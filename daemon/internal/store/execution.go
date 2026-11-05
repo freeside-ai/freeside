@@ -584,9 +584,9 @@ func (tx *ReadTx) gateReconstructedAdmission(
 // that the id is a well-formed digest, which a caller can supply for a line
 // that was never recorded; here it must resolve to a recorded line of the
 // admission run's task. The lineup has no record to resolve, and a card's
-// stays shape-only until the card has a writer (#869). It serves execution
-// and review admissions alike, and returns the line it resolved, or a zero
-// line when the binding cites none.
+// resolves in gateCardSelection. It serves execution and review admissions
+// alike, and returns the line it resolved, or a zero line when the binding
+// cites none.
 func (tx *ReadTx) gateTaskLineSelection(
 	ctx context.Context, invocationID domain.InvocationID, runID domain.RunID, binding domain.AdmissionAgentBinding,
 ) (domain.TaskLine, error) {
@@ -618,6 +618,38 @@ func (tx *ReadTx) gateTaskLineSelection(
 			invocationID, line.ID, line.TaskID, run.TaskID, domain.ErrAdmissionDerivationMismatch)
 	}
 	return line, nil
+}
+
+// gateCardSelection resolves the alternate-agent record an admission cites as
+// the card that chose its agent, as gateTaskLineSelection does a line: it
+// must be a recorded retry of the admission run's task that answered a card,
+// since a parked task's move is cited by the lines it set, never by an
+// admission. The caller binds the record to the attempt or role it admits.
+// It returns a zero record when the binding cites no card.
+func (tx *ReadTx) gateCardSelection(
+	ctx context.Context, invocationID domain.InvocationID, runID domain.RunID, binding domain.AdmissionAgentBinding,
+) (domain.AlternateAgentRetry, error) {
+	if binding.SelectionSource != domain.AgentSelectionSourceCard {
+		return domain.AlternateAgentRetry{}, nil
+	}
+	record, err := tx.GetAlternateAgentRetry(ctx, binding.SelectionRecordID)
+	if errors.Is(err, ErrNotFound) {
+		return domain.AlternateAgentRetry{}, fmt.Errorf("admission %q cites card record %q, which is not recorded: %w",
+			invocationID, binding.SelectionRecordID, domain.ErrAdmissionDerivationMismatch)
+	}
+	if err != nil {
+		return domain.AlternateAgentRetry{}, fmt.Errorf("admission %q cites card record %q: %w",
+			invocationID, binding.SelectionRecordID, err)
+	}
+	run, err := tx.GetRun(ctx, runID)
+	if err != nil {
+		return domain.AlternateAgentRetry{}, fmt.Errorf("admission %q: %w", invocationID, err)
+	}
+	if record.TaskID != run.TaskID || record.ParkedMove() {
+		return domain.AlternateAgentRetry{}, fmt.Errorf("admission %q cites card record %q, not a card retry of task %q: %w",
+			invocationID, record.ID, run.TaskID, domain.ErrAdmissionDerivationMismatch)
+	}
+	return record, nil
 }
 
 func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
@@ -692,6 +724,18 @@ func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 	attempt, attemptErr := tx.GetProductionAttemptByRun(ctx, admission.RunID)
 	if attemptErr != nil && !errors.Is(attemptErr, ErrNotFound) {
 		return fmt.Errorf("admission %q capability retry attempt: %w", admission.InvocationID, attemptErr)
+	}
+	if binding := admission.AgentBinding; binding != nil {
+		card, err := tx.gateCardSelection(ctx, admission.InvocationID, admission.RunID, *binding)
+		if err != nil {
+			return err
+		}
+		// A card chooses the agent for the one attempt that cites it.
+		if card.ID != "" && (attemptErr != nil || attempt.AlternateAgentRetryID == nil ||
+			*attempt.AlternateAgentRetryID != card.ID) {
+			return fmt.Errorf("admission %q cites card record %q, which its attempt does not: %w",
+				admission.InvocationID, card.ID, domain.ErrAdmissionDerivationMismatch)
+		}
 	}
 	attemptManifest := attempt.CapabilityManifestDigest
 	if (attemptManifest == nil) != (admission.CapabilityManifestDigest == nil) {

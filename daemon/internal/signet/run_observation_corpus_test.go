@@ -1016,7 +1016,7 @@ func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 			domain.RunHoldObservation{Reason: domain.HoldQuotaWindowExhausted, QuotaWindow: &quotaWindow},
 			`"quota_window":{"pool":"pool-shared","window":"five_hour","source":"provider_refusal",` +
 				`"invocation_id":"inv-refused","reading_observed_at":null,"resets_at":"2026-01-02T08:04:05Z",` +
-				`"set_at":"2026-01-02T03:04:05Z"}`,
+				`"set_at":"2026-01-02T03:04:05Z","alternate_agents":null}`,
 		},
 		{
 			"machine_capacity",

@@ -97,6 +97,14 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		}
 		return nil
 	}
+	if command.Action == domain.ActionRetryWithAlternateAgent {
+		// The message is the chosen agent's tree name; the apply step holds
+		// it to the card's offers.
+		if command.Message == "" || len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrInvalidAlternateAgentDecisionPayload)
+		}
+		return nil
+	}
 	if command.Action == domain.ActionSnooze {
 		until, err := time.Parse(time.RFC3339Nano, command.Message)
 		if err != nil || until.Location() != time.UTC || len(command.Attachments) > 0 {

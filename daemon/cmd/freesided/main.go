@@ -1176,6 +1176,25 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				}, now)
 			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 		}),
+		// An alternate-agent choice re-derives its rule against the committed
+		// tree and the daemon's admission settings, which exist only after the
+		// Claude composition below; without them both commands fail closed.
+		signet.WithAlternateAgentRetrier(func(
+			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
+		) (domain.AlternateAgentRetry, error) {
+			if claudeWiring == nil || claudeWiring.env.Agents == nil {
+				return domain.AlternateAgentRetry{}, signet.ErrOperatorSettingUnavailable
+			}
+			return claudeWiring.env.Agents.AcceptAlternateAgentRetryTx(ctx, tx, command, item, now)
+		}),
+		signet.WithParkedTaskMover(func(
+			ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
+		) (domain.ParkedTaskMoveReceipt, error) {
+			if claudeWiring == nil || claudeWiring.env.Agents == nil {
+				return domain.ParkedTaskMoveReceipt{}, signet.ErrOperatorSettingUnavailable
+			}
+			return claudeWiring.env.Agents.MoveParkedTaskTx(ctx, tx, request, now)
+		}),
 		// The catalog, like the tree it projects, exists only after the
 		// Claude composition below; until then, and in the fake-driver and
 		// scenario compositions that load no tree, clients see null.

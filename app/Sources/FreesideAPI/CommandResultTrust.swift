@@ -67,6 +67,20 @@ public enum CommandResultTrust {
                 && line?.agent == payload.agent
                 && (line.map { $0.task_id == payload.task_id && $0.role == payload.role } ?? true)
                 && (!record.recorded || line.map { $0.source == .client_line_change } ?? true)
+        case .move_parked_task(let payload):
+            // The receipt records the move the client asked for: the chosen
+            // agent on the task, a parked move's record (no card), and the
+            // implementer line set to that agent, every line citing the record.
+            guard case .move_parked_task(let record) = result.record else { return false }
+            let retry = record.retry
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.task_id == payload.task_id && record.agent == payload.agent
+                && retry.command_id == command.command_id && retry.task_id == payload.task_id
+                && retry.agent == payload.agent && retry.item_id.isEmpty && retry.role == .implementer
+                && record.lines.allSatisfy {
+                    $0.task_id == payload.task_id && $0.source == .alternate_agent_move && $0.set_by == retry.id
+                }
+                && record.lines.contains { $0.role == .implementer && $0.agent == payload.agent }
         case .set_routing_policy(let payload):
             // The policy is the revision current after the change, holding the
             // requested orders and drain-first account: the one after
@@ -96,6 +110,8 @@ public enum CommandResultTrust {
         switch payload.action {
         case .retry_with_capabilities:
             return payload.capability_manifest_digest?.value1 ?? ""
+        case .retry_with_alternate_agent:
+            return payload.alternate_agent ?? ""
         case .start_with_changes:
             guard let revision = payload.task_proposal_revision?.value1 else {
                 return payload.message ?? ""

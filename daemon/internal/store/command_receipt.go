@@ -119,6 +119,8 @@ func encodeCommandReceipt(receipt domain.CommandReceipt) (string, error) {
 		return encode(receipt.TaskLineChange)
 	case domain.CommandKindSetRoutingPolicy:
 		return encode(receipt.RoutingPolicyChange)
+	case domain.CommandKindMoveParkedTask:
+		return encode(receipt.ParkedTaskMove)
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 	}
 	return "", domain.ErrCommandReceiptArms
@@ -138,6 +140,9 @@ func decodeCommandReceipt(kind domain.CommandKind, body []byte) (domain.CommandR
 	case domain.CommandKindSetRoutingPolicy:
 		arm, err := decode[domain.RoutingPolicyChangeReceipt](body)
 		return domain.CommandReceipt{RoutingPolicyChange: &arm}, err
+	case domain.CommandKindMoveParkedTask:
+		arm, err := decode[domain.ParkedTaskMoveReceipt](body)
+		return domain.CommandReceipt{ParkedTaskMove: &arm}, err
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 	}
 	return domain.CommandReceipt{}, fmt.Errorf("kind %q: %w", kind, domain.ErrInvalidCommandKind)

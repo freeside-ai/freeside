@@ -591,10 +591,17 @@ type AttentionItem struct {
 	// audit's facts, on a review_diminishing_returns item (plan §7 Review
 	// Drift). It is nil on items created before the field existed.
 	ReviewDiminishing *ReviewDiminishingFacts `json:"review_diminishing"`
-	ItemVersion       int                     `json:"item_version"`
-	InterruptionClass InterruptionClass       `json:"interruption_class"`
-	ConversationID    *ConversationID         `json:"conversation_id"`
-	Timing            TimingSummary           `json:"timing"`
+	// AlternateAgents are the agents the item offers to retry the failed role
+	// under (plan §4, alternate-agent retry): present exactly when the item
+	// offers retry_with_alternate_agent, and only on the execution_failure,
+	// review_dispute, and review_configuration types. Sorted by agent, fixed
+	// once attached; acceptance and admission re-derive each rule rather than
+	// trust it.
+	AlternateAgents   []AlternateAgentOffer `json:"alternate_agents"`
+	ItemVersion       int                   `json:"item_version"`
+	InterruptionClass InterruptionClass     `json:"interruption_class"`
+	ConversationID    *ConversationID       `json:"conversation_id"`
+	Timing            TimingSummary         `json:"timing"`
 	// CreatedAt is the daemon-stamped instant this item was created. It is
 	// immutable across the item's lifecycle and nil only for legacy items
 	// persisted before the field existed.
@@ -669,6 +676,7 @@ type AttentionItemInput struct {
 	SpecRevision                     *SpecRevisionFacts
 	AgentQuestion                    *AgentQuestionFacts
 	ReviewDiminishing                *ReviewDiminishingFacts
+	AlternateAgents                  []AlternateAgentOffer
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
@@ -730,6 +738,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		SpecRevision:                     cloneSpecRevisionFacts(in.SpecRevision),
 		AgentQuestion:                    cloneAgentQuestionFacts(in.AgentQuestion),
 		ReviewDiminishing:                cloneReviewDiminishingFacts(in.ReviewDiminishing),
+		AlternateAgents:                  slices.Clone(in.AlternateAgents),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
@@ -1043,6 +1052,9 @@ func (i AttentionItem) Validate() error {
 	} else if i.Offers(ActionRetryWithCapability) {
 		return fmt.Errorf("item %s offers capability retry without execution failure facts: %w",
 			i.ID, ErrCardFactInconsistent)
+	}
+	if err := i.validateAlternateAgents(); err != nil {
+		return err
 	}
 	if i.InterpretationFailure != nil {
 		if i.Type != AttentionExecutionFailure {
@@ -1398,6 +1410,32 @@ func bindingDigests(
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// validateAlternateAgents holds the alternate-agent offer to its facts, as
+// OfferedManifests holds the capability retry: the action and the offers
+// come together, on a type that can raise from a role's failure.
+func (i AttentionItem) validateAlternateAgents() error {
+	offers := i.Offers(ActionRetryWithAlternateAgent)
+	if offers != (i.AlternateAgents != nil) {
+		return fmt.Errorf("item %s alternate agent offer disagrees with alternate_agents: %w",
+			i.ID, ErrCardFactInconsistent)
+	}
+	if !offers {
+		return nil
+	}
+	switch i.Type {
+	case AttentionExecutionFailure, AttentionReviewDispute, AttentionReviewConfiguration:
+	default:
+		return fmt.Errorf("item %s type %q carries alternate_agents: %w", i.ID, i.Type, ErrCardFactOutsideItem)
+	}
+	if i.Subject.Type != SubjectRun || i.Subject.RunID == nil {
+		return fmt.Errorf("item %s alternate agent offer has no run subject: %w", i.ID, ErrCardFactInconsistent)
+	}
+	if err := ValidateAlternateAgentOffers(i.AlternateAgents); err != nil {
+		return fmt.Errorf("item %s %w", i.ID, err)
+	}
+	return nil
 }
 
 // Offers reports whether the item currently offers action as one of its

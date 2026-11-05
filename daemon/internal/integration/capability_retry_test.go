@@ -118,16 +118,83 @@ type capabilityRetrySelection struct {
 }
 
 // driveCapabilityRetrySelection runs the real path up to an accepted
-// retry_with_capabilities command: a specification run is approved, the
-// engine dispatches its implementation attempt, the fake driver fails it, and
-// the engine's own failure producer raises the card that offers the manifest.
-// Nothing here is hand-seeded — not the attempt, not its admission, not the
-// card — so the offer under test is the one production code computes.
+// retry_with_capabilities command on the card that offers the manifest.
 func driveCapabilityRetrySelection(t *testing.T, f *workflowFixture) capabilityRetrySelection {
 	t.Helper()
 	ctx := context.Background()
-	f.seedDevices(t)
 	manifest := capabilityRetryManifest(t)
+	failure := driveImplementationFailure(t, f, manifest, fake.StageScript{
+		Outcome: fake.OutcomeFail,
+		Result:  exec.StageResult{Summary: "The stage could not reach the provider's documentation."},
+	})
+	card := failure.card
+	if !card.Item.Offers(domain.ActionRetryWithCapability) {
+		t.Fatalf("failure card requests %v, want retry_with_capabilities", card.Item.RequestedDecision)
+	}
+	offered := card.Item.ExecutionFailure.OfferedManifests
+	if len(offered) != 1 || offered[0] != manifest.Offer() {
+		t.Fatalf("offered manifests = %+v, want the policy manifest %+v", offered, manifest.Offer())
+	}
+
+	digest := manifest.Digest
+	if _, err := f.signet.Submit(ctx, signet.ClientCommand{
+		CommandID: capabilityRetryCommandID, DeviceID: deviceA,
+		ExpectedEntityVersion: card.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: card.Item.ID, Action: domain.ActionRetryWithCapability,
+			ItemVersion: card.Item.ItemVersion, CapabilityManifestDigest: &digest,
+		},
+	}); err != nil {
+		t.Fatalf("submit retry_with_capabilities: %v", err)
+	}
+	return capabilityRetrySelection{
+		manifest: manifest, campaignID: failure.campaignID, failedInvocation: failure.invocation,
+		retryRunID: failure.retryRunID, retryInvocation: productionInvocationForRun(failure.retryRunID),
+	}
+}
+
+// implementationFailure is the failure card the engine raised for the
+// campaign's first implementation attempt, with the identities a retry of it
+// keys off.
+type implementationFailure struct {
+	card       signet.AttentionItemSnapshot
+	campaignID domain.CampaignID
+	invocation domain.InvocationID
+	retryRunID domain.RunID
+}
+
+// driveImplementationFailure runs the real path up to the failure card: a
+// specification run is approved, the engine dispatches its implementation
+// attempt, the fake driver fails it under script, and the engine's own
+// failure producer raises the card. Nothing here is hand-seeded (not the
+// attempt, not its admission, not the card), so the offers under test are
+// the ones production code computes.
+func driveImplementationFailure(
+	t *testing.T, f *workflowFixture, manifest domain.CapabilityManifest, script fake.StageScript,
+) implementationFailure {
+	t.Helper()
+	failure := driveImplementationTerminal(t, f, manifest, script)
+	card, err := f.signet.GetAttentionItem(context.Background(),
+		domain.ItemID("execution-failure-"+string(failure.invocation)))
+	if err != nil {
+		t.Fatalf("get failure card: %v", err)
+	}
+	if card.Item.ExecutionFailure == nil {
+		t.Fatal("failure card carries no execution-failure facts")
+	}
+	failure.card = card
+	return failure
+}
+
+// driveImplementationTerminal is driveImplementationFailure up to the
+// failure's terminal, for a failure the engine answers without a card, such
+// as a quota refusal it parks. The returned failure carries no card.
+func driveImplementationTerminal(
+	t *testing.T, f *workflowFixture, manifest domain.CapabilityManifest, script fake.StageScript,
+) implementationFailure {
+	t.Helper()
+	ctx := context.Background()
+	f.seedDevices(t)
 
 	specificationRunID, err := engine.SpecificationRunIDForImplementation(capabilityRetryRunID)
 	if err != nil {
@@ -201,52 +268,18 @@ func driveCapabilityRetrySelection(t *testing.T, f *workflowFixture) capabilityR
 	}
 
 	failedInvocation := productionInvocationForRun(capabilityRetryRunID)
-	f.driver.Script(failedInvocation, fake.StageScript{
-		Outcome: fake.OutcomeFail,
-		Result:  exec.StageResult{Summary: "The stage could not reach the provider's documentation."},
-	})
+	f.driver.Script(failedInvocation, script)
 	// Approval creates the implementation run, the next pass dispatches it,
 	// and the third records its failure terminal and the failure card.
 	for _, stage := range []string{"approval", "implementation dispatch", "implementation failure"} {
 		reconcileCapabilityRetryPass(t, f, stage)
 	}
 
-	card, err := f.signet.GetAttentionItem(ctx,
-		domain.ItemID("execution-failure-"+string(failedInvocation)))
-	if err != nil {
-		t.Fatalf("get failure card: %v", err)
-	}
-	if !card.Item.Offers(domain.ActionRetryWithCapability) {
-		t.Fatalf("failure card requests %v, want retry_with_capabilities", card.Item.RequestedDecision)
-	}
-	if card.Item.ExecutionFailure == nil {
-		t.Fatal("failure card carries no execution-failure facts")
-	}
-	offered := card.Item.ExecutionFailure.OfferedManifests
-	if len(offered) != 1 || offered[0] != manifest.Offer() {
-		t.Fatalf("offered manifests = %+v, want the policy manifest %+v", offered, manifest.Offer())
-	}
-
-	digest := manifest.Digest
-	if _, err := f.signet.Submit(ctx, signet.ClientCommand{
-		CommandID: capabilityRetryCommandID, DeviceID: deviceA,
-		ExpectedEntityVersion: card.EntityVersion,
-		Payload: signet.DecisionPayload{
-			ItemID: card.Item.ID, Action: domain.ActionRetryWithCapability,
-			ItemVersion: card.Item.ItemVersion, CapabilityManifestDigest: &digest,
-		},
-	}); err != nil {
-		t.Fatalf("submit retry_with_capabilities: %v", err)
-	}
-
 	retryRunID, err := engine.ProductionAttemptRunID(campaignID, 2)
 	if err != nil {
 		t.Fatalf("derive retry run: %v", err)
 	}
-	return capabilityRetrySelection{
-		manifest: manifest, campaignID: campaignID, failedInvocation: failedInvocation,
-		retryRunID: retryRunID, retryInvocation: productionInvocationForRun(retryRunID),
-	}
+	return implementationFailure{campaignID: campaignID, invocation: failedInvocation, retryRunID: retryRunID}
 }
 
 // productionInvocationForRun mirrors the engine's production invocation key.

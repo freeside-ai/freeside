@@ -55,6 +55,11 @@ type ProductionAttempt struct {
 	OperatorCommandID        *string         `json:"operator_command_id,omitempty"`
 	RetryOfInvocationID      *InvocationID   `json:"retry_of_invocation_id,omitempty"`
 	CapabilityManifestDigest *Digest         `json:"capability_manifest_digest,omitempty"`
+	// AlternateAgentRetryID cites the card record of a retry under another
+	// agent (plan §4, alternate-agent retry). Like the manifest digest it
+	// completes an operator retry's bindings, and an attempt carries at most
+	// one of the two.
+	AlternateAgentRetryID *Digest `json:"alternate_agent_retry_id,omitempty"`
 	// RevisesRunID and RevisionCommandID link a fresh campaign's initial attempt
 	// back to the blocked implementation run whose agent_question was answered
 	// with revise_specification, and to the answer_and_retry command that did so
@@ -89,7 +94,8 @@ func (a ProductionAttempt) Validate() error {
 		if a.AttemptNumber != 1 {
 			return fmt.Errorf("initial attempt number %d: %w", a.AttemptNumber, ErrProductionAttemptInconsistent)
 		}
-		if a.OperatorCommandID != nil || a.RetryOfInvocationID != nil || a.CapabilityManifestDigest != nil {
+		if a.OperatorCommandID != nil || a.RetryOfInvocationID != nil || a.CapabilityManifestDigest != nil ||
+			a.AlternateAgentRetryID != nil {
 			return fmt.Errorf("initial attempt carries operator retry bindings: %w", ErrProductionAttemptInconsistent)
 		}
 	case ProductionAttemptRetry:
@@ -114,6 +120,16 @@ func (a ProductionAttempt) Validate() error {
 			if !contentaddr.Valid(string(*a.CapabilityManifestDigest)) {
 				return fmt.Errorf("retry capability manifest digest %q: %w",
 					*a.CapabilityManifestDigest, ErrInvalidDigest)
+			}
+		}
+		if a.AlternateAgentRetryID != nil {
+			bindingCount++
+			if !contentaddr.Valid(string(*a.AlternateAgentRetryID)) {
+				return fmt.Errorf("retry alternate agent record %q: %w", *a.AlternateAgentRetryID, ErrInvalidDigest)
+			}
+			if a.CapabilityManifestDigest != nil {
+				return fmt.Errorf("retry carries both a capability manifest and an alternate agent: %w",
+					ErrProductionAttemptInconsistent)
 			}
 		}
 		if bindingCount != 0 && bindingCount != 3 {

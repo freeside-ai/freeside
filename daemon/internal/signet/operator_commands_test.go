@@ -120,6 +120,40 @@ func lineCommand(id string, task domain.TaskID, agent *string) signet.ClientComm
 	return in
 }
 
+func moveCommand(id string, task domain.TaskID, agent string) signet.ClientCommand {
+	in := operatorCommand(id, domain.CommandKindMoveParkedTask)
+	in.MoveParkedTask = signet.MoveParkedTaskPayload{TaskID: task, Agent: agent}
+	return in
+}
+
+// fakeParkedTaskMover answers a move with the receipt a move to the request's
+// agent on pool-b would record, writing nothing: the engine's move has its
+// own tests, and these exercise only the command's envelope.
+func fakeParkedTaskMover(
+	_ context.Context, _ *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
+) (domain.ParkedTaskMoveReceipt, error) {
+	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
+		TaskID: request.TaskID, Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
+		CommandID: request.CommandID, Agent: request.Agent, Pool: "pool-b",
+		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: now,
+	})
+	if err != nil {
+		return domain.ParkedTaskMoveReceipt{}, err
+	}
+	line, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: request.TaskID, Role: domain.RoleImplementer, Agent: request.Agent,
+		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{},
+		},
+	}, 1, nil, now)
+	if err != nil {
+		return domain.ParkedTaskMoveReceipt{}, err
+	}
+	return domain.ParkedTaskMoveReceipt{ParkedTaskMoveRequest: request, Retry: record, Lines: []domain.TaskLine{line}}, nil
+}
+
 func policyCommand(id string, expected *int, agents ...string) signet.ClientCommand {
 	in := operatorCommand(id, domain.CommandKindSetRoutingPolicy)
 	in.SetRoutingPolicy = signet.SetRoutingPolicyPayload{

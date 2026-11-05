@@ -14,6 +14,7 @@ import Testing
             .convert_to_policy: .pending,
             .retry: .concludes(.resolved),
             .retry_with_capabilities: .concludes(.superseded),
+            .retry_with_alternate_agent: .concludes(.superseded),
             .answer_and_retry: .concludes(.superseded),
             .answer_without_retry: .concludes(.resolved),
             .rerun_trust_evaluation: .concludes(.resolved),

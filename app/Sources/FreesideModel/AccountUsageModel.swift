@@ -16,7 +16,8 @@ public struct PendingUsageCommand: Codable, Equatable, Sendable {
     func isValid(deviceID: String) -> Bool {
         switch command.payload {
         case .refresh_usage, .reassign_collector: break
-        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy: return false
+        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy, .move_parked_task:
+            return false
         }
         if let receipt, !CommandResultTrust.accepts(receipt, for: command) { return false }
         return !command.command_id.isEmpty && !deviceID.isEmpty && command.device_id == deviceID
@@ -28,7 +29,7 @@ public struct PendingUsageCommand: Codable, Equatable, Sendable {
         switch command.payload {
         case .refresh_usage(let payload): payload.pool
         case .reassign_collector(let payload): payload.pool
-        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy: nil
+        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy, .move_parked_task: nil
         }
     }
 }

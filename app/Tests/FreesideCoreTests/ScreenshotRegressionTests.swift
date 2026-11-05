@@ -1394,6 +1394,18 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
+                    // A quota failure whose card offers another agent (#869):
+                    // the Other Agents fact and the retry action.
+                    let quota = AttentionFixtures.quotaFailure().item
+                    for (suffix, width) in [("", canvasWidth), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-execution_failure-quota\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        quota, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    }
                 }
 
                 if snapshot.item._type == .effect_proposal {

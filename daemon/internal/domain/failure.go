@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // The cross-lane failure model (plan §4, alternate-agent retry) keeps three
 // axes apart so no one value has to answer two questions:
@@ -139,26 +142,23 @@ type FailureAlternate struct {
 // failed attempt with no recorded pool or route proves no alternate escapes
 // it, so it waits.
 //
-// Which alternate to offer, and the lineup's per-failure-class switch (plan
-// §4), belong to the alternate-agent card (#869), not here.
+// QualifyAlternate holds the per-agent rule; the lineup's per-failure-class
+// switch (plan §4) is not built, so the card offers the qualified agents and
+// the operator chooses.
 func DecideFailureDisposition(cause FailureCause, facts FailureFacts) FailureDisposition {
 	switch cause {
 	case FailureCauseQuota:
-		if facts.hasAlternate(func(a FailureAlternate) bool {
-			return facts.UsagePool != "" && a.UsagePool != "" && a.UsagePool != facts.UsagePool
-		}) {
+		if facts.hasAlternate(cause) {
 			return FailureDispositionAlternateAgentEligible
 		}
 		return FailureDispositionWait
 	case FailureCauseCredentialExpired, FailureCauseCredentialRevoked:
-		if facts.hasAlternate(func(a FailureAlternate) bool { return a.GenerationValid }) {
+		if facts.hasAlternate(cause) {
 			return FailureDispositionAlternateAgentEligible
 		}
 		return FailureDispositionAttention
 	case FailureCauseServiceCapacity:
-		if facts.hasAlternate(func(a FailureAlternate) bool {
-			return facts.Route != "" && a.Route != "" && a.Route != facts.Route
-		}) {
+		if facts.hasAlternate(cause) {
 			return FailureDispositionAlternateAgentEligible
 		}
 		return FailureDispositionWait
@@ -177,11 +177,11 @@ func DecideFailureDisposition(cause FailureCause, facts FailureFacts) FailureDis
 	return FailureDispositionAttention
 }
 
-func (f FailureFacts) hasAlternate(eligible func(FailureAlternate) bool) bool {
-	for _, a := range f.Alternates {
-		if eligible(a) {
-			return true
-		}
-	}
-	return false
+// hasAlternate reports whether some alternate escapes a failure with this
+// cause (QualifyAlternate).
+func (f FailureFacts) hasAlternate(cause FailureCause) bool {
+	return slices.ContainsFunc(f.Alternates, func(a FailureAlternate) bool {
+		_, ok := QualifyAlternate(cause, f, a)
+		return ok
+	})
 }

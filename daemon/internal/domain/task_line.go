@@ -35,7 +35,8 @@ const (
 	TaskLineSourceProposalStart TaskLineSource = "proposal_start"
 	// TaskLineSourceRouter is the routing policy's choice at a task's first
 	// admission for a role with no operator line (plan §5.4, routing policy;
-	// revision 103). It is the only source that carries a TaskLineProvenance.
+	// revision 103). It and TaskLineSourceAlternateAgentMove are the sources
+	// that carry a TaskLineProvenance.
 	TaskLineSourceRouter TaskLineSource = "router"
 	// TaskLineSourceTriage is the triager's escalation of a task's specifier
 	// to its escalated counterpart (plan §5.13, Specifier Triage; revision
@@ -52,6 +53,13 @@ const (
 	// command: the same change as cli_line_change, made from a client, with
 	// SetBy naming its TaskLineChange too.
 	TaskLineSourceClientLineChange TaskLineSource = "client_line_change"
+	// TaskLineSourceAlternateAgentMove is the operator's move of a task parked
+	// on an exhausted quota window to another agent (plan §4, §5.4; revision
+	// 103): the chosen agent takes the parked role, and every router-sourced
+	// line moves to that agent's pool as the router would have written it
+	// there. SetBy names the AlternateAgentRetry record, and the provenance's
+	// passed_over names the agent left on the exhausted pool.
+	TaskLineSourceAlternateAgentMove TaskLineSource = "alternate_agent_move"
 )
 
 // AllTaskLineSources lists every valid TaskLineSource; it is the single
@@ -59,18 +67,24 @@ const (
 var AllTaskLineSources = []TaskLineSource{
 	TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
 	TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange,
-	TaskLineSourceTriage,
+	TaskLineSourceTriage, TaskLineSourceAlternateAgentMove,
 }
 
 func (s TaskLineSource) valid() bool {
 	switch s {
 	case TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
 		TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange,
-		TaskLineSourceTriage:
+		TaskLineSourceTriage, TaskLineSourceAlternateAgentMove:
 		return true
 	default:
 		return false
 	}
+}
+
+// CarriesProvenance reports whether a line of this source cites the pool
+// choice that set it: the router's, and a move's from an exhausted pool.
+func (s TaskLineSource) CarriesProvenance() bool {
+	return s == TaskLineSourceRouter || s == TaskLineSourceAlternateAgentMove
 }
 
 // IsLineChange reports whether the source is a change to an existing task's
@@ -416,7 +430,7 @@ type TaskLineInput struct {
 	Source TaskLineSource
 	// SetBy is the command or submission identity that set the line.
 	SetBy string
-	// Provenance is set exactly for a router line.
+	// Provenance is set exactly for a router or alternate-agent-move line.
 	Provenance *TaskLineProvenance
 	// Cleared records a version that names no agent; Agent stays empty.
 	Cleared bool
@@ -445,8 +459,9 @@ type TaskLine struct {
 	Source        TaskLineSource `json:"source"`
 	SetBy         string         `json:"set_by"`
 	SetAt         time.Time      `json:"set_at"`
-	// Provenance is how the router chose the agent: set exactly when Source
-	// is router, nil for every operator source.
+	// Provenance is how the router, or a move from an exhausted pool, chose
+	// the agent: set exactly when Source is router or alternate_agent_move
+	// (CarriesProvenance), nil for every other source.
 	Provenance *TaskLineProvenance `json:"provenance"`
 	// Cleared is a version that takes the role back to the lineup. It is
 	// omitted when false because the API's TaskLine has no such field: the
@@ -559,7 +574,7 @@ func (l TaskLine) Validate() error {
 	if l.SetBy == "" {
 		return fmt.Errorf("task line %s %s set_by: %w", l.TaskID, l.Role, ErrEmptyField)
 	}
-	if (l.Provenance != nil) != (l.Source == TaskLineSourceRouter) {
+	if (l.Provenance != nil) != l.Source.CarriesProvenance() {
 		return fmt.Errorf("task line %s %s source %s provenance: %w",
 			l.TaskID, l.Role, l.Source, ErrTaskLineProvenanceInconsistent)
 	}

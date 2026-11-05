@@ -76,6 +76,11 @@ type Service struct {
 	usageOperator       UsageOperator
 	taskLineChanger     TaskLineChanger
 	routingPolicySetter RoutingPolicySetter
+	// parkedTaskMover and alternateAgentRetrier apply an alternate-agent
+	// choice (alternate_agent_retry.go, operator_commands.go). Nil fails the
+	// command closed, after replay.
+	parkedTaskMover       ParkedTaskMover
+	alternateAgentRetrier AlternateAgentRetrier
 	// usageRefreshAge bounds how long a usage reading counts as fresh in the
 	// projection (WithUsageRefreshAge); zero means only its reset does.
 	usageRefreshAge time.Duration
@@ -288,6 +293,8 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		return s.changeTaskLine(ctx, in)
 	case domain.CommandKindSetRoutingPolicy:
 		return s.setRoutingPolicy(ctx, in)
+	case domain.CommandKindMoveParkedTask:
+		return s.moveParkedTask(ctx, in)
 	case domain.CommandKindDecision, "":
 		// The empty zero value is the intentional legacy decision default, so
 		// existing decision callers stay unchanged (ClientCommand.Kind).
@@ -475,6 +482,10 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				if err := s.applyCapabilityRetryDecision(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeRetriesWithAlternateAgent:
+				if err := s.applyAlternateAgentRetryDecision(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeStopsUnattended:
 				if err := s.applyStopUnattended(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -655,6 +666,11 @@ const (
 	// the displayed offer and concludes the carrier as superseded. The engine
 	// consumes the durable command into a new production attempt.
 	outcomeRetriesWithCapabilities
+	// outcomeRetriesWithAlternateAgent validates the chosen agent against the
+	// card's offers, records the choice after re-deriving its rule, and
+	// concludes the carrier as superseded. The engine consumes the record
+	// into a new production attempt.
+	outcomeRetriesWithAlternateAgent
 	outcomeRunsDoctor
 )
 
@@ -718,6 +734,8 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusSuperseded, outcomeReturnsToAgent
 	case domain.ActionRetryWithCapability:
 		return domain.StatusSuperseded, outcomeRetriesWithCapabilities
+	case domain.ActionRetryWithAlternateAgent:
+		return domain.StatusSuperseded, outcomeRetriesWithAlternateAgent
 	case domain.ActionStopUnattended:
 		return domain.StatusResolved, outcomeStopsUnattended
 	case domain.ActionResumeUnattended:

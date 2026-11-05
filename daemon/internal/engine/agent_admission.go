@@ -74,7 +74,11 @@ type RoleAgent struct {
 	// names, at the digest the tree resolves it to.
 	Line domain.LineupSelection
 	// TaskLine is the task line that chose the agent; nil when the lineup did.
-	TaskLine   *domain.TaskLine
+	TaskLine *domain.TaskLine
+	// Card is the alternate-agent record that chose the agent for this one
+	// attempt; nil when a line or the lineup did. It takes precedence over
+	// TaskLine.
+	Card       *domain.AlternateAgentRetry
 	Resolved   agenttree.ResolvedAgent
 	Identity   domain.AuthIdentity
 	Enrollment domain.ClientEnrollment
@@ -181,8 +185,8 @@ func resolveRoleLine(
 
 // resolveAttemptRole is the one point that selects which agent a role runs
 // in an attempt (plan §5.4). The precedence is the alternate-agent card for
-// this one attempt, then the task's line for the role, then the lineup. The
-// card has no writer yet (#869); it overrides here when it does.
+// this one attempt, then the task's line for the role, then the lineup. A
+// card's agent is re-gated against the failure it answered (regateCardAgent).
 //
 // A task line picks the agent only. The prompt stays the one the role's
 // lineup line names, so a role with no lineup line is still refused. A line
@@ -191,6 +195,20 @@ func resolveRoleLine(
 func resolveAttemptRole(
 	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, runID domain.RunID, role domain.RoleName,
 ) (RoleAgent, error) {
+	card, carded, err := attemptCard(ctx, tx, runID, role)
+	if err != nil {
+		return RoleAgent{}, err
+	}
+	if carded {
+		agent, err := resolveCardAgent(ctx, tx, tree, role, card)
+		if err != nil {
+			return RoleAgent{}, err
+		}
+		if err := agent.requireUnmarked(ctx, tx); err != nil {
+			return RoleAgent{}, err
+		}
+		return agent, nil
+	}
 	taskLine, found, err := RunTaskLine(ctx, tx, runID, role)
 	if err != nil {
 		return RoleAgent{}, err
@@ -253,6 +271,37 @@ func resolveLineAgent(
 	return agent, nil
 }
 
+// resolveCardAgent is resolveLineAgent for the agent a card record chose: the
+// prompt stays the lineup line's, the agent is the record's at the digest the
+// tree resolves now, and the rule the record names is re-derived for it. It
+// runs without the generation's integrity mark, which the caller reads in the
+// same transaction. A record that fails any step refuses the attempt, never
+// falling back to the task's line or the lineup.
+func resolveCardAgent(
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName, card domain.AlternateAgentRetry,
+) (RoleAgent, error) {
+	line, err := lineupLine(tree, role)
+	if err != nil {
+		return RoleAgent{}, err
+	}
+	if _, ok := tree.Agent(card.Agent); !ok {
+		return RoleAgent{}, fmt.Errorf("card record %s names an agent the tree lacks", card.ID)
+	}
+	agent, err := resolveAgent(ctx, tx, tree, card.Agent)
+	if err != nil {
+		return RoleAgent{}, fmt.Errorf("card record %s: %w", card.ID, err)
+	}
+	if err := agent.readGeneration(ctx, tx); err != nil {
+		return RoleAgent{}, err
+	}
+	if err := regateCardAgent(ctx, tx, tree, card, agent); err != nil {
+		return RoleAgent{}, fmt.Errorf("card record %s: %w", card.ID, err)
+	}
+	line.AgentName, line.AgentDigest = card.Agent, agent.Resolved.Definition.Digest
+	agent.Line, agent.Card = line, &card
+	return agent, nil
+}
+
 // triageCounterpart is the Tier A half of a triage line's anchor that needs
 // the tree: the line's agent must be the escalated counterpart the current
 // lineup names for the specifier's lineup agent. It is re-read from the
@@ -285,8 +334,11 @@ func triageCounterpart(
 
 // Selection is the selection source that chose the agent and the record an
 // admission cites for it. The lineup has no record beyond its revision; a
-// task line is cited by its id.
+// card and a task line are cited by their ids.
 func (a RoleAgent) Selection() (domain.AgentSelectionSource, domain.Digest) {
+	if a.Card != nil {
+		return domain.AgentSelectionSourceCard, a.Card.ID
+	}
 	if a.TaskLine != nil {
 		return domain.AgentSelectionSourceTaskLine, a.TaskLine.ID
 	}
@@ -473,6 +525,8 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		return nil
 	case domain.TaskLineSourceRouter:
 		return anchorRouterLine(ctx, tx, line)
+	case domain.TaskLineSourceAlternateAgentMove:
+		return anchorAlternateAgentMoveLine(ctx, tx, line)
 	case domain.TaskLineSourceTriage:
 		if line.Role != domain.RoleSpecifier {
 			return fmt.Errorf("a triage line sets only the specifier, not the %s", line.Role)
@@ -506,15 +560,9 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 
 // anchorRouterLine holds a router line to the routing that wrote it. No
 // operator action backs one, so the anchor is the policy: the line names its
-// own task's routing, it is its role's first version (a later router version
-// is the alternate-agent card's re-pin, which anchors its own, #869), the
-// policy revision it cites exists and was set no later than the line, that
-// revision orders the line's agent for its role, any agent it passed over is
-// in that revision's orders, and a line the drain-first tier chose names the
-// pool that revision drains first. The marks and readings it acted on are not
-// rechecked, because both change over time: a line routed past a mark that
-// has since cleared, or ranked by a reset since passed, is still the routing
-// that chose it.
+// own task's routing, it is its role's first version (a later version that
+// re-pins a moved task is an alternate_agent_move line, which anchors to its
+// record), and it holds to its policy revision (anchorLinePolicy).
 //
 // The refusals name no agent, as the other arms don't.
 func anchorRouterLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
@@ -524,6 +572,49 @@ func anchorRouterLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLin
 	if line.Version != 1 {
 		return errors.New("the router sets only a role's first version")
 	}
+	return anchorLinePolicy(ctx, tx, line)
+}
+
+// anchorAlternateAgentMoveLine holds a moved line to the operator's move that
+// set it: the record it cites is a parked move of its own task, made by a
+// command whose receipt records that move, and the line was set at the
+// record's instant on the record's pool. The record's role moves to the
+// record's agent; every line holds to its policy revision (anchorLinePolicy),
+// since a move re-pins the task as the router would. Any version may be a
+// move: it supersedes whatever the role held.
+func anchorAlternateAgentMoveLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
+	record, err := tx.GetAlternateAgentRetry(ctx, domain.Digest(line.SetBy))
+	if err != nil {
+		return err
+	}
+	if record.TaskID != line.TaskID || !record.ParkedMove() {
+		return errors.New("its record is not a move of its own task")
+	}
+	receipt, _, err := tx.GetCommandReceipt(ctx, record.CommandID)
+	if err != nil {
+		return fmt.Errorf("its record's command: %w", err)
+	}
+	if move := receipt.ParkedTaskMove; move == nil || move.Retry.ID != record.ID {
+		return errors.New("its record's command did not move the task")
+	}
+	if !line.SetAt.Equal(record.RecordedAt) || line.Provenance.Pool != record.Pool {
+		return errors.New("it was not set at its record's instant on its record's pool")
+	}
+	if line.Role == record.Role && line.Agent != record.Agent {
+		return errors.New("its record moved the role to another agent")
+	}
+	return anchorLinePolicy(ctx, tx, line)
+}
+
+// anchorLinePolicy holds a line that carries a provenance to the policy
+// revision it cites: the revision exists and was set no later than the line,
+// it orders the line's agent for its role, any agent the line passed over is
+// in its orders, and a line the drain-first tier chose names the pool it
+// drains first. The marks and readings the routing acted on are not
+// rechecked, because both change over time: a line routed past a mark that
+// has since cleared, or ranked by a reset since passed, is still the routing
+// that chose it.
+func anchorLinePolicy(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
 	revision := line.Provenance.PolicyRevision
 	policies, err := tx.RoutingPolicyRevisions(ctx)
 	if err != nil {

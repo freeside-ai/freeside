@@ -365,7 +365,8 @@ FROM client_enrollment_generations`
 			entry.Name() == "0121_routing_policy_drain_first.sql" ||
 			entry.Name() == "0122_memory_budget.sql" ||
 			entry.Name() == "0123_task_triages.sql" ||
-			entry.Name() == "0124_task_attachments.sql" || entry.IsDir() {
+			entry.Name() == "0124_task_attachments.sql" ||
+			entry.Name() == "0125_alternate_agent_retries.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

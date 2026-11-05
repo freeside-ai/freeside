@@ -34,6 +34,9 @@
 //   - quota_park.go   the refused window's hold on a parked attempt
 //   - capability_manifest.go, capability_retry.go
 //     the capability choices a failed writer card offers and their retries
+//   - alternate_agent.go, alternate_agent_retry.go
+//     the other agents a provider failure card offers, and the operator's
+//     retry or parked-task move that runs one (§5.4)
 //   - held_work_notice.go the advisory notice for a long refusal hold
 //   - vendor_instruction.go, review_instruction.go
 //     snapshots of the operator-host instruction files a writer or review

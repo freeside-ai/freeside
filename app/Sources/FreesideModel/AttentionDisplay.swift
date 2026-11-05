@@ -384,9 +384,14 @@ package enum AttentionDisplay {
                 .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ].compactMap { $0 }
+            // The agents Retry With Another Agent offers, so the card names
+            // them before the picker does.
+            let offers = (item.alternate_agents ?? []).map(\.agent)
+            let alternates: [FactRow] =
+                offers.isEmpty ? [] : [.init("Other Agents", offers.joined(separator: ", "), monospaced: true)]
             // What ran the failed attempt, as its admission recorded it; an
             // item raised before the daemon recorded it carries none (#979).
-            return rows + admittedFailureRows(failure.admitted?.value1)
+            return rows + admittedFailureRows(failure.admitted?.value1) + alternates
         case .review_diminishing_returns:
             return [
                 item.billable_cost_so_far.map { .init("Cost so Far", costSoFar($0.value1)) },
@@ -868,6 +873,7 @@ package enum AttentionDisplay {
         case .convert_to_policy: return "Convert to Policy"
         case .retry: return "Retry"
         case .retry_with_capabilities: return "Retry With Profile"
+        case .retry_with_alternate_agent: return "Retry With Another Agent"
         case .answer_and_retry: return "Answer and Retry"
         case .answer_without_retry: return "Answer Without Retry"
         case .rerun_trust_evaluation: return "Rerun Trust Evaluation"
@@ -919,7 +925,7 @@ package enum AttentionDisplay {
         case .stop, .stop_unattended: return "stop.fill"
         case .return_to_agent, .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
             .continue_under_policy, .convert_to_policy,
-            .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
+            .retry_with_capabilities, .retry_with_alternate_agent, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation,
             .inspect_trust_failure, .mark_seen, .dismiss, .start,
             .start_with_changes, .approve_with_changes, .decline, .acknowledge, .run_doctor,
@@ -967,7 +973,7 @@ package enum AttentionDisplay {
             return "The item closes without taking the requested action."
         case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
             .continue_under_policy, .convert_to_policy, .retry,
-            .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
+            .retry_with_capabilities, .retry_with_alternate_agent, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr, .return_to_agent, .mark_seen,
             .start, .start_with_changes, .approve_with_changes, .snooze, .acknowledge, .run_doctor,

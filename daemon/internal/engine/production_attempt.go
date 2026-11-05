@@ -21,6 +21,10 @@ type ProductionReattemptSpec struct {
 	OperatorCommandID        string
 	RetryOfInvocationID      domain.InvocationID
 	CapabilityManifestDigest domain.Digest
+	// AlternateAgentRetryID is the alternate-agent record an operator retry
+	// runs under, in place of CapabilityManifestDigest: one retry carries
+	// one choice.
+	AlternateAgentRetryID domain.Digest
 }
 
 // ProductionReattempt reports the new run and the lineage/input identities
@@ -81,10 +85,13 @@ func reattemptProductionRunTx(
 	if spec.RetryOfInvocationID != "" {
 		operatorBindings++
 	}
-	if spec.CapabilityManifestDigest != "" {
+	if spec.CapabilityManifestDigest != "" && spec.AlternateAgentRetryID != "" {
+		return ProductionReattempt{}, errors.New("an operator retry carries one choice")
+	}
+	if choice := spec.CapabilityManifestDigest + spec.AlternateAgentRetryID; choice != "" {
 		operatorBindings++
-		if !contentaddr.Valid(string(spec.CapabilityManifestDigest)) {
-			return ProductionReattempt{}, errors.New("capability manifest digest is invalid")
+		if !contentaddr.Valid(string(choice)) {
+			return ProductionReattempt{}, errors.New("operator retry choice digest is invalid")
 		}
 	}
 	if operatorBindings != 0 && operatorBindings != 3 {
@@ -160,7 +167,7 @@ func reattemptProductionRunTx(
 					parentMatches := spec.ParentRunID == "" || latest.ParentRunID == spec.ParentRunID
 					intentMatches := latest.Reason == reason && parentMatches &&
 						latest.OperatorCommandID == nil && latest.RetryOfInvocationID == nil &&
-						latest.CapabilityManifestDigest == nil
+						latest.CapabilityManifestDigest == nil && latest.AlternateAgentRetryID == nil
 					if operatorBindings != 0 {
 						intentMatches = operatorRetryAttemptMatches(latest, spec, reason)
 					}
@@ -224,10 +231,14 @@ func reattemptProductionRunTx(
 			if operatorBindings != 0 {
 				commandID := spec.OperatorCommandID
 				retryOf := spec.RetryOfInvocationID
-				manifest := spec.CapabilityManifestDigest
 				attempt.OperatorCommandID = &commandID
 				attempt.RetryOfInvocationID = &retryOf
-				attempt.CapabilityManifestDigest = &manifest
+				if manifest := spec.CapabilityManifestDigest; manifest != "" {
+					attempt.CapabilityManifestDigest = &manifest
+				}
+				if record := spec.AlternateAgentRetryID; record != "" {
+					attempt.AlternateAgentRetryID = &record
+				}
 			}
 			if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
 				return err
@@ -282,8 +293,18 @@ func operatorRetryAttemptMatches(
 ) bool {
 	return attempt.OperatorCommandID != nil && *attempt.OperatorCommandID == spec.OperatorCommandID &&
 		attempt.RetryOfInvocationID != nil && *attempt.RetryOfInvocationID == spec.RetryOfInvocationID &&
-		attempt.CapabilityManifestDigest != nil && *attempt.CapabilityManifestDigest == spec.CapabilityManifestDigest &&
+		optionalDigestIs(attempt.CapabilityManifestDigest, spec.CapabilityManifestDigest) &&
+		optionalDigestIs(attempt.AlternateAgentRetryID, spec.AlternateAgentRetryID) &&
 		attempt.ParentRunID == spec.ParentRunID && attempt.Reason == reason
+}
+
+// optionalDigestIs reports whether an attempt's optional binding is the
+// spec's, where the spec's empty value means absent.
+func optionalDigestIs(bound *domain.Digest, want domain.Digest) bool {
+	if bound == nil {
+		return want == ""
+	}
+	return *bound == want
 }
 
 type productionAttemptReader interface {

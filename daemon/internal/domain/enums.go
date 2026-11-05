@@ -453,6 +453,7 @@ const (
 	CommandKindReassignCollector CommandKind = "reassign_collector"
 	CommandKindChangeTaskLine    CommandKind = "change_task_line"
 	CommandKindSetRoutingPolicy  CommandKind = "set_routing_policy"
+	CommandKindMoveParkedTask    CommandKind = "move_parked_task"
 )
 
 // AllCommandKinds lists every valid CommandKind; it is the single registration
@@ -465,12 +466,14 @@ var AllCommandKinds = []CommandKind{
 	CommandKindReassignCollector,
 	CommandKindChangeTaskLine,
 	CommandKindSetRoutingPolicy,
+	CommandKindMoveParkedTask,
 }
 
 func (k CommandKind) valid() bool {
 	switch k {
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask, CommandKindRefreshUsage,
-		CommandKindReassignCollector, CommandKindChangeTaskLine, CommandKindSetRoutingPolicy:
+		CommandKindReassignCollector, CommandKindChangeTaskLine, CommandKindSetRoutingPolicy,
+		CommandKindMoveParkedTask:
 		return true
 	default:
 		return false
@@ -1204,6 +1207,7 @@ const (
 	ActionAcceptRecommendedRoute   Action = "accept_recommended_route"
 	ActionChooseAlternativeRoute   Action = "choose_alternative_route"
 	ActionAdjudicateFindings       Action = "adjudicate_findings"
+	ActionRetryWithAlternateAgent  Action = "retry_with_alternate_agent"
 )
 
 // AllActions lists every valid Action.
@@ -1218,6 +1222,7 @@ var AllActions = []Action{
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 	ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
 	ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute, ActionAdjudicateFindings,
+	ActionRetryWithAlternateAgent,
 }
 
 func (a Action) valid() bool {
@@ -1231,7 +1236,8 @@ func (a Action) valid() bool {
 		ActionStart, ActionStartWithChanges, ActionApproveWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
-		ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute, ActionAdjudicateFindings:
+		ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute, ActionAdjudicateFindings,
+		ActionRetryWithAlternateAgent:
 		return true
 	default:
 		return false

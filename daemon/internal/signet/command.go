@@ -43,6 +43,7 @@ type ClientCommand struct {
 	ReassignCollector ReassignCollectorPayload
 	ChangeTaskLine    ChangeTaskLinePayload
 	SetRoutingPolicy  SetRoutingPolicyPayload
+	MoveParkedTask    MoveParkedTaskPayload
 }
 
 // SubmitTaskPayload mirrors the API contract's SubmitTaskPayload: the project
@@ -112,6 +113,9 @@ type DecisionPayload struct {
 	AlternativeChoices       []AlternativeChoice
 	FindingRoutes            []FindingRouteChoice `json:",omitempty"`
 	CapabilityManifestDigest *domain.Digest
+	// AlternateAgent is the tree agent a retry_with_alternate_agent decision
+	// picks from the card's offers, and forbidden on every other action.
+	AlternateAgent *string
 	// TaskLines are per-role agent choices for the task a task_proposal start
 	// names (plan §5.4). Nil means absent; a present, empty list is malformed.
 	// Only start and start_with_changes apply them, in the decision's
@@ -177,6 +181,9 @@ type EffectProposalRevisionInput struct {
 func decisionMessage(payload DecisionPayload) (string, error) {
 	if payload.Action != domain.ActionAdjudicateFindings && payload.FindingRoutes != nil {
 		return "", ErrInvalidReviewDisputeDecisionPayload
+	}
+	if payload.Action != domain.ActionRetryWithAlternateAgent && payload.AlternateAgent != nil {
+		return "", ErrInvalidAlternateAgentDecisionPayload
 	}
 	switch payload.Action {
 	case domain.ActionAdjudicateFindings:
@@ -249,6 +256,16 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 			return "", ErrInvalidCapabilityRetryDecisionPayload
 		}
 		return string(*payload.CapabilityManifestDigest), nil
+	case domain.ActionRetryWithAlternateAgent:
+		// The agent is the durable message, as the manifest digest is for a
+		// capability retry, so a replay compares the same choice.
+		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil || payload.Message != "" || len(payload.Attachments) != 0 ||
+			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil ||
+			payload.AlternateAgent == nil || *payload.AlternateAgent == "" {
+			return "", ErrInvalidAlternateAgentDecisionPayload
+		}
+		return *payload.AlternateAgent, nil
 	default:
 		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
 			payload.SnoozeUntil != nil ||
@@ -318,7 +335,7 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 
 // kindedReceiptRecord flattens a receipt's arm beside its kind, producing the
 // wire UsageRefreshRecord, CollectorReassignmentRecord, TaskLineChangeRecord,
-// or RoutingPolicyChangeRecord.
+// RoutingPolicyChangeRecord, or ParkedTaskMoveRecord.
 func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 	kind := receipt.Kind()
 	switch kind {
@@ -342,6 +359,11 @@ func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 			Kind domain.CommandKind `json:"kind"`
 			*domain.RoutingPolicyChangeReceipt
 		}{kind, receipt.RoutingPolicyChange}, nil
+	case domain.CommandKindMoveParkedTask:
+		return struct {
+			Kind domain.CommandKind `json:"kind"`
+			*domain.ParkedTaskMoveReceipt
+		}{kind, receipt.ParkedTaskMove}, nil
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 	}
 	return nil, domain.ErrCommandReceiptArms

@@ -419,6 +419,10 @@ var (
 		"an attempt of the role is running")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
+	ErrInvalidAlternateAgentQualification = errors.New(
+		"alternate agent qualification is not different_pool, valid_generation, or different_route")
+	ErrAlternateAgentRetryInconsistent = errors.New(
+		"alternate agent retry id does not match its content")
 	ErrInvalidTriageOutcome = errors.New(
 		"triage outcome is not a member of the closed list")
 	ErrInvalidTriageTier = errors.New(

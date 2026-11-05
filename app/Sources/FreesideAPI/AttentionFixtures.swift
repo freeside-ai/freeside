@@ -56,7 +56,7 @@ public enum AttentionFixtures {
     /// pins it to no actions, and the schema permits the empty set (#96).
     public static let phase1ActionSets: [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
         .spec_approval: [.approve, .request_changes, .discuss, .stop],
-        .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
+        .execution_failure: [.retry, .retry_with_capabilities, .retry_with_alternate_agent, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
@@ -91,7 +91,7 @@ public enum AttentionFixtures {
     public static let phase1Actions: [Components.Schemas.Action] = [
         .approve, .request_changes, .discuss, .stop,
         .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
-        .retry, .retry_with_capabilities,
+        .retry, .retry_with_capabilities, .retry_with_alternate_agent,
         .answer_and_retry, .answer_without_retry,
         .rerun_trust_evaluation, .inspect_trust_failure,
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
@@ -890,6 +890,25 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The implementation failure as a quota exhaustion, whose card offers
+    /// the routing policy's second agent on another pool (issue #869) in
+    /// place of capability profiles, which no quota failure offers. The
+    /// default inbox keeps the invalid-configuration failure; tests and
+    /// screenshots opt into this one.
+    public static func quotaFailure() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .execution_failure)
+        snapshot.item.execution_failure?.value1.cause = .quota
+        snapshot.item.reason = "the implementation stage hit its account's quota window"
+        snapshot.item.execution_failure?.value1.offered_manifests = nil
+        snapshot.item.requested_decision = [.retry, .retry_with_alternate_agent, .discuss, .stop]
+        snapshot.item.alternate_agents = [
+            .init(
+                agent: "claude-team", pool: "claude-team-pool", harness: .claude_code, model: "claude-opus-5-5",
+                qualification: .different_pool)
+        ]
+        return snapshot
+    }
+
     /// A hold raised after the run's pull request already existed: the item
     /// carries that pull request's reference and offers viewing it beside
     /// inspecting the trust failure. The default inbox keeps the hold opened
@@ -1013,10 +1032,14 @@ public enum AttentionFixtures {
         }
         // The default hold was opened before publication, so it carries no
         // pull request reference and cannot offer open_pr.
+        // The default failure's cause, an invalid configuration, is one no
+        // other agent escapes, so it offers none (quotaFailure does).
         let actions =
             type == .publish_blocked
             ? allowed.filter { $0 != .open_pr }
-            : type == .review_dispute ? allowed.filter { $0 != .adjudicate_findings } : allowed
+            : type == .review_dispute
+                ? allowed.filter { $0 != .adjudicate_findings }
+                : type == .execution_failure ? allowed.filter { $0 != .retry_with_alternate_agent } : allowed
 
         // Every card keeps its referenced screenshot claim; cards whose type
         // carries §9's summary layer also get an inline text claim, whose

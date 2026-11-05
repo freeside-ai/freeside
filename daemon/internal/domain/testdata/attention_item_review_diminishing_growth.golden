@@ -85,6 +85,7 @@
     "cause": "growth_without_blockers",
     "drift_audit": null
   },
+  "alternate_agents": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

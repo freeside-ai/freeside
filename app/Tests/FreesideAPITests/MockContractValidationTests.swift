@@ -318,6 +318,25 @@ import Testing
                 == "invalid execution_failure capability manifests")
     }
 
+    /// domain.validateAlternateAgents: the action and its offers come
+    /// together, sorted by agent, on a run's failure card.
+    @Test func alternateAgentOffersComeWithTheirAction() {
+        let quota = AttentionFixtures.quotaFailure().item
+        #expect(MockContractValidation.itemValidityBreach(quota) == nil)
+
+        var unoffered = quota
+        unoffered.requested_decision.removeAll { $0 == .retry_with_alternate_agent }
+        #expect(
+            MockContractValidation.itemValidityBreach(unoffered)
+                == "retry_with_alternate_agent does not match alternate_agents")
+        var unsorted = quota
+        unsorted.alternate_agents?.insert(
+            .init(
+                agent: "codex-team", pool: "codex-pool", harness: .codex_cli, model: "gpt-test",
+                qualification: .different_pool), at: 0)
+        #expect(MockContractValidation.itemValidityBreach(unsorted) == "invalid alternate_agents")
+    }
+
     @Test func recommendationAndDecisionSurfaceBreachesNameTheFailedInvariant() {
         let finding = AttentionFixtures.fixture(type: .finding_adjudication).item
         #expect(MockContractValidation.itemValidityBreach(finding) == nil)
@@ -1339,6 +1358,32 @@ import Testing
             c.payload.asDecision.alternative_choices = [
                 .init(finding_id: "review-finding-17", route: .dispute)
             ]
+            return c
+        }
+    }
+
+    /// signet decisionMessage: an alternate-agent retry carries the agent
+    /// alone, and no other action carries one.
+    @Test func alternateAgentInputIsTheAgentAlone() throws {
+        let quota = AttentionFixtures.quotaFailure()
+        var valid = command(against: quota)
+        valid.payload.asDecision.action = .retry_with_alternate_agent
+        valid.payload.asDecision.alternate_agent = "claude-team"
+        try MockContractValidation.validateActionInput(valid)
+
+        expectMalformed(reason: "invalid alternate agent selection") {
+            var c = valid
+            c.payload.asDecision.alternate_agent = nil
+            return c
+        }
+        expectMalformed(reason: "invalid alternate agent selection") {
+            var c = valid
+            c.payload.asDecision.message = "please"
+            return c
+        }
+        expectMalformed(reason: "alternate_agent on unrelated action") {
+            var c = valid
+            c.payload.asDecision.action = .retry
             return c
         }
     }

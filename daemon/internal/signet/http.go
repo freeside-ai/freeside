@@ -404,6 +404,7 @@ type decisionPayloadRequest struct {
 	FindingRoutes               []FindingRouteChoice           `json:"finding_routes"`
 	TaskLines                   []domain.TaskLineChoice        `json:"task_lines"`
 	CapabilityManifestDigest    *domain.Digest                 `json:"capability_manifest_digest"`
+	AlternateAgent              *string                        `json:"alternate_agent"`
 	AnswerRoute                 *domain.AnswerRoute            `json:"answer_route"`
 	DecisionActionSurfaceDigest *domain.Digest                 `json:"decision_action_surface_digest"`
 }
@@ -472,7 +473,7 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 	case domain.CommandKindSubmitTask:
 		h.submitTaskCommand(w, r, request)
 	case domain.CommandKindRefreshUsage, domain.CommandKindReassignCollector,
-		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy:
+		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy, domain.CommandKindMoveParkedTask:
 		h.operatorCommand(w, r, request, kindProbe.Kind)
 	case domain.CommandKindDecision, "":
 		// A missing kind is treated as a decision for clients that predate the
@@ -541,6 +542,10 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 	if arm.CapabilityManifestDigest != nil {
 		digest := *arm.CapabilityManifestDigest
 		payload.CapabilityManifestDigest = &digest
+	}
+	if arm.AlternateAgent != nil {
+		agent := *arm.AlternateAgent
+		payload.AlternateAgent = &agent
 	}
 	if arm.AnswerRoute != nil {
 		route := *arm.AnswerRoute
@@ -676,6 +681,11 @@ func (h httpHandler) operatorCommand(
 			Kind domain.CommandKind `json:"kind"`
 			*SetRoutingPolicyPayload
 		}{SetRoutingPolicyPayload: &in.SetRoutingPolicy}
+	case domain.CommandKindMoveParkedTask:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*MoveParkedTaskPayload
+		}{MoveParkedTaskPayload: &in.MoveParkedTask}
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
 		return
@@ -1001,6 +1011,7 @@ func isCommandRequestError(err error) bool {
 		ErrInvalidReviewDisputeDecisionPayload, ErrFindingRouteNotOffered, ErrFindingRoutesIncomplete,
 		ErrFindingRouteReasonInvalid, ErrFindingRouteReasonUnpublishable,
 		ErrCapabilityManifestNotOffered,
+		ErrInvalidAlternateAgentDecisionPayload, ErrAlternateAgentNotOffered,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAnswerRouteRequired, ErrAttachmentNotStored,
 		// A referenced action surface that does not match the command is
 		// deterministic invalid client input (a foreign/stale/unknown surface),
@@ -1041,6 +1052,9 @@ func isCommandRequestError(err error) bool {
 func isCommandAuthorityRejection(err error) bool {
 	for _, target := range []error{
 		ErrDoctorUnavailable,
+		// The offer or park the client acted on no longer holds: the agent
+		// stopped qualifying, or the parked attempt started or closed.
+		ErrAlternateAgentNotQualified, ErrTaskNotParked,
 		ErrProposalSnoozed,
 		ErrImagePolicyAdoptionStale,
 		domain.ErrReviewConfigAdoptionIneffective,

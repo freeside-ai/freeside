@@ -416,7 +416,7 @@ func TestQuotaParkOnlyFromTheRootInvocation(t *testing.T) {
 		var hold *domain.QuotaWindowHold
 		if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 			var err error
-			hold, err = quotaParkHold(t.Context(), tx, f.run, terminal, time.Now().UTC())
+			hold, err = quotaParkHold(t.Context(), tx, nil, f.run, terminal, time.Now().UTC())
 			return err
 		}); err != nil {
 			t.Fatal(err)

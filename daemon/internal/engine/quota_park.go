@@ -74,8 +74,12 @@ func admittedPool(
 // only the root's terminal. The mark is written
 // whenever a reset and an enrollment exist, since it is a fact about the pool
 // whatever happens to this task.
+//
+// Under agent selection the hold carries the agents the operator may move the
+// task to (parkedTaskOffers).
 func quotaParkHold(
-	ctx context.Context, tx *store.WriteTx, run domain.Run, terminal productionTerminalRecord, now time.Time,
+	ctx context.Context, tx *store.WriteTx, selection *AgentSelection, run domain.Run,
+	terminal productionTerminalRecord, now time.Time,
 ) (*domain.QuotaWindowHold, error) {
 	refusal := terminal.QuotaRefusal
 	if terminal.Status != exec.StatusFailed || terminal.Cause != domain.FailureCauseQuota || refusal == nil ||
@@ -119,7 +123,34 @@ func quotaParkHold(
 	if parkable, err := productionAttemptParkable(ctx, tx, run); err != nil || !parkable {
 		return nil, err
 	}
-	return &domain.QuotaWindowHold{Pool: pool, ExhaustedMark: mark}, nil
+	offers, err := parkedTaskOffers(ctx, &tx.ReadTx, selection, run.TaskID, terminal.InvocationID, now)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.QuotaWindowHold{Pool: pool, ExhaustedMark: mark, AlternateAgents: offers}, nil
+}
+
+// parkedTaskOffers returns the agents a task parked on its implementer's
+// quota refusal may move to, nil when there is no agent selection or none
+// qualifies. Only a routing policy's agents are offered: a move re-pins the
+// task's lines as the router would (moveParkedTask).
+func parkedTaskOffers(
+	ctx context.Context, tx *store.ReadTx, selection *AgentSelection, taskID domain.TaskID,
+	refused domain.InvocationID, now time.Time,
+) ([]domain.AlternateAgentOffer, error) {
+	if selection == nil {
+		return nil, nil
+	}
+	return selection.alternateAgentOffers(ctx, tx, parkedTaskFailure(taskID, refused), now)
+}
+
+// parkedTaskFailure is the failure a parked task's offers answer: its
+// implementer's quota refusal on the parked attempt's parent.
+func parkedTaskFailure(taskID domain.TaskID, refused domain.InvocationID) alternateAgentFailure {
+	return alternateAgentFailure{
+		taskID: taskID, role: domain.RoleImplementer, cause: domain.FailureCauseQuota,
+		invocationID: refused, policyOnly: true,
+	}
 }
 
 // productionAttemptParkable reports whether reattemptProductionRunTx can
@@ -173,6 +204,12 @@ func parkProductionAttempt(
 // does a parent with no refused window or pool to wait on, as when an
 // operator's reattempt happens to carry the park's reason: the gate holds
 // only on a refusal it can read, and never stops dispatch over one it can't.
+//
+// Under agent selection, an implementer line that now resolves to another
+// pool also lets it start: the operator moved the task off the refused pool
+// (moveParkedTask) or changed its line, and the window no longer bounds it. A
+// line that resolves to no pool keeps the hold. The hold it returns carries
+// the offers current at now, so the hold row a client reads stays fresh.
 func (e *Engine) requireQuotaWindowReset(
 	ctx context.Context, run domain.Run, invocationID domain.InvocationID,
 ) error {
@@ -215,6 +252,47 @@ func (e *Engine) requireQuotaWindowReset(
 		if !marked || mark.ResetsAt == nil {
 			return nil
 		}
-		return &QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{Pool: pool, ExhaustedMark: mark}}
+		selection := e.agentSelection()
+		if moved, err := implementerMovedOffPool(ctx, tx, selection, run.ID, pool); err != nil || moved {
+			return err
+		}
+		offers, err := parkedTaskOffers(ctx, tx, selection, run.TaskID, parentInvocation, now)
+		if err != nil {
+			return err
+		}
+		return &QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{
+			Pool: pool, ExhaustedMark: mark, AlternateAgents: offers,
+		}}
 	})
+}
+
+// implementerMovedOffPool reports whether the run's current implementer line
+// names an agent that resolves to a pool other than refused. No selection, no
+// line, a line that fails its anchor, or an agent that no longer resolves
+// reports false: the park holds, and admission refuses a bad line when the
+// window resets.
+func implementerMovedOffPool(
+	ctx context.Context, tx *store.ReadTx, selection *AgentSelection, runID domain.RunID, refused domain.UsagePoolID,
+) (bool, error) {
+	if selection == nil {
+		return false, nil
+	}
+	line, found, err := RunTaskLine(ctx, tx, runID, domain.RoleImplementer)
+	if err != nil || !found {
+		return false, nil
+	}
+	candidate, ok, err := selection.routeCandidate(ctx, tx, line.Agent)
+	if err != nil || !ok {
+		return false, err
+	}
+	return candidate.pool != refused, nil
+}
+
+// agentSelection is the engine's agent selection, nil when it admits under
+// one configured identity.
+func (e *Engine) agentSelection() *AgentSelection {
+	if e.admission == nil {
+		return nil
+	}
+	return e.admission.environment.Agents
 }

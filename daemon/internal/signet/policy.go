@@ -30,7 +30,8 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 		domain.ActionDiscuss, domain.ActionStop,
 	),
 	domain.AttentionExecutionFailure: actionSet(
-		domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
+		domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionRetryWithAlternateAgent,
+		domain.ActionDiscuss, domain.ActionStop,
 	),
 	domain.AttentionAgentQuestion: actionSet(
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry, domain.ActionStop,
