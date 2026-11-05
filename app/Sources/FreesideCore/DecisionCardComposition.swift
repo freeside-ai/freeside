@@ -126,6 +126,27 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
+    /// The claims the Evidence fold lists (#2607): the foot's attachment
+    /// claims and, on iPhone, the text claims a supporting claims module
+    /// would otherwise draw below the actions. The Mac lists those text
+    /// claims in its action region instead, so the card draws each once.
+    func evidenceClaims(
+        from claims: [Components.Schemas.AgentClaim],
+        prominentClaimIndex: Int?,
+        on platform: UnverifiedContext.Platform
+    ) -> [Components.Schemas.AgentClaim] {
+        let foot = footClaims(from: claims, prominentClaimIndex: prominentClaimIndex)
+        switch platform {
+        case .mac:
+            return foot
+        case .phone:
+            let supporting = supportingModules.filter { modules[$0] == .claims }.flatMap {
+                claimsInCard(from: claims, at: $0, prominentClaimIndex: prominentClaimIndex, on: .phone)
+            }
+            return foot + supporting
+        }
+    }
+
     func summaries(
         from claims: [Components.Schemas.AgentClaim]
     ) -> [Components.Schemas.AgentClaim] {
@@ -179,8 +200,8 @@ struct DecisionCardComposition: Equatable {
         var label: String { isAgentWritten ? "Agent reason" : "Reason" }
     }
 
-    /// The reason the card's Details carry in full on every type (plan §9
-    /// revision 82), including one the card draws nowhere else, such as the
+    /// The reason the card's Recorded Context carries in full on every type
+    /// (plan §9 revision 82), including one the card draws nowhere else, such as the
     /// diminishing-returns `Binding:` line. Nil only when the daemon recorded
     /// no reason.
     static func reason(for item: Components.Schemas.AttentionItem) -> Reason? {
@@ -188,7 +209,7 @@ struct DecisionCardComposition: Equatable {
         return Reason(text: item.reason, isAgentWritten: reasonIsAgentWritten(item._type))
     }
 
-    /// Whether the card draws `item`'s reason outside Details. The reason is
+    /// Whether the card draws `item`'s reason outside Recorded Context. The reason is
     /// dropped only when the type's `reason` is the agent's summary *and*
     /// that summary has a claim to render under. A specification approval
     /// persisted before summary claims carries its `Specification` claim
@@ -204,8 +225,9 @@ struct DecisionCardComposition: Equatable {
     /// the facts, stored before they existed or raised by a review
     /// escalation, has no other statement of its cause and keeps its reason.
     ///
-    /// Details carries the reason in full on every type either way (plan §9
-    /// revision 82), so a reason this drops is still one disclosure away.
+    /// Recorded Context carries the reason in full on every type either way
+    /// (plan §9 revision 82), so a reason this drops is still one disclosure
+    /// away.
     func drawsReason(for item: Components.Schemas.AttentionItem) -> Bool {
         if item._type == .review_diminishing_returns, item.review_diminishing != nil {
             return false
@@ -364,7 +386,7 @@ struct DecisionCardComposition: Equatable {
             carriesInfo: item._type == .agent_question && !rendersAsk(for: item))
     }
 
-    /// Where the card shell draws the `reason` ahead of Details. The reason
+    /// Where the card shell draws the `reason` ahead of Recorded Context. The reason
     /// is drawn by the shell, not by a module, so its place is a rule of the
     /// type rather than a position in `modules`.
     enum ReasonPlacement: Equatable {
@@ -372,8 +394,8 @@ struct DecisionCardComposition: Equatable {
         case underAsk
         /// A closed "Recorded Context" disclosure below the actions.
         case recordedContext
-        /// Off the card's face: Details alone carry it, as they do on every
-        /// type.
+        /// Off the card's face: the Recorded Context fold alone carries it,
+        /// as it does on every type.
         case detailsOnly
     }
 
@@ -447,7 +469,7 @@ struct DecisionCardComposition: Equatable {
     /// (`ensureSpecificationBlockedItem` in
     /// daemon/internal/engine/specification.go, the one writer). The card's
     /// lead names that wait and its Waiting fact gives the duration, with
-    /// the exact start in Details, so the reason leaves the face. That holds
+    /// the exact start in Identifiers, so the reason leaves the face. That holds
     /// only for the wait the daemon writes today: an item with no typed
     /// wait keeps the generic ask, and no writer yet says what a wait on PR
     /// checks or an external review records, so both keep the reason under
@@ -539,9 +561,6 @@ struct DecisionCardComposition: Equatable {
         }
 
         var platform: Platform = currentPlatform
-        /// At an accessibility size a supporting section is a disclosure,
-        /// so its keyword is that disclosure's label.
-        var accessibilityLayout = false
         /// The recommendation block draws, in the agent-claim register.
         var drawsUnverifiedRecommendation = false
         /// The card has a change summary to draw in its fact block.
@@ -574,7 +593,12 @@ struct DecisionCardComposition: Equatable {
             if index == actionInsertionIndex, drawsUnverifiedInActionRegion(item, in: context) {
                 slots.append(.actionRegion)
             }
-            if drawsUnverifiedKeyword(module, at: index, for: item, in: context) {
+            // A module under the actions draws inside a fold (Recorded
+            // Context or Evidence, #2607), so its keyword is never in view
+            // to carry the control.
+            if index < actionInsertionIndex,
+                drawsUnverifiedKeyword(module, at: index, for: item, in: context)
+            {
                 slots.append(.module(index))
             }
         }
@@ -666,9 +690,7 @@ struct DecisionCardComposition: Equatable {
             let drawn = claimsInCard(
                 from: item.agent_claims, at: index,
                 prominentClaimIndex: context.prominentClaimIndex, on: context.platform)
-            // A supporting claims section is a disclosure at an accessibility
-            // size, and its keyword is that disclosure's label.
-            return !drawn.isEmpty && (claimsAreProminent(at: index) || !context.accessibilityLayout)
+            return !drawn.isEmpty
         case .stopCause:
             // The drift audit's explanation and fixes are the audit model's
             // words, drawn under an unverified keyword (frame 5.2).
@@ -931,13 +953,91 @@ struct DecisionCardComposition: Equatable {
     }
 }
 
+/// Where a card's foot draws its folds (#2607), kept apart from the view so
+/// the placement is testable without rendering. The rule the task page
+/// density handoff sets: if you'd copy it, it's in Identifiers; if you'd
+/// read it, it's in the body.
+struct DecisionCardFoot: Equatable {
+    enum Fold: Equatable {
+        /// The agent's claims and the evidence packet, directly above the
+        /// control group.
+        case evidence
+        /// The one reading fold under the hairline.
+        case recordedContext
+        /// The card's own identifier rows. A card on a task page hands them
+        /// to the page's Identifiers footer instead.
+        case identifiers
+    }
+
+    let aboveActions: [Fold]
+    let underHairline: [Fold]
+
+    init(
+        evidenceClaims: [Components.Schemas.AgentClaim],
+        attachments: Int,
+        recordedContext: DecisionRecordedContext,
+        identifierRows: [AttentionDisplay.BindingRow],
+        onPage: Bool
+    ) {
+        aboveActions = evidenceClaims.isEmpty && attachments == 0 ? [] : [.evidence]
+        var underHairline: [Fold] = []
+        if !recordedContext.parts.isEmpty { underHairline.append(.recordedContext) }
+        if !onPage, !identifierRows.isEmpty { underHairline.append(.identifiers) }
+        self.underHairline = underHairline
+    }
+}
+
+/// What a card's Recorded Context holds, in the order it draws them: the
+/// daemon's reason in full, the folded modules, the reading rows, and the
+/// supporting modules.
+struct DecisionRecordedContext: Equatable {
+    var hasReason = false
+    var hasRunDetails = false
+    var hasReviewYield = false
+    /// The reading rows: `AttentionDisplay.detailReadingRows`, then the
+    /// requested actions not offered on this surface.
+    var readingRows: [AttentionDisplay.BindingRow] = []
+    var hasFactBlock = false
+    var hasAgentSummary = false
+    var hasReport = false
+
+    /// The closed fold's mono line: what it holds, in drawing order.
+    var parts: [String] {
+        var parts: [String] = []
+        if hasReason { parts.append("reason") }
+        if hasRunDetails { parts.append("run details") }
+        if hasReviewYield { parts.append("review yield") }
+        let readingParts = Set(readingRows.compactMap { Self.readingPart($0.label) })
+        parts.append(contentsOf: Self.readingPartOrder.filter(readingParts.contains))
+        if hasFactBlock { parts.append("facts") }
+        if hasAgentSummary { parts.append("agent summary") }
+        if hasReport { parts.append("report") }
+        return parts
+    }
+
+    var summary: String { parts.joined(separator: " · ") }
+
+    /// The reading rows' parts, in the order `detailReadingRows` builds
+    /// them and the view appends the unavailable actions.
+    private static let readingPartOrder = ["posture", "readiness", "review rounds", "not offered here"]
+
+    private static func readingPart(_ label: String) -> String? {
+        if label == "Posture" { return "posture" }
+        if label == "Readiness" || label.hasPrefix("Requirement ") || label.hasPrefix("Waiver ") {
+            return "readiness"
+        }
+        if label.hasPrefix("Review Round ") || label == "Terminal Review" { return "review rounds" }
+        if label == "Requested, Not Available Here" { return "not offered here" }
+        return nil
+    }
+}
+
 /// The card's closed-by-default disclosures. The view keeps the open set as
 /// local state; a caller names the ones that start open, which is how a
 /// screenshot shows what a folded section holds.
 enum DecisionDisclosure: Hashable {
     case runDetails
     case recordedContext
-    case reviewYield
     /// One claim's source identifiers. Neither a label nor a digest is
     /// unique on its own, and two claims that share both are the same bytes
     /// under the same name, so opening them together loses nothing.
@@ -962,12 +1062,6 @@ struct DecisionFactPlacement: Equatable {
 
     let visible: [AttentionDisplay.FactRow]
     let folded: [AttentionDisplay.FactRow]
-
-    /// What the closed fold says it holds: the folded rows' values in row
-    /// order, so the stage and what it waits on read without opening it.
-    var foldedSummary: String? {
-        folded.isEmpty ? nil : folded.map(\.value).joined(separator: " \u{00B7} ")
-    }
 
     init(
         _ item: Components.Schemas.AttentionItem,
@@ -1091,7 +1185,7 @@ struct FindingCardPresentation: Equatable, Identifiable {
         .joined(separator: " · ")
         evidence = proposal.evidence
 
-        // The binding digest stays in Technical Details with the rest of
+        // The binding digest stays in Identifiers with the rest of
         // the binding (`AttentionDisplay.findingAdjudicationRows`).
         var daemonFacts: [AttentionDisplay.FactRow] = [
             .init("Finding", proposal.finding_id, monospaced: true)
@@ -1502,33 +1596,21 @@ struct DecisionYieldPresentation: Equatable {
 
     let rounds: [Round]
     let summary: String
-    /// What the closed Review Yield fold says of itself: how many rounds
-    /// ran, and how the daemon recorded the last one where it did.
-    let foldSummary: String
 
-    init(rounds: [Round], lastRound: String? = nil) {
+    init(rounds: [Round]) {
         self.rounds = rounds
         summary = "Review yield: " + rounds.map(\.text).joined(separator: "; ") + "."
-        foldSummary =
-            ([rounds.count == 1 ? "1 round" : "\(rounds.count) rounds", lastRound] as [String?])
-            .compactMap { $0 }.joined(separator: " · ")
     }
 
     init?(_ item: Components.Schemas.AttentionItem) {
         guard let history = item.yield_history?.value1 else { return nil }
-        let lastRound =
-            switch history.terminal_outcome {
-            case .clean: "last clean"
-            case .findings: "last had findings"
-            }
         self.init(
             rounds: history.rounds.map {
                 .init(
                     number: $0.round,
                     newFindings: $0.new_findings,
                     recurringFindings: $0.recurring_findings)
-            },
-            lastRound: lastRound)
+            })
     }
 }
 
@@ -1751,35 +1833,15 @@ struct DecisionYieldChartModuleView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let presentation: DecisionYieldPresentation
     var showsBars = true
-    /// When set, the rounds fold into a "Review Yield" disclosure in place
-    /// of the module card: the final review reads its verdict first and the
-    /// rounds that led to it on demand (D07).
-    var isExpanded: Binding<Bool>? = nil
 
     var body: some View {
-        if let isExpanded {
-            SentenceDisclosure(
-                label: Self.title, summary: presentation.foldSummary, isExpanded: isExpanded
-            ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    rounds
-                }
-                .font(FreesideFont.callout)
-                .foregroundStyle(Color.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 8)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(presentation.summary))
-            }
-        } else {
-            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
-                KeywordLabel(text: Self.title)
-                rounds
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(presentation.summary))
+        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
+            KeywordLabel(text: Self.title)
+            rounds
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(presentation.summary))
     }
 
     private static let title = "Review Yield"

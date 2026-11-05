@@ -47,6 +47,16 @@ struct TaskPageView: View {
     /// The item whose card `leadingCard` draws.
     private let leadingItemID: String?
     private let leadingCard: AnyView?
+    /// The leading card's identifier rows, which the footer lists as its
+    /// Decision group (#2607). The card hands them up through its seat.
+    private let decisionIdentifiers: [AttentionDisplay.BindingRow]
+    /// Counts the leading card's requests to reveal its identifiers; each
+    /// new count opens the footer and scrolls to it.
+    private let identifiersReveals: Int
+    /// The launch input that opens the card's identifiers, which on a page
+    /// open the footer. Held apart from the persisted fold so a launch
+    /// doesn't write the operator's choice.
+    @State private var identifiersOpenAtLaunch: Bool
     /// The scroll view the outline row jumps through. Nil in a screenshot.
     private let scrollProxy: ScrollViewProxy?
     /// Supplies the existing screenshot composition without loading tasks or
@@ -113,15 +123,23 @@ struct TaskPageView: View {
         case toPlace
         /// To the leading card, which the operator opened.
         case toCard
+        /// To the Identifiers footer, which the leading card revealed.
+        case toIdentifiers
     }
 
     /// The page's top, where a Decisions place with no card left returns.
     private enum PageTop: Hashable { case top }
 
+    /// The Identifiers footer, where a card's reveal lands. Not a
+    /// `TaskPageAnchor`: the footer is no section the outline row offers.
+    private enum IdentifiersFooter: Hashable { case top }
+
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil, scrollProxy: ScrollViewProxy? = nil,
+        decisionIdentifiers: [AttentionDisplay.BindingRow] = [], identifiersReveals: Int = 0,
+        identifiersOpenAtLaunch: Bool = false,
         topMargin: CGFloat? = nil, memory: TaskPageMemory? = nil,
         screenshotTimeline: Components.Schemas.TaskTimeline? = nil,
         screenshotPinned: Bool = false,
@@ -134,6 +152,9 @@ struct TaskPageView: View {
         self.onOpenItem = onOpenItem
         self.leadingItemID = leadingItemID
         self.leadingCard = leadingCard
+        self.decisionIdentifiers = decisionIdentifiers
+        self.identifiersReveals = identifiersReveals
+        _identifiersOpenAtLaunch = State(initialValue: identifiersOpenAtLaunch)
         self.scrollProxy = scrollProxy
         self.topMargin = topMargin
         self.screenshotTimeline = screenshotTimeline
@@ -216,6 +237,7 @@ struct TaskPageView: View {
                 }
             }
             .onChange(of: leadingCard != nil, initial: true) { place.leadsWithCard = leadingCard != nil }
+            .onChange(of: identifiersReveals) { revealIdentifiers() }
             .taskStopConfirmation(
                 $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize)
         }
@@ -251,6 +273,12 @@ struct TaskPageView: View {
                     .background(alignment: .top) { jumpTarget(.section(.conversation)) }
                 timelineSection(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.timeline)) }
+                // Outside the timeline, so a seated card's identifiers,
+                // which have no other place on the page, stay reachable
+                // while the history loads or is unavailable.
+                if hasIdentifiersFooter(timeline) {
+                    identifiers(timeline)
+                }
             }
             .foregroundStyle(Color.ink)
             .pageBody(compact: compact)
@@ -261,11 +289,13 @@ struct TaskPageView: View {
     /// ImageRenderer never executes the loading task.
     func screenshotContent(
         _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil,
-        leadingItemID: String? = nil, leadingCard: AnyView? = nil, pinned: Bool = false
+        leadingItemID: String? = nil, leadingCard: AnyView? = nil,
+        decisionIdentifiers: [AttentionDisplay.BindingRow] = [], pinned: Bool = false
     ) -> some View {
         TaskPageView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun,
             onOpenItem: onOpenItem, leadingItemID: leadingItemID, leadingCard: leadingCard,
+            decisionIdentifiers: decisionIdentifiers,
             screenshotTimeline: timeline, screenshotPinned: pinned,
             disclosures: disclosures ?? TaskTimelineDisclosurePreferences(defaults: nil))
     }
@@ -362,6 +392,26 @@ struct TaskPageView: View {
             place.itemIDs = openItemIDs
             // Opening forgot the memory's place; the next record after the
             // jump writes the new one through.
+            place.anchor = nil
+            place.pendingMove = nil
+        }
+    }
+
+    /// Opens the Identifiers footer and moves to it when the leading card
+    /// reveals its identifiers: the item row's Reveal in Identifiers, an
+    /// inspection, or a launch input. The route seats a card it changes in
+    /// a later transaction, so the move waits the beat an opened card's
+    /// does, and wins over that move, which the same route starts.
+    private func revealIdentifiers() {
+        identifiersFold.wrappedValue = true
+        place.pendingMove = .toIdentifiers
+        Task { @MainActor [place, scrollProxy] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard place.pendingMove == .toIdentifiers else { return }
+            chosenSection = nil
+            await drawTarget(.section(.timeline))
+            withAnimation { scrollProxy?.scrollTo(IdentifiersFooter.top, anchor: .top) }
+            place.itemIDs = openItemIDs
             place.anchor = nil
             place.pendingMove = nil
         }
@@ -552,11 +602,15 @@ struct TaskPageView: View {
     private func controls(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         TaskStopView(
             coordinator: coordinator, taskID: snapshot.task.id,
-            moreActions: timeline.map { timeline in
-                let text = TaskTimelinePresentation.allIdentifiersText(
-                    TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id))
-                return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
-            } ?? [],
+            moreActions: hasIdentifiersFooter(timeline)
+                ? [
+                    .init(title: "Copy all identifiers") {
+                        Clipboard.copy(
+                            TaskTimelinePresentation.allIdentifiersText(
+                                TaskTimelinePresentation.identifierGroups(
+                                    timeline, taskID: snapshot.task.id, decision: decisionIdentifiers)))
+                    }
+                ] : [],
             presentedConfirmation: $stopConfirmation,
             explanationExpanded: $showsStopExplanation)
     }
@@ -706,25 +760,53 @@ struct TaskPageView: View {
                         .padding(.top, 3)
                 }
             }
-            identifiers(timeline)
         }
     }
 
     /// The page's one hairline, then its one Identifiers fold (R26), as the
     /// run timeline closes its page: every exact id on the page, grouped by
-    /// what it names, under everything the page says in words. Each card
-    /// keeps a copy menu for its own ids, so a single copy needs no trip
-    /// here.
-    private func identifiers(_ timeline: Components.Schemas.TaskTimeline) -> some View {
+    /// what it names, under everything the page says in words, the leading
+    /// card's among them (#2607). Each card keeps a copy menu for its own
+    /// ids, so a single copy needs no trip here.
+    private func identifiers(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         TechnicalDetailsSection(
-            groups: TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id),
-            summary: TaskTimelinePresentation.identifiersSummary(timeline),
-            isExpanded: fold(.identifiers)
+            groups: TaskTimelinePresentation.identifierGroups(
+                timeline, taskID: snapshot.task.id, decision: decisionIdentifiers),
+            summary: TaskTimelinePresentation.identifiersSummary(
+                timeline, hasDecision: !decisionIdentifiers.isEmpty),
+            isExpanded: identifiersFold
         )
         .padding(.top, 18)
         .overlay(alignment: .top) {
             Color.rule.frame(height: 1)
         }
+        // A reveal lands clear of the outline row pinned over the top.
+        .background(alignment: .top) {
+            Color.clear
+                .frame(height: outlineHeight)
+                .id(IdentifiersFooter.top)
+                .padding(.top, -outlineHeight)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// Whether the page draws its Identifiers footer: once the history
+    /// loads, whose ids make up most of it, or as soon as a seated card
+    /// hands up its own.
+    private func hasIdentifiersFooter(_ timeline: Components.Schemas.TaskTimeline?) -> Bool {
+        timeline != nil || !decisionIdentifiers.isEmpty
+    }
+
+    /// The footer's fold, open while the launch input holds it open as well
+    /// as when the operator opened it; closing it ends both.
+    private var identifiersFold: Binding<Bool> {
+        let fold = fold(.identifiers)
+        return Binding(
+            get: { fold.wrappedValue || identifiersOpenAtLaunch },
+            set: { expanded in
+                if !expanded { identifiersOpenAtLaunch = false }
+                fold.wrappedValue = expanded
+            })
     }
 
     /// One context-menu item per identifier, each copying the exact value.
@@ -1002,8 +1084,19 @@ struct TaskPageHost: View {
     var memory: TaskPageMemory? = nil
     let onOpenRun: (String) -> Void
     let onOpenItem: (String) -> Void
+    /// The launch input that opens a card's identifiers; on a page with a
+    /// card it opens the footer that holds them.
+    var identifiersOpenAtLaunch = false
+    /// Which folds are open. Nil uses the device's shared preferences; a
+    /// test passes its own.
+    var disclosures: TaskTimelineDisclosurePreferences? = nil
     /// Builds the leading item's card, seated in the page's scroll view.
     let card: (String, DecisionDetailView.PageSeat) -> DecisionDetailView
+    /// The seated card's identifier rows, by item id. The card builds them
+    /// from facts its model fetches and publishes them here, because the
+    /// footer that lists them belongs to the page.
+    @State private var seatedIdentifiers: [String: [AttentionDisplay.BindingRow]] = [:]
+    @State private var identifiersReveals = 0
     #if os(iOS)
         @State private var footerHeight: CGFloat = 0
     #endif
@@ -1016,8 +1109,12 @@ struct TaskPageHost: View {
                 TaskPageView(
                     coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
                     leadingItemID: leadingItemID,
-                    leadingCard: leadingItemID.map { AnyView(card($0, .init(scrollProxy: proxy)).id($0)) },
-                    scrollProxy: proxy, topMargin: topMargin, memory: memory)
+                    leadingCard: leadingItemID.map { AnyView(card($0, seat(proxy)).id($0)) },
+                    scrollProxy: proxy,
+                    decisionIdentifiers: leadingItemID.flatMap { seatedIdentifiers[$0] } ?? [],
+                    identifiersReveals: identifiersReveals,
+                    identifiersOpenAtLaunch: identifiersOpenAtLaunch && leadingItemID != nil,
+                    topMargin: topMargin, memory: memory, disclosures: disclosures)
             }
             .coordinateSpace(name: DecisionDetailView.scrollSpace)
             #if os(iOS)
@@ -1041,6 +1138,14 @@ struct TaskPageHost: View {
         .task(id: coordinator.taskReviewRequestKey(for: snapshot.task.id, revision: snapshot.as_of_revision)) {
             await coordinator.refreshTaskReviews(for: snapshot.task.id, revision: snapshot.as_of_revision)
         }
+    }
+
+    private func seat(_ proxy: ScrollViewProxy) -> DecisionDetailView.PageSeat {
+        DecisionDetailView.PageSeat(
+            scrollProxy: proxy,
+            // Only the card that leads keeps rows here: the page lists one.
+            publishIdentifiers: { itemID, rows in seatedIdentifiers = [itemID: rows] },
+            revealIdentifiers: { identifiersReveals += 1 })
     }
 }
 
@@ -1820,11 +1925,18 @@ enum TaskTimelinePresentation {
     /// campaign, each followed by its attempts, every owner under the name
     /// the page gives it. An owner with no identifiers (a section outside a
     /// campaign with no approved specification) is left out.
+    /// The footer's groups in page order: the task, the leading card's
+    /// decision, then each campaign and its runs once the history loads.
     static func identifierGroups(
-        _ timeline: Components.Schemas.TaskTimeline, taskID: String
+        _ timeline: Components.Schemas.TaskTimeline?, taskID: String,
+        decision: [AttentionDisplay.BindingRow] = []
     ) -> [IdentifierGroup] {
+        var groups = [
+            IdentifierGroup(owner: "Task", rows: technicalRows(taskID: taskID)),
+            IdentifierGroup(owner: "Decision", rows: decision),
+        ]
+        guard let timeline else { return groups.filter { !$0.rows.isEmpty } }
         let disambiguate = campaignCount(timeline) > 1
-        var groups = [IdentifierGroup(owner: "Task", rows: technicalRows(taskID: taskID))]
         for section in timeline.sections {
             groups.append(
                 .init(owner: sectionTitle(section, disambiguate: disambiguate), rows: technicalRows(section: section)))
@@ -1852,12 +1964,16 @@ enum TaskTimelinePresentation {
         return "\(title), campaign \(ShortIdentifier.short(campaign))"
     }
 
-    /// What the closed footer says it holds: `task · campaign · 2 runs`.
-    static func identifiersSummary(_ timeline: Components.Schemas.TaskTimeline) -> String {
-        let campaigns = timeline.sections.count { !technicalRows(section: $0).isEmpty }
-        let runs = timeline.sections.reduce(0) { $0 + $1.runs.count }
+    /// What the closed footer says it holds:
+    /// `task · decision · campaign · 2 runs`.
+    static func identifiersSummary(
+        _ timeline: Components.Schemas.TaskTimeline?, hasDecision: Bool = false
+    ) -> String {
+        let sections = timeline?.sections ?? []
+        let campaigns = sections.count { !technicalRows(section: $0).isEmpty }
+        let runs = sections.reduce(0) { $0 + $1.runs.count }
         return
-            (["task"]
+            (["task", hasDecision ? "decision" : nil]
             + [campaigns > 0 ? (campaigns == 1 ? "campaign" : "\(campaigns) campaigns") : nil]
             + [runs > 0 ? "\(runs) \(runs == 1 ? "run" : "runs")" : nil])
             .compactMap { $0 }.joined(separator: " · ")

@@ -842,7 +842,7 @@ struct InboxRowView: View {
             }
         }
         Divider()
-        Button("Reveal in Technical Details") { onRevealTechnicalDetails() }
+        Button("Reveal in Identifiers") { onRevealTechnicalDetails() }
     }
 
     private func copy(_ value: String) {

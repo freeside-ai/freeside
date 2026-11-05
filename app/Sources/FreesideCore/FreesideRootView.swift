@@ -433,6 +433,7 @@ public struct FreesideRootView: View {
             memory: pageMemory,
             onOpenRun: { navigation.openRun(taskID: task.task.id, runID: $0) },
             onOpenItem: openItem,
+            identifiersOpenAtLaunch: launchDetailsExpanded,
             card: { itemID, seat in decisionCard(itemID, coordinator: coordinator, seat: seat) })
     }
 

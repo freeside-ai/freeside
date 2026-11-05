@@ -411,7 +411,7 @@ package enum AttentionDisplay {
             return rows
         case .ready_for_final_review:
             // Diff alone: the checklist's "Bound to" row above carries the
-            // readiness candidate's head and base, and Details keeps this
+            // readiness candidate's head and base, and Identifiers keep this
             // diff's own base and head as Diff base and Diff head, so
             // repeating them here made one datum render in three card modules
             // (#1107).
@@ -443,12 +443,12 @@ package enum AttentionDisplay {
             var rows: [FactRow] = [
                 // The wait reads as the duration the inbox row already uses.
                 // Its exact start is an audit coordinate, so it stays with the
-                // other technical bindings rather than leading the card as a
+                // other identifiers rather than leading the card as a
                 // monospaced timestamp.
                 .init("Waiting", relativeRowTime(wait.since, now: now))
             ]
             // The item the run waits on is one the operator can open, so the
-            // row links to it; its id is a binding and stays in Details.
+            // row links to it; its id is a binding and stays in Identifiers.
             if let blockingItem = wait.item_id {
                 rows.append(.init("Blocked on", label(wait.kind), linkingItem: blockingItem))
             } else {
@@ -508,7 +508,7 @@ package enum AttentionDisplay {
     /// What approving an adoption adds to the repository's image policy.
     /// The recipe digest is shortened as a card row shortens a revision; the
     /// full digest and the refusal the card answers are audit coordinates,
-    /// kept for Details (`imagePolicyAdoptionDetailRows`).
+    /// kept for Identifiers (`imagePolicyAdoptionDetailRows`).
     private static func imagePolicyAdoptionRows(
         _ adoption: Components.Schemas.ImagePolicyAdoptionFacts
     ) -> [FactRow] {
@@ -730,7 +730,7 @@ package enum AttentionDisplay {
     package static let screenedIssueTextExplanation =
         "Written by the agent. The daemon screened this text; it did not check that it is true."
 
-    /// The adoption's audit coordinates for Details, in full: the repository
+    /// The adoption's audit coordinates for Identifiers, in full: the repository
     /// identity, the recipe digest the card row shortens, when the adoption
     /// names one, and the upkeep refusal the card answers.
     package static func imagePolicyAdoptionDetailRows(
@@ -749,7 +749,7 @@ package enum AttentionDisplay {
         return rows
     }
 
-    /// The filing's audit coordinates for Details, in full: the card's rows
+    /// The filing's audit coordinates for Identifiers, in full: the card's rows
     /// name the repository and finding for reading, and these are the
     /// forge identity and digest an operator copies to compare.
     package static func followUpFilingDetailRows(
@@ -1222,15 +1222,19 @@ package enum AttentionDisplay {
         actions.map { .init(label: "Requested, Not Available Here", value: label($0)) }
     }
 
-    package static func detailBindingRows(
+    /// The card's exact values, the ones a reader copies rather than reads
+    /// (#2607: "if you'd copy it, it's in Identifiers; if you'd read it,
+    /// it's in the body"): stamps, ids, versions, revisions, and digests.
+    /// A task page gathers them in its Identifiers footer; a card with no
+    /// page keeps them in its own Identifiers fold. Together with
+    /// `detailReadingRows` they are every row the card's foot carries, each
+    /// once and unchanged.
+    package static func detailIdentifierRows(
         _ item: Components.Schemas.AttentionItem,
         priorProposalDigest: String? = nil,
         proposalDigest: String? = nil
     ) -> [BindingRow] {
         var rows: [BindingRow] = []
-        if let posture = item.posture?.value1 {
-            rows.append(.init(label: "Posture", value: label(posture)))
-        }
         if let created = item.created_at {
             rows.append(.init(label: "Created", value: created.formatted(.iso8601)))
         }
@@ -1261,8 +1265,8 @@ package enum AttentionDisplay {
         // render: the checklist's "Bound to" row reads readiness_detail, which
         // a legacy or fake-mode item can omit, and it shows the readiness
         // candidate's coordinates rather than these. Audit coordinates belong
-        // in the technical bindings, so the card can stop repeating them
-        // without losing them (#1107).
+        // with the identifiers, so the card can stop repeating them without
+        // losing them (#1107).
         if let diff = item.diff_stats?.value1 {
             rows.append(.init(label: "Diff Base", value: diff.base_sha))
             rows.append(.init(label: "Diff Head", value: diff.head_sha))
@@ -1278,11 +1282,25 @@ package enum AttentionDisplay {
         rows.append(contentsOf: reviewConfigurationRecoveryRows(item))
         rows.append(contentsOf: codexReenrollmentRecoveryRows(item))
         rows.append(contentsOf: findingAdjudicationRows(item))
-        rows.append(contentsOf: readinessSummaryRows(item))
-        rows.append(contentsOf: reviewYieldRows(item))
+        rows.append(contentsOf: readinessIdentifierRows(item))
         if let drift = item.review_diminishing?.value1.drift_audit?.value1 {
             rows.append(.init(label: "Drift Audit", value: drift.audit_digest))
         }
+        return rows
+    }
+
+    /// The card's recorded rows a reader reads in words: the posture, the
+    /// readiness verdict with its requirements and waivers, and the review
+    /// rounds. The card's Recorded Context draws them under its reason.
+    package static func detailReadingRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        var rows: [BindingRow] = []
+        if let posture = item.posture?.value1 {
+            rows.append(.init(label: "Posture", value: label(posture)))
+        }
+        rows.append(contentsOf: readinessReadingRows(item))
+        rows.append(contentsOf: reviewYieldRows(item))
         return rows
     }
 
@@ -1330,7 +1348,23 @@ package enum AttentionDisplay {
         }
     }
 
-    static func readinessSummaryRows(
+    /// The readiness binding's exact values: the evaluation set and, when
+    /// the detail is present, the bound head and base.
+    static func readinessIdentifierRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        guard let readiness = item.readiness?.value1 else { return [] }
+        var rows = [BindingRow(label: "Evaluation Set", value: readiness.evaluation_set_digest)]
+        guard let detail = item.readiness_detail?.value1 else { return rows }
+        rows.append(BindingRow(label: "Bound Head", value: detail.candidate_head))
+        rows.append(
+            BindingRow(label: "Bound Base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
+        return rows
+    }
+
+    /// The readiness verdict and, when the detail is present, each
+    /// requirement and waiver, in words.
+    static func readinessReadingRows(
         _ item: Components.Schemas.AttentionItem
     ) -> [BindingRow] {
         guard let readiness = item.readiness?.value1 else { return [] }
@@ -1339,14 +1373,8 @@ package enum AttentionDisplay {
         case .ready_clean: verdict = "Clean"
         case .ready_degraded: verdict = "Degraded"
         }
-        var rows = [
-            BindingRow(label: "Readiness", value: verdict),
-            BindingRow(label: "Evaluation Set", value: readiness.evaluation_set_digest),
-        ]
+        var rows = [BindingRow(label: "Readiness", value: verdict)]
         guard let detail = item.readiness_detail?.value1 else { return rows }
-        rows.append(BindingRow(label: "Bound Head", value: detail.candidate_head))
-        rows.append(
-            BindingRow(label: "Bound Base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
         for requirement in detail.requirements {
             var value = [
                 label(requirement.check_class), label(requirement.kind), label(requirement.state),
@@ -1368,7 +1396,7 @@ package enum AttentionDisplay {
     }
 
     /// A revision shortened for a card row to the eight characters every
-    /// binding line uses; Technical Bindings keeps the full daemon value. Only a
+    /// binding line uses; the card's Identifiers keep the full daemon value. Only a
     /// hex object name is abbreviated. The other
     /// coordinates a readiness invalidation carries on its axis, a base ref
     /// and a "repository_id#pr_number" identity, put their meaning in the

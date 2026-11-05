@@ -919,6 +919,40 @@ import Testing
         #expect(TaskTimelinePresentation.identifiersSummary(single) == "task · campaign · 1 run")
     }
 
+    /// Acceptance 3 (#2607): a seated card's identifiers join the footer as
+    /// a Decision group after the task's, in the copied text and the closed
+    /// fold's summary alike, and the footer has them before the timeline
+    /// loads.
+    @Test func aSeatedDecisionsIdentifiersFollowTheTask() {
+        let t = Self.instants
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(campaign_id: "campaign-a", events: [], runs: [.init(run_id: "run-a", milestones: [], events: [])])
+            ])
+        let decision: [AttentionDisplay.BindingRow] = [
+            .init(label: "Item Version", value: "2"), .init(label: "PR Head", value: "cafebabe"),
+        ]
+
+        let groups = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x", decision: decision)
+        #expect(groups.map(\.owner) == ["Task", "Decision", "Campaign", "Run run-a"])
+        #expect(groups[1].rows == decision)
+        #expect(
+            TaskTimelinePresentation.identifiersSummary(timeline, hasDecision: true)
+                == "task · decision · campaign · 1 run")
+        #expect(
+            TaskTimelinePresentation.allIdentifiersText(Array(groups.prefix(2)))
+                == "Task\nTask ID: task-x\n\nDecision\nItem Version: 2\nPR Head: cafebabe")
+
+        let beforeTimeline = TaskTimelinePresentation.identifierGroups(nil, taskID: "task-x", decision: decision)
+        #expect(beforeTimeline.map(\.owner) == ["Task", "Decision"])
+        #expect(TaskTimelinePresentation.identifiersSummary(nil, hasDecision: true) == "task · decision")
+        // Without a seated card the footer is the task's and its runs' alone.
+        let withoutCard = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x")
+        #expect(!withoutCard.map(\.owner).contains("Decision"))
+    }
+
     @Test func identifierOwnersTellSharedAttemptNumbersApart() {
         let t = Self.instants
         func run(

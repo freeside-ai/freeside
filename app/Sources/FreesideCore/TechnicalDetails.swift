@@ -102,6 +102,10 @@ struct TechnicalDetailsSection: View {
     var rendersInteractiveControls = true
     /// The caller's open state when it persists the fold; nil keeps it here.
     private let isExpanded: Binding<Bool>?
+    /// How far the rows sit in from the disclosure's glyph. A decision
+    /// card's foot sets its rows under the label's text, as its other folds
+    /// do; a page footer keeps them flush.
+    private let rowIndent: CGFloat
     /// A screenshot captures the expanded state by starting open; live use
     /// starts collapsed, as the contract requires.
     @State private var expanded: Bool
@@ -110,12 +114,15 @@ struct TechnicalDetailsSection: View {
         rows: [AttentionDisplay.BindingRow],
         summary: String? = nil,
         rendersInteractiveControls: Bool = true,
-        startsExpanded: Bool = false
+        startsExpanded: Bool = false,
+        isExpanded: Binding<Bool>? = nil,
+        rowIndent: CGFloat = 0
     ) {
         groups = [(nil, rows)]
         self.summary = summary
         self.rendersInteractiveControls = rendersInteractiveControls
-        isExpanded = nil
+        self.isExpanded = isExpanded
+        self.rowIndent = rowIndent
         _expanded = State(initialValue: startsExpanded)
     }
 
@@ -125,6 +132,7 @@ struct TechnicalDetailsSection: View {
         self.groups = groups.map { ($0.owner, $0.rows) }
         self.summary = summary
         self.isExpanded = isExpanded
+        rowIndent = 0
         _expanded = State(initialValue: false)
     }
 
@@ -146,6 +154,7 @@ struct TechnicalDetailsSection: View {
                         }
                     }
                 }
+                .padding(.leading, rowIndent)
                 // A stacked row hugs its text, and a disclosure centers
                 // content narrower than itself.
                 .frame(maxWidth: .infinity, alignment: .leading)
