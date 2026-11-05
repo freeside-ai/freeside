@@ -198,6 +198,18 @@ answer timeout. It reports the routes the CLI tried besides inference:
 go test ./internal/exec/claude -run '^TestPinnedClaudeUsageDriverLive$' -count=1 -v
 ```
 
+`TestPinnedClaudeInputReadLive` runs the same `file_v6` lines, implementation
+and specification, with `FREESIDE_INPUT_READ_LIVE=1`. It places a synthetic
+PNG root-owned and read-only under Ward's input directory,
+`/var/lib/freeside/inputs`, outside the working directory, and has the mock API
+ask the CLI's Read tool for it. It passes when the image returns as an image
+block with identical bytes after privilege drop, which shows operator input
+files need no new launch flag or `PromptDelivery` member:
+
+```sh
+go test ./internal/exec/claude -run '^TestPinnedClaudeInputReadLive$' -count=1 -v
+```
+
 `TestExporterInputScriptsLive` proves Ward's input seeder and observer
 scripts against the exporter image's BusyBox tools. It cross-compiles the
 ward tests and runs the input script test as root inside the image, on a
