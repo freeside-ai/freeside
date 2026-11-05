@@ -603,6 +603,11 @@ an existing path opens as-is so reopen tests preserve their state. Tests of
 migrations, `Open` behavior, or refusal of an existing file keep the raw
 `store.Open` path. Tests inside `package store` use `openTemplateStore` or
 `openTemplateStoreAt` because importing `storetest` would create a cycle.
+A migration test that starts from an empty database gets the head before the
+migration under test from a cached snapshot with `openRawThrough(t, before)`,
+or `copySnapshotThrough(t, path, before)` when it opens and reopens the path
+itself, and still calls `migrateThrough` to move a database it has seeded
+forward, so the migrations under test run for real.
 
 **Repository templates.** Use `repotemplate.Cache[M].Copy` from
 `internal/repotemplate` for repeated small git fixtures. Each key builds once
