@@ -250,6 +250,13 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 	} else if hs.Agent.PromptFile != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt cannot acquire file delivery", ErrUnsupportedStart)
 	}
+	// Input files ride only on file delivery, where the prompt names them, and
+	// must be exactly the admitted attachments: a provider can neither add,
+	// drop, rename, nor reorder one.
+	if want := InputFilesFor(in.Spec); !slices.Equal(hs.Agent.Inputs, want) ||
+		(len(want) > 0 && !in.delivery().usesPromptFile()) {
+		return ward.HandoffSpec{}, fmt.Errorf("%w: provider input files differ from admitted attachments", ErrUnsupportedStart)
+	}
 	// The provider chooses vendor-specific containment details, but it cannot
 	// retarget the durable run, checkout, or admitted security bindings. Ward
 	// validates the returned shape; only this boundary can compare it with the
@@ -454,6 +461,7 @@ func (d *Driver) startRegistryHosts(ctx context.Context, spec exec.StartSpec, po
 
 func detachProviderHandoffSpec(hs ward.HandoffSpec) ward.HandoffSpec {
 	hs.Agent.PromptFile = hs.Agent.PromptFile.Clone()
+	hs.Agent.Inputs = slices.Clone(hs.Agent.Inputs)
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
@@ -638,7 +646,7 @@ func (d *Driver) StartWithInputs(
 	if !delivery.valid() {
 		return fmt.Errorf("%w: provider prompt delivery is invalid", ErrUnsupportedStart)
 	}
-	promptInputs := providerPromptInputsFrom(materialized)
+	promptInputs := providerPromptInputsFrom(materialized, spec)
 	promptInputs.Delivery = delivery
 	prompt, err := d.provider.RenderPrompt(promptInputs)
 	promptErr := err

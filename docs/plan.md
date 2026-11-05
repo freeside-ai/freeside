@@ -2322,6 +2322,13 @@ silently downgrades. Named capabilities are:
   makes it a minimum of every `subscription_injected` admission, only once a
   revision lifts the hold.
 
+Operator input files, a task's attachments and those on user-authored
+discussion messages, reach a writer only through a Ward-staged volume mounted
+read-only outside the workspace, whose every file's bytes, path, owner, and
+mode Ward proves before the writer starts; the agent's user can read them but
+not write them, and agent- or daemon-authored attachments are never
+delivered.
+
 #### The First Ward Gate
 
 The actual runtime must prove this sequence:

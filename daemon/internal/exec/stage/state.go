@@ -137,13 +137,20 @@ func durableInputsFrom(inputs exec.StageInputs) durableInputs {
 	}
 }
 
-func providerPromptInputsFrom(inputs durableInputs) ProviderPromptInputs {
-	return ProviderPromptInputs{
+// providerPromptInputsFrom reads attachment metadata from the admitted spec,
+// not from materialized bytes, so a stored intent re-renders the prompt it
+// started with; the materializer proved the bytes against that metadata.
+func providerPromptInputsFrom(inputs durableInputs, spec exec.StartSpec) ProviderPromptInputs {
+	prompt := ProviderPromptInputs{
 		Specification:  slices.Clone(inputs.Specification),
 		PromptPackage:  slices.Clone(inputs.PromptPackage),
 		Policy:         slices.Clone(inputs.Policy),
 		PriorArtifacts: cloneBodies(inputs.PriorArtifacts),
 	}
+	if spec.StageInputs != nil {
+		prompt.Attachments = slices.Clone(spec.StageInputs.Attachments)
+	}
+	return prompt
 }
 
 func cloneBodies(in [][]byte) [][]byte {
@@ -656,7 +663,7 @@ func (d *Driver) regateWithCurrentPolicy(
 				ErrUnsupportedStart, i.InvocationID, got, *vendor.Digest)
 		}
 	}
-	promptInputs := providerPromptInputsFrom(i.Inputs)
+	promptInputs := providerPromptInputsFrom(i.Inputs, i.Spec)
 	promptInputs.Delivery = i.delivery()
 	wantPrompt, promptErr := d.provider.RenderPrompt(promptInputs)
 	if promptErr != nil {

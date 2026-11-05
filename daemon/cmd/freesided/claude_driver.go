@@ -1660,6 +1660,10 @@ func composeClaudeDriver(
 		AuthStoreLeaser:   conformanceLeaser,
 		Journal:           adapters.Journal,
 		Logger:            logger,
+		// Operator input files are read from the same immutable,
+		// digest-addressed store admission described them from; ward
+		// re-hashes every byte it stages.
+		InputBlobs: blobs,
 	}
 	backend, backendErr := ward.New(runtime, wardConfig)
 	if backendErr != nil {

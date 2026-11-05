@@ -199,7 +199,11 @@ type AgentSpec struct {
 	// writer. Omission preserves historical handoff digests and behavior.
 	FailureTranscript *export.EvidenceSource `json:",omitempty"`
 	// Omission preserves the exact JSON shape and digest of legacy handoffs.
-	PromptFile    *PromptFile `json:",omitempty"`
+	PromptFile *PromptFile `json:",omitempty"`
+	// Inputs are operator files ward copies read-only to InputFilesTarget,
+	// in admitted order. Omission preserves the exact JSON shape and digest
+	// of every handoff without them.
+	Inputs        []InputFile `json:",omitempty"`
 	Image         string
 	Command       []string
 	Env           []string
@@ -625,6 +629,14 @@ func (s HandoffSpec) validate() error {
 			return err
 		}
 	}
+	if len(s.Agent.Inputs) > 0 {
+		if s.Agent.LaunchState != LaunchStateClaudeClean || s.Agent.PromptFile == nil {
+			return fmt.Errorf("%w: input files require the Claude launch topology and a prompt file", ErrInvalidHandoffSpec)
+		}
+		if err := validateInputFiles(s.Agent.Inputs); err != nil {
+			return err
+		}
+	}
 	switch {
 	case !runIDPattern.MatchString(s.RunID):
 		return fmt.Errorf("%w: RunID %q does not match %s", ErrInvalidHandoffSpec, s.RunID, runIDPattern)
@@ -837,6 +849,9 @@ type handoffNames struct {
 	Prompt              string
 	PromptSeeder        string
 	PromptObserver      string
+	Inputs              string
+	InputsSeeder        string
+	InputsObserver      string
 	Workspace           string
 	Instructions        string
 	ConfigRoot          string
@@ -863,6 +878,9 @@ func namesFor(runID string) handoffNames {
 		Prompt:              "freeside-handoff-" + runID + "-prompt",
 		PromptSeeder:        "freeside-handoff-" + runID + "-prompt-seed",
 		PromptObserver:      "freeside-handoff-" + runID + "-prompt-check",
+		Inputs:              "freeside-handoff-" + runID + "-inputs",
+		InputsSeeder:        "freeside-handoff-" + runID + "-inputs-seed",
+		InputsObserver:      "freeside-handoff-" + runID + "-inputs-check",
 		Workspace:           "freeside-handoff-" + runID + "-ws",
 		Instructions:        "freeside-handoff-" + runID + "-ins",
 		ConfigRoot:          "freeside-handoff-" + runID + "-cfg",
@@ -965,6 +983,7 @@ func buildAgentSpec(
 		Target: cfg.WorkspaceTarget,
 	}}
 	mounts = append(mounts, promptMounts(names, hs.Agent.PromptFile != nil)...)
+	mounts = append(mounts, inputMounts(names, len(hs.Agent.Inputs) > 0)...)
 	for _, cm := range hs.Agent.CredentialMounts {
 		mounts = append(mounts, Mount{
 			Type:     MountVolume,

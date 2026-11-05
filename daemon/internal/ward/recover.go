@@ -191,6 +191,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		if hs.Agent.PromptFile != nil {
 			return nil, fmt.Errorf("%w: legacy digest cannot authorize a prompt file", ErrInvalidJournalRecord)
 		}
+		if len(hs.Agent.Inputs) > 0 {
+			return nil, fmt.Errorf("%w: legacy digest cannot authorize input files", ErrInvalidJournalRecord)
+		}
 		legacyDigest, lerr := legacySpecDigest(hs)
 		if lerr != nil {
 			return nil, lerr
@@ -268,6 +271,14 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		} else if rec.State.PromptFingerprint == "" ||
 			rec.State.PromptDigest != contentaddr.Hex(string(hs.Agent.PromptFile.Digest)) {
 			return nil, fmt.Errorf("%w: prepared prompt proof does not bind its input", ErrInvalidJournalRecord)
+		}
+		if len(hs.Agent.Inputs) == 0 {
+			if rec.State.InputsFingerprint != "" || rec.State.InputsDigest != "" {
+				return nil, fmt.Errorf("%w: handoff without inputs carries an input proof", ErrInvalidJournalRecord)
+			}
+		} else if rec.State.InputsFingerprint == "" ||
+			rec.State.InputsDigest != inputListingDigest(hs.Agent.Inputs) {
+			return nil, fmt.Errorf("%w: prepared input proof does not bind its manifest", ErrInvalidJournalRecord)
 		}
 	}
 	if hs.Agent.LaunchState == LaunchStateClaudeClean &&
@@ -414,6 +425,12 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		st.prompt.attempted, st.promptSeeder.attempted, st.promptObserver.attempted = true, true, true
 		if rec.State != nil {
 			st.prompt.fingerprint = rec.State.PromptFingerprint
+		}
+	}
+	if len(hs.Agent.Inputs) > 0 {
+		st.inputs.attempted, st.inputsSeeder.attempted, st.inputsObserver.attempted = true, true, true
+		if rec.State != nil {
+			st.inputs.fingerprint = rec.State.InputsFingerprint
 		}
 	}
 	if rec.Lease != nil {
@@ -745,6 +762,8 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		{names.ScratchObserver, &st.scratchObserver},
 		{names.PromptSeeder, &st.promptSeeder},
 		{names.PromptObserver, &st.promptObserver},
+		{names.InputsSeeder, &st.inputsSeeder},
+		{names.InputsObserver, &st.inputsObserver},
 	} {
 		if err := b.reapRecoveredContainer(
 			ctx, recovered.name, recovered.claim, st.ownershipLabel,

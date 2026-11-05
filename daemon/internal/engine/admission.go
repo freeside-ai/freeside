@@ -16,6 +16,42 @@ import (
 
 var ErrProductionInputUndeliverable = errors.New("production input cannot be delivered")
 
+// errOperatorInputsUndeliverable marks a writer's operator input files that
+// can never be delivered: the combined list breaks a size, count, or name
+// rule. It is permanent, like a materializer shape refusal, so each caller
+// turns it into its stage's undeliverable error instead of retrying the
+// intent forever. A missing blob is not one: it stays an operational fault.
+var errOperatorInputsUndeliverable = errors.New("operator input files cannot be delivered")
+
+// operatorInputRefusal reports whether a snapshot error is a refusal of its
+// attachment list. Only the list rules return these errors.
+func operatorInputRefusal(err error) bool {
+	return errors.Is(err, domain.ErrTaskAttachmentTooLarge) ||
+		errors.Is(err, domain.ErrTaskAttachmentsTooLarge) ||
+		errors.Is(err, domain.ErrTooManyTaskAttachments) ||
+		errors.Is(err, domain.ErrInvalidTaskAttachmentName) ||
+		errors.Is(err, domain.ErrTaskAttachmentNameConflict)
+}
+
+// undeliverableWriterInputs tags an operator-input refusal with the error the
+// writer stage's dispatcher records as a terminal outcome, as
+// validateProductionDelivery tags a materializer refusal.
+func undeliverableWriterInputs(
+	run domain.Run, stage domain.Stage, invocationID domain.InvocationID, err error,
+) error {
+	if !errors.Is(err, errOperatorInputsUndeliverable) {
+		return err
+	}
+	role, _ := wardRole(run, stage, invocationID)
+	if role == domain.RoleSpecifier {
+		return errors.Join(ErrSpecificationInputUndeliverable, err)
+	}
+	if _, remediation := remediationRoundForInvocation(run.ID, invocationID); remediation {
+		return errors.Join(ErrRemediationInputUndeliverable, ErrProductionInputUndeliverable, err)
+	}
+	return errors.Join(ErrProductionInputUndeliverable, err)
+}
+
 // Admission wiring (plan §5.3, §5.7): before an attempt is dispatched, the
 // engine checks the runner backend against the policy floor and records what
 // admitted it, in the same transaction that appends the attempt. #39 deferred
@@ -538,12 +574,14 @@ func (e *Engine) admitAttempt(
 				"admit invocation %q: %w", invocationID, err)
 		}
 	}
+	_, wardWriter := wardRole(binding.run, stage, invocationID)
 	stageInputs, err := e.stageInputSnapshot(
-		ctx, binding, inputDigest, promptPackageDigest, isSpecification,
+		ctx, binding, inputDigest, promptPackageDigest, isSpecification, wardWriter,
 	)
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf(
-			"admit invocation %q stage inputs: %w", invocationID, err)
+			"admit invocation %q stage inputs: %w", invocationID,
+			undeliverableWriterInputs(binding.run, stage, invocationID, err))
 	}
 	// A mode that must be anchored to an approved trust profile records the
 	// exact revision it was admitted under, read here rather than configured:
@@ -749,20 +787,96 @@ func (e *Engine) validateProductionReplayDelivery(
 	return nil
 }
 
+// operatorInputFiles lists the files a Ward writer receives, in order: the
+// task's attachments as task/<name>, then each user-authored message's
+// attachments in the bound conversation prefix as
+// discussion/<sequence>/<index>.<ext>, its media type sniffed from the stored
+// bytes. Agent- and daemon-authored attachments are never delivered. The
+// snapshot enforces names, counts, and byte budgets, so a breach fails
+// admission; a missing blob fails here.
+func (e *Engine) operatorInputFiles(
+	ctx context.Context, binding invocationBinding,
+) ([]domain.StageInputAttachment, error) {
+	// Every stored run is bound to a task, and a prospective run carries the
+	// task the store will bind it to, so an empty TaskID is a caller bug;
+	// skipping would silently drop the task's files.
+	if binding.run.TaskID == "" {
+		return nil, fmt.Errorf("run %q names no task: %w", binding.run.ID, domain.ErrEmptyID)
+	}
+	var task []domain.TaskAttachment
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		task, err = tx.TaskAttachments(ctx, binding.run.TaskID)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("read task attachments: %w", err)
+	}
+	files := make([]domain.StageInputAttachment, 0, len(task))
+	for _, a := range task {
+		files = append(files, domain.StageInputAttachment{
+			Digest: a.Digest, Name: "task/" + a.Name, MediaType: a.MediaType, SizeBytes: a.SizeBytes,
+		})
+	}
+	if binding.invocation.ConversationID == nil {
+		return files, nil
+	}
+	for _, message := range binding.conversation.Messages[:binding.invocation.ThroughSequence] {
+		if message.Author != domain.AuthorUser {
+			continue
+		}
+		for index, digest := range message.Attachments {
+			size, head, err := e.signet.DescribeAttachment(ctx, digest)
+			if err != nil {
+				return nil, fmt.Errorf("describe message %d attachment %d: %w", message.Sequence, index+1, err)
+			}
+			mediaType := domain.SniffTaskAttachmentMediaType(head)
+			files = append(files, domain.StageInputAttachment{
+				Digest: digest, MediaType: mediaType, SizeBytes: size,
+				Name: domain.TaskAttachmentName(fmt.Sprintf(
+					"discussion/%d/%d.%s", message.Sequence, index+1, discussionExtension(mediaType))),
+			})
+		}
+	}
+	return files, nil
+}
+
+// discussionExtension names a discussion file by its sniffed type, so the
+// writer's tools recognize an image without a client-chosen name.
+func discussionExtension(mediaType domain.TaskAttachmentMediaType) string {
+	switch mediaType {
+	case domain.TaskAttachmentMediaPNG:
+		return "png"
+	case domain.TaskAttachmentMediaJPEG:
+		return "jpg"
+	case domain.TaskAttachmentMediaGIF:
+		return "gif"
+	case domain.TaskAttachmentMediaWebP:
+		return "webp"
+	case domain.TaskAttachmentMediaOctetStream:
+		return "bin"
+	}
+	return "bin"
+}
+
 // imageInputArtifactType is the Phase 1 artifact vocabulary already used for
 // agent-produced image inputs. Other artifact types are prior artifacts.
 const imageInputArtifactType = domain.ArtifactKindImage
 
 func (e *Engine) stageInputSnapshot(
 	ctx context.Context, binding invocationBinding, inputDigest, promptPackageDigest domain.Digest,
-	isSpecification bool,
+	isSpecification, wardWriter bool,
 ) (domain.StageInputSnapshot, error) {
-	return e.stageInputSnapshotWithArtifacts(ctx, binding, inputDigest, promptPackageDigest, isSpecification, nil)
+	return e.stageInputSnapshotWithArtifacts(
+		ctx, binding, inputDigest, promptPackageDigest, isSpecification, wardWriter, nil)
 }
 
+// stageInputSnapshotWithArtifacts freezes one start's inputs. wardWriter says
+// the stage runs a Ward writer (specifier, implementer, or remediator), the
+// only stages that receive operator input files: the task's attachments and
+// the attachments on user-authored discussion messages.
 func (e *Engine) stageInputSnapshotWithArtifacts(
 	ctx context.Context, binding invocationBinding, inputDigest, promptPackageDigest domain.Digest,
-	isSpecification bool, prospective map[domain.ArtifactID]domain.Artifact,
+	isSpecification, wardWriter bool, prospective map[domain.ArtifactID]domain.Artifact,
 ) (domain.StageInputSnapshot, error) {
 	vendorInstructions, vendorBody, err := snapshotVendorInstructions(
 		ctx, e.admission.environment.VendorInstructions,
@@ -845,13 +959,12 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 			return domain.StageInputSnapshot{}, err
 		}
 		conversationDigest, conversationBody = &digest, body
-		if !isSpecification {
-			for _, message := range binding.conversation.Messages[:binding.invocation.ThroughSequence] {
-				// The provider does not yet have an authenticated image-delivery path.
-				// Preserve the existing opaque role outside specification; specification
-				// admits only envelopes constructed from typed durable artifacts above.
-				priorArtifacts = append(priorArtifacts, message.Attachments...)
-			}
+	}
+	var attachments []domain.StageInputAttachment
+	if wardWriter {
+		attachments, err = e.operatorInputFiles(ctx, binding)
+		if err != nil {
+			return domain.StageInputSnapshot{}, err
 		}
 	}
 	snapshot, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
@@ -863,8 +976,12 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 		ConversationDigest:   conversationDigest,
 		PriorArtifactDigests: priorArtifacts,
 		ImageInputDigests:    imageInputs,
+		Attachments:          attachments,
 	})
 	if err != nil {
+		if len(attachments) > 0 && operatorInputRefusal(err) {
+			return domain.StageInputSnapshot{}, fmt.Errorf("%w: %w", errOperatorInputsUndeliverable, err)
+		}
 		return domain.StageInputSnapshot{}, err
 	}
 	if vendorInstructions.Digest != nil {

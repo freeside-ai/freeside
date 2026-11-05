@@ -55,104 +55,27 @@ func (p *PromptFile) Validate() error {
 	return nil
 }
 
-// preparePrompt uses the existing controlled rootfs-copy handshake. Runtime
-// copy directly into a mounted volume does not reliably populate that volume.
+// preparePrompt binds the prompt bytes to an owned read-only volume through
+// the staged-volume handshake before the writer can consume them on stdin.
 func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) error {
 	if hs.Agent.PromptFile == nil {
 		return nil
 	}
-	if err := b.createStateVolume(ctx, hs.RunID, names.Prompt, 2, &st.prompt, st); err != nil {
-		return err
-	}
-	snapshot, err := os.MkdirTemp("", "freeside-prompt-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(snapshot) //nolint:errcheck // gate-owned transient input
-	input, ready := filepath.Join(snapshot, "input"), filepath.Join(snapshot, "ready")
-	for _, dir := range []string{input, ready} {
-		if err := os.Mkdir(dir, 0o700); err != nil {
-			return err
-		}
-	}
-	if err := os.WriteFile(filepath.Join(input, "prompt.txt"), hs.Agent.PromptFile.Body, 0o600); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(ready, seedReadyFile), []byte("ready\n"), 0o600); err != nil {
-		return err
-	}
-	seeder := buildPromptSeederSpec(b.cfg, hs, names, st.ownershipLabel)
-	if err := b.startPromptRole(ctx, seeder, names.Prompt, &st.promptSeeder, st); err != nil {
-		return err
-	}
-	for _, copy := range []struct{ source, target string }{{input, promptStageDir}, {ready, promptReadyDir}} {
-		copyCtx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
-		err := b.rt.CopyIntoContainer(copyCtx, seeder.Name, copy.source, copy.target)
-		cancel()
-		if err != nil {
-			return failw(CheckControlPlaneIsolation, err, "copy prompt input: %v", err)
-		}
-	}
-	if err := b.waitStopped(ctx, seeder.Name, st.promptSeeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return err
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, seeder.Name); err != nil {
-		return err
-	}
-	if err := b.removePromptRole(ctx, seeder.Name, &st.promptSeeder, st); err != nil {
-		return err
-	}
-	observer := buildPromptObserverSpec(b.cfg, hs, names, st.ownershipLabel)
-	if err := b.startPromptRole(ctx, observer, names.Prompt, &st.promptObserver, st); err != nil {
-		return err
-	}
-	if err := b.waitStopped(ctx, observer.Name, st.promptObserver, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return err
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, observer.Name); err != nil {
-		return err
-	}
-	// Reuse the bounded rootfs proof reader. The observer exports only its
-	// nonce/digest proof; the prompt itself lives on the separate volume.
-	proof, err := b.readStateProof(ctx, hs.RunID, observer.Name, st)
-	if err != nil {
-		return err
-	}
-	if err := verifyPromptProof(proof, st.ownershipLabel.Value, hs.Agent.PromptFile.Digest); err != nil {
-		return err
-	}
-	return b.removePromptRole(ctx, observer.Name, &st.promptObserver, st)
-}
-
-func (b *Backend) startPromptRole(ctx context.Context, spec ContainerSpec, volume string, claim *objectClaim, st *runState) error {
-	claim.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "create prompt role: %v", err)
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, spec.Name)
-	if err != nil {
-		return err
-	}
-	if err := verifySeedRoleAllowlist(rep, spec, volume, promptVolumeTarget, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
-	if err != nil {
-		return err
-	}
-	return b.rt.StartContainer(ctx, spec.Name)
-}
-
-func (b *Backend) removePromptRole(ctx context.Context, name string, claim *objectClaim, st *runState) error {
-	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return err
-	}
-	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	*claim = objectClaim{}
-	return nil
+	return b.prepareStagedVolume(ctx, hs, stagedVolume{
+		label:  "prompt",
+		volume: names.Prompt, volumeTarget: promptVolumeTarget, sizeMB: 2, volumeClaim: &st.prompt,
+		seeder:        buildPromptSeederSpec(b.cfg, hs, names, st.ownershipLabel),
+		seederClaim:   &st.promptSeeder,
+		observer:      buildPromptObserverSpec(b.cfg, hs, names, st.ownershipLabel),
+		observerClaim: &st.promptObserver,
+		stageDir:      promptStageDir, readyDir: promptReadyDir,
+		stage: func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "prompt.txt"), hs.Agent.PromptFile.Body, 0o600)
+		},
+		verify: func(proof []byte) error {
+			return verifyPromptProof(proof, st.ownershipLabel.Value, hs.Agent.PromptFile.Digest)
+		},
+	}, st)
 }
 
 func buildPromptSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, ownership Label) ContainerSpec {
@@ -206,6 +129,7 @@ func promptMounts(names handoffNames, present bool) []Mount {
 
 func clonePromptSpec(hs HandoffSpec) HandoffSpec {
 	hs.Agent.PromptFile = hs.Agent.PromptFile.Clone()
+	hs.Agent.Inputs = slices.Clone(hs.Agent.Inputs)
 	if hs.Agent.FailureTranscript != nil {
 		copy := *hs.Agent.FailureTranscript
 		hs.Agent.FailureTranscript = &copy
@@ -215,8 +139,11 @@ func clonePromptSpec(hs HandoffSpec) HandoffSpec {
 
 // promptResourceNames is included only where the current invocation may use
 // file delivery; historical conformance fixtures retain their old namespace.
+// The operator input directory rides only on file delivery, so its objects
+// join the same namespace.
 func promptResourceNames(names handoffNames, resources RuntimeResourceNames) RuntimeResourceNames {
-	resources.Containers = append(slices.Clone(resources.Containers), names.PromptSeeder, names.PromptObserver)
-	resources.Volumes = append(slices.Clone(resources.Volumes), names.Prompt)
+	resources.Containers = append(slices.Clone(resources.Containers),
+		names.PromptSeeder, names.PromptObserver, names.InputsSeeder, names.InputsObserver)
+	resources.Volumes = append(slices.Clone(resources.Volumes), names.Prompt, names.Inputs)
 	return resources
 }

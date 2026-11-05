@@ -117,6 +117,25 @@ type ProviderPromptInputs struct {
 	PromptPackage  []byte
 	Policy         []byte
 	PriorArtifacts [][]byte
+	// Attachments are the admitted operator input files, in order, that the
+	// writer reads under ward.InputFilesTarget. Only this metadata enters the
+	// prompt; the bytes reach the writer through Ward's input volume.
+	Attachments []domain.StageInputAttachment
+}
+
+// InputFilesFor is the Ward input manifest an admitted start delivers: each
+// stage-input attachment's name, digest, and size, in admitted order. The
+// provider builds its handoff from it and the driver holds the returned
+// handoff to it, so neither can add, drop, or reorder a file.
+func InputFilesFor(spec exec.StartSpec) []ward.InputFile {
+	if spec.StageInputs == nil || len(spec.StageInputs.Attachments) == 0 {
+		return nil
+	}
+	files := make([]ward.InputFile, len(spec.StageInputs.Attachments))
+	for i, a := range spec.StageInputs.Attachments {
+		files[i] = ward.InputFile{Name: a.Name, Digest: a.Digest, SizeBytes: a.SizeBytes}
+	}
+	return files
 }
 
 // Gate is the ward workspace-handoff gate (production: *ward.Backend). The

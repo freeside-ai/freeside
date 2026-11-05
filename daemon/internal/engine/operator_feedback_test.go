@@ -359,7 +359,11 @@ func TestOperatorFeedbackInputIDsPreserveAuthenticatedRetryChain(t *testing.T) {
 	}
 	var got []domain.ArtifactID
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		// Delivery reads the run as the store holds it, bound to its task.
 		var err error
+		if run, err = tx.GetRun(t.Context(), runID); err != nil {
+			return err
+		}
 		got, err = operatorFeedbackInputIDs(
 			t.Context(), tx, run, root, sourceID, "operator-feedback-current",
 		)

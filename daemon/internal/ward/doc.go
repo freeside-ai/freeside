@@ -225,6 +225,10 @@
 //   - state.go         per-launch state volumes (config root, continuity,
 //     scratch): creation, seeding, and the observed proof
 //   - prompt.go        PromptFile, the bounded user prompt delivered as a file
+//   - input.go         operator input files: the manifest rules, the staged
+//     archive with byte-for-byte digest checks, and the observed listing proof
+//   - staged_volume.go the seeder/observer handshake that fills a read-only
+//     writer input volume
 //   - instruction.go   the Claude instruction bundle composed from the
 //     exact-base snapshot, its seeding, and its observation from another VM
 //   - stall.go         stallWatch, the running writer's stall heartbeat (§5.12)

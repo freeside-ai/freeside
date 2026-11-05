@@ -108,11 +108,16 @@ type HandoffJournalState struct {
 	SessionScratchDigest      string `json:"session_scratch_digest"`
 	PromptFingerprint         string `json:"prompt_fingerprint,omitempty"`
 	PromptDigest              string `json:"prompt_digest,omitempty"`
+	InputsFingerprint         string `json:"inputs_fingerprint,omitempty"`
+	InputsDigest              string `json:"inputs_digest,omitempty"`
 }
 
 func (s HandoffJournalState) validate() error {
 	if (s.PromptFingerprint == "") != (s.PromptDigest == "") {
 		return errors.New("handoff journal prompt binding is incomplete")
+	}
+	if (s.InputsFingerprint == "") != (s.InputsDigest == "") {
+		return errors.New("handoff journal input binding is incomplete")
 	}
 	if s.ConfigRootFingerprint == "" || s.ContinuityFingerprint == "" ||
 		s.SessionScratchFingerprint == "" || s.ConfigRootDigest == "" ||

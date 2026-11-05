@@ -190,6 +190,9 @@ type runState struct {
 	prompt              objectClaim
 	promptSeeder        objectClaim
 	promptObserver      objectClaim
+	inputs              objectClaim
+	inputsSeeder        objectClaim
+	inputsObserver      objectClaim
 	ownershipLabel      Label
 	workspace           objectClaim
 	instructions        objectClaim
@@ -335,6 +338,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	hs.RegistryHosts = slices.Clone(hs.RegistryHosts)
 	if err := hs.validate(); err != nil {
 		return nil, err
+	}
+	if len(hs.Agent.Inputs) > 0 && b.cfg.InputBlobs == nil {
+		return nil, fmt.Errorf("%w: input files need a configured blob source", ErrInvalidHandoffSpec)
 	}
 	adm, err := exec.CheckCapabilities(b, requiredCapabilities)
 	if err != nil {
@@ -514,7 +520,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	)
 	if err := validateAgentSpec(
 		b.cfg, preflightAgentSpec, names, hs.leasedCredentialTarget(), hs.leasedCredentialWritable(),
-		hs.Agent.LaunchState, hs.Agent.PromptFile != nil,
+		hs.Agent.LaunchState, hs.Agent.PromptFile != nil, len(hs.Agent.Inputs) > 0,
 	); err != nil {
 		return nil, err
 	}
@@ -690,7 +696,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	)
 	if err := validateAgentSpec(
 		b.cfg, agentSpec, names, hs.leasedCredentialTarget(), hs.leasedCredentialWritable(),
-		hs.Agent.LaunchState, hs.Agent.PromptFile != nil,
+		hs.Agent.LaunchState, hs.Agent.PromptFile != nil, len(hs.Agent.Inputs) > 0,
 	); err != nil {
 		return nil, err
 	}
@@ -1642,6 +1648,8 @@ func (b runtimeOps) teardown(
 	containerClaims := []containerClaim{
 		{id: names.PromptSeeder, claim: st.promptSeeder},
 		{id: names.PromptObserver, claim: st.promptObserver},
+		{id: names.InputsSeeder, claim: st.inputsSeeder},
+		{id: names.InputsObserver, claim: st.inputsObserver},
 		{id: names.Seeder, claim: st.seeder},
 		{id: names.Observer, claim: st.observer},
 		{id: names.InstructionSeeder, claim: st.instructionSeeder},
@@ -1724,6 +1732,7 @@ func (b runtimeOps) teardown(
 	}
 	volumeClaims := []volumeClaim{
 		{name: names.Prompt, claim: st.prompt},
+		{name: names.Inputs, claim: st.inputs},
 		{name: names.Workspace, claim: st.workspace},
 		{name: names.Instructions, claim: st.instructions},
 		{name: names.ConfigRoot, claim: st.configRoot},

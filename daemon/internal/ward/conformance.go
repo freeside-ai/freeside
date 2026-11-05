@@ -44,6 +44,7 @@ func validateAgentSpec(
 	leasedCredentialWritable bool,
 	statePolicy LaunchStatePolicy,
 	hasPrompt bool,
+	hasInputs bool,
 ) error {
 	workspaceVolume := names.Workspace
 	// A bare-key env entry makes the CLI inherit the host's value, pulling a
@@ -68,6 +69,7 @@ func validateAgentSpec(
 	leasedMounts := 0
 	stateMounts := 0
 	promptCount := 0
+	inputsCount := 0
 	stateVolumes := map[string]bool{
 		names.ConfigRoot:     true,
 		names.Continuity:     true,
@@ -86,6 +88,19 @@ func validateAgentSpec(
 		}
 		if hasPrompt && (strings.HasPrefix(m.Target, PromptFileTarget+"/") || strings.HasPrefix(PromptFileTarget, m.Target+"/")) {
 			return failf(CheckControlPlaneIsolation, "mount overlaps the protected prompt")
+		}
+		if m.Target == InputFilesTarget || m.Source == names.Inputs {
+			if !hasInputs || m.Target != InputFilesTarget || m.Source != names.Inputs ||
+				m.Type != MountVolume || !m.ReadOnly ||
+				m.Target == cfg.WorkspaceTarget || strings.HasPrefix(m.Target, cfg.WorkspaceTarget+"/") ||
+				strings.HasPrefix(cfg.WorkspaceTarget, m.Target+"/") {
+				return failf(CheckControlPlaneIsolation, "input mount does not match its protected topology")
+			}
+			inputsCount++
+			continue
+		}
+		if hasInputs && (strings.HasPrefix(m.Target, InputFilesTarget+"/") || strings.HasPrefix(InputFilesTarget, m.Target+"/")) {
+			return failf(CheckControlPlaneIsolation, "mount overlaps the protected inputs")
 		}
 		if !m.Type.valid() {
 			return failf(CheckControlPlaneIsolation, "agent spec carries an unknown mount type")
@@ -198,6 +213,9 @@ func validateAgentSpec(
 	}
 	if (hasPrompt && promptCount != 1) || (!hasPrompt && promptCount != 0) {
 		return failf(CheckControlPlaneIsolation, "agent spec does not carry its exact prompt topology")
+	}
+	if (hasInputs && inputsCount != 1) || (!hasInputs && inputsCount != 0) {
+		return failf(CheckControlPlaneIsolation, "agent spec does not carry its exact input topology")
 	}
 	if instructionMounts != 1 {
 		return failf(CheckControlPlaneIsolation,

@@ -2942,8 +2942,13 @@ func (e *Engine) validateProspectiveDelivery(
 		}
 	}
 	snapshot, err := e.stageInputSnapshotWithArtifacts(
-		ctx, binding, inputDigest, promptPackage, isSpecification, prospective,
+		ctx, binding, inputDigest, promptPackage, isSpecification, true, prospective,
 	)
+	if errors.Is(err, errOperatorInputsUndeliverable) {
+		// The specification validator's caller records this sentinel for
+		// both the specifier and the implementation it prospectively checks.
+		return errors.Join(ErrSpecificationInputUndeliverable, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -2978,8 +2983,10 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 	if e.admission == nil && e.specification.validateDelivery != nil {
 		return false, errors.New("implementation delivery validation requires admission")
 	}
+	// The store binds the implementation run to its specification run's task
+	// (the campaign's), so the prospective run names that task now.
 	implementationRun := domain.Run{
-		ID: request.ImplementationRunID, ProjectID: request.ProjectID,
+		ID: request.ImplementationRunID, ProjectID: request.ProjectID, TaskID: run.TaskID,
 		SpecDigest: digest, PolicyDigest: run.PolicyDigest,
 	}
 	implementationInvocation, err := domain.NewAgentInvocation(

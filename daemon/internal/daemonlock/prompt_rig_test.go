@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRigBindsProtectedPromptNamespace(t *testing.T) {
+func TestRigBindsProtectedPromptAndInputNamespaces(t *testing.T) {
 	root := t.TempDir()
 	cfg := rigTestConfig(t, filepath.Join(root, "state"), filepath.Join(root, "seed"))
 	lease, err := AcquireRig(cfg)
@@ -17,6 +17,11 @@ func TestRigBindsProtectedPromptNamespace(t *testing.T) {
 	prefix := "freeside-handoff-c" + strings.Repeat("a", 31) + "-prompt"
 	if _, err := BindRigRuntimeResources(cfg.StateRoot, lease.Token(),
 		[]string{prefix + "-seed", prefix + "-check"}, []string{prefix}, nil); err != nil {
+		t.Fatal(err)
+	}
+	inputs := "freeside-handoff-c" + strings.Repeat("a", 31) + "-inputs"
+	if _, err := BindRigRuntimeResources(cfg.StateRoot, lease.Token(),
+		[]string{inputs + "-seed", inputs + "-check"}, []string{inputs}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := BindRigRuntimeResources(cfg.StateRoot, lease.Token(), []string{prefix + "-shell"}, nil, nil); err == nil {

@@ -662,7 +662,7 @@ func TestDurableInputsPreserveAndDetachPriorArtifacts(t *testing.T) {
 		},
 		PriorArtifactsPersisted: true,
 	}
-	provider := providerPromptInputsFrom(inputs)
+	provider := providerPromptInputsFrom(inputs, exec.StartSpec{})
 	if got := string(provider.PriorArtifacts[0]) + "/" + string(provider.PriorArtifacts[1]); got != "first/second" {
 		t.Fatalf("provider prior artifacts = %q", got)
 	}

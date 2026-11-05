@@ -102,3 +102,29 @@ func TestGetAttachmentServesStoredBytes(t *testing.T) {
 		}
 	})
 }
+
+func TestDescribeAttachmentSizesAndSniffsWithoutAStoreFailsClosed(t *testing.T) {
+	f := newConversationFixture(t)
+	blob := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("p"), 4096)...)
+	digest := domain.Digest("sha256:" + hex.EncodeToString(sha256sum(blob)))
+	if _, err := f.blobs.Put(digest, bytes.NewReader(blob)); err != nil {
+		t.Fatal(err)
+	}
+	size, head, err := f.service.DescribeAttachment(t.Context(), digest)
+	if err != nil || size != int64(len(blob)) || !bytes.HasPrefix(blob, head) ||
+		domain.SniffTaskAttachmentMediaType(head) != domain.TaskAttachmentMediaPNG {
+		t.Fatalf("DescribeAttachment = %d, %q, %v", size, head, err)
+	}
+	missing := domain.Digest("sha256:" + strings.Repeat("22", 32))
+	if _, _, err := f.service.DescribeAttachment(t.Context(), missing); !errors.Is(err, signet.ErrBlobNotFound) {
+		t.Fatalf("missing blob = %v, want ErrBlobNotFound", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := f.service.DescribeAttachment(ctx, digest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled describe = %v", err)
+	}
+	if _, _, err := signet.NewService(f.store).DescribeAttachment(t.Context(), digest); !errors.Is(err, signet.ErrAttachmentsUnavailable) {
+		t.Fatalf("describe without a blob store = %v, want ErrAttachmentsUnavailable", err)
+	}
+}
