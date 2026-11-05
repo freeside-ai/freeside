@@ -588,9 +588,30 @@ func checkpointArtifactDigests(
 		for _, digest := range stageInputs.ImageInputDigests {
 			digests[digest] = struct{}{}
 		}
+		for _, attachment := range stageInputs.Attachments {
+			digests[attachment.Digest] = struct{}{}
+		}
 	}
 	if err := errors.Join(admissionRows.Err(), admissionRows.Close()); err != nil {
 		return artifactClosure{}, err
+	}
+
+	// Each task's list goes through the validated reader rather than a bare
+	// digest query, so a row this store wrote and someone since edited fails
+	// the scan, as all owned state outside the outbox does.
+	attachmentTaskIDs, err := checkpointIDs[domain.TaskID](
+		ctx, sqlTx, `SELECT DISTINCT task_id FROM task_attachments ORDER BY task_id`)
+	if err != nil {
+		return artifactClosure{}, err
+	}
+	for _, taskID := range attachmentTaskIDs {
+		attachments, err := readTx.TaskAttachments(ctx, taskID)
+		if err != nil {
+			return artifactClosure{}, err
+		}
+		for _, attachment := range attachments {
+			digests[attachment.Digest] = struct{}{}
+		}
 	}
 
 	reviewRows, err := sqlTx.QueryContext(ctx,
