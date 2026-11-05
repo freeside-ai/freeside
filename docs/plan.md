@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 109
+revision: 110
 status: active
-updated: 2026-11-03
+updated: 2026-11-05
 ---
 
 # Freeside
@@ -566,7 +566,7 @@ synchronized item. The mechanism satisfies four invariants:
   epoch. A record that was once authoritative therefore never becomes
   permanently stranded.
 - **Telemetry-stable:** Delivery, open, timing, status, `decided_at`,
-  `expires_when`, readiness, base freshness, the commit-plan notice, the PR
+  `expires_when`, readiness, the commit-plan notice, the PR
   reference, recovery bindings, and the recommendation field never advance the
   identity. General `item_version`, row `entity_version`, head, and
   full-artifact approval and command gates are unrelated to it.
@@ -1569,7 +1569,7 @@ capabilities cover its launch, and an agent carries no role. Review requires
 An agent narrows behaviour inside a stage. It never waives or widens the
 stage's floors: no GitHub write credential in a workspace, publication
 credentials withheld, review's fresh context and read-only workspace,
-base/head invalidation, and the role capability ceilings all hold whatever
+head invalidation, and the role capability ceilings all hold whatever
 the agent.
 
 #### Roles and Launch Shapes
@@ -2477,13 +2477,13 @@ base:
 
 Repository identity, the fixed preparation command, and recipe approval
 against current policy are checked as before. Every boundary that binds an
-image to a base (composition preflight, daemon start, publication, and
-readiness re-entry) re-derives the verdict from the immutable record and the
-exact base tree; none stores or trusts one. The one exception is a repair
+image to a base (composition preflight, daemon start, publication and its
+handoff check against the tip, and readiness re-entry) re-derives the verdict
+from the immutable record and the exact base tree; none stores or trusts one. The one exception is a repair
 task's writer at composition (project-image upkeep below). The publication
 lane decides immediately before it builds a verification room, so finished
-verification evidence is never judged again. A re-entered cycle whose image
-cannot serve its base holds while project-image upkeep below has a
+verification evidence is never judged again. A handoff check or re-entered
+cycle whose image cannot serve its base holds while project-image upkeep below has a
 resolution pending; otherwise it stops on an attention item that carries the
 pull request. Either way it does not fail the lane. A record built before
 environment evidence existed carries none and stays admissible only at its
@@ -4759,21 +4759,13 @@ trust nor replaying a command grants new producer authority.
 One scheduler owns every durable deferred check: PR watches, deadlines, and
 subject-bound polls. It represents them as a closed union of schedule kinds with
 fixed Go types and trusted event constructors. 1B implements only the kinds that
-have 1B consumers: the PR-checks deadline, the review-wait threshold, the
-base-advance staleness watch, and the installation poll, plus the permanent
-trusted-config jobs (doctor, janitor, image upkeep; not proposable, no expiry
-requirement).
-The base-advance staleness watch is bound to the task, so it follows the work
-across retries. Its consumer is the base-freshness fact on task-bound
-`ready_for_final_review` items. Section [4](#4-the-attention-model)'s item resolution rules still
-apply: returning published work supersedes that item and starts a new feedback invocation in the same run.
-After return-to-agent, base-advance checks stay inactive until a new
-final-review item has a bound PR head. That item arms a watch with its own
-exact run, evidence, and head bindings.
-The watch revalidates its current run, evidence, and exact PR head when those
-bindings change; task identity never makes an earlier run's evidence or
-approvals fresh for a later one. Merge or close is still observed by the
-reconciler below.
+have 1B consumers: the PR-checks deadline, the review-wait threshold, and the
+installation poll, plus the permanent trusted-config jobs (doctor, janitor,
+image upkeep; not proposable, no expiry requirement).
+No kind watches the target branch. A `ready_for_final_review` item shows the
+target tip its handoff checked, and a later advance of that branch never marks
+it stale (Section [7](#7-review-policy), revision 110). Merge or close is still
+observed by the reconciler below.
 
 The doctor, the janitor, and the onboarding pending-install-or-expansion poll
 already run before 1B on plain tickers under their Section [10](#10-operations-and-onboarding) obligations. The
@@ -4781,7 +4773,7 @@ scheduler adopting them is a 1B migration that preserves those obligations,
 never a precondition for them.
 
 The proposed-watch, scan-sweep, and grant-expiry kinds are planned extensions
-that arrive with their consumers. Proposed watches wait past the four 1B timer
+that arrive with their consumers. Proposed watches wait past the three 1B timer
 kinds, and an approved watch proposal is representable only once its kind and
 consumer land. Scan activation stays Phase 2.
 
@@ -5125,19 +5117,15 @@ a proof cannot structurally occupy another requirement's state. A pass carries
 proof: the candidate head; the base or prospective-merge identity for any
 requirement whose evidence depends on one (integration checks, Section [7](#7-review-policy) review
 passes); the recipe digest; and the resolution digest. The re-gate binds the
-current base alongside the requirement-set digest. So a base advance
-structurally mismatches base-dependent proofs and forces reruns. The re-gate
-never restores readiness from evidence bound to a prior base.
-
-A base-advance re-entry keeps the candidate head, which was built on the old
-base. This holds whether the base advanced after publication or before it
-(Section [7](#7-review-policy)). Its base-dependent proofs therefore bind three
-commits: the new base, the unchanged candidate head, and the prospective merge
-of that head into that base. The daemon builds the merge locally and never
-pushes it, so the head the forge shows, or the head a pre-publication re-entry
-publishes, stays the candidate head. For a base-dependent requirement, a proof
-that names a merge satisfies only a target that names the same merge, and a
-proof that names none never satisfies a target that names one.
+candidate head and the requirement-set digest, never the current target tip.
+The base a proof names is evidence of what ran, so a later advance of the
+target branch leaves the proof valid (revision 110). The handoff check's own
+proof names the tip and the prospective merge it verified (Section
+[7](#7-review-policy)); the daemon builds that merge locally and never pushes
+it, so the head the forge shows stays the candidate head. A handoff proof
+satisfies only a handoff at the same tip and merge, and when the tip differs
+from the evidence base, a proof that names no merge never satisfies the handoff
+check.
 
 Waivers exist only inside Failed and NotRun. They apply only to required checks
 in registered waiver-eligible classes. Each one names the waived dimension and
@@ -5185,8 +5173,8 @@ Illustrative annex (non-binding):
     evaluation_set_digest commits to the complete canonical current
     CheckState set: resolutions, outcomes, proofs, waivers, advisories.
     CheckProof carries the base or prospective-merge identity wherever the
-    requirement's evidence depends on one, so the digest shifts on a base
-    advance.
+    requirement's evidence depends on one, as evidence of what ran; the
+    digest does not shift when the target branch advances after the proof.
     waiver? is representable only when requirement = required and the check
     class is registered waiver-eligible; the real types enforce this
     structurally (the annex elides it for brevity).
@@ -5206,61 +5194,53 @@ GitHub-native Codex review is observed, it is recorded as best-effort extra
 evidence; it never satisfies the review requirement. The trigger falsification
 behind this is recorded in Sections [5.3](#53-execution-stagedriver-and-reviewsource) and [13](#13-decisions-log) and on #427.
 
-Each review pass binds the exact base and candidate head SHAs. A new candidate
-head or an advanced base invalidates the pass and requires re-review.
-Integration evidence follows the same rule: a base advance also invalidates
-verification and check evidence bound to the prior base, and readiness
-recomputes under the Section [6](#6-verification) re-gate before any ready state is restored.
+**Review covers the head; handoff checks it against the current tip**
+(decider: user, 2026-11-04; revision 110; #2629). Each review pass binds the
+exact candidate head it reviewed and records the base it ran against as
+evidence. A new candidate head invalidates the pass and requires re-review. A
+later advance of the target branch never invalidates a pass, a verification
+proof, or a ready state (Section [6](#6-verification)).
 
-A base-advance re-entry reviews the prospective merge of the unchanged head
-into the new base (Section [6](#6-verification)), not the head against a base it was not built
-on. The pass still binds the candidate head and the new base, and its request
-records the merge it evaluated.
+Handoff is publication of the candidate head to the pull request: the first
+publication and every successor publication, such as a feedback return or a
+remediation continuation. At handoff, the publication-time workflow audit
+resolves the target tip, and nothing weakens it. The evidence base is the base
+every base-dependent proof of the head names; proofs that name different bases
+count as a moved tip. When the tip is the evidence base, the head's own proofs
+satisfy the handoff check and the daemon publishes. When it differs, the daemon
+builds the prospective merge of the unchanged head into that tip in its own
+checkout and never pushes it. It verifies the merge under the admitted recipe,
+records the tip and merge it checked, and publishes the unchanged head. Review
+is not rerun, because it covers the head and the merge adds nothing Freeside
+wrote. The tip stays the one the audit resolved: an advance while the merge is
+verified, or before the publication lands, starts nothing. Every publication
+binding that names a base SHA, such as the source-issue closure approval, names
+that tip, so an approval bound to an earlier base no longer matches and fails
+closed.
 
-**A base advance before publication re-enters the run instead of ending it**
-(decider: user, 2026-10-16; revision 89; #2058). The publication-time workflow
-audit of the target branch stays the only base-freshness gate, and nothing
-weakens it. When that audit finds the base advanced and the run holds no
-committed publication intent, the daemon:
+A conflict found at handoff is resolved before handoff. A conflict is a
+textual conflict or a verification failure on the merge. A remediation at the
+current tip produces a new head, which is verified and reviewed again like any
+head Freeside changed, and then meets the handoff check again. It runs as any
+remediation does: its rounds count toward `hard_round_limit`, Finding
+Adjudication governs its findings and their dispositions, its repository
+instructions come from the trusted base at that tip, and an exhausted bound ends
+it as any exhausted loop ends. Until that remediation exists, a conflict ends
+the run with the existing `publish_blocked` item, its reason naming the
+conflict.
 
-- keeps the candidate head and seals a re-entry authority that names the
-  audited tip as the new base. The base comes only from the daemon's own
-  recorded audit, never from a task payload;
-- builds the prospective merge of the unchanged head into the new base in the
-  run's own checkout and verifies it under the admitted recipe;
-- reviews the merge as one ordinary round of the same convergence segment,
-  bound to the new base, the head, and the merge;
-- carries every finding disposition from the rounds at the admitted base
-  forward by finding identity (#702), under the re-emission rule below;
-- sends new findings through ordinary adjudication and remediation, since the
-  head is not yet public. A remediated head is a new candidate head whose
-  base-dependent proofs bind the new base and that head's prospective merge;
-  and
-- publishes against the new base once the round is clean or fully
-  dispositioned.
+After handoff, a changed head is verified and reviewed again and handed off
+under the same check. That covers a feedback return, a remediation
+continuation, and a head someone else pushed. A target-branch advance alone
+starts nothing: no check or review reruns, and the run does not re-enter.
 
-The re-review rule above decides what is re-reviewed. Because an advanced base
-invalidates the review pass, a pre-publication advance always costs exactly one
-re-review, of the prospective merge, and nothing else is re-reviewed: findings
-already adjudicated keep their dispositions under the re-emission rule below,
-and a clean or fully dispositioned re-review adds no further round. The
-re-review counts toward `hard_round_limit`. A conflicting prospective merge, or
-a limit that leaves no room for the re-review, ends the run with the existing
-`publish_blocked` item and hold reason `base_advanced`, its reason naming the
-conflict or the limit. A further advance before publication re-enters again
-under the same bound.
-
-A carried disposition stays in the published history, but it never stands in
-for adjudication that the new base requires. A finding the re-review does not
-re-emit keeps its disposition. A re-emitted identity whose carried disposition
-is `fixed` re-enters adjudication as a failed prior fix, the rule Finding
-Adjudication (below) sets for any re-emitted identity. A re-emitted declined or
-deferred identity keeps its disposition only when its FindingAdjudication's
-bound inputs are unchanged at the new base: the approved specification digest,
-the repository-instruction snapshot digest, and the resolved policy digest.
-Otherwise it re-enters adjudication with the carried disposition as prior
-history, because the new base can change the repository instructions that
-decision rested on.
+**Between handoff and merge, nothing in Freeside checks the PR against the
+latest target branch.** Only the merge-time checks the target repository
+enforces, such as required checks on an up-to-date branch, cover that interval,
+and Freeside neither requires nor verifies them. This is a named gap until
+Freeside has a landing step, not a commitment to close it. A ready card claims
+only the tip its handoff checked, so a later advance makes none of its facts
+stale or false (Section [12](#12-exit-criteria-definitions)).
 
 The pass runs with fresh context independent of the implementing invocation, in
 a read-only workspace, with no publication credentials. It receives repository
@@ -5980,7 +5960,7 @@ below governs which layers each type carries:
 `finding_adjudication`, the layer 1 facts split into two groups:
 
 - **Verdicts, exceptions, and decision restrictions stay visible ahead of the
-  actions.** A stale or base-advanced state, a degraded or waived result, a
+  actions.** A stale state, a degraded or waived result, a
   missing decision capability, an action's consequence, and a commit-plan
   notice never fold into a disclosure.
 - **Routine technical coordinates may fold into a named disclosure, which may
@@ -6015,7 +5995,7 @@ item, not only its type:
 
 An item that lacks the lead, the typed fact, the claim, or the revalidated
 recommendation that would say what its reason says keeps the reason ahead of
-the actions. A reason that carries a stale or base-advanced state, a degraded
+the actions. A reason that carries a stale state, a degraded
 or waived result, a missing decision capability, an action's consequence, or
 a commit-plan notice is neither folded nor left to the details, unless the
 card's lead, a typed fact, or a revalidated recommendation states the same
@@ -7180,28 +7160,36 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 109 ("Commitments in the Plan, Mechanism at Its Point of Use"):
+Revision 110 ("Verify at Handoff, Not on a Base Move"):
 
-1. **The plan holds what Freeside commits to; mechanism lives where it is
-   used.** A sentence belongs in the plan only if changing it would change
-   what Freeside commits to, not only how it does it. Purpose, goals,
-   principles, safety invariants and trust boundaries, authority, component
-   responsibilities, interface shapes that bind several components, roadmap,
-   risks, and this log stay. Record fields, hold reasons, error types, reader
-   lists, test names, and per-unit acceptance move to package documentation,
-   component READMEs, issue contracts, and decision notes. Moving mechanism
-   out while the commitment stays is a wording change, and the moved text
-   lands at its destination in the same change unless it is already there;
-   "acceptance criteria" in AGENTS.md's materiality list means plan-level
-   criteria such as phase exits. A section past roughly 150 lines prompts a review
-   question about its mechanism, not a limit. Section [9](#9-comprehension) states the rule and AGENTS.md (Document Gating)
-   carries the full lists. Rejected: leaving the plan as is, because routine
-   implementation keeps churning it (PR #2496 changed it only to name a
-   record's second reader); and splitting it into many files with no content
-   rule, which spreads the same churn across more places.
+1. **Freeside verifies a pull request at handoff and again whenever its
+   head changes, never because the target branch moved.** Handoff is
+   publication, first or successor. At handoff the daemon checks the
+   unchanged head against the target tip current then: when the tip differs
+   from the base the head's proofs name, it verifies the prospective merge of the
+   head into that tip, records the tip and merge, and publishes; review is
+   not rerun. A conflict, textual or a failed verification of the merge, is
+   resolved before handoff by a remediation at the current tip, whose new
+   head is verified and reviewed again; until that remediation exists, a
+   conflict ends the run with `publish_blocked`. A changed head after
+   handoff is verified, reviewed, and handed off again. A base advance alone
+   reruns no check or review and re-enters no run, and nothing in Freeside
+   checks the PR against the latest target branch between handoff and merge:
+   only the merge-time checks the target repository enforces cover that, and
+   Freeside neither requires nor verifies them, until Freeside has a landing
+   step (Sections [6](#6-verification) and [7](#7-review-policy)). The Section [5.16](#516-the-durable-scheduler) base-advance staleness watch and the
+   base-freshness fact go; the ready card shows the tip its handoff checked.
+   This overturns revision 89's pre-publication base-advance re-entry (#2058),
+   the successor base-advance re-entry (#2111), and the base-advance half of
+   #502's readiness re-entry; the head-change half stays. Rejected: auditing
+   at handoff without verifying the merge, because the owner's rule says
+   verify at handoff; re-reviewing the merge at handoff, because review
+   covers the head and the merge adds nothing Freeside wrote; and keeping
+   the watch as information, which would mark every ready card stale after
+   each merge to the target branch, against Section [3.2](#32-the-interruption-budget)'s interruption budget.
 
-(Owner decision of 2026-11-03 on #2520;
-[decision note](../devlog/2026-11-03-1441-plan-content-rule.md).)
+(Owner decision of 2026-11-04 on #2629;
+[decision note](../devlog/2026-11-05-0951-verify-at-handoff-not-on-base-advance.md).)
 
 ## 14. Risks
 
