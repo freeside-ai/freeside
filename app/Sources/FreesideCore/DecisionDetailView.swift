@@ -2966,7 +2966,9 @@ struct DecisionDetailView: View {
     /// supports (plan §9), drawn as R20 sets it: the keyword, with the
     /// unverified word when an agent judged; one sentence naming who
     /// recommends, the action, and the confidence; the recommendation's own
-    /// reason, which plan §9 requires; then the filled action. It argues
+    /// reason, which plan §9 requires (on `finding_adjudication` it is the
+    /// first Provenance row instead, `DecisionRecommendationPresentation
+    /// .faceReason`); the Provenance fold; then the filled action. It argues
     /// before it acts: the block led with the act until 2026-09-03, on the
     /// reading that an operator decides rather than audits; the owner
     /// reversed that after the September UI audit (#1104, #1107), so the
@@ -2992,11 +2994,32 @@ struct DecisionDetailView: View {
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .proseMeasure()
-            Text(recommendation.reason)
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-                .proseMeasure()
+            if let reason = recommendation.faceReason(for: item) {
+                Text(reason)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .proseMeasure()
+            }
+            // The digests, policy key, and judgment site revalidate the
+            // recommendation; an operator deciding never reads them, so they
+            // stay one disclosure away, led by the reason where the face
+            // does not draw it. The fold sits above the action, so the
+            // action and the controls after it read as one block (#2608).
+            SentenceDisclosure(label: "Provenance", isExpanded: $provenanceExpanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let reason = recommendation.provenanceReason(for: item) {
+                        StackedFact(label: "Reason") {
+                            Text(reason)
+                                .font(FreesideFont.cardBody)
+                                .foregroundStyle(Color.ink)
+                        }
+                    }
+                    ForEach(recommendation.sourceFacts) { fact in
+                        factRow(fact.label, value: fact.value)
+                    }
+                }
+            }
             actionButton(
                 recommendation.action,
                 item: item,
@@ -3013,17 +3036,6 @@ struct DecisionDetailView: View {
                     viewportHeight: geometry.bounds(of: .named(Self.scrollSpace))?.height)
             } action: { visible in
                 recommendationVisible = visible
-            }
-            // The digests, policy key, and judgment site revalidate the
-            // recommendation; an operator deciding never reads them, so they
-            // stay one disclosure away below the act rather than inside the
-            // argument for it.
-            SentenceDisclosure(label: "Provenance", isExpanded: $provenanceExpanded) {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(recommendation.sourceFacts) { fact in
-                        factRow(fact.label, value: fact.value)
-                    }
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

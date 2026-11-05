@@ -1697,6 +1697,28 @@ import Testing
                 == "Less, reason for Finding 1")
     }
 
+    /// On `finding_adjudication` the recommendation's reason restates the
+    /// finding items by id, so it leaves the face for the first Provenance
+    /// row; every other card keeps it on the face (#2608).
+    @Test func theRecommendationReasonIsTheFirstProvenanceRowOnlyOnFindingAdjudication() throws {
+        let findings = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let findingRecommendation = try #require(DecisionRecommendationPresentation.of(findings))
+        #expect(findingRecommendation.faceReason(for: findings) == nil)
+        #expect(
+            findingRecommendation.provenanceReason(for: findings)
+                == "Decline review-finding-17. Fix review-finding-18 in this PR.")
+
+        // The same recommendation on any other type keeps its reason on
+        // the face and its Provenance as the source facts alone.
+        for type in AttentionFixtures.phase1Types where type != .finding_adjudication {
+            var item = AttentionFixtures.fixture(type: type).item
+            item.recommendation = findings.recommendation
+            let recommendation = try #require(DecisionRecommendationPresentation.of(item))
+            #expect(recommendation.faceReason(for: item) == recommendation.reason)
+            #expect(recommendation.provenanceReason(for: item) == nil)
+        }
+    }
+
     /// The spoken card names the finding, the route's keyword, who proposed
     /// it with the confidence its mark draws, and the route, so a model-proposed route is never heard as a
     /// daemon fact, and each card's identically titled disclosure says
