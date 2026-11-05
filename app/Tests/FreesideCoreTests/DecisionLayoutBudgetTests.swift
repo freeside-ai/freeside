@@ -15,14 +15,20 @@
         /// The Mac detail column at its narrow width, where the budget binds.
         private let cardWidth: CGFloat = 560
         /// Measured from the card's own top edge, so the padding the screenshot
-        /// wrapper adds around it does not spend the budget.
-        private let actionRowBudget: CGFloat = 520
+        /// wrapper adds around it does not spend the budget. The first
+        /// viewport is 520pt, but the Evidence fold now sits above the
+        /// actions (#2607), and once each finding draws its reason under its
+        /// route (#2608) two realistic findings put the action region at
+        /// 526.5pt at 560pt width (measured 2026-11-05). The owner chose to
+        /// record that, rounded up to 530pt, over trimming the finding
+        /// quotes' padding or keeping Evidence below the actions on this card.
+        private let actionRowBudget: CGFloat = 530
         /// The message length the budget is stated for: a two-sentence
         /// explanation, three lines at this width. A longer message wraps and
         /// the card scrolls; the budget makes no claim about it.
         private let realisticMessageLength = 180
 
-        @Test func twoFindingsWithRealisticMessagesKeepTheActionRegionInTheFirstViewport()
+        @Test func twoFindingsWithRealisticMessagesKeepTheirRecordedBudget()
             throws
         {
             let snapshot = AttentionFixtures.findingAdjudicationRealisticMessages()
