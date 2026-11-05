@@ -1045,7 +1045,6 @@ import Testing
         informationalOnly.readiness = nil
         informationalOnly.readiness_detail = nil
         informationalOnly.yield_history = nil
-        informationalOnly.base_freshness = nil
         let informationalChecklist = try #require(
             DecisionChecklistPresentation(informationalOnly))
         #expect(informationalChecklist.verdict?.result == .failed)
@@ -1131,13 +1130,13 @@ import Testing
         #expect(stale.rows.filter(\.isStale).count == 1)
         #expect(stale.rows[1].result == .note)
 
-        // A base advance the watch observed is the other staleness axis: the
-        // verdict is still the daemon's, but it no longer describes the base.
-        var advanced = AttentionFixtures.fixture(type: .ready_for_final_review).item
-        advanced.base_freshness = .init(
-            value1: .init(
-                base_ref: "main", admitted_base_sha: "deadbeef", observed_base_sha: "0badf00d",
-                advanced: true, observed_at: AttentionFixtures.createdInstant))
+        // An item concluded before plan revision 110 may still carry a
+        // base advance. It stays stale, the Bound-to row keeps the bound
+        // coordinates, and the advance keeps its own row with both values.
+        var advanced = AttentionFixtures.staleReady().item
+        advanced.readiness_invalidation?.value1.reason = .base_advanced
+        advanced.readiness_invalidation?.value1.bound = "deadbeef"
+        advanced.readiness_invalidation?.value1.observed = "0badf00d"
         let advancedChecklist = try #require(DecisionChecklistPresentation(advanced))
         #expect(
             advancedChecklist.verdict
@@ -1146,19 +1145,18 @@ import Testing
         #expect(
             advancedChecklist.rows[0]
                 == .init(
-                    label: "Bound to", value: "Base main@deadbeef → 0badf00d · Head cafebabe",
+                    label: "Bound to", value: "Head cafebabe · Base main@deadbeef",
                     result: .failed, isStale: true))
-        // The Bound-to row carries the advance, so the freshness row does
-        // not say it a second time.
-        #expect(advancedChecklist.rows.first(where: { $0.label == "Base freshness" }) == nil)
+        #expect(
+            advancedChecklist.rows[1]
+                == .init(
+                    label: "Base advanced", value: "deadbeef → 0badf00d", result: .failed,
+                    isStale: true))
 
         // Frame 7.3's notice: one sentence, built from the same typed
-        // facts. An item with no verdict to name, or an invalidation whose
-        // coordinates are not revisions, draws none.
-        #expect(
-            DecisionCardComposition.staleNotice(for: advanced)
-                == "The base advanced after verification. The verdict below was clean at head "
-                + "cafebabe against main@deadbeef; main is now at 0badf00d.")
+        // facts. An item with no verdict to name, or an invalidation that
+        // is not a head change, draws none.
+        #expect(DecisionCardComposition.staleNotice(for: advanced) == nil)
         #expect(
             DecisionCardComposition.staleNotice(for: AttentionFixtures.staleReady().item)
                 == "The head changed after verification. The verdict below was clean at head "
@@ -1166,7 +1164,7 @@ import Testing
         var retargeted = AttentionFixtures.staleReady().item
         retargeted.readiness_invalidation?.value1.reason = .retargeted
         #expect(DecisionCardComposition.staleNotice(for: retargeted) == nil)
-        var unverdicted = advanced
+        var unverdicted = AttentionFixtures.staleReady().item
         unverdicted.readiness = nil
         #expect(DecisionCardComposition.staleNotice(for: unverdicted) == nil)
         #expect(

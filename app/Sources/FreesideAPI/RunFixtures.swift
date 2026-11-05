@@ -262,13 +262,6 @@ public enum RunFixtures {
             schedule(
                 id: "schedule-review-657", kind: .review_wait_threshold,
                 runID: activeRunID, fireAt: date(3_600), createdAt: created),
-            schedule(
-                id: "schedule-base-654", kind: .base_advance_watch,
-                runID: readyRunID, createdAt: created,
-                baseWatch: .init(
-                    value1: .init(
-                        repo: "freeside-ai/freeside", base_ref: "main",
-                        admitted_base_sha: String(repeating: "a", count: 40)))),
         ]
     }
 
@@ -537,8 +530,7 @@ public enum RunFixtures {
         kind: Components.Schemas.ScheduleKind,
         runID: String,
         fireAt: Date? = nil,
-        createdAt: Date,
-        baseWatch: Components.Schemas.Schedule.base_watchPayload? = nil
+        createdAt: Date
     ) -> Components.Schemas.ScheduleSnapshot {
         .init(
             as_of_revision: 12,
@@ -554,7 +546,6 @@ public enum RunFixtures {
                 generation: 1,
                 created_at: createdAt,
                 fire_at: fireAt,
-                base_watch: baseWatch,
                 status: .armed))
     }
 
