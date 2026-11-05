@@ -300,11 +300,11 @@ uses golangci-lint-action at the same pinned version.
 workflows for changed components and reports `required`. Branch protection
 requires that check and an up-to-date branch. Leave a PR behind `main`, before
 handoff and after it: the lander (`land-approved-prs`) refreshes it when it
-selects the PR. Refresh it onto `main` yourself only when the merge-result
-audit finds a conflict, a landed change needs a fix in it (including a
-contract PR's regenerated consumers, Contract Changes), the lander hands it
-back (`needs-human`), or the owner asks (`docs/agent-workflow.md`
-§handing-off step 3).
+selects the PR. Before handoff, refresh it onto `main` yourself only when the
+merge-result audit finds a conflict or a landed change needs a fix in it
+(Integration Ordering and Merge-Result Audit). After handoff, refresh it only
+when the lander hands it back (`needs-human`) or the owner asks
+(`docs/agent-workflow.md` §handing-off step 3).
 
 Operator
 tools that are not checks live with their component: installers in
