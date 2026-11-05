@@ -18,18 +18,18 @@ func TestReenteredReadyItemOffersNoReturnToAgent(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	})
 	if !started {
 		t.Fatal("a base advance started no re-entry")
 	}
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.scriptCleanReview(2, p.baseSHA, pushed)
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
 		t.Fatalf("re-entry result = %#v, %v", result, err)
 	}
-	reentered := p.assertReentered(t, superseded, 2, advanced, p.replay.HeadSHA)
+	reentered := p.assertReentered(t, superseded, 2, p.baseSHA, pushed)
 	ready, err := p.attention.GetAttentionItem(p.ctx, reentered.ID)
 	if err != nil {
 		t.Fatal(err)

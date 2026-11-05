@@ -10,12 +10,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -273,51 +271,32 @@ func TestParseNameStatus(t *testing.T) {
 }
 
 // TestReentryStopReasonsNameTheCommits: the stop text is what a person acts
-// on, so it names both commits, quotes repository-controlled names, and stays
-// bounded however many paths conflict.
+// on, so it names the commit and quotes the repository-controlled branch.
 func TestReentryStopReasonsNameTheCommits(t *testing.T) {
 	t.Parallel()
 	task := newReentryTask("project-reentry", reentrySuccessorForTest(
-		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced))
-	base := task.Successor.Reentry.BaseSHA
-	paths := make([]string, 0, reentryConflictPathLimit+5)
-	for i := range reentryConflictPathLimit + 5 {
-		paths = append(paths, "dir/file-"+string(rune('a'+i))+".txt")
-	}
-	paths[0] = "line\nbreak.txt"
-	reason := reentryConflictReason(task, base, &publish.MergeConflictError{
-		BaseSHA: base, HeadSHA: task.HeadSHA, Paths: paths,
-	})
-	if !strings.Contains(reason, base) || !strings.Contains(reason, task.HeadSHA) ||
-		!strings.Contains(reason, `"line\nbreak.txt"`) || strings.Contains(reason, "\n") ||
-		!strings.Contains(reason, paths[reentryConflictPathLimit-1]) ||
-		strings.Contains(reason, paths[reentryConflictPathLimit]) ||
-		!strings.Contains(reason, "and more") {
-		t.Fatalf("conflict reason = %q", reason)
-	}
-	few := reentryConflictReason(task, base, &publish.MergeConflictError{
-		BaseSHA: base, HeadSHA: task.HeadSHA, Paths: paths[1:3],
-	})
-	if strings.Contains(few, "and more") {
-		t.Fatalf("a complete listing claims more paths: %q", few)
-	}
-	truncated := reentryConflictReason(task, base, &publish.MergeConflictError{
-		BaseSHA: base, HeadSHA: task.HeadSHA, Paths: paths[1:3], Truncated: true,
-	})
-	if !strings.Contains(truncated, "and more") {
-		t.Fatalf("a truncated listing reads as complete: %q", truncated)
-	}
-	// A path is as long as its pusher makes it; the reason is stored and
-	// synced, so each one is cut, on a rune boundary.
-	long := reentryConflictReason(task, base, &publish.MergeConflictError{
-		BaseSHA: base, HeadSHA: task.HeadSHA, Paths: []string{"x" + strings.Repeat("é", 4096)},
-	})
-	if len(long) > 4*reentryQuotedTextLimit || !utf8.ValidString(long) || !strings.Contains(long, `é..."`) {
-		t.Fatalf("long conflict path reason (%d bytes) = %q", len(long), long)
-	}
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationHeadChanged))
 	missing := reentryMissingHeadReason(task, "feature\nbranch")
 	if !strings.Contains(missing, task.HeadSHA) || strings.Contains(missing, "\n") {
 		t.Fatalf("missing-head reason = %q", missing)
+	}
+	base := task.Successor.Reentry.BaseSHA
+	undescended := reentryUndescendedHeadReason(task, base)
+	if !strings.Contains(undescended, task.HeadSHA) || !strings.Contains(undescended, base) ||
+		!strings.Contains(undescended, "Inspect the pull request") {
+		t.Fatalf("head-change undescended reason = %q", undescended)
+	}
+
+	// A base_advanced cycle sealed before plan revision 110 and still in
+	// flight at upgrade stops here too: its head is the reviewed one, so the
+	// reason names the retired advance instead of a problem to inspect.
+	legacy := newReentryTask("project-reentry", reentrySuccessorForTest(
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced))
+	legacyBase := legacy.Successor.Reentry.BaseSHA
+	advanced := reentryUndescendedHeadReason(legacy, legacyBase)
+	if !strings.Contains(advanced, legacy.HeadSHA) || !strings.Contains(advanced, legacyBase) ||
+		!strings.Contains(advanced, "revision 110") || strings.Contains(advanced, "Inspect") {
+		t.Fatalf("base-advanced undescended reason = %q", advanced)
 	}
 }
 

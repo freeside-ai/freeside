@@ -575,24 +575,6 @@ func TestReadinessReentryAppliesRebuildGate(t *testing.T) {
 			t.Fatalf("re-entry ran %d commands in rooms %v, want the last in %s",
 				p.room.runs, p.room.images, images[1].ID)
 		}
-
-		// The base then advances under the rebuilt head. The merge keeps the
-		// head's manifests, so the image already recorded for them serves it.
-		advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
-		if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-		}); !started {
-			t.Fatal("a base advance started no re-entry")
-		}
-		p.scriptCleanReview(3, advanced, head)
-		if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-			t.Fatalf("base-advance re-entry result = %#v, %v", result, err)
-		}
-		if len(builder.requests) != 1 || len(p.recordedImages(t)) != 2 ||
-			p.room.runs != 3 || p.room.images[len(p.room.images)-1] != images[1].ID {
-			t.Fatalf("base-advance re-entry built %d times, recorded %d images, ran %d commands in rooms %v",
-				len(builder.requests), len(p.recordedImages(t)), p.room.runs, p.room.images)
-		}
 	})
 
 	t.Run("a pushed dependency change outside policy stops the cycle", func(t *testing.T) {

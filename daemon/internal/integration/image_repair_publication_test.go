@@ -208,8 +208,7 @@ func TestImageRepairExceptionNeedsTheRefusalsImageAndTip(t *testing.T) {
 
 // A re-entered cycle still at the refusal's tip takes the repair gate at the
 // commit it verifies, so a head that keeps the manifests is verified in the
-// image already rebuilt for them, never the admitted one. One at an advanced
-// base takes the ordinary checks.
+// image already rebuilt for them, never the admitted one.
 func TestImageRepairReentryTakesTheRepairGateOnlyAtTheTip(t *testing.T) {
 	t.Parallel()
 	p, builder := newImageRepairPublicationHarness(t, nil, imageRepairCase{})
@@ -229,20 +228,5 @@ func TestImageRepairReentryTakesTheRepairGateOnlyAtTheTip(t *testing.T) {
 		p.room.runs != 2 || p.room.images[len(p.room.images)-1] != images[1].ID {
 		t.Fatalf("re-entry built %d times, recorded %d images, ran %d commands in rooms %v, want the rebuilt %s",
 			len(builder.requests), len(images), p.room.runs, p.room.images, images[1].ID)
-	}
-
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
-	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-	}); !started {
-		t.Fatal("a base advance started no re-entry")
-	}
-	p.scriptCleanReview(3, advanced, head)
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-		t.Fatalf("base-advance re-entry result = %#v, %v", result, err)
-	}
-	if len(builder.requests) != 1 || p.room.runs != 3 || p.room.images[len(p.room.images)-1] != p.image.ID {
-		t.Fatalf("base-advance re-entry built %d times, ran %d commands in rooms %v, want the admitted image",
-			len(builder.requests), p.room.runs, p.room.images)
 	}
 }

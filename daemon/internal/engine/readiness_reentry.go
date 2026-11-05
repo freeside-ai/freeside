@@ -18,8 +18,11 @@ import (
 // transaction means a restart never finds the item superseded with no cycle
 // behind it. It reports whether it started one.
 //
-// Only a base advance or a head change re-enters. An item that is not one of
-// those, a run whose work unit already completed or whose task is cancelled,
+// Only a head change re-enters. A base advance no longer does (plan §5.16,
+// revision 110): verification happens at handoff, never because the target
+// branch moved, so a base_advanced fact, which only an item concluded before
+// that revision carries, starts nothing. An item that is not a head change,
+// a run whose work unit already completed or whose task is cancelled,
 // and a run whose latest review does not cover the item's head start nothing:
 // the item stays superseded for a person, as it did before this cycle
 // existed. Each of those is decided from reads, before the first write.
@@ -36,8 +39,9 @@ func StartReadinessReentry(
 		return false, nil
 	}
 	switch fact.Reason {
-	case domain.ReadinessInvalidationBaseAdvanced, domain.ReadinessInvalidationHeadChanged:
-	case domain.ReadinessInvalidationRetargeted, domain.ReadinessInvalidationIdentityChanged:
+	case domain.ReadinessInvalidationHeadChanged:
+	case domain.ReadinessInvalidationBaseAdvanced, domain.ReadinessInvalidationRetargeted,
+		domain.ReadinessInvalidationIdentityChanged:
 		return false, nil
 	}
 	runID := *item.Subject.RunID
@@ -88,8 +92,6 @@ func StartReadinessReentry(
 	}
 	reentry := domain.PublicationSuccessorReentry{Reason: fact.Reason}
 	switch fact.Reason {
-	case domain.ReadinessInvalidationBaseAdvanced:
-		reentry.BaseSHA, reentry.HeadSHA = fact.Observed, binding.HeadSHA
 	case domain.ReadinessInvalidationHeadChanged:
 		// The new head is reviewed against the base the last review used. A
 		// record from before reviews carried a base has none to reuse.
@@ -97,7 +99,8 @@ func StartReadinessReentry(
 			return false, nil
 		}
 		reentry.BaseSHA, reentry.HeadSHA = latest.BaseSHA, fact.Observed
-	case domain.ReadinessInvalidationRetargeted, domain.ReadinessInvalidationIdentityChanged:
+	case domain.ReadinessInvalidationBaseAdvanced, domain.ReadinessInvalidationRetargeted,
+		domain.ReadinessInvalidationIdentityChanged:
 		return false, nil
 	}
 	successor := domain.PublicationSuccessor{

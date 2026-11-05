@@ -2,13 +2,10 @@ package integration_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -130,94 +127,6 @@ func TestProductionPublicationRefusesIncompatibleProjectImage(t *testing.T) {
 	}
 }
 
-// A re-entered cycle keeps its producer's image and runs it on the re-entry
-// base, so that base is the one the image must serve. Before this rule the
-// cycle checked the image only against the base its producer was admitted at.
-// A base advance is ordinary, so the refusal stops this one cycle on an item a
-// person can read: as a lane error it would stop publication for every run.
-func TestReadinessReentryStopsOnBaseTheImageCannotServe(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		edit    func(*domain.ProjectImageInput)
-		advance func(dir string) error
-		names   string
-	}{
-		"dependency drift on the advanced base": {
-			nil,
-			func(dir string) error {
-				return os.WriteFile(filepath.Join(dir, "package-lock.json"),
-					[]byte(`{"name":"fixture","lockfileVersion":2}`+"\n"), 0o600)
-			},
-			"package-lock.json",
-		},
-		"legacy record on a source-only advance": {
-			func(input *domain.ProjectImageInput) { input.Environment = nil },
-			func(dir string) error {
-				return os.WriteFile(filepath.Join(dir, "UPSTREAM.md"), []byte("upstream change\n"), 0o600)
-			},
-			"rebuild the image",
-		},
-		// No image can have baked a manifest that is not a regular file, so
-		// the base is one the image cannot serve, not a fault of the lane.
-		"manifest replaced by a symbolic link on the advanced base": {
-			nil,
-			func(dir string) error {
-				manifest := filepath.Join(dir, "package.json")
-				if err := os.Rename(manifest, filepath.Join(dir, "real.json")); err != nil {
-					return err
-				}
-				return os.Symlink("real.json", manifest)
-			},
-			"package.json",
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			p := newProjectImageReuseHarness(t, nil, tc.edit)
-			// The first cycle runs at the image's own build commit.
-			p.publishReady(t)
-			if err := tc.advance(p.baseDir); err != nil {
-				t.Fatal(err)
-			}
-			runGit(t, p.baseDir, "add", "-A")
-			runGit(t, p.baseDir, "commit", "-q", "-m", "advance the base")
-			advanced := runGit(t, p.baseDir, "rev-parse", "HEAD")
-			if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-				Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-			}); !started {
-				t.Fatal("a base advance started no re-entry")
-			}
-			reads, runs := p.room.reads, p.room.runs
-			result, err := p.reconcileLanes()
-			if err != nil || result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
-				t.Fatalf("unserved base result = %#v, %v", result, err)
-			}
-			stop := p.reentryStopItem(t)
-			if !strings.Contains(stop.Reason, advanced) || !strings.Contains(stop.Reason, tc.names) ||
-				!strings.Contains(stop.Reason, "project image") {
-				t.Fatalf("stop item = %#v", stop)
-			}
-			if p.room.reads != reads || p.room.runs != runs {
-				t.Fatalf("a refused image served %d room reads and %d verification commands",
-					p.room.reads-reads, p.room.runs-runs)
-			}
-			// The task is retired: later passes neither fail nor repeat the stop.
-			if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 0 {
-				t.Fatalf("pass after the stop = %#v, %v", result, err)
-			}
-			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-				pending, err := tx.ListPendingOutbox(p.ctx, engine.KindProductionPublicationRequested)
-				if err != nil || len(pending) != 0 {
-					t.Errorf("a stopped cycle left %d pending tasks, %v", len(pending), err)
-				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
 // The preparation clause follows the running binary, so the verdict is taken
 // where a verification room is about to be built and nowhere else. A cycle
 // that lost its process after verification finishes on the evidence it holds,
@@ -254,20 +163,20 @@ func TestProjectImageVerdictIsNotTakenAgainAfterVerification(t *testing.T) {
 		t.Parallel()
 		p := newProjectImageReuseHarness(t, nil, nil)
 		p.publishReady(t)
-		advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+		pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 		if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+			Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 		}); !started {
-			t.Fatal("a base advance started no re-entry")
+			t.Fatal("a head change started no re-entry")
 		}
-		p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+		p.scriptCleanReview(2, p.baseSHA, pushed)
 		p.workflow = p.newEngine(t, crashAfterVerification, true)
 		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("the crash seam after verification did not interrupt the cycle")
 		}
 		runs := p.room.runs
 		p.restartDurableState(t)
-		p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+		p.scriptCleanReview(2, p.baseSHA, pushed)
 		p.preparationDigest = upgraded
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 		if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {

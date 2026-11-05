@@ -328,7 +328,11 @@ const (
 	// the head the ready item was earned against (a force-push or new commit).
 	ReadinessInvalidationHeadChanged ReadinessInvalidationReason = "head_changed"
 	// ReadinessInvalidationBaseAdvanced: the observed target-base tip advanced
-	// past the base the publication was admitted for.
+	// past the base the publication was admitted for. Retired for published
+	// items (plan §5.16, revision 110): nothing watches the target branch after
+	// handoff, so it appears only on ready items concluded before that
+	// revision, and a re-entry before publication still names it. It stays
+	// registered so that history decodes.
 	ReadinessInvalidationBaseAdvanced ReadinessInvalidationReason = "base_advanced"
 	// ReadinessInvalidationRetargeted: the PR's base ref changed (the pull was
 	// retargeted at a different branch).

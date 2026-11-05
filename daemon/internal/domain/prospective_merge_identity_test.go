@@ -56,11 +56,12 @@ func TestProspectiveMergeIdentityValidation(t *testing.T) {
 }
 
 // TestPublicationSuccessorAllowsProspectiveMerge pins the gate to one
-// authority shape: a base_advanced re-entry, for the merge of exactly its
-// head into exactly its base.
+// authority shape: a base_advanced re-entry before publication, for the merge
+// of exactly its head into exactly its base. A published (v3) base_advanced
+// re-entry is refused since plan revision 110.
 func TestPublicationSuccessorAllowsProspectiveMerge(t *testing.T) {
 	t.Parallel()
-	advanced := reentrySuccessor()
+	advanced := unpublishedReentrySuccessor()
 	merge := reentryMerge()
 	if !advanced.AllowsProspectiveMerge(merge) {
 		t.Fatal("base_advanced re-entry refused the merge of its own head into its own base")
@@ -107,14 +108,15 @@ func TestPublicationSuccessorAllowsProspectiveMerge(t *testing.T) {
 		authority domain.PublicationSuccessor
 		merge     domain.ProspectiveMergeIdentity
 	}{
-		"head_changed re-entry":  {headChanged, merge},
-		"external_review":        {external, externalMerge},
-		"feedback successor":     {feedback, merge},
-		"remediation successor":  {continuation, merge},
-		"retargeted re-entry":    {retargeted, merge},
-		"mislabelled origin":     {wrongOrigin, merge},
-		"zero authority":         {domain.PublicationSuccessor{}, merge},
-		"zero authority, v3 tag": {domain.PublicationSuccessor{Version: domain.PublicationReentryVersion}, merge},
+		"published base_advanced": {reentrySuccessor(), merge},
+		"head_changed re-entry":   {headChanged, merge},
+		"external_review":         {external, externalMerge},
+		"feedback successor":      {feedback, merge},
+		"remediation successor":   {continuation, merge},
+		"retargeted re-entry":     {retargeted, merge},
+		"mislabelled origin":      {wrongOrigin, merge},
+		"zero authority":          {domain.PublicationSuccessor{}, merge},
+		"zero authority, v3 tag":  {domain.PublicationSuccessor{Version: domain.PublicationReentryVersion}, merge},
 	} {
 		if test.authority.AllowsProspectiveMerge(test.merge) {
 			t.Fatalf("%s admitted a prospective merge", name)
