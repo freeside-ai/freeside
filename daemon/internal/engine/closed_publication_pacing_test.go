@@ -21,8 +21,8 @@ import (
 
 // closedPublicationSchedule is the attempt schedule at the default
 // holdRetryInterval over the 10 minutes each phase drives: an immediate
-// attempt, then 30 s doubling. Unpaced, the same 100 ms passes made about
-// 6,000 attempts (#2343).
+// attempt, then 30 s doubling. Unpaced, the lane's 100 ms passes made about
+// 6,000 attempts (#2343); the test's 1 s passes would make 600.
 var closedPublicationSchedule = []time.Duration{
 	0, 30 * time.Second, 90 * time.Second, 210 * time.Second, 450 * time.Second,
 }
@@ -78,23 +78,38 @@ func (h *closedPublicationHarness) workflow() *productionPublicationWorkflow {
 	}
 }
 
-// drive runs the sweep every 100 ms for d, the lane's cadence, after
-// resetting the phase's attempt record. onAttempt runs after each pass that
-// made an attempt, with the attempt's 1-based number.
+// pacingStep is how far drive advances virtual time between sweeps. The
+// lane's real cadence is 100 ms, but every due time the pacing computes is a
+// multiple of holdRetryInterval (30 s), so any step that divides 30 s still
+// runs the sweep at each attempt's exact offset. Stepping 100 ms instead made
+// these tests spend ~25 s on 31,000 store reads.
+const pacingStep = time.Second
+
+// drive runs the sweep every pacingStep for d, after resetting the phase's
+// attempt record. onAttempt runs after each pass that made an attempt, with
+// the attempt's 1-based number. Each pass also requires every pending due
+// time to fall on a step: a due time between steps would be swept up to a
+// step late and recorded at the step's offset, so requireSchedule alone
+// could not tell an off-schedule due time from an exact one.
 func (h *closedPublicationHarness) drive(
 	w *productionPublicationWorkflow, d time.Duration, onAttempt func(attempt int),
 ) {
 	h.t.Helper()
 	h.attemptAt, h.start = nil, time.Now()
-	for elapsed := time.Duration(0); elapsed < d; elapsed += 100 * time.Millisecond {
+	for elapsed := time.Duration(0); elapsed < d; elapsed += pacingStep {
 		before := len(h.attemptAt)
 		if err := w.observeClosedWorkflows(h.t.Context()); err != nil {
 			h.t.Fatal(err)
 		}
+		for runID, pace := range w.closedPublicationRetry {
+			if offset := pace.due.Sub(h.start); offset%pacingStep != 0 {
+				h.t.Fatalf("run %q due at %v from the phase start, between %v steps", runID, offset, pacingStep)
+			}
+		}
 		if onAttempt != nil && len(h.attemptAt) > before {
 			onAttempt(len(h.attemptAt))
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(pacingStep)
 	}
 }
 
@@ -130,6 +145,10 @@ func TestClosedPublicationObservationIsPacedAndHeld(t *testing.T) {
 	if defaultProductionHoldRetryInterval != 30*time.Second {
 		t.Fatalf("default hold-retry interval = %v; closedPublicationSchedule assumes 30s",
 			defaultProductionHoldRetryInterval)
+	}
+	if defaultProductionHoldRetryInterval%pacingStep != 0 {
+		t.Fatalf("pacing step %v does not divide the hold-retry interval %v; drive would miss due attempts",
+			pacingStep, defaultProductionHoldRetryInterval)
 	}
 	synctest.Test(t, func(t *testing.T) {
 		h := newClosedPublicationHarness(t)
@@ -172,7 +191,7 @@ func TestClosedPublicationObservationIsPacedAndHeld(t *testing.T) {
 			t.Fatalf("hold after restarted attempts = %+v, found %v", hold, found)
 		}
 
-		// The next due attempt, 7 m 30 s after the last one, settles.
+		// The next due attempt, 8 m after the last one, settles.
 		h.result = nil
 		h.drive(restarted, 10*time.Minute, nil)
 		if len(h.attemptAt) == 0 {
