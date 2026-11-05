@@ -463,7 +463,15 @@ All under `daemon/`:
   `internal/exec/claude/spec.go` (the credential mount),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
   `internal/exec/capability.go`, and the `CredentialMode` and
-  `EgressProfile` fields in `internal/exec/driver.go`.
+  `EgressProfile` fields in `internal/exec/driver.go`. The alternate-agent
+  retry, which lets an operator choose another agent's credential after a
+  failure, joins them: `internal/domain/alternate_agent_retry.go`
+  (the rule an alternate must meet), `internal/engine/alternate_agent.go`
+  (the offers and the admission re-gate of a card's agent),
+  `internal/engine/alternate_agent_retry.go` (records the choice and
+  re-pins a moved task's lines), `internal/store/alternate_agent_retry.go`,
+  and `internal/store/production_attempt.go` (authenticates the record an
+  attempt cites).
 - **GitHub publish, app keys, tokens, and janitor deletes:**
   `internal/publish/`.
 - **Publication decisions in the engine:**
@@ -494,6 +502,8 @@ All under `daemon/`:
   `internal/domain/decision_surface.go`,
   `internal/domain/closure_approval.go`,
   `internal/domain/agent_decision.go`, `internal/domain/authorization.go`,
+  `internal/signet/alternate_agent_retry.go` (binds the decision to an
+  offered agent),
   `internal/domain/trust_profile.go`,
   `internal/domain/shadow_review_configuration.go`,
   `cmd/freesided/approve_shadow_review.go`,

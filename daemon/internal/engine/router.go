@@ -36,9 +36,23 @@ type routeCandidate struct {
 // routeBeforeAdmission runs the router for the role's admission and then the
 // routed pool's hold. Stage and review admission call it before they resolve
 // the role's agent, each in its own transaction ahead of admission's read.
+//
+// An attempt whose card chose the role's agent neither routes nor holds: the
+// card overrides the task's lines for that attempt, so their pool is not the
+// one it runs on. A card that cannot be read is admission's to refuse.
 func (s AgentSelection) routeBeforeAdmission(
 	ctx context.Context, st *store.Store, runID domain.RunID, role domain.RoleName, now time.Time,
 ) error {
+	if runID != "" && role.TaskLineEligible() {
+		var carded bool
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			_, carded, err = attemptCard(ctx, tx, runID, role)
+			return err
+		}); err == nil && carded {
+			return nil
+		}
+	}
 	if err := s.routeTask(ctx, st, runID, role, now); err != nil {
 		return err
 	}
@@ -514,8 +528,8 @@ func compareResets(a, b domain.ExhaustedMark) int { return a.ResetsAt.Compare(*b
 // pool. A role whose order holds no agent on the pool gets none and keeps the
 // lineup. An agent the router passed over on this pool for its model's marked
 // window still takes its role's line, which holds on that window like any
-// later role: the task stays on one pool. The alternate-agent card (#869)
-// reuses this to re-pin a task it moves.
+// later role: the task stays on one pool. A parked task's move reuses this
+// to re-pin the task to the pool it moves to.
 func routerLinesForPool(
 	policy domain.RoutingPolicy, pool domain.UsagePoolID, pools map[string]domain.UsagePoolID,
 	skip map[domain.RoleName]bool,
@@ -536,9 +550,9 @@ func routerLinesForPool(
 	return lines
 }
 
-// requireRoutedPoolOpen holds a role whose current line the router set while
-// that line's pool still marks a window for the agent's model with a reset
-// ahead. The hold names the mark that resets last (heldUntil). The router
+// requireRoutedPoolOpen holds a role whose current line the router or a
+// parked task's move set while that line's pool still marks a window for the
+// agent's model with a reset ahead. The hold names the mark that resets last (heldUntil). The router
 // never reroutes the role.
 //
 // A line that fails its anchor, or an agent that no longer resolves, passes
@@ -551,7 +565,7 @@ func (s AgentSelection) requireRoutedPoolOpen(
 	}
 	return st.Read(ctx, func(tx *store.ReadTx) error {
 		line, found, err := RunTaskLine(ctx, tx, runID, role)
-		if err != nil || !found || line.Source != domain.TaskLineSourceRouter {
+		if err != nil || !found || !line.Source.CarriesProvenance() {
 			// An unreadable or unanchored line is admission's to refuse.
 			return nil
 		}

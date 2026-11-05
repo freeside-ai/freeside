@@ -39,7 +39,7 @@ public enum ActionOutcome: Equatable {
             return .concludes(.resolved)
         case .request_changes:
             return .concludes(.superseded)
-        case .answer_and_retry, .return_to_agent, .retry_with_capabilities:
+        case .answer_and_retry, .return_to_agent, .retry_with_capabilities, .retry_with_alternate_agent:
             return .concludes(.superseded)
         case .answer_without_retry:
             return .concludes(.resolved)

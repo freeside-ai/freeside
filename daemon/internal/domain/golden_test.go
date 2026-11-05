@@ -380,6 +380,54 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A quota failure whose card offers two agents on other pools.
+	alternateAgentOffers := []domain.AlternateAgentOffer{
+		{
+			Agent: "claude-b", Pool: "claude-max-b", Harness: domain.HarnessClientClaudeCode,
+			Model: "claude-opus-4-1", Qualification: domain.AlternateAgentDifferentPool,
+		},
+		{
+			Agent: "codex-a", Pool: "chatgpt-pro-a", Harness: domain.HarnessClientCodexCLI,
+			Model: "gpt-5-codex", Qualification: domain.AlternateAgentDifferentPool,
+		},
+	}
+	alternateAgentItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-execution-failure-quota", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+		Reason: "the implementation stage failed",
+		RequestedDecision: []domain.Action{
+			domain.ActionRetryWithAlternateAgent, domain.ActionDiscuss, domain.ActionStop,
+		},
+		ExecutionFailure: &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseQuota,
+			Stage:        domain.StageNameImplementation,
+			InvocationID: "inv-implementation-1",
+		},
+		AlternateAgents: alternateAgentOffers,
+		ItemVersion:     1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternateAgentRetry, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
+		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-implementation-1",
+		ItemID: "item-execution-failure-quota", CommandID: "cmd-alternate-1",
+		Agent: "claude-b", Pool: "claude-max-b", Qualification: domain.AlternateAgentDifferentPool,
+		RecordedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parkedMoveRetry, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
+		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-implementation-1",
+		CommandID: "cmd-move-1", Agent: "claude-b", Pool: "claude-max-b",
+		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	interpretationFailureItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-interpretation-failure", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
@@ -1331,6 +1379,24 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operator moved the parked task off claude-a's exhausted pool: the
+	// implementer's router line gains a second version on claude-b's pool,
+	// citing the move's record.
+	alternateAgentMoveTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(parkedMoveRetry.ID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
+			RankedBy: []domain.TaskLineRankingReading{},
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "claude-max-a", Window: "seven_day_opus",
+				Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: ts.Add(-time.Hour), ResetsAt: new(ts.Add(50 * time.Hour)),
+			},
+		},
+	}, 2, &routerPolicyOrderTaskLine.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
 	// beside the existing fields, and its presence selects the new encoding
@@ -1900,6 +1966,9 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	quotaWindowHoldOffers := quotaWindowHold
+	quotaWindowHoldOffers.QuotaWindow = new(*quotaWindowHold.QuotaWindow)
+	quotaWindowHoldOffers.QuotaWindow.AlternateAgents = alternateAgentOffers
 	machineCapacityHold := domain.RunHoldObservation{
 		RunID: "run-2", InvocationID: &obsInvocationID,
 		Reason: domain.HoldMachineCapacity,
@@ -2262,6 +2331,9 @@ func TestGolden(t *testing.T) {
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_execution_failure", executionFailureItem},
+		{"attention_item_execution_failure_alternate_agents", alternateAgentItem},
+		{"alternate_agent_retry", alternateAgentRetry},
+		{"alternate_agent_retry_parked_move", parkedMoveRetry},
 		{"attention_item_interpretation_failure", interpretationFailureItem},
 		{"attention_item_publish_blocked", publishBlockedItem},
 		{"attention_item_publish_blocked_pr_reference", publishBlockedPRReferenceItem},
@@ -2383,6 +2455,7 @@ func TestGolden(t *testing.T) {
 		{"task_line_router_drain_first", routerDrainFirstTaskLine},
 		{"task_line_router_soonest_reset", routerSoonestResetTaskLine},
 		{"task_line_router_policy_order", routerPolicyOrderTaskLine},
+		{"task_line_alternate_agent_move", alternateAgentMoveTaskLine},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
 		{"production_attempt_revision", productionRevisionAttempt},
@@ -2467,6 +2540,7 @@ func TestGolden(t *testing.T) {
 		{"run_hold_observation_image_upkeep_adoption", adoptionHold},
 		{"run_hold_observation_image_upkeep_maintenance", maintenanceHold},
 		{"run_hold_observation_quota_window", quotaWindowHold},
+		{"run_hold_observation_quota_window_offers", quotaWindowHoldOffers},
 		{"run_hold_observation_machine_capacity", machineCapacityHold},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},

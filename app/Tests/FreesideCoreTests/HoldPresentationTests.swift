@@ -102,6 +102,28 @@ import Testing
         #expect(RunDisplay.holdFact(misplaced, runID: "run") == nil)
     }
 
+    /// A quota-window park offers its hold's agents to move to, and only
+    /// while the position is current and its recorded hold is that park.
+    @Test func quotaWindowParkOffersItsAgentsWhileCurrent() throws {
+        let parked = HoldPresentationFixtures.make("Quota window")
+        #expect(TaskDisplay.moveOffers(parked.position).map(\.agent) == ["claude-team"])
+
+        var unloaded = parked
+        unloaded.history = nil
+        #expect(TaskDisplay.moveOffers(unloaded.position).isEmpty)
+        #expect(TaskDisplay.moveOffers(HoldPresentationFixtures.make("Usage pool").position).isEmpty)
+
+        let runID = parked.runs[0].run.id
+        let section = try #require(parked.history?.sections.firstIndex { $0.runs.contains { $0.run_id == runID } })
+        let run = try #require(parked.history?.sections[section].runs.firstIndex { $0.run_id == runID })
+        var none = parked
+        none.history?.sections[section].runs[run].hold?.value1.quota_window?.value1.alternate_agents = nil
+        #expect(TaskDisplay.moveOffers(none.position).isEmpty)
+        var finished = parked
+        finished.runs[0].run.lifecycle = .finished
+        #expect(TaskDisplay.moveOffers(finished.position).isEmpty)
+    }
+
     @Test func poolGuidanceNamesThePoolOnlyFromTheCurrentHold() throws {
         let busy = "The configured agent account is busy. This work is queued; no action is needed for this wait."
         let named =
@@ -315,6 +337,7 @@ enum HoldPresentationFixtures {
         case "Missing cause": reason = nil
         case "Machine capacity": reason = .machine_capacity
         case "Usage pool", "Usage pool without facts": reason = .usage_pool_exhausted
+        case "Quota window": reason = .quota_window_exhausted
         default: reason = .identity_parallelism
         }
         fixture.runs[0].run.hold_reason = reason.map { .init(value1: $0) }
@@ -347,6 +370,22 @@ enum HoldPresentationFixtures {
             return .init(
                 run_id: runID, reason: .usage_pool_exhausted, usage_pool: "claude-max", first_observed_at: observed,
                 last_observed_at: observed)
+        case "Quota window":
+            // A provider refused the implementer on its pool's weekly window;
+            // the routing policy's second agent on another pool is offered.
+            return .init(
+                run_id: runID, invocation_id: "inv-\(runID)-quota", reason: .quota_window_exhausted,
+                quota_window: .init(
+                    value1: .init(
+                        pool: "claude-max", window: "seven_day", source: .provider_refusal,
+                        invocation_id: "inv-\(runID)-quota", resets_at: observed.addingTimeInterval(3 * 3600),
+                        set_at: observed,
+                        alternate_agents: [
+                            .init(
+                                agent: "claude-team", pool: "claude-team-pool", harness: .claude_code,
+                                model: "claude-opus-5-5", qualification: .different_pool)
+                        ])),
+                first_observed_at: observed, last_observed_at: observed)
         case "Machine capacity":
             return .init(
                 run_id: runID, reason: .machine_capacity,

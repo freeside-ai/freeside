@@ -791,7 +791,8 @@ public actor MockServer {
                 original.deviceID == deviceID
             else { return nil }
             return resultsByCommandID[command.command_id]
-        case .stop_task, .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy:
+        case .stop_task, .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy,
+            .move_parked_task:
             // Active-device authority is required even for Stop and operator
             // command replay; the daemon gates the device before its replay read.
             return nil
@@ -1614,6 +1615,8 @@ public actor MockServer {
             return try submitChangeTaskLineCommand(command, payload)
         case .set_routing_policy(let payload):
             return try submitSetRoutingPolicyCommand(command, payload)
+        case .move_parked_task(let payload):
+            return try submitMoveParkedTaskCommand(command, payload)
         }
     }
 
@@ -1726,6 +1729,18 @@ public actor MockServer {
                 throw MalformedCommandError(
                     commandID: command.command_id,
                     reason: "capability manifest was not offered")
+            }
+        }
+        // signet validateAlternateAgentRetryDecision: the agent is one the
+        // item offered. The daemon's re-derivation against current state has
+        // no mock analogue, so an offered agent is accepted.
+        if payload.action == .retry_with_alternate_agent {
+            guard let agent = payload.alternate_agent,
+                current.item.alternate_agents?.contains(where: { $0.agent == agent }) == true
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id,
+                    reason: "alternate agent was not offered")
             }
         }
         // The daemon's answer_route policy (signet validateAnswerRoute): an
@@ -2365,6 +2380,85 @@ public actor MockServer {
                     kind: .change_task_line, command_id: command.command_id, device_id: command.device_id,
                     task_id: payload.task_id, role: payload.role, agent: payload.agent, recorded: !same,
                     line: taskLineHeads[key]?.line.map { .init(value1: $0) })))
+    }
+
+    /// Moves a task parked on its implementer's exhausted quota window to an
+    /// agent its hold offers (engine.MoveParkedTaskTx). The mock pins only
+    /// the implementer, under the offer's pool, and releases the hold as the
+    /// parked attempt's start would; a task with no such hold, or an agent
+    /// the hold does not offer, is refused and records nothing.
+    private func submitMoveParkedTaskCommand(
+        _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.MoveParkedTaskPayload
+    ) throws -> SubmitOutcome {
+        if let replay = try replayOperatorCommand(command) { return replay }
+        guard var snapshot = try task(id: payload.task_id) else { throw UnknownItemError(itemID: payload.task_id) }
+        guard let runID = snapshot.task.current_position?.value1.run_id,
+            var history = taskHistoryFixtures[payload.task_id],
+            let hold = history.sections.flatMap(\.runs).first(where: { $0.run_id == runID })?.hold?.value1,
+            let window = hold.quota_window?.value1, let invocationID = window.invocation_id
+        else {
+            throw OperatorCommandRejectedError(commandID: command.command_id, reason: "task is not parked")
+        }
+        guard let offer = window.alternate_agents?.first(where: { $0.agent == payload.agent }) else {
+            throw OperatorCommandRejectedError(
+                commandID: command.command_id, reason: "alternate agent no longer qualifies")
+        }
+        revision += 1
+        let retry = Components.Schemas.AlternateAgentRetry(
+            id: MockContractValidation.sha256Digest(
+                of: ["alternate_agent_retry", payload.task_id, invocationID, command.command_id, payload.agent]
+                    .joined(separator: "/")),
+            task_id: payload.task_id, role: .implementer, failed_invocation_id: invocationID, item_id: "",
+            command_id: command.command_id, agent: payload.agent, pool: offer.pool,
+            qualification: offer.qualification, recorded_at: currentTime)
+        let key = Self.taskLineKey(payload.task_id, .implementer)
+        let head = taskLineHeads[key]
+        let version = (head?.version ?? 0) + 1
+        let id = MockContractValidation.sha256Digest(
+            of: [payload.task_id, "implementer", payload.agent, String(version), head?.id ?? "", retry.id]
+                .joined(separator: "/"))
+        // The provenance names the agent the move left, with the hold's
+        // mark, when the policy orders it (engine.movedPastMark).
+        let left = (head?.line?.agent).flatMap { agent -> String? in
+            routingPolicy?.roles.contains { $0.agents.contains(agent) } == true ? agent : nil
+        }
+        let line = Components.Schemas.TaskLine(
+            id: id, task_id: payload.task_id, role: .implementer, agent: payload.agent, version: version,
+            predecessor_id: head.map { .init(value1: $0.id) }, source: .alternate_agent_move, set_by: retry.id,
+            set_at: currentTime,
+            provenance: .init(
+                value1: .init(
+                    policy_revision: routingPolicy?.revision ?? 1, tier: .policy_order, pool: offer.pool,
+                    ranked_by: [],
+                    passed_over: left.map {
+                        .init(
+                            value1: .init(
+                                agent: $0, pool: window.pool, window: window.window, source: window.source,
+                                marked_at: window.set_at, resets_at: window.resets_at))
+                    })))
+        recordTaskLineEvent(
+            taskID: payload.task_id, lineID: id, role: .implementer, agent: payload.agent, version: version,
+            source: .alternate_agent_move, supersededAgent: head?.line?.agent)
+        taskLineHeads[key] = (version, id, line)
+        snapshot.task.task_lines = Components.Schemas.TaskLineRole.allCases.compactMap {
+            taskLineHeads[Self.taskLineKey(payload.task_id, $0)]?.line
+        }
+        snapshot.entity_version = revision
+        snapshot.as_of_revision = revision
+        tasksByID[payload.task_id] = snapshot
+        for section in history.sections.indices {
+            for run in history.sections[section].runs.indices where history.sections[section].runs[run].run_id == runID
+            {
+                history.sections[section].runs[run].hold = nil
+            }
+        }
+        taskHistoryFixtures[payload.task_id] = history
+        return recordOperatorResult(
+            command,
+            .move_parked_task(
+                .init(
+                    kind: .move_parked_task, command_id: command.command_id, device_id: command.device_id,
+                    task_id: payload.task_id, agent: payload.agent, retry: retry, lines: [line])))
     }
 
     /// Records the task_line_set event for a line version this mock wrote,

@@ -229,6 +229,7 @@ type terminalDigestItem struct {
 	ReviewDiminishing     *struct{} `json:"review_diminishing,omitempty"`
 	InterpretationFailure *struct{} `json:"interpretation_failure,omitempty"`
 	Conclusion            *struct{} `json:"conclusion,omitempty"`
+	AlternateAgents       *struct{} `json:"alternate_agents,omitempty"`
 }
 
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
@@ -254,7 +255,8 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// never carry review-diminishing facts, so the commitment leaves the key
 	// out instead of gaining a null: an item bound before the field existed
 	// keeps its digest. Interpretation-failure facts belong only to
-	// execution_failure items and are shadowed for the same reason. The
+	// execution_failure items and are shadowed for the same reason, as are
+	// alternate-agent offers, which only a role's failure card carries. The
 	// conclusion is shadowed the same way: it is
 	// lifecycle state like status and decided_at, which the commitment resets
 	// to open, and an item bound before the field existed keeps its digest.

@@ -12,6 +12,12 @@ import FreesideAPI
 public enum AgentChoiceDisplay {
     public typealias Role = Components.Schemas.TaskLineRole
 
+    /// An alternate-agent offer as a picker names it: the agent, its model,
+    /// and the usage pool it draws on, so the operator sees what changes.
+    public static func offerLabel(_ offer: Components.Schemas.AlternateAgentOffer) -> String {
+        "\(offer.agent) · \(offer.model) · \(offer.pool)"
+    }
+
     /// The roles in the order the form shows them and a submission sends
     /// their lines. The generated `TaskLineRole` declares the same order;
     /// naming it here keeps the line order explicit.

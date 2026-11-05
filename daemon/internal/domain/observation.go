@@ -534,6 +534,11 @@ func (h ImageUpkeepHold) Validate() error {
 type QuotaWindowHold struct {
 	Pool UsagePoolID `json:"pool"`
 	ExhaustedMark
+	// AlternateAgents are the agents the operator may move the parked task to
+	// (plan §4, alternate-agent retry), sorted by agent; nil when none
+	// qualifies or the hold is not a parked refusal's. The move re-derives
+	// each rule rather than trust it.
+	AlternateAgents []AlternateAgentOffer `json:"alternate_agents"`
 }
 
 // Validate reports whether the hold names a pool and a well-formed mark that
@@ -547,6 +552,11 @@ func (h QuotaWindowHold) Validate() error {
 	}
 	if h.ResetsAt == nil {
 		return fmt.Errorf("quota window hold %s resets_at: %w", h.Window, ErrMissingTimestamp)
+	}
+	if h.AlternateAgents != nil {
+		if err := ValidateAlternateAgentOffers(h.AlternateAgents); err != nil {
+			return fmt.Errorf("quota window hold: %w", err)
+		}
 	}
 	return nil
 }

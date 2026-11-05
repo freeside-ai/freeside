@@ -91,6 +91,9 @@
 //   - machine_capacity.go launch memory reservations and capacity holds
 //   - wardless_admission.go wardless admission and its interim launch audit
 //   - failure.go      the failure cause and disposition axes, and the pure disposition rule (§4)
+//   - alternate_agent_retry.go the rule an agent must meet to stand in for a
+//     failed one, the offers a failure card makes, and the operator's retry
+//     record (§4)
 //   - task.go, task_lifecycle.go, task_timeline.go
 //     task identity, its lifecycle log and display projection, and its
 //     recorded event timeline

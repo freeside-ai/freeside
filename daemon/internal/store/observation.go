@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -44,7 +45,7 @@ const (
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
-			quota_reading_observed_at, quota_resets_at, quota_set_at,
+			quota_reading_observed_at, quota_resets_at, quota_set_at, quota_alternate_agents,
 			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
 			first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
@@ -53,10 +54,10 @@ const (
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
-			quota_reading_observed_at, quota_resets_at, quota_set_at,
+			quota_reading_observed_at, quota_resets_at, quota_set_at, quota_alternate_agents,
 			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
 			first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
@@ -76,6 +77,7 @@ const (
 			quota_reading_observed_at = excluded.quota_reading_observed_at,
 			quota_resets_at = excluded.quota_resets_at,
 			quota_set_at = excluded.quota_set_at,
+			quota_alternate_agents = excluded.quota_alternate_agents,
 			capacity_reservation_mib = excluded.capacity_reservation_mib,
 			capacity_reserved_mib = excluded.capacity_reserved_mib,
 			capacity_budget_mib = excluded.capacity_budget_mib,
@@ -221,9 +223,17 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 		usagePool = string(*h.UsagePool)
 	}
 	var quotaPool, quotaWindow, quotaSource, quotaInvocation, quotaReadingAt, quotaResetsAt, quotaSetAt any
+	var quotaAlternates any
 	if q := h.QuotaWindow; q != nil {
 		quotaPool, quotaWindow, quotaSource = string(q.Pool), q.Window, string(q.Source)
 		quotaSetAt = formatTime(q.SetAt)
+		if q.AlternateAgents != nil {
+			body, err := json.Marshal(q.AlternateAgents)
+			if err != nil {
+				return fmt.Errorf("record run hold %s alternate agents: %w", h.RunID, err)
+			}
+			quotaAlternates = string(body)
+		}
 		if q.InvocationID != nil {
 			quotaInvocation = string(*q.InvocationID)
 		}
@@ -242,7 +252,7 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
 		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest,
 		pending, refusal, item, task, usagePool,
-		quotaPool, quotaWindow, quotaSource, quotaInvocation, quotaReadingAt, quotaResetsAt, quotaSetAt,
+		quotaPool, quotaWindow, quotaSource, quotaInvocation, quotaReadingAt, quotaResetsAt, quotaSetAt, quotaAlternates,
 		capacityReservation, capacityReserved, capacityBudget, capacityAhead,
 		formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
@@ -416,7 +426,7 @@ func (tx *ReadTx) GetRunHold(
 		pending, refusal, item, task, usagePool       sql.NullString
 		quotaPool, quotaWindow, quotaSource           sql.NullString
 		quotaInvocation, quotaReadingAt               sql.NullString
-		quotaResetsAt, quotaSetAt                     sql.NullString
+		quotaResetsAt, quotaSetAt, quotaAlternates    sql.NullString
 		capacityReservation, capacityReserved         sql.NullInt64
 		capacityBudget, capacityAhead                 sql.NullInt64
 	)
@@ -424,6 +434,7 @@ func (tx *ReadTx) GetRunHold(
 		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest,
 			&pending, &refusal, &item, &task, &usagePool,
 			&quotaPool, &quotaWindow, &quotaSource, &quotaInvocation, &quotaReadingAt, &quotaResetsAt, &quotaSetAt,
+			&quotaAlternates,
 			&capacityReservation, &capacityReserved, &capacityBudget, &capacityAhead,
 			&first, &last)
 	switch {
@@ -500,7 +511,7 @@ func (tx *ReadTx) GetRunHold(
 		h.UsagePool = &pool
 	}
 	quota, err := readQuotaWindowHold(quotaPool, quotaWindow, quotaSource, quotaInvocation,
-		quotaReadingAt, quotaResetsAt, quotaSetAt)
+		quotaReadingAt, quotaResetsAt, quotaSetAt, quotaAlternates)
 	if err != nil {
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
 	}
@@ -524,10 +535,11 @@ func (tx *ReadTx) GetRunHold(
 // pool is the presence key: any other column without it is not a detail the
 // contract can express. Validate on the whole hold checks the rest.
 func readQuotaWindowHold(
-	pool, window, source, invocation, readingAt, resetsAt, setAt sql.NullString,
+	pool, window, source, invocation, readingAt, resetsAt, setAt, alternates sql.NullString,
 ) (*domain.QuotaWindowHold, error) {
 	if !pool.Valid {
-		if window.Valid || source.Valid || invocation.Valid || readingAt.Valid || resetsAt.Valid || setAt.Valid {
+		if window.Valid || source.Valid || invocation.Valid || readingAt.Valid || resetsAt.Valid || setAt.Valid ||
+			alternates.Valid {
 			return nil, fmt.Errorf("quota window column without a pool: %w", domain.ErrHoldDetailMismatch)
 		}
 		return nil, nil
@@ -564,6 +576,13 @@ func readQuotaWindowHold(
 			return nil, fmt.Errorf("quota_set_at %q: %w", setAt.String, err)
 		}
 		hold.SetAt = at
+	}
+	if alternates.Valid {
+		// Validate on the whole hold checks the decoded offers; an empty or
+		// unsorted list fails there as a corrupt row.
+		if err := json.Unmarshal([]byte(alternates.String), &hold.AlternateAgents); err != nil {
+			return nil, fmt.Errorf("quota_alternate_agents: %w", errRowInconsistent)
+		}
 	}
 	return hold, nil
 }

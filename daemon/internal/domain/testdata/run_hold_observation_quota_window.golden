@@ -12,7 +12,8 @@
     "invocation_id": "inv-run-1-implement",
     "reading_observed_at": null,
     "resets_at": "2026-01-02T08:04:05Z",
-    "set_at": "2026-01-02T03:05:05Z"
+    "set_at": "2026-01-02T03:05:05Z",
+    "alternate_agents": null
   },
   "machine_capacity": null,
   "first_observed_at": "2026-01-02T03:05:05Z",

@@ -104,6 +104,7 @@ struct DecisionDetailView: View {
     @State private var specApprovalReader: SpecApprovalReader?
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var capabilityRetrySnapshot: Components.Schemas.AttentionItemSnapshot?
+    @State private var alternateAgentRetrySnapshot: Components.Schemas.AttentionItemSnapshot?
     @State private var actionDetailsRevealRequest: TechnicalDetailsRevealRequest?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var recommendationVisible = true
@@ -378,6 +379,26 @@ struct DecisionDetailView: View {
             } message: {
                 Text("The daemon will verify the selected manifest again before admission.")
             }
+            .confirmationDialog(
+                "Choose another agent",
+                isPresented: alternateAgentRetryIsPresented,
+                titleVisibility: .visible
+            ) {
+                if let reviewedSnapshot = alternateAgentRetrySnapshot {
+                    ForEach(reviewedSnapshot.item.alternate_agents ?? [], id: \.agent) { offer in
+                        Button(AgentChoiceDisplay.offerLabel(offer)) {
+                            alternateAgentRetrySnapshot = nil
+                            Task {
+                                await model.submitAlternateAgentRetry(
+                                    agent: offer.agent, reviewedSnapshot: reviewedSnapshot)
+                            }
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { alternateAgentRetrySnapshot = nil }
+            } message: {
+                Text("The daemon checks the agent again before the retry runs.")
+            }
             .sheet(item: $specApprovalReader) { reader in
                 if let item = model.snapshot?.item {
                     specApprovalReaderSheet(reader, item: item)
@@ -400,6 +421,7 @@ struct DecisionDetailView: View {
             .onChange(of: model.snapshot?.item.item_version) {
                 pendingConfirmation = nil
                 capabilityRetrySnapshot = nil
+                alternateAgentRetrySnapshot = nil
                 // A new item version can carry a different recommendation. The
                 // sticky action would otherwise stay reachable from the last
                 // version's scroll position, offering a replacement action
@@ -515,6 +537,14 @@ struct DecisionDetailView: View {
             get: { capabilityRetrySnapshot != nil },
             set: { presented in
                 if !presented { capabilityRetrySnapshot = nil }
+            })
+    }
+
+    private var alternateAgentRetryIsPresented: Binding<Bool> {
+        Binding(
+            get: { alternateAgentRetrySnapshot != nil },
+            set: { presented in
+                if !presented { alternateAgentRetrySnapshot = nil }
             })
     }
 
@@ -4106,6 +4136,8 @@ struct DecisionDetailView: View {
             Task { await model.submitFindingRoutes(selectedFindingRoutes(findings)) }
         case .retry_with_capabilities:
             capabilityRetrySnapshot = model.snapshot
+        case .retry_with_alternate_agent:
+            alternateAgentRetrySnapshot = model.snapshot
         default:
             Task { await model.submit(action) }
         }
@@ -4151,6 +4183,7 @@ struct DecisionDetailView: View {
             messageEditor = nil
             pendingConfirmation = nil
             capabilityRetrySnapshot = nil
+            alternateAgentRetrySnapshot = nil
         }
     #endif
 }

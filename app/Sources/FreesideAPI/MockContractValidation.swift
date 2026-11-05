@@ -687,6 +687,26 @@ enum MockContractValidation {
                 return "retry_with_capabilities does not match offered manifests"
             }
         }
+        // domain.validateAlternateAgents: the action and its offers come
+        // together, on a type that can raise from a role's failure.
+        let alternates = item.alternate_agents
+        if item.requested_decision.contains(.retry_with_alternate_agent) != (alternates != nil) {
+            return "retry_with_alternate_agent does not match alternate_agents"
+        }
+        if let alternates {
+            guard [.execution_failure, .review_dispute, .review_configuration].contains(item._type) else {
+                return "alternate_agents on a different item type"
+            }
+            guard case .run(let subject) = item.subject, subject.run_id != nil else {
+                return "alternate_agents on a non-run subject"
+            }
+            let agents = alternates.map(\.agent)
+            if agents.isEmpty || agents != agents.sorted() || Set(agents).count != agents.count
+                || alternates.contains(where: { !validAgentName($0.agent) || $0.pool.isEmpty || $0.model.isEmpty })
+            {
+                return "invalid alternate_agents"
+            }
+        }
         if let block = item.publish_block?.value1 {
             if item._type != .publish_blocked {
                 return "publish_block facts on a different item type"
@@ -1221,7 +1241,7 @@ enum MockContractValidation {
                 }
                 guard trimmed.unicodeScalars.count <= 60 else { throw malformed("name exceeds 60 characters") }
             }
-        case .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy:
+        case .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy, .move_parked_task:
             // An operator command binds to no entity version (api/openapi.yaml).
             guard command.expected_entity_version == nil, command.expected_bindings == nil else {
                 throw malformed("operator command must not carry expected_entity_version or expected_bindings")
@@ -1242,6 +1262,10 @@ enum MockContractValidation {
                 guard payload.drain_first_account.map({ !$0.isEmpty }) ?? true else {
                     throw malformed("empty drain_first_account")
                 }
+            case .move_parked_task(let payload):
+                guard !payload.task_id.isEmpty, validAgentName(payload.agent) else {
+                    throw malformed("empty task or invalid agent")
+                }
             case .decision, .stop_task, .submit_task:
                 break
             }
@@ -1255,6 +1279,9 @@ enum MockContractValidation {
         guard case .decision(let payload) = command.payload else { return }
         if payload.action != .adjudicate_findings && payload.finding_routes != nil {
             throw malformed("finding_routes on unrelated action")
+        }
+        if payload.action != .retry_with_alternate_agent && payload.alternate_agent != nil {
+            throw malformed("alternate_agent on unrelated action")
         }
         switch payload.action {
         case .adjudicate_findings:
@@ -1287,6 +1314,18 @@ enum MockContractValidation {
                 payload.snooze_until == nil,
                 payload.alternative_choices == nil
             else { throw malformed("invalid capability manifest selection") }
+        case .retry_with_alternate_agent:
+            // The daemon's decision message is the agent alone
+            // (signet decisionMessage): no other input rides along.
+            guard let agent = payload.alternate_agent, !agent.isEmpty,
+                (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty,
+                payload.capability_manifest_digest == nil,
+                payload.task_proposal_revision == nil,
+                payload.effect_proposal_revision == nil,
+                payload.snooze_until == nil,
+                payload.alternative_choices == nil
+            else { throw malformed("invalid alternate agent selection") }
         case .discuss:
             guard let message = payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

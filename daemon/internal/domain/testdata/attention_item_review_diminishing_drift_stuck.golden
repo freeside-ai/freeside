@@ -92,6 +92,7 @@
       "simplification_on_continue": false
     }
   },
+  "alternate_agents": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

@@ -752,6 +752,9 @@ struct RealDaemonConvergenceTests {
         // constructs neither, so exercising that cell would test malformed-card
         // rejection before the action policy. The daemon integration test covers
         // its full offer, acceptance, allocation, and replay path instead.
+        // The alternate-agent retry is the same: its offers come from a failed
+        // admission and the routing policy, which the seed route doesn't build
+        // (daemon TestAlternateAgentRetryAdmitsTheChosenAgent covers it).
         //
         // open_pr on a hold is conditional on the item's pull request
         // reference, which this seed route cannot attach. The daemon's
@@ -762,7 +765,8 @@ struct RealDaemonConvergenceTests {
             // resolved scope, which the generic seed route cannot create.
             // TestReviewDisputeHumanDecisionContinuesAndReplays and the external
             // restart integration test exercise that authenticated action cell.
-            action != .retry_with_capabilities && !(type == .publish_blocked && action == .open_pr)
+            action != .retry_with_capabilities && action != .retry_with_alternate_agent
+                && !(type == .publish_blocked && action == .open_pr)
                 && !(type == .review_dispute && action == .adjudicate_findings)
         }
         let constructibleAllowed = allowed.filter(constructible)

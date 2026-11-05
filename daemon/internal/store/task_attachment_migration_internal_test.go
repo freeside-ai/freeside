@@ -10,6 +10,7 @@ import (
 // holds.
 func rewindTaskAttachments(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindAlternateAgentRetries(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE task_attachments`,
 		`DELETE FROM schema_migrations WHERE name = '0124_task_attachments.sql'`,

@@ -32,7 +32,8 @@ func TestAllowedActionsByType(t *testing.T) {
 			domain.ActionDiscuss, domain.ActionStop,
 		},
 		domain.AttentionExecutionFailure: {
-			domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
+			domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionRetryWithAlternateAgent,
+			domain.ActionDiscuss, domain.ActionStop,
 		},
 		domain.AttentionAgentQuestion: {
 			domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry, domain.ActionStop,

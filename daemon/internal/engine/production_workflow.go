@@ -1747,7 +1747,7 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			// A parked quota refusal raises no card: the next attempt waits
 			// under a hold instead. The outcome above still records the cause.
 			if completion == nil {
-				if parked, err = quotaParkHold(ctx, tx, run, terminal, createdAt); err != nil {
+				if parked, err = quotaParkHold(ctx, tx, e.agentSelection(), run, terminal, createdAt); err != nil {
 					return err
 				}
 			}
@@ -1775,7 +1775,19 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 				if err != nil {
 					return err
 				}
-				item, err := productionFailureItem(run, terminal, createdAt, facts, names, claims)
+				// The card offers alternates for the implementer only: a
+				// retry reattempts the run from its start, which a failed
+				// remediation round must not discard its reviewed work for.
+				var offers []domain.AlternateAgentOffer
+				if selection := e.agentSelection(); selection != nil && facts != nil && role == domain.RoleImplementer {
+					offers, err = selection.alternateAgentOffers(ctx, &tx.ReadTx, alternateAgentFailure{
+						taskID: run.TaskID, role: role, cause: facts.Cause, invocationID: terminal.InvocationID,
+					}, createdAt)
+					if err != nil {
+						return err
+					}
+				}
+				item, err := productionFailureItem(run, terminal, createdAt, facts, offers, names, claims)
 				if err != nil {
 					return err
 				}
@@ -1994,11 +2006,13 @@ func (e *Engine) recordProductionDeliveryRefusal(
 // stage that ended without an accepted result. Deterministic identity and
 // content, so a replayed pass converges instead of raising a second item.
 // Discuss and stop are always executable. A capability retry is offered only
-// when the failure facts carry a policy-derived, enforceable alternative.
+// when the failure facts carry a policy-derived, enforceable alternative, and
+// an alternate-agent retry only when offers names an agent that escapes the
+// failure's cause; the alternate comes first, since it answers the cause.
 func productionFailureItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
-	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
-	claims []domain.AgentClaim,
+	facts *domain.ExecutionFailureFacts, offers []domain.AlternateAgentOffer,
+	displayNames *domain.DisplayNames, claims []domain.AgentClaim,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Unattended %s stage ended %q without an accepted result.",
@@ -2010,6 +2024,9 @@ func productionFailureItem(
 	if facts != nil && len(facts.OfferedManifests) != 0 {
 		actions = append([]domain.Action{domain.ActionRetryWithCapability}, actions...)
 	}
+	if offers != nil {
+		actions = append([]domain.Action{domain.ActionRetryWithAlternateAgent}, actions...)
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        domain.ItemID("execution-failure-" + string(terminal.InvocationID)),
 		ProjectID: run.ProjectID,
@@ -2018,6 +2035,7 @@ func productionFailureItem(
 		Reason:            reason,
 		RequestedDecision: actions,
 		ExecutionFailure:  facts,
+		AlternateAgents:   offers,
 		AgentClaims:       claims,
 		DisplayNames:      displayNames,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
@@ -2033,7 +2051,7 @@ func productionDeliveryRefusalItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	item, err := productionFailureItem(run, terminal, createdAt, facts, displayNames, nil)
+	item, err := productionFailureItem(run, terminal, createdAt, facts, nil, displayNames, nil)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}

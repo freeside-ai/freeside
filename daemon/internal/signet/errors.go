@@ -51,9 +51,22 @@ var (
 	ErrAlternativeNotOffered                     = errors.New("finding adjudication alternative was not offered")
 	ErrInvalidCapabilityRetryDecisionPayload     = errors.New("capability retry decision payload is invalid")
 	ErrCapabilityManifestNotOffered              = errors.New("capability manifest was not offered")
+	ErrInvalidAlternateAgentDecisionPayload      = errors.New("alternate agent decision payload is invalid")
+	ErrAlternateAgentNotOffered                  = errors.New("alternate agent was not offered")
 	ErrProposalAdmissionRequired                 = errors.New("task proposal requires atomic proposal admission")
 	ErrProposalSnoozed                           = errors.New("proposal is snoozed")
 )
+
+// ErrAlternateAgentNotQualified refuses an offered alternate agent that no
+// longer escapes the failure, or would not pass admission, at the instant
+// the choice is accepted (plan §5.4 admission step 5). The offer was a
+// snapshot; the choice re-derives it.
+var ErrAlternateAgentNotQualified = errors.New("the agent is not an alternate the failure qualifies now")
+
+// ErrTaskNotParked refuses a move_parked_task command for a task with no
+// attempt parked on an exhausted quota window: it never parked, its attempt
+// started, or the task closed.
+var ErrTaskNotParked = errors.New("the task has no attempt parked on an exhausted quota window")
 
 // ErrCapabilityNotRegistered is returned when the action surface is requested
 // for a device that has not registered a capability contract: the daemon

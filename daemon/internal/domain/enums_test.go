@@ -68,6 +68,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["LineageRelation"] = append(valids["LineageRelation"], v.valid)
 	}
 	invalids["LineageRelation"] = LineageRelation("").valid
+	for _, v := range AllAlternateAgentQualifications {
+		valids["AlternateAgentQualification"] = append(valids["AlternateAgentQualification"], v.valid)
+	}
+	invalids["AlternateAgentQualification"] = AlternateAgentQualification("").valid
 	for _, v := range AllTaskLineSources {
 		valids["TaskLineSource"] = append(valids["TaskLineSource"], v.valid)
 	}

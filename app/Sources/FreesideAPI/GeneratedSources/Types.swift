@@ -247,7 +247,8 @@ public protocol APIProtocol: Sendable {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// change_task_line, set_routing_policy, and move_parked_task carry
+    /// neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -257,7 +258,11 @@ public protocol APIProtocol: Sendable {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. Until the daemon routes
+    /// revision is 409 with the current policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or naming
+    /// an agent the park no longer offers, is 400 and records nothing, as is
+    /// a retry_with_alternate_agent decision whose agent no longer
+    /// qualifies. Until the daemon routes
     /// refresh_usage and reassign_collector to its collection lifecycle, it
     /// answers them with 500 and records nothing.
     ///
@@ -729,7 +734,8 @@ extension APIProtocol {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// change_task_line, set_routing_policy, and move_parked_task carry
+    /// neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -739,7 +745,11 @@ extension APIProtocol {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. Until the daemon routes
+    /// revision is 409 with the current policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or naming
+    /// an agent the park no longer offers, is 400 and records nothing, as is
+    /// a retry_with_alternate_agent decision whose agent no longer
+    /// qualifies. Until the daemon routes
     /// refresh_usage and reassign_collector to its collection lifecycle, it
     /// answers them with 500 and records nothing.
     ///
@@ -3551,7 +3561,7 @@ public enum Components {
                 ])
             }
         }
-        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance. triage is the triager's escalation of the specifier to its escalated counterpart (plan §5.13), citing the task's triage record; it carries no provenance.
+        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line. alternate_agent_move is an operator's move_parked_task re-pinning a parked task to the chosen agent's pool, citing the move's AlternateAgentRetry by id in set_by. router and alternate_agent_move are the only sources that carry provenance. triage is the triager's escalation of the specifier to its escalated counterpart (plan §5.13), citing the task's triage record; it carries no provenance.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineSource`.
@@ -3563,6 +3573,7 @@ public enum Components {
             case cli_line_change = "cli_line_change"
             case client_line_change = "client_line_change"
             case triage = "triage"
+            case alternate_agent_move = "alternate_agent_move"
         }
         /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an agent on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
         ///
@@ -3723,7 +3734,7 @@ public enum Components {
                 ])
             }
         }
-        /// How the router chose a routing's pool: the policy revision it applied, the tier that chose, the pool, the resets that ranked the candidates, and any exhausted mark it passed over. One routing writes one provenance onto every line it writes. ranked_by holds one reading per candidate pool whose weekly reset was known, in rank order (ascending resets_at, ties in the policy's order, no pool twice); it is empty when no reset was known. passed_over is the first agent ranked ahead of the chosen pool whose pool's window was marked exhausted, null when none was. The tier fixes the rest: drain_first_account passes over no one; soonest_reset names a pool in ranked_by, and passed_over is set when that pool is not first; policy_order names a pool absent from ranked_by, and passed_over is set when ranked_by is not empty. A pool passed over for a mark keeps its reading in ranked_by.
+        /// How the router chose a routing's pool: the policy revision it applied, the tier that chose, the pool, the resets that ranked the candidates, and any exhausted mark it passed over. One routing writes one provenance onto every line it writes. ranked_by holds one reading per candidate pool whose weekly reset was known, in rank order (ascending resets_at, ties in the policy's order, no pool twice); it is empty when no reset was known. passed_over is the first agent ranked ahead of the chosen pool whose pool's window was marked exhausted, null when none was. The tier fixes the rest: drain_first_account passes over no one; soonest_reset names a pool in ranked_by, and passed_over is set when that pool is not first; policy_order names a pool absent from ranked_by, and passed_over is set when ranked_by is not empty. A pool passed over for a mark keeps its reading in ranked_by. An alternate_agent_move line carries the same shape at tier policy_order with an empty ranked_by; its passed_over names the agent the move left, with the parked hold's mark, when the policy orders that agent, and is null otherwise.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineProvenance`.
@@ -3815,7 +3826,7 @@ public enum Components {
                 ])
             }
         }
-        /// One version of a task's line for one role: the agent chosen for that role in that task. A change is a new version naming the one it supersedes; a version is never edited. id is the content address of every other field. provenance is set exactly when source is router.
+        /// One version of a task's line for one role: the agent chosen for that role in that task. A change is a new version naming the one it supersedes; a version is never edited. id is the content address of every other field. provenance is set exactly when source is router or alternate_agent_move.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLine`.
@@ -7433,7 +7444,7 @@ public enum Components {
             case adoption_proposal = "adoption_proposal"
             case maintenance_task = "maintenance_task"
         }
-        /// The typed fact beside a quota_window_exhausted hold, mirrored from domain.QuotaWindowHold: the pool and window a provider refused on and the mark that keeps the parked attempt waiting until its reset.
+        /// The typed fact beside a quota_window_exhausted hold, mirrored from domain.QuotaWindowHold: the pool and window a provider refused on and the mark that keeps the parked attempt waiting until its reset, and the agents the operator may move the task to instead.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/QuotaWindowHold`.
@@ -7458,6 +7469,11 @@ public enum Components {
             public var resets_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/set_at`.
             public var set_at: Foundation.Date
+            /// The agents a move_parked_task may move the task to, sorted by agent: each one the routing policy orders for the implementer, on another pool, that would pass admission when offered. Null when none qualifies or the daemon runs without agent selection.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/alternate_agents`.
+            public var alternate_agents: [Components.Schemas.AlternateAgentOffer]?
             /// Creates a new `QuotaWindowHold`.
             ///
             /// - Parameters:
@@ -7468,6 +7484,7 @@ public enum Components {
             ///   - reading_observed_at: The reading that set the mark; set exactly for usage_reading.
             ///   - resets_at: When the window resets and the parked attempt starts.
             ///   - set_at:
+            ///   - alternate_agents: The agents a move_parked_task may move the task to, sorted by agent: each one the routing policy orders for the implementer, on another pool, that would pass admission when offered. Null when none qualifies or the daemon runs without agent selection.
             public init(
                 pool: Swift.String,
                 window: Swift.String,
@@ -7475,7 +7492,8 @@ public enum Components {
                 invocation_id: Swift.String? = nil,
                 reading_observed_at: Foundation.Date? = nil,
                 resets_at: Foundation.Date,
-                set_at: Foundation.Date
+                set_at: Foundation.Date,
+                alternate_agents: [Components.Schemas.AlternateAgentOffer]? = nil
             ) {
                 self.pool = pool
                 self.window = window
@@ -7484,6 +7502,7 @@ public enum Components {
                 self.reading_observed_at = reading_observed_at
                 self.resets_at = resets_at
                 self.set_at = set_at
+                self.alternate_agents = alternate_agents
             }
             public enum CodingKeys: String, CodingKey {
                 case pool
@@ -7493,6 +7512,7 @@ public enum Components {
                 case reading_observed_at
                 case resets_at
                 case set_at
+                case alternate_agents
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -7524,6 +7544,10 @@ public enum Components {
                     Foundation.Date.self,
                     forKey: .set_at
                 )
+                self.alternate_agents = try container.decodeIfPresent(
+                    [Components.Schemas.AlternateAgentOffer].self,
+                    forKey: .alternate_agents
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "pool",
                     "window",
@@ -7531,7 +7555,8 @@ public enum Components {
                     "invocation_id",
                     "reading_observed_at",
                     "resets_at",
-                    "set_at"
+                    "set_at",
+                    "alternate_agents"
                 ])
             }
         }
@@ -8871,7 +8896,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, and set_routing_policy. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, and move_parked_task. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
@@ -8885,7 +8910,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
@@ -8922,6 +8947,8 @@ public enum Components {
                 case change_task_line(Components.Schemas.ChangeTaskLinePayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/DecisionPayload`.
                 case decision(Components.Schemas.DecisionPayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/MoveParkedTaskPayload`.
+                case move_parked_task(Components.Schemas.MoveParkedTaskPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/ReassignCollectorPayload`.
                 case reassign_collector(Components.Schemas.ReassignCollectorPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/RefreshUsagePayload`.
@@ -8946,6 +8973,8 @@ public enum Components {
                         self = .change_task_line(try .init(from: decoder))
                     case "decision":
                         self = .decision(try .init(from: decoder))
+                    case "move_parked_task":
+                        self = .move_parked_task(try .init(from: decoder))
                     case "reassign_collector":
                         self = .reassign_collector(try .init(from: decoder))
                     case "refresh_usage":
@@ -8970,6 +8999,8 @@ public enum Components {
                         try value.encode(to: encoder)
                     case let .decision(value):
                         try value.encode(to: encoder)
+                    case let .move_parked_task(value):
+                        try value.encode(to: encoder)
                     case let .reassign_collector(value):
                         try value.encode(to: encoder)
                     case let .refresh_usage(value):
@@ -8990,7 +9021,7 @@ public enum Components {
             /// - Parameters:
             ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///   - expected_bindings: Required for decision; forbidden for every other kind. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
@@ -9460,6 +9491,62 @@ public enum Components {
                 ])
             }
         }
+        /// Move a task parked on its implementer's exhausted quota window to another agent (issue #869). agent must be one of the parked attempt's QuotaWindowHold.alternate_agents, and the daemon re-derives that it still qualifies. The move records an AlternateAgentRetry, pins the implementer to agent and every other role the routing policy orders an agent on its pool for (except a role an operator set), and lets the parked attempt start. The new lines' source is alternate_agent_move.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload`.
+        public struct MoveParkedTaskPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case move_parked_task = "move_parked_task"
+            }
+            /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/kind`.
+            public var kind: Components.Schemas.MoveParkedTaskPayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/agent`.
+            public var agent: Swift.String
+            /// Creates a new `MoveParkedTaskPayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - task_id:
+            ///   - agent:
+            public init(
+                kind: Components.Schemas.MoveParkedTaskPayload.kindPayload,
+                task_id: Swift.String,
+                agent: Swift.String
+            ) {
+                self.kind = kind
+                self.task_id = task_id
+                self.agent = agent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case task_id
+                case agent
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.MoveParkedTaskPayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "task_id",
+                    "agent"
+                ])
+            }
+        }
         /// The receipt that a refresh was requested for the pool.
         ///
         /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord`.
@@ -9843,6 +9930,318 @@ public enum Components {
                 ])
             }
         }
+        /// The receipt of a parked task's move: the request, the record of the operator's choice, and the task lines the move set, each citing the record.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord`.
+        public struct ParkedTaskMoveRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case move_parked_task = "move_parked_task"
+            }
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/kind`.
+            public var kind: Components.Schemas.ParkedTaskMoveRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/retry`.
+            public var retry: Components.Schemas.AlternateAgentRetry
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/lines`.
+            public var lines: [Components.Schemas.TaskLine]
+            /// Creates a new `ParkedTaskMoveRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - task_id:
+            ///   - agent:
+            ///   - retry:
+            ///   - lines:
+            public init(
+                kind: Components.Schemas.ParkedTaskMoveRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                task_id: Swift.String,
+                agent: Swift.String,
+                retry: Components.Schemas.AlternateAgentRetry,
+                lines: [Components.Schemas.TaskLine]
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.task_id = task_id
+                self.agent = agent
+                self.retry = retry
+                self.lines = lines
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case task_id
+                case agent
+                case retry
+                case lines
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.ParkedTaskMoveRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.retry = try container.decode(
+                    Components.Schemas.AlternateAgentRetry.self,
+                    forKey: .retry
+                )
+                self.lines = try container.decode(
+                    [Components.Schemas.TaskLine].self,
+                    forKey: .lines
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "task_id",
+                    "agent",
+                    "retry",
+                    "lines"
+                ])
+            }
+        }
+        /// An operator's choice to run a role under another agent after a quota, credential, or capacity failure (plan §5.4 admission step 5). id is the content address of every other field. item_id is the execution-failure card a retry_with_alternate_agent decided, empty for a move_parked_task.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry`.
+        public struct AlternateAgentRetry: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/id`.
+            public var id: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/failed_invocation_id`.
+            public var failed_invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/item_id`.
+            public var item_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/qualification`.
+            public var qualification: Components.Schemas.AlternateAgentQualification
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// Creates a new `AlternateAgentRetry`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - task_id:
+            ///   - role:
+            ///   - failed_invocation_id:
+            ///   - item_id:
+            ///   - command_id:
+            ///   - agent:
+            ///   - pool:
+            ///   - qualification:
+            ///   - recorded_at:
+            public init(
+                id: Components.Schemas.Digest,
+                task_id: Swift.String,
+                role: Components.Schemas.TaskLineRole,
+                failed_invocation_id: Swift.String,
+                item_id: Swift.String,
+                command_id: Swift.String,
+                agent: Swift.String,
+                pool: Swift.String,
+                qualification: Components.Schemas.AlternateAgentQualification,
+                recorded_at: Foundation.Date
+            ) {
+                self.id = id
+                self.task_id = task_id
+                self.role = role
+                self.failed_invocation_id = failed_invocation_id
+                self.item_id = item_id
+                self.command_id = command_id
+                self.agent = agent
+                self.pool = pool
+                self.qualification = qualification
+                self.recorded_at = recorded_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case task_id
+                case role
+                case failed_invocation_id
+                case item_id
+                case command_id
+                case agent
+                case pool
+                case qualification
+                case recorded_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .id
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.failed_invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .failed_invocation_id
+                )
+                self.item_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .item_id
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.qualification = try container.decode(
+                    Components.Schemas.AlternateAgentQualification.self,
+                    forKey: .qualification
+                )
+                self.recorded_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .recorded_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "task_id",
+                    "role",
+                    "failed_invocation_id",
+                    "item_id",
+                    "command_id",
+                    "agent",
+                    "pool",
+                    "qualification",
+                    "recorded_at"
+                ])
+            }
+        }
+        /// The rule an alternate agent escapes its failure under (plan §5.4): different_pool for a quota exhaustion, valid_generation for an expired or revoked credential, different_route for exhausted service capacity.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AlternateAgentQualification`.
+        @frozen public enum AlternateAgentQualification: String, Codable, Hashable, Sendable, CaseIterable {
+            case different_pool = "different_pool"
+            case valid_generation = "valid_generation"
+            case different_route = "different_route"
+        }
+        /// One agent the daemon offers to run a failed role under: its tree name, the usage pool it draws on, its harness and model, and the rule it escapes the failure under.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer`.
+        public struct AlternateAgentOffer: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/harness`.
+            public var harness: Components.Schemas.HarnessClientKind
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/model`.
+            public var model: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/qualification`.
+            public var qualification: Components.Schemas.AlternateAgentQualification
+            /// Creates a new `AlternateAgentOffer`.
+            ///
+            /// - Parameters:
+            ///   - agent:
+            ///   - pool:
+            ///   - harness:
+            ///   - model:
+            ///   - qualification:
+            public init(
+                agent: Swift.String,
+                pool: Swift.String,
+                harness: Components.Schemas.HarnessClientKind,
+                model: Swift.String,
+                qualification: Components.Schemas.AlternateAgentQualification
+            ) {
+                self.agent = agent
+                self.pool = pool
+                self.harness = harness
+                self.model = model
+                self.qualification = qualification
+            }
+            public enum CodingKeys: String, CodingKey {
+                case agent
+                case pool
+                case harness
+                case model
+                case qualification
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.harness = try container.decode(
+                    Components.Schemas.HarnessClientKind.self,
+                    forKey: .harness
+                )
+                self.model = try container.decode(
+                    Swift.String.self,
+                    forKey: .model
+                )
+                self.qualification = try container.decode(
+                    Components.Schemas.AlternateAgentQualification.self,
+                    forKey: .qualification
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "agent",
+                    "pool",
+                    "harness",
+                    "model",
+                    "qualification"
+                ])
+            }
+        }
         /// A command conflict with the replacement state it was refused against.
         ///
         /// - Remark: Generated from `#/components/schemas/CommandRejection`.
@@ -10139,6 +10538,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/capability_manifest_digest`.
             public var capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload?
+            /// The agent selected by retry_with_alternate_agent from the item's alternate_agents. Required only for that action; the daemon re-derives that it still escapes the failure and would pass admission before it records the choice.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternate_agent`.
+            public var alternate_agent: Swift.String?
             /// Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///
             ///
@@ -10258,6 +10662,7 @@ public enum Components {
             ///   - artifact_digests: The canonical (sorted, deduplicated) binding set: exactly the digests rendered in the item's evidence_snapshot and agent_claims.
             ///   - message: Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy.
             ///   - capability_manifest_digest: The offered capability manifest selected by retry_with_capabilities. Required only for that action; the daemon re-derives the manifest from the run's current resolved policy.
+            ///   - alternate_agent: The agent selected by retry_with_alternate_agent from the item's alternate_agents. Required only for that action; the daemon re-derives that it still escapes the failure and would pass admission before it records the choice.
             ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///   - attachments: Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
             ///   - task_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
@@ -10276,6 +10681,7 @@ public enum Components {
                 artifact_digests: [Components.Schemas.Digest],
                 message: Swift.String? = nil,
                 capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload? = nil,
+                alternate_agent: Swift.String? = nil,
                 answer_route: Components.Schemas.DecisionPayload.answer_routePayload? = nil,
                 attachments: [Components.Schemas.Digest]? = nil,
                 task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload? = nil,
@@ -10294,6 +10700,7 @@ public enum Components {
                 self.artifact_digests = artifact_digests
                 self.message = message
                 self.capability_manifest_digest = capability_manifest_digest
+                self.alternate_agent = alternate_agent
                 self.answer_route = answer_route
                 self.attachments = attachments
                 self.task_proposal_revision = task_proposal_revision
@@ -10313,6 +10720,7 @@ public enum Components {
                 case artifact_digests
                 case message
                 case capability_manifest_digest
+                case alternate_agent
                 case answer_route
                 case attachments
                 case task_proposal_revision
@@ -10356,6 +10764,10 @@ public enum Components {
                 self.capability_manifest_digest = try container.decodeIfPresent(
                     Components.Schemas.DecisionPayload.capability_manifest_digestPayload.self,
                     forKey: .capability_manifest_digest
+                )
+                self.alternate_agent = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .alternate_agent
                 )
                 self.answer_route = try container.decodeIfPresent(
                     Components.Schemas.DecisionPayload.answer_routePayload.self,
@@ -10402,6 +10814,7 @@ public enum Components {
                     "artifact_digests",
                     "message",
                     "capability_manifest_digest",
+                    "alternate_agent",
                     "answer_route",
                     "attachments",
                     "task_proposal_revision",
@@ -11034,6 +11447,8 @@ public enum Components {
                 case change_task_line(Components.Schemas.TaskLineChangeRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/CommandRecord`.
                 case decision(Components.Schemas.CommandRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/ParkedTaskMoveRecord`.
+                case move_parked_task(Components.Schemas.ParkedTaskMoveRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/CollectorReassignmentRecord`.
                 case reassign_collector(Components.Schemas.CollectorReassignmentRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/UsageRefreshRecord`.
@@ -11058,6 +11473,8 @@ public enum Components {
                         self = .change_task_line(try .init(from: decoder))
                     case "decision":
                         self = .decision(try .init(from: decoder))
+                    case "move_parked_task":
+                        self = .move_parked_task(try .init(from: decoder))
                     case "reassign_collector":
                         self = .reassign_collector(try .init(from: decoder))
                     case "refresh_usage":
@@ -11081,6 +11498,8 @@ public enum Components {
                     case let .change_task_line(value):
                         try value.encode(to: encoder)
                     case let .decision(value):
+                        try value.encode(to: encoder)
+                    case let .move_parked_task(value):
                         try value.encode(to: encoder)
                     case let .reassign_collector(value):
                         try value.encode(to: encoder)
@@ -15550,6 +15969,11 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/AttentionItem/execution_failure`.
             public var execution_failure: Components.Schemas.AttentionItem.execution_failurePayload?
+            /// The agents an execution_failure item offers to retry the implementer under, sorted by agent, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/alternate_agents`.
+            public var alternate_agents: [Components.Schemas.AlternateAgentOffer]?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure`.
             public struct interpretation_failurePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure/value1`.
@@ -15889,6 +16313,7 @@ public enum Components {
             ///   - display_names: Daemon-authored project and work-unit labels; null on legacy items.
             ///   - billable_cost_so_far: Billable cost observed so far on review_diminishing_returns items.
             ///   - execution_failure:
+            ///   - alternate_agents: The agents an execution_failure item offers to retry the implementer under, sorted by agent, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
             ///   - interpretation_failure:
             ///   - publish_block:
             ///   - diff_stats:
@@ -15938,6 +16363,7 @@ public enum Components {
                 display_names: Components.Schemas.AttentionItem.display_namesPayload? = nil,
                 billable_cost_so_far: Components.Schemas.AttentionItem.billable_cost_so_farPayload? = nil,
                 execution_failure: Components.Schemas.AttentionItem.execution_failurePayload? = nil,
+                alternate_agents: [Components.Schemas.AlternateAgentOffer]? = nil,
                 interpretation_failure: Components.Schemas.AttentionItem.interpretation_failurePayload? = nil,
                 publish_block: Components.Schemas.AttentionItem.publish_blockPayload? = nil,
                 diff_stats: Components.Schemas.AttentionItem.diff_statsPayload? = nil,
@@ -15987,6 +16413,7 @@ public enum Components {
                 self.display_names = display_names
                 self.billable_cost_so_far = billable_cost_so_far
                 self.execution_failure = execution_failure
+                self.alternate_agents = alternate_agents
                 self.interpretation_failure = interpretation_failure
                 self.publish_block = publish_block
                 self.diff_stats = diff_stats
@@ -16037,6 +16464,7 @@ public enum Components {
                 case display_names
                 case billable_cost_so_far
                 case execution_failure
+                case alternate_agents
                 case interpretation_failure
                 case publish_block
                 case diff_stats
@@ -17935,6 +18363,7 @@ public enum Components {
             case convert_to_policy = "convert_to_policy"
             case retry = "retry"
             case retry_with_capabilities = "retry_with_capabilities"
+            case retry_with_alternate_agent = "retry_with_alternate_agent"
             case answer_and_retry = "answer_and_retry"
             case answer_without_retry = "answer_without_retry"
             case rerun_trust_evaluation = "rerun_trust_evaluation"
@@ -22038,7 +22467,8 @@ public enum Operations {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// change_task_line, set_routing_policy, and move_parked_task carry
+    /// neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -22048,7 +22478,11 @@ public enum Operations {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. Until the daemon routes
+    /// revision is 409 with the current policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or naming
+    /// an agent the park no longer offers, is 400 and records nothing, as is
+    /// a retry_with_alternate_agent decision whose agent no longer
+    /// qualifies. Until the daemon routes
     /// refresh_usage and reassign_collector to its collection lifecycle, it
     /// answers them with 500 and records nothing.
     ///

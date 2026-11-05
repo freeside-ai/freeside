@@ -132,7 +132,7 @@ type TaskEventTaskLine struct {
 func (l TaskEventTaskLine) validate() error {
 	if !contentaddr.Valid(string(l.LineID)) || !l.Role.TaskLineEligible() ||
 		l.Version < 1 || (l.Version == 1 && l.SupersededAgent != nil) || !l.Source.valid() ||
-		(l.Provenance != nil) != (l.Source == TaskLineSourceRouter) {
+		(l.Provenance != nil) != l.Source.CarriesProvenance() {
 		return ErrTaskEventDetailMismatch
 	}
 	if l.Agent == nil {

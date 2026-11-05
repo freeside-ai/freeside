@@ -1,0 +1,38 @@
+{
+  "command_id": "cmd-move",
+  "device_id": "device-1",
+  "task_id": "task-1",
+  "agent": "claude-b",
+  "retry": {
+    "id": "sha256:42d47ed8cb983eff98098e10fb1ac476663fe128d9a9b6adcd4cfcab660cccd3",
+    "task_id": "task-1",
+    "role": "implementer",
+    "failed_invocation_id": "inv-refused",
+    "item_id": "",
+    "command_id": "cmd-move",
+    "agent": "claude-b",
+    "pool": "pool-b",
+    "qualification": "different_pool",
+    "recorded_at": "2026-01-02T03:04:05Z"
+  },
+  "lines": [
+    {
+      "id": "sha256:4b5bfe8c59a8fc37fe5c27bff3c8a4d14448962aae10f55432fb27bfcebba13b",
+      "task_id": "task-1",
+      "role": "implementer",
+      "agent": "claude-b",
+      "version": 1,
+      "predecessor_id": null,
+      "source": "alternate_agent_move",
+      "set_by": "sha256:42d47ed8cb983eff98098e10fb1ac476663fe128d9a9b6adcd4cfcab660cccd3",
+      "set_at": "2026-01-02T03:04:05Z",
+      "provenance": {
+        "policy_revision": 1,
+        "tier": "policy_order",
+        "pool": "pool-b",
+        "ranked_by": [],
+        "passed_over": null
+      }
+    }
+  ]
+}

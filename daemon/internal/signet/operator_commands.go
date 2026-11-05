@@ -12,7 +12,7 @@ import (
 )
 
 // The operator commands (refresh_usage, reassign_collector, change_task_line,
-// set_routing_policy) bind to no entity version: each records a
+// set_routing_policy, move_parked_task) bind to no entity version: each records a
 // domain.CommandReceipt in the transaction that applies it, and a replay of
 // its command_id returns that receipt. Their effects live in the engine and,
 // for usage, in the collection lifecycle, which import signet, so each reaches
@@ -46,6 +46,13 @@ type SetRoutingPolicyPayload struct {
 	ExpectedRevision  *int                       `json:"expected_revision"`
 }
 
+// MoveParkedTaskPayload mirrors the API's MoveParkedTaskPayload: the task
+// parked on an exhausted quota window and the offered agent to move it to.
+type MoveParkedTaskPayload struct {
+	TaskID domain.TaskID `json:"task_id"`
+	Agent  string        `json:"agent"`
+}
+
 // ErrInvalidOperatorCommandPayload rejects a malformed operator command, or
 // one carrying the decision envelope or another kind's payload.
 var ErrInvalidOperatorCommandPayload = errors.New("operator command payload is invalid")
@@ -55,8 +62,9 @@ var ErrInvalidOperatorCommandPayload = errors.New("operator command payload is i
 // answers submit_task: the command fails closed and records nothing.
 var ErrUsageOperationUnavailable = errors.New("usage operation is not available")
 
-// ErrOperatorSettingUnavailable answers change_task_line and
-// set_routing_policy on a service composed without their hook.
+// ErrOperatorSettingUnavailable answers change_task_line,
+// set_routing_policy, move_parked_task, and a retry_with_alternate_agent
+// decision on a service composed without their hook.
 var ErrOperatorSettingUnavailable = errors.New("operator setting is not available")
 
 // UsageOperator runs a pool's refresh or collector reassignment
@@ -118,6 +126,31 @@ type RoutingPolicyOutcome struct {
 // domain.ErrRoutingPolicyAgentUnknown.
 type RoutingPolicySetter func(ctx context.Context, tx *store.WriteTx, change RoutingPolicyChange, now time.Time) (RoutingPolicyOutcome, error)
 
+// ParkedTaskMover moves a parked task in the accepting transaction
+// (engine.AgentSelection.MoveParkedTaskTx, bound by WithParkedTaskMover). It
+// refuses a task with no parked attempt with ErrTaskNotParked, and an agent
+// the park does not offer now with ErrAlternateAgentNotQualified.
+type ParkedTaskMover func(
+	ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
+) (domain.ParkedTaskMoveReceipt, error)
+
+// AlternateAgentRetrier records an accepted retry_with_alternate_agent
+// choice in the decision's transaction
+// (engine.AgentSelection.AcceptAlternateAgentRetryTx, bound by
+// WithAlternateAgentRetrier). It refuses an agent that no longer qualifies
+// with ErrAlternateAgentNotQualified.
+type AlternateAgentRetrier func(
+	ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
+) (domain.AlternateAgentRetry, error)
+
+func WithParkedTaskMover(mover ParkedTaskMover) Option {
+	return func(s *Service) { s.parkedTaskMover = mover }
+}
+
+func WithAlternateAgentRetrier(retrier AlternateAgentRetrier) Option {
+	return func(s *Service) { s.alternateAgentRetrier = retrier }
+}
+
 func WithUsageOperator(operator UsageOperator) Option {
 	return func(s *Service) { s.usageOperator = operator }
 }
@@ -155,7 +188,7 @@ func (in ClientCommand) operatorArmOnly() bool {
 	set := 0
 	for _, arm := range []any{
 		in.Payload, in.StopTask, in.SubmitTask,
-		in.RefreshUsage, in.ReassignCollector, in.ChangeTaskLine, in.SetRoutingPolicy,
+		in.RefreshUsage, in.ReassignCollector, in.ChangeTaskLine, in.SetRoutingPolicy, in.MoveParkedTask,
 	} {
 		if !reflect.ValueOf(arm).IsZero() {
 			set++
@@ -402,4 +435,32 @@ func sameRevision(current *domain.RoutingPolicy, expected *int) bool {
 		return current == nil && expected == nil
 	}
 	return current.Revision == *expected
+}
+
+func (s *Service) moveParkedTask(ctx context.Context, in ClientCommand) (CommandResult, error) {
+	p := in.MoveParkedTask
+	request := domain.ParkedTaskMoveRequest{
+		CommandIdentity: domain.CommandIdentity{CommandID: in.CommandID, DeviceID: in.DeviceID},
+		TaskID:          p.TaskID, Agent: p.Agent,
+	}
+	if !in.operatorArmOnly() || p.TaskID == "" || p.Agent == "" {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
+	}
+	return s.commitReceipt(ctx, in,
+		func(old domain.CommandReceipt) bool {
+			return old.ParkedTaskMove != nil && old.ParkedTaskMove.ParkedTaskMoveRequest == request
+		},
+		func(tx *store.WriteTx, now time.Time) (domain.CommandReceipt, error) {
+			if s.parkedTaskMover == nil {
+				return domain.CommandReceipt{}, ErrOperatorSettingUnavailable
+			}
+			if _, err := tx.GetTask(ctx, request.TaskID); err != nil {
+				return domain.CommandReceipt{}, err
+			}
+			receipt, err := s.parkedTaskMover(ctx, tx, request, now)
+			if err != nil {
+				return domain.CommandReceipt{}, err
+			}
+			return domain.CommandReceipt{ParkedTaskMove: &receipt}, nil
+		})
 }

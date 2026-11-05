@@ -604,7 +604,8 @@ paths:
         receipt replay. Acceptance is pending, never proof of termination or
         WIP release.
         The operator commands refresh_usage, reassign_collector,
-        change_task_line, and set_routing_policy carry neither envelope field
+        change_task_line, set_routing_policy, and move_parked_task carry
+        neither envelope field
         and are rejected as malformed if they do. Each records a receipt in
         the transaction that applies it, and a replay returns that receipt and
         its revision. A request for the line or the role orders already held
@@ -614,7 +615,11 @@ paths:
         does not carry (set_routing_policy) are 400. A role whose attempt is
         running (change_task_line) is 409 with the current task snapshot, and
         a set_routing_policy whose expected_revision is not the current policy
-        revision is 409 with the current policy. Until the daemon routes
+        revision is 409 with the current policy. A move_parked_task for a
+        task with no attempt parked on an exhausted quota window, or naming
+        an agent the park no longer offers, is 400 and records nothing, as is
+        a retry_with_alternate_agent decision whose agent no longer
+        qualifies. Until the daemon routes
         refresh_usage and reassign_collector to its collection lifecycle, it
         answers them with 500 and records nothing.
       requestBody:
@@ -2131,11 +2136,14 @@ components:
         the daemon host and client_line_change the same change from a paired
         client's change_task_line command, and they are the only sources that
         may clear a line. router is the routing policy's choice at a task's
-        first admission for a role with no operator line, and is the only
-        source that carries provenance. triage is the triager's escalation of
-        the specifier to its escalated counterpart (plan §5.13), citing the
-        task's triage record; it carries no provenance.
-      enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change, triage]
+        first admission for a role with no operator line. alternate_agent_move
+        is an operator's move_parked_task re-pinning a parked task to the
+        chosen agent's pool, citing the move's AlternateAgentRetry by id in
+        set_by. router and alternate_agent_move are the only sources that
+        carry provenance. triage is the triager's escalation of the specifier
+        to its escalated counterpart (plan §5.13), citing the task's triage
+        record; it carries no provenance.
+      enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change, triage, alternate_agent_move]
 
     TaskLineSelectionTier:
       type: string
@@ -2218,7 +2226,10 @@ components:
         ranked_by, and passed_over is set when that pool is not first;
         policy_order names a pool absent from ranked_by, and passed_over is
         set when ranked_by is not empty. A pool passed over for a mark keeps
-        its reading in ranked_by.
+        its reading in ranked_by. An alternate_agent_move line carries the
+        same shape at tier policy_order with an empty ranked_by; its
+        passed_over names the agent the move left, with the parked hold's
+        mark, when the policy orders that agent, and is null otherwise.
       additionalProperties: false
       required: [policy_revision, tier, pool, ranked_by, passed_over]
       properties:
@@ -2245,7 +2256,8 @@ components:
         One version of a task's line for one role: the agent chosen for that
         role in that task. A change is a new version naming the one it
         supersedes; a version is never edited. id is the content address of
-        every other field. provenance is set exactly when source is router.
+        every other field. provenance is set exactly when source is router or
+        alternate_agent_move.
       additionalProperties: false
       required: [id, task_id, role, agent, version, predecessor_id, source, set_by, set_at, provenance]
       properties:
@@ -3503,9 +3515,10 @@ components:
       description: >
         The typed fact beside a quota_window_exhausted hold, mirrored from
         domain.QuotaWindowHold: the pool and window a provider refused on and
-        the mark that keeps the parked attempt waiting until its reset.
+        the mark that keeps the parked attempt waiting until its reset, and
+        the agents the operator may move the task to instead.
       additionalProperties: false
-      required: [pool, window, source, invocation_id, reading_observed_at, resets_at, set_at]
+      required: [pool, window, source, invocation_id, reading_observed_at, resets_at, set_at, alternate_agents]
       properties:
         pool:
           type: string
@@ -3532,6 +3545,17 @@ components:
         set_at:
           type: string
           format: date-time
+        alternate_agents:
+          type: array
+          nullable: true
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AlternateAgentOffer"
+          description: >
+            The agents a move_parked_task may move the task to, sorted by
+            agent: each one the routing policy orders for the implementer,
+            on another pool, that would pass admission when offered. Null
+            when none qualifies or the daemon runs without agent selection.
 
     MachineCapacityHold:
       type: object
@@ -4198,7 +4222,7 @@ components:
         from source text and binds to no entity, so it carries neither
         envelope field and is rejected as malformed if it does, as are the
         operator commands refresh_usage, reassign_collector, change_task_line,
-        and set_routing_policy. New command
+        set_routing_policy, and move_parked_task. New command
         types are typed as the signet/saddle pair exercises the surface, via
         kind:contract changes.
       required:
@@ -4225,7 +4249,7 @@ components:
           description: >
             Required for decision and stop_task; absent for submit_task and the
             operator commands (refresh_usage, reassign_collector,
-            change_task_line, set_routing_policy).
+            change_task_line, set_routing_policy, move_parked_task).
             For a decision command this is the entity_version of the target
             entity the command was prepared against; a mismatch rejects the
             command with the replacement state. For Stop this is the observed
@@ -4254,6 +4278,7 @@ components:
             - $ref: "#/components/schemas/ReassignCollectorPayload"
             - $ref: "#/components/schemas/ChangeTaskLinePayload"
             - $ref: "#/components/schemas/SetRoutingPolicyPayload"
+            - $ref: "#/components/schemas/MoveParkedTaskPayload"
           discriminator:
             propertyName: kind
             mapping:
@@ -4264,6 +4289,7 @@ components:
               reassign_collector: "#/components/schemas/ReassignCollectorPayload"
               change_task_line: "#/components/schemas/ChangeTaskLinePayload"
               set_routing_policy: "#/components/schemas/SetRoutingPolicyPayload"
+              move_parked_task: "#/components/schemas/MoveParkedTaskPayload"
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -4436,6 +4462,31 @@ components:
           minimum: 1
           nullable: true
 
+    MoveParkedTaskPayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Move a task parked on its implementer's exhausted quota window to
+        another agent (issue #869). agent must be one of the parked attempt's
+        QuotaWindowHold.alternate_agents, and the daemon re-derives that it
+        still qualifies. The move records an AlternateAgentRetry, pins the
+        implementer to agent and every other role the routing policy orders
+        an agent on its pool for (except a role an operator set), and lets the
+        parked attempt start. The new lines' source is alternate_agent_move.
+      required: [kind, task_id, agent]
+      properties:
+        kind:
+          type: string
+          enum: [move_parked_task]
+        task_id:
+          type: string
+          minLength: 1
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+
     UsageRefreshRecord:
       type: object
       additionalProperties: false
@@ -4547,6 +4598,107 @@ components:
         policy:
           $ref: "#/components/schemas/RoutingPolicy"
 
+    ParkedTaskMoveRecord:
+      type: object
+      additionalProperties: false
+      description: >
+        The receipt of a parked task's move: the request, the record of the
+        operator's choice, and the task lines the move set, each citing the
+        record.
+      required: [kind, command_id, device_id, task_id, agent, retry, lines]
+      properties:
+        kind:
+          type: string
+          enum: [move_parked_task]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        task_id:
+          type: string
+          minLength: 1
+        agent:
+          type: string
+          minLength: 1
+        retry:
+          $ref: "#/components/schemas/AlternateAgentRetry"
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TaskLine"
+
+    AlternateAgentRetry:
+      type: object
+      additionalProperties: false
+      description: >
+        An operator's choice to run a role under another agent after a quota,
+        credential, or capacity failure (plan §5.4 admission step 5). id is
+        the content address of every other field. item_id is the
+        execution-failure card a retry_with_alternate_agent decided, empty for
+        a move_parked_task.
+      required: [id, task_id, role, failed_invocation_id, item_id, command_id, agent, pool, qualification, recorded_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/Digest"
+        task_id:
+          type: string
+          minLength: 1
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        failed_invocation_id:
+          type: string
+          minLength: 1
+        item_id:
+          type: string
+        command_id:
+          type: string
+          minLength: 1
+        agent:
+          type: string
+          minLength: 1
+        pool:
+          type: string
+          minLength: 1
+        qualification:
+          $ref: "#/components/schemas/AlternateAgentQualification"
+        recorded_at:
+          type: string
+          format: date-time
+
+    AlternateAgentQualification:
+      type: string
+      description: >
+        The rule an alternate agent escapes its failure under (plan §5.4):
+        different_pool for a quota exhaustion, valid_generation for an expired
+        or revoked credential, different_route for exhausted service capacity.
+      enum: [different_pool, valid_generation, different_route]
+
+    AlternateAgentOffer:
+      type: object
+      additionalProperties: false
+      description: >
+        One agent the daemon offers to run a failed role under: its tree
+        name, the usage pool it draws on, its harness and model, and the rule
+        it escapes the failure under.
+      required: [agent, pool, harness, model, qualification]
+      properties:
+        agent:
+          type: string
+          minLength: 1
+        pool:
+          type: string
+          minLength: 1
+        harness:
+          $ref: "#/components/schemas/HarnessClientKind"
+        model:
+          type: string
+          minLength: 1
+        qualification:
+          $ref: "#/components/schemas/AlternateAgentQualification"
+
     CommandRejection:
       description: A command conflict with the replacement state it was refused against.
       oneOf:
@@ -4657,6 +4809,14 @@ components:
             The offered capability manifest selected by
             retry_with_capabilities. Required only for that action; the daemon
             re-derives the manifest from the run's current resolved policy.
+        alternate_agent:
+          type: string
+          minLength: 1
+          description: >
+            The agent selected by retry_with_alternate_agent from the item's
+            alternate_agents. Required only for that action; the daemon
+            re-derives that it still escapes the failure and would pass
+            admission before it records the choice.
         answer_route:
           nullable: true
           allOf:
@@ -5076,6 +5236,7 @@ components:
             - $ref: "#/components/schemas/CollectorReassignmentRecord"
             - $ref: "#/components/schemas/TaskLineChangeRecord"
             - $ref: "#/components/schemas/RoutingPolicyChangeRecord"
+            - $ref: "#/components/schemas/ParkedTaskMoveRecord"
           discriminator:
             propertyName: kind
             mapping:
@@ -5086,6 +5247,7 @@ components:
               reassign_collector: "#/components/schemas/CollectorReassignmentRecord"
               change_task_line: "#/components/schemas/TaskLineChangeRecord"
               set_routing_policy: "#/components/schemas/RoutingPolicyChangeRecord"
+              move_parked_task: "#/components/schemas/ParkedTaskMoveRecord"
         revision:
           type: integer
           format: int64
@@ -6701,6 +6863,7 @@ components:
         - display_names
         - billable_cost_so_far
         - execution_failure
+        - alternate_agents
         - interpretation_failure
         - publish_block
         - diff_stats
@@ -6923,6 +7086,17 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/ExecutionFailureFacts"
+        alternate_agents:
+          type: array
+          nullable: true
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AlternateAgentOffer"
+          description: >
+            The agents an execution_failure item offers to retry the
+            implementer under, sorted by agent, after a quota, credential, or
+            capacity failure (issue #869). Present exactly when the item offers
+            retry_with_alternate_agent; null on every other item.
         interpretation_failure:
           nullable: true
           allOf:
@@ -7170,6 +7344,7 @@ components:
           task: {text: "task-1", source: "identifier"}
         billable_cost_so_far: null
         execution_failure: null
+        alternate_agents: null
         interpretation_failure: null
         publish_block: null
         diff_stats:
@@ -8324,6 +8499,7 @@ components:
         - convert_to_policy
         - retry
         - retry_with_capabilities
+        - retry_with_alternate_agent
         - answer_and_retry
         - answer_without_retry
         - rerun_trust_evaluation

@@ -1914,6 +1914,52 @@ does for an operator's.
   review's hold ends when its admission is written, and the review's wait
   spends no retry budget.
 
+### Retry Or Move A Task To Another Agent
+
+When an implementation attempt fails on its agent's quota, credential, or
+provider capacity, the daemon offers the agents that escape the failure
+(issue #869). The operator picks one from a paired client; nothing picks an
+agent on its own. There's no `freesided` command for either path.
+
+- **An offer escapes the cause.** A quota failure offers agents on another
+  usage pool (`different_pool`), an expired or revoked credential offers
+  agents on another enrollment or a later generation of the failed one,
+  whose generation is valid (`valid_generation`), and a capacity failure
+  offers agents on another provider route (`different_route`). Any other
+  cause offers nothing.
+- **An offer would admit now.** A candidate is an agent the routing policy
+  in effect orders for the implementer, other than the failed agent; a card
+  also considers the lineup's implementer. It's offered only when it
+  resolves, its credential is unmarked and valid through the attempt's
+  deadline, its route admits the daemon's egress, and its pool marks no
+  window for its model with a reset ahead.
+- **A failure card retries once.** An `execution_failure` card for the
+  implementation stage lists the offers in `alternate_agents` and offers
+  `retry_with_alternate_agent`. The decision names one offered agent. The
+  daemon re-derives the offer, records the choice as an alternate-agent
+  retry record in the decision's transaction, and starts the next attempt
+  citing it. The task's lines don't change, so only that attempt runs on the
+  chosen agent.
+- **A parked task moves for good.** A task parked on its implementer's
+  exhausted quota window carries the offers on its hold. The
+  `move_parked_task` command records the choice, re-pins the task's lines to
+  the chosen pool as the router would, and clears the hold, so the parked
+  attempt starts on the new line. The lines' provenance names the agent
+  left, with its mark, as `passed_over` when the policy orders it. Other roles the policy orders an agent on
+  that pool for move with it; a role an operator set, or one the policy
+  can't pin there, keeps its line. Offers here come only from the routing
+  policy, so a task with no policy in effect is offered nothing.
+- **Admission checks the choice again.** Before a card's agent runs,
+  admission refuses it unless it isn't the failed agent, it draws on the pool
+  the operator chose, and it still escapes the failed invocation's cause
+  under the recorded rule. A card that fails this refuses the attempt; it
+  never falls back to the task's line or the lineup. A moved line counts
+  only with the record and the command receipt that set it, and holds on its
+  pool's windows like a routed line.
+- **A stale offer is refused, not replaced.** When the agent no longer
+  qualifies or the task is no longer parked, the command is 400 and records
+  nothing; the client refreshes and shows the current offers.
+
 ### Enroll An Agent Credential
 
 `freesided auth add` enrolls one harness client (`codex_cli` or

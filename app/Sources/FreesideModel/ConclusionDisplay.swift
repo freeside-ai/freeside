@@ -48,6 +48,7 @@ package enum ConclusionDisplay {
         case .convert_to_policy: return "Converted to policy."
         case .retry: return "Retried."
         case .retry_with_capabilities: return "Retried with another profile."
+        case .retry_with_alternate_agent: return "Retried with another agent."
         case .answer_and_retry: return "Answered and retried."
         case .answer_without_retry: return "Answered without a retry."
         case .rerun_trust_evaluation: return "Trust evaluation rerun."

@@ -640,8 +640,8 @@ func (tx *WriteTx) PutProductionAttempt(ctx context.Context, attempt domain.Prod
 				attempt.CampaignID, attempt.AttemptNumber, domain.ErrParentKeyMismatch)
 		}
 	}
-	if err := tx.authenticateCapabilityRetryAttempt(ctx, attempt); err != nil {
-		return fmt.Errorf("put production attempt %s/%d capability retry: %w",
+	if err := tx.authenticateOperatorRetryAttempt(ctx, attempt); err != nil {
+		return fmt.Errorf("put production attempt %s/%d operator retry: %w",
 			attempt.CampaignID, attempt.AttemptNumber, err)
 	}
 	if err := tx.gateRevisionRevisedRun(ctx, attempt); err != nil {
@@ -842,7 +842,7 @@ func (tx *ReadTx) authenticateReconstructedProductionAttempt(ctx context.Context
 	if attempt.AttemptNumber < 2 {
 		return domain.ErrParentKeyMismatch
 	}
-	if err := tx.authenticateCapabilityRetryAttempt(ctx, attempt); err != nil {
+	if err := tx.authenticateOperatorRetryAttempt(ctx, attempt); err != nil {
 		return err
 	}
 	parent, err := tx.productionAttemptByRun(ctx, attempt.ParentRunID)
@@ -858,12 +858,72 @@ func (tx *ReadTx) authenticateReconstructedProductionAttempt(ctx context.Context
 	return tx.authenticateReconstructedProductionAttempt(ctx, parent)
 }
 
+// authenticateOperatorRetryAttempt re-checks an operator retry's binding
+// against the decision that made it: the command, its superseded card, and
+// for an alternate-agent retry the stored record. An attempt no operator
+// asked for has none to check.
+func (tx *ReadTx) authenticateOperatorRetryAttempt(
+	ctx context.Context, attempt domain.ProductionAttempt,
+) error {
+	switch {
+	case attempt.OperatorCommandID == nil:
+		return nil
+	case attempt.AlternateAgentRetryID != nil:
+		return tx.authenticateAlternateAgentRetryAttempt(ctx, attempt)
+	}
+	return tx.authenticateCapabilityRetryAttempt(ctx, attempt)
+}
+
+// authenticateAlternateAgentRetryAttempt binds an alternate-agent retry to
+// its record and the card it answered: the record was made by the attempt's
+// command on that card, for the failed invocation the attempt retries, and
+// names an agent the card offered with the offer's pool and rule. It does not
+// re-derive the rule; admission does that against current state before the
+// agent runs.
+func (tx *ReadTx) authenticateAlternateAgentRetryAttempt(
+	ctx context.Context, attempt domain.ProductionAttempt,
+) error {
+	record, err := tx.GetAlternateAgentRetry(ctx, *attempt.AlternateAgentRetryID)
+	if err != nil {
+		return err
+	}
+	command, err := tx.GetCommand(ctx, *attempt.OperatorCommandID)
+	if err != nil {
+		return err
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	run, err := tx.GetRun(ctx, attempt.ParentRunID)
+	if err != nil {
+		return err
+	}
+	if command.Action != domain.ActionRetryWithAlternateAgent || attempt.RetryOfInvocationID == nil ||
+		record.CommandID != command.CommandID || record.ItemID != item.ID || record.ParkedMove() ||
+		record.TaskID != run.TaskID || record.Role != domain.RoleImplementer ||
+		record.FailedInvocationID != *attempt.RetryOfInvocationID ||
+		command.Message != record.Agent ||
+		command.ItemID != item.ID || command.ItemVersion+1 != item.ItemVersion ||
+		command.PRHeadSHA != item.PRHeadSHA ||
+		!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) ||
+		item.Status != domain.StatusSuperseded || item.DecidedAt == nil ||
+		item.Type != domain.AttentionExecutionFailure || item.ExecutionFailure == nil ||
+		item.ExecutionFailure.Stage != domain.StageNameImplementation ||
+		item.ExecutionFailure.InvocationID != *attempt.RetryOfInvocationID ||
+		item.Subject.RunID == nil || *item.Subject.RunID != attempt.ParentRunID ||
+		!slices.ContainsFunc(item.AlternateAgents, func(offer domain.AlternateAgentOffer) bool {
+			return offer.Agent == record.Agent && offer.Pool == record.Pool &&
+				offer.Qualification == record.Qualification
+		}) {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
 func (tx *ReadTx) authenticateCapabilityRetryAttempt(
 	ctx context.Context, attempt domain.ProductionAttempt,
 ) error {
-	if attempt.OperatorCommandID == nil {
-		return nil
-	}
 	command, err := tx.GetCommand(ctx, *attempt.OperatorCommandID)
 	if err != nil {
 		return err

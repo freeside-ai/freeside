@@ -267,6 +267,16 @@ package enum TaskDisplay {
         reason == .usage_pool_exhausted || reason == .identity_parallelism || reason == .machine_capacity
     }
 
+    /// The agents a current task's hold offers to move it to
+    /// (`move_parked_task`): a quota-window hold's offers, and none beside any
+    /// other reason, on a historical position, or before the timeline loads.
+    package static func moveOffers(_ position: Position?) -> [Components.Schemas.AlternateAgentOffer] {
+        guard let position, !position.historical, let hold = position.holdFacts,
+            hold.reason == .quota_window_exhausted
+        else { return [] }
+        return hold.quota_window?.value1.alternate_agents ?? []
+    }
+
     /// The hold the task's own timeline recorded for `runID`, when it records
     /// the reason the position holds on. The task and project match is the
     /// one `specificationApproval` applies to the same timeline.

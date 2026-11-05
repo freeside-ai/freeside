@@ -48,6 +48,37 @@ func receiptPolicy(t *testing.T, revision int) domain.RoutingPolicy {
 	return policy
 }
 
+// receiptParkedTaskMove is a move of task-1's implementer to claude-b on
+// pool-b, with the record and line it wrote.
+func receiptParkedTaskMove(t *testing.T) domain.CommandReceipt {
+	t.Helper()
+	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
+		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
+		CommandID: "cmd-move", Agent: "claude-b", Pool: "pool-b",
+		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: receiptAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{},
+		},
+	}, 1, nil, receiptAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.CommandReceipt{ParkedTaskMove: &domain.ParkedTaskMoveReceipt{
+		ParkedTaskMoveRequest: domain.ParkedTaskMoveRequest{
+			CommandIdentity: receiptIdentity("cmd-move"), TaskID: "task-1", Agent: "claude-b",
+		},
+		Retry: record, Lines: []domain.TaskLine{line},
+	}}
+}
+
 func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 	t.Helper()
 	line := receiptTaskLine(t)
@@ -75,6 +106,7 @@ func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 			},
 			Recorded: true,
 		}},
+		"parked_task_move_receipt": receiptParkedTaskMove(t),
 		"routing_policy_change_receipt": {RoutingPolicyChange: &domain.RoutingPolicyChangeReceipt{
 			RoutingPolicyChangeRequest: domain.RoutingPolicyChangeRequest{
 				CommandIdentity: receiptIdentity("cmd-policy"), ExpectedRevision: new(1),
@@ -102,6 +134,8 @@ func TestCommandReceiptGoldens(t *testing.T) {
 				arm = receipt.TaskLineChange
 			case domain.CommandKindSetRoutingPolicy:
 				arm = receipt.RoutingPolicyChange
+			case domain.CommandKindMoveParkedTask:
+				arm = receipt.ParkedTaskMove
 			case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 				t.Fatalf("kind %q", receipt.Kind())
 			}

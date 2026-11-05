@@ -57,7 +57,7 @@ offers only these agents. The heartbeat carries the tree's `lineup_revision`.
 It changes only when the daemon restarts on a changed tree, which moves no
 revision, so a client bootstraps when it differs from the adopted catalog's.
 
-Four `/commands` kinds act on them. None carries `expected_entity_version` or
+Five `/commands` kinds act on them. None carries `expected_entity_version` or
 `expected_bindings`. Each records an immutable receipt in the transaction that
 applies it, and an exact replay of its `command_id` returns that receipt and
 revision. A `command_id` names one command of any kind.
@@ -86,3 +86,12 @@ revision. A `command_id` names one command of any kind.
   usage pool that takes every new task ahead of reset order; null or omitted
   clears it, as a set without `-drain-first` does. A pool no agent of the
   tree is on is 400. The same orders and account record nothing.
+- **`move_parked_task`** moves a task parked on its implementer's exhausted
+  quota window to `agent`, one of the agents the park's hold offers in
+  `alternate_agents`. The daemon re-derives the offer against current state
+  and refuses with 400 when the task is no longer parked or the agent no
+  longer qualifies, recording nothing. The record carries the alternate-agent
+  retry record and the task lines the move set: the implementer on the chosen
+  agent, and each other role the routing policy orders an agent on that pool
+  for, unless an operator set its line (`daemon/README.md`, Retry Or Move A
+  Task To Another Agent).

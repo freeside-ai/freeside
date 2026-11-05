@@ -35,7 +35,7 @@ import Testing
         .finding_adjudication: [
             .accept_recommended_route, .choose_alternative_route, .discuss, .stop,
         ],
-        .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
+        .execution_failure: [.retry, .retry_with_capabilities, .retry_with_alternate_agent, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .publish_blocked: [
             .rerun_trust_evaluation, .inspect_trust_failure, .open_pr, .stop,
@@ -65,11 +65,11 @@ import Testing
     /// phase1Actions is the enumeration universe the cross-language policy
     /// parity suite walks; if it dropped an action, that action's cells would
     /// go unchecked. Pin it to exactly the union of the per-type sets (every
-    /// action is offered by at least one type) and to a duplicate-free 31.
+    /// action is offered by at least one type) and to a duplicate-free 34.
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 33)
+        #expect(AttentionFixtures.phase1Actions.count == 34)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -369,8 +369,10 @@ import Testing
         let item = AttentionFixtures.fixture(type: type).item
         // The default hold predates publication: it carries no pull request
         // reference, so it offers its set without the conditional open_pr.
+        // The default failure's cause has no alternate agent to offer.
         let offered = AttentionFixtures.phase1ActionSets[type]?.filter {
             (type != .publish_blocked || $0 != .open_pr) && (type != .review_dispute || $0 != .adjudicate_findings)
+                && (type != .execution_failure || $0 != .retry_with_alternate_agent)
         }
         #expect(item.requested_decision == offered)
         #expect(item.status == .open)

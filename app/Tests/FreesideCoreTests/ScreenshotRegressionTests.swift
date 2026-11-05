@@ -1394,6 +1394,18 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
+                    // A quota failure whose card offers another agent (#869):
+                    // the Other Agents fact and the retry action.
+                    let quota = AttentionFixtures.quotaFailure().item
+                    for (suffix, width) in [("", canvasWidth), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-execution_failure-quota\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        quota, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    }
                 }
 
                 if snapshot.item._type == .effect_proposal {
@@ -2239,7 +2251,12 @@
             // a full usage pool (#1596): the row's capacity wait and the
             // timeline header's callout, each guidance sentence naming its
             // cause from the recorded hold (#1599).
-            for (name, slug) in [("Machine capacity", "machine-capacity"), ("Usage pool", "usage-pool")] {
+            // A park on an exhausted quota window that offers another agent
+            // draws its move menu under the callout (#869).
+            for (name, slug) in [
+                ("Machine capacity", "machine-capacity"), ("Usage pool", "usage-pool"),
+                ("Quota window", "quota-window"),
+            ] {
                 let wait = HoldPresentationFixtures.make(name)
                 var waitTask = approvalFixture.task
                 waitTask.task = wait.task

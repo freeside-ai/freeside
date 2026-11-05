@@ -11,14 +11,15 @@ import (
 var ErrCommandReceiptArms = errors.New("command receipt must set exactly one arm")
 
 // CommandReceipt is the recorded result of one accepted operator command
-// (refresh_usage, reassign_collector, change_task_line, set_routing_policy):
-// exactly one arm is set. The accepting transaction records it with the
+// (refresh_usage, reassign_collector, change_task_line, set_routing_policy,
+// move_parked_task): exactly one arm is set. The accepting transaction records it with the
 // command's effect, and a replay of the command_id returns it unchanged.
 type CommandReceipt struct {
 	UsageRefresh          *UsageRefreshReceipt
 	CollectorReassignment *CollectorReassignmentReceipt
 	TaskLineChange        *TaskLineChangeReceipt
 	RoutingPolicyChange   *RoutingPolicyChangeReceipt
+	ParkedTaskMove        *ParkedTaskMoveReceipt
 }
 
 // Kind names the set arm; it is empty unless exactly one arm is set.
@@ -35,6 +36,9 @@ func (r CommandReceipt) Kind() CommandKind {
 	}
 	if r.RoutingPolicyChange != nil {
 		kinds = append(kinds, CommandKindSetRoutingPolicy)
+	}
+	if r.ParkedTaskMove != nil {
+		kinds = append(kinds, CommandKindMoveParkedTask)
 	}
 	if len(kinds) != 1 {
 		return ""
@@ -53,6 +57,8 @@ func (r CommandReceipt) CommandID() string {
 		return r.TaskLineChange.CommandID
 	case CommandKindSetRoutingPolicy:
 		return r.RoutingPolicyChange.CommandID
+	case CommandKindMoveParkedTask:
+		return r.ParkedTaskMove.CommandID
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
 	}
 	return ""
@@ -70,6 +76,8 @@ func (r CommandReceipt) Validate() error {
 		return r.TaskLineChange.Validate()
 	case CommandKindSetRoutingPolicy:
 		return r.RoutingPolicyChange.Validate()
+	case CommandKindMoveParkedTask:
+		return r.ParkedTaskMove.Validate()
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
 	}
 	return ErrCommandReceiptArms
@@ -258,6 +266,67 @@ func (r RoutingPolicyChangeReceipt) Validate() error {
 	if r.Recorded && r.Policy.Revision != expected+1 || !r.Recorded && r.Policy.Revision != expected {
 		return fmt.Errorf("routing policy change receipt %q revision %d after %d: %w",
 			r.CommandID, r.Policy.Revision, expected, ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// ParkedTaskMoveRequest is a move_parked_task command as accepted: the task
+// parked on an exhausted quota window and the agent it moves to.
+type ParkedTaskMoveRequest struct {
+	CommandIdentity
+	TaskID TaskID `json:"task_id"`
+	Agent  string `json:"agent"`
+}
+
+func (r ParkedTaskMoveRequest) validate() error {
+	if err := r.CommandIdentity.validate(); err != nil {
+		return err
+	}
+	if r.TaskID == "" {
+		return fmt.Errorf("task: %w", ErrEmptyID)
+	}
+	if !validAgentName(r.Agent) {
+		return fmt.Errorf("agent: %w", ErrInvalidAgentName)
+	}
+	return nil
+}
+
+// ParkedTaskMoveReceipt records a move: the card record it wrote and the
+// task lines it set, each citing that record. The parked attempt's hold is
+// released in the same transaction.
+type ParkedTaskMoveReceipt struct {
+	ParkedTaskMoveRequest
+	Retry AlternateAgentRetry `json:"retry"`
+	Lines []TaskLine          `json:"lines"`
+}
+
+func (r ParkedTaskMoveReceipt) Validate() error {
+	if err := r.validate(); err != nil {
+		return fmt.Errorf("parked task move receipt %q: %w", r.CommandID, err)
+	}
+	if err := r.Retry.Validate(); err != nil {
+		return fmt.Errorf("parked task move receipt %q: %w", r.CommandID, err)
+	}
+	if !r.Retry.ParkedMove() || r.Retry.CommandID != r.CommandID || r.Retry.TaskID != r.TaskID ||
+		r.Retry.Agent != r.Agent {
+		return fmt.Errorf("parked task move receipt %q retry: %w", r.CommandID, ErrParentKeyMismatch)
+	}
+	// The parked role's line is always among them: it names the chosen
+	// agent.
+	moved := false
+	for _, line := range r.Lines {
+		if err := line.Validate(); err != nil {
+			return fmt.Errorf("parked task move receipt %q line: %w", r.CommandID, err)
+		}
+		if line.TaskID != r.TaskID || line.Source != TaskLineSourceAlternateAgentMove ||
+			line.SetBy != string(r.Retry.ID) {
+			return fmt.Errorf("parked task move receipt %q line %s: %w", r.CommandID, line.ID, ErrParentKeyMismatch)
+		}
+		moved = moved || line.Role == r.Retry.Role && line.Agent == r.Agent
+	}
+	if !moved {
+		return fmt.Errorf("parked task move receipt %q moves no %s line: %w",
+			r.CommandID, r.Retry.Role, ErrParentKeyMismatch)
 	}
 	return nil
 }

@@ -17,10 +17,12 @@ import Testing
         let store = await makeStore(server: MockServer())
         let model = DecisionModel(store: store, itemID: "item-\(type.rawValue)")
         // The default hold carries no pull request, so it cannot offer the
-        // conditional open_pr.
+        // conditional open_pr, and the default failure's cause has no
+        // alternate agent to offer.
         let offered = AttentionFixtures.phase1ActionSets[type]?.filter {
             (type != .publish_blocked || $0 != .open_pr)
                 && (type != .review_dispute || $0 != .adjudicate_findings)
+                && (type != .execution_failure || $0 != .retry_with_alternate_agent)
         }
         #expect(model.offeredActions == offered)
     }
@@ -725,6 +727,34 @@ import Testing
         #expect(model.appliedRecord?.action == .retry_with_capabilities)
         #expect(model.appliedRecord?.message == manifest.digest)
         #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func alternateAgentRetrySubmitsTheChosenAgent() async throws {
+        let server = MockServer(items: [AttentionFixtures.quotaFailure()])
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-execution_failure")
+        await model.validate()
+        let reviewedSnapshot = try #require(model.snapshot)
+        let offer = try #require(reviewedSnapshot.item.alternate_agents?.first)
+
+        await model.submitAlternateAgentRetry(agent: offer.agent, reviewedSnapshot: reviewedSnapshot)
+
+        #expect(model.appliedRecord?.action == .retry_with_alternate_agent)
+        #expect(model.appliedRecord?.message == offer.agent)
+        #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func alternateAgentRetryRefusesAnAgentTheCardDidNotOffer() async throws {
+        let server = MockServer(items: [AttentionFixtures.quotaFailure()])
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-execution_failure")
+        await model.validate()
+        let reviewedSnapshot = try #require(model.snapshot)
+
+        await model.submitAlternateAgentRetry(agent: "claude-other", reviewedSnapshot: reviewedSnapshot)
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.snapshot?.item.status == .open)
     }
 
     @Test func returnToAgentRequiresBoundedFeedback() async {
