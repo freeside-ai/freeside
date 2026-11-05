@@ -136,7 +136,9 @@ saved requests and choose **Retry**. Recovery is a separate read-only screen;
 New task always opens a fresh form. Opening or reconnecting never sends a
 saved request automatically. Entries belong to the paired device and daemon;
 switching either does not replay another connection's commands. A failed local
-save prevents sending.
+save prevents sending. A request's attachments are saved with it, so Retry
+uploads them again; their bytes are deleted once the request is confirmed or
+rejected.
 
 ## Devices
 

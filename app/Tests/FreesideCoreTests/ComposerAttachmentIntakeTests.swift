@@ -1,0 +1,125 @@
+import CoreGraphics
+import Foundation
+import FreesideAPI
+import FreesideModel
+import ImageIO
+import Testing
+import UniformTypeIdentifiers
+
+@testable import FreesideCore
+
+@Suite struct ComposerAttachmentIntakeTests {
+    private func temporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// A 4×4 opaque image encoded as `type`, with `properties` as its
+    /// metadata.
+    private func image(_ type: UTType, properties: [CFString: Any] = [:]) throws -> Data {
+        let context = try #require(
+            CGContext(
+                data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        let output = NSMutableData()
+        let destination = try #require(
+            CGImageDestinationCreateWithData(output as CFMutableData, type.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), properties as CFDictionary)
+        try #require(CGImageDestinationFinalize(destination))
+        return output as Data
+    }
+
+    @Test func aFolderIsRefusedByName() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("screens", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #expect(
+            ComposerAttachmentIntake.file(at: folder) == .refused("screens is a folder. Folders aren't supported yet."))
+    }
+
+    @Test func aFileOverTheFileLimitIsRefusedFromItsSize() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("dump.bin")
+        // A sparse file: its size is past the limit without writing 32 MiB.
+        #expect(FileManager.default.createFile(atPath: url.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(TaskAttachmentLimits.maxFileBytes + 1))
+        try handle.close()
+        #expect(
+            ComposerAttachmentIntake.file(at: url) == .refused("dump.bin is 32.1 MiB; a file can be at most 32 MiB."))
+    }
+
+    @Test func aFileKeepsItsNameAndClaimsItsType() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("crash.log")
+        let bytes = Data("panic".utf8)
+        try bytes.write(to: url)
+        guard case .attachment(let name, let claim, let read) = ComposerAttachmentIntake.file(at: url) else {
+            Issue.record("crash.log wasn't read")
+            return
+        }
+        #expect(name == "crash.log")
+        #expect(claim == "text/plain")
+        #expect(read == bytes)
+    }
+
+    @Test func aPastedTIFFBecomesAPNG() throws {
+        let item = ComposerAttachmentIntake.image(try image(.tiff), origin: .pasted)
+        guard case .attachment(let name, let claim, let bytes) = item else {
+            Issue.record("the TIFF wasn't re-encoded")
+            return
+        }
+        #expect(name == "Pasted image.png")
+        #expect(claim == "image/png")
+        #expect(TaskAttachmentLimits.sniff(bytes) == .image_sol_png)
+    }
+
+    @Test func aHEICPhotoBecomesAJPEG() throws {
+        let heic = try image(.heic)
+        #expect(TaskAttachmentLimits.sniff(heic) == .application_sol_octet_hyphen_stream)
+        guard case .attachment(let name, _, let bytes) = ComposerAttachmentIntake.image(heic, origin: .photo) else {
+            Issue.record("the HEIC wasn't re-encoded")
+            return
+        }
+        #expect(name == "Photo.jpg")
+        #expect(TaskAttachmentLimits.sniff(bytes) == .image_sol_jpeg)
+    }
+
+    @Test func aReencodedPhotoKeepsItsOrientationAndDropsItsLocation() throws {
+        let heic = try image(
+            .heic,
+            properties: [
+                kCGImagePropertyOrientation: 6,
+                kCGImagePropertyGPSDictionary: [
+                    kCGImagePropertyGPSLatitude: 37.0, kCGImagePropertyGPSLatitudeRef: "N",
+                ],
+            ])
+        guard case .attachment(_, _, let bytes) = ComposerAttachmentIntake.image(heic, origin: .photo) else {
+            Issue.record("the HEIC wasn't re-encoded")
+            return
+        }
+        let source = try #require(CGImageSourceCreateWithData(bytes as CFData, nil))
+        let properties = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        #expect(properties[kCGImagePropertyOrientation] as? Int == 6)
+        #expect(properties[kCGImagePropertyGPSDictionary] == nil)
+    }
+
+    @Test func anImageTheDaemonSniffsKeepsItsBytes() throws {
+        let png = try image(.png)
+        #expect(
+            ComposerAttachmentIntake.image(png, origin: .photo)
+                == .attachment(name: "Photo.png", claimedMediaType: "image/png", bytes: png))
+    }
+
+    @Test func bytesThatArentAnImageAreRefused() {
+        #expect(
+            ComposerAttachmentIntake.image(Data("not an image".utf8), origin: .pasted)
+                == .refused("The pasted image couldn't be read as an image."))
+    }
+}

@@ -824,6 +824,34 @@
                                 initialChoices: writerAndReviewer))))
             }
 
+            // Attachments in the composer (#2590): an image chip with its
+            // thumbnail, a numbered repeat, and a file chip; one surface also
+            // shows the refusal notice for an image over its limit.
+            var composerAttachments = TaskAttachmentDraft()
+            for (name, claim, bytes) in [
+                ("Layout bug.png", "image/png", AttentionFixtures.fixtureImagePNG),
+                ("Layout bug.png", "image/png", AttentionFixtures.fixtureImagePNG + Data([0])),
+                ("crash.log", "text/plain", Data(repeating: 0x61, count: 48_213)),
+            ] {
+                _ = composerAttachments.add(name: name, claimedMediaType: claim, bytes: bytes)
+            }
+            let imageRefusal = "Screen recording.png is 12.4 MiB; an image can be at most 10 MiB."
+            for (name, width, scheme, refusals) in [
+                ("new-task-sheet-attachments", CGFloat(380), ColorScheme.light, [imageRefusal]),
+                ("new-task-sheet-attachments-dark", CGFloat(380), ColorScheme.dark, []),
+                ("new-task-sheet-phone-attachments", CGFloat(390), ColorScheme.light, []),
+                ("new-task-sheet-phone-attachments-dark", CGFloat(390), ColorScheme.dark, [imageRefusal]),
+            ] as [(String, CGFloat, ColorScheme, [String])] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width, colorScheme: scheme,
+                        view: AnyView(
+                            NewTaskSheet(
+                                projects: newTaskProjects, model: newTaskModel, onSubmitted: { _ in },
+                                rendersInteractiveControls: false, initialSource: filledSource,
+                                initialAttachments: composerAttachments, initialRefusals: refusals))))
+            }
+
             let recoveryModel = try TaskSubmissionRecoveryScreenshots.model(client: client)
             for (name, width, scheme) in [
                 ("new-task-recovery", CGFloat(380), ColorScheme.light),

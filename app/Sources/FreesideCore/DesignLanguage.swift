@@ -2031,7 +2031,7 @@ private struct ComposerChevron: View {
 extension View {
     /// R33's pill: ground-2 inside the window border, or the accent wash
     /// inside the accent border while the chip is open or active.
-    fileprivate func composerPill(isActive: Bool) -> some View {
+    func composerPill(isActive: Bool) -> some View {
         background(Capsule().fill(isActive ? Color.accentWash : Color.ground2))
             .overlay(Capsule().strokeBorder(isActive ? Color.accentBorder : Color.secondaryBorder, lineWidth: 1))
     }
