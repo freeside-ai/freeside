@@ -362,6 +362,7 @@ func (p *claudeUsageProxy) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestClaudeUsageRelayFailure(t *testing.T) {
+	t.Parallel()
 	p := newClaudeUsageProxy(t, "idle", "127.0.0.0/8", codexAuthRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)), ProtoMajor: 1, ProtoMinor: 1}, nil
 	}))
@@ -389,6 +390,7 @@ func TestClaudeUsageRelayFailure(t *testing.T) {
 }
 
 func TestClaudeUsageStartupStatus(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		path             string
 		status, failures int
@@ -436,6 +438,7 @@ func TestClaudeUsageStartupStatus(t *testing.T) {
 }
 
 func TestClaudeUsageRequestObservation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"idle", "idle_profile_scope", "turn", "turn_seeded"} {
 		t.Run(mode, func(t *testing.T) {
 			forwarded := 0
@@ -515,6 +518,7 @@ func claudeUsageAuthUnchanged(snapshotToken []byte, config, token string) bool {
 }
 
 func TestClaudeUsageAuthMutation(t *testing.T) {
+	t.Parallel()
 	config := t.TempDir()
 	if err := os.WriteFile(filepath.Join(config, ".credentials.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
@@ -870,6 +874,7 @@ func claudeUsageWindows(probes []claudeUsageEvidence) map[string]string {
 }
 
 func TestClaudeUsageObservedFixtures(t *testing.T) {
+	t.Parallel()
 	zero := 0
 	// idle and turn are the #1713 observations (2026-10-03); idle_profile_scope
 	// and turn_seeded are #2389's (2026-11-03). The event names whichever window
@@ -926,6 +931,7 @@ func TestClaudeUsageObservedFixtures(t *testing.T) {
 }
 
 func TestClaudeUsageProtocol(t *testing.T) {
+	t.Parallel()
 	body, err := os.ReadFile("testdata/claude_usage_synthetic.jsonl")
 	if err != nil {
 		t.Fatal(err)
@@ -1038,6 +1044,7 @@ func TestClaudeUsageProtocol(t *testing.T) {
 // the window verdicts, never positive provider fixtures; the observed file
 // holds the sanitized answers #2389's live run received.
 func TestClaudeUsageReadClassification(t *testing.T) {
+	t.Parallel()
 	type readCase struct {
 		Name            string            `json:"name"`
 		Status          *int              `json:"status"`
@@ -1140,6 +1147,7 @@ func TestClaudeUsageReadClassification(t *testing.T) {
 }
 
 func TestClaudeUsageWindows(t *testing.T) {
+	t.Parallel()
 	event := func(raw string) []json.RawMessage { return []json.RawMessage{json.RawMessage(raw)} }
 	for _, tc := range []struct {
 		name   string
@@ -1208,6 +1216,7 @@ func claudeUsageProxyClient(t *testing.T, p *claudeUsageProxy) *http.Client {
 }
 
 func TestClaudeUsageReadProxy(t *testing.T) {
+	t.Parallel()
 	forwarded := []string{}
 	p := newClaudeUsageProxy(t, "read", "127.0.0.0/8", codexAuthRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		forwarded = append(forwarded, r.Method+" "+r.Host+r.URL.Path)
@@ -1253,6 +1262,7 @@ func TestClaudeUsageReadProxy(t *testing.T) {
 // TestClaudeUsageProxyClassifiesUsage pins that the CLI's own usage read in
 // idle_profile_scope is classified by path 2's rule and relayed unchanged.
 func TestClaudeUsageProxyClassifiesUsage(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, encoding string
 		status         int
@@ -1306,6 +1316,7 @@ func TestClaudeUsageProxyClassifiesUsage(t *testing.T) {
 // TestClaudeUsageAcceptEncodingScope pins that the proxy drops the client's
 // Accept-Encoding only on the usage route in the modes that classify it.
 func TestClaudeUsageAcceptEncodingScope(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		mode, path string
 		dropped    bool
@@ -1342,6 +1353,7 @@ func TestClaudeUsageAcceptEncodingScope(t *testing.T) {
 }
 
 func TestClaudeUsageSeedHeaders(t *testing.T) {
+	t.Parallel()
 	p := newClaudeUsageProxy(t, "turn_seeded", "127.0.0.0/8", codexAuthRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		header := http.Header{}
 		header.Set("anthropic-ratelimit-unified-5h-utilization", "0.04")
@@ -1367,6 +1379,7 @@ func TestClaudeUsageSeedHeaders(t *testing.T) {
 // TestClaudeUsageReadDriver runs path 2's read child against the TLS
 // observer, so the request shape the live run sends is pinned offline.
 func TestClaudeUsageReadDriver(t *testing.T) {
+	t.Parallel()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is not on PATH")
@@ -1419,6 +1432,7 @@ func TestClaudeUsageReadDriver(t *testing.T) {
 // bearer only to a certificate the given CA signed: an interceptor on the
 // host-only network gets a failed handshake, never a request.
 func TestClaudeUsageReadDriverVerifiesProxy(t *testing.T) {
+	t.Parallel()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is not on PATH")
@@ -1456,6 +1470,7 @@ func TestClaudeUsageReadDriverVerifiesProxy(t *testing.T) {
 }
 
 func TestClaudeUsageNonessentialRoutes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		mode     string
 		failures int

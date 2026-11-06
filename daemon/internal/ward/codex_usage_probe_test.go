@@ -60,6 +60,7 @@ func codexUsageLaunchGate(expiry *time.Time, now time.Time) (bool, time.Duration
 }
 
 func TestCodexUsageLaunchGate(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	at := func(d time.Duration) *time.Time { expiry := now.Add(d); return &expiry }
 	if codexUsageLaunchFloor != 7*time.Minute {
@@ -587,6 +588,7 @@ func codexUsageProxyClient(t *testing.T, p *codexUsageProxy) *http.Client {
 }
 
 func TestCodexUsageProxyRoutes(t *testing.T) {
+	t.Parallel()
 	for _, turn := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "turn"}[turn], func(t *testing.T) {
 			var forwarded []string
@@ -656,6 +658,7 @@ func TestCodexUsageProxyRoutes(t *testing.T) {
 }
 
 func TestCodexUsageProxyUpstream(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		status   int
@@ -691,6 +694,7 @@ func TestCodexUsageProxyUpstream(t *testing.T) {
 }
 
 func TestCodexUsageProxyDeniesOtherHosts(t *testing.T) {
+	t.Parallel()
 	p := newCodexUsageProxy(t, true, "127.0.0.0/8", codexAuthRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Error("request for another host reached the upstream transport")
 		return nil, errors.New("denied")
@@ -742,6 +746,7 @@ func codexUsageProxySecure(t *testing.T, p *codexUsageProxy, authority string) *
 
 // The inner request cannot choose where a forwarded route goes.
 func TestCodexUsageProxyFixesAuthority(t *testing.T) {
+	t.Parallel()
 	var authorities []string
 	p := newCodexUsageProxy(t, false, "127.0.0.0/8", codexAuthRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		authorities = append(authorities, r.URL.Scheme+"://"+r.URL.Host+" "+r.Host)
@@ -767,6 +772,7 @@ func TestCodexUsageProxyFixesAuthority(t *testing.T) {
 }
 
 func TestCodexUsageProxyHandshake(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, authority, sent, want string
 		reset                       bool
@@ -804,6 +810,7 @@ func TestCodexUsageProxyHandshake(t *testing.T) {
 // The forwarded body has no length and ends with the connection. A client
 // that requires a TLS close_notify, as the pinned CLI does, must get one.
 func TestCodexUsageProxyClosesCleanly(t *testing.T) {
+	t.Parallel()
 	p := newCodexUsageProxy(t, false, "127.0.0.0/8", codexAuthRoundTripFunc(codexUsageSyntheticUpstream))
 	secure := codexUsageProxySecure(t, p, "chatgpt.com:443")
 	if _, err := io.WriteString(secure, "GET /backend-api/wham/usage HTTP/1.1\r\nHost: chatgpt.com\r\n\r\n"); err != nil {
@@ -816,6 +823,7 @@ func TestCodexUsageProxyClosesCleanly(t *testing.T) {
 }
 
 func TestCodexUsageProxyClosedConnection(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, authority, fragment, want string
 		failures                        int
@@ -860,6 +868,7 @@ func codexUsageGoodCapture(mode string) *codexUsageCapture {
 }
 
 func TestCodexUsageVerdicts(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, kind, want string
 		mutate           func(*codexUsageEvidence)
@@ -969,6 +978,7 @@ func TestCodexUsageVerdicts(t *testing.T) {
 }
 
 func TestCodexUsageOverall(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		want                          string
 		fresh, nearExpiry, idle, turn string
@@ -993,6 +1003,7 @@ func TestCodexUsageOverall(t *testing.T) {
 }
 
 func TestCodexUsageCaptureStrict(t *testing.T) {
+	t.Parallel()
 	good, err := json.Marshal(codexUsageGoodCapture("turn"))
 	if err != nil {
 		t.Fatal(err)
@@ -1016,6 +1027,7 @@ func TestCodexUsageCaptureStrict(t *testing.T) {
 // Exercise the actual in-container reducer with synthetic values. jq is also
 // a declared image/runtime tool; this test needs no provider or network.
 func TestCodexUsageSanitizer(t *testing.T) {
+	t.Parallel()
 	jq, err := exec.LookPath("jq")
 	if err != nil {
 		t.Fatal("jq is required for the Codex usage sanitizer tests; install jq and put it on PATH")

@@ -55,6 +55,7 @@ func runTokenReadScript(t *testing.T, store string) (credProof, string, string) 
 // only far enough to be refused, and a store with no regular token file
 // leaves no copy.
 func TestCredTokenReadObserverScript(t *testing.T) {
+	t.Parallel()
 	store := func(t *testing.T, body []byte) string {
 		t.Helper()
 		dir := t.TempDir()
@@ -201,6 +202,8 @@ func assertNoToken(t *testing.T, what string, value any) {
 // the stored token with both digests, through one networkless read-only
 // observer whose name was authorized first, and leaves no container, no
 // file, and no token in anything it hands back but the token itself.
+//
+//nolint:paralleltest // Serial: newTokenReadFixture redirects the host temp dir with t.Setenv("TMPDIR")
 func TestReadSetupToken(t *testing.T) {
 	longest := integritySentinelToken + strings.Repeat("a", MaxSetupTokenBytes-len(integritySentinelToken))
 	for name, stored := range map[string][]byte{
@@ -255,6 +258,7 @@ func TestReadSetupToken(t *testing.T) {
 // TestObserveSetupTokenIntegrityExportsNoToken pins that only the token-read
 // observer brings a token out: the integrity probe's command names no copy.
 func TestObserveSetupTokenIntegrityExportsNoToken(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	for _, command := range [][]string{
 		credObserverCommand(cfg, "nonce", "/credentials", CredentialManifestSetupToken),
@@ -269,6 +273,8 @@ func TestObserveSetupTokenIntegrityExportsNoToken(t *testing.T) {
 // TestReadSetupTokenFailsClosed covers every read that must return no token.
 // Each also leaves no container and no file behind, and its error carries no
 // byte of the store.
+//
+//nolint:paralleltest // Serial: newTokenReadFixture redirects the host temp dir with t.Setenv("TMPDIR")
 func TestReadSetupTokenFailsClosed(t *testing.T) {
 	token := []byte(integritySentinelToken)
 	cut := token[:len(token)-1]
@@ -379,6 +385,8 @@ func (fx *tokenReadFixture) archiveDir(t *testing.T) string {
 // the runtime is exporting. A killed export leaves the runtime's own archive
 // of the token behind, so the export runs on under its own bound; the read
 // then fails, and the daemon's archive and the observer are both gone.
+//
+//nolint:paralleltest // Serial: newTokenReadFixture redirects the host temp dir with t.Setenv("TMPDIR")
 func TestReadSetupTokenFinishesItsExportWhenCancelled(t *testing.T) {
 	token := []byte(integritySentinelToken)
 	fx := newTokenReadFixture(t, token, hexSHA256(token))
@@ -416,6 +424,8 @@ func TestReadSetupTokenFinishesItsExportWhenCancelled(t *testing.T) {
 
 // A wedged export is cut off at its own bound, not held open by a caller
 // that never cancels.
+//
+//nolint:paralleltest // Serial: newTokenReadFixture redirects the host temp dir with t.Setenv("TMPDIR")
 func TestReadSetupTokenBoundsAWedgedExport(t *testing.T) {
 	token := []byte(integritySentinelToken)
 	fx := newTokenReadFixture(t, token, hexSHA256(token))
@@ -438,6 +448,8 @@ func TestReadSetupTokenBoundsAWedgedExport(t *testing.T) {
 // A token that was read is still not returned when the read cannot finish
 // cleanly: the archive that held it could not be removed, the observer could
 // not be deleted, or its absence could not be shown.
+//
+//nolint:paralleltest // Serial: newTokenReadFixture redirects the host temp dir with t.Setenv("TMPDIR")
 func TestReadSetupTokenDropsTheTokenWhenItCannotCleanUp(t *testing.T) {
 	token := []byte(integritySentinelToken)
 	refused := func(t *testing.T, fx *tokenReadFixture, rt Runtime, want string) {
@@ -504,6 +516,8 @@ func TestReadSetupTokenDropsTheTokenWhenItCannotCleanUp(t *testing.T) {
 }
 
 // Every registered observer is valid, and the zero value starts nothing.
+//
+//nolint:paralleltest // Serial: newTokenReadFixture redirects the host temp dir with t.Setenv("TMPDIR")
 func TestCredObserversAreRegistered(t *testing.T) {
 	for _, observer := range allCredObservers {
 		if !observer.valid() {
@@ -525,6 +539,7 @@ func TestCredObserversAreRegistered(t *testing.T) {
 // A setup token renders as its placeholder under every verb; Reveal is the
 // one way to its bytes, and it hands out a copy.
 func TestSetupTokenRevealIsTheOnlyWayOut(t *testing.T) {
+	t.Parallel()
 	token, err := NewSetupToken([]byte(integritySentinelToken))
 	if err != nil {
 		t.Fatal(err)

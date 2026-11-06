@@ -17,6 +17,7 @@ func claudeResultLine(isError bool, result string) []byte {
 }
 
 func TestClassifyEnrollmentProbe(t *testing.T) {
+	t.Parallel()
 	token := lineupProbeTestToken(t)
 	failed := func(result string) LineupProbeOutput {
 		return LineupProbeOutput{Stdout: claudeResultLine(true, result), ExitStatus: 1, ProviderReached: true}
@@ -99,6 +100,7 @@ func TestClassifyEnrollmentProbe(t *testing.T) {
 // refusal that echoes the token, whole or cut by the judge's length cap, is
 // replaced by a fixed placeholder and still classified.
 func TestClassifyEnrollmentProbeWithholdsARefusalCarryingTheToken(t *testing.T) {
+	t.Parallel()
 	token := lineupProbeTestToken(t)
 	cut := claudeEnrollmentTestToken[:len(claudeEnrollmentTestToken)-20]
 	for name, result := range map[string]string{

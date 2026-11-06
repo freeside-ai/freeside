@@ -306,6 +306,7 @@ func (p *codexAccountProxy) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestCodexAccountProxy(t *testing.T) {
+	t.Parallel()
 	p := newCodexAccountProxy(t, "127.0.0.0/8")
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(p.ca)
@@ -347,6 +348,7 @@ func TestCodexAccountProxy(t *testing.T) {
 }
 
 func TestCodexAccountProxyClosedConnection(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, authority, fragment, want string
 		failures                        int
@@ -394,6 +396,7 @@ func TestCodexAccountProxyClosedConnection(t *testing.T) {
 }
 
 func TestCodexAccountProxyHandshake(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, authority, sent, want string
 		reset                       bool
@@ -446,6 +449,7 @@ func codexAccountGoodCapture() codexAccountCapture {
 }
 
 func TestCodexAccountVerdicts(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, want string
 		mutate     func(*codexAccountCapture)
@@ -495,6 +499,7 @@ func TestCodexAccountVerdicts(t *testing.T) {
 }
 
 func TestCodexAccountCaptureStrict(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{`{"email":"private"}`, `{"version":"0.147.0","version":"other"}`, `{} {}`} {
 		if _, err := codexAccountDecode([]byte(body)); err == nil {
 			t.Fatal("unreviewed or ambiguous capture accepted")
@@ -505,6 +510,7 @@ func TestCodexAccountCaptureStrict(t *testing.T) {
 // Exercise the actual in-container reducer with synthetic values. jq is also
 // a declared image/runtime tool; this test needs no provider or network.
 func TestCodexAccountSanitizer(t *testing.T) {
+	t.Parallel()
 	jq, err := exec.LookPath("jq")
 	if err != nil {
 		t.Fatal("jq is required for the Codex account sanitizer tests; install jq and put it on PATH")

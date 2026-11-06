@@ -67,6 +67,7 @@ func runIntegrityScript(t *testing.T, store string) (credProof, string) {
 // the length verdict follows MinSetupTokenBytes, an absent or symlinked
 // token reports absent, and the proof never carries the token.
 func TestCredIntegrityObserverScript(t *testing.T) {
+	t.Parallel()
 	writeToken := func(t *testing.T, body []byte) string {
 		t.Helper()
 		store := t.TempDir()
@@ -136,6 +137,7 @@ func TestCredIntegrityObserverScript(t *testing.T) {
 // opaque script byte for byte, so the gate's own command is unchanged, and
 // both report the same tree digest for the same store.
 func TestCredIntegrityObserverScriptKeepsTheGateScript(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	nonce := testOwnershipLabel().Value
 	gate := credObserverScript(cfg, nonce, "/credentials", CredentialManifestOpaque)
@@ -172,6 +174,7 @@ func TestCredIntegrityObserverScriptKeepsTheGateScript(t *testing.T) {
 // The proof comes out of an unscanned archive, so a shape the script cannot
 // write is refused, and the handoff gate's mode keeps refusing both keys.
 func TestParseCredProofIntegrity(t *testing.T) {
+	t.Parallel()
 	const nonce = "00000000000000000000000000000000"
 	tree := strings.Repeat("ab", 32)
 	token := strings.Repeat("cd", 32)
@@ -235,6 +238,7 @@ func integrityProofLines(digest, length string) func(string, []byte) []byte {
 // one read-only networkless observer and reaps it, and neither its result
 // nor its container spec carries a credential value.
 func TestObserveSetupTokenIntegrity(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeRuntime(t)
 		if err := f.CreateVolume(context.Background(), integrityCredentialVolume, 1, nil); err != nil {
@@ -299,6 +303,7 @@ func TestObserveSetupTokenIntegrity(t *testing.T) {
 // cases the probe must report as not checked: each is an error, never a
 // truncation verdict.
 func TestObserveSetupTokenIntegrityNeverReportsAnUnobservedStore(t *testing.T) {
+	t.Parallel()
 	t.Run("missing volume starts no observer", func(t *testing.T) {
 		f := newFakeRuntime(t)
 		_, err := ObserveSetupTokenIntegrity(
@@ -378,6 +383,7 @@ func codexIntegrityStore(t *testing.T, body []byte) (root, path string) {
 // ends before its JSON document closes. Bytes that are not JSON are not
 // truncation, and the digest is the hash of the file.
 func TestObserveCodexStoreIntegrity(t *testing.T) {
+	t.Parallel()
 	complete := `{"tokens":{"access_token":"` + integritySentinelToken + `"}}`
 	cases := []struct {
 		name      string
@@ -417,6 +423,7 @@ func TestObserveCodexStoreIntegrity(t *testing.T) {
 // reader refuses is an error, never a truncation verdict, and no error
 // echoes file content.
 func TestObserveCodexStoreIntegrityNeverReportsAnUnobservedStore(t *testing.T) {
+	t.Parallel()
 	t.Run("missing file", func(t *testing.T) {
 		root, path := codexIntegrityStore(t, nil)
 		_, err := ObserveCodexStoreIntegrity(root, path)

@@ -17,6 +17,7 @@ const preflightCredentialVolume = "freeside-preflight-credential-volume-fixture"
 // omits the manifest line, so the probe itself fails; the authorization
 // ordering is what this test pins.
 func TestInspectCredentialVolumeManifestAuthorizesBeforeCreate(t *testing.T) {
+	t.Parallel()
 	f := newFakeRuntime(t)
 	var (
 		authorized  int
@@ -58,6 +59,7 @@ func TestInspectCredentialVolumeManifestAuthorizesBeforeCreate(t *testing.T) {
 // refused authorization creates nothing: the probe returns the refusal before
 // any container exists, so there is no unrecorded observer to strand.
 func TestInspectCredentialVolumeManifestStopsOnAuthorizationFailure(t *testing.T) {
+	t.Parallel()
 	f := newFakeRuntime(t)
 	sentinel := errors.New("rig bind refused")
 	err := InspectCredentialVolumeManifest(
@@ -78,6 +80,7 @@ func TestInspectCredentialVolumeManifestStopsOnAuthorizationFailure(t *testing.T
 // after creation, so a completed (non-interrupted) failed probe strands
 // nothing.
 func TestInspectCredentialVolumeManifestReapsAfterFailedProbe(t *testing.T) {
+	t.Parallel()
 	f := newFakeRuntime(t)
 	err := InspectCredentialVolumeManifest(
 		context.Background(), f, "registry.test/exporter", preflightCredentialVolume,
