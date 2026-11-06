@@ -312,6 +312,14 @@ func TestResolveAgent(t *testing.T) {
 	if resolved.Offer.RouteModelID != "gpt-5.6-sol" {
 		t.Fatalf("resolved offer = %+v", resolved.Offer)
 	}
+	// The agent's selection: its offer's model and the effort its adapter
+	// sends, which for Codex's max is xhigh.
+	if want := must(domain.ReduceAgentSelection(resolved.Definition, resolved.Adapter, resolved.Offer)); resolved.Selection != want {
+		t.Fatalf("resolved selection %+v, the agent reduces to %+v", resolved.Selection, want)
+	}
+	if resolved.Selection.ModelID != "gpt-5.6-sol" || resolved.Selection.Effort != "xhigh" {
+		t.Fatalf("resolved selection = %+v", resolved.Selection)
+	}
 
 	if _, err := tree.ResolveAgent("ghost", enrollment, identity); !errors.Is(err, agenttree.ErrUnknownAgent) {
 		t.Fatalf("unknown agent = %v", err)
@@ -325,6 +333,47 @@ func TestResolveAgent(t *testing.T) {
 	disabled.Enabled = false
 	if _, err := tree.ResolveAgent(agentName, enrollment, disabled); !errors.Is(err, domain.ErrAgentJoinInvalid) {
 		t.Fatalf("disabled identity = %v", err)
+	}
+}
+
+func TestAdapterForLaunch(t *testing.T) {
+	tree := fixtureTree(t)
+	launch := func(writer bool) domain.LaunchSpec {
+		l := domain.LaunchSpec{
+			EncodingVersion: domain.LaunchEncodingVersion, Stage: domain.StageNameReview, Writer: writer,
+			OutputContract: "review-findings/v3", SessionMode: domain.SessionOneShot,
+			AuxiliaryInference: domain.AuxiliaryForbidden,
+		}
+		l.Digest = must(l.ComputeDigest())
+		return l
+	}
+	review := launch(false)
+	got, err := tree.AdapterForLaunch(domain.HarnessClientCodexCLI, review, "high", domain.LaunchCapAuxiliaryInferenceControl)
+	if err != nil || got.Digest != tree.Adapters[0].Fragment.Digest {
+		t.Fatalf("review launch = %s %v, want the tree's codex adapter", got.AdapterBuild, err)
+	}
+	if _, err := tree.AdapterForLaunch(domain.HarnessClientCodexCLI, review, "high"); !errors.Is(err, domain.ErrNoAdapterForLaunch) {
+		t.Fatalf("review launch, nothing waived = %v, want ErrNoAdapterForLaunch", err)
+	}
+	if _, err := tree.AdapterForLaunch(
+		domain.HarnessClientClaudeCode, review, "high", domain.LaunchCapAuxiliaryInferenceControl,
+	); !errors.Is(err, domain.ErrNoAdapterForLaunch) {
+		t.Fatalf("a client kind the tree has no adapter for = %v, want ErrNoAdapterForLaunch", err)
+	}
+	if _, err := tree.AdapterForLaunch(
+		domain.HarnessClientCodexCLI, launch(true), "high", domain.LaunchCapAuxiliaryInferenceControl,
+	); !errors.Is(err, domain.ErrNoAdapterForLaunch) {
+		t.Fatalf("a writer launch on a read-only adapter = %v, want ErrNoAdapterForLaunch", err)
+	}
+	second := tree.Adapters[0]
+	second.Name = "codex_proto_v2"
+	second.Fragment.AdapterBuild = "codex_proto_v2@build-1"
+	second.Fragment.Digest = must(second.Fragment.ComputeDigest())
+	tree.Adapters = append(tree.Adapters, second)
+	if _, err := tree.AdapterForLaunch(
+		domain.HarnessClientCodexCLI, review, "high", domain.LaunchCapAuxiliaryInferenceControl,
+	); !errors.Is(err, domain.ErrAmbiguousAdapterForLaunch) {
+		t.Fatalf("two covering codex adapters = %v, want ErrAmbiguousAdapterForLaunch", err)
 	}
 }
 
