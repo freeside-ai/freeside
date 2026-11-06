@@ -503,6 +503,9 @@ All under `daemon/`:
 - **Import and handoff:** `internal/importer/`,
   `internal/store/handoff_journal.go`, `internal/exportscan/` (the export
   credential scan that refuses a handoff).
+- **Batch object reads:** `internal/gitrun/objects.go` (carries untrusted
+  object bytes into agent-tree admission and the import and verification
+  gates).
 - **Verification verdicts, recipe approval, and trusted export:**
   `internal/verify/`, `internal/export/`, `cmd/freeside-export/`,
   `internal/store/entities.go`,
