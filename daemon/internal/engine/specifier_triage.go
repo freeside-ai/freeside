@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -63,6 +64,15 @@ func (e *Engine) triageSpecifier(
 	if needed, err := e.specifierTriageNeeded(ctx, run.TaskID); err != nil || !needed {
 		return err
 	}
+	// The triage line selects what the counterpart runs. A lineup that
+	// resolves closes every agent it names, so only an effort the
+	// counterpart's adapter cannot send, or a selection another definition
+	// holds, fails here, and it fails the admission rather than leave a
+	// complex task on the smaller model.
+	counterpartSelection, err := selection.Tree.LineSelection(domain.RoleSpecifier, counterpart.AgentName)
+	if err != nil {
+		return fmt.Errorf("specifier triage counterpart: %w", err)
+	}
 	// One triage call at a time: the inference client refuses a second call
 	// at a site while one is in flight, which would escalate a task for no
 	// reason of its own. The check repeats under the lock, so a task another
@@ -77,9 +87,9 @@ func (e *Engine) triageSpecifier(
 		return err
 	}
 	record.RecordedAt = now()
-	var escalateTo string
+	var escalateTo *domain.TaskLineSelection
 	if record.Escalated {
-		escalateTo = counterpart.AgentName
+		escalateTo = &counterpartSelection
 	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
 		_, err := tx.RecordSpecifierTriage(ctx, record, escalateTo)

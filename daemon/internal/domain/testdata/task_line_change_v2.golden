@@ -1,0 +1,14 @@
+{
+  "id": "sha256:ceeca9c5e955d6079146b89ec808e0629e3307428b91cf8dfd997bcc5debc94d",
+  "encoding": "freeside.task_line_change/v2",
+  "task_id": "task-1",
+  "role": "implementer",
+  "selection": {
+    "enrollment_id": "claude-max-b",
+    "model_id": "claude-sonnet-4-5",
+    "effort": "medium"
+  },
+  "cleared": false,
+  "replaces_id": "sha256:d6370a11917e4075d557054739e8439b85d616cb667e5c3d839a4e2b6c3b2894",
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

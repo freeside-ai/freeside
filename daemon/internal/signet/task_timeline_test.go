@@ -576,7 +576,7 @@ func TestTaskTimelineAuthenticatesOpenedPRWithoutCompletionMilestone(t *testing.
 func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
 	f := newRunFixture(t)
 	ctx := t.Context()
-	var want []domain.TaskLine
+	var want []signet.TaskLine
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		task, err := tx.GetOrCreateTask(ctx, "proj-1", domain.SpecificationSource{
 			Kind:         domain.SpecificationSourceIssueSubject,
@@ -602,7 +602,7 @@ func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
 			return err
 		}
 		specifier, err := appendLine(domain.RoleSpecifier, "claude-b")
-		want = []domain.TaskLine{specifier, implementer, reviewer}
+		want = []signet.TaskLine{wireLine(specifier), wireLine(implementer), wireLine(reviewer)}
 		return err
 	}); err != nil {
 		t.Fatal(err)

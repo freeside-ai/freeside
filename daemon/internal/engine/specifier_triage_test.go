@@ -65,7 +65,13 @@ func (f *agentAdmissionFixture) addTriagerLine(t *testing.T) {
 // triager line, and a triager client whose driver answers with output.
 func triageFixture(t *testing.T, output string) (*agentAdmissionFixture, *inferencefake.Driver) {
 	t.Helper()
-	f, driver := unregisteredTriageFixture(t, output)
+	return triageFixtureOn(t, output, agentTestEscalatedModel)
+}
+
+// triageFixtureOn is triageFixture with the escalated counterpart on model.
+func triageFixtureOn(t *testing.T, output, model string) (*agentAdmissionFixture, *inferencefake.Driver) {
+	t.Helper()
+	f, driver := unregisteredTriageFixtureOn(t, output, model)
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		return tx.RegisterProject(t.Context(), domain.Project{ID: f.run.ProjectID, Repo: "owner/repo", RepositoryID: 1})
 	}); err != nil {
@@ -79,9 +85,14 @@ func triageFixture(t *testing.T, output string) (*agentAdmissionFixture, *infere
 // has not seen.
 func unregisteredTriageFixture(t *testing.T, output string) (*agentAdmissionFixture, *inferencefake.Driver) {
 	t.Helper()
+	return unregisteredTriageFixtureOn(t, output, agentTestEscalatedModel)
+}
+
+func unregisteredTriageFixtureOn(t *testing.T, output, model string) (*agentAdmissionFixture, *inferencefake.Driver) {
+	t.Helper()
 	f := newAgentAdmissionFixture(t)
 	f.addTriagerLine(t)
-	f.addEscalatedSpecifier(t, true)
+	f.addEscalatedSpecifierOn(t, true, model)
 	driver := inferencefake.New()
 	driver.Script(inference.TriagerSiteID, inferencefake.Script{Response: inference.Response{Output: []byte(output)}})
 	f.engine.inference = triageClient(t, driver, 10)
@@ -191,7 +202,7 @@ func TestTriageEscalatedAdmitsTheCounterpart(t *testing.T) {
 		t.Fatalf("triage record = %+v", record)
 	}
 	if len(lines) != 1 || lines[0].Source != domain.TaskLineSourceTriage || lines[0].Version != 1 ||
-		lines[0].Agent != agentTestEscalatedAgent || !lines[0].SetAt.Equal(record.RecordedAt) {
+		f.lineAgent(lines[0]) != agentTestEscalatedAgent || !lines[0].SetAt.Equal(record.RecordedAt) {
 		t.Fatalf("lines = %+v, want one triage line on %s", lines, agentTestEscalatedAgent)
 	}
 	if admission.AgentBinding.SelectionRecordID != lines[0].ID ||
@@ -207,6 +218,31 @@ func TestTriageEscalatedAdmitsTheCounterpart(t *testing.T) {
 	}
 	if got := len(driver.Requests()); got != 1 {
 		t.Fatalf("triager calls = %d, want 1", got)
+	}
+}
+
+// An escalated specifier on the implementer's model and effort is one
+// definition under two names, as the baseline tree writes it when settings
+// pick that pair. The triage line's selection is the implementer's too, and
+// it still runs the counterpart.
+func TestTriageEscalatesToTheImplementersSelection(t *testing.T) {
+	t.Parallel()
+	f, _ := triageFixtureOn(t, `{"tier":"escalated","reason":"Changes the API schema."}`, "claude-implementer-test")
+	if f.agentDigest(t, agentTestEscalatedAgent) != f.agentDigest(t, agentTestWriterAgent) {
+		t.Fatal("the counterpart is not the implementer's definition")
+	}
+	admission, err := f.admitSpecifier(t, "inv-specification-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, lines := f.triageState(t)
+	if len(lines) != 1 || lines[0].Source != domain.TaskLineSourceTriage ||
+		*lines[0].Selection != *f.lineSelection(t, agentTestWriterAgent) {
+		t.Fatalf("lines = %+v, want one triage line on the implementer's selection", lines)
+	}
+	if admission.AgentBinding.SelectionRecordID != lines[0].ID ||
+		admission.AgentBinding.AgentDigest != f.agentDigest(t, agentTestEscalatedAgent) {
+		t.Fatalf("binding = %+v, want the triage line on the counterpart", admission.AgentBinding)
 	}
 }
 
@@ -298,7 +334,7 @@ func TestTriageFailuresEscalate(t *testing.T) {
 			if (record.Reason == nil) != (tc.reason == "") || (record.Reason != nil && *record.Reason != tc.reason) {
 				t.Fatalf("triage reason = %v, want %q", record.Reason, tc.reason)
 			}
-			if len(lines) != 1 || lines[0].Agent != agentTestEscalatedAgent ||
+			if len(lines) != 1 || f.lineAgent(lines[0]) != agentTestEscalatedAgent ||
 				admission.AgentBinding.SelectionRecordID != lines[0].ID {
 				t.Fatalf("lines = %+v, binding = %+v; want the triage line", lines, admission.AgentBinding)
 			}

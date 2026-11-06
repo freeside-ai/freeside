@@ -999,3 +999,24 @@ func TestResolveAgentByName(t *testing.T) {
 		t.Fatalf("ResolveAgent of a marked generation = %v", err)
 	}
 }
+
+// lineSelection is the selection a v2 line holds to run the named agent of
+// the fixture's tree as it stands now.
+func (f *agentAdmissionFixture) lineSelection(t *testing.T, name string) *domain.TaskLineSelection {
+	t.Helper()
+	selection, err := f.selection.Tree.SelectionOfAgent(name)
+	if err != nil {
+		t.Fatalf("selection of %s: %v", name, err)
+	}
+	return &selection
+}
+
+// lineAgent is the agent of the fixture's tree a line runs (Tree.LineAgent),
+// "" when its selection maps to no one agent.
+func (f *agentAdmissionFixture) lineAgent(line domain.TaskLine) string {
+	name, err := f.selection.Tree.LineAgent(line)
+	if err != nil {
+		return ""
+	}
+	return name
+}

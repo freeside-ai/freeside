@@ -1865,22 +1865,26 @@ freesided auth set-collector \
 ### Change A Task's Agent For A Role
 
 `freesided task-line` moves a role of a task to another agent, or clears the
-role's line so it returns to the lineup. It works against the task's record
+role's line so it returns to the lineup. A line selects what runs by
+enrollment, model, and effort: the enrollment id from `freesided auth list`,
+a model id from that enrollment's catalog, and the harness's effort value
+for the model. It works against the task's record
 and needs no restart: on a running daemon it goes through that daemon, which
 holds the store. It prints the result as JSON.
 
 ```sh
-freesided task-line -db "$DB" -task "$TASK" -role reviewer -agent codex
+freesided task-line -db "$DB" -task "$TASK" -role reviewer \
+  -enrollment "$ENROLLMENT" -model gpt-5.1-codex -effort high
 freesided task-line -db "$DB" -task "$TASK" -role reviewer -clear
 ```
 
-`-role` is `specifier`, `implementer`, `remediator`, or `reviewer`. Pass exactly
-one of `-agent` and `-clear`.
+`-role` is `specifier`, `implementer`, `remediator`, or `reviewer`. Pass
+either all of `-enrollment`, `-model`, and `-effort`, or `-clear`.
 
 - **Each change is a record.** The command writes a line-change record and a
   new line version citing it, and leaves earlier versions alone. Admission
   honors a change only when that record exists and names the same task, role,
-  agent or clear, and replaced version; otherwise it refuses the attempt as
+  selection or clear, and replaced version; otherwise it refuses the attempt as
   agent-not-admissible instead of using the lineup.
 - **Refused while the role runs.** A writer role's attempt runs from its
   execution admission until its export or outcome is recorded, even if its
@@ -1890,16 +1894,20 @@ one of `-agent` and `-clear`.
   nothing. A running attempt of another role doesn't refuse it, and neither
   does one in a closed workflow, so a line can change after `abandon` and before
   `reattempt`.
-- **The same line records nothing.** Asking for the agent the role already has,
-  or clearing a role with no line or a cleared one, prints `"recorded": false`
-  and moves nothing. `line` is the role's newest version, `null` if it never
+- **The same line records nothing.** Asking for the selection the role
+  already has, or clearing a role with no line or a cleared one, prints
+  `"recorded": false` and moves nothing. A line recorded before lines held
+  selections names its agent instead, so a selection over it always records
+  a new version, even one that runs the same agent. `line` is the role's newest version, `null` if it never
   had one, and a version with `"cleared": true` names no agent. The exception
   is a newest version admission would refuse against the action that set it:
   asking for the same thing records a version that holds, which recovers a
   line submitted before submissions stored their lines.
-- **The agent isn't checked here.** Admission resolves it at the next attempt,
-  as it does a line set at submission. An agent it can't run refuses that
-  attempt and doesn't fall back to the lineup.
+- **The selection isn't checked here.** Admission resolves it at the next
+  attempt, as it does a line set at submission: it runs the tree agent
+  with that enrollment, model, and effort. Names that share one definition
+  are one agent. A selection no agent runs, or agents of different
+  definitions do, refuses that attempt and doesn't fall back to the lineup.
 - **Changes apply to later admissions.** An admission that read the old line
   before the change committed may still run on it.
 - **It starts nothing.** A task parked on a refused attempt stays parked until
@@ -2996,28 +3004,33 @@ saved submission. Retry needs no original input files and never rereads them.
 The journal contains the submitted task and configuration; keep it with the
 database and its access controls.
 
-`--task-line role=agent` records the operator's choice of agent for one role
-of the new task; repeat it for more roles. The roles are `specifier`,
-`implementer`, `remediator`, and `reviewer`. Submit checks only the name's
-shape and saves the lines in the journal with the other inputs, so a retry
+`--task-line role=enrollment/model/effort` records the operator's choice of
+what runs one role of the new task; repeat it for more roles. The roles are
+`specifier`, `implementer`, `remediator`, and `reviewer`, and the selection
+takes the same values as `freesided task-line` (Change A Task's Agent For A
+Role). Submit checks only the value's shape and saves the lines in the journal with the other inputs, so a retry
 replays them and takes no `--task-line` of its own. The submission record
 stores the lines too, in role order, and so does a `submit_task` command's.
 
 Admission reads the task's line for `specifier`, `implementer`, and
-`remediator`: an attempt of that role runs the agent the line names, on the
-lineup line's prompt, and its admission cites the line. A line picks the
+`remediator`: an attempt of that role runs the agent the line selects, on
+the lineup line's prompt, and its admission cites the line. That agent is
+the tree agent whose enrollment, model, and effort are the line's, where
+names sharing one definition count as one agent; a line recorded before
+lines held selections names its agent instead. A line picks the
 agent only, so the role still needs its lineup line. A line that cannot be
 honored refuses the attempt, and the lineup's agent never runs in its place:
-that covers an agent the tree lacks, a disabled identity, and a line that
-does not hold against the submission that set it. A submitted line holds only
-when that submission's record names the same agent for the role.
+that covers a selection no tree agent runs or several definitions do, a disabled
+identity, and a line that does not hold against the submission that set it.
+A submitted line holds only when that submission's record makes the same
+choice for the role.
 
 A submission recorded before its lines were stored holds none, so a line that
 cites it refuses the attempt as agent-not-admissible. To recover that task, run
-`freesided task-line` for the role, naming the same agent or another (Change A
-Task's Agent For A Role). The new version cites its own change record, and the
-task's next attempt admits on it. Don't use `-clear` then `-agent` to keep the
-agent: the lineup's agent could run in between.
+`freesided task-line` for the role, selecting the same agent or another
+(Change A Task's Agent For A Role). The new version cites its own change
+record, and the task's next attempt admits on it. Don't use `-clear` then a
+selection to keep the agent: the lineup's agent could run in between.
 
 Review admission reads the task's `reviewer` line the same way: the routed
 review runs the line's agent with its model and effort, under its identity,
@@ -3433,7 +3446,7 @@ Run it on the standing root with the files the run will submit:
 
 ```sh
 freesided prelaunch -root <state-root> -task <file> -policy <file> -publication <file> \
-  [-work-unit <file>] [--task-line role=agent]... [-no-live]
+  [-work-unit <file>] [--task-line role=enrollment/model/effort]... [-no-live]
 ```
 
 **What it checks.** Each check reports `passed`, `failed` with the `fix`
@@ -3453,7 +3466,7 @@ is `not_run`, and the rest still run.
 - **`inputs`**: the files pass what `submit` checks of a new submission
   before it saves anything, including the work-unit requirement and the
   publication's `source_issue`; the `--task-line` set is well formed and
-  each agent is in the tree. `duplicate_source` makes `submit`'s refusal of
+  one agent definition of the tree runs each selection. `duplicate_source` makes `submit`'s refusal of
   a source an unfinished task in the project already holds, as for new
   work (a replay under that task's own `--submission-id` is not checked), and
   `launch_binding` compares the inputs with the composed manifest as

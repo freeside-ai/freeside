@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -72,7 +73,7 @@ func TestProposalStartTaskLines(t *testing.T) {
 						line.SetBy != command.CommandID || !line.SetAt.Equal(decision.DecidedAt) {
 						t.Fatalf("line = %+v, decision = %+v", line, decision)
 					}
-					got, found, err := engine.RunTaskLine(t.Context(), tx, f.policy.RunID, line.Role)
+					got, found, err := engine.RunTaskLine(t.Context(), tx, agenttree.Tree{}, f.policy.RunID, line.Role)
 					if err != nil || !found || got.ID != line.ID {
 						t.Fatalf("RunTaskLine = %s, %t, %v; want %s", got.ID, found, err, line.ID)
 					}

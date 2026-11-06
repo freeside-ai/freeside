@@ -103,7 +103,7 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 		t.Fatal(err)
 	}
 	service := signet.NewService(base.store, signet.WithBlobStore(base.blobs),
-		signet.WithClock(func() time.Time { return *base.now }),
+		signet.WithClock(func() time.Time { return *base.now }), withTestLineAgents(),
 	)
 	return proposalDecisionFixture{fixture: base, service: service, instance: instance, item: item, policy: policy, handles: handles}
 }

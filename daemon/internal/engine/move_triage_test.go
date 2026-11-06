@@ -32,7 +32,7 @@ func TestMoveKeepsAnEscalatedSpecifierEscalated(t *testing.T) {
 			triage := f.escalate(t)
 			f.moveTask(t, policy, nil, false)
 			specifier := f.heads(t)[domain.RoleSpecifier]
-			if specifier.Source != domain.TaskLineSourceAlternateAgentMove || specifier.Agent != tc.want ||
+			if specifier.Source != domain.TaskLineSourceAlternateAgentMove || f.lineAgent(specifier) != tc.want ||
 				specifier.PredecessorID == nil || *specifier.PredecessorID != triage.ID {
 				t.Fatalf("specifier head = %+v, want a move to %s over the triage line", specifier, tc.want)
 			}

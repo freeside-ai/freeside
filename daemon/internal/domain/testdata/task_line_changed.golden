@@ -1,12 +1,17 @@
 {
-  "id": "sha256:c419d2caaebcbfd280a35c27e02cde2edf0e58a1ccdbd72d2c008bf466b45ed6",
+  "id": "sha256:5333224295af3283d87d6021874690fadea25dc33a9233a3dbdc7ee130c89164",
+  "encoding": "freeside.task_line/v2",
   "task_id": "task-1",
   "role": "implementer",
-  "agent": "claude-b",
+  "selection": {
+    "enrollment_id": "claude-max-b",
+    "model_id": "claude-sonnet-4-5",
+    "effort": "medium"
+  },
   "version": 2,
-  "predecessor_id": "sha256:a99eb0f058e945b3b19ed29013787a28c3e3bf385cfb73479dd0dab6b481c74e",
+  "predecessor_id": "sha256:d6370a11917e4075d557054739e8439b85d616cb667e5c3d839a4e2b6c3b2894",
   "source": "cli_line_change",
-  "set_by": "sha256:690c121f66b4c637232b0ae02b46ae37baa6bc88327ebd1128f9ff509bec5689",
+  "set_by": "sha256:ceeca9c5e955d6079146b89ec808e0629e3307428b91cf8dfd997bcc5debc94d",
   "set_at": "2026-01-02T03:04:05Z",
   "provenance": null
 }

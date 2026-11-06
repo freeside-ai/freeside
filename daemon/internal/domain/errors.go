@@ -406,6 +406,10 @@ var (
 		"task lines name a role more than once")
 	ErrInvalidTaskLineSource = errors.New(
 		"task line source is not a path that may set a line")
+	ErrInvalidTaskLineSelection = errors.New(
+		"task line selection needs an enrollment, a model, and an effort, each one launch option value")
+	ErrInvalidTaskLineEncoding = errors.New(
+		"task line or change encoding is not v1 or v2, or its fields do not fit it")
 	ErrSyntheticWindow = errors.New(
 		"usage record carries a window reading its collector never answered with")
 	ErrReadingNotFromCollector = errors.New(

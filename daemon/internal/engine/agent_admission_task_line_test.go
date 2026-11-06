@@ -156,6 +156,20 @@ func (f *agentAdmissionFixture) submitLine(t *testing.T, role domain.RoleName, a
 	}, task.CreatedAt)
 }
 
+// submitLineV2 records the v2 line a submission choosing the named agent writes
+// now: the selection the agent reduces to in the fixture's tree.
+func (f *agentAdmissionFixture) submitLineV2(t *testing.T, role domain.RoleName, agent string) domain.TaskLine {
+	t.Helper()
+	commandID := agentTestSubmitCommand + "-" + string(role)
+	selection := f.lineSelection(t, agent)
+	f.recordSubmitCommand(t, commandID, f.run.ID, domain.TaskLineChoice{Role: role, Selection: selection})
+	task := f.task(t, f.run.ID)
+	return f.appendLine(t, domain.TaskLineInput{
+		TaskID: task.ID, Role: role, Selection: selection,
+		Source: domain.TaskLineSourceSubmitTask, SetBy: commandID,
+	}, task.CreatedAt)
+}
+
 // recordCLISubmission records a `freesided submit` that created the task of
 // taskRun, with the lines it carried, and returns the identity a cli_submit
 // line's set_by names. As the command does, it stores the specification run
@@ -702,7 +716,8 @@ func taskLineProposal(t *testing.T, f *agentAdmissionFixture) (ProposalAdmission
 		t.Fatal(err)
 	}
 	service := signet.NewService(f.store, signet.WithBlobStore(engine.artifacts.(*signet.BlobStore)),
-		signet.WithClock(func() time.Time { return agentTestAt.Add(time.Minute) }))
+		signet.WithClock(func() time.Time { return agentTestAt.Add(time.Minute) }),
+		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) { return f.selection.Tree, nil }))
 	return proposal, service, signet.ClientCommand{
 		CommandID: "start-task-line", DeviceID: "device-lines", ExpectedEntityVersion: 1,
 		Payload: signet.DecisionPayload{
@@ -726,7 +741,7 @@ func TestProposalTaskLineAdmitsChosenSpecifier(t *testing.T) {
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var found bool
 		var err error
-		line, found, err = RunTaskLine(t.Context(), tx, runID, domain.RoleSpecifier)
+		line, found, err = RunTaskLine(t.Context(), tx, agenttree.Tree{}, runID, domain.RoleSpecifier)
 		if err == nil && !found {
 			t.Fatal("the proposal's specification run has no line")
 		}
@@ -838,7 +853,7 @@ func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
 		var line domain.TaskLine
 		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 			var err error
-			line, _, err = RunTaskLine(t.Context(), tx, runID, domain.RoleSpecifier)
+			line, _, err = RunTaskLine(t.Context(), tx, agenttree.Tree{}, runID, domain.RoleSpecifier)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -866,7 +881,7 @@ func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
 		if i == 0 && line.ID != original.ID {
 			t.Fatal("a lineless start replaced the reused task's earlier choice")
 		}
-		if i == 1 && (line.Version != 2 || line.PredecessorID == nil || *line.PredecessorID != original.ID || line.Agent != agentTestWriterAgent) {
+		if i == 1 && (line.Version != 2 || line.PredecessorID == nil || *line.PredecessorID != original.ID || f.lineAgent(line) != agentTestWriterAgent) {
 			t.Fatalf("changed start did not supersede the earlier line: %+v", line)
 		}
 	}
@@ -970,10 +985,20 @@ func TestLinelessAdmissionSelectsFromTheLineup(t *testing.T) {
 // triage tests add to the tree.
 const agentTestEscalatedAgent = "claude-escalated"
 
+// agentTestEscalatedModel is the escalated counterpart's own model.
+const agentTestEscalatedModel = "claude-escalated-test"
+
 // addEscalatedSpecifier adds to the tree an escalated counterpart of the
 // specifier's lineup agent, on the same enrollment and adapter with an offer
 // of its own, and, when withLine, the escalated line pairing the two.
 func (f *agentAdmissionFixture) addEscalatedSpecifier(t *testing.T, withLine bool) {
+	t.Helper()
+	f.addEscalatedSpecifierOn(t, withLine, agentTestEscalatedModel)
+}
+
+// addEscalatedSpecifierOn is addEscalatedSpecifier with the counterpart's
+// offer on model.
+func (f *agentAdmissionFixture) addEscalatedSpecifierOn(t *testing.T, withLine bool, model string) {
 	t.Helper()
 	tree := f.selection.Tree
 	specifierAgent := agentbaseline.WriterAgentName(domain.RoleSpecifier)
@@ -988,7 +1013,7 @@ func (f *agentAdmissionFixture) addEscalatedSpecifier(t *testing.T, withLine boo
 	}
 	offer := offers[i]
 	offer.Name = agentTestEscalatedAgent
-	offer.Fragment.RouteModelID = "claude-escalated-test"
+	offer.Fragment.RouteModelID = model
 	var err error
 	if offer.Fragment.Digest, err = offer.Fragment.ComputeDigest(); err != nil {
 		t.Fatal(err)
@@ -1210,7 +1235,7 @@ func TestOperatorLineEscalatesTheSpecifierByHand(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	f.addEscalatedSpecifier(t, true)
 	task := f.task(t, f.run.ID)
-	change, err := domain.NewTaskLineChange(task.ID, domain.RoleSpecifier, agentTestEscalatedAgent, false, nil, agentTestAt)
+	change, err := domain.NewTaskLineChange(task.ID, domain.RoleSpecifier, f.lineSelection(t, agentTestEscalatedAgent), nil, agentTestAt)
 	if err != nil {
 		t.Fatal(err)
 	}

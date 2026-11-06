@@ -212,7 +212,11 @@ func (s AgentSelection) MoveParkedTaskTx(
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
-	lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, inputs)
+	moved, err := s.Tree.LineSelection(record.Role, record.Agent)
+	if err != nil {
+		return domain.ParkedTaskMoveReceipt{}, err
+	}
+	lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, moved, inputs)
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
@@ -306,18 +310,21 @@ func (s AgentSelection) moveLines(
 		PolicyRevision: policy.Revision, Tier: domain.TaskLineSelectionPolicyOrder, Pool: record.Pool,
 		RankedBy: []domain.TaskLineRankingReading{}, PassedOver: passedOver,
 	}
-	line := func(role domain.RoleName, agent string) domain.TaskLineInput {
-		return domain.TaskLineInput{
-			TaskID: record.TaskID, Role: role, Agent: agent, Source: domain.TaskLineSourceAlternateAgentMove,
-			SetBy: string(record.ID), Provenance: provenance,
-		}
-	}
-	inputs := []domain.TaskLineInput{line(record.Role, record.Agent)}
+	choices := []domain.TaskLineChoice{{Role: record.Role, Agent: record.Agent}}
 	if counterpart != "" {
-		inputs = append(inputs, line(domain.RoleSpecifier, counterpart))
+		choices = append(choices, domain.TaskLineChoice{Role: domain.RoleSpecifier, Agent: counterpart})
 	}
-	for _, choice := range routerLinesForPool(policy, record.Pool, pools, skip) {
-		inputs = append(inputs, line(choice.Role, choice.Agent))
+	choices = append(choices, routerLinesForPool(policy, record.Pool, pools, skip)...)
+	inputs := make([]domain.TaskLineInput, 0, len(choices))
+	for _, choice := range choices {
+		selection, err := s.Tree.LineSelection(choice.Role, choice.Agent)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, domain.TaskLineInput{
+			TaskID: record.TaskID, Role: choice.Role, Selection: &selection,
+			Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID), Provenance: provenance,
+		})
 	}
 	return inputs, nil
 }

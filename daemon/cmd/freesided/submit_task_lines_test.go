@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -264,18 +265,30 @@ func TestSubmitCommandRefusesBadTaskLines(t *testing.T) {
 func TestTaskLineFlag(t *testing.T) {
 	t.Parallel()
 	var lines taskLineFlag
-	for _, value := range []string{"implementer=codex", "reviewer=claude-b"} {
+	for _, value := range []string{
+		"implementer=codex-a/codex_cli/gpt-5.1-codex/high", "reviewer=claude-b/claude_code/claude-opus-4-5/medium",
+	} {
 		if err := lines.Set(value); err != nil {
 			t.Fatalf("Set(%q): %v", value, err)
 		}
 	}
-	want := taskLineFlag{{Role: domain.RoleImplementer, Agent: "codex"}, {Role: domain.RoleReviewer, Agent: "claude-b"}}
+	want := taskLineFlag{
+		{Role: domain.RoleImplementer, Selection: &domain.TaskLineSelection{
+			EnrollmentID: "codex-a/codex_cli", ModelID: "gpt-5.1-codex", Effort: "high",
+		}},
+		{Role: domain.RoleReviewer, Selection: &domain.TaskLineSelection{
+			EnrollmentID: "claude-b/claude_code", ModelID: "claude-opus-4-5", Effort: "medium",
+		}},
+	}
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("lines = %+v, want %+v", lines, want)
 	}
-	for _, value := range []string{"", "implementer", "=codex", "implementer="} {
+	for _, value := range []string{
+		"", "implementer", "=e/m/high", "implementer=", "implementer=codex", "implementer=e/m", "implementer=e//high",
+		"implementer=e/m/", "implementer=/m/high", "implementer=e/c/m/",
+	} {
 		if err := new(taskLineFlag).Set(value); err == nil {
-			t.Fatalf("Set(%q) accepted a value that is not role=agent", value)
+			t.Fatalf("Set(%q) accepted a value that is not role=enrollment/model/effort", value)
 		}
 	}
 }
@@ -335,13 +348,13 @@ func TestSubmitCommandTaskLinesHoldAtAdmission(t *testing.T) {
 		t.Helper()
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			for _, want := range cfg.TaskLines {
-				line, found, err := engine.RunTaskLine(ctx, tx, runID, want.Role)
+				line, found, err := engine.RunTaskLine(ctx, tx, agenttree.Tree{}, runID, want.Role)
 				if err != nil || !found || line.Agent != want.Agent || line.Source != domain.TaskLineSourceCLISubmit {
 					t.Fatalf("%s line at admission = %+v, %t, %v; want agent %q", want.Role, line, found, err, want.Agent)
 				}
 			}
 			// A role the submission named no line for stays on the lineup.
-			if _, found, err := engine.RunTaskLine(ctx, tx, runID, domain.RoleImplementer); err != nil || found {
+			if _, found, err := engine.RunTaskLine(ctx, tx, agenttree.Tree{}, runID, domain.RoleImplementer); err != nil || found {
 				t.Fatalf("implementer line at admission = %t, %v; want none", found, err)
 			}
 			return nil

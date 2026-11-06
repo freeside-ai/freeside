@@ -212,6 +212,9 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 	}
 	options := []signet.Option{
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, convergenceManualInitiator)),
+		// A submission's task lines record selections, which signet
+		// translates from the names a client sends (#2597).
+		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) { return convergenceLineAgents{}, nil }),
 		signet.WithPairingKey(pairingKey),
 		signet.WithBlobStore(blobs),
 		// Fixed dev facts: the harness always listens on loopback

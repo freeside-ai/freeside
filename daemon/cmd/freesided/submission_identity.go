@@ -149,7 +149,7 @@ func matchingRetainedSubmission(cfg submitCommandConfig) (submitCommandConfig, e
 		return cfg, err
 	}
 	if saved.DBPath != cfg.DBPath || saved.SubmissionID != cfg.SubmissionID || saved.ProjectID != cfg.ProjectID ||
-		saved.RequireComposition != cfg.RequireComposition || !slices.Equal(saved.TaskLines, cfg.TaskLines) ||
+		saved.RequireComposition != cfg.RequireComposition || !slices.EqualFunc(saved.TaskLines, cfg.TaskLines, domain.TaskLineChoice.Same) ||
 		!slices.Equal(saved.Attachments, cfg.Attachments) ||
 		!sameSubmissionInputs(saved.SavedInputs, cfg.SavedInputs) {
 		return cfg, fmt.Errorf("submit: saved submission inputs changed: %w", store.ErrImmutableConflict)

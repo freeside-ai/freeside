@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -40,7 +41,9 @@ func TestSubmitTaskCommandBindsTaskLinesToItsIdentity(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	// The submitter receives the lines in canonical role order.
-	if want := []domain.TaskLineChoice{implementer, reviewer}; !reflect.DeepEqual(submitter.last.TaskLines, want) {
+	if want := []domain.TaskLineChoice{
+		selectionChoice(domain.RoleImplementer, "claude-b"), selectionChoice(domain.RoleReviewer, "codex"),
+	}; !reflect.DeepEqual(submitter.last.TaskLines, want) {
 		t.Fatalf("submitter lines = %+v, want %+v", submitter.last.TaskLines, want)
 	}
 
@@ -219,7 +222,14 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 			line.SetBy != "cmd-lines" || !line.SetAt.Equal(task.CreatedAt) {
 			t.Fatalf("line = %+v", line)
 		}
-		agents[line.Role] = line.Agent
+		if line.Encoding != domain.TaskLineEncodingV2 || line.Selection == nil {
+			t.Fatalf("line = %+v, want a v2 line", line)
+		}
+		name, err := testLineAgents.AgentForSelection(line.Role, *line.Selection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		agents[line.Role] = name
 	}
 	if want := map[domain.RoleName]string{domain.RoleReviewer: "codex", domain.RoleImplementer: "claude-b"}; !reflect.DeepEqual(agents, want) {
 		t.Fatalf("recorded lines = %v, want %v", agents, want)
@@ -227,7 +237,7 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 
 	// Both records the command wrote hold the lines in canonical role order.
 	canonical := []domain.TaskLineChoice{
-		{Role: domain.RoleImplementer, Agent: "claude-b"}, {Role: domain.RoleReviewer, Agent: "codex"},
+		selectionChoice(domain.RoleImplementer, "claude-b"), selectionChoice(domain.RoleReviewer, "codex"),
 	}
 	var specificationRun domain.RunID
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
@@ -263,8 +273,8 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		for _, run := range []domain.RunID{specificationRun, laterRun} {
 			for role, agent := range agents {
-				line, found, err := engine.RunTaskLine(ctx, tx, run, role)
-				if err != nil || !found || line.Agent != agent {
+				line, found, err := engine.RunTaskLine(ctx, tx, agenttree.Tree{}, run, role)
+				if err != nil || !found || line.Selection == nil || *line.Selection != lineSelectionOf(agent) {
 					t.Fatalf("%s %s line at admission = %+v, %t, %v; want agent %q", run, role, line, found, err, agent)
 				}
 			}
