@@ -364,6 +364,37 @@ func (o CodexReviewSnapshotObservation) verifyFresh(fresh CodexReviewSnapshotObs
 	return nil
 }
 
+// CodexReviewInputsObservation is opaque evidence from a pinned, networkless,
+// read-only observer that the ward-owned input volume holds exactly the
+// admitted operator files: digest is the listing digest verifyInputProof
+// accepted for them (inputListingDigest). It exists only for a review that
+// carries input files.
+type CodexReviewInputsObservation struct {
+	volume              string
+	fingerprint         string
+	digest              string
+	observerImage       string
+	observerFingerprint string
+}
+
+func (o CodexReviewInputsObservation) valid() bool {
+	_, digestOK := contentaddr.FromHex(o.digest)
+	return o.volume != "" && cliSafe(o.volume) && o.fingerprint != "" && o.observerFingerprint != "" &&
+		digestOK && digestPinnedImagePattern.MatchString(o.observerImage)
+}
+
+func (o CodexReviewInputsObservation) verifyFresh(fresh CodexReviewInputsObservation) error {
+	if !o.valid() || !fresh.valid() || fresh.volume != o.volume ||
+		fresh.fingerprint != o.fingerprint || fresh.digest != o.digest ||
+		fresh.observerImage != o.observerImage {
+		return failf(CheckControlPlaneIsolation, "Codex review input volume changed before launch")
+	}
+	if fresh.observerFingerprint == o.observerFingerprint {
+		return failf(CheckControlPlaneIsolation, "Codex review input volume was not re-observed before launch")
+	}
+	return nil
+}
+
 // CodexReviewSpec is the caller-owned request for one fresh review container.
 // It carries paths only to daemon-prepared, single-file snapshots under
 // Config.InputRoot; BuildCodexReviewAgentSpec re-opens and validates them.
@@ -401,6 +432,13 @@ type CodexReviewSpec struct {
 	// volume that delivers exactly the two admitted files (auth.json, AGENTS.md)
 	// to the review container. Its digests are tied to the admitted bodies.
 	Snapshot CodexReviewSnapshotObservation
+
+	// Inputs are the operator files the reviewer reads at
+	// InputFilesTarget/<name>, empty for a review without them. InputVolume
+	// is the observation of the ward-owned volume that holds exactly them,
+	// mounted read-only; it is the zero value when Inputs is empty.
+	Inputs      []InputFile
+	InputVolume CodexReviewInputsObservation
 }
 
 // CodexReviewJournalBinding is the non-secret topology evidence a review
@@ -467,6 +505,19 @@ type CodexReviewJournalBinding struct {
 	ReviewContainer                         string                         `json:"review_container"`
 	ReviewContainerFingerprint              string                         `json:"review_container_fingerprint"`
 	ReviewOwnershipToken                    string                         `json:"review_ownership_token"`
+
+	// The input fields are all set for a review that delivers operator files
+	// and all empty otherwise, which is the shape every binding written before
+	// review inputs existed has. InputsDigest is the observed listing digest
+	// of exactly the launch's files.
+	InputsVolume                      string `json:"inputs_volume,omitempty"`
+	InputsTarget                      string `json:"inputs_target,omitempty"`
+	InputsFingerprint                 string `json:"inputs_fingerprint,omitempty"`
+	InputsDigest                      string `json:"inputs_digest,omitempty"`
+	InputsObserverImage               string `json:"inputs_observer_image,omitempty"`
+	InputsObserverFingerprint         string `json:"inputs_observer_fingerprint,omitempty"`
+	InputsPreStartObserverFingerprint string `json:"inputs_pre_start_observer_fingerprint,omitempty"`
+	InputsReadOnly                    bool   `json:"inputs_read_only,omitempty"`
 }
 
 // BuildCodexReviewShadowObserverSpec returns the exact networkless helper
@@ -1070,6 +1121,13 @@ func buildReviewAgentSpec(
 			Type: MountVolume, Source: req.AgentsShadow.volume, Target: target, ReadOnly: true,
 		})
 	}
+	// The input mount goes last, so a review without inputs keeps its
+	// earlier mount list and indexes.
+	if len(req.Inputs) > 0 {
+		mounts = append(mounts, Mount{
+			Type: MountVolume, Source: req.InputVolume.volume, Target: InputFilesTarget, ReadOnly: true,
+		})
+	}
 	spec := ContainerSpec{
 		Size:    DefaultLaunchSize(LaunchReview),
 		Name:    reviewContainerName(provider, req.RunID),
@@ -1135,6 +1193,15 @@ func buildReviewAgentSpec(
 		CommandDigest:                   digestStrings(command),
 		ConfigurationDigest:             req.ConfigurationDigest,
 	}
+	if len(req.Inputs) > 0 {
+		binding.InputsVolume = req.InputVolume.volume
+		binding.InputsTarget = InputFilesTarget
+		binding.InputsFingerprint = req.InputVolume.fingerprint
+		binding.InputsDigest = req.InputVolume.digest
+		binding.InputsObserverImage = req.InputVolume.observerImage
+		binding.InputsObserverFingerprint = req.InputVolume.observerFingerprint
+		binding.InputsReadOnly = true
+	}
 	if err := validateReviewAgentSpec(provider, cfg, req, spec, binding); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
@@ -1160,7 +1227,8 @@ func (b CodexReviewJournalBinding) validateForTeardown(provider reviewProvider) 
 func (b CodexReviewJournalBinding) validatePrepared(provider reviewProvider) error {
 	if b.AgentsShadowPreStartObserverFingerprint != "" ||
 		b.WorkspacePreStartObserverFingerprint != "" ||
-		b.SnapshotPreStartObserverFingerprint != "" {
+		b.SnapshotPreStartObserverFingerprint != "" ||
+		b.InputsPreStartObserverFingerprint != "" {
 		return errors.New("codex review prepared journal binding carries pre-start evidence")
 	}
 	return b.validate(provider, false, false)
@@ -1237,6 +1305,9 @@ func (b CodexReviewJournalBinding) validate(
 			b.SnapshotPreStartObserverFingerprint == b.SnapshotObserverFingerprint) {
 		return errors.New("codex review journal omits distinct pre-start snapshot evidence")
 	}
+	if err := b.validateInputs(requirePreStartObservation); err != nil {
+		return err
+	}
 	if b.AgentsShadowVolume == "" || !cliSafe(b.AgentsShadowVolume) ||
 		b.AgentsShadowFingerprint == "" || b.AgentsShadowDigest != emptyCodexShadowDigest ||
 		!digestPinnedImagePattern.MatchString(b.AgentsShadowObserverImage) ||
@@ -1262,6 +1333,34 @@ func (b CodexReviewJournalBinding) validate(
 		!codexReviewJournalNetworkValid(b) ||
 		!contentaddr.Valid(b.LauncherEnvironmentDigest) || !contentaddr.Valid(b.CommandDigest) {
 		return errors.New("codex review journal egress, environment, or command binding is invalid")
+	}
+	return nil
+}
+
+// validateInputs holds the input fields to all or none. A binding that has
+// them names this run's input volume, read-only at InputFilesTarget, with a
+// listing digest and observer evidence, and a distinct pre-start observer
+// once that observation is required.
+func (b CodexReviewJournalBinding) validateInputs(requirePreStartObservation bool) error {
+	if b.InputsVolume == "" {
+		if b.InputsTarget != "" || b.InputsFingerprint != "" || b.InputsDigest != "" ||
+			b.InputsObserverImage != "" || b.InputsObserverFingerprint != "" ||
+			b.InputsPreStartObserverFingerprint != "" || b.InputsReadOnly {
+			return errors.New("codex review journal input binding is partial")
+		}
+		return nil
+	}
+	_, digestOK := contentaddr.FromHex(b.InputsDigest)
+	if b.InputsVolume != codexReviewInputsVolumeName(b.RunID) || b.InputsTarget != InputFilesTarget ||
+		b.InputsFingerprint == "" || !digestOK ||
+		!digestPinnedImagePattern.MatchString(b.InputsObserverImage) ||
+		b.InputsObserverFingerprint == "" || !b.InputsReadOnly {
+		return errors.New("codex review journal input binding is invalid")
+	}
+	if requirePreStartObservation &&
+		(b.InputsPreStartObserverFingerprint == "" ||
+			b.InputsPreStartObserverFingerprint == b.InputsObserverFingerprint) {
+		return errors.New("codex review journal omits distinct pre-start input evidence")
 	}
 	return nil
 }
@@ -1310,6 +1409,14 @@ func validateCodexReviewRequest(provider reviewProvider, cfg CodexReviewConfig, 
 	case !req.Snapshot.valid() || req.Snapshot.observerImage != cfg.ObserverImage ||
 		req.Snapshot.volume != codexReviewSnapshotVolumeName(req.RunID):
 		return fmt.Errorf("%w: runtime-backed snapshot volume observation is required", ErrInvalidCodexReviewSpec)
+	case len(req.Inputs) == 0 && req.InputVolume != (CodexReviewInputsObservation{}):
+		return fmt.Errorf("%w: an input volume observation needs input files", ErrInvalidCodexReviewSpec)
+	case len(req.Inputs) > 0 && (validateInputFiles(req.Inputs) != nil || !req.InputVolume.valid() ||
+		req.InputVolume.observerImage != cfg.ObserverImage ||
+		req.InputVolume.volume != codexReviewInputsVolumeName(req.RunID) ||
+		req.InputVolume.digest != inputListingDigest(req.Inputs)):
+		return fmt.Errorf("%w: runtime-backed input volume observation of the admitted files is required",
+			ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.InputRoot):
 		return fmt.Errorf("%w: InputRoot must be a clean absolute non-root path", ErrInvalidCodexReviewSpec)
 	case provider.requiresExpiringCredential() && cfg.AccessTokenLifetimeFloor <= 0:
@@ -1698,6 +1805,12 @@ type codexReviewResourceNames struct {
 	snapshotVolume   string
 	snapshotSeeder   string
 	snapshotObserver string
+	// input resources exist only for a review that delivers operator files;
+	// validatedResourceNames blanks them for an intent that has none, and
+	// every generation before review inputs leaves them empty.
+	inputsVolume   string
+	inputsSeeder   string
+	inputsObserver string
 }
 
 // codexReviewNames is the single registration point for runtime resources
@@ -1715,6 +1828,9 @@ func codexReviewNames(runID string) codexReviewResourceNames {
 		snapshotVolume:    prefix + "-snap",
 		snapshotSeeder:    prefix + "-snap-init",
 		snapshotObserver:  prefix + "-snap-obs",
+		inputsVolume:      prefix + "-inputs",
+		inputsSeeder:      prefix + "-inputs-init",
+		inputsObserver:    prefix + "-inputs-obs",
 	}
 }
 
@@ -1760,6 +1876,10 @@ func codexReviewRuntimeResourceNames(
 	if review.snapshotVolume != "" {
 		containers = append(containers, review.snapshotSeeder, review.snapshotObserver)
 		volumes = append(volumes, review.snapshotVolume)
+	}
+	if review.inputsVolume != "" {
+		containers = append(containers, review.inputsSeeder, review.inputsObserver)
+		volumes = append(volumes, review.inputsVolume)
 	}
 	return RuntimeResourceNames{
 		Containers: containers,
@@ -1823,6 +1943,10 @@ func codexReviewSnapshotSeederName(runID string) string {
 
 func codexReviewSnapshotVolumeName(runID string) string {
 	return codexReviewNames(runID).snapshotVolume
+}
+
+func codexReviewInputsVolumeName(runID string) string {
+	return codexReviewNames(runID).inputsVolume
 }
 
 func codexReviewShadowObserverScript(nonce, targetPath, proofPath string) string {
@@ -1939,6 +2063,7 @@ func codexReviewWorkspaceOverlapsControlPath(provider reviewProvider, workspaceT
 		provider.configHomeTarget(),
 		"/.agents",
 		path.Join(provider.homeTarget(), ".agents"),
+		InputFilesTarget,
 	}
 	for _, p := range protected {
 		if pathsOverlap(workspaceTarget, p) {
@@ -2089,8 +2214,18 @@ func validateReviewAgentSpec(
 		return failf(CheckControlPlaneIsolation, "Codex review environment is malformed or duplicates a key")
 	}
 	wantTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget, req.Workspace.agentsEntry)
-	if len(spec.Mounts) != 2+len(wantTargets) {
+	inputMounts := 0
+	if len(req.Inputs) > 0 {
+		inputMounts = 1
+	}
+	if len(spec.Mounts) != 2+len(wantTargets)+inputMounts {
 		return failf(CheckControlPlaneIsolation, "Codex review carries an unexpected mount count")
+	}
+	if inputMounts == 1 {
+		m := spec.Mounts[len(spec.Mounts)-1]
+		if m.Type != MountVolume || m.Source != req.InputVolume.volume || m.Target != InputFilesTarget || !m.ReadOnly {
+			return failf(CheckControlPlaneIsolation, "Codex review input volume is not the admitted read-only mount")
+		}
 	}
 	workspace, snapshot := spec.Mounts[0], spec.Mounts[1]
 	if workspace.Type != MountVolume || workspace.Source != req.WorkspaceVolume ||
@@ -2153,10 +2288,26 @@ func validateReviewAgentSpec(
 		binding.LauncherEnvironmentDigest != digestEnvironment(wantEnv) ||
 		binding.CommandDigest != digestStrings(wantCommand) ||
 		binding.ConfigurationDigest != req.ConfigurationDigest ||
+		!reviewInputsBindingMatches(binding, req) ||
 		!contentaddr.Valid(binding.AuthSnapshotDigest) || !contentaddr.Valid(string(binding.InstructionDigest)) {
 		return failf(CheckControlPlaneIsolation, "Codex review journal binding diverged from the admitted topology")
 	}
 	return nil
+}
+
+// reviewInputsBindingMatches ties a prepared binding's input fields to the
+// request's observation: none for a review without inputs, otherwise exactly
+// the observed volume, its listing digest, and its observer.
+func reviewInputsBindingMatches(binding CodexReviewJournalBinding, req CodexReviewSpec) bool {
+	if len(req.Inputs) == 0 {
+		return binding.InputsVolume == ""
+	}
+	return binding.InputsVolume == req.InputVolume.volume && binding.InputsTarget == InputFilesTarget &&
+		binding.InputsFingerprint == req.InputVolume.fingerprint &&
+		binding.InputsDigest == req.InputVolume.digest &&
+		binding.InputsObserverImage == req.InputVolume.observerImage &&
+		binding.InputsObserverFingerprint == req.InputVolume.observerFingerprint &&
+		binding.InputsPreStartObserverFingerprint == "" && binding.InputsReadOnly
 }
 
 func sameOptionalTime(a, b *time.Time) bool {
@@ -2177,6 +2328,7 @@ func verifyCodexReviewAllowlistShape(
 	freshShadow CodexReviewShadowObservation,
 	freshWorkspace CodexReviewWorkspaceObservation,
 	freshSnapshot CodexReviewSnapshotObservation,
+	freshInputs CodexReviewInputsObservation,
 	currentNetwork CodexReviewNetworkObservation,
 	rep InspectReport,
 	spec ContainerSpec,
@@ -2190,6 +2342,14 @@ func verifyCodexReviewAllowlistShape(
 	if err := req.Snapshot.verifyFresh(freshSnapshot); err != nil {
 		return CodexReviewJournalBinding{}, err
 	}
+	if len(req.Inputs) > 0 {
+		if err := req.InputVolume.verifyFresh(freshInputs); err != nil {
+			return CodexReviewJournalBinding{}, err
+		}
+	} else if freshInputs != (CodexReviewInputsObservation{}) {
+		return CodexReviewJournalBinding{}, failf(
+			CheckControlPlaneIsolation, "Codex review without inputs observed an input volume")
+	}
 	if err := req.Network.verifyCurrent(currentNetwork); err != nil {
 		return CodexReviewJournalBinding{}, err
 	}
@@ -2202,6 +2362,7 @@ func verifyCodexReviewAllowlistShape(
 	binding.AgentsShadowPreStartObserverFingerprint = freshShadow.observerFingerprint
 	binding.WorkspacePreStartObserverFingerprint = freshWorkspace.observerFingerprint
 	binding.SnapshotPreStartObserverFingerprint = freshSnapshot.observerFingerprint
+	binding.InputsPreStartObserverFingerprint = freshInputs.observerFingerprint
 	if err := binding.validateShape(provider); err != nil {
 		return CodexReviewJournalBinding{}, failf(
 			CheckControlPlaneIsolation, "Codex review final journal binding is invalid",

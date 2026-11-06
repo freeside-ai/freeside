@@ -311,6 +311,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 	if binding.validateForTeardown(provider) != nil || binding.RunID != runID ||
 		binding.ReviewContainer != intent.ReviewContainer ||
 		binding.ReviewOwnershipToken != intent.OwnershipToken ||
+		binding.InputsVolume != intent.InputsVolume ||
 		binding.WorkspaceSourceRunID != runID ||
 		binding.WorkspaceVolume != namesFor(runID).Workspace {
 		return failf(CheckControlPlaneIsolation, "Codex review durable binding is invalid")
@@ -351,7 +352,8 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 		return err
 	}
 	lease, _, err := cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
-		ctx, owner.Value, codexReviewLeaseVolumes(binding.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume),
+		ctx, owner.Value, codexReviewLeaseVolumes(
+			binding.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume, intent.InputsVolume),
 	)
 	if err != nil {
 		// The leaser's authenticated refusals are contradictions, not runtime
@@ -383,6 +385,11 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 	// lease. A legacy (pre-#591) intent carries none, so this is skipped there.
 	if intent.SnapshotVolume != "" {
 		if err := b.deleteCodexReviewVolume(ctx, intent.SnapshotVolume, claims[intent.SnapshotVolume], owner); err != nil {
+			return err
+		}
+	}
+	if intent.InputsVolume != "" {
+		if err := b.deleteCodexReviewVolume(ctx, intent.InputsVolume, claims[intent.InputsVolume], owner); err != nil {
 			return err
 		}
 	}

@@ -14,6 +14,7 @@ type codexReviewLifecycleConfig struct {
 	EgressProxyTimeout time.Duration
 	ExportRoot         string
 	HandoffTimeout     time.Duration
+	InputBlobs         InputBlobSource
 	SeedReadyDir       string
 	SeedStageDir       string
 	SeedTimeout        time.Duration
@@ -27,6 +28,7 @@ func newCodexReviewLifecycleConfig(cfg Config) codexReviewLifecycleConfig {
 		EgressProxyTimeout: cfg.EgressProxyTimeout,
 		ExportRoot:         cfg.ExportRoot,
 		HandoffTimeout:     cfg.HandoffTimeout,
+		InputBlobs:         cfg.InputBlobs,
 		SeedReadyDir:       cfg.SeedReadyDir,
 		SeedStageDir:       cfg.SeedStageDir,
 		SeedTimeout:        cfg.SeedTimeout,

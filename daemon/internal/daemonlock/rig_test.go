@@ -567,12 +567,15 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-agents-observer",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-snap-init",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-snap-obs",
+			"freeside-review-review-" + strings.Repeat("a", 24) + "-inputs-init",
+			"freeside-review-review-" + strings.Repeat("a", 24) + "-inputs-obs",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-codex",
 		},
 		Volumes: []string{
 			"freeside-handoff-review-" + strings.Repeat("a", 24) + "-ws",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-agents",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-snap",
+			"freeside-review-review-" + strings.Repeat("a", 24) + "-inputs",
 		},
 		Networks: []string{
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-egress",

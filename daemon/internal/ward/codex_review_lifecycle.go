@@ -156,16 +156,26 @@ type CodexReviewLaunchIntent struct {
 	SnapshotVolume string                      `json:"snapshot_volume"`
 	Resources      []CodexReviewIntentResource `json:"resources"`
 	State          CodexReviewIntentState      `json:"state"`
+
+	// InputsVolume is the ward-owned operator input volume, set only for a
+	// review that delivers input files; its seeder and observer then join
+	// Resources. An empty value is the shape of every intent written before
+	// review inputs and of a review without them.
+	InputsVolume string `json:"inputs_volume,omitempty"`
 }
 
 // codexReviewLeaseVolumes is the exclusive-lease volume set for one review. The
 // snapshot volume joins the workspace and shadow volumes on the #591 shape; a
 // legacy intent with no snapshot volume keeps the original two-volume lease, so
-// the same helper serves both the current launch path and legacy recovery.
-func codexReviewLeaseVolumes(workspaceVolume, shadowVolume, snapshotVolume string) []string {
+// the same helper serves both the current launch path and legacy recovery. The
+// input volume joins last, only for a review that delivers input files.
+func codexReviewLeaseVolumes(workspaceVolume, shadowVolume, snapshotVolume, inputsVolume string) []string {
 	volumes := []string{workspaceVolume, shadowVolume}
 	if snapshotVolume != "" {
 		volumes = append(volumes, snapshotVolume)
+	}
+	if inputsVolume != "" {
+		volumes = append(volumes, inputsVolume)
 	}
 	return volumes
 }
@@ -210,6 +220,11 @@ type CodexReviewLaunchSpec struct {
 	// ConfigurationDigest is the trust-profile configuration digest the
 	// launch is approved under; the journal binding records it.
 	ConfigurationDigest domain.Digest
+	// Inputs are the operator files the reviewer reads at
+	// InputFilesTarget/<name>, in order; empty for a review without them.
+	// Ward stages them from the lifecycle's InputBlobs and proves the volume
+	// before the review container can exist.
+	Inputs []InputFile
 }
 
 // CodexReviewLaunch is a started review and its reconstructed durable binding.
@@ -267,6 +282,9 @@ func (b *CodexReviewLifecycle) codexReview(
 	credentials := b.reviewProvider().newCredentialStrategy(b)
 	if err := validateCodexReviewLaunchShape(b.reviewProvider(), cfg, launch); err != nil {
 		return nil, err
+	}
+	if len(launch.Inputs) > 0 && b.cfg.InputBlobs == nil {
+		return nil, fmt.Errorf("%w: input files need an input blob source", ErrInvalidCodexReviewSpec)
 	}
 	if err := credentials.checkLaunchAdmission(ctx, cfg, launch); err != nil {
 		return nil, err
@@ -349,13 +367,24 @@ func (b *CodexReviewLifecycle) codexReview(
 			{Name: codexReviewSnapshotObserverName(launch.RunID)},
 		}, State: CodexReviewIntentPreparing,
 	}
+	inputRoles := codexReviewInputRoles(cfg, launch.RunID)
+	inputsName := ""
+	if len(launch.Inputs) > 0 {
+		inputsName = inputRoles.volume
+		intent.InputsVolume = inputsName
+		intent.Resources = append(intent.Resources,
+			CodexReviewIntentResource{Name: inputRoles.volume, OwnershipToken: owner.Value},
+			CodexReviewIntentResource{Name: inputRoles.seeder, OwnershipToken: owner.Value},
+			CodexReviewIntentResource{Name: inputRoles.observer},
+		)
+	}
 	if err := cfg.Journal.BeginCodexReviewIntent(ctx, intent); err != nil {
 		return nil, codexReviewJournalCheckf(
 			CheckControlPlaneIsolation, "persist Codex review launch intent: %v", err,
 		)
 	}
 	volumeLease, err := cfg.VolumeLifecycleLeaser.AcquireCodexReviewVolumeLease(
-		ctx, owner.Value, codexReviewLeaseVolumes(launch.WorkspaceVolume, shadowName, snapshotName),
+		ctx, owner.Value, codexReviewLeaseVolumes(launch.WorkspaceVolume, shadowName, snapshotName, inputsName),
 	)
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) {
@@ -426,6 +455,7 @@ func (b *CodexReviewLifecycle) codexReview(
 	networkName := codexReviewNetworkName(launch.RunID)
 	shadowClaim := objectClaim{attempted: true}
 	snapshotClaim := objectClaim{}
+	inputsClaim := objectClaim{}
 	networkClaim := objectClaim{}
 	containerClaim := objectClaim{}
 	var proxy *connectProxy
@@ -460,6 +490,11 @@ func (b *CodexReviewLifecycle) codexReview(
 		if snapshotClaim.attempted {
 			cleanupErrs = append(cleanupErrs, b.deleteCodexReviewVolume(
 				cleanupCtx, snapshotName, snapshotClaim, owner,
+			))
+		}
+		if inputsClaim.attempted {
+			cleanupErrs = append(cleanupErrs, b.deleteCodexReviewVolume(
+				cleanupCtx, inputsName, inputsClaim, owner,
 			))
 		}
 		if networkClaim.attempted {
@@ -552,6 +587,13 @@ func (b *CodexReviewLifecycle) codexReview(
 	if err != nil {
 		return nil, err
 	}
+	var inputs CodexReviewInputsObservation
+	if len(launch.Inputs) > 0 {
+		inputs, err = b.prepareCodexReviewInputs(ctx, cfg, launch, inputRoles, owner, &inputsClaim)
+		if err != nil {
+			return nil, err
+		}
+	}
 	networkClaim.attempted = true
 	if err := b.rt.CreateNetwork(ctx, networkName, append(runLabels(launch.RunID), owner)); err != nil {
 		return nil, codexReviewOperationalCheckf(CheckAgentEgress, "create Codex review network: %v", err)
@@ -595,6 +637,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		AuthSnapshot: launch.AuthSnapshot, Credential: launch.Credential, Instructions: launch.Instructions,
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
 		AgentsShadow: shadow, Snapshot: snapshot, ConfigurationDigest: launch.ConfigurationDigest,
+		Inputs: slices.Clone(launch.Inputs), InputVolume: inputs,
 	}
 	spec, binding, err := buildReviewAgentSpec(b.reviewProvider(), cfg, req)
 	if err != nil {
@@ -633,14 +676,15 @@ func (b *CodexReviewLifecycle) codexReview(
 	binding.ReviewContainerFingerprint = containerClaim.fingerprint
 	binding.ReviewOwnershipToken = owner.Value
 
-	freshShadow, freshWorkspace, freshSnapshot, currentNetwork, err := b.reobserveCodexReview(
+	fresh, err := b.reobserveCodexReview(
 		ctx, cfg, launch, workspaceOwner, owner, shadowName, snapshotName,
 	)
 	if err != nil {
 		return nil, err
 	}
 	binding, err = verifyCodexReviewAllowlistShape(
-		b.reviewProvider(), cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, containerReport, spec,
+		b.reviewProvider(), cfg, req, binding, fresh.shadow, fresh.workspace, fresh.snapshot, fresh.inputs,
+		fresh.network, containerReport, spec,
 	)
 	if err != nil {
 		return nil, err
@@ -874,6 +918,11 @@ func validateCodexReviewLaunchShape(provider reviewProvider, cfg CodexReviewConf
 	case !slices.Equal(cfg.ProviderEndpoints, launch.AuthMode.providerEndpoints()):
 		return fmt.Errorf("%w: provider_only endpoints do not exactly match auth mode", ErrInvalidCodexReviewSpec)
 	}
+	if len(launch.Inputs) > 0 {
+		if err := validateInputFiles(launch.Inputs); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidCodexReviewSpec, err)
+		}
+	}
 	if err := launch.Instructions.validate(); err != nil ||
 		launch.Instructions.Vendor != provider.vendor() || !launch.Instructions.Present {
 		return fmt.Errorf("%w: Codex instructions are invalid", ErrInvalidCodexReviewSpec)
@@ -957,6 +1006,7 @@ func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec
 		InstructionBinding                                                    exec.ReviewInstructionBinding
 		ApprovedImage, ObserverImage, WorkspaceTarget, Model, ReasoningEffort string
 		ProviderEndpoints                                                     []string
+		Inputs                                                                []InputFile `json:"Inputs,omitempty"`
 	}{
 		ExpectedBase: launch.ExpectedBase,
 		RunID:        launch.RunID, Image: launch.Image, WorkspaceSourceRunID: launch.WorkspaceSourceRunID,
@@ -966,6 +1016,7 @@ func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec
 		ApprovedImage:      cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
 		WorkspaceTarget: cfg.WorkspaceTarget, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort,
 		ProviderEndpoints: slices.Clone(cfg.ProviderEndpoints),
+		Inputs:            slices.Clone(launch.Inputs),
 	}
 	data, err := json.Marshal(shape)
 	if err != nil {
@@ -1034,6 +1085,12 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		return codexReviewOperationalCheckf(
 			CheckCredentialSeparation, "remove recovery Codex review snapshot stage: %v", stageErr)
 	}
+	// The input stage holds operator files, not a credential, but a crash
+	// before its own wipe leaves them under the same trusted root.
+	if stageErr := os.RemoveAll(codexReviewInputsStagePath(b.cfg.ExportRoot, intent.RunID)); stageErr != nil {
+		return codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "remove recovery Codex review input stage: %v", stageErr)
+	}
 	launch := CodexReviewLaunchSpec{
 		RunID: intent.RunID, WorkspaceVolume: namesFor(intent.RunID).Workspace,
 	}
@@ -1061,7 +1118,8 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		}
 		return failw(CheckTeardown, err, "Codex review pre-lease preparation recovery: %v", err)
 	}
-	leaseVolumes := codexReviewLeaseVolumes(launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume)
+	leaseVolumes := codexReviewLeaseVolumes(
+		launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume, intent.InputsVolume)
 	lease, transfer, err := cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
 		ctx, owner.Value, leaseVolumes,
 	)
@@ -1143,6 +1201,9 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		recoveryVolumes := []string{intent.ShadowVolume}
 		if intent.SnapshotVolume != "" {
 			recoveryVolumes = append(recoveryVolumes, intent.SnapshotVolume)
+		}
+		if intent.InputsVolume != "" {
+			recoveryVolumes = append(recoveryVolumes, intent.InputsVolume)
 		}
 		for _, name := range recoveryVolumes {
 			if !slices.ContainsFunc(volumes, func(v VolumeSummary) bool { return v.Name == name }) {
@@ -1237,6 +1298,9 @@ func codexReviewPreparationContainers(names codexReviewResourceNames) []string {
 	}
 	if names.snapshotObserver != "" {
 		containers = append(containers, names.snapshotObserver)
+	}
+	if names.inputsVolume != "" {
+		containers = append(containers, names.inputsSeeder, names.inputsObserver)
 	}
 	return containers
 }
@@ -1580,7 +1644,8 @@ func (b *CodexReviewLifecycle) reapCodexReviewTransferredAttachment(
 	transfer CodexReviewVolumeLeaseTransfer,
 ) error {
 	if transfer.Holder != owner.Value ||
-		!slices.Equal(transfer.Volumes, codexReviewLeaseVolumes(launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume)) ||
+		!slices.Equal(transfer.Volumes, codexReviewLeaseVolumes(
+			launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume, intent.InputsVolume)) ||
 		transfer.Container != intent.ReviewContainer {
 		return failf(CheckControlPlaneIsolation, "Codex review starting lease transfer is foreign or malformed")
 	}
@@ -1664,16 +1729,26 @@ func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (code
 	}
 	candidates = append(candidates, preSnapshotCodexReviewNames(runID), legacyCodexReviewNames(runID))
 	for _, names := range candidates {
-		if intent.resourceNamesMatch(names) {
-			return names, nil
+		if !intent.resourceNamesMatch(names) {
+			continue
 		}
+		if intent.InputsVolume == "" {
+			names.inputsVolume, names.inputsSeeder, names.inputsObserver = "", "", ""
+		}
+		return names, nil
 	}
 	return codexReviewResourceNames{}, errors.New("launch resources are invalid")
 }
 
 func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResourceNames) bool {
+	// A review without inputs journals no input volume, so its intent matches
+	// the derived names without the three input resources.
+	if intent.InputsVolume == "" {
+		names.inputsVolume, names.inputsSeeder, names.inputsObserver = "", "", ""
+	}
 	if intent.ShadowVolume != names.shadowVolume || intent.Network != names.network ||
-		intent.ReviewContainer != names.reviewContainer || intent.SnapshotVolume != names.snapshotVolume {
+		intent.ReviewContainer != names.reviewContainer || intent.SnapshotVolume != names.snapshotVolume ||
+		intent.InputsVolume != names.inputsVolume {
 		return false
 	}
 	expected := map[string]struct{}{
@@ -1692,6 +1767,16 @@ func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResour
 		expected[names.snapshotSeeder] = struct{}{}
 		expected[names.snapshotObserver] = struct{}{}
 	}
+	// The input volume rides only on the current snapshot shape, so a
+	// legacy name set (no snapshot volume) never carries input resources.
+	if names.inputsVolume != "" {
+		if names.snapshotVolume == "" {
+			return false
+		}
+		expected[names.inputsVolume] = struct{}{}
+		expected[names.inputsSeeder] = struct{}{}
+		expected[names.inputsObserver] = struct{}{}
+	}
 	if len(intent.Resources) != len(expected) {
 		return false
 	}
@@ -1708,7 +1793,8 @@ func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResour
 		// ward-created, so they must bear the intent owner; snapshotObserver may not.
 		if resource.Name == intent.ShadowVolume || resource.Name == intent.Network ||
 			resource.Name == intent.ReviewContainer || resource.Name == names.shadowInitializer ||
-			(names.snapshotVolume != "" && (resource.Name == names.snapshotVolume || resource.Name == names.snapshotSeeder)) {
+			(names.snapshotVolume != "" && (resource.Name == names.snapshotVolume || resource.Name == names.snapshotSeeder)) ||
+			(names.inputsVolume != "" && (resource.Name == names.inputsVolume || resource.Name == names.inputsSeeder)) {
 			if resource.OwnershipToken != intent.OwnershipToken {
 				return false
 			}
@@ -2290,50 +2376,71 @@ func validateCodexReviewStartLifetime(
 	return nil
 }
 
+// codexReviewFreshObservations is the pre-start re-observation of every
+// volume and the network a review container depends on. inputs is the zero
+// value for a review without input files.
+type codexReviewFreshObservations struct {
+	shadow    CodexReviewShadowObservation
+	workspace CodexReviewWorkspaceObservation
+	snapshot  CodexReviewSnapshotObservation
+	inputs    CodexReviewInputsObservation
+	network   CodexReviewNetworkObservation
+}
+
 func (b *CodexReviewLifecycle) reobserveCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 	workspaceOwner, owner Label, shadowName, snapshotName string,
-) (CodexReviewShadowObservation, CodexReviewWorkspaceObservation, CodexReviewSnapshotObservation, CodexReviewNetworkObservation, error) {
-	var (
-		emptyShadow    CodexReviewShadowObservation
-		emptyWorkspace CodexReviewWorkspaceObservation
-		emptySnapshot  CodexReviewSnapshotObservation
-		emptyNetwork   CodexReviewNetworkObservation
-	)
+) (codexReviewFreshObservations, error) {
+	var fresh codexReviewFreshObservations
 	workspaceReport, err := b.rt.InspectVolume(ctx, launch.WorkspaceVolume)
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
+		return codexReviewFreshObservations{},
 			codexReviewOperationalCheckf(CheckObservedBaseIdentity, "inspect Codex review workspace: %v", err)
 	}
-	workspace, err := b.observeCodexReviewWorkspace(ctx, cfg, launch, workspaceOwner, workspaceReport)
+	fresh.workspace, err = b.observeCodexReviewWorkspace(ctx, cfg, launch, workspaceOwner, workspaceReport)
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork, err
+		return codexReviewFreshObservations{}, err
 	}
 	shadowReport, err := b.rt.InspectVolume(ctx, shadowName)
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
+		return codexReviewFreshObservations{},
 			codexReviewOperationalCheckf(CheckControlPlaneIsolation, "inspect Codex review shadow: %v", err)
 	}
-	shadow, err := b.observeCodexReviewShadow(ctx, cfg, launch.RunID, shadowName, owner, shadowReport)
+	fresh.shadow, err = b.observeCodexReviewShadow(ctx, cfg, launch.RunID, shadowName, owner, shadowReport)
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork, err
+		return codexReviewFreshObservations{}, err
 	}
 	snapshotReport, err := b.rt.InspectVolume(ctx, snapshotName)
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
+		return codexReviewFreshObservations{},
 			codexReviewOperationalCheckf(CheckCredentialSeparation, "inspect Codex review snapshot: %v", err)
 	}
-	snapshot, err := b.observeCodexReviewSnapshot(ctx, cfg, launch.RunID, snapshotName, owner, snapshotReport)
+	fresh.snapshot, err = b.observeCodexReviewSnapshot(ctx, cfg, launch.RunID, snapshotName, owner, snapshotReport)
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork, err
+		return codexReviewFreshObservations{}, err
+	}
+	if len(launch.Inputs) > 0 {
+		roles := codexReviewInputRoles(cfg, launch.RunID)
+		inputsReport, err := b.rt.InspectVolume(ctx, roles.volume)
+		if err != nil {
+			return codexReviewFreshObservations{},
+				codexReviewOperationalCheckf(CheckControlPlaneIsolation, "inspect Codex review input volume: %v", err)
+		}
+		fresh.inputs, err = b.observeCodexReviewInputs(ctx, cfg, roles, launch.Inputs, owner, inputsReport)
+		if err != nil {
+			return codexReviewFreshObservations{}, err
+		}
 	}
 	networkReport, err := b.rt.InspectNetwork(ctx, codexReviewNetworkName(launch.RunID))
 	if err != nil {
-		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
+		return codexReviewFreshObservations{},
 			codexReviewOperationalCheckf(CheckAgentEgress, "inspect Codex review network: %v", err)
 	}
-	network, err := ObserveCodexReviewNetwork(cfg, launch.RunID, owner, networkReport)
-	return shadow, workspace, snapshot, network, err
+	fresh.network, err = ObserveCodexReviewNetwork(cfg, launch.RunID, owner, networkReport)
+	if err != nil {
+		return codexReviewFreshObservations{}, err
+	}
+	return fresh, nil
 }
 
 func (b *CodexReviewLifecycle) reconstructCodexReview(
@@ -2341,12 +2448,13 @@ func (b *CodexReviewLifecycle) reconstructCodexReview(
 	req CodexReviewSpec, spec ContainerSpec, binding CodexReviewJournalBinding,
 	workspaceOwner, owner Label, shadowName, snapshotName string,
 ) error {
-	shadow, workspace, snapshot, network, err := b.reobserveCodexReview(
+	fresh, err := b.reobserveCodexReview(
 		ctx, cfg, launch, workspaceOwner, owner, shadowName, snapshotName,
 	)
 	if err != nil {
 		return err
 	}
+	shadow, workspace, snapshot, inputs := fresh.shadow, fresh.workspace, fresh.snapshot, fresh.inputs
 	if binding.AgentsShadowFingerprint != shadow.fingerprint ||
 		binding.AgentsShadowDigest != shadow.digest ||
 		binding.WorkspaceFingerprint != workspace.fingerprint ||
@@ -2356,7 +2464,10 @@ func (b *CodexReviewLifecycle) reconstructCodexReview(
 		binding.SnapshotFingerprint != snapshot.fingerprint ||
 		binding.SnapshotVolume != snapshot.volume ||
 		binding.AuthSnapshotDigest != snapshot.authDigest ||
-		req.Snapshot.instructionDigest != snapshot.instructionDigest {
+		req.Snapshot.instructionDigest != snapshot.instructionDigest ||
+		binding.InputsVolume != inputs.volume ||
+		binding.InputsFingerprint != inputs.fingerprint ||
+		binding.InputsDigest != inputs.digest {
 		return failf(CheckControlPlaneIsolation, "reconstructed Codex review volumes diverged")
 	}
 	current := CodexReviewNetworkObservation{
@@ -2364,7 +2475,7 @@ func (b *CodexReviewLifecycle) reconstructCodexReview(
 		gateway: binding.ProviderNetworkGateway, subnet: binding.ProviderNetworkSubnet,
 		proxyAuthority: binding.ProviderProxyAuthority,
 	}
-	if err := current.verifyCurrent(network); err != nil {
+	if err := current.verifyCurrent(fresh.network); err != nil {
 		return err
 	}
 	report, err := b.rt.Inspect(ctx, binding.ReviewContainer)
@@ -2384,6 +2495,7 @@ func (b *CodexReviewLifecycle) reconstructCodexReview(
 	prepared.AgentsShadowPreStartObserverFingerprint = ""
 	prepared.WorkspacePreStartObserverFingerprint = ""
 	prepared.SnapshotPreStartObserverFingerprint = ""
+	prepared.InputsPreStartObserverFingerprint = ""
 	if err := validateReviewAgentSpec(b.reviewProvider(), cfg, req, spec, prepared); err != nil {
 		return err
 	}
