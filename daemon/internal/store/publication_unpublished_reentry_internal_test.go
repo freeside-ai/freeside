@@ -235,27 +235,3 @@ func TestStoredUnpublishedReentryChainReads(t *testing.T) {
 		t.Fatalf("current successor = %+v, want chain tip %s", current, tip.PublicationID())
 	}
 }
-
-func TestLatestRunWorkflowAuditTip(t *testing.T) {
-	f := seedUnpublishedReentry(t, publicationReservationKind)
-	f.audit(t, "owner/repo", reentryBase2)
-	f.audit(t, "other/repo", reentryBase3)
-	ctx := context.Background()
-	if err := f.st.Read(ctx, func(tx *ReadTx) error {
-		tip, err := tx.LatestRunWorkflowAuditTip(ctx, f.runID)
-		if err == nil && tip != reentryBase2 {
-			t.Fatalf("latest tip = %s, want %s from the run's own repository", tip, reentryBase2)
-		}
-		if err != nil {
-			return err
-		}
-		// With no admission there is no repository to read audits of, so
-		// the read fails closed rather than report no tip.
-		if _, err := tx.LatestRunWorkflowAuditTip(ctx, "run-without-admissions"); !errors.Is(err, domain.ErrParentKeyMismatch) {
-			t.Fatalf("tip of a run with no admissions = %v, want ErrParentKeyMismatch", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}

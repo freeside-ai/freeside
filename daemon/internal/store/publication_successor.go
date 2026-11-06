@@ -348,20 +348,6 @@ func (tx *ReadTx) validateSuccessorReentrySuccessor(ctx context.Context, success
 	return nil
 }
 
-// LatestRunWorkflowAuditTip returns the commit the daemon's latest workflow
-// audit of the run's repository observed. A base-advance refusal names that
-// tip only in its error text, so the engine reads the base it seals from here.
-func (tx *ReadTx) LatestRunWorkflowAuditTip(ctx context.Context, runID domain.RunID) (string, error) {
-	audits, err := tx.runWorkflowAudits(ctx, runID)
-	if err != nil {
-		return "", err
-	}
-	if len(audits) == 0 {
-		return "", ErrNotFound
-	}
-	return audits[len(audits)-1].Audit.AuditedCommitSHA, nil
-}
-
 // runWorkflowAudits lists the workflow audits recorded for the one repository
 // a run's admissions name, in insertion order. The repository comes from the
 // admission records, which are immutable facts, so a later policy change does
