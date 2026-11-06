@@ -36,8 +36,16 @@ type CachedTokenSource struct {
 
 	// mu is held across a mint so concurrent callers converge on one
 	// minted token (and one audit row) instead of racing mints.
-	mu     sync.Mutex
-	tokens map[tokenCacheKey]InstallationToken
+	mu sync.Mutex
+
+	// tokens holds pointers so a holder that keeps this source in an
+	// unexported field cannot print a cached token. Under a verb a
+	// pointer does not support (%s, %q, %t), fmt cannot call Format
+	// through that field; it reprints the source pointer under %v, which
+	// prints a pointer below the top level as an address, so each entry
+	// shows only its address. Format still guards direct rendering.
+	// Token returns a copy, so no caller can mutate an entry.
+	tokens map[tokenCacheKey]*InstallationToken
 }
 
 type tokenCacheKey struct {
@@ -175,7 +183,7 @@ func NewCachedTokenSource(m *Minter, now func() time.Time) *CachedTokenSource {
 	return &CachedTokenSource{
 		minter: m,
 		now:    now,
-		tokens: map[tokenCacheKey]InstallationToken{},
+		tokens: map[tokenCacheKey]*InstallationToken{},
 	}
 }
 
@@ -204,7 +212,7 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 		repositoryID:   repositoryID,
 	}
 	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return tok, nil
+		return *tok, nil
 	}
 	tok, err := s.minter.mintResolved(
 		ctx, binding, parsed, repositoryID,
@@ -213,7 +221,7 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	s.tokens[key] = tok
+	s.tokens[key] = &tok
 	return tok, nil
 }
 
@@ -223,11 +231,19 @@ type FollowUpFilingTokenSource struct {
 	minter *Minter
 	now    func() time.Time
 	mu     sync.Mutex
-	tokens map[tokenCacheKey]InstallationToken
+
+	// tokens holds pointers so a holder that keeps this source in an
+	// unexported field cannot print a cached token. Under a verb a
+	// pointer does not support (%s, %q, %t), fmt cannot call Format
+	// through that field; it reprints the source pointer under %v, which
+	// prints a pointer below the top level as an address, so each entry
+	// shows only its address. Format still guards direct rendering.
+	// Token returns a copy, so no caller can mutate an entry.
+	tokens map[tokenCacheKey]*InstallationToken
 }
 
 func NewFollowUpFilingTokenSource(m *Minter, now func() time.Time) *FollowUpFilingTokenSource {
-	return &FollowUpFilingTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]InstallationToken{}}
+	return &FollowUpFilingTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]*InstallationToken{}}
 }
 
 // Format renders the source without its cache. fmt prints values reached
@@ -255,14 +271,14 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 		repositoryID:   repositoryID,
 	}
 	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return tok, nil
+		return *tok, nil
 	}
 	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
 		FollowUpFilingPermissions, followUpFilingPermissionScopes)
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	s.tokens[key] = tok
+	s.tokens[key] = &tok
 	return tok, nil
 }
 
@@ -273,11 +289,19 @@ type IssueReadTokenSource struct {
 	minter *Minter
 	now    func() time.Time
 	mu     sync.Mutex
-	tokens map[tokenCacheKey]InstallationToken
+
+	// tokens holds pointers so a holder that keeps this source in an
+	// unexported field cannot print a cached token. Under a verb a
+	// pointer does not support (%s, %q, %t), fmt cannot call Format
+	// through that field; it reprints the source pointer under %v, which
+	// prints a pointer below the top level as an address, so each entry
+	// shows only its address. Format still guards direct rendering.
+	// Token returns a copy, so no caller can mutate an entry.
+	tokens map[tokenCacheKey]*InstallationToken
 }
 
 func NewIssueReadTokenSource(m *Minter, now func() time.Time) *IssueReadTokenSource {
-	return &IssueReadTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]InstallationToken{}}
+	return &IssueReadTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]*InstallationToken{}}
 }
 
 // Format renders the source without its cache. fmt prints values reached
@@ -305,14 +329,14 @@ func (s *IssueReadTokenSource) Token(ctx context.Context, repo string) (Installa
 		repositoryID:   repositoryID,
 	}
 	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return tok, nil
+		return *tok, nil
 	}
 	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
 		IssueReadPermissions, issueReadPermissionScopes)
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	s.tokens[key] = tok
+	s.tokens[key] = &tok
 	return tok, nil
 }
 
@@ -335,8 +359,16 @@ type OnboardingTokenSource struct {
 	repositoryID   int64
 	now            func() time.Time
 
-	mu     sync.Mutex
-	tokens map[tokenCacheKey]InstallationToken
+	mu sync.Mutex
+
+	// tokens holds pointers so a holder that keeps this source in an
+	// unexported field cannot print a cached token. Under a verb a
+	// pointer does not support (%s, %q, %t), fmt cannot call Format
+	// through that field; it reprints the source pointer under %v, which
+	// prints a pointer below the top level as an address, so each entry
+	// shows only its address. Format still guards direct rendering.
+	// Token returns a copy, so no caller can mutate an entry.
+	tokens map[tokenCacheKey]*InstallationToken
 }
 
 func NewOnboardingTokenSource(
@@ -349,7 +381,7 @@ func NewOnboardingTokenSource(
 	return &OnboardingTokenSource{
 		minter: minter, authority: authority, gate: gate,
 		registrationID: registrationID, repositoryID: repositoryID, now: now,
-		tokens: map[tokenCacheKey]InstallationToken{},
+		tokens: map[tokenCacheKey]*InstallationToken{},
 	}
 }
 
@@ -387,7 +419,7 @@ func (s *OnboardingTokenSource) Token(
 	}
 	if tok, ok := s.tokens[key]; ok &&
 		tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return tok, nil
+		return *tok, nil
 	}
 	tok, err := s.minter.mintResolved(
 		ctx, binding, parsed, s.repositoryID,
@@ -402,7 +434,7 @@ func (s *OnboardingTokenSource) Token(
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	s.tokens[key] = tok
+	s.tokens[key] = &tok
 	return tok, nil
 }
 

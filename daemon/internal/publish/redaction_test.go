@@ -128,11 +128,17 @@ func TestNoCredentialValueRenders(t *testing.T) {
 		"Secret":            creds.WebhookSecret,
 		"IssueReadToken":    issueReadToken,
 	}
+	// A holder keeps its source in an unexported field, as Transport and
+	// the publish forge do. Under a verb a pointer does not support, fmt
+	// prints the source's struct without calling its Format, so the
+	// source's own fields must not reach a token either.
+	type tokenSourceHolder struct{ source publish.TokenSource }
 	for name, source := range sources {
 		values[name] = source
+		values[name+" holder"] = tokenSourceHolder{source}
 	}
 	for name, v := range values {
-		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d", "%t"} {
 			renderings[name+" "+verb] = fmt.Sprintf(verb, v)
 		}
 		j, err := json.Marshal(v)
