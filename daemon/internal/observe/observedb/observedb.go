@@ -215,6 +215,15 @@ func (s *Store) ObserveRun(
 // in the same transaction. It is the bounded read used by follow and resume;
 // unlike the supervision snapshot it does not reconstruct actionable
 // AttentionItems and therefore needs no mutable evidence-policy input.
+//
+// For a run with a durable Run row, the returned invocations carry their
+// authenticated terminal status (signet.AuthoritativeInvocationStatuses):
+// an invocation row is a paced last look that the engine's terminal path
+// does not rewrite (#785), so the durable export, outcome, or terminal is
+// the status authority while the row keeps its observed-at instant. A
+// status-bearing milestone that fails authentication fails the read with
+// signet.ErrRunObservationIntegrity. The conclusion is still computed from
+// the stored observation, before the overlay.
 func (s *Store) ObserveConclusion(
 	ctx context.Context, runID domain.RunID,
 ) (domain.RunObservation, domain.RunConclusion, error) {
@@ -250,6 +259,17 @@ func (s *Store) ObserveConclusion(
 			return err
 		}
 		_, _, conclusion, err = authenticateRunConclusion(ctx, tx, run, observation)
+		if err != nil {
+			return err
+		}
+		observation, err = signet.AuthoritativeInvocationStatuses(ctx, tx, run, observation)
+		if store.IsRowVerdict(err) && !errors.Is(err, signet.ErrRunObservationIntegrity) {
+			// The overlay tags only a parent-key mismatch. A status milestone
+			// whose export or outcome is missing is the same contradiction
+			// in the store's own rows, so it gets the same tag, as
+			// `freesided inspect task` classifies it.
+			err = fmt.Errorf("%w: %w", signet.ErrRunObservationIntegrity, err)
+		}
 		return err
 	}); err != nil {
 		return domain.RunObservation{}, domain.RunConclusion{}, fmt.Errorf(

@@ -12,16 +12,20 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
@@ -1318,4 +1322,157 @@ func seedTopicStore(t *testing.T, path string) {
 		t.Fatalf("create topic key: %v", err)
 	}
 	storetest.Copy(t, path)
+}
+
+// openRunningSeed opens a store holding the representative fixture, with the
+// attended_dev floor its admissions were recorded under, and returns its
+// running retry attempt: one invocation whose row is running and live.
+func openRunningSeed(t *testing.T) (*store.Store, domain.ExecutionAdmission, domain.InvocationObservation) {
+	t.Helper()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	seedTopicStore(t, path)
+	st, _, err := topicstore.Open(ctx, path, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: seedfixture.AdmissionCapabilities,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if _, err := seedfixture.Seed(ctx, st, seedfixture.Representative); err != nil {
+		t.Fatal(err)
+	}
+	var admission domain.ExecutionAdmission
+	var observation domain.RunObservation
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		parent, err := tx.GetRun(ctx, "run-freeside-656")
+		if err != nil {
+			return err
+		}
+		runID, err := engine.ProductionAttemptRunID(parent.CampaignID, 2)
+		if err != nil {
+			return err
+		}
+		if observation, err = tx.ObserveRun(ctx, runID); err != nil {
+			return err
+		}
+		if len(observation.Invocations) != 1 {
+			return fmt.Errorf("run %s invocations = %+v, want one", runID, observation.Invocations)
+		}
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, observation.Invocations[0].InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if row := observation.Invocations[0]; row.Status != domain.ObservedStatusRunning || !row.Live {
+		t.Fatalf("seeded invocation = %+v, want running and live", row)
+	}
+	return st, admission, observation.Invocations[0]
+}
+
+// recordTerminal records an invocation's durable terminal without touching
+// its observation row, the state the engine's terminal path leaves (#785):
+// an export for completed, an outcome for failed, then terminal_recorded.
+func recordTerminal(
+	t *testing.T, st *store.Store, admission domain.ExecutionAdmission,
+	terminal domain.ObservedInvocationStatus, at time.Time,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if terminal == domain.ObservedStatusCompleted {
+			record, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+				InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+				ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+				ManifestDigest: domain.Digest(contentaddr.Sum([]byte("manifest"))), RecordedAt: at,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.RecordExecutionExportRecord(ctx, record); err != nil {
+				return err
+			}
+		} else if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+			InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+			Cause: domain.FailureCauseUnknown, RecordedAt: at,
+		}); err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &admission.InvocationID, Terminal: &terminal, RecordedAt: at,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestObserveConclusionShowsRecordedTerminal pins #2355: an invocation whose
+// terminal is recorded reads with that status, not its stale running row,
+// and keeps the row's observed-at. The conclusion is the one computed from
+// the stored observation, so the overlay changes only invocation values.
+func TestObserveConclusionShowsRecordedTerminal(t *testing.T) {
+	for _, terminal := range []domain.ObservedInvocationStatus{
+		domain.ObservedStatusCompleted, domain.ObservedStatusFailed,
+	} {
+		t.Run(string(terminal), func(t *testing.T) {
+			ctx := context.Background()
+			st, admission, row := openRunningSeed(t)
+			recordTerminal(t, st, admission, terminal, row.ObservedAt.Add(time.Minute))
+
+			observation, conclusion, err := Borrow(st).ObserveConclusion(ctx, admission.RunID)
+			if err != nil {
+				t.Fatalf("ObserveConclusion: %v", err)
+			}
+			want := row
+			want.Status, want.Live = terminal, false
+			if len(observation.Invocations) != 1 || observation.Invocations[0] != want {
+				t.Fatalf("invocations = %+v, want [%+v]", observation.Invocations, want)
+			}
+
+			var stored domain.RunConclusion
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				run, err := tx.GetRun(ctx, admission.RunID)
+				if err != nil {
+					return err
+				}
+				raw, err := tx.ObserveRun(ctx, admission.RunID)
+				if err != nil {
+					return err
+				}
+				_, _, stored, err = authenticateRunConclusion(ctx, tx, run, raw)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(conclusion, stored) {
+				t.Fatalf("conclusion = %+v, want the stored observation's %+v", conclusion, stored)
+			}
+		})
+	}
+}
+
+// TestObserveConclusionRefusesUnbackedTerminal appends a terminal milestone
+// no outcome or export backs. The read fails as an integrity fault instead
+// of returning either the forged status or the row's.
+func TestObserveConclusionRefusesUnbackedTerminal(t *testing.T) {
+	ctx := context.Background()
+	st, admission, row := openRunningSeed(t)
+	failed := domain.ObservedStatusFailed
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &admission.InvocationID, Terminal: &failed,
+			RecordedAt: row.ObservedAt.Add(time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	observation, _, err := Borrow(st).ObserveConclusion(ctx, admission.RunID)
+	if !errors.Is(err, signet.ErrRunObservationIntegrity) {
+		t.Fatalf("ObserveConclusion() = %+v, %v, want ErrRunObservationIntegrity", observation, err)
+	}
 }

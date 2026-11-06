@@ -13,52 +13,75 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
+	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+// openSeededResumeStore opens a store at a topic-keyed path holding the
+// representative fixture, with the attended_dev floor its admissions were
+// recorded under. Its terminals are backed by admissions and outcomes, which
+// resume's read authenticates before it shows an invocation's status.
+func openSeededResumeStore(t *testing.T) (*store.Store, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	seedTemplateStore(t, dbPath)
+	st, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: seedfixture.AdmissionCapabilities,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seedfixture.Seed(t.Context(), st, seedfixture.Representative); err != nil {
+		t.Fatal(err)
+	}
+	return st, dbPath
+}
+
+func countRuns(t *testing.T, st *store.Store) int {
+	t.Helper()
+	var count int
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		runs, err := tx.ListRuns(t.Context())
+		count = len(runs)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
 
 func TestResumeTargetsExactLiveRunAndRefusesTerminal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	seedTemplateStore(t, dbPath)
-	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st, dbPath := openSeededResumeStore(t)
 	now := time.Now().UTC()
 	liveID := domain.RunID("run-live")
-	terminalID := domain.RunID("run-terminal")
-	terminalInvocation := domain.InvocationID("inv-terminal")
-	terminalStatus := domain.ObservedStatusFailed
+	// The fixture's first retry-campaign attempt failed, with its outcome
+	// and terminal recorded.
+	terminalID := domain.RunID(fixtureActiveRunID)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		for _, id := range []domain.RunID{liveID, terminalID} {
-			if err := tx.PutRun(ctx, domain.Run{
-				ID: id, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
-			}); err != nil {
-				return err
-			}
-		}
-		liveInvocation := domain.InvocationID("inv-live")
-		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
-			RunID: liveID, Kind: domain.MilestoneRunSubmitted,
-			InvocationID: &liveInvocation, RecordedAt: now,
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: liveID, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 		}); err != nil {
 			return err
 		}
+		liveInvocation := domain.InvocationID("inv-live")
 		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
-			RunID: terminalID, Kind: domain.MilestoneTerminalRecorded,
-			InvocationID: &terminalInvocation, Terminal: &terminalStatus,
-			RecordedAt: now,
+			RunID: liveID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &liveInvocation, RecordedAt: now,
 		})
 	}); err != nil {
 		t.Fatal(err)
 	}
+	runCount := countRuns(t, st)
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = runResumeCommand(ctx, []string{"-db", dbPath, "-run", string(terminalID), "-once"}, &stdout, &stderr)
+	err := runResumeCommand(ctx, []string{"-db", dbPath, "-run", string(terminalID), "-once"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), `terminal in state "failed"`) ||
 		!strings.Contains(err.Error(), "freesided reattempt") {
 		t.Fatalf("terminal resume = %v, want state and reattempt refusal", err)
@@ -77,17 +100,8 @@ func TestResumeTargetsExactLiveRunAndRefusesTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		runs, err := tx.ListRuns(ctx)
-		if err != nil {
-			return err
-		}
-		if len(runs) != 2 {
-			t.Fatalf("resume changed run count to %d, want 2", len(runs))
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	if got := countRuns(t, st); got != runCount {
+		t.Fatalf("resume changed run count to %d, want %d", got, runCount)
 	}
 }
 
@@ -101,67 +115,62 @@ func TestResumeReportsAuthenticatedPublishedOutcome(t *testing.T) {
 	}
 }
 
+// TestResumeTaskUsesNewestRun resumes the fixture's retry-campaign task,
+// whose failed first attempt (run-freeside-656) sorts after its running
+// retry by id, so only the ordinal picks the retry.
 func TestResumeTaskUsesNewestRun(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	seedTemplateStore(t, dbPath)
-	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{})
-	if err != nil {
+	st, dbPath := openSeededResumeStore(t)
+	defer func() { _ = st.Close() }()
+	taskID, admission, observed := fixtureRunningRun(t, st)
+	newest := admission.RunID
+	if newest >= fixtureActiveRunID {
+		t.Fatalf("retry run %s sorts after %s; the test needs id order to disagree with ordinal order",
+			newest, fixtureActiveRunID)
+	}
+	var runCount int
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		runs, err := tx.TaskRunIDs(ctx, taskID)
+		runCount = len(runs)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = st.Close() }()
-	var taskID domain.TaskID
-	addRun := func(id domain.RunID) {
-		t.Helper()
-		if err := st.Write(ctx, func(tx *store.WriteTx) error {
-			if err := tx.PutRun(ctx, domain.Run{
-				ID: id, TaskID: taskID, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
-			}); err != nil {
-				return err
-			}
-			run, err := tx.GetRun(ctx, id)
-			if err != nil {
-				return err
-			}
-			taskID = run.TaskID
-			invocation := domain.InvocationID("inv-" + string(id))
-			return tx.AppendRunMilestone(ctx, domain.RunMilestone{
-				RunID: id, Kind: domain.MilestoneRunSubmitted, InvocationID: &invocation,
-				RecordedAt: time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC),
-			})
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	addRun("run-z-older")
-	addRun("run-a-newer")
 	var stdout bytes.Buffer
 	args := []string{"-db", dbPath, "--task", string(taskID), "-once"}
 	if err := runResumeCommand(ctx, args, &stdout, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "run-a-newer") || strings.Contains(stdout.String(), "run-z-older") {
-		t.Fatalf("task snapshot = %q, want newest ordinal run", stdout.String())
+	if !strings.Contains(stdout.String(), string(newest)) || strings.Contains(stdout.String(), fixtureActiveRunID) {
+		t.Fatalf("task snapshot = %q, want newest ordinal run %s", stdout.String(), newest)
 	}
+	at := observed.ObservedAt.Add(time.Minute)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+			InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+			Cause: domain.FailureCauseUnknown, RecordedAt: at,
+		}); err != nil {
+			return err
+		}
 		terminal := domain.ObservedStatusFailed
-		invocation := domain.InvocationID("inv-run-a-newer")
 		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
-			RunID: "run-a-newer", Kind: domain.MilestoneTerminalRecorded, InvocationID: &invocation,
-			Terminal: &terminal, RecordedAt: time.Date(2026, 9, 12, 12, 1, 0, 0, time.UTC),
+			RunID: newest, Kind: domain.MilestoneTerminalRecorded, InvocationID: &admission.InvocationID,
+			Terminal: &terminal, RecordedAt: at,
 		})
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := runResumeCommand(ctx, args, io.Discard, io.Discard); err == nil ||
-		!strings.Contains(err.Error(), `run "run-a-newer" is terminal`) || !strings.Contains(err.Error(), "use freesided reattempt") {
-		t.Fatalf("terminal newest run = %v, want refusal instead of following older live run", err)
+		!strings.Contains(err.Error(), `run "`+string(newest)+`" is terminal`) ||
+		!strings.Contains(err.Error(), "use freesided reattempt") {
+		t.Fatalf("terminal newest run = %v, want refusal naming %s", err, newest)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		runs, err := tx.TaskRunIDs(ctx, taskID)
-		if err == nil && len(runs) != 2 {
-			t.Fatalf("resume changed task run count to %d", len(runs))
+		if err == nil && len(runs) != runCount {
+			t.Fatalf("resume changed task run count to %d, want %d", len(runs), runCount)
 		}
 		return err
 	}); err != nil {
