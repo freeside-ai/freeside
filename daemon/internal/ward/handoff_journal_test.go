@@ -414,6 +414,7 @@ func TestHandoffJournalCloseFailureVoidsDelivery(t *testing.T) {
 	j := fx.journalled()
 	inject := errors.New("fixture: journal close failed")
 	j.failClose = inject
+	fx.isolateScratch(t)
 
 	res, err := fx.run(t)
 	if !errors.Is(err, inject) {
@@ -422,7 +423,7 @@ func TestHandoffJournalCloseFailureVoidsDelivery(t *testing.T) {
 	if res != nil {
 		t.Fatal("close failure still delivered a result")
 	}
-	for _, d := range scratchDirs(t, testHandoffSpec().RunID) {
+	for _, d := range fx.scratchDirs(t, testHandoffSpec().RunID) {
 		t.Errorf("leftover handoff temp dir after voided delivery: %s", d)
 	}
 	fx.assertReaped(t)
