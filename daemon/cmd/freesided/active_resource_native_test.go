@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -462,4 +463,113 @@ func readPullTimeline(t *testing.T, st *store.Store) []domain.PullMergeFact {
 		t.Fatalf("list pull facts: %v", err)
 	}
 	return pulls
+}
+
+// TestActiveResourceReactionsRefusalReportedOncePerItem proves a refused
+// reactions read keeps the reviews' native evidence, is reported once per
+// ready item rather than every pass, and is reported again after a pass reads
+// the reactions and a later one is refused (#2717).
+func TestActiveResourceReactionsRefusalReportedOncePerItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+
+	refused := findingsReviewActivity()
+	refused.Reactions = nil
+	refused.ReactionsUnavailable = true
+	reconciler := activeResourceReconciler{
+		store: st, pull: openExactPull, review: staticReview(refused),
+		reviewers: testReviewers(),
+		now:       func() time.Time { return activeResourceTestTime },
+	}
+	pass := func(label string) activeResourceReconcileResult {
+		t.Helper()
+		result, err := reconciler.Reconcile(ctx)
+		if err != nil || len(result.failures) != 0 {
+			t.Fatalf("%s: Reconcile = %v, %v", label, result.failures, err)
+		}
+		return result
+	}
+
+	if got := pass("first refused").reactionsRefused; len(got) != 1 {
+		t.Fatalf("first refused pass reported %v, want one refusal", got)
+	}
+	// The review and its inline comment are still recorded; only the
+	// clean-pass reaction is missing.
+	if got := readNativeObservations(t, st); len(got) != 1 {
+		t.Fatalf("refused pass recorded %d native observations, want the findings review only", len(got))
+	}
+
+	// A repeated refusal, changed or not, stays quiet.
+	if got := pass("second refused").reactionsRefused; len(got) != 0 {
+		t.Fatalf("second refused pass reported %v, want none", got)
+	}
+	unchanged := refused
+	unchanged.NotModified = true
+	reconciler.review = staticReview(unchanged)
+	if got := pass("unchanged refused").reactionsRefused; len(got) != 0 {
+		t.Fatalf("unchanged refused pass reported %v, want none", got)
+	}
+
+	// A failed review read neither reports nor re-arms.
+	reconciler.review = func(context.Context, string, int) (publish.PullReviewObservation, error) {
+		return publish.PullReviewObservation{}, errors.New("boom")
+	}
+	if result, err := reconciler.Reconcile(ctx); err != nil || len(result.reactionsRefused) != 0 {
+		t.Fatalf("failed read = %v, %v; want no refusal report", result.reactionsRefused, err)
+	}
+	reconciler.review = staticReview(refused)
+	if got := pass("refused after failure").reactionsRefused; len(got) != 0 {
+		t.Fatalf("refusal after a failed read reported %v, want none", got)
+	}
+
+	// The reactions read again, then are refused again: reported once more.
+	reconciler.review = staticReview(findingsReviewActivity())
+	if got := pass("recovered").reactionsRefused; len(got) != 0 {
+		t.Fatalf("recovered pass reported %v, want none", got)
+	}
+	reconciler.review = staticReview(refused)
+	if got := pass("refused again").reactionsRefused; len(got) != 1 {
+		t.Fatalf("refusal after recovery reported %v, want one", got)
+	}
+}
+
+// TestActiveResourceReactionsRefusalForgottenWhenItemConcludes proves the
+// once-per-item record doesn't outlive the open item: open statuses never
+// return, so an entry left behind would only leak (#2717).
+func TestActiveResourceReactionsRefusalForgottenWhenItemConcludes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+
+	refused := findingsReviewActivity()
+	refused.Reactions = nil
+	refused.ReactionsUnavailable = true
+	reconciler := activeResourceReconciler{
+		store: st, pull: openExactPull, review: staticReview(refused),
+		reviewers: testReviewers(),
+		now:       func() time.Time { return activeResourceTestTime },
+	}
+	if result, err := reconciler.Reconcile(ctx); err != nil || len(result.reactionsRefused) != 1 {
+		t.Fatalf("refused pass = %v, %v; want one refusal", result.reactionsRefused, err)
+	}
+
+	concluded := readActiveItem(t, st, item.ID)
+	concluded.Status = domain.StatusResolved
+	concluded.ItemVersion++
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, domaintest.MustConclude(concluded))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(ctx); err != nil {
+		t.Fatalf("pass over the concluded item: %v", err)
+	}
+	if reconciler.reactionsRefusalReported[item.ID] {
+		t.Fatal("the concluded item's refusal record was kept")
+	}
 }
