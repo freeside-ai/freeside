@@ -787,6 +787,26 @@ func (e *Engine) validateProductionReplayDelivery(
 	return nil
 }
 
+// taskInputFiles maps a task's attachments, in submitted order, to the stage
+// inputs every agent that receives them sees as task/<name>. Writers and the
+// review agents share it, so both read the same names. Task attachments are
+// written once with the task, so the list is stable for the task's life.
+func taskInputFiles(
+	ctx context.Context, tx *store.ReadTx, taskID domain.TaskID,
+) ([]domain.StageInputAttachment, error) {
+	task, err := tx.TaskAttachments(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("read task attachments: %w", err)
+	}
+	files := make([]domain.StageInputAttachment, 0, len(task))
+	for _, a := range task {
+		files = append(files, domain.StageInputAttachment{
+			Digest: a.Digest, Name: "task/" + a.Name, MediaType: a.MediaType, SizeBytes: a.SizeBytes,
+		})
+	}
+	return files, nil
+}
+
 // operatorInputFiles lists the files a Ward writer receives, in order: the
 // task's attachments as task/<name>, then each user-authored message's
 // attachments in the bound conversation prefix as
@@ -803,19 +823,13 @@ func (e *Engine) operatorInputFiles(
 	if binding.run.TaskID == "" {
 		return nil, fmt.Errorf("run %q names no task: %w", binding.run.ID, domain.ErrEmptyID)
 	}
-	var task []domain.TaskAttachment
+	var files []domain.StageInputAttachment
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		task, err = tx.TaskAttachments(ctx, binding.run.TaskID)
+		files, err = taskInputFiles(ctx, tx, binding.run.TaskID)
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("read task attachments: %w", err)
-	}
-	files := make([]domain.StageInputAttachment, 0, len(task))
-	for _, a := range task {
-		files = append(files, domain.StageInputAttachment{
-			Digest: a.Digest, Name: "task/" + a.Name, MediaType: a.MediaType, SizeBytes: a.SizeBytes,
-		})
+		return nil, err
 	}
 	if binding.invocation.ConversationID == nil {
 		return files, nil

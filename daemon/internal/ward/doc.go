@@ -277,6 +277,8 @@
 //     journal and intent states, and CodexReviewLifecycle, the runtime owner
 //   - codex_review_workspace.go the candidate checkout snapshot into a
 //     ward-owned volume, its HEAD and tree proof, and its cleanup
+//   - codex_review_inputs.go the task's attachments seeded into a ward-owned
+//     input volume for the reviewer, and its listing proof
 //   - codex_review_access.go the sandboxed probe that the review can read the
 //     candidate
 //   - codex_review_volume_lease.go serialized review-volume attachment leases

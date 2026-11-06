@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"slices"
@@ -203,6 +204,16 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 			func(r *ReviewRequest) { r.Admission.AgentBinding.AgentDigest = digest("2") },
 			func(r *ReviewRequest) { r.Admission.AgentBinding.RouteModelID = "other-model" },
 			func(r *ReviewRequest) { r.Admission.LineageGroup = "other" },
+		},
+		// The files the reviewer reads are authority: adding, renaming,
+		// retyping, or reordering one changes what it judges against.
+		"Inputs": {
+			func(r *ReviewRequest) { r.Inputs = reviewInputs("one.png", "two.md") },
+			func(r *ReviewRequest) { r.Inputs = reviewInputs("two.md", "one.png") },
+			func(r *ReviewRequest) {
+				r.Inputs = reviewInputs("one.png")
+				r.Inputs[0].MediaType = domain.TaskAttachmentMediaOctetStream
+			},
 		},
 	}
 	exempt := map[string]func(*ReviewRequest){
@@ -546,5 +557,101 @@ func TestRetainedLegacyReviewRequestReads(t *testing.T) {
 	const recorded = domain.Digest("sha256:66d11f8107b5c31782fee83d3ad9ebedeebb4a753cfdb8fe68cb2cd191fdbd5b")
 	if digest != recorded {
 		t.Fatalf("AuthorityDigest = %s, want the recorded %s", digest, recorded)
+	}
+}
+
+// reviewInputs returns one valid task input per name, each a PNG of a
+// distinct digest, in the given order.
+func reviewInputs(names ...string) []domain.StageInputAttachment {
+	inputs := make([]domain.StageInputAttachment, len(names))
+	for i, name := range names {
+		inputs[i] = domain.StageInputAttachment{
+			Digest: domain.Digest("sha256:" + strings.Repeat(string(rune('a'+i)), 64)),
+			Name:   domain.TaskAttachmentName("task/" + name), MediaType: domain.TaskAttachmentMediaPNG,
+			SizeBytes: int64(100 + i),
+		}
+	}
+	return inputs
+}
+
+// TestReviewRequestValidateHoldsInputs checks a request's inputs against the
+// stage-input list rules, and that a request without inputs keeps its digest.
+func TestReviewRequestValidateHoldsInputs(t *testing.T) {
+	_, instructions, err := ComposeCodexReviewInstructions(
+		ReviewHostInstructionInput{},
+		[]ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("base rules")}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Workspace: "/candidate", Instructions: instructions,
+		Admission: testReviewAdmission("run-1"),
+		Verification: ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		},
+		RequestedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
+	}
+	empty := base
+	empty.Inputs = []domain.StageInputAttachment{}
+	baseDigest, err := base.AuthorityDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := empty.AuthorityDigest(); err != nil || got != baseDigest {
+		t.Fatalf("an empty input list changed the authority digest: %v", err)
+	}
+	valid := base
+	valid.Inputs = reviewInputs("a.png", "docs/b.md")
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid inputs refused: %v", err)
+	}
+	tooMany := make([]string, domain.MaxTaskAttachments+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("f%d.png", i)
+	}
+	for name, mutate := range map[string]func([]domain.StageInputAttachment) []domain.StageInputAttachment{
+		"bad name": func(in []domain.StageInputAttachment) []domain.StageInputAttachment {
+			in[0].Name = "../escape.png"
+			return in
+		},
+		"bad digest": func(in []domain.StageInputAttachment) []domain.StageInputAttachment {
+			in[0].Digest = "sha256:short"
+			return in
+		},
+		"bad media type": func(in []domain.StageInputAttachment) []domain.StageInputAttachment {
+			in[0].MediaType = "text/html"
+			return in
+		},
+		"repeated name": func(in []domain.StageInputAttachment) []domain.StageInputAttachment {
+			in[1].Name = in[0].Name
+			return in
+		},
+		"name is another's directory": func(in []domain.StageInputAttachment) []domain.StageInputAttachment {
+			in[0].Name = "task/docs"
+			return in
+		},
+		"too many": func([]domain.StageInputAttachment) []domain.StageInputAttachment {
+			return reviewInputs(tooMany...)
+		},
+		"over budget": func(in []domain.StageInputAttachment) []domain.StageInputAttachment {
+			in[0].MediaType, in[0].SizeBytes = domain.TaskAttachmentMediaOctetStream, domain.MaxTaskAttachmentsTotalBytes
+			return in
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := base
+			request.Inputs = mutate(reviewInputs("a.png", "docs/b.md"))
+			if err := request.Validate(); err == nil {
+				t.Fatal("invalid inputs accepted")
+			}
+			if _, err := request.AuthorityDigest(); err == nil {
+				t.Fatal("invalid inputs digested")
+			}
+		})
 	}
 }

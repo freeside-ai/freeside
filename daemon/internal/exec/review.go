@@ -96,8 +96,10 @@ type ReviewRequestAuthorityVerifier interface {
 }
 
 // ReviewRequestSupersessionVerifier recognizes a persisted request whose only
-// authority change is an updated trusted instruction binding. It must tear
-// down that request before returning ErrSupersededReviewRequest.
+// authority change is an updated trusted instruction binding, or the task's
+// attachments that a request persisted before reviewers received them never
+// carried. It must tear down that request before returning
+// ErrSupersededReviewRequest; a finished request's outcome and evidence stay.
 type ReviewRequestSupersessionVerifier interface {
 	VerifyReviewRequestSupersession(ctx context.Context, id domain.InvocationID, expected ReviewRequest) error
 }
@@ -120,20 +122,28 @@ type ReviewRequestSupersessionVerifier interface {
 // it runs under, and its launch values. The source returns it unchanged on
 // the ReviewResult. A persisted request with no snapshot predates review
 // admission and is a legacy request.
+//
+// Inputs are the task's attachments the reviewer reads read-only, as
+// task/<name> in submitted order (plan §5.7). The engine reads them when it
+// builds the request, and they enter the authority digest, so a rewritten
+// list fails the request's re-check. Empty is omitted, which keeps a request
+// for a task without attachments in the shape and digest it had before
+// reviewers received inputs.
 type ReviewRequest struct {
-	RunID              domain.RunID               `json:"run_id"`
-	Round              int                        `json:"round"`
-	Repo               string                     `json:"repo"`
-	RepositoryID       int64                      `json:"repository_id"`
-	BaseRef            string                     `json:"base_ref"`
-	BaseSHA            string                     `json:"base_sha"`
-	HeadSHA            string                     `json:"head_sha"`
-	LegacyEvaluatedSHA string                     `json:"evaluated_sha,omitempty"`
-	Workspace          string                     `json:"workspace"`
-	Verification       ReviewVerificationEvidence `json:"verification"`
-	Instructions       ReviewInstructionBinding   `json:"instructions"`
-	Admission          domain.ReviewAdmission     `json:"admission"`
-	RequestedAt        time.Time                  `json:"requested_at"`
+	RunID              domain.RunID                  `json:"run_id"`
+	Round              int                           `json:"round"`
+	Repo               string                        `json:"repo"`
+	RepositoryID       int64                         `json:"repository_id"`
+	BaseRef            string                        `json:"base_ref"`
+	BaseSHA            string                        `json:"base_sha"`
+	HeadSHA            string                        `json:"head_sha"`
+	LegacyEvaluatedSHA string                        `json:"evaluated_sha,omitempty"`
+	Workspace          string                        `json:"workspace"`
+	Verification       ReviewVerificationEvidence    `json:"verification"`
+	Instructions       ReviewInstructionBinding      `json:"instructions"`
+	Admission          domain.ReviewAdmission        `json:"admission"`
+	Inputs             []domain.StageInputAttachment `json:"inputs,omitempty"`
+	RequestedAt        time.Time                     `json:"requested_at"`
 }
 
 // ReviewVerificationEvidence is the compact, content-addressed account of
@@ -250,38 +260,60 @@ func (r ReviewRequest) ValidateBeforeAdmission() error {
 			return fmt.Errorf("review request evaluated_sha: %w", err)
 		}
 	}
-	return errors.Join(r.Verification.Validate(), r.Instructions.Validate())
+	return errors.Join(r.Verification.Validate(), r.Instructions.Validate(), validateReviewInputs(r.Inputs))
+}
+
+// validateReviewInputs holds a request's input list to the rules a stage's
+// list meets: each entry valid for its media type, at most
+// domain.MaxTaskAttachments files and domain.MaxTaskAttachmentsTotalBytes in
+// total, and names that coexist on a case-sensitive filesystem.
+func validateReviewInputs(inputs []domain.StageInputAttachment) error {
+	list := make([]domain.TaskAttachment, len(inputs))
+	for i, input := range inputs {
+		if err := input.Validate(); err != nil {
+			return fmt.Errorf("review request input %d: %w", i, err)
+		}
+		list[i] = domain.TaskAttachment{
+			Digest: input.Digest, Name: input.Name, MediaType: input.MediaType,
+			ClaimedMediaType: string(input.MediaType), SizeBytes: input.SizeBytes,
+		}
+	}
+	if err := domain.ValidateTaskAttachments(list); err != nil {
+		return fmt.Errorf("review request inputs: %w", err)
+	}
+	return nil
 }
 
 // AuthorityDigest binds the reviewer to every request field that can change
 // which candidate or verification authority it reviews, or which admitted
-// agent reviews it. Request time is an operational observation, not delegated
-// authority.
+// agent reviews it, and which operator files it reads. Request time is an
+// operational observation, not delegated authority.
 func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 	if err := r.Validate(); err != nil {
 		return "", err
 	}
 	body, err := json.Marshal(struct {
-		Version      string                     `json:"version"`
-		RunID        domain.RunID               `json:"run_id"`
-		Round        int                        `json:"round"`
-		Repo         string                     `json:"repo"`
-		RepositoryID int64                      `json:"repository_id"`
-		BaseRef      string                     `json:"base_ref"`
-		BaseSHA      string                     `json:"base_sha"`
-		HeadSHA      string                     `json:"head_sha"`
-		EvaluatedSHA string                     `json:"evaluated_sha,omitempty"`
-		Workspace    string                     `json:"workspace"`
-		Verification ReviewVerificationEvidence `json:"verification"`
-		Instructions ReviewInstructionBinding   `json:"instructions"`
-		Admission    domain.ReviewAdmission     `json:"admission"`
+		Version      string                        `json:"version"`
+		RunID        domain.RunID                  `json:"run_id"`
+		Round        int                           `json:"round"`
+		Repo         string                        `json:"repo"`
+		RepositoryID int64                         `json:"repository_id"`
+		BaseRef      string                        `json:"base_ref"`
+		BaseSHA      string                        `json:"base_sha"`
+		HeadSHA      string                        `json:"head_sha"`
+		EvaluatedSHA string                        `json:"evaluated_sha,omitempty"`
+		Workspace    string                        `json:"workspace"`
+		Verification ReviewVerificationEvidence    `json:"verification"`
+		Instructions ReviewInstructionBinding      `json:"instructions"`
+		Admission    domain.ReviewAdmission        `json:"admission"`
+		Inputs       []domain.StageInputAttachment `json:"inputs,omitempty"`
 	}{
 		Version: "review-request-authority-v4", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
 		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.LegacyEvaluatedSHA,
 		Workspace:    r.Workspace,
 		Verification: r.Verification, Instructions: r.Instructions,
-		Admission: r.Admission,
+		Admission: r.Admission, Inputs: r.Inputs,
 	})
 	if err != nil {
 		return "", err

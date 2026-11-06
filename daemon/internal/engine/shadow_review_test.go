@@ -256,11 +256,28 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 		VerificationOutcome:      domain.VerificationPassed,
 	}}
 	task := productionPublicationTask{RunID: runID, ProjectID: run.ProjectID, HeadSHA: headSHA}
+	// The shadow reviewer reads the same task attachments the routed one
+	// does, so a dispute compares reviews over the same evidence.
+	shot := taskAttachment("shot.png", domain.TaskAttachmentMediaPNG, []byte("\x89PNG\r\n\x1a\nshot"))
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		stored, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		return tx.PutTaskAttachments(ctx, stored.TaskID, []domain.TaskAttachment{shot})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	complete, err := w.reconcileShadowReview(
 		ctx, task, binding, checkpoint, nil, instructions, routed,
 	)
 	if err != nil || !complete {
 		t.Fatalf("reconcileShadowReview = %v, %v", complete, err)
+	}
+	if want := []domain.StageInputAttachment{{
+		Digest: shot.Digest, Name: "task/shot.png", MediaType: shot.MediaType, SizeBytes: shot.SizeBytes,
+	}}; !slices.Equal(source.request.Inputs, want) {
+		t.Fatalf("shadow review inputs = %#v, want %#v", source.request.Inputs, want)
 	}
 	if failures != 0 {
 		t.Fatalf("shadow failures = %d", failures)
