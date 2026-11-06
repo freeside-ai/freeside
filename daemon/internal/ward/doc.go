@@ -250,7 +250,10 @@
 //   - lineup_probe.go  one lineup probe call through an image, and the
 //     credentials a probe container reads
 //   - claude_model_discovery.go the initialize probe's model report, decoded
-//     into an enrollment's discovered model catalog
+//     into an enrollment's discovered model catalog, and the report checks
+//     both harnesses share
+//   - codex_model_discovery.go the Codex model/list probe's pages, decoded
+//     into the same report
 //   - auth_enrollment.go EnrollmentBootstrap, a harness client's first
 //     enrollment (§5.4)
 //   - auth_adoption.go adopting a flag-era identity's existing store as an

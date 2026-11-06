@@ -81,6 +81,29 @@ const (
 	lineupProbeInitializeRequest = `{"type":"control_request","request_id":"` + lineupProbeInitializeRequestID +
 		`","request":{"subtype":"initialize"}}`
 	lineupProbeInitializeRequestID = "freeside-model-discovery"
+	// lineupProbeInput is the pipe a Codex initialize probe feeds the
+	// app-server through. It sits outside the output directory and both
+	// forbidden paths, so the export never carries it as an output.
+	lineupProbeInput = lineupProbeRoot + "/input"
+	// lineupProbeCodexInitializeRequest and lineupProbeCodexInitialized open
+	// a Codex initialize probe's app-server session; model/list requests
+	// follow, built by jq from the page number and the last cursor.
+	lineupProbeCodexInitializeRequest = `{"id":1,"method":"initialize","params":{"clientInfo":` +
+		`{"name":"` + lineupProbeInitializeRequestID + `","version":"1"}}}`
+	lineupProbeCodexInitialized = `{"method":"initialized"}`
+	// lineupProbeCodexPageLimit is each model/list page's size, and
+	// lineupProbeCodexMaxPages the most pages a probe asks for; a list that
+	// still has a cursor after them is refused as incomplete. The first page
+	// is request id 2, after initialize's 1.
+	lineupProbeCodexPageLimit = 100
+	lineupProbeCodexMaxPages  = 8
+	// lineupProbeCodexAnswerTicks bounds, in one-second ticks, the whole wait
+	// for the app-server's answers, and lineupProbeCodexExitTicks the wait for
+	// it to exit once its input closes, after which it is killed. With the
+	// ready wait both stay inside lineupProbeTimeout, so the script, not the
+	// host, ends a slow session and still records the app-server's status.
+	lineupProbeCodexAnswerTicks = 120
+	lineupProbeCodexExitTicks   = 10
 )
 
 // LineupProbeCredential is the credential one probe container reads. Build
@@ -139,9 +162,9 @@ type LineupProbe struct {
 	// NativeEffort is the effort as the CLI takes it
 	// (domain.TranslateEffort); empty sends none.
 	NativeEffort string
-	// Initialize sends the control protocol's initialize request in place of
-	// the prompt, so the CLI reports what it can run instead of running a
-	// turn (Claude only; no Model or NativeEffort).
+	// Initialize asks the CLI what it can run instead of running a turn: the
+	// control protocol's initialize request for Claude, the app-server's
+	// model/list for Codex. It takes no Model or NativeEffort.
 	Initialize bool
 	Credential LineupProbeCredential
 }
@@ -167,10 +190,8 @@ func (p LineupProbe) validate() error {
 	switch {
 	case !digestPinnedImagePattern.MatchString(p.Image):
 		return errors.New("lineup probe image is not digest-pinned")
-	case p.Harness == domain.HarnessClientCodexCLI && p.Model == "":
+	case p.Harness == domain.HarnessClientCodexCLI && !p.Initialize && p.Model == "":
 		return errors.New("a Codex lineup probe needs a model")
-	case p.Initialize && p.Harness != domain.HarnessClientClaudeCode:
-		return fmt.Errorf("no initialize probe for harness %q", p.Harness)
 	case p.Initialize && (p.Model != "" || p.NativeEffort != ""):
 		return errors.New("an initialize probe sends no model or effort")
 	case !lineupProbeValue(p.Model) || !lineupProbeValue(p.NativeEffort):
@@ -210,7 +231,7 @@ func (p LineupProbe) outputCap() int64 {
 // host's ready copy, takes the credential out of the stage, prints the CLI
 // build, runs one call with the launch's flags, and records the call's exit
 // status. The prompt is a positional argument, never shell text; an
-// initialize probe pipes a fixed request instead, and no caller text reaches
+// initialize probe sends fixed requests instead, and no caller text reaches
 // the shell either way.
 func lineupProbeCommand(p LineupProbe, homeTarget, configTarget string) []string {
 	stagedCredential := shellQuote(lineupProbeStageDir + "/" + lineupProbeCredName)
@@ -248,20 +269,60 @@ func lineupProbeCommand(p LineupProbe, homeTarget, configTarget string) []string
 		if p.NativeEffort != "" {
 			effort = " -c " + shellQuote("model_reasoning_effort=\""+p.NativeEffort+"\"")
 		}
-		call = "cp " + stagedCredential + " " + auth + "; chmod 0600 " + auth + "; rm -rf " +
-			shellQuote(lineupProbeStageDir) + "; set +e; " +
-			"codex --version > " + shellQuote(lineupProbeVersion) + " 2>&1; " +
-			"codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(homeTarget) +
+		invocation := "codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(homeTarget) +
 			" -m " + shellQuote(p.Model) + effort +
 			" -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules" +
 			" --disable apps -c " + shellQuote("web_search=\"disabled\"") + " -- \"$1\"" + outputs +
-			"status=$?; rm -rf " + shellQuote(configTarget) + "; "
+			"status=$?; "
+		if p.Initialize {
+			invocation = codexModelListSession()
+		}
+		call = "cp " + stagedCredential + " " + auth + "; chmod 0600 " + auth + "; rm -rf " +
+			shellQuote(lineupProbeStageDir) + "; set +e; " +
+			"codex --version > " + shellQuote(lineupProbeVersion) + " 2>&1; " +
+			invocation + "rm -rf " + shellQuote(configTarget) + "; "
 	}
 	return []string{
 		"sh", "-c", prologue + call +
 			"printf '%s\\n' \"$status\" > " + shellQuote(lineupProbeStatus) + "; sync; exit 0",
 		"freeside-lineup-probe", LineupProbePrompt,
 	}
+}
+
+// codexModelListSession is a Codex initialize probe's call: one app-server
+// session over stdio that answers initialize, then model/list page by page.
+// The app-server answers out of order, among notifications, and exits at end
+// of input without answering what is still in flight, so the script holds
+// its input pipe open on fd 3 and writes each request only once the last
+// one's answer is in stdout. A cursor reaches jq only through --arg, and a
+// server-sent request, which carries a method beside its id, is never read
+// as an answer. SIGPIPE is ignored so an app-server that exits early fails
+// the next write, not the script, and its status is still recorded; a wait
+// for an answer also ends when the app-server has exited. The script stops
+// at the first page with no cursor, at the page cap, or when the answer
+// budget runs out, then closes the input and kills an app-server that has
+// not exited within the exit wait; the decoder judges what arrived.
+func codexModelListSession() string {
+	stdout := shellQuote(lineupProbeStdout)
+	input := shellQuote(lineupProbeInput)
+	answer := `first(inputs | select(type == "object" and (has("method") | not) and .id == $id))`
+	request := `{id: $id, method: "model/list", params: ({limit: ` + strconv.Itoa(lineupProbeCodexPageLimit) +
+		`} + (if $cursor == "" then {} else {cursor: $cursor} end))}`
+	return "trap '' PIPE; rm -f " + input + "; mkfifo " + input + "; " +
+		"codex app-server --listen stdio:// < " + input + " > " + stdout + " 2> " + shellQuote(lineupProbeStderr) +
+		" & pid=$!; exec 3> " + input + "; t=0; " +
+		"answered() { jq -en --argjson id \"$1\" " + shellQuote(answer) + " < " + stdout + " > /dev/null 2>&1; }; " +
+		"await() { until answered \"$1\"; do kill -0 \"$pid\" 2> /dev/null || { answered \"$1\"; return; }; " +
+		"t=$((t+1)); [ \"$t\" -le " + strconv.Itoa(lineupProbeCodexAnswerTicks) + " ] || return 1; sleep 1; done; }; " +
+		"printf '%s\\n' " + shellQuote(lineupProbeCodexInitializeRequest) + " >&3; " +
+		"if await 1; then printf '%s\\n' " + shellQuote(lineupProbeCodexInitialized) + " >&3; id=2; cursor=; " +
+		"while [ \"$id\" -le " + strconv.Itoa(lineupProbeCodexMaxPages+1) + " ]; do " +
+		"jq -nc --argjson id \"$id\" --arg cursor \"$cursor\" " + shellQuote(request) + " >&3; " +
+		"await \"$id\" || break; " +
+		"cursor=\"$(jq -rn --argjson id \"$id\" " + shellQuote(answer+" | .result.nextCursor // empty") +
+		" < " + stdout + ")\"; [ -n \"$cursor\" ] || break; id=$((id+1)); done; fi; " +
+		"exec 3>&-; t=0; while kill -0 \"$pid\" 2> /dev/null && [ \"$t\" -lt " + strconv.Itoa(lineupProbeCodexExitTicks) +
+		" ]; do t=$((t+1)); sleep 1; done; kill \"$pid\" 2> /dev/null; wait \"$pid\"; status=$?; rm -f " + input + "; "
 }
 
 func lineupProbeOption(flag, value string) string {

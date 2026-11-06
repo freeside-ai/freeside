@@ -20,28 +20,28 @@ import (
 // as an initialize lineup probe, under the same containment and credential
 // handling, and the answer feeds a picker and the selection check only.
 
-// The ways a model report is refused. Each keeps the enrollment's last
-// catalog; none quotes the CLI's output, which is logged.
+// The ways a model report is refused, from either harness. Each keeps the
+// enrollment's last catalog; none quotes the CLI's output, which is logged.
 var (
 	// ErrNoModelReport is a transcript with no answer to the request.
 	ErrNoModelReport = errors.New("the CLI did not answer the initialize request")
 	// ErrModelReportRefused is an answer that is an error, or a CLI that
 	// exited nonzero.
-	ErrModelReportRefused = errors.New("the CLI refused the initialize request")
+	ErrModelReportRefused = errors.New("the CLI refused the model discovery request")
 	// ErrModelReportMalformed is a transcript that is not one JSON value per
 	// line, carries a duplicate key, or answers the request twice.
-	ErrModelReportMalformed = errors.New("the CLI's initialize answer is malformed")
+	ErrModelReportMalformed = errors.New("the CLI's model discovery answer is malformed")
 	// ErrModelReportCarriesCredential is output that holds a run of the
 	// enrollment's token. Nothing from it is decoded, stored, or logged.
-	ErrModelReportCarriesCredential = errors.New("the CLI's initialize output carries the credential")
+	ErrModelReportCarriesCredential = errors.New("the CLI's model discovery output carries the credential")
 )
 
 // claudeDefaultModelValue is the CLI's pointer at its own default model. It
 // names no model of its own, so it is not recorded.
 const claudeDefaultModelValue = "default"
 
-// ModelReport is what the CLI reported: its build, from --version, and
-// the models it offers, in its order.
+// ModelReport is what a Claude or Codex CLI reported: its build, from
+// --version, and the models it offers, in its order.
 type ModelReport struct {
 	CLIBuild string
 	Models   []domain.DiscoveredModel
@@ -148,7 +148,8 @@ func DecodeClaudeModelReport(out LineupProbeOutput, token SetupToken) (ModelRepo
 		if reported.Value == claudeDefaultModelValue {
 			continue
 		}
-		if !launchableModelReport(reported) {
+		if !launchableModelStrings(reported.Value, reported.ResolvedModel, reported.DisplayName,
+			reported.SupportedEffortLevels) {
 			return ModelReport{}, fmt.Errorf("%w: model %d is not a launchable value", ErrModelReportMalformed, i)
 		}
 		model := domain.DiscoveredModel{ID: reported.Value, DisplayName: reported.DisplayName, EffortLevels: []string{}}
@@ -190,17 +191,17 @@ func reportCarriesSecret(report ModelReport, secrets [][]byte) bool {
 	return false
 }
 
-// launchableModelReport reports whether a model's strings are safe to record
+// launchableModelStrings reports whether a model's strings are safe to record
 // as selectable: the id, resolved model, and effort levels pass the check a
 // launch applies to an option value, and the display name is bounded text.
-func launchableModelReport(m claudeReportedModel) bool {
-	if !lineupProbeValue(m.Value) || !lineupProbeValue(m.ResolvedModel) {
+func launchableModelStrings(id, resolvedModel, displayName string, efforts []string) bool {
+	if !lineupProbeValue(id) || !lineupProbeValue(resolvedModel) {
 		return false
 	}
-	for _, level := range m.SupportedEffortLevels {
+	for _, level := range efforts {
 		if !lineupProbeValue(level) {
 			return false
 		}
 	}
-	return len(m.DisplayName) <= 256 && !strings.ContainsFunc(m.DisplayName, func(r rune) bool { return !unicode.IsGraphic(r) })
+	return len(displayName) <= 256 && !strings.ContainsFunc(displayName, func(r rune) bool { return !unicode.IsGraphic(r) })
 }
