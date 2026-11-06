@@ -42,9 +42,12 @@ var (
 	// are not exactly the head tree's: a conversion or stray file means
 	// the recipe would verify content other than the bound head.
 	ErrWorkspaceMismatch = errors.New("materialized workspace does not match the head tree")
-	// ErrMalformedTree rejects a head tree that cannot be safely
-	// materialized: an entry nested under another entry (a blob under a
-	// symlink) would escape the workspace on write.
+	// ErrMalformedTree rejects a tree that cannot be safely materialized
+	// or read: an entry nested under another entry (a blob under a
+	// symlink) would escape the workspace on write, and a blob or symlink
+	// entry that names an object other than a blob (a tag, a tree), or a
+	// blob other than the size its listing gives, is refused before its
+	// bytes are used.
 	ErrMalformedTree = errors.New("head tree is malformed")
 
 	// Verify invocation failures.

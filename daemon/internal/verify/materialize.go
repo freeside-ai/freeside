@@ -6,12 +6,15 @@ import (
 	"crypto/sha1" //nolint:gosec // G505: sha1 is git's object identity under the enforced sha1 format, not a cryptographic protection; content trust rides the importer's sha256 audit
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 )
 
 // verifyHead enforces the head binding (§11 exit criterion: verification
@@ -32,8 +35,9 @@ func (g *gitRunner) verifyHead(ctx context.Context, headSHA string) error {
 
 // materialize writes the verified head's tree into dest as the fresh
 // verification workspace (§5.6: fresh checkout, never the agent's
-// workspace). It extracts each blob with cat-file and writes it
-// directly, deliberately NOT `git checkout-index`: checkout-index runs
+// workspace). It reads each blob through the runner's batch object
+// reader and writes it directly, deliberately NOT `git checkout-index`:
+// checkout-index runs
 // any smudge/clean filter the checkout's attributes and config define,
 // which would execute host code outside the Room during materialization
 // (and GIT_ATTR_SOURCE does not suppress .git/info/attributes). Direct
@@ -270,8 +274,11 @@ func rejectPrefixConflicts(entries map[string]treeEntry, gitlinks []string) erro
 
 // writeTreeEntry extracts one blob entry and writes it under root (bound
 // to the workspace dest): a regular file with the mode's executable bit,
-// or a symlink whose target is the blob's bytes. cat-file emits raw blob
-// content, so no filter or attribute processing runs. root refuses to
+// streamed from the reader, or a symlink whose target is the blob's
+// bytes. The batch reader emits raw object content, so no filter or
+// attribute processing runs, and it does not peel: an entry naming a tag
+// or a tree fails with ErrMalformedTree before anything is written for
+// it, where `cat-file blob` would have followed a tag. root refuses to
 // traverse an escaping symlink component, so no write can leave dest even
 // when a malformed tree crafts a case- or Unicode-folding collision; the
 // symlink itself is created with root.Symlink, which does not validate
@@ -282,12 +289,19 @@ func (g *gitRunner) writeTreeEntry(ctx context.Context, root *os.Root, treePath 
 	if err := root.MkdirAll(filepath.FromSlash(path.Dir(treePath)), 0o700); err != nil {
 		return fmt.Errorf("create workspace dir for %s: %w", treePath, err)
 	}
-	content, err := g.run(ctx, nil, "cat-file", "blob", e.oid)
+	info, body, err := g.objects.Open(ctx, e.oid)
 	if err != nil {
 		return err
 	}
+	if info.Type != gitrun.ObjectBlob {
+		return fmt.Errorf("malformed tree: %s entry %s names a %s: %w", e.mode, treePath, info.Type, ErrMalformedTree)
+	}
 	if e.mode == "120000" {
-		if err := root.Symlink(string(content), name); err != nil {
+		target, err := io.ReadAll(body)
+		if err != nil {
+			return err
+		}
+		if err := root.Symlink(string(target), name); err != nil {
 			return fmt.Errorf("materialize symlink %s: %w", treePath, err)
 		}
 		return nil
@@ -296,8 +310,18 @@ func (g *gitRunner) writeTreeEntry(ctx context.Context, root *os.Root, treePath 
 	if e.mode == "100755" {
 		perm = 0o755
 	}
-	if err := root.WriteFile(name, content, perm); err != nil {
+	// The flags root.WriteFile uses, streaming instead of buffering the blob.
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
 		return fmt.Errorf("materialize %s: %w", treePath, err)
+	}
+	_, copyErr := io.Copy(f, body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return fmt.Errorf("materialize %s: %w", treePath, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("materialize %s: %w", treePath, closeErr)
 	}
 	return nil
 }
