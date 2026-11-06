@@ -608,6 +608,54 @@ import Testing
                 == "readiness_detail requirements out of key order")
     }
 
+    /// domain.ReadinessDetail.validateHandoff: the tip and merge the handoff
+    /// checked agree with the bound base and the candidate head, and a detail
+    /// recorded before they existed carries neither.
+    @Test func readinessDetailHandoffAgreesWithBaseAndHead() {
+        let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        var moved = clean
+        moved.readiness_detail = .init(
+            value1: AttentionFixtures.movedTipReadinessDetail(head: clean.pr_head_sha))
+        #expect(MockContractValidation.itemValidityBreach(moved) == nil)
+        var legacy = clean
+        legacy.readiness_detail?.value1.handoff_tip = nil
+        #expect(MockContractValidation.itemValidityBreach(legacy) == nil)
+
+        let cases: [(String, (inout Components.Schemas.ReadinessDetail) -> Void)] = [
+            ("readiness_detail handoff_merge without handoff_tip", { $0.handoff_tip = nil }),
+            ("empty readiness_detail handoff_tip", { $0.handoff_tip = "" }),
+            ("readiness_detail handoff_tip moved without handoff_merge", { $0.handoff_merge = nil }),
+            (
+                "readiness_detail handoff_merge at an unchanged tip",
+                {
+                    $0.handoff_tip = $0.base.base_sha
+                    $0.handoff_merge?.base_sha = $0.base.base_sha
+                }
+            ),
+            ("empty readiness_detail handoff_merge", { $0.handoff_merge?.merge_sha = "" }),
+            (
+                "readiness_detail handoff_merge repeats a commit",
+                { $0.handoff_merge?.merge_sha = $0.candidate_head }
+            ),
+            (
+                "readiness_detail handoff_merge disagrees with handoff_tip or candidate_head",
+                { $0.handoff_merge?.base_sha = "0badf00d" }
+            ),
+            (
+                "readiness_detail handoff_merge disagrees with handoff_tip or candidate_head",
+                { $0.handoff_merge?.head_sha = "0badf00d" }
+            ),
+        ]
+        for (breach, mutate) in cases {
+            var item = moved
+            if var detail = item.readiness_detail?.value1 {
+                mutate(&detail)
+                item.readiness_detail = .init(value1: detail)
+            }
+            #expect(MockContractValidation.itemValidityBreach(item) == breach)
+        }
+    }
+
     @Test func reviewYieldHistoryIsTypeScopedConsistentAndLegacyOptional() {
         let ready = AttentionFixtures.fixture(type: .ready_for_final_review).item
         #expect(MockContractValidation.itemValidityBreach(ready) == nil)

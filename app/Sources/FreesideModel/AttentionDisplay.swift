@@ -1365,6 +1365,12 @@ package enum AttentionDisplay {
         rows.append(BindingRow(label: "Bound Head", value: detail.candidate_head))
         rows.append(
             BindingRow(label: "Bound Base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
+        if let tip = detail.handoff_tip {
+            rows.append(BindingRow(label: "Handoff Tip", value: tip))
+        }
+        if let merge = detail.handoff_merge {
+            rows.append(BindingRow(label: "Handoff Merge", value: merge.merge_sha))
+        }
         return rows
     }
 

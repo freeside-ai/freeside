@@ -215,8 +215,9 @@ enum MockContractValidation {
     /// The daemon's rules for the readiness detail (domain.ReadinessDetail and
     /// AttentionItem.Validate): ready items only, never without the summary it
     /// explains, bound to the summary's digest and class and to the published
-    /// head, entries in key order, a proof exactly on a pass, a waiver only on
-    /// a required waiver-eligible non-pass, and never a blocked shape.
+    /// head, a handoff tip and merge that agree with the base and head,
+    /// entries in key order, a proof exactly on a pass, a waiver only on a
+    /// required waiver-eligible non-pass, and never a blocked shape.
     static func readinessDetailBreach(
         _ detail: Components.Schemas.ReadinessDetail,
         item: Components.Schemas.AttentionItem
@@ -236,6 +237,7 @@ enum MockContractValidation {
         if detail.base.base_ref.isEmpty || detail.base.base_sha.isEmpty {
             return "empty readiness_detail base"
         }
+        if let breach = readinessDetailHandoffBreach(detail) { return breach }
         if detail.requirements.isEmpty { return "empty readiness_detail requirements" }
         var previousKey = ""
         var impliedClass = Components.Schemas.ReadinessSummary._classPayload.ready_clean
@@ -271,6 +273,35 @@ enum MockContractValidation {
         }
         if impliedClass != readiness._class {
             return "readiness_detail class disagrees with readiness"
+        }
+        return nil
+    }
+
+    /// domain.ReadinessDetail.validateHandoff: no tip is a legacy detail and
+    /// carries no merge; a tip past the base needs the merge of the candidate
+    /// head into it, and a tip at the base takes none.
+    static func readinessDetailHandoffBreach(
+        _ detail: Components.Schemas.ReadinessDetail
+    ) -> String? {
+        guard let tip = detail.handoff_tip else {
+            return detail.handoff_merge == nil ? nil : "readiness_detail handoff_merge without handoff_tip"
+        }
+        if tip.isEmpty { return "empty readiness_detail handoff_tip" }
+        let moved = tip != detail.base.base_sha
+        guard let merge = detail.handoff_merge else {
+            return moved ? "readiness_detail handoff_tip moved without handoff_merge" : nil
+        }
+        if !moved { return "readiness_detail handoff_merge at an unchanged tip" }
+        if merge.base_sha.isEmpty || merge.head_sha.isEmpty || merge.merge_sha.isEmpty {
+            return "empty readiness_detail handoff_merge"
+        }
+        if merge.base_sha == merge.head_sha || merge.merge_sha == merge.base_sha
+            || merge.merge_sha == merge.head_sha
+        {
+            return "readiness_detail handoff_merge repeats a commit"
+        }
+        if merge.base_sha != tip || merge.head_sha != detail.candidate_head {
+            return "readiness_detail handoff_merge disagrees with handoff_tip or candidate_head"
         }
         return nil
     }

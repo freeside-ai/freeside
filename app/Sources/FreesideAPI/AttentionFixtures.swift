@@ -661,12 +661,14 @@ public enum AttentionFixtures {
 
     /// The evaluation behind the ready fixture's clean verdict, matching the
     /// daemon's golden: the production set's two required checks passed
-    /// against the published head and the admitted base.
+    /// against the published head and the admitted base, and the handoff
+    /// found the target tip still at that base.
     static func cleanReadinessDetail(head: String) -> Components.Schemas.ReadinessDetail {
         .init(
             evaluation_set_digest: "sha256:evaluation-clean",
             candidate_head: head,
             base: .init(base_ref: "main", base_sha: "deadbeef"),
+            handoff_tip: "deadbeef",
             requirements: [
                 .init(
                     requirement_key: "clean-verification",
@@ -683,6 +685,15 @@ public enum AttentionFixtures {
                     proof_recipe_digest: .init(value1: "sha256:review-config"),
                     waiver: nil),
             ])
+    }
+
+    /// The clean evaluation whose handoff found the target tip moved past
+    /// the admitted base and verified the head's merge into it.
+    public static func movedTipReadinessDetail(head: String) -> Components.Schemas.ReadinessDetail {
+        var detail = cleanReadinessDetail(head: head)
+        detail.handoff_tip = "facefeed"
+        detail.handoff_merge = .init(base_sha: "facefeed", head_sha: head, merge_sha: "0ddba11")
+        return detail
     }
 
     /// A ready fixture carrying the other valid readiness class. The default

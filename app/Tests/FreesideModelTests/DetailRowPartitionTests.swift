@@ -54,7 +54,7 @@ import Testing
             Self.fixtures.flatMap { AttentionDisplay.detailIdentifierRows($0) }.map(\.label))
         let readingLabels = Set(Self.fixtures.flatMap { AttentionDisplay.detailReadingRows($0) }.map(\.label))
 
-        for label in ["Evaluation Set", "Bound Head", "Bound Base", "Drift Audit", "Hold Code"] {
+        for label in ["Evaluation Set", "Bound Head", "Bound Base", "Handoff Tip", "Drift Audit", "Hold Code"] {
             #expect(identifierLabels.contains(label), "\(label)")
         }
         for label in ["Posture", "Readiness", "Terminal Review"] {
@@ -146,6 +146,12 @@ import Testing
                 rows.append(.init(label: "Bound Head", value: detail.candidate_head))
                 rows.append(
                     .init(label: "Bound Base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
+                if let tip = detail.handoff_tip {
+                    rows.append(.init(label: "Handoff Tip", value: tip))
+                }
+                if let merge = detail.handoff_merge {
+                    rows.append(.init(label: "Handoff Merge", value: merge.merge_sha))
+                }
                 // The requirement and waiver rows were the tail of the old
                 // readiness rows; the reading half still builds them alone.
                 rows.append(contentsOf: AttentionDisplay.readinessReadingRows(item).dropFirst())
