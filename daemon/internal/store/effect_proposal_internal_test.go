@@ -14,6 +14,7 @@ import (
 )
 
 func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0040_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -52,6 +53,7 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 }
 
 func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	policy, err := domain.NewResolvedPolicy("proposal-policy-run", []domain.PolicyKey{{
@@ -246,6 +248,7 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 }
 
 func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	policy, err := domain.NewResolvedPolicy("proposal-policy-run", []domain.PolicyKey{{
@@ -702,6 +705,7 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 // approval from it rather than trust the tampered action, matching the write
 // path's command-authority check.
 func TestClosureApprovalRejectsCorruptedDeclineRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 
@@ -859,6 +863,7 @@ func closureApproval(t *testing.T, ctx context.Context, st *Store, instanceID do
 // the item's status, and fails closed when the deciding command names an item
 // bound to another instance.
 func TestDecidedEffectItemForInstance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	source := domain.SpecificationSource{
@@ -943,6 +948,7 @@ func TestDecidedEffectItemForInstance(t *testing.T) {
 // uses: the subject's cards of one kind, open or closed, and an instance's
 // ledger decision, which fails closed when its command no longer backs it.
 func TestProposalCardReads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	closureFor := func(projectID domain.ProjectID) (domain.OpaqueSubjectHandle, domain.EffectProposal) {
@@ -1075,6 +1081,7 @@ func TestProposalCardReads(t *testing.T) {
 // TestProposalTaskRefusesAnEffectCard: only a task_proposal starts a task, so
 // a card of another kind resolves to none.
 func TestProposalTaskRefusesAnEffectCard(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newAdoptionFixture(t)
 	instance, _, err := fx.admit(t, fx.params())

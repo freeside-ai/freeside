@@ -511,6 +511,7 @@ func TestFindingDispositionSurvivesProcessKill(t *testing.T) {
 }
 
 func TestFindingDispositionKillWriter(t *testing.T) {
+	t.Parallel()
 	path := os.Getenv("FREESIDE_FINDING_DISPOSITION_KILL_DB")
 	if path == "" {
 		t.Skip("helper process")

@@ -20,6 +20,7 @@ import (
 // (started, completed); a task whose runs are all concluded with no completion
 // is not (started, abandoned).
 func TestBackfillTaskLifecycleFactsClassifiesLegacyTasks(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	// Seed legacy rows at the pre-0072 schema, then migrate to head so the
 	// backfill runs exactly as it would on a real upgrade.
@@ -161,6 +162,7 @@ func TestBackfillTaskLifecycleFactsClassifiesLegacyTasks(t *testing.T) {
 // binding resolves to another run's unit, fails closed at reconstruction rather
 // than releasing a WIP slot on a corrupt log.
 func TestTaskReconstructionRegatesLifecycleFacts(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	// A head-schema copy, so task_lifecycle_facts exists and facts can be
 	// seeded directly.
@@ -419,6 +421,7 @@ func insertRawRunFixture(ctx context.Context, db *sql.DB, id, projectID, policy 
 }
 
 func TestTaskReconstructionRejectsCoherentRunRetarget(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := openRaw(t)
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_rename_specification_vocabulary.sql"))
@@ -468,6 +471,7 @@ func TestTaskReconstructionRejectsCoherentRunRetarget(t *testing.T) {
 }
 
 func TestTaskMigrationDoesNotGroupOrphanThroughForgedAttemptColumn(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := openRawThrough(t, "0070_")
 	if err := seedEpoch(ctx, db); err != nil {
@@ -511,6 +515,7 @@ func TestTaskMigrationDoesNotGroupOrphanThroughForgedAttemptColumn(t *testing.T)
 }
 
 func TestTaskMigrationAuthenticatesStartedLabelIntake(t *testing.T) {
+	t.Parallel()
 	for _, mutation := range []string{"", "declaration", "occurrence"} {
 		t.Run(mutation, func(t *testing.T) {
 			ctx := t.Context()
@@ -575,6 +580,7 @@ func TestTaskMigrationAuthenticatesStartedLabelIntake(t *testing.T) {
 }
 
 func TestTaskMigrationRetainsUnstartedLabelIntake(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := openRawThrough(t, "0070_")
 	if err := seedEpoch(ctx, db); err != nil {

@@ -18,6 +18,7 @@ import (
 )
 
 func TestCodexReenrollmentEnumRegistration(t *testing.T) {
+	t.Parallel()
 	outcomes := []CodexReenrollmentOutcome{
 		CodexReenrollmentFailed,
 		CodexReenrollmentVerified,
@@ -57,6 +58,7 @@ func TestCodexReenrollmentEnumRegistration(t *testing.T) {
 }
 
 func TestCodexReenrollmentMarkerBindingMatchesIdentity(t *testing.T) {
+	t.Parallel()
 	binding := domain.CodexReenrollmentRecoveryBinding{
 		AuthIdentityID: "codex-other", LeaseFence: 1,
 		AuthStoreDigest:      "sha256:replacement",
@@ -72,6 +74,7 @@ func TestCodexReenrollmentMarkerBindingMatchesIdentity(t *testing.T) {
 }
 
 func TestCodexReenrollmentMarkerRequiresPositiveOccurrence(t *testing.T) {
+	t.Parallel()
 	for _, occurrence := range []int{-1, 0} {
 		_, err := NewCodexReenrollmentMarker(
 			"codex-primary", occurrence, "project-1", 1, domain.StatusOpen, nil,
@@ -83,6 +86,7 @@ func TestCodexReenrollmentMarkerRequiresPositiveOccurrence(t *testing.T) {
 }
 
 func TestCodexReenrollmentJournalRejectsCompletionBeforeOpening(t *testing.T) {
+	t.Parallel()
 	openedAt := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	class := CodexReenrollmentLeaseLost
 	rec := CodexReenrollmentJournal{
@@ -103,6 +107,7 @@ func TestCodexReenrollmentJournalRejectsCompletionBeforeOpening(t *testing.T) {
 }
 
 func TestCodexReenrollmentRecoveryBindingValidatesCallerConstructedJournal(t *testing.T) {
+	t.Parallel()
 	completedAt := time.Date(2026, 8, 11, 1, 2, 4, 0, time.UTC)
 	digest := domain.Digest("sha256:replacement")
 	expiresAt := completedAt.Add(time.Hour)
@@ -133,6 +138,7 @@ func TestCodexReenrollmentRecoveryBindingValidatesCallerConstructedJournal(t *te
 }
 
 func TestCodexReenrollmentRecoveryCarrierValidatesCallerConstructedTransition(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, t.TempDir()+"/freeside.db", Options{})
 	at := time.Date(2026, 8, 11, 1, 2, 4, 0, time.UTC)
@@ -166,6 +172,7 @@ func TestCodexReenrollmentRecoveryCarrierValidatesCallerConstructedTransition(t 
 }
 
 func TestCodexReenrollmentRecoveryCarrierRequiresExactDecisionInstant(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 8, 11, 1, 2, 4, 0, time.UTC)
 	binding := domain.CodexReenrollmentRecoveryBinding{
 		AuthIdentityID: "codex-primary", LeaseFence: 1,
@@ -213,6 +220,7 @@ func TestCodexReenrollmentRecoveryCarrierRequiresExactDecisionInstant(t *testing
 }
 
 func TestCodexReenrollmentVerifiedRequiresUnexpiredEvidence(t *testing.T) {
+	t.Parallel()
 	completedAt := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	digest := domain.Digest("sha256:replacement")
 	for _, expiresAt := range []time.Time{
@@ -242,6 +250,7 @@ func TestCodexReenrollmentVerifiedRequiresUnexpiredEvidence(t *testing.T) {
 }
 
 func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0039_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -262,6 +271,7 @@ func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 }
 
 func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0039_")
 	identities := []domain.AuthIdentityID{
@@ -409,6 +419,7 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 }
 
 func TestCodexReenrollmentMigrationNoMatchPreservesRevision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0039_")
 	var before int64
@@ -436,6 +447,7 @@ func TestCodexReenrollmentMigrationNoMatchPreservesRevision(t *testing.T) {
 }
 
 func TestAuthenticateLegacyCodexReenrollmentMarkerRejectsNearMatches(t *testing.T) {
+	t.Parallel()
 	id := domain.AuthIdentityID("codex-near-match")
 	valid, err := legacyCodexReenrollmentMarker(
 		id, codexReenrollmentMigrationTestItemID(id, "10"), "project-1", 1, domain.StatusOpen,
@@ -548,6 +560,7 @@ func insertCodexReenrollmentMigrationTestItem(
 }
 
 func TestCodexReenrollmentReconstructionRejectsUnknownAndTrailingBody(t *testing.T) {
+	t.Parallel()
 	for _, mutate := range []struct {
 		name string
 		body func(string) string

@@ -15,6 +15,7 @@ import (
 // TestPublicationAuthoringMigrationAppliesFromHead proves 0078 applies on top of
 // the prior schema and creates the authoring table at schema version 78.
 func TestPublicationAuthoringMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0077_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -29,6 +30,7 @@ func TestPublicationAuthoringMigrationAppliesFromHead(t *testing.T) {
 // integrity column is cross-checked against the decoded body on read: a
 // tampered value fails closed rather than reconstructing.
 func TestPublicationAuthoringReconstructionRejectsTampering(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 

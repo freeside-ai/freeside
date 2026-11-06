@@ -11,6 +11,7 @@ import (
 )
 
 func TestAdmissionAndPolicyPackagesCannotReadUsageObservations(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("..")
 	targets := []string{"domain", "store", "intake", "signet", "exec", "inference", "publish", "engine"}
 	inspected := 0

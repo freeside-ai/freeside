@@ -300,6 +300,7 @@ func TestTaskNameAdvancesAttentionSnapshots(t *testing.T) {
 }
 
 func TestTaskNameAgentRefinementAdvancesAttentionSnapshots(t *testing.T) {
+	t.Parallel()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 	seedItem(t, s, &f)

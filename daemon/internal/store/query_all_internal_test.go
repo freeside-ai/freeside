@@ -21,6 +21,7 @@ func scanQueryAllInt(s scanner) (int, error) {
 // nil for zero rows, a scan error located by its 1-based row position and
 // still matching errors.Is, and a query error returned unchanged.
 func TestQueryAll(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTestStore(t)
 	errCorrupt := errors.New("corrupt row")

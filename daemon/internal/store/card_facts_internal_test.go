@@ -624,6 +624,7 @@ func TestStoreRefusesOpenBlockedItem(t *testing.T) {
 }
 
 func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
+	t.Parallel()
 	invocationID := domain.InvocationID("inv-specify-specification-run-1")
 	provenance := domain.Provenance{
 		ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocationID,
@@ -664,6 +665,7 @@ func TestBlockedWaitTerminalSummaryMatchesApproval(t *testing.T) {
 }
 
 func TestBlockedWaitTerminalIdentityMatchesApproval(t *testing.T) {
+	t.Parallel()
 	specificationRun := domain.RunID("specification-run")
 	approval := domain.AttentionItem{
 		ID: "spec-approval-implementation-run-1",
@@ -938,6 +940,7 @@ func TestAttentionItemSuccessorReauthenticatesRestoredExecutionFailure(t *testin
 }
 
 func TestCostCompletenessEnumerationsRejectCopiedRunIDTamper(t *testing.T) {
+	t.Parallel()
 	t.Run("execution admission", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()

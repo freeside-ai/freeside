@@ -10,6 +10,7 @@ import (
 // The unpublished re-entry seal recognizes an open reservation by its outbox
 // kind, which the publish package owns and the store cannot import.
 func TestPublicationReservationKind(t *testing.T) {
+	t.Parallel()
 	if store.PublicationReservationKind != publish.IntentKindReservation {
 		t.Fatalf("store reservation kind %q, publish writes %q",
 			store.PublicationReservationKind, publish.IntentKindReservation)

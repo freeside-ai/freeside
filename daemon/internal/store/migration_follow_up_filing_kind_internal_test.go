@@ -18,6 +18,7 @@ import (
 // before 0070; the source_issue_closure row is that row re-keyed, which is
 // enough for a schema-level rebuild that never reads the body.
 func TestFollowUpFilingKindMigrationPreservesRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))

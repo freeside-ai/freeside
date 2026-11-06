@@ -11,6 +11,7 @@ import (
 )
 
 func TestLocalBackupProducerEffectProposalEvidence(t *testing.T) {
+	t.Parallel()
 	for _, forged := range []bool{false, true} {
 		name := "durable instance"
 		if forged {

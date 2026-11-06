@@ -17,6 +17,7 @@ import (
 // a task proposal). The fixture carries a real start decision and item row from
 // before 0070.
 func TestEffectProposalApprovalsMigrationPreservesRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
@@ -70,6 +71,7 @@ func TestEffectProposalApprovalsMigrationPreservesRows(t *testing.T) {
 // probe connection so only the CHECK, not a missing parent row, can reject the
 // insert.
 func TestEffectProposalItemsCheckEnforcesAllOrNoneMerge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawTemplate(t)
 	conn, err := db.Conn(ctx)

@@ -108,7 +108,6 @@ linters:
           |internal/signet\
           |internal/specify\
           |internal/specify/fake\
-          |internal/store\
           |internal/strictjson\
           |internal/topicstore\
           |internal/wardstore\

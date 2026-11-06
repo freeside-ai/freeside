@@ -91,6 +91,7 @@ func TestAppendUsageObservationsRoundTripsAndReplays(t *testing.T) {
 // An append feeds the run's billable_cost_so_far, so it has to reach clients
 // through the revision on its own (#1145).
 func TestAppendUsageObservationsRaisesRevision(t *testing.T) {
+	t.Parallel()
 	s, admission := seedUsageAdmission(t)
 	ctx := context.Background()
 	before, err := s.ServerState(ctx)

@@ -182,6 +182,7 @@ func (f unpublishedReentryFixture) current(t *testing.T) *domain.PublicationSucc
 // a new v5 successor and records nothing, while one an earlier daemon sealed
 // still reads as the run's current successor.
 func TestUnpublishedReentrySealIsRetired(t *testing.T) {
+	t.Parallel()
 	f := seedUnpublishedReentry(t, publicationReservationKind)
 	f.audit(t, "owner/repo", reentryBase2)
 	authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
@@ -200,6 +201,7 @@ func TestUnpublishedReentrySealIsRetired(t *testing.T) {
 // The every-read gate accepts a tip any recorded audit of the run's
 // repository observed, not only the latest.
 func TestUnpublishedReentryReadsAnOlderAuditTip(t *testing.T) {
+	t.Parallel()
 	f := seedUnpublishedReentry(t, publicationReservationKind)
 	f.audit(t, "owner/repo", reentryBase2)
 	f.audit(t, "owner/repo", reentryBase3)
@@ -210,6 +212,7 @@ func TestUnpublishedReentryReadsAnOlderAuditTip(t *testing.T) {
 }
 
 func TestUnpublishedReentryRefusesAnUnauditedBase(t *testing.T) {
+	t.Parallel()
 	f := seedUnpublishedReentry(t, publicationReservationKind)
 	// Another repository's audit observed the base: it proves nothing for
 	// this run, whose admissions name owner/repo.
@@ -223,6 +226,7 @@ func TestUnpublishedReentryRefusesAnUnauditedBase(t *testing.T) {
 // A stored chain of v5 re-entries still reads: its tip is the run's current
 // successor.
 func TestStoredUnpublishedReentryChainReads(t *testing.T) {
+	t.Parallel()
 	f := seedUnpublishedReentry(t, publicationReservationKind)
 	f.audit(t, "owner/repo", reentryBase2)
 	first := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
