@@ -1594,6 +1594,10 @@ func TestGolden(t *testing.T) {
 	recordedFactsReviewBinding.CostOwner = "platform-team"
 	recordedFactsReview := reviewAdmission
 	recordedFactsReview.AgentBinding = recordedFactsReviewBinding
+	goldenSelection, err := domain.ReduceAgentSelection(goldenAgent, goldenAdapter, goldenOffer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The facts each kind of admission projects: a writer with every fact
 	// recorded, a binding from before #979 (no harness, lineage, or cost
 	// owner), a legacy admission with no binding, and a reviewer that
@@ -2474,6 +2478,7 @@ func TestGolden(t *testing.T) {
 		{"offer_fragment", goldenOffer},
 		{"launch_spec", goldenLaunch},
 		{"agent_definition", goldenAgent},
+		{"agent_selection", goldenSelection},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"stage_input_snapshot_attachments", attachmentsStageInput},

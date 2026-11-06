@@ -1,0 +1,8 @@
+{
+  "encoding_version": 1,
+  "enrollment_id": "enroll-openai-A-codex",
+  "model_id": "gpt-5.6-sol",
+  "effort": "xhigh",
+  "adapter_digest": "sha256:f37088cecbdc7f0b98601729cadc96795867cef126e405d85a525dc4869d6a78",
+  "digest": "sha256:9e51a0466655d03f5b0fab46b5ef0778d26237ee3dec99fc7bf91f45038f97e9"
+}

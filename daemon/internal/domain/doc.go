@@ -86,6 +86,8 @@
 //   - execution.go    the durable admission and export records (§5.3, §5.7)
 //   - agent.go, agent_fragment.go, harness_effort.go
 //     admitted agents, credential route fragments, and effort translation (§5.4)
+//   - agent_selection.go the enrollment, model, and effort an agent stands for,
+//     its digest, and the adapter a launch shape picks (§5.4)
 //   - role.go         a role's launch shape, stage, and judgment sites
 //   - launch.go       digest-addressed stage launch specs
 //   - machine_capacity.go launch memory reservations and capacity holds
