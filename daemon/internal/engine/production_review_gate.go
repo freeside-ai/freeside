@@ -34,7 +34,12 @@ const (
 	productionReviewContinue
 )
 
+// productionReviewRequest builds the request every review path derives from
+// current state: the routed and shadow launches and the authority-only re-gate
+// of a persisted request. The task's attachments ride in Inputs, so all three
+// bind the same files into the authority digest.
 func (w *productionPublicationWorkflow) productionReviewRequest(
+	ctx context.Context,
 	task productionPublicationTask,
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
@@ -62,16 +67,48 @@ func (w *productionPublicationWorkflow) productionReviewRequest(
 	if err != nil {
 		return exec.ReviewRequest{}, "", err
 	}
+	inputs, err := w.reviewInputFiles(ctx, task.RunID)
+	if err != nil {
+		return exec.ReviewRequest{}, "", err
+	}
 	request := exec.ReviewRequest{
 		RunID: task.RunID, Round: round,
 		Repo: binding.admission.Base.Repo, RepositoryID: binding.admission.Base.RepositoryID,
 		BaseRef: binding.admission.Base.BaseRef,
 		BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
 		Workspace: reviewWorkspace, Verification: verification,
-		Instructions: instructions, Admission: admission, RequestedAt: w.now().UTC(),
+		Instructions: instructions, Admission: admission, Inputs: inputs, RequestedAt: w.now().UTC(),
 	}
 	authority, err := request.AuthorityDigest()
 	return request, authority, err
+}
+
+// reviewInputFiles reads the reviewed run's task attachments, nil when it has
+// none so a request without them keeps its earlier shape. Discussion
+// attachments are a writer's conversation input and never reach a reviewer.
+// As for writers, a run that names no task is a bug: skipping would drop the
+// task's files silently.
+func (w *productionPublicationWorkflow) reviewInputFiles(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.StageInputAttachment, error) {
+	var files []domain.StageInputAttachment
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("read reviewed run: %w", err)
+		}
+		if run.TaskID == "" {
+			return fmt.Errorf("run %q names no task: %w", runID, domain.ErrEmptyID)
+		}
+		files, err = taskInputFiles(ctx, tx, run.TaskID)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, nil
+	}
+	return files, nil
 }
 
 // ProductionReviewInvocationID derives the bounded ward identity for one
@@ -484,10 +521,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				advanceReview = true
 			}
 			if !advanceReview {
-				_, requestAuthority, err := w.productionReviewRequest(
-					task, binding, checkpoint, latestRecord.InvocationID,
+				req, requestAuthority, err := w.productionReviewRequest(
+					ctx, task, binding, checkpoint, latestRecord.InvocationID,
 					latestRecord.Round, reviewInstructions, latestAdmission,
 				)
+				if err != nil {
+					return productionReviewPending, err
+				}
+				requestAuthority, err = w.persistedReviewAuthority(
+					ctx, latestRecord.InvocationID, req, requestAuthority)
 				if err != nil {
 					return productionReviewPending, err
 				}
@@ -642,7 +684,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return productionReviewPending, err
 	}
 	req, requestAuthority, err := w.productionReviewRequest(
-		task, binding, checkpoint, id, round, reviewInstructions, admission,
+		ctx, task, binding, checkpoint, id, round, reviewInstructions, admission,
 	)
 	if err != nil {
 		return productionReviewPending, err
@@ -2188,4 +2230,33 @@ func (w *productionPublicationWorkflow) observeReviewInvocation(ctx context.Cont
 // upgrade.
 func legacyCodexReviewReason(reason string) string {
 	return "Codex review" + strings.TrimPrefix(reason, "Review")
+}
+
+// persistedReviewAuthority is the authority a finished review's persisted
+// request is re-gated against. A request persisted before reviewers received
+// the task's attachments carries none, and the source recognizes it as
+// superseded by req; its review stands under the authority it was persisted
+// with, req without inputs, as a findings record's adjudication already lets
+// it. Rerunning it instead would leave a round behind a remediation's
+// review, which reconcileRemediationReview refuses, or push a clean final
+// round past the hard limit. An unknown invocation, or one the source does
+// not supersede, keeps req's authority, and the re-gate decides.
+func (w *productionPublicationWorkflow) persistedReviewAuthority(
+	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest, authority domain.Digest,
+) (domain.Digest, error) {
+	verifier, ok := w.reviewSource.(exec.ReviewRequestSupersessionVerifier)
+	if !ok || len(req.Inputs) == 0 {
+		return authority, nil
+	}
+	err := verifier.VerifyReviewRequestSupersession(ctx, id, req)
+	switch {
+	case err == nil, errors.Is(err, exec.ErrUnknownInvocation):
+		return authority, nil
+	case errors.Is(err, exec.ErrSupersededReviewRequest):
+		persisted := req
+		persisted.Inputs = nil
+		return persisted.AuthorityDigest()
+	default:
+		return "", err
+	}
 }

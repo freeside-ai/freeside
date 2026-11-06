@@ -141,7 +141,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		return w.refuseShadowReviewAdmission(ctx, task, routed, id, err)
 	}
 	req, authority, err := w.productionReviewRequest(
-		task, binding, checkpoint, id, routed.Round, instructions, admission,
+		ctx, task, binding, checkpoint, id, routed.Round, instructions, admission,
 	)
 	if err != nil {
 		return false, err
