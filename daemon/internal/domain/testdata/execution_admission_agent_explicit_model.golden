@@ -1,5 +1,5 @@
 {
-  "id": "sha256:d822770656547621f79b22d1340e296b2cabbbbfe04af35c4b3e6cc999e98970",
+  "id": "sha256:2eb9a460663f0889d1708a6a645b0c918d58c36156b8fe0925621d9cdfd5f9ff",
   "invocation_id": "inv-4",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -61,7 +61,10 @@
     "route_model_id": "claude-opus-5-5",
     "requested_effort": "max",
     "native_effort": "max",
-    "selection_source": "lineup"
+    "selection_source": "lineup",
+    "selection_digest": "sha256:1e188081302e14a3d0ddc4bcf615fba8a2ba2633720decf51d2f9f344cdd8833",
+    "selection_model_id": "claude-opus-5-5",
+    "selection_effort": "max"
   },
   "admitted_at": "2026-01-02T03:04:05Z"
 }

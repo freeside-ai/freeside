@@ -35,8 +35,9 @@ type ReviewRoleAgent struct {
 	RoleAgent
 	Model, NativeEffort string
 
-	launch domain.LaunchSpec
-	passes domain.AgentLaunchSelection
+	launch    domain.LaunchSpec
+	passes    domain.AgentLaunchSelection
+	selection domain.AgentSelection
 }
 
 // ReviewAdmitter resolves the snapshot one review invocation is admitted
@@ -95,13 +96,15 @@ func CheckReviewRole(
 		return refuse("role %s is not a review role", role)
 	}
 	var (
-		agent  ReviewRoleAgent
-		line   domain.TaskLine
-		found  bool
-		marked error
+		agent   ReviewRoleAgent
+		line    domain.TaskLine
+		found   bool
+		marked  error
+		catalog *domain.DiscoveredModelCatalog
 	)
 	// One read transaction, so the task's line, the enrollment, its
-	// identity, its current generation, and its mark are one consistent view.
+	// identity, its current generation, its mark, and its catalog are one
+	// consistent view.
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		if runID != "" && role.TaskLineEligible() {
@@ -123,6 +126,9 @@ func CheckReviewRole(
 				return fmt.Errorf("role %s: %w", role, err)
 			}
 			marked = fmt.Errorf("role %s: %w", role, err)
+		}
+		if catalog, err = readCatalog(ctx, tx, agent.Enrollment.ID); err != nil {
+			return fmt.Errorf("role %s: %w", role, err)
 		}
 		return nil
 	})
@@ -183,6 +189,16 @@ func CheckReviewRole(
 		return refuse("agent %s is on an offer whose model the review launch cannot pass as one argument",
 			agent.Line.AgentName)
 	}
+	// The selection the agent stands for, after the checks above so their
+	// refusals keep their own words, with the adapter the review launch
+	// shape picks. The shape waives auxiliary-inference control, which the
+	// review launch forbids and no review adapter declares yet (#1980), for
+	// the reason review admission skips step 3 (the doc comment above).
+	if agent.selection, err = admitSelection(
+		tree, agent.RoleAgent, catalog, agent.launch, domain.LaunchCapAuxiliaryInferenceControl,
+	); err != nil {
+		return refuse("%v", err)
+	}
 	agent.Model, agent.NativeEffort = agent.passes.RouteModelID, agent.passes.NativeEffort
 	if marked != nil {
 		return agent, errors.Join(ErrAgentNotAdmissible, marked)
@@ -240,7 +256,9 @@ func (s AgentSelection) AdmitReview(
 			RouteModelID:        agent.passes.RouteModelID, RequestedEffort: agent.passes.RequestedEffort,
 			NativeEffort:    agent.passes.NativeEffort,
 			SelectionSource: source, SelectionRecordID: record,
-			HarnessClient: resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
+			SelectionDigest: agent.selection.Digest, SelectionModelID: agent.selection.ModelID,
+			SelectionEffort: agent.selection.Effort,
+			HarnessClient:   resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
 			CostOwner: agent.Identity.CostOwner,
 		},
 		AdmittedAt: admittedAt,

@@ -379,6 +379,13 @@ var (
 		"agent resolution join is invalid")
 	ErrEffortUntranslatable = errors.New(
 		"requested effort has no native value for the harness client")
+	// ErrNoAdapterForLaunch and ErrAmbiguousAdapterForLaunch are
+	// SelectAdapterForLaunch's refusals: no adapter for the client kind
+	// sends the effort and covers the stage launch, or more than one does.
+	ErrNoAdapterForLaunch = errors.New(
+		"no adapter for the client kind sends the effort and covers the stage launch")
+	ErrAmbiguousAdapterForLaunch = errors.New(
+		"more than one adapter for the client kind sends the effort and covers the stage launch")
 	ErrAgentBodyUnresolved = errors.New(
 		"agent canonical body carries a name where a resolved reference belongs")
 	ErrInvalidAgentName = errors.New(

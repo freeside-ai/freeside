@@ -1594,6 +1594,42 @@ func TestGolden(t *testing.T) {
 	recordedFactsReviewBinding.CostOwner = "platform-team"
 	recordedFactsReview := reviewAdmission
 	recordedFactsReview.AgentBinding = recordedFactsReviewBinding
+	// The selection #2596 records beside a binding: the four admission
+	// goldens carry it, and every fixture derived from those bindings above
+	// keeps the bytes it had before the selection existed.
+	goldenSelection, err := domain.ReduceAgentSelection(goldenAgent, goldenAdapter, goldenOffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := func(binding domain.AdmissionAgentBinding, model, effort string) domain.AdmissionAgentBinding {
+		t.Helper()
+		selection := domain.AgentSelection{
+			EncodingVersion: domain.AgentSelectionEncodingVersion, EnrollmentID: binding.EnrollmentID,
+			ModelID: model, Effort: effort, AdapterDigest: goldenAdapter.Digest,
+		}
+		if selection.Digest, err = selection.ComputeDigest(); err != nil {
+			t.Fatal(err)
+		}
+		binding.SelectionDigest = selection.Digest
+		binding.SelectionModelID = selection.ModelID
+		binding.SelectionEffort = selection.Effort
+		return binding
+	}
+	selectedExecution := func(a domain.ExecutionAdmission, model, effort string) domain.ExecutionAdmission {
+		t.Helper()
+		binding := selected(*a.AgentBinding, model, effort)
+		a.AgentBinding = &binding
+		if a.ID, err = a.ComputeID(); err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	selectedAgentAdmission := selectedExecution(agentAdmission, goldenSelection.ModelID, goldenSelection.Effort)
+	selectedTaskLineAdmission := selectedExecution(taskLineAdmission, goldenSelection.ModelID, goldenSelection.Effort)
+	selectedClaudeAdmission := selectedExecution(claudeAdmission, "claude-opus-5-5", "max")
+	selectedReviewAdmission := reviewAdmission
+	selectedReviewAdmission.AgentBinding = selected(reviewAdmission.AgentBinding, "gpt-5.2-codex", "high")
+
 	// The facts each kind of admission projects: a writer with every fact
 	// recorded, a binding from before #979 (no harness, lineage, or cost
 	// owner), a legacy admission with no binding, and a reviewer that
@@ -2474,6 +2510,7 @@ func TestGolden(t *testing.T) {
 		{"offer_fragment", goldenOffer},
 		{"launch_spec", goldenLaunch},
 		{"agent_definition", goldenAgent},
+		{"agent_selection", goldenSelection},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"stage_input_snapshot_attachments", attachmentsStageInput},
@@ -2481,11 +2518,11 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_registry", registryAdmission},
 		{"registry_set", registrySetDeclaration},
 		{"execution_admission_waived", waivedAdmission},
-		{"execution_admission_agent", agentAdmission},
+		{"execution_admission_agent", selectedAgentAdmission},
 		{"execution_admission_no_hydration", noHydrationAdmission},
-		{"execution_admission_agent_explicit_model", claudeAdmission},
-		{"review_admission", reviewAdmission},
-		{"execution_admission_task_line", taskLineAdmission},
+		{"execution_admission_agent_explicit_model", selectedClaudeAdmission},
+		{"review_admission", selectedReviewAdmission},
+		{"execution_admission_task_line", selectedTaskLineAdmission},
 		{"execution_admission_recorded_facts", recordedFactsAdmission},
 		{"review_admission_recorded_facts", recordedFactsReview},
 		{"invocation_admission_facts_execution", writerFacts},

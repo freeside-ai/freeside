@@ -602,6 +602,9 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A catalog lacking the agent's model fails the selection check too;
+	// coverage runs first, so the refusal keeps its own check.
+	f.recordCatalog(t, f.enrollment.ID, "claude-other-test", "high")
 	_, err = resolveAgentAdmission(
 		ctx, f.store, f.selection, f.run.ID, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt,
 	)
