@@ -436,8 +436,35 @@ engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
 ### Classification
 
 - **By path.** A change that touches any Tier A path below is Tier A, even
-  when most of it is Tier B. A new Tier A gate's doc comment names what it
-  re-checks, so a reviewer can see a path that skips it.
+  when most of it is Tier B, apart from the test-only files the next rule
+  names. A new Tier A gate's doc comment names what it re-checks, so a
+  reviewer can see a path that skips it.
+- **Test-only files don't make a change Tier A by path.** A `_test.go`
+  file or a file under a `testdata/` directory doesn't make a change Tier
+  A by its path, because Go's ordinary build leaves both out; the rest of
+  the change is classified on its own, and the next rule names the test
+  changes that stay Tier A. So a change limited to such files in a Tier A
+  path is Tier B, and so is one whose only other file is
+  `daemon/.golangci.yml`, which isn't on the Tier A list, as in #2706,
+  #2709, and #2711. Any other Go file keeps its path's tier even when only
+  tests use it, because Go compiles it into its package; a name with
+  "test" in it is no evidence (`internal/signet/test_notice.go` is
+  production code). Edits that leave every assertion and every credential
+  use as they were, such as adding `t.Parallel()` or `t.TempDir()` or
+  extracting a helper inside a `_test.go` file, are Tier B. Decision
+  record: `devlog/2026-11-06-0930-test-only-tier-b.md`.
+- **Gate tests and live credentials keep the Tier A bar.** Two test
+  changes stay Tier A wherever they sit:
+  - Adding or removing a test that checks a Tier A gate (a refusal,
+    tamper, or re-gate test), or changing what such a test asserts.
+    Disabling one counts as removing it, whether by `t.Skip`, a build
+    constraint, or a `TestMain` that never runs it. Changing what it
+    asserts includes editing a golden or other `testdata/` file it
+    compares against, or a `_test.go` helper, fixture, or `init` that
+    changes what it feeds the gate or checks.
+  - Changing how a test reads, uses, or prints a real credential, or what
+    it writes to a real external service, as the opt-in live suites
+    (`*_live_test.go`) do.
 - **An unlisted file joins the list.** Work in a file the list misses is
   still Tier A when it does what a Tier A category names (grants
   authority, stores or injects a credential, deletes real state, rewrites
