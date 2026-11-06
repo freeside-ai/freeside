@@ -10,6 +10,7 @@ import (
 )
 
 func TestRigReviewRecoveryPreservesInterruptedOutcomeWithoutLaunch(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	leaser, err := NewRuntimeCodexReviewVolumeLeaser(rt)
 	if err != nil {
@@ -61,6 +62,7 @@ func TestRigReviewRecoveryPreservesInterruptedOutcomeWithoutLaunch(t *testing.T)
 }
 
 func TestRigReviewRecoveryPreparationAndOwnership(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"owned", "foreign", "partial-failure", "outside-rig"} {
 		t.Run(mode, func(t *testing.T) {
 			fx := testCodexReviewPrepRecoveryFixture(t)
@@ -113,6 +115,7 @@ func TestRigReviewRecoveryPreparationAndOwnership(t *testing.T) {
 }
 
 func TestRigReviewRecoveryLeavesUnrelatedOutcomeUntouched(t *testing.T) {
+	t.Parallel()
 	fx := testCodexReviewPrepRecoveryFixture(t)
 	fx.journal.intent.State = CodexReviewIntentClosed
 	fx.journal.outcomes = map[string]CodexReviewSourceOutcome{fx.launch.RunID: {
@@ -128,6 +131,7 @@ func TestRigReviewRecoveryLeavesUnrelatedOutcomeUntouched(t *testing.T) {
 }
 
 func TestRigReviewRecoveryOrphanWorkspace(t *testing.T) {
+	t.Parallel()
 	backend, rt, _, launch, journal := testCodexReviewLifecycle(t)
 	resources := codexReviewWorkspaceRuntimeResourceNames(launch.RunID)
 	if err := RecoverCodexReviewResources(context.Background(), rt, journal, backend.cfg.ExportRoot, resources); err != nil {

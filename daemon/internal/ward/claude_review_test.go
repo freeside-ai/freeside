@@ -170,6 +170,7 @@ func claudeReviewSourceConfigForTest(
 }
 
 func TestClaudeReviewProviderConstants(t *testing.T) {
+	t.Parallel()
 	p := claudeReviewProvider{}
 	strs := []struct{ name, got, want string }{
 		{"sourceLabel", p.sourceLabel(), "claude_local"},
@@ -214,6 +215,7 @@ func TestClaudeReviewProviderConstants(t *testing.T) {
 }
 
 func TestClaudeReviewBuildAgentSpecTopology(t *testing.T) {
+	t.Parallel()
 	cfg, req := testClaudeReview(t)
 	spec, binding, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
 	if err != nil {
@@ -263,6 +265,7 @@ func TestClaudeReviewBuildAgentSpecTopology(t *testing.T) {
 }
 
 func TestClaudeReviewContainerNameIsSingleSourced(t *testing.T) {
+	t.Parallel()
 	cfg, req := testClaudeReview(t)
 	spec, _, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
 	if err != nil {
@@ -293,6 +296,7 @@ func TestClaudeReviewContainerNameIsSingleSourced(t *testing.T) {
 }
 
 func TestClaudeReviewCommandShape(t *testing.T) {
+	t.Parallel()
 	cmd := claudeReviewCommand("/workspace/project", "claude-opus-4-8", "high", "the prompt")
 	if len(cmd) != 5 || cmd[0] != "sh" || cmd[1] != "-c" {
 		t.Fatalf("command shell wrapper = %v", cmd[:min(len(cmd), 2)])
@@ -335,6 +339,7 @@ func TestClaudeReviewCommandShape(t *testing.T) {
 }
 
 func TestClaudeReviewRejectsCrossProviderAuthMode(t *testing.T) {
+	t.Parallel()
 	// A Codex subscription request against the Claude provider is refused.
 	codexCfg, codexReq := testCodexReview(t)
 	if _, _, err := buildReviewAgentSpec(claudeReviewProvider{}, codexCfg, codexReq); !errors.Is(err, ErrInvalidCodexReviewSpec) {
@@ -348,6 +353,7 @@ func TestClaudeReviewRejectsCrossProviderAuthMode(t *testing.T) {
 }
 
 func TestReviewSourceRejectsLifecycleProviderMismatch(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	codexLifecycle := fx.codexReviewLifecycle(t)
 	claudeLifecycle, err := NewClaudeReviewLifecycle(fx.rt, fx.cfg, nil)
@@ -379,6 +385,7 @@ func TestReviewSourceRejectsLifecycleProviderMismatch(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryDispatchesStartedClaudeIntent(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -462,6 +469,7 @@ func TestCodexReviewRecoveryDispatchesStartedClaudeIntent(t *testing.T) {
 }
 
 func TestClaudeReviewInspectSetupToken(t *testing.T) {
+	t.Parallel()
 	p := claudeReviewProvider{}
 	// A trailing newline is trimmed; the container body is the bare token.
 	body, expires, err := p.inspectAgentAuthSnapshot(CodexAuthSetupToken, []byte(testClaudeSetupToken+"\n"))
@@ -499,6 +507,7 @@ func TestClaudeReviewInspectSetupToken(t *testing.T) {
 // reconstructed instructions must carry the source's own vendor, or a Claude
 // source's every request is rejected at the launch-shape vendor gate.
 func TestClaudeReviewSourceMaterializesClaudeVendor(t *testing.T) {
+	t.Parallel()
 	host := []byte("operator review rules\n")
 	bundle, binding, err := exec.ComposeCodexReviewInstructions(
 		exec.ReviewHostInstructionInput{Present: true, Body: host}, nil,
@@ -538,6 +547,7 @@ func testClaudeReviewSourceForCollection() *CodexReviewSource {
 }
 
 func TestClaudeReviewCollectionEnvelope(t *testing.T) {
+	t.Parallel()
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{Admission: testClaudeReviewAdmission("run-1"), RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
@@ -621,6 +631,7 @@ func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 }
 
 func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
+	t.Parallel()
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{
@@ -680,6 +691,7 @@ func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
 }
 
 func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
+	t.Parallel()
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{
@@ -731,6 +743,7 @@ func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
 }
 
 func TestClaudeReviewBindingRefusesV2LegacyTopology(t *testing.T) {
+	t.Parallel()
 	cfg, req := testClaudeReview(t)
 	_, binding, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
 	if err != nil {
@@ -764,6 +777,7 @@ func TestClaudeReviewBindingRefusesV2LegacyTopology(t *testing.T) {
 // snapshot of the same bytes does, and the snapshot volume is held to that
 // body: a credential whose bytes the seeded volume does not hold is refused.
 func TestClaudeReviewBuildsFromAnInMemoryCredential(t *testing.T) {
+	t.Parallel()
 	cfg, req := testClaudeReview(t)
 	fromSnapshot, _, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
 	if err != nil {

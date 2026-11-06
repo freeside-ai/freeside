@@ -35,6 +35,7 @@ func inputMountsOf(spec ContainerSpec) []Mount {
 }
 
 func TestCodexReviewSpecMountsObservedInputsReadOnly(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	req = testReviewInputsRequest(cfg, req)
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
@@ -101,6 +102,7 @@ func TestCodexReviewSpecMountsObservedInputsReadOnly(t *testing.T) {
 }
 
 func TestCodexReviewSpecRefusesUnprovenInputs(t *testing.T) {
+	t.Parallel()
 	cfg, base := testCodexReview(t)
 	for name, mutate := range map[string]func(*CodexReviewSpec){
 		"observation without files": func(r *CodexReviewSpec) { r.Inputs = nil },
@@ -122,6 +124,7 @@ func TestCodexReviewSpecRefusesUnprovenInputs(t *testing.T) {
 }
 
 func TestCodexReviewInputObservationMustBeFreshBeforeStart(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	withInputs := testReviewInputsRequest(cfg, req)
 	fresh := withInputs.InputVolume
@@ -146,6 +149,7 @@ func TestCodexReviewInputObservationMustBeFreshBeforeStart(t *testing.T) {
 }
 
 func TestReviewLaunchDeliversInputsToEachProvider(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		provider reviewProvider
@@ -212,6 +216,7 @@ func TestReviewLaunchDeliversInputsToEachProvider(t *testing.T) {
 }
 
 func TestReviewLaunchWithoutInputsCreatesNoInputVolume(t *testing.T) {
+	t.Parallel()
 	lifecycle, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	launch, err := lifecycle.CodexReview(context.Background(), cfg, launchSpec)
 	if err != nil {
@@ -230,6 +235,7 @@ func TestReviewLaunchWithoutInputsCreatesNoInputVolume(t *testing.T) {
 }
 
 func TestReviewInputPreparationFailuresNeverCreateReviewer(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{
 		"no_blob_source", "blob_bytes", "blob_missing", "tampered_tree", "extra_entry", "wrong_proof",
 		"replaced_before_start", "changed_before_start",
@@ -326,6 +332,7 @@ func TestReviewInputPreparationFailuresNeverCreateReviewer(t *testing.T) {
 }
 
 func TestReviewRecoveryReapsInterruptedInputPreparation(t *testing.T) {
+	t.Parallel()
 	lifecycle, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	files, blobs := testInputs("task/shot.png", "pixels")
 	lifecycle.cfg.InputBlobs = blobs
@@ -389,6 +396,7 @@ func TestReviewRecoveryReapsInterruptedInputPreparation(t *testing.T) {
 }
 
 func TestReviewReconstructionRefusesADivergentInputBinding(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*CodexReviewJournalBinding){
 		"other listing": func(b *CodexReviewJournalBinding) { b.InputsDigest = strings.Repeat("0", 64) },
 		"other volume":  func(b *CodexReviewJournalBinding) { b.InputsFingerprint = "replacement" },
@@ -414,6 +422,7 @@ func TestReviewReconstructionRefusesADivergentInputBinding(t *testing.T) {
 }
 
 func TestReviewIntentInputResourcesMustMatchTheirNames(t *testing.T) {
+	t.Parallel()
 	runID := "review-1"
 	names := codexReviewNames(runID)
 	owner := testOwnershipLabel().Value
@@ -469,6 +478,7 @@ func TestReviewIntentInputResourcesMustMatchTheirNames(t *testing.T) {
 // input volume its intent journals, and refuses, leaving the volume, when the
 // durable binding no longer names that volume.
 func TestReviewTeardownReapsTheInputVolume(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		tamper bool

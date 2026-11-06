@@ -48,6 +48,7 @@ const (
 // TestReviewProviderConstantsMatchBase pins the Codex provider's value seam to
 // the historical constants, except the deliberate #1212 and #1291 changes.
 func TestReviewProviderConstantsMatchBase(t *testing.T) {
+	t.Parallel()
 	p := codexReviewProvider{}
 	cases := []struct {
 		name string
@@ -499,6 +500,7 @@ func oldBuildReviewAgentSpec(
 // target, model, reasoning effort, prompt) that flow into the review command,
 // its digest, and the mount targets.
 func TestReviewBuildAgentSpecEquivalence(t *testing.T) {
+	t.Parallel()
 	variants := []struct {
 		name      string
 		workspace string

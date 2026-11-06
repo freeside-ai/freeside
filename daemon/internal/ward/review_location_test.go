@@ -9,6 +9,7 @@ import (
 )
 
 func TestProductionReviewLocationContract(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []reviewProvider{codexReviewProvider{}, claudeReviewProvider{}} {
 		t.Run(provider.sourceLabel(), func(t *testing.T) {
 			prompt := provider.reviewPrompt(exec.ReviewRequest{
@@ -78,6 +79,7 @@ func TestProductionReviewLocationContract(t *testing.T) {
 }
 
 func TestReviewLocationProtocolChangesConfiguration(t *testing.T) {
+	t.Parallel()
 	cfg, request := testCodexReview(t)
 	for _, tc := range []struct {
 		provider reviewProvider

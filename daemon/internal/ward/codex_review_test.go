@@ -347,6 +347,7 @@ func (j *fakeCodexReviewJournal) MarkCodexReviewIntentResource(
 }
 
 func TestFakeCodexReviewJournalRejectsResourceMutationAfterPreparing(t *testing.T) {
+	t.Parallel()
 	for _, state := range AllCodexReviewIntentStates {
 		t.Run(string(state), func(t *testing.T) {
 			journal := &fakeCodexReviewJournal{intent: &CodexReviewLaunchIntent{
@@ -397,6 +398,7 @@ func (j *fakeCodexReviewJournal) MarkCodexReviewIntentPrepared(_ context.Context
 }
 
 func TestBackendCodexReviewDoesNotPrepareAfterRejectedOutcome(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.onGet = func() {
 		if journal.outcomes == nil {
@@ -496,6 +498,7 @@ func writeCodexReviewFile(t *testing.T, root, name string, body []byte) string {
 }
 
 func TestInspectCodexAuthReadinessRequiresRefreshMaterialBelowThreshold(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // private test input directory requires owner traversal
 		t.Fatal(err)
@@ -842,6 +845,7 @@ func legacyCodexReviewIntentForTest(
 }
 
 func TestCodexReviewResourceNamesFitReferenceRuntime(t *testing.T) {
+	t.Parallel()
 	maximumID := strings.Repeat("a", 32)
 	if !runIDPattern.MatchString(maximumID) {
 		t.Fatalf("maximum invocation ID %q is not admitted", maximumID)
@@ -876,6 +880,7 @@ func TestCodexReviewResourceNamesFitReferenceRuntime(t *testing.T) {
 }
 
 func TestCodexReviewRuntimeResourceNamesAreComplete(t *testing.T) {
+	t.Parallel()
 	runID := "review-" + strings.Repeat("a", 24)
 	got := CodexReviewRuntimeResourceNamesFor(runID)
 	want := RuntimeResourceNames{
@@ -905,6 +910,7 @@ func TestCodexReviewRuntimeResourceNamesAreComplete(t *testing.T) {
 }
 
 func TestRecoverCodexReviewAuthorizesExactLegacyTopologyBeforeRuntime(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	intent := legacyCodexReviewIntentForTest(launch.RunID, "legacy-digest", owner.Value)
@@ -933,6 +939,7 @@ func TestRecoverCodexReviewAuthorizesExactLegacyTopologyBeforeRuntime(t *testing
 }
 
 func TestBackendCodexReviewMaximumInvocationReachesRuntimeLaunch(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, strings.Repeat("a", 32))
 	rt.onCreateVolume = validateRuntimeResourceName
@@ -956,6 +963,7 @@ func TestBackendCodexReviewMaximumInvocationReachesRuntimeLaunch(t *testing.T) {
 // proven to lack one launches without that mount, the topology Apple
 // container can actually start (errno 30 regression).
 func TestBackendCodexReviewShadowTopologyFollowsObservedAgentsEntry(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                string
 		entry               string
@@ -1004,6 +1012,7 @@ func TestBackendCodexReviewShadowTopologyFollowsObservedAgentsEntry(t *testing.T
 // (a symlink or regular file) refuses the launch before any credential-
 // bearing container exists.
 func TestBackendCodexReviewRefusesNonDirectoryWorkspaceAgents(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
 	rt.volAgents[launchSpec.WorkspaceVolume] = "other"
 	_, err := backend.CodexReview(context.Background(), cfg, launchSpec)
@@ -1014,6 +1023,7 @@ func TestBackendCodexReviewRefusesNonDirectoryWorkspaceAgents(t *testing.T) {
 }
 
 func TestBackendCodexReviewReapsAuthenticatedLegacyOversizedObserverBeforeRelaunch(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	const runID = "review-0dcd5c691adcaec0c353993a"
 	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
@@ -1050,6 +1060,7 @@ func TestBackendCodexReviewReapsAuthenticatedLegacyOversizedObserverBeforeRelaun
 }
 
 func TestRecoverCodexReviewRefusesForeignLegacyOversizedObserver(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	const runID = "review-0dcd5c691adcaec0c353993a"
 	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
@@ -1079,6 +1090,7 @@ func TestRecoverCodexReviewRefusesForeignLegacyOversizedObserver(t *testing.T) {
 }
 
 func TestCodexReviewIntentRejectsMixedResourceNameGenerations(t *testing.T) {
+	t.Parallel()
 	runID := strings.Repeat("a", 32)
 	owner := strings.Repeat("1", 32)
 	intent := legacyCodexReviewIntentForTest(runID, strings.Repeat("a", 64), owner)
@@ -1135,6 +1147,7 @@ func currentCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLa
 // while the current generation carries nine resources and the snapshot volume,
 // and a six-resource intent claiming a snapshot volume is rejected.
 func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
+	t.Parallel()
 	runID := strings.Repeat("a", 32)
 	owner := strings.Repeat("1", 32)
 	digest := strings.Repeat("a", 64)
@@ -1171,6 +1184,7 @@ func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
 }
 
 func TestBackendCodexReviewAuthenticatesAndReconstructsBeforeStart(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	workspaceObserver := codexReviewWorkspaceObserverName(launchSpec.RunID)
 	shadowObserver := codexReviewShadowObserverName(launchSpec.RunID)
@@ -1227,6 +1241,7 @@ func TestBackendCodexReviewAuthenticatesAndReconstructsBeforeStart(t *testing.T)
 }
 
 func TestBackendCodexReviewPersistsIntentBeforeLeaseOrRuntime(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.onBegin = func(intent CodexReviewLaunchIntent) error {
 		if intent.OwnershipToken == "" || intent.SpecDigest == "" || intent.State != CodexReviewIntentPreparing {
@@ -1245,6 +1260,7 @@ func TestBackendCodexReviewPersistsIntentBeforeLeaseOrRuntime(t *testing.T) {
 }
 
 func TestBackendCodexReviewValidatesPriorIntentBeforeStateBranch(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.intent = &CodexReviewLaunchIntent{
 		RunID: launch.RunID,
@@ -1262,6 +1278,7 @@ func TestBackendCodexReviewValidatesPriorIntentBeforeStateBranch(t *testing.T) {
 }
 
 func TestBackendCodexReviewRetainsRecoveryIntentWhenResourceJournalUpdateFails(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.failResourceMark = errors.New("journal unavailable")
 	if got, err := backend.CodexReview(context.Background(), cfg, launch); err == nil || got != nil {
@@ -1273,6 +1290,7 @@ func TestBackendCodexReviewRetainsRecoveryIntentWhenResourceJournalUpdateFails(t
 }
 
 func TestBackendCodexReviewPreservesResourceMutationConformance(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.failResourceMark = errors.Join(ErrConformance, errors.New("malformed intent row"))
 	if got, err := backend.CodexReview(context.Background(), cfg, launch); got != nil ||
@@ -1282,6 +1300,7 @@ func TestBackendCodexReviewPreservesResourceMutationConformance(t *testing.T) {
 }
 
 func TestRecoverCodexReviewReapsOnlyDurablyOwnedPreStartObjects(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	digest, err := codexReviewIntentDigest(cfg, launch)
@@ -1328,6 +1347,7 @@ func TestRecoverCodexReviewReapsOnlyDurablyOwnedPreStartObjects(t *testing.T) {
 }
 
 func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	digest, err := codexReviewIntentDigest(cfg, launch)
@@ -1370,6 +1390,7 @@ func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
 }
 
 func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, Label) {
 		t.Helper()
 		backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
@@ -1650,6 +1671,7 @@ func setCodexReviewIntentResourceEvidenceForTest(
 }
 
 func TestRecoverCodexReviewReapsPartialPreparationAttachmentsForRelaunch(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		containerName func(codexReviewResourceNames) string
@@ -1724,6 +1746,7 @@ func TestRecoverCodexReviewReapsPartialPreparationAttachmentsForRelaunch(t *test
 }
 
 func TestRecoverCodexReviewReapsLegacyPartialPreparationAttachmentForRelaunch(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	digest, err := codexReviewIntentDigest(cfg, launch)
 	if err != nil {
@@ -1779,6 +1802,7 @@ func TestRecoverCodexReviewReapsLegacyPartialPreparationAttachmentForRelaunch(t 
 }
 
 func TestRecoverCodexReviewLeavesUnauthenticatedPartialPreparationAttachments(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		add  func(*testing.T, codexReviewPrepRecoveryFixture) string
@@ -1901,6 +1925,7 @@ func TestRecoverCodexReviewLeavesUnauthenticatedPartialPreparationAttachments(t 
 // path and end up a fresh, private, real directory the caller can safely write
 // 0400 secrets into.
 func TestCreatePrivateStageDirDefeatsSymlinkPreattack(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 
 	// Happy path: a fresh path becomes a real private directory.
@@ -1956,6 +1981,7 @@ func TestCreatePrivateStageDirDefeatsSymlinkPreattack(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	journal.intent = &CodexReviewLaunchIntent{
@@ -1991,6 +2017,7 @@ func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
+	t.Parallel()
 	for _, preparation := range []string{"pending", "finalized"} {
 		t.Run(preparation, func(t *testing.T) {
 			ctx := context.Background()
@@ -2046,6 +2073,7 @@ func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryMarksFenceOnlyRejectedOutcomeReady(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	backend := fx.codexReviewLifecycle(t)
@@ -2074,6 +2102,7 @@ func TestCodexReviewRecoveryMarksFenceOnlyRejectedOutcomeReady(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryDoesNotLetInvalidIntentStarveLaterCleanup(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, _, journal := testCodexReviewLifecycle(t)
 	validID := "review-2"
 	owner := testOwnershipLabel()
@@ -2113,6 +2142,7 @@ func TestCodexReviewRecoveryDoesNotLetInvalidIntentStarveLaterCleanup(t *testing
 }
 
 func TestCodexReviewRecoveryFailsClosedOnRewrittenIntentKey(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	rewrittenID := launch.RunID + "-rewritten"
 	journal.intent = nil
@@ -2135,6 +2165,7 @@ func TestCodexReviewRecoveryFailsClosedOnRewrittenIntentKey(t *testing.T) {
 }
 
 func TestRecoverCodexReviewRefusesForeignSameNameReviewContainer(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	digest, err := codexReviewIntentDigest(cfg, launch)
@@ -2167,6 +2198,7 @@ func TestRecoverCodexReviewRefusesForeignSameNameReviewContainer(t *testing.T) {
 }
 
 func TestRecoverCodexReviewRejectsForgedFixedResourceOwner(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	digest, err := codexReviewIntentDigest(cfg, launch)
@@ -2197,6 +2229,7 @@ func TestRecoverCodexReviewRejectsForgedFixedResourceOwner(t *testing.T) {
 }
 
 func TestRecoverCodexReviewKeepsIntentOpenWhenShadowDeletionLies(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	digest, err := codexReviewIntentDigest(cfg, launch)
@@ -2228,6 +2261,7 @@ func TestRecoverCodexReviewKeepsIntentOpenWhenShadowDeletionLies(t *testing.T) {
 }
 
 func TestRecoverCodexReviewRetriesLeaseReleaseBeforeClosingIntent(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	digest, _ := codexReviewIntentDigest(cfg, launch)
@@ -2247,6 +2281,7 @@ func TestRecoverCodexReviewRetriesLeaseReleaseBeforeClosingIntent(t *testing.T) 
 }
 
 func TestBackendCodexReviewRefusesRuntimeSpecMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		target func(string) string
@@ -2274,6 +2309,7 @@ func TestBackendCodexReviewRefusesRuntimeSpecMutation(t *testing.T) {
 }
 
 func TestBackendCodexReviewRequiresPriorWorkspaceProvenance(t *testing.T) {
+	t.Parallel()
 	const forgedToken = "11111111111111111111111111111111"
 	t.Run("forged durable token", func(t *testing.T) {
 		backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
@@ -2305,6 +2341,7 @@ func TestBackendCodexReviewRequiresPriorWorkspaceProvenance(t *testing.T) {
 }
 
 func TestBackendCodexReviewRejectsConcurrentWorkspaceAttachment(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
 	rt.ctrs["foreign-writer"] = &fakeCtr{
 		spec: ContainerSpec{
@@ -2323,6 +2360,7 @@ func TestBackendCodexReviewRejectsConcurrentWorkspaceAttachment(t *testing.T) {
 }
 
 func TestBackendCodexReviewLifecycleLeaseClosesFinalAttachmentWindow(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
 	leaser, ok := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 	if !ok {
@@ -2360,6 +2398,7 @@ func TestBackendCodexReviewLifecycleLeaseClosesFinalAttachmentWindow(t *testing.
 }
 
 func TestBackendCodexReviewProxyOutlivesLaunchContext(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	launch, err := backend.CodexReview(ctx, cfg, launchSpec)
@@ -2375,6 +2414,7 @@ func TestBackendCodexReviewProxyOutlivesLaunchContext(t *testing.T) {
 }
 
 func TestBackendCodexReviewObserverDeleteRequiresAbsence(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
 	observer := codexReviewWorkspaceObserverName(launchSpec.RunID)
 	subverted := false
@@ -2392,6 +2432,7 @@ func TestBackendCodexReviewObserverDeleteRequiresAbsence(t *testing.T) {
 }
 
 func TestBackendCodexReviewRetainsLeaseWhenReviewContainerAbsenceIsUnproven(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 	journal.mutate = func(binding *CodexReviewJournalBinding) {
@@ -2408,6 +2449,7 @@ func TestBackendCodexReviewRetainsLeaseWhenReviewContainerAbsenceIsUnproven(t *t
 	}
 }
 
+//nolint:paralleltest // Serial: dials the freed proxy port to prove it closed; a parallel test's listener can take that port
 func TestBackendCodexReviewRecoversAmbiguousStartOutcome(t *testing.T) {
 	t.Run("untransferred start error cleans up after owner adoption", func(t *testing.T) {
 		backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
@@ -2468,6 +2510,7 @@ func TestBackendCodexReviewRecoversAmbiguousStartOutcome(t *testing.T) {
 }
 
 func TestBackendCodexReviewStartingStatePrecedesRuntimeStart(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.failStarting = errors.New("journal unavailable")
 	if got, err := backend.CodexReview(context.Background(), cfg, launch); err == nil || got != nil {
@@ -2482,6 +2525,7 @@ func TestBackendCodexReviewStartingStatePrecedesRuntimeStart(t *testing.T) {
 }
 
 func TestBackendCodexReviewReapsStartedReviewWhenHandoffJournalFails(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.failStarted = errors.New("journal response lost")
 	if got, err := backend.CodexReview(context.Background(), cfg, launch); err == nil || got != nil {
@@ -2536,6 +2580,7 @@ func crashedTransferredCodexReview(
 }
 
 func TestRecoverCodexReviewReapsTransferredAttachmentForRelaunch(t *testing.T) {
+	t.Parallel()
 	for _, state := range []CodexReviewIntentState{
 		CodexReviewIntentPreparing, CodexReviewIntentPrepared, CodexReviewIntentStarting,
 	} {
@@ -2574,6 +2619,7 @@ func TestRecoverCodexReviewReapsTransferredAttachmentForRelaunch(t *testing.T) {
 }
 
 func TestRecoverCodexReviewRejectsForgedTransferredLease(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		mutate func(*fakeCodexReviewVolumeLeaser, *fakeRuntime, CodexReviewLaunchSpec)
@@ -2615,6 +2661,7 @@ func TestRecoverCodexReviewRejectsForgedTransferredLease(t *testing.T) {
 }
 
 func TestBackendCodexReviewReleasesLifecycleLeaseOnPreStartRefusal(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 	journal.mutate = func(binding *CodexReviewJournalBinding) {
@@ -2630,6 +2677,7 @@ func TestBackendCodexReviewReleasesLifecycleLeaseOnPreStartRefusal(t *testing.T)
 }
 
 func TestBackendCodexReviewRechecksTokenLifetimeImmediatelyBeforeStart(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	now := codexReviewEpoch
 	cfg.Now = func() time.Time { return now }
@@ -2667,6 +2715,7 @@ func TestBackendCodexReviewRechecksTokenLifetimeImmediatelyBeforeStart(t *testin
 }
 
 func TestBackendCodexReviewRejectsCallerInputBeforeRuntime(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*testing.T, *CodexReviewConfig, *CodexReviewLaunchSpec)
@@ -2739,6 +2788,7 @@ func TestBackendCodexReviewRejectsCallerInputBeforeRuntime(t *testing.T) {
 }
 
 func TestBackendCodexReviewRefusesForgedPersistedFingerprint(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	journal.mutate = func(binding *CodexReviewJournalBinding) {
 		binding.WorkspaceFingerprint = "forged-runtime-fingerprint"
@@ -2750,6 +2800,7 @@ func TestBackendCodexReviewRefusesForgedPersistedFingerprint(t *testing.T) {
 }
 
 func TestBackendCodexReviewRefusesSameNameReplacementBeforeStart(t *testing.T) {
+	t.Parallel()
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	reviewName := codexReviewContainerName(launchSpec.RunID)
 	journal.onGet = func() {
@@ -2776,6 +2827,7 @@ func TestBackendCodexReviewRefusesSameNameReplacementBeforeStart(t *testing.T) {
 }
 
 func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -2883,6 +2935,7 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 // container cannot create a missing mountpoint under the read-only workspace,
 // so mounting the shadow over an absent .agents is what broke production.
 func TestCodexAgentsShadowTargetsFollowObservedWorkspaceEntry(t *testing.T) {
+	t.Parallel()
 	withDir := codexAgentsShadowTargets("/workspace/project", codexWorkspaceAgentsDir)
 	withoutDir := codexAgentsShadowTargets("/workspace/project", codexWorkspaceAgentsAbsent)
 	const workspaceLocal = "/workspace/project/.agents"
@@ -2913,6 +2966,7 @@ func TestCodexAgentsShadowTargetsFollowObservedWorkspaceEntry(t *testing.T) {
 // opt-in live suite. The fake runtime synthesizes this line in Go; this test
 // is what ties that synthesis to the script's real behaviour.
 func TestCodexWorkspaceAgentsProbeScriptClassifiesEntries(t *testing.T) {
+	t.Parallel()
 	shPath, err := osexec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh not available: %v", err)
@@ -2969,6 +3023,7 @@ func TestCodexWorkspaceAgentsProbeScriptClassifiesEntries(t *testing.T) {
 }
 
 func TestCodexReviewProofWorkspaceAgentsFailsClosed(t *testing.T) {
+	t.Parallel()
 	base := "nonce=n\ntree_sha256=" + strings.Repeat("1", 64) + "\n"
 	cases := []struct {
 		name  string
@@ -3003,6 +3058,7 @@ func TestCodexReviewProofWorkspaceAgentsFailsClosed(t *testing.T) {
 // carry no .agents directory must launch without the workspace-local shadow
 // mount, with the reduced target set durably bound and self-consistent.
 func TestBuildCodexReviewAgentSpecOmitsWorkspaceShadowWhenAgentsAbsent(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	req.Workspace = testCodexReviewWorkspaceWithAgents(
 		t, cfg, req.RunID, req.WorkspaceVolume, "2026-08-03T12:00:03Z", codexWorkspaceAgentsAbsent,
@@ -3041,6 +3097,7 @@ func TestBuildCodexReviewAgentSpecOmitsWorkspaceShadowWhenAgentsAbsent(t *testin
 // under; collection compares it with the daemon's, so a spec without one, or a
 // binding that records another, must never reach the runtime.
 func TestCodexReviewBindingRecordsConfigurationDigest(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -3064,6 +3121,7 @@ func TestCodexReviewBindingRecordsConfigurationDigest(t *testing.T) {
 }
 
 func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -3105,6 +3163,7 @@ func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 // authenticate cleanup of a pre-upgrade review, but can never validate for
 // launch or result collection under the v3 contract.
 func TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -3142,6 +3201,7 @@ func TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly(t *testing.T) {
 }
 
 func TestCodexReviewRefusesResumeAndContinuity(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []CodexReviewBoundary{CodexReviewResume, CodexReviewContinuity} {
 		t.Run(string(boundary), func(t *testing.T) {
 			cfg, req := testCodexReview(t)
@@ -3155,6 +3215,7 @@ func TestCodexReviewRefusesResumeAndContinuity(t *testing.T) {
 }
 
 func TestCodexReviewAuthSnapshotFailsClosed(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		auth func(*testing.T) []byte
@@ -3200,6 +3261,7 @@ func TestCodexReviewAuthSnapshotFailsClosed(t *testing.T) {
 }
 
 func TestCodexReviewDerivesAccessOnlySnapshotFromHostStore(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	hostBody := []byte(fmt.Sprintf(
 		`{"OPENAI_API_KEY":null,"tokens":{"id_token":"id","access_token":%q,"refresh_token":"family-revoking"}}`,
@@ -3235,6 +3297,7 @@ func TestCodexReviewDerivesAccessOnlySnapshotFromHostStore(t *testing.T) {
 }
 
 func TestCodexReviewProviderOnlyIsExact(t *testing.T) {
+	t.Parallel()
 	for _, endpoints := range [][]string{
 		{"chatgpt.com:443", "auth.openai.com:443"},
 		{"chatgpt.com:443", "api.github.com:443"},
@@ -3250,6 +3313,7 @@ func TestCodexReviewProviderOnlyIsExact(t *testing.T) {
 }
 
 func TestCodexReviewRejectsCredentialBearingProxyURL(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	cfg.ProxyURL = "http://user:secret@127.0.0.1:43123"
 	if _, _, err := BuildCodexReviewAgentSpec(cfg, req); !errors.Is(err, ErrInvalidCodexReviewSpec) {
@@ -3258,6 +3322,7 @@ func TestCodexReviewRejectsCredentialBearingProxyURL(t *testing.T) {
 }
 
 func TestCodexReviewPromptBound(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	req.Prompt = strings.Repeat("p", maxCodexReviewPromptBytes)
 	if _, _, err := BuildCodexReviewAgentSpec(cfg, req); err != nil {
@@ -3270,6 +3335,7 @@ func TestCodexReviewPromptBound(t *testing.T) {
 }
 
 func TestCodexReviewRejectsWorkspaceControlPathOverlap(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{
 		"/var/lib/freeside",
 		CodexHomeTarget,
@@ -3296,6 +3362,7 @@ func TestCodexReviewRejectsWorkspaceControlPathOverlap(t *testing.T) {
 }
 
 func TestCodexReviewInputUIDMustMatchDaemon(t *testing.T) {
+	t.Parallel()
 	stat := &syscall.Stat_t{Uid: 42}
 	if !codexReviewUIDMatches(stat, 42) {
 		t.Fatal("matching daemon UID was rejected")
@@ -3311,6 +3378,7 @@ func TestCodexReviewInputUIDMustMatchDaemon(t *testing.T) {
 }
 
 func TestObserveCodexReviewShadowFailsClosed(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	owner := testOwnershipLabel()
 	spec, err := BuildCodexReviewShadowObserverSpec(
@@ -3367,6 +3435,7 @@ func TestObserveCodexReviewShadowFailsClosed(t *testing.T) {
 }
 
 func TestObserveCodexReviewNetworkFailsClosed(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	owner := testOwnershipLabel()
 	base := NetworkReport{
@@ -3406,6 +3475,7 @@ func TestObserveCodexReviewNetworkFailsClosed(t *testing.T) {
 }
 
 func TestCodexReviewShadowObserverScriptProvesEmptiness(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	proofPath := filepath.Join(t.TempDir(), "proof")
 	run := func() []byte {
@@ -3440,6 +3510,7 @@ func TestCodexReviewShadowObserverScriptProvesEmptiness(t *testing.T) {
 }
 
 func TestCodexReviewSingleFileBindsStayUnderTrustedRoot(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	outside := writeCodexReviewFile(t, t.TempDir(), "outside-auth.json", []byte(`{}`))
 	req.AuthSnapshot = outside
@@ -3493,6 +3564,7 @@ func TestCodexReviewSingleFileBindsStayUnderTrustedRoot(t *testing.T) {
 }
 
 func TestCodexReviewAPIKeyStaysOutOfEnvironment(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	req.AuthMode = CodexAuthAPIKey
 	cfg.ProviderEndpoints = []string{"api.openai.com:443"}
@@ -3514,6 +3586,7 @@ func TestCodexReviewAPIKeyStaysOutOfEnvironment(t *testing.T) {
 }
 
 func TestCodexReviewConformanceRejectsTopologyDrift(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	base, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -3554,6 +3627,7 @@ func TestCodexReviewConformanceRejectsTopologyDrift(t *testing.T) {
 }
 
 func TestCodexReviewBindingUsesCanonicalEnvironmentDigest(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -3579,6 +3653,7 @@ func TestCodexReviewBindingUsesCanonicalEnvironmentDigest(t *testing.T) {
 }
 
 func TestCodexReviewPostStartEnvironmentAuthentication(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		mutate  func([]string) []string
@@ -3677,6 +3752,7 @@ func TestCodexReviewPostStartEnvironmentAuthentication(t *testing.T) {
 }
 
 func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
+	t.Parallel()
 	cfg, req := testCodexReview(t)
 	freshShadow := testCodexReviewShadow(
 		t, cfg, req.RunID, req.AgentsShadow.volume, "2026-08-03T12:00:02Z",
@@ -3773,6 +3849,7 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 }
 
 func TestCodexReviewEnums(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range AllCodexReviewBoundaries {
 		if !boundary.valid() {
 			t.Errorf("registered boundary %q reports invalid", boundary)
@@ -3798,6 +3875,7 @@ func TestCodexReviewEnums(t *testing.T) {
 // registered state. A drift here is a stored-JSON compatibility break: the
 // tokens are the on-disk representation of the durable launch intent.
 func TestCodexReviewIntentStateTokens(t *testing.T) {
+	t.Parallel()
 	tokens := map[CodexReviewIntentState]string{
 		CodexReviewIntentPreparing: "preparing",
 		CodexReviewIntentPrepared:  "prepared",
@@ -3827,6 +3905,7 @@ func TestCodexReviewIntentStateTokens(t *testing.T) {
 // valid, and the zero value plus adversarial near-members (case, spacing,
 // prefix/suffix, substring) are rejected.
 func TestCodexReviewIntentStateValidEquivalence(t *testing.T) {
+	t.Parallel()
 	// oldMembership is the inline switch validateIdentity carried before the
 	// registration point existed, reconstructed here as the equivalence oracle.
 	oldMembership := func(s CodexReviewIntentState) bool {
@@ -3852,6 +3931,7 @@ func TestCodexReviewIntentStateValidEquivalence(t *testing.T) {
 }
 
 func TestValidateCodexReviewModelConfiguration(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		model     string

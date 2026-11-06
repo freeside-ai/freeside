@@ -89,6 +89,7 @@ func runCodexModelListSession(t *testing.T, env ...string) (LineupProbeOutput, s
 // shell syntax through as data, records the app-server's status, and
 // removes its input pipe.
 func TestCodexModelListSessionPagesTheAppServer(t *testing.T) {
+	t.Parallel()
 	out, input, _ := runCodexModelListSession(t)
 	report, err := DecodeCodexModelReport(out, codexModelListCredential())
 	if err != nil {
@@ -115,6 +116,7 @@ func TestCodexModelListSessionPagesTheAppServer(t *testing.T) {
 // exits before answering ends the wait at once, well inside the answer
 // budget, and its status is recorded.
 func TestCodexModelListSessionEndsWhenTheAppServerExits(t *testing.T) {
+	t.Parallel()
 	out, _, elapsed := runCodexModelListSession(t, "FAKE_CRASH=7")
 	if out.ExitStatus != 7 {
 		t.Fatalf("status = %d, want the app-server's 7", out.ExitStatus)

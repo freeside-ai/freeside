@@ -87,6 +87,7 @@ func (f *codexReviewAdapterFixture) reopen(t *testing.T) {
 }
 
 func TestCodexReviewLifecycleUsesRealJournalThroughStarted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	adapterFixture := openCodexReviewAdapter(t)
 	adapters := adapterFixture.Adapters
@@ -126,6 +127,7 @@ func TestCodexReviewLifecycleUsesRealJournalThroughStarted(t *testing.T) {
 }
 
 func TestCodexReviewPreparedTransitionRejectsDurableOutcome(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	adapters := openCodexReviewAdapter(t).Adapters
 	runID := "rejected-before-prepared"
@@ -177,6 +179,7 @@ func TestCodexReviewPreparedTransitionRejectsDurableOutcome(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryConvergesPreparingCrashAfterBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	adapterFixture := openCodexReviewAdapter(t)
 	adapters := adapterFixture.Adapters
@@ -226,6 +229,7 @@ func TestCodexReviewRecoveryConvergesPreparingCrashAfterBinding(t *testing.T) {
 }
 
 func TestCodexReviewClassifiesPostBindingJournalResponseLossOperational(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	adapterFixture := openCodexReviewAdapter(t)
 	adapters := adapterFixture.Adapters

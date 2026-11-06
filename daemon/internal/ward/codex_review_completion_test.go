@@ -17,6 +17,7 @@ import (
 )
 
 func TestCodexReviewArchiveReadFailuresStayOperational(t *testing.T) {
+	t.Parallel()
 	archive := buildTar(t, []tarEntry{{name: "proof", body: []byte("proof")}})
 	archiveRoot, err := os.OpenRoot(filepath.Dir(archive))
 	if err != nil {
@@ -72,6 +73,7 @@ func TestCodexReviewArchiveReadFailuresStayOperational(t *testing.T) {
 }
 
 func TestCodexReviewTruncatedCollectionRetriesWithoutCleanup(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	seed := fx.seed(t)
 	lc := fx.codexReviewLifecycle(t)
@@ -144,6 +146,7 @@ func TestCodexReviewTruncatedCollectionRetriesWithoutCleanup(t *testing.T) {
 }
 
 func TestCodexReviewTerminalFailureOverridesEmptyFindings(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, events string
 		status       int
@@ -212,6 +215,7 @@ func TestCodexReviewTerminalFailureOverridesEmptyFindings(t *testing.T) {
 }
 
 func TestCodexReviewReplayCannotTurnTerminalFailureIntoCleanResult(t *testing.T) {
+	t.Parallel()
 	outcome := codexGoldenReviewOutcome(`{"type":"turn.completed"}`)
 	outcome.Collection.Events = []byte(`{"type":"turn.failed","error":{"message":""}}`)
 	// Even internally consistent content hashes cannot make a known failure
@@ -224,6 +228,7 @@ func TestCodexReviewReplayCannotTurnTerminalFailureIntoCleanResult(t *testing.T)
 }
 
 func TestCodexReviewFailedCollectionSurvivesCleanupAndRestart(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, status, result, events string
 		wantEvidence                 bool

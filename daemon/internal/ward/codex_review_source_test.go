@@ -78,6 +78,7 @@ func testReviewInstructionBinding() exec.ReviewInstructionBinding {
 }
 
 func TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar(t *testing.T) {
+	t.Parallel()
 	request := exec.ReviewRequest{
 		BaseSHA:      strings.Repeat("a", 40),
 		HeadSHA:      strings.Repeat("b", 40),
@@ -109,6 +110,7 @@ func TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar(t *testing
 // TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar pins
 // unchanged, so the defect bar does not move to make room for it.
 func TestCodexProductionReviewPromptAdmitsMissingRepositoryRequiredArtifact(t *testing.T) {
+	t.Parallel()
 	prompt := codexProductionReviewPrompt(exec.ReviewRequest{
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Verification: testReviewVerificationEvidence(),
@@ -133,6 +135,7 @@ func TestCodexProductionReviewPromptAdmitsMissingRepositoryRequiredArtifact(t *t
 }
 
 func TestCodexProductionReviewPromptCarriesFreesideRulePairs(t *testing.T) {
+	t.Parallel()
 	prompt := codexProductionReviewPrompt(exec.ReviewRequest{
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Verification: testReviewVerificationEvidence(),
@@ -167,6 +170,7 @@ func TestCodexProductionReviewPromptCarriesFreesideRulePairs(t *testing.T) {
 }
 
 func TestCodexProductionReviewPromptPreservesPriorEvidenceCapacity(t *testing.T) {
+	t.Parallel()
 	request := exec.ReviewRequest{
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Verification: testReviewVerificationEvidence(),
@@ -192,6 +196,7 @@ func TestCodexProductionReviewPromptPreservesPriorEvidenceCapacity(t *testing.T)
 // The task's attachments are request data: they extend the prompt only when
 // present, so a request without them renders the text it did before.
 func TestCodexProductionReviewPromptListsOperatorInputFiles(t *testing.T) {
+	t.Parallel()
 	request := exec.ReviewRequest{
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Verification: testReviewVerificationEvidence(),
@@ -232,6 +237,7 @@ func TestCodexProductionReviewPromptListsOperatorInputFiles(t *testing.T) {
 // A full manifest's names exceed the prompt cap, so the listing falls back to
 // naming the directory, and the prompt stays launchable.
 func TestCodexProductionReviewPromptSummarizesAnOversizedInputListing(t *testing.T) {
+	t.Parallel()
 	request := exec.ReviewRequest{
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Verification: testReviewVerificationEvidence(),
@@ -262,6 +268,7 @@ func TestCodexProductionReviewPromptSummarizesAnOversizedInputListing(t *testing
 }
 
 func TestCodexReviewSourceReconstructsInstructionClosure(t *testing.T) {
+	t.Parallel()
 	cfg, _ := testCodexReview(t)
 	host := []byte("operator rules\n")
 	repository := []byte("repository rules\n")
@@ -310,6 +317,7 @@ func TestCodexReviewSourceReconstructsInstructionClosure(t *testing.T) {
 }
 
 func TestCodexReviewSourceRejectsPersistedV1InstructionReconstruction(t *testing.T) {
+	t.Parallel()
 	_, binding, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -326,6 +334,7 @@ func TestCodexReviewSourceRejectsPersistedV1InstructionReconstruction(t *testing
 }
 
 func TestCodexReviewSourceReplacesStaleInstructionSnapshot(t *testing.T) {
+	t.Parallel()
 	cfg, _ := testCodexReview(t)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
 	id := domain.InvocationID("review-existing-snapshot")
@@ -347,6 +356,7 @@ func TestCodexReviewSourceReplacesStaleInstructionSnapshot(t *testing.T) {
 }
 
 func TestRemoveCodexReviewInstructionSnapshotRejectsInvalidID(t *testing.T) {
+	t.Parallel()
 	cfg, _ := testCodexReview(t)
 	root := codexReviewInstructionRoot(cfg.InputRoot)
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -365,6 +375,7 @@ func TestRemoveCodexReviewInstructionSnapshotRejectsInvalidID(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryRemovesInstructionSnapshot(t *testing.T) {
+	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
 	journal.intent = &CodexReviewLaunchIntent{
@@ -403,6 +414,7 @@ func TestCodexReviewRecoveryRemovesInstructionSnapshot(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryRemovesOrphanWorkspaceInstructionSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seed := fx.seed(t).Seed
@@ -437,6 +449,7 @@ func TestCodexReviewRecoveryRemovesOrphanWorkspaceInstructionSnapshot(t *testing
 }
 
 func TestCodexReviewRecoveryAuthorizesOrphanWorkspaceBeforeRuntime(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	bindFailure := errors.New("rig bind failed")
 	var authorized RuntimeResourceNames
@@ -482,6 +495,7 @@ func TestCodexReviewRecoveryAuthorizesOrphanWorkspaceBeforeRuntime(t *testing.T)
 }
 
 func TestCodexReviewRecoveryKeepsOrphanWorkspaceWhenSnapshotRemovalFails(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seed := fx.seed(t).Seed
@@ -524,6 +538,7 @@ func TestCodexReviewRecoveryKeepsOrphanWorkspaceWhenSnapshotRemovalFails(t *test
 }
 
 func TestCodexReviewSourceRegatesInstructionClosureBeforeReadiness(t *testing.T) {
+	t.Parallel()
 	id := domain.InvocationID("review-readiness-1")
 	bundle, binding, err := exec.ComposeCodexReviewInstructions(
 		exec.ReviewHostInstructionInput{},
@@ -582,6 +597,7 @@ func TestCodexReviewSourceRegatesInstructionClosureBeforeReadiness(t *testing.T)
 }
 
 func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		directStart bool
@@ -685,6 +701,7 @@ func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *
 }
 
 func TestCodexReviewSourceRetriesInstructionMaterializationUnderSameInvocation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		fail func([]byte) (io.ReadCloser, error)
@@ -805,6 +822,7 @@ func TestCodexReviewSourceRetriesInstructionMaterializationUnderSameInvocation(t
 }
 
 func TestCodexReviewInstructionMaterializationRejectsDivergentSnapshotTopology(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -857,6 +875,7 @@ func TestCodexReviewInstructionMaterializationRejectsDivergentSnapshotTopology(t
 }
 
 func TestCodexReviewInstructionMaterializationFailsClosed(t *testing.T) {
+	t.Parallel()
 	oversized := bytes.Repeat([]byte("x"), int(domain.MaxVendorInstructionBytes)+1)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		InstructionArtifacts: testReviewInstructionArtifacts{digestBody(oversized): oversized},
@@ -914,6 +933,7 @@ func TestCodexReviewInstructionMaterializationFailsClosed(t *testing.T) {
 }
 
 func TestCodexReviewInstructionOpenClassification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -935,6 +955,7 @@ func TestCodexReviewInstructionOpenClassification(t *testing.T) {
 }
 
 func TestCodexReviewInstructionWriteClassification(t *testing.T) {
+	t.Parallel()
 	missingRoot := filepath.Join(t.TempDir(), "missing")
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review: CodexReviewConfig{InputRoot: missingRoot},
@@ -1003,6 +1024,7 @@ func codexReviewSourceConfigForTest(
 }
 
 func TestNewCodexReviewSourceRejectsUninitializedLifecycle(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	backend := fx.codexReviewLifecycle(t)
 	cfg, request := testCodexReview(t)
@@ -1015,6 +1037,7 @@ func TestNewCodexReviewSourceRejectsUninitializedLifecycle(t *testing.T) {
 }
 
 func TestCodexReviewSourceAuthorizesCompleteNamespaceBeforeRuntime(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1098,6 +1121,7 @@ func TestCodexReviewSourceAuthorizesCompleteNamespaceBeforeRuntime(t *testing.T)
 }
 
 func TestCodexReviewSourceAuthorizationFailureCreatesNoRuntimeObjects(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
 	bindFailure := errors.New("rig bind failed")
@@ -1137,6 +1161,7 @@ func TestCodexReviewSourceAuthorizationFailureCreatesNoRuntimeObjects(t *testing
 }
 
 func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1270,6 +1295,7 @@ func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 }
 
 func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1334,6 +1360,7 @@ func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) 
 }
 
 func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		entries   []tarEntry
@@ -1448,6 +1475,7 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 }
 
 func TestCodexReviewSourceRetriesOperationalBindingRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1497,6 +1525,7 @@ func TestCodexReviewSourceRetriesOperationalBindingRead(t *testing.T) {
 }
 
 func TestCodexReviewSourceCleansBeforeRejectingMalformedOutcome(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1567,6 +1596,7 @@ func TestCodexReviewSourceCleansBeforeRejectingMalformedOutcome(t *testing.T) {
 }
 
 func TestCodexReviewSourceAbortsStartedInvocationForRejectedRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1651,6 +1681,7 @@ func TestCodexReviewSourceAbortsStartedInvocationForRejectedRequest(t *testing.T
 }
 
 func TestCodexReviewSourceAbortsPreHandoffLaunchForRejectedRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1709,6 +1740,7 @@ func TestCodexReviewSourceAbortsPreHandoffLaunchForRejectedRequest(t *testing.T)
 }
 
 func TestCodexReviewSourceRejectedRequestFencesAndRecoversBeforeBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1766,6 +1798,7 @@ func TestCodexReviewSourceRejectedRequestFencesAndRecoversBeforeBinding(t *testi
 }
 
 func TestCodexReviewSourceRejectedPreparingRequestAbortsWhenBindingExists(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1845,6 +1878,7 @@ func TestCodexReviewSourceRejectedPreparingRequestAbortsWhenBindingExists(t *tes
 }
 
 func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		reject func(*fakeCodexReviewJournal, domain.InvocationID, exec.ReviewRequest)
@@ -1955,6 +1989,7 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 }
 
 func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1987,6 +2022,7 @@ func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testin
 }
 
 func TestCodexReviewSourceSupersedesPersistedV1InstructionRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	backend := fx.codexReviewLifecycle(t)
@@ -2031,6 +2067,7 @@ func TestCodexReviewSourceSupersedesPersistedV1InstructionRequest(t *testing.T) 
 // request that already carried inputs is never superseded by a different list;
 // the authority re-gate refuses that one.
 func TestCodexReviewSourceSupersedesAPreInputsRequest(t *testing.T) {
+	t.Parallel()
 	shot := domain.StageInputAttachment{
 		Name: "task/shot.png", Digest: domain.Digest("sha256:" + strings.Repeat("1", 64)),
 		MediaType: domain.TaskAttachmentMediaPNG, SizeBytes: 2048,
@@ -2095,6 +2132,7 @@ func TestCodexReviewSourceSupersedesAPreInputsRequest(t *testing.T) {
 }
 
 func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2167,6 +2205,7 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 }
 
 func TestCodexReviewCleanupRefusesRedirectedWorkspaceBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2219,6 +2258,7 @@ func TestCodexReviewCleanupRefusesRedirectedWorkspaceBinding(t *testing.T) {
 }
 
 func TestCodexReviewCleanupRefusesSubstitutedIntentResources(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2262,6 +2302,7 @@ func TestCodexReviewCleanupRefusesSubstitutedIntentResources(t *testing.T) {
 }
 
 func TestCodexReviewCleanupRefusesMissingIntentAuthority(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2299,6 +2340,7 @@ func TestCodexReviewCleanupRefusesMissingIntentAuthority(t *testing.T) {
 }
 
 func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2348,6 +2390,7 @@ func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2429,6 +2472,7 @@ func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testin
 // relabel) a review launched under any other digest or under a binding that
 // predates the record.
 func TestCodexReviewSourceRefusesCollectionLaunchedUnderAnotherDigest(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// restart changes the restarted daemon's configuration or the
@@ -2584,6 +2628,7 @@ func TestCodexReviewSourceRefusesCollectionLaunchedUnderAnotherDigest(t *testing
 }
 
 func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2653,6 +2698,7 @@ func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing
 }
 
 func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -2709,6 +2755,7 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 }
 
 func TestCodexReviewRecoveryDoesNotTrustClosedRejectedLegacyOutcome(t *testing.T) {
+	t.Parallel()
 	for _, ready := range []bool{false, true} {
 		t.Run(fmt.Sprintf("ready=%t", ready), func(t *testing.T) {
 			fx := newHandoffFixture(t)
@@ -2751,6 +2798,7 @@ func TestCodexReviewRecoveryDoesNotTrustClosedRejectedLegacyOutcome(t *testing.T
 }
 
 func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -2799,6 +2847,7 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 // against the candidate-deletion diff (§7). The reject side (unmarked (0,0),
 // marker-with-range) lives in TestCodexReviewSourceRejectsInvalidFindingsEnvelope.
 func TestCodexReviewSourceAcceptsWholeFileLocation(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -2856,6 +2905,7 @@ func TestCodexReviewSourceAcceptsWholeFileLocation(t *testing.T) {
 }
 
 func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -2969,6 +3019,7 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 }
 
 func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -3001,6 +3052,7 @@ func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
 // the fixed-disposition absence proof is decidable against real reviewer
 // output.
 func TestCodexReviewSourceFindingsAreCrossRoundFingerprintable(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -3072,6 +3124,7 @@ func TestCodexReviewSourceFindingsAreCrossRoundFingerprintable(t *testing.T) {
 // fail-closed branch remains a domain-level safety net for sources with weaker
 // Message guarantees; see the domain fail-closed tests.)
 func TestCodexReviewSourceEmptyExplanationRejectedBySource(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -3123,6 +3176,7 @@ func codexRejectedCredentialStderrOnly(t *testing.T) string {
 }
 
 func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
+	t.Parallel()
 	fixture := codexRejectedCredentialFixture(t)
 	stderrOnly := codexRejectedCredentialStderrOnly(t)
 	beforeStart, _, found := strings.Cut(fixture, `{"type":"turn.started"}`)
@@ -3303,6 +3357,7 @@ func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 }
 
 func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
+	t.Parallel()
 	source := &CodexReviewSource{}
 	outcome := source.normalizeCollection("review-run-1-1", exec.ReviewRequest{}, CodexReviewCollection{
 		Events:     []byte(`{"type":"turn.failed","error":{"message":"Failed to refresh token while starting"}}`),
@@ -3365,6 +3420,7 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 }
 
 func TestCodexReviewSourceClassifiesOutcomeWritesAndCleanup(t *testing.T) {
+	t.Parallel()
 	journalErr := errors.New("journal temporarily unavailable")
 	var failure *exec.ReviewSourceFailure
 	if err := codexReviewOutcomeWriteFailure(journalErr); !errors.As(err, &failure) ||
@@ -3387,6 +3443,7 @@ func TestCodexReviewSourceClassifiesOutcomeWritesAndCleanup(t *testing.T) {
 }
 
 func TestCodexReviewLaunchCleanupFailureDoesNotTerminalizeUnreapedWorkspace(t *testing.T) {
+	t.Parallel()
 	launchErr := fmt.Errorf("invalid review launch: %w", ErrInvalidCodexReviewSpec)
 	transient := codexReviewLaunchCleanupFailure(launchErr, errors.New("runtime temporarily unavailable"))
 	if exec.ClassifyReviewSourceFailure(transient) != domain.ReviewFailureTransient ||
@@ -3408,6 +3465,7 @@ func TestCodexReviewLaunchCleanupFailureDoesNotTerminalizeUnreapedWorkspace(t *t
 }
 
 func TestCodexReviewSourceJournalReadsKeepResultPending(t *testing.T) {
+	t.Parallel()
 	id := domain.InvocationID("review-journal-read-1")
 	request := exec.ReviewRequest{
 		Admission: testReviewAdmission("run-journal-read"),
@@ -3433,6 +3491,7 @@ func TestCodexReviewSourceJournalReadsKeepResultPending(t *testing.T) {
 }
 
 func TestCodexReviewSourceRecoversBeforeLaunchIntent(t *testing.T) {
+	t.Parallel()
 	for _, preparation := range []string{"absent", "pending", "finalized"} {
 		t.Run(preparation, func(t *testing.T) {
 			ctx := context.Background()
@@ -3525,6 +3584,7 @@ func TestCodexReviewSourceRecoversBeforeLaunchIntent(t *testing.T) {
 }
 
 func TestCodexReviewSourceRetriesTransientPreparationUnderSameInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -3574,6 +3634,7 @@ func TestCodexReviewSourceRetriesTransientPreparationUnderSameInvocation(t *test
 }
 
 func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -3630,6 +3691,7 @@ func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T
 }
 
 func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -3739,6 +3801,7 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 }
 
 func TestCodexReviewSourceVerifyRejectsSwappedInvocation(t *testing.T) {
+	t.Parallel()
 	id := domain.InvocationID("review-run-1-1")
 	request := exec.ReviewRequest{
 		Admission: testReviewAdmission("run-1"),
@@ -3771,6 +3834,7 @@ func TestCodexReviewSourceVerifyRejectsSwappedInvocation(t *testing.T) {
 }
 
 func TestCodexReviewSourcePollRejectsSwappedFailureOutcome(t *testing.T) {
+	t.Parallel()
 	id := domain.InvocationID("review-run-failure-1")
 	foreign := domain.InvocationID("review-run-failure-2")
 	journal := &fakeCodexReviewJournal{
@@ -3789,6 +3853,7 @@ func TestCodexReviewSourcePollRejectsSwappedFailureOutcome(t *testing.T) {
 }
 
 func TestCodexReviewSourcePollMarksPersistedFailureTerminal(t *testing.T) {
+	t.Parallel()
 	for _, class := range []domain.ReviewFailureClass{
 		domain.ReviewFailureTransient,
 		domain.ReviewFailureConfiguration,
@@ -3819,6 +3884,7 @@ func TestCodexReviewSourcePollMarksPersistedFailureTerminal(t *testing.T) {
 }
 
 func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	backend := fx.codexReviewLifecycle(t)
 	review, _ := testCodexReview(t)
@@ -3877,6 +3943,7 @@ func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 }
 
 func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
@@ -3910,6 +3977,7 @@ func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
 }
 
 func TestCodexReviewConfigurationDigestBindsEffectiveInputs(t *testing.T) {
+	t.Parallel()
 	cfg, request := testCodexReview(t)
 	digest := func(
 		config CodexReviewConfig,
@@ -3979,6 +4047,7 @@ func TestCodexReviewConfigurationDigestBindsEffectiveInputs(t *testing.T) {
 }
 
 func TestClassifyCodexLaunchFailureKeepsRuntimePreparationRetryable(t *testing.T) {
+	t.Parallel()
 	if got := classifyCodexLaunchFailure(errors.New("runtime unavailable")); got != domain.ReviewFailureTransient {
 		t.Fatalf("runtime failure class = %q", got)
 	}
@@ -4006,6 +4075,7 @@ func TestClassifyCodexLaunchFailureKeepsRuntimePreparationRetryable(t *testing.T
 }
 
 func TestRuntimeCodexReviewVolumeLeaseTransfersAtomically(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	runtime := newFakeRuntime(t)
 	for _, volume := range []string{"workspace", "shadow"} {
@@ -4086,6 +4156,7 @@ func TestRuntimeCodexReviewVolumeLeaseTransfersAtomically(t *testing.T) {
 // volume-mount count far above the leased-set size must still authenticate as
 // the atomic transfer; the pre-#591 reconstruct rejected this shape outright.
 func TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	runtime := newFakeRuntime(t)
 	volumes := []string{"workspace", "shadow", "snapshot"}
@@ -4149,6 +4220,7 @@ func TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer(t *test
 // an equivalence-class representative: every ErrConformance failure reachable
 // before start classifies identically as a contradiction (#499).
 func TestClassifyCodexLaunchFailure(t *testing.T) {
+	t.Parallel()
 	conformance := func(c Check) error {
 		return &ConformanceFailure{Backend: BackendName, Check: c, Reason: "test"}
 	}
@@ -4199,6 +4271,7 @@ func TestClassifyCodexLaunchFailure(t *testing.T) {
 // ReviewFailureContradiction, not the repairable ReviewFailureConfiguration
 // the launch classifier previously emitted for every conformance failure.
 func TestCodexReviewSourceLaunchConformanceIsContradiction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -4254,6 +4327,7 @@ func reviewSourceFailureClass(err error) domain.ReviewFailureClass {
 // before it. Per the trust-boundary refactor discipline this is a harness over
 // a corpus, not a diff-read: the dispatch owns credential-bearing teardown.
 func TestReconcileRejectedRequestDispatchEquivalence(t *testing.T) {
+	t.Parallel()
 	type branch int
 	const (
 		branchContradictionPreparing branch = iota
@@ -4345,6 +4419,7 @@ func codexGoldenReviewOutcome(events string) CodexReviewSourceOutcome {
 // retained collection is refused, a tampered transcript no longer resolves, and
 // a well-formed outcome survives the persistence codec and still resolves.
 func TestCodexReviewOutcomeEvidenceGate(t *testing.T) {
+	t.Parallel()
 	t.Run("missing retained collection is refused", func(t *testing.T) {
 		outcome := codexGoldenReviewOutcome(`{"type":"turn.completed"}`)
 		outcome.Collection = nil
@@ -4395,6 +4470,7 @@ func TestCodexReviewOutcomeEvidenceGate(t *testing.T) {
 // provider parses turn.completed usage, and its absence (no event, or malformed
 // counts) reads as nil, matching exec.ExtractClaudeUsage.
 func TestCodexReviewProviderUsageMeasurements(t *testing.T) {
+	t.Parallel()
 	observedAt := codexReviewEpoch
 	provider := codexReviewProvider{}
 	reported := func(metric string, quantity int64) exec.UsageMeasurement {
@@ -4451,6 +4527,7 @@ func TestCodexReviewProviderUsageMeasurements(t *testing.T) {
 // usage-present and usage-absent states so the two are visibly distinguishable
 // (Acceptance 4). Both fixtures are self-consistent under the read gates.
 func TestCodexReviewOutcomeGolden(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		golden string
@@ -4483,6 +4560,7 @@ func TestCodexReviewOutcomeGolden(t *testing.T) {
 // workspace-ownership row, and the next reconcile's orphan sweep removes it once
 // the launch intent is closed.
 func TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -4544,6 +4622,7 @@ func TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt(t *tes
 // before the request is recorded, so a refused review leaves no request, no
 // workspace, and no credential-bearing launch behind.
 func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -4610,6 +4689,7 @@ func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
 // read for the launch, and a source that cannot read one refuses the request
 // before anything is recorded.
 func TestCodexReviewSourceLaunchFollowsTheAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	composed := CodexReviewSourceConfig{
 		Review:         CodexReviewConfig{Model: "gpt-5.2-codex", ReasoningEffort: "high"},
@@ -4807,6 +4887,7 @@ func requireRecoveredReviewReaped(
 }
 
 func TestAbortRecoveredReviewReapsStartedReview(t *testing.T) {
+	t.Parallel()
 	for _, existing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fence", true: "existing outcome"}[existing], func(t *testing.T) {
 			ctx := t.Context()
@@ -4854,6 +4935,7 @@ func TestAbortRecoveredReviewReapsStartedReview(t *testing.T) {
 // or outcome row may be the contradiction the operator recovered. Raising it
 // again would fail every pass, so the abort reaps the review instead.
 func TestAbortRecoveredReviewDoesNotReraiseItsContradiction(t *testing.T) {
+	t.Parallel()
 	rejectedRequest := errors.Join(ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest)
 	t.Run("rejected request, already reaped", func(t *testing.T) {
 		ctx := t.Context()
@@ -4891,6 +4973,7 @@ func TestAbortRecoveredReviewDoesNotReraiseItsContradiction(t *testing.T) {
 }
 
 func TestAbortRecoveredReviewRetriesAnUnreadRequest(t *testing.T) {
+	t.Parallel()
 	_, source, journal, id := startRecoveredReview(t)
 	journal.failGetRequest = errors.New("journal unavailable")
 	err := source.AbortRecoveredReview(t.Context(), id)
@@ -4903,6 +4986,7 @@ func TestAbortRecoveredReviewRetriesAnUnreadRequest(t *testing.T) {
 }
 
 func TestAbortRecoveredReviewDoesNotInventUnknownReview(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	cfg, spec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
@@ -4925,6 +5009,7 @@ func TestAbortRecoveredReviewDoesNotInventUnknownReview(t *testing.T) {
 // whose launch never started is refused when Inspect would relaunch it. Both
 // refusals are configuration failures, so nothing retries them.
 func TestCodexReviewSourceRefusesLegacyEvaluatedRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)

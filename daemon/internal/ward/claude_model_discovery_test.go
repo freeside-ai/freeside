@@ -59,6 +59,7 @@ func wantClaudeModels() []domain.DiscoveredModel {
 }
 
 func TestDecodeClaudeModelReport(t *testing.T) {
+	t.Parallel()
 	report, err := DecodeClaudeModelReport(initializeOutput(claudeInitializeAnswer+"\n", 0), lineupProbeTestToken(t))
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +79,7 @@ func TestDecodeClaudeModelReport(t *testing.T) {
 }
 
 func TestDecodeClaudeModelReportRefusals(t *testing.T) {
+	t.Parallel()
 	answer := func(models string) string {
 		return `{"type":"control_response","response":{"subtype":"success","request_id":"freeside-model-discovery",` +
 			`"response":{"models":[` + models + `]}}}`
@@ -151,6 +153,7 @@ func TestDecodeClaudeModelReportRefusals(t *testing.T) {
 // fake runtime: the credential is staged and gone, nothing is left behind,
 // and an answer past the prompt probe's 64 KiB cap is read whole.
 func TestDiscoverClaudeModelsRunsOneContainedCall(t *testing.T) {
+	t.Parallel()
 	padding := `{"type":"system","subtype":"status","padding":"` + strings.Repeat("x", 80<<10) + `"}` + "\n"
 	rt := newLineupProbeFakeRuntime(t,
 		lineupProbeOutputFiles("2.1.282 (Claude Code)\n", padding+claudeInitializeAnswer+"\n", "", "0\n")...)
@@ -190,6 +193,7 @@ func TestDiscoverClaudeModelsRunsOneContainedCall(t *testing.T) {
 }
 
 func TestDiscoverClaudeModelsRefusesAnExportStillHoldingTheCredential(t *testing.T) {
+	t.Parallel()
 	files := append(lineupProbeOutputFiles("2.1.282 (Claude Code)\n", claudeInitializeAnswer, "", "0\n"),
 		tarFile{lineupProbeStageDir + "/" + lineupProbeCredName, []byte("token")})
 	rt := newLineupProbeFakeRuntime(t, files...)
@@ -202,6 +206,7 @@ func TestDiscoverClaudeModelsRefusesAnExportStillHoldingTheCredential(t *testing
 // TestLineupProbeKeepsItsOutputCap: only an initialize probe gets the raised
 // cap; a prompt probe's oversized stdout is still refused.
 func TestLineupProbeKeepsItsOutputCap(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("x", lineupProbeOutputCap+1)
 	rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("v\n", big, "", "0\n")...)
 	if _, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil); err == nil ||
