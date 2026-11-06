@@ -3207,8 +3207,15 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    interrupted. A stale lease for another root refuses and names the
    `rig recover` command.
 4. Check `prod`'s App authority against `prod.installed_daemon`, under the
-   lease, and record the two auth identities from the settings once (a
-   later file that names other ones is refused).
+   lease. Open the task runtime coverage record under the database daemon
+   lock, writing it on the root's first start, so it exists before this
+   start's composition manifest does: every task submitted for the run is
+   saved after it, and its Stop can be proven. A task with a run saved
+   before the root's first daemon or deputy start stays unprovable (Task
+   Cancellation Contract), and a daemon holding the database refuses the
+   start here.
+   Then record the two auth identities from the settings once (a later
+   file that names other ones is refused).
 5. Self-check: adopt the agent tree and compare the patch with
    `agent_tree.commit`, then run the composition preflight. Both need the
    database idle and the listener free, so they run before the daemon
@@ -3227,7 +3234,8 @@ error, abandons the lease instead, so the next start recovers it.
 
 **What it writes.** Under `<state-root>/daemon/`: `freeside.db`,
 `rig-acquisition.json` (the lease's acquisition record, `0600`) and
-`composition-manifest.json`, both removed when the deputy ends, the
+`composition-manifest.json`, both removed when the deputy ends,
+`task-runtime-coverage.json` (written once per root), the
 adoption's `agent-tree.patch`,
 `auth-adopt.json`, and `auth-adopt.log`. A passing manifest is also kept by
 content digest under `<state-root>/production-evidence/composition/`.
@@ -4270,7 +4278,12 @@ stage, review, verification, and judgment adapters to prove quiescence. An
 attempt has a two-minute wait bound; a timeout records `failed_to_stop` and
 retains WIP. Retries never turn a missing local session into proof of exit.
 A failed attempt is retried with exponential backoff, from one second up to
-256, and its warning is logged again only when the error changes. A stop the
+256, and its warning is logged again only when the error changes. The coverage
+record (`task-runtime-coverage.json`) is the ownership checkpoint: the daemon
+writes it on its root's first start, listing the tasks then saved, and
+`freesided deputy` writes it before its composition check (Run Real Work With
+The Deputy). So only a task saved before a root's first daemon or deputy start,
+such as one `freesided submit` saved then, predates it. A stop the
 coverage record can never prove, because the task predates the ownership
 checkpoint or the database epoch differs from the record's, gets one attempt:
 it records `failed_to_stop`, logs one line, and isn't retried in that process

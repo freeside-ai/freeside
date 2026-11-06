@@ -175,6 +175,9 @@ func runDeputy(
 	if err := removeIfPresent(paths.Manifest); err != nil {
 		return err
 	}
+	if err := openDeputyTaskCoverage(ctx, paths, settings); err != nil {
+		return err
+	}
 
 	if err := withDeputyStore(ctx, paths.DB, settings, func(st *store.Store) error {
 		if interrupted != nil {
@@ -393,6 +396,27 @@ func withDeputyStore(
 	}
 	defer func() { err = errors.Join(err, st.Close()) }()
 	return fn(st)
+}
+
+// openDeputyTaskCoverage opens the root's task runtime coverage record
+// before the self-check writes this start's composition manifest. Unattended
+// submission needs that manifest, so every task submitted for the run is
+// saved after the record and its Stop can be proven; a task saved before a
+// root's first start stays uncovered, as it would under run(). It holds the
+// database daemon lock while it lists tasks and writes the record, and
+// releases it, because the self-check's preflight takes the same lock. run()
+// opens the same file through openTaskRuntimeCoverage, since the deputy
+// passes it paths.StateRoot as its state directory.
+func openDeputyTaskCoverage(ctx context.Context, paths deputyPaths, settings loadedDeputySettings) error {
+	lock, err := daemonlock.Acquire(paths.DB)
+	if err != nil {
+		return fmt.Errorf("acquire database daemon lock: %w", err)
+	}
+	err = withDeputyStore(ctx, paths.DB, settings, func(st *store.Store) error {
+		_, err := openTaskRuntimeCoverage(ctx, st, paths.StateRoot)
+		return err
+	})
+	return errors.Join(err, lock.Close())
 }
 
 // recordDeputyIdentities records the writer and reviewer identities a fresh
