@@ -42,6 +42,7 @@ func TestCanonicalAuthority(t *testing.T) {
 }
 
 func TestConnectProxyExactAllowlist(t *testing.T) {
+	t.Parallel()
 	const allowed = "provider.example:443"
 	payload := strings.Repeat("p", maxProxyHeaderBytes*2)
 	upstreamResult := make(chan error, 1)
@@ -196,6 +197,7 @@ func TestConnectProxyClientSubnetAdmission(t *testing.T) {
 }
 
 func TestConnectProxyCloseInterruptsPartialClientHello(t *testing.T) {
+	t.Parallel()
 	proxySide, upstreamSide := net.Pipe()
 	defer func() { _ = upstreamSide.Close() }()
 	dial := func(context.Context, string, string) (net.Conn, error) {
@@ -281,6 +283,7 @@ func TestConnectProxyRejectsInvalidNetworkMetadata(t *testing.T) {
 }
 
 func TestSameEnvironmentExactByKey(t *testing.T) {
+	t.Parallel()
 	want := []string{"PATH=/bin", "A=1", "B=two=parts"}
 	for _, got := range [][]string{
 		{"B=two=parts", "PATH=/bin", "A=1"},
@@ -306,6 +309,7 @@ func TestSameEnvironmentExactByKey(t *testing.T) {
 // daemon: a writer that uploads while the provider stays silent never
 // refreshes it, and one provider byte does.
 func TestConnectProxyHeartbeatCountsOnlyProviderBytes(t *testing.T) {
+	t.Parallel()
 	proxySide, upstreamSide := net.Pipe()
 	defer func() { _ = upstreamSide.Close() }()
 	dial := func(context.Context, string, string) (net.Conn, error) {
@@ -513,6 +517,7 @@ func (rp *registryProxy) get(conn net.Conn, serverName string) (string, error) {
 }
 
 func TestConnectProxyRegistryAllowlist(t *testing.T) {
+	t.Parallel()
 	rp := newRegistryProxy(t)
 
 	providers, registries := rp.proxy.Allowlist()
@@ -580,6 +585,7 @@ func TestConnectProxyRegistryAllowlist(t *testing.T) {
 }
 
 func TestConnectProxyRegistryRequiresPublicAddresses(t *testing.T) {
+	t.Parallel()
 	rp := newRegistryProxy(t)
 	for _, tc := range []struct {
 		name  string
@@ -653,6 +659,7 @@ func TestConnectProxyRegistryRequiresPublicAddresses(t *testing.T) {
 // on the provider path: it was already admitted, so the declaration adds
 // nothing and must not be read back as a registry.
 func TestConnectProxyProviderOutranksRegistryDeclaration(t *testing.T) {
+	t.Parallel()
 	proxy, err := startRegistryConnectProxy(
 		context.Background(), "127.0.0.1", "127.0.0.0/24",
 		[]string{testProviderAuthority},
@@ -703,6 +710,7 @@ func TestPublicUnicast(t *testing.T) {
 // proxy also tries the next one after the stagger, so a working address
 // behind several silent ones is reached.
 func TestDialRegistryReachesAnAddressBehindSilentOnes(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		upstream, peer := net.Pipe()
 		defer func() { _ = upstream.Close() }()
@@ -740,6 +748,7 @@ func TestDialRegistryReachesAnAddressBehindSilentOnes(t *testing.T) {
 // When no address answers, the dial ends with the CONNECT's own budget and
 // reports a gateway failure.
 func TestDialRegistryEndsWithTheBudgetWhenNoAddressAnswers(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		p := &connectProxy{
 			lookup: func(context.Context, string) ([]netip.Addr, error) {
@@ -781,6 +790,7 @@ func (c *closeRecorder) Close() error {
 // Two attempts can both connect when the earlier one is slow. The tunnel
 // takes the first to finish and closes the other.
 func TestDialRegistryClosesAConnectionThatLosesTheRace(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		slowConn, slowPeer := net.Pipe()
 		fastConn, fastPeer := net.Pipe()
@@ -832,6 +842,7 @@ func (r *recordingResolver) LookupNetIP(_ context.Context, network, host string)
 // A declared registry host is asked of the resolver as a rooted name, so the
 // resolver's search list cannot answer for another name.
 func TestRootedLookupAsksForTheRootedName(t *testing.T) {
+	t.Parallel()
 	resolver := &recordingResolver{}
 	addrs, err := rootedLookup(resolver)(context.Background(), testRegistryHost)
 	if err != nil || !slices.Equal(addrs, []netip.Addr{netip.MustParseAddr(testRegistryAddr)}) {

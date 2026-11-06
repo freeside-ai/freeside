@@ -62,6 +62,7 @@ func isErrorName(name string) bool {
 }
 
 func TestErrorNamedFailfArgDetection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -96,6 +97,7 @@ func TestErrorNamedFailfArgDetection(t *testing.T) {
 // error cause into Reason again (#574): a failure caused by an error goes
 // through failw so ConformanceFailure.Err keeps it.
 func TestFailfCarriesNoErrorCause(t *testing.T) {
+	t.Parallel()
 	paths, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("list package source: %v", err)

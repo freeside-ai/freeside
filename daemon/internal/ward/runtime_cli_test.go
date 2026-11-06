@@ -35,6 +35,7 @@ const pinnedImageReference = "docker.io/library/alpine@sha256:2c9d26f410d032d5b1
 // host block-image path), options ["ro"] mapped to ReadOnly, image PATH
 // environment, no SSH, no publications.
 func TestDecodeInspectVolume(t *testing.T) {
+	t.Parallel()
 	rep, err := decodeInspect(readFixture(t, "cli-inspect-volume.json"), "freeside-handoff-run-1-exporter")
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +81,7 @@ func TestDecodeInspectVolume(t *testing.T) {
 }
 
 func TestDecodeInspectRetainsExactNetworkAttachment(t *testing.T) {
+	t.Parallel()
 	raw := readFixture(t, "cli-inspect-volume.json")
 	raw = bytes.Replace(raw, []byte(`"networks": []`), []byte(`"networks": [{"network":"freeside-handoff-run-1-egress","options":{"hostname":"fixture","mtu":1280}}]`), 1)
 	rep, err := decodeInspect(raw, "freeside-handoff-run-1-exporter")
@@ -92,6 +94,7 @@ func TestDecodeInspectRetainsExactNetworkAttachment(t *testing.T) {
 }
 
 func TestDecodeNetworkInspect(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`[{"configuration":{"creationDate":"2026-07-27T19:00:39Z","labels":{"freeside.handoff":"run-1"},"mode":"hostOnly","name":"freeside-handoff-run-1-egress","options":{},"plugin":"container-network-vmnet"},"id":"freeside-handoff-run-1-egress","status":{"ipv4Gateway":"192.168.128.1","ipv4Subnet":"192.168.128.0/24"}}]`)
 	report, err := decodeNetworkInspect(raw, "freeside-handoff-run-1-egress")
 	if err != nil {
@@ -106,6 +109,7 @@ func TestDecodeNetworkInspect(t *testing.T) {
 }
 
 func TestDecodeNetworkRejectsInconsistentIdentity(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`[{"configuration":{"creationDate":"2026-07-27T19:00:39Z","labels":{},"mode":"hostOnly","name":"replacement","options":{},"plugin":"container-network-vmnet"},"id":"requested","status":{"ipv4Gateway":"192.168.128.1"}}]`)
 	if _, err := decodeNetworkInspect(raw, "requested"); err == nil {
 		t.Fatal("inconsistent inspect identity accepted")
@@ -120,6 +124,7 @@ func TestDecodeNetworkRejectsInconsistentIdentity(t *testing.T) {
 // unknown mount kind and an unnamed volume decode to invalid types (never
 // silently dropped), and ssh/publications/extra env survive decoding.
 func TestDecodeInspectHostile(t *testing.T) {
+	t.Parallel()
 	rep, err := decodeInspect(readFixture(t, "cli-inspect-bind.json"), "hostile-fixture")
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +166,7 @@ func TestDecodeInspectHostile(t *testing.T) {
 // both is contradictory and flagged so verification fails closed rather than
 // trusting ro's mere presence.
 func TestToMountAccessOptions(t *testing.T) {
+	t.Parallel()
 	vol := map[string]json.RawMessage{"volume": json.RawMessage(`{"name":"ws"}`)}
 	cases := []struct {
 		name         string
@@ -186,6 +192,7 @@ func TestToMountAccessOptions(t *testing.T) {
 }
 
 func TestDecodeInspectCardinality(t *testing.T) {
+	t.Parallel()
 	if _, err := decodeInspect([]byte("[]"), "x"); err == nil {
 		t.Error("empty inspect array decoded without error")
 	}
@@ -198,6 +205,7 @@ func TestDecodeInspectCardinality(t *testing.T) {
 // members never collapse through encoding/json's last-value-wins behavior
 // before inspect/list evidence reaches a gate check or teardown decision.
 func TestRuntimeDecodersRejectDuplicateKeys(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		call func([]byte) error
@@ -251,6 +259,7 @@ func TestRuntimeDecodersRejectDuplicateKeys(t *testing.T) {
 // A missing or mismatched id fails closed, so checks 3/4 never act on the
 // wrong (or unidentified) object's state and mounts.
 func TestDecodeInspectIdentity(t *testing.T) {
+	t.Parallel()
 	// The captured fixture is for the exporter; requesting a different name
 	// must fail rather than trust the report.
 	if _, err := decodeInspect(readFixture(t, "cli-inspect-volume.json"), "some-other-container"); err == nil {
@@ -278,6 +287,7 @@ func TestDecodeInspectIdentity(t *testing.T) {
 // reading as clean. The fixtures keep the runtime's descriptor object, which
 // the decoder ignores; only the reference is a required presence field.
 func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
+	t.Parallel()
 	// A report with the correct id and state but each allowlist field omitted
 	// in turn must preserve identity while remaining unapprovable.
 	fields := map[string]string{
@@ -321,6 +331,7 @@ func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 }
 
 func TestDecodeContainerList(t *testing.T) {
+	t.Parallel()
 	got, err := decodeContainerList(readFixture(t, "cli-list-all.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -348,6 +359,7 @@ func TestDecodeContainerList(t *testing.T) {
 // (containers) or name (volumes) is a decode error, never a silently
 // unidentified entry the absence proofs would treat as absent.
 func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
+	t.Parallel()
 	if _, err := decodeContainerList([]byte(`null`)); err == nil {
 		t.Error("null container list decoded as an empty absence proof")
 	}
@@ -375,6 +387,7 @@ func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
 }
 
 func TestRuntimeResourceNameLimitRejectsLegacyCodexObserver(t *testing.T) {
+	t.Parallel()
 	maximumID := strings.Repeat("a", 32)
 	legacy := legacyCodexReviewNames(maximumID).workspaceObserver
 	if len(legacy) <= appleContainerIDLimit {
@@ -395,6 +408,7 @@ func TestRuntimeResourceNameLimitRejectsLegacyCodexObserver(t *testing.T) {
 // errors are wrapped into ConformanceFailure.Reason, which must hold no
 // credential material. The trusted requested id and entry index stay.
 func TestIdentityMismatchErrorsRedactObservedIDs(t *testing.T) {
+	t.Parallel()
 	const token = "copied-secret-TOKEN"
 	cases := []struct {
 		name string
@@ -455,6 +469,7 @@ func mustDecodeInspectErr(out, id string) error {
 }
 
 func TestDecodeVolumeList(t *testing.T) {
+	t.Parallel()
 	got, err := decodeVolumeList(readFixture(t, "cli-volume-list.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -482,6 +497,7 @@ func TestDecodeVolumeList(t *testing.T) {
 // evidence only for the requested name, so ownership recovery can never act
 // on another volume's labels or fingerprint.
 func TestDecodeVolumeInspect(t *testing.T) {
+	t.Parallel()
 	got, err := decodeVolumeInspect(readFixture(t, "cli-volume-inspect.json"), "freeside-handoff-run-1-ws")
 	if err != nil {
 		t.Fatal(err)
@@ -533,6 +549,7 @@ func TestDecodeVolumeInspect(t *testing.T) {
 // spec, readonly flag included, and the narrow read-only bind phrasing used
 // by the Codex review topology.
 func TestCreateContainerArgs(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -600,6 +617,7 @@ func TestCreateContainerArgs(t *testing.T) {
 }
 
 func TestCopyArgs(t *testing.T) {
+	t.Parallel()
 	args, err := copyArgs("freeside-handoff-golden-run-seeder", "/seeds/checkout", "/seed")
 	if err != nil {
 		t.Fatal(err)
@@ -619,6 +637,7 @@ func TestCopyArgs(t *testing.T) {
 // rather than escaped, so a direct Runtime caller cannot bypass the
 // spec-level checks.
 func TestCopyArgsRefusesInjection(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name                   string
 		id, hostDir, targetDir string
@@ -654,6 +673,7 @@ func TestCopyArgsRefusesInjection(t *testing.T) {
 // CLI would parse as an injected mount option) are both refused at phrasing
 // time, so a direct Runtime caller cannot bypass the spec-level checks.
 func TestCreateContainerArgsRefusesInjection(t *testing.T) {
+	t.Parallel()
 	base := ContainerSpec{
 		Name:            "c",
 		Image:           "img",
@@ -699,6 +719,7 @@ func TestCreateContainerArgsRefusesInjection(t *testing.T) {
 // echo an accepted explicit environment credential through the Runtime
 // error. The exit status remains available for operational classification.
 func TestCreateContainerRedactsStderr(t *testing.T) {
+	t.Parallel()
 	bin := filepath.Join(t.TempDir(), "container-fixture")
 	execfixture.Write(t, bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >&2\nexit 7\n"), 0o700)
 	const secret = "secret-fixture-value"
@@ -725,6 +746,7 @@ func TestCreateContainerRedactsStderr(t *testing.T) {
 // the runtime's stderr into their error: a runtime/XPC message can name a
 // foreign user-created object, and these errors reach ConformanceFailure.Reason.
 func TestListInspectExportWithholdStderr(t *testing.T) {
+	t.Parallel()
 	bin := filepath.Join(t.TempDir(), "container-fixture")
 	execfixture.Write(t, bin, []byte("#!/bin/sh\nprintf 'foreign-container-SECRET\\n' >&2\nexit 7\n"), 0o700)
 	rt := NewCLIRuntime(bin)
@@ -756,6 +778,7 @@ func TestListInspectExportWithholdStderr(t *testing.T) {
 // bounded and keeps its end, where the runtime prints why the call failed,
 // marking the dropped head.
 func TestRuntimeStderrKeepsItsTail(t *testing.T) {
+	t.Parallel()
 	bin := filepath.Join(t.TempDir(), "container-fixture")
 	const cause = "Error: volume quota exceeded"
 	script := "#!/bin/sh\n" +
@@ -789,6 +812,7 @@ func TestRuntimeStderrKeepsItsTail(t *testing.T) {
 // rather than buffering the whole stream, while a no-output call drains it to
 // io.Discard and still succeeds.
 func TestRuntimeStdoutBounds(t *testing.T) {
+	t.Parallel()
 	bin := filepath.Join(t.TempDir(), "container-fixture")
 	// Emit more than maxRuntimeOutput (16 MiB) regardless of the subcommand.
 	script := "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\n"
@@ -806,6 +830,7 @@ func TestRuntimeStdoutBounds(t *testing.T) {
 // TestExportRootFSStreamsStdout pins the boundary CLIRuntime can enforce: the
 // CLI emits its default stdout stream into the caller-owned bounded Writer.
 func TestExportRootFSStreamsStdout(t *testing.T) {
+	t.Parallel()
 	bin := filepath.Join(t.TempDir(), "container-fixture")
 	script := "#!/bin/sh\n" +
 		"[ \"$1\" = export ] || exit 8\n" +
@@ -826,6 +851,7 @@ func TestExportRootFSStreamsStdout(t *testing.T) {
 // image, so everything after it is positional. Without this, an image of
 // "--mount" would let the next word realize a host bind outside the spec.
 func TestCreateContainerArgsTerminatesOptions(t *testing.T) {
+	t.Parallel()
 	spec := ContainerSpec{
 		Name:            "c",
 		Image:           "--mount",

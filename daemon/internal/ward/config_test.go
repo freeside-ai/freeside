@@ -8,6 +8,7 @@ import (
 )
 
 func TestConfigDefaults(t *testing.T) {
+	t.Parallel()
 	cfg := Config{}.withDefaults()
 	if cfg.WorkspaceTarget != "/workspace" || cfg.HandoffDir != "/handoff" || cfg.ProofPath != "/handoff-proof.txt" {
 		t.Errorf("path defaults = %q %q %q, want /workspace /handoff /handoff-proof.txt",
@@ -22,6 +23,7 @@ func TestConfigDefaults(t *testing.T) {
 }
 
 func TestConfigWriterStopTimeoutOverridePreserved(t *testing.T) {
+	t.Parallel()
 	// A production implementation can legitimately run longer than the 10m
 	// default; the operator's override must survive withDefaults, or the run is
 	// aborted at the writer-termination handoff with a context deadline.
@@ -40,6 +42,7 @@ func TestConfigWriterStopTimeoutOverridePreserved(t *testing.T) {
 }
 
 func TestConfigValidate(t *testing.T) {
+	t.Parallel()
 	if err := testConfig().validate(); err != nil {
 		t.Fatalf("valid fixture: validate() = %v, want nil", err)
 	}
@@ -92,6 +95,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestSleepContextCancel(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := sleepContext(ctx, time.Hour); !errors.Is(err, context.Canceled) {

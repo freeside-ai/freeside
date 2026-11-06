@@ -15,6 +15,7 @@ import (
 )
 
 func TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents(t *testing.T) {
+	t.Parallel()
 	// Exporter preflight requires sh, but not an external printf executable.
 	// Exercise successful proof and extra-entry rejection with only the
 	// observer's external tools in PATH, leaving printf to the shell.
@@ -126,6 +127,7 @@ func TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents(t *testing.T)
 }
 
 func TestPromptFileHandoffBindsObservedBytesBeforeWriter(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := newFakeJournal()
 	fx.cfg.Journal = j
@@ -170,6 +172,7 @@ func TestPromptFileHandoffBindsObservedBytesBeforeWriter(t *testing.T) {
 }
 
 func TestPromptPreparationFailuresNeverCreateWriter(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"changed_copy", "missing_copy", "wrong_proof", "observer_mount", "interrupted_copy"} {
 		t.Run(failure, func(t *testing.T) {
 			fx := newHandoffFixture(t)
@@ -215,6 +218,7 @@ func TestPromptPreparationFailuresNeverCreateWriter(t *testing.T) {
 }
 
 func TestPromptFileValidationAndLegacyEncoding(t *testing.T) {
+	t.Parallel()
 	hs := testHandoffSpec()
 	body, err := json.Marshal(hs)
 	if err != nil || bytes.Contains(body, []byte("PromptFile")) {
@@ -238,6 +242,7 @@ func TestPromptFileValidationAndLegacyEncoding(t *testing.T) {
 }
 
 func TestPromptMountCannotBeRedirectedOrMadeWritable(t *testing.T) {
+	t.Parallel()
 	hs := testHandoffSpec()
 	hs.Agent.LaunchState = LaunchStateClaudeClean
 	hs.Agent.PromptFile = NewPromptFile([]byte("prompt"))
@@ -271,6 +276,7 @@ func TestPromptMountCannotBeRedirectedOrMadeWritable(t *testing.T) {
 }
 
 func TestPromptRecoveryRejectsMissingOrRetargetedProof(t *testing.T) {
+	t.Parallel()
 	for _, corruption := range []string{"missing", "wrong_digest", "half_pair", "argument_with_proof", "legacy_digest"} {
 		t.Run(corruption, func(t *testing.T) {
 			fx := newHandoffFixture(t)
@@ -313,6 +319,7 @@ func TestPromptRecoveryRejectsMissingOrRetargetedProof(t *testing.T) {
 }
 
 func TestPromptRecoveryReapsInterruptedPreparation(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := fx.seed(t)
 	hs.Agent.LaunchState = LaunchStateClaudeClean

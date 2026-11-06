@@ -9,6 +9,7 @@ import (
 )
 
 func TestClaudeLaunchStateTopologyIsPreparedAndJournalled(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	journal := newFakeJournal()
 	fx.cfg.Journal = journal
@@ -67,6 +68,7 @@ func TestClaudeLaunchStateTopologyIsPreparedAndJournalled(t *testing.T) {
 }
 
 func TestLaunchStateSeederNormalizesEveryFilesystemRoot(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := fx.seed(t)
 	hs.Agent.LaunchState = LaunchStateClaudeClean
@@ -124,6 +126,7 @@ func TestLaunchStateSeederNormalizesEveryFilesystemRoot(t *testing.T) {
 }
 
 func TestVerifyStateProofRejectsEveryUntrustedShape(t *testing.T) {
+	t.Parallel()
 	const nonce = "00112233445566778899aabbccddeeff"
 	digest := strings.Repeat("ab", 32)
 	valid := "nonce=" + nonce + "\nkind=empty\ncontents=valid\ndigest=" + digest + "\n"
@@ -150,6 +153,7 @@ func TestVerifyStateProofRejectsEveryUntrustedShape(t *testing.T) {
 }
 
 func TestClaudeLaunchStateReplacementRefusesBeforeStart(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := fx.seed(t)
 	hs.Agent.LaunchState = LaunchStateClaudeClean
@@ -174,6 +178,7 @@ func TestClaudeLaunchStateReplacementRefusesBeforeStart(t *testing.T) {
 }
 
 func TestClaudeInstructionJournalReplacementRefusesBeforeStart(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	journal := newFakeJournal()
 	fx.cfg.Journal = journal
@@ -206,6 +211,7 @@ func TestClaudeInstructionJournalReplacementRefusesBeforeStart(t *testing.T) {
 }
 
 func TestRecoverReapsJournalBoundClaudeStateVolumes(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	hs.Seed = WorkspaceSeed{
