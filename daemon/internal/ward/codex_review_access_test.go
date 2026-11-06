@@ -9,8 +9,8 @@ import (
 )
 
 // The probe is a shell program, so its meaning is whatever Git and sh make of
-// it. This runs it against a real checkout outside the sandbox wrapper: a base
-// that advanced, a head written on the old base, and their merge.
+// it. This runs it against a real checkout outside the sandbox wrapper: a head
+// written on a base, and another commit on that base.
 func TestCodexReviewAccessProbeBindsTheWorkspaceCommit(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -38,35 +38,27 @@ func TestCodexReviewAccessProbeBindsTheWorkspaceCommit(t *testing.T) {
 	write("README.md", "advanced\n")
 	git("add", "--all")
 	git("commit", "-q", "-m", "advanced base")
-	base := git("rev-parse", "HEAD")
-	git("merge", "-q", "--no-ff", "-m", "prospective merge", head)
-	merge := git("rev-parse", "HEAD")
+	other := git("rev-parse", "HEAD")
 	absent := strings.Repeat("f", 40)
 
 	for _, tc := range []struct {
-		name                  string
-		checkout              string
-		base, head, evaluated string
-		wantReport            string
+		name       string
+		checkout   string
+		base, head string
+		wantReport string
 	}{
 		{
 			name: "head workspace", checkout: head, base: start, head: head,
 			wantReport: "freeside-review-access-v1 base=" + start + " head=" + head + " cwd=" + root,
 		},
-		{
-			name: "merge workspace", checkout: merge, base: base, head: head, evaluated: merge,
-			wantReport: "freeside-review-access-v2 base=" + base + " head=" + head + " evaluated=" + merge + " cwd=" + root,
-		},
-		{name: "merge requested, workspace at head", checkout: head, base: base, head: head, evaluated: merge},
-		{name: "head requested, workspace at merge", checkout: merge, base: base, head: head},
-		{name: "merge workspace, absent head", checkout: merge, base: base, head: absent, evaluated: merge},
-		{name: "merge workspace, absent base", checkout: merge, base: absent, head: head, evaluated: merge},
-		{name: "absent evaluated commit", checkout: merge, base: base, head: head, evaluated: absent},
+		{name: "head requested, workspace at another commit", checkout: other, base: start, head: head},
+		{name: "absent head", checkout: head, base: start, head: absent},
+		{name: "absent base", checkout: head, base: absent, head: head},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			git("checkout", "-q", "--detach", tc.checkout)
 			cmd := osexec.Command( //nolint:gosec // generated probe, test-owned checkout
-				"sh", "-c", codexReviewAccessProbe(root, tc.base, tc.head, tc.evaluated))
+				"sh", "-c", codexReviewAccessProbe(root, tc.base, tc.head))
 			cmd.Dir = root
 			cmd.Env = append(scrubbedLiveGitEnv(),
 				"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)

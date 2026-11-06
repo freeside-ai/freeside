@@ -329,7 +329,7 @@ func TestClaudeReviewCommandShape(t *testing.T) {
 	}
 	// The findings schema is the shared provider-neutral literal, identical to the
 	// Codex command's.
-	if !strings.Contains(codexReviewCommand("/w", "m", "e", "p", "base", "head", "")[2], reviewFindingsJSONSchema) {
+	if !strings.Contains(codexReviewCommand("/w", "m", "e", "p", "base", "head")[2], reviewFindingsJSONSchema) {
 		t.Error("Codex and Claude do not share the findings schema literal")
 	}
 }

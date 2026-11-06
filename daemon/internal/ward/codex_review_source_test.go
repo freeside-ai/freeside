@@ -180,7 +180,7 @@ func TestCodexProductionReviewPromptPreservesPriorEvidenceCapacity(t *testing.T)
 		t.Fatalf("420-artifact production review prompt = %d bytes, limit %d",
 			len(prompt), maxCodexReviewPromptBytes)
 	}
-	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt, "base", "head", "")
+	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt, "base", "head")
 	if got := command[len(command)-1]; got != prompt {
 		t.Fatal("production review prompt was not preserved as its own command argument")
 	}
@@ -1783,19 +1783,19 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 				journal.requests[string(id)] = request
 			},
 		},
-		// A row rewritten to name the head or the base as the evaluated commit
-		// would pass a head review off as a review of the merge.
+		// A retained legacy row rewritten to name the head or the base as its
+		// evaluated commit fails validation.
 		{
 			name: "decoded evaluated commit is the head",
 			reject: func(journal *fakeCodexReviewJournal, id domain.InvocationID, request exec.ReviewRequest) {
-				request.EvaluatedSHA = request.HeadSHA
+				request.LegacyEvaluatedSHA = request.HeadSHA
 				journal.requests[string(id)] = request
 			},
 		},
 		{
 			name: "decoded evaluated commit is the base",
 			reject: func(journal *fakeCodexReviewJournal, id domain.InvocationID, request exec.ReviewRequest) {
-				request.EvaluatedSHA = request.BaseSHA
+				request.LegacyEvaluatedSHA = request.BaseSHA
 				journal.requests[string(id)] = request
 			},
 		},
@@ -4767,5 +4767,62 @@ func TestAbortRecoveredReviewDoesNotInventUnknownReview(t *testing.T) {
 	}
 	if _, _, err := journal.GetCodexReviewOutcome(t.Context(), string(id)); !errors.Is(err, ErrCodexReviewOutcomeNotFound) {
 		t.Fatalf("invented outcome for unknown review: %v", err)
+	}
+}
+
+// TestCodexReviewSourceRefusesLegacyEvaluatedRequest pins that no launch runs
+// a request naming a prospective merge, the shape a daemon recorded before
+// #2660: a new request is refused before it is recorded, and a recorded one
+// whose launch never started is refused when Inspect would relaunch it. Both
+// refusals are configuration failures, so nothing retries them.
+func TestCodexReviewSourceRefusesLegacyEvaluatedRequest(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.codexReviewLifecycle(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	source, err := NewCodexReviewSource(codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := exec.ReviewRequest{
+		Admission: testReviewAdmission("run-legacy-evaluated"),
+		RunID:     "run-legacy-evaluated", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		LegacyEvaluatedSHA: strings.Repeat("e", 40),
+		Workspace:          seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: requestSpec.InstructionBinding, RequestedAt: codexReviewEpoch,
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("fixture legacy request is invalid: %v", err)
+	}
+	refusedAsConfiguration := func(name string, err error) {
+		t.Helper()
+		var failure *exec.ReviewSourceFailure
+		if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureConfiguration ||
+			!errors.Is(err, ErrInvalidCodexReviewSpec) {
+			t.Fatalf("%s of a legacy evaluated request = %v, want a configuration failure", name, err)
+		}
+	}
+
+	id := domain.InvocationID("review-legacy-evaluated-new")
+	refusedAsConfiguration("RequestReview", source.RequestReview(ctx, id, request))
+	if _, recorded := journal.requests[string(id)]; recorded {
+		t.Fatal("refused legacy request was recorded")
+	}
+
+	recordedID := domain.InvocationID("review-legacy-evaluated-recorded")
+	if err := journal.PutCodexReviewRequest(ctx, string(recordedID), request); err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.Inspect(ctx, recordedID)
+	refusedAsConfiguration("Inspect relaunch", err)
+	if journal.intent != nil {
+		t.Fatal("a launch intent began for a legacy evaluated request")
+	}
+	if _, err := source.Poll(ctx, recordedID); err == nil {
+		t.Fatal("a refused legacy request produced a result")
 	}
 }

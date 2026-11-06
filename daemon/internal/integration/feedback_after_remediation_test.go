@@ -64,7 +64,7 @@ func testReturnToAgentAfterRemediation(t *testing.T, advance bool) {
 		}
 		if reviews != nil {
 			for _, req := range reviews.requests {
-				t.Logf("review round %d base %s head %s evaluated %s", req.Round, req.BaseSHA, req.HeadSHA, req.EvaluatedSHA)
+				t.Logf("review round %d base %s head %s evaluated %s", req.Round, req.BaseSHA, req.HeadSHA, req.LegacyEvaluatedSHA)
 			}
 			t.Logf("pinned base %s returned head %s", p.baseSHA, p.replay.HeadSHA)
 		}

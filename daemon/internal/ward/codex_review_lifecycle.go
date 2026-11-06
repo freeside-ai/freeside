@@ -195,13 +195,10 @@ type CodexReviewLaunchSpec struct {
 	WorkspaceVolume      string
 	ExpectedHead         string
 	ExpectedBase         string
-	// ExpectedEvaluated is empty unless the workspace must hold the unpushed
-	// merge of ExpectedHead into the base instead of ExpectedHead itself.
-	ExpectedEvaluated string
-	Prompt            string
-	Boundary          CodexReviewBoundary
-	AuthMode          CodexAuthMode
-	AuthIdentityID    domain.AuthIdentityID
+	Prompt               string
+	Boundary             CodexReviewBoundary
+	AuthMode             CodexAuthMode
+	AuthIdentityID       domain.AuthIdentityID
 	// AuthSnapshot is the host snapshot of the identity's credential, under
 	// the input root. Credential replaces it for an identity that has none
 	// (#1981); exactly one of the two is set.
@@ -599,9 +596,6 @@ func (b *CodexReviewLifecycle) codexReview(
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
 		AgentsShadow: shadow, Snapshot: snapshot, ConfigurationDigest: launch.ConfigurationDigest,
 	}
-	if launch.ExpectedEvaluated != "" {
-		req.EvaluatedSHA, req.HeadSHA = launch.ExpectedEvaluated, launch.ExpectedHead
-	}
 	spec, binding, err := buildReviewAgentSpec(b.reviewProvider(), cfg, req)
 	if err != nil {
 		return nil, err
@@ -841,9 +835,6 @@ func validateCodexReviewLaunchShape(provider reviewProvider, cfg CodexReviewConf
 		return fmt.Errorf("%w: ExpectedHead is invalid", ErrInvalidCodexReviewSpec)
 	case provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && !commitSHAPattern.MatchString(launch.ExpectedBase):
 		return fmt.Errorf("%w: ExpectedBase is invalid", ErrInvalidCodexReviewSpec)
-	case launch.ExpectedEvaluated != "" && (!commitSHAPattern.MatchString(launch.ExpectedEvaluated) ||
-		launch.ExpectedEvaluated == launch.ExpectedHead || launch.ExpectedEvaluated == launch.ExpectedBase):
-		return fmt.Errorf("%w: ExpectedEvaluated is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.WorkspaceTarget) || !cliSafe(cfg.WorkspaceTarget) ||
 		codexReviewWorkspaceOverlapsControlPath(provider, cfg.WorkspaceTarget):
 		return fmt.Errorf("%w: WorkspaceTarget is invalid", ErrInvalidCodexReviewSpec)
@@ -949,23 +940,16 @@ func validateCodexReviewLaunch(provider reviewProvider, cfg CodexReviewConfig, l
 	return nil
 }
 
-// workspaceCommit is the commit the review workspace must hold.
-func (l CodexReviewLaunchSpec) workspaceCommit() string {
-	if l.ExpectedEvaluated != "" {
-		return l.ExpectedEvaluated
-	}
-	return l.ExpectedHead
-}
-
 // codexReviewIntentDigest deliberately commits only non-secret launch shape.
 // The auth snapshot, prompt, and instruction body stay outside durable state;
 // their live content is re-read and re-gated before the handoff boundary.
 // WorkflowRunID routes a refresh failure to its owning run but does not change
 // runtime topology, so excluding it preserves compatibility with open intents.
+// A prospective-merge review once added a member under omitempty;
+// no launch names one now, so every intent digests as it did without it.
 func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) (string, error) {
 	shape := struct {
 		ExpectedBase                                                          string `json:"ExpectedBase,omitempty"`
-		ExpectedEvaluated                                                     string `json:"ExpectedEvaluated,omitempty"`
 		RunID, Image, WorkspaceSourceRunID, WorkspaceVolume, ExpectedHead     string
 		Boundary                                                              CodexReviewBoundary
 		AuthMode                                                              CodexAuthMode
@@ -974,8 +958,8 @@ func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec
 		ApprovedImage, ObserverImage, WorkspaceTarget, Model, ReasoningEffort string
 		ProviderEndpoints                                                     []string
 	}{
-		ExpectedBase: launch.ExpectedBase, ExpectedEvaluated: launch.ExpectedEvaluated,
-		RunID: launch.RunID, Image: launch.Image, WorkspaceSourceRunID: launch.WorkspaceSourceRunID,
+		ExpectedBase: launch.ExpectedBase,
+		RunID:        launch.RunID, Image: launch.Image, WorkspaceSourceRunID: launch.WorkspaceSourceRunID,
 		WorkspaceVolume: launch.WorkspaceVolume, ExpectedHead: launch.ExpectedHead,
 		Boundary: launch.Boundary, AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		InstructionBinding: launch.InstructionBinding,
@@ -2083,7 +2067,7 @@ func (b *CodexReviewLifecycle) observeCodexReviewWorkspace(
 		return CodexReviewWorkspaceObservation{}, err
 	}
 	return observeReviewWorkspace(
-		b.reviewProvider(), cfg, launch.RunID, launch.WorkspaceVolume, launch.workspaceCommit(),
+		b.reviewProvider(), cfg, launch.RunID, launch.WorkspaceVolume, launch.ExpectedHead,
 		workspaceOwner, observerOwner, volumeReport, report, proof,
 	)
 }

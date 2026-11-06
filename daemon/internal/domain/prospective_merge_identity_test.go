@@ -9,8 +9,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
-// reentryMerge is the prospective merge of reentrySuccessor's head into its
-// base.
+// reentryMerge is a valid prospective merge identity: three distinct commits.
 func reentryMerge() domain.ProspectiveMergeIdentity {
 	return domain.ProspectiveMergeIdentity{BaseSHA: "base-2", HeadSHA: "head-1", MergeSHA: "merge-1"}
 }
@@ -52,74 +51,5 @@ func TestProspectiveMergeIdentityValidation(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want %v", err, test.wantErr)
 			}
 		})
-	}
-}
-
-// TestPublicationSuccessorAllowsProspectiveMerge pins the gate to one
-// authority shape: a base_advanced re-entry before publication, for the merge
-// of exactly its head into exactly its base. A published (v3) base_advanced
-// re-entry is refused since plan revision 110.
-func TestPublicationSuccessorAllowsProspectiveMerge(t *testing.T) {
-	t.Parallel()
-	advanced := unpublishedReentrySuccessor()
-	merge := reentryMerge()
-	if !advanced.AllowsProspectiveMerge(merge) {
-		t.Fatal("base_advanced re-entry refused the merge of its own head into its own base")
-	}
-
-	for name, mutate := range map[string]func(*domain.ProspectiveMergeIdentity){
-		"another base":    func(m *domain.ProspectiveMergeIdentity) { m.BaseSHA = "base-1" },
-		"another head":    func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA = "head-2" },
-		"swapped parents": func(m *domain.ProspectiveMergeIdentity) { m.BaseSHA, m.HeadSHA = m.HeadSHA, m.BaseSHA },
-		"no merge":        func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = "" },
-		"merge is head":   func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.HeadSHA },
-		"merge is base":   func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.BaseSHA },
-	} {
-		other := merge
-		mutate(&other)
-		if advanced.AllowsProspectiveMerge(other) {
-			t.Fatalf("base_advanced re-entry admitted a merge with %s", name)
-		}
-	}
-
-	headChanged := reentrySuccessor()
-	headChanged.Reentry.Reason = domain.ReadinessInvalidationHeadChanged
-	// The v3 shape with coordinates that match, under an origin or version the
-	// re-entry rules refuse: a decoded record is never trusted on its fields.
-	wrongOrigin := reentrySuccessor()
-	wrongOrigin.Origin = domain.PublicationSuccessorExternalReview
-	retargeted := reentrySuccessor()
-	retargeted.Reentry.Reason = domain.ReadinessInvalidationRetargeted
-	external := externalReviewSuccessor()
-	externalMerge := domain.ProspectiveMergeIdentity{
-		BaseSHA: external.Reentry.BaseSHA, HeadSHA: external.Reentry.HeadSHA, MergeSHA: "merge-1",
-	}
-	feedback := domain.PublicationSuccessor{
-		Version: domain.PublicationSuccessorVersion, RunID: "run-1", CommandID: "return-1",
-		FeedbackInvocationID: "inv-feedback-1", PredecessorItemID: "production-ready-run-1",
-		PriorReviewInvocationID: "review-1", ReviewRound: 2,
-	}
-	continuation := domain.PublicationSuccessor{
-		Version: domain.PublicationContinuationVersion, Origin: domain.PublicationSuccessorRemediation,
-		RunID: "run-1", CommandID: "approve-1", ReevaluationCommandID: "rerun-1",
-		PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-2", ReviewRound: 3,
-	}
-	for name, test := range map[string]struct {
-		authority domain.PublicationSuccessor
-		merge     domain.ProspectiveMergeIdentity
-	}{
-		"published base_advanced": {reentrySuccessor(), merge},
-		"head_changed re-entry":   {headChanged, merge},
-		"external_review":         {external, externalMerge},
-		"feedback successor":      {feedback, merge},
-		"remediation successor":   {continuation, merge},
-		"retargeted re-entry":     {retargeted, merge},
-		"mislabelled origin":      {wrongOrigin, merge},
-		"zero authority":          {domain.PublicationSuccessor{}, merge},
-		"zero authority, v3 tag":  {domain.PublicationSuccessor{Version: domain.PublicationReentryVersion}, merge},
-	} {
-		if test.authority.AllowsProspectiveMerge(test.merge) {
-			t.Fatalf("%s admitted a prospective merge", name)
-		}
 	}
 }

@@ -61,9 +61,7 @@ type reviewProvider interface {
 	promptProtocol() string
 	// reviewCommand builds the in-container review argv from the read-only
 	// workspace target and the deployment-pinned model configuration.
-	// evaluatedSHA is empty unless the workspace holds the unpushed merge of
-	// headSHA into baseSHA.
-	reviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA, evaluatedSHA string) []string
+	reviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA string) []string
 	// vendor is the agent vendor whose native instruction mechanism this
 	// provider's review invocation consumes (Codex: domain.AgentVendorCodex).
 	vendor() domain.AgentVendor
@@ -175,9 +173,9 @@ func (codexReviewProvider) configurationVersion() string      { return "codex-re
 func (codexReviewProvider) promptProtocol() string { return codexProductionReviewPromptVersion }
 
 func (codexReviewProvider) reviewCommand(
-	workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA, evaluatedSHA string,
+	workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA string,
 ) []string {
-	return codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA, evaluatedSHA)
+	return codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA)
 }
 
 func (codexReviewProvider) vendor() domain.AgentVendor { return domain.AgentVendorCodex }

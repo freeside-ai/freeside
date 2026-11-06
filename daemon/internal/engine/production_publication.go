@@ -2327,9 +2327,10 @@ type productionBinding struct {
 	// commit replaced by the cycle's base, so every reader of the admitted
 	// base below evaluates against the base the authority names.
 	reentry *reentryCycle
-	// evaluatedSHA is the prospective merge a base-advance re-entry verifies
-	// and has reviewed in place of its head. It is set only after
-	// AllowsProspectiveMerge admits it, and is empty for every other cycle.
+	// evaluatedSHA is the prospective merge the handoff check verifies in
+	// place of the head. Only the handoff cycles set it
+	// (production_handoff.go); it is empty for every other cycle, and no
+	// review sees it.
 	evaluatedSHA string
 }
 
@@ -3265,8 +3266,8 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 		}
 	}
 	base := binding.admission.Base
-	// A base-advance re-entry evaluated the prospective merge of the head
-	// into the base, so both proofs and the target name that merge. The
+	// A binding that names a prospective merge evaluated it in place of the
+	// head, so both proofs and the target name that merge. The
 	// proofs an earlier cycle recorded for the same head name none, and
 	// EvaluationTarget.covers refuses them.
 	newProof := func(resolution domain.RequirementResolution, recipe domain.Digest) (domain.CheckProof, error) {

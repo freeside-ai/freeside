@@ -410,7 +410,7 @@ func oldBuildReviewAgentSpec(
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
 	}, proxyEnvironment(cfg.ProxyURL)...)
-	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head, "")
+	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
 		{Type: MountVolume, Source: req.Snapshot.volume, Target: codexReviewSnapshotTarget, ReadOnly: true},
@@ -552,8 +552,8 @@ func FuzzReviewCommandEquivalence(f *testing.F) {
 	f.Add("", "", "", "")
 	f.Add("/w", "m$o'd\"e l", "hi;gh", "Review \"$1\" & `echo x`")
 	f.Fuzz(func(t *testing.T, workspace, model, effort, prompt string) {
-		got := codexReviewProvider{}.reviewCommand(workspace, model, effort, prompt, "base", "head", "")
-		want := codexReviewCommand(workspace, model, effort, prompt, "base", "head", "")
+		got := codexReviewProvider{}.reviewCommand(workspace, model, effort, prompt, "base", "head")
+		want := codexReviewCommand(workspace, model, effort, prompt, "base", "head")
 		if !slices.Equal(got, want) {
 			t.Fatalf("provider review command diverged from base\n new: %q\n base: %q", got, want)
 		}

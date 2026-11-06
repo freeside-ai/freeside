@@ -141,10 +141,11 @@ func TestGolden(t *testing.T) {
 		Artifacts:    []domain.Digest{"sha256:blocked"},
 		Summary:      "Which retention period applies to exported logs?",
 	}
-	// A base-advance re-entry reviews the merge of the unchanged head into the
-	// advanced base; the head stays the one the forge shows.
+	// A request stored before #2660 named the prospective merge a base-advance
+	// re-entry had reviewed. Nothing writes one now; the golden pins that its
+	// encoding, which retained rows carry, did not move.
 	mergeRequest := request
-	mergeRequest.EvaluatedSHA = "merge-sha-1"
+	mergeRequest.LegacyEvaluatedSHA = "merge-sha-1"
 	cases := []struct {
 		name  string
 		value any

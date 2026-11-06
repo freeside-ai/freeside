@@ -368,13 +368,7 @@ func (o CodexReviewSnapshotObservation) verifyFresh(fresh CodexReviewSnapshotObs
 // It carries paths only to daemon-prepared, single-file snapshots under
 // Config.InputRoot; BuildCodexReviewAgentSpec re-opens and validates them.
 type CodexReviewSpec struct {
-	BaseSHA string
-	// EvaluatedSHA and HeadSHA are set together, and only when the workspace
-	// holds the unpushed merge of the pull request's head into the base:
-	// EvaluatedSHA is that merge and HeadSHA the head it merged. Both are
-	// empty when the workspace holds the head itself.
-	EvaluatedSHA         string
-	HeadSHA              string
+	BaseSHA              string
 	RunID                string
 	Image                string
 	WorkspaceSourceRunID string
@@ -1065,7 +1059,7 @@ func buildReviewAgentSpec(
 	shadowTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget, req.Workspace.agentsEntry)
 	env := append(provider.containerEnv(), proxyEnvironment(cfg.ProxyURL)...)
 	command := provider.reviewCommand(
-		cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.commandHead(), req.EvaluatedSHA,
+		cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head,
 	)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
@@ -1272,29 +1266,6 @@ func (b CodexReviewJournalBinding) validate(
 	return nil
 }
 
-// evaluatedCommitValid reports whether the spec either names no evaluated
-// commit, or names one the runtime observed in the workspace together with a
-// distinct head and base. A caller-supplied evaluated commit is never trusted
-// on its own: only the observation proves what the reviewer will read.
-func (r CodexReviewSpec) evaluatedCommitValid() bool {
-	if r.EvaluatedSHA == "" {
-		return r.HeadSHA == ""
-	}
-	return commitSHAPattern.MatchString(r.EvaluatedSHA) && commitSHAPattern.MatchString(r.HeadSHA) &&
-		r.Workspace.head == r.EvaluatedSHA && r.HeadSHA != r.EvaluatedSHA &&
-		r.BaseSHA != r.EvaluatedSHA && r.BaseSHA != r.HeadSHA
-}
-
-// commandHead is the pull request head the review command names: the head the
-// evaluated commit merged, or the observed workspace head when the workspace
-// holds the head itself.
-func (r CodexReviewSpec) commandHead() string {
-	if r.EvaluatedSHA != "" {
-		return r.HeadSHA
-	}
-	return r.Workspace.head
-}
-
 func validateCodexReviewRequest(provider reviewProvider, cfg CodexReviewConfig, req CodexReviewSpec) error {
 	switch {
 	case !runIDPattern.MatchString(req.RunID):
@@ -1318,9 +1289,6 @@ func validateCodexReviewRequest(provider reviewProvider, cfg CodexReviewConfig, 
 		return fmt.Errorf("%w: runtime-backed workspace observation is required", ErrInvalidCodexReviewSpec)
 	case provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && !commitSHAPattern.MatchString(req.BaseSHA):
 		return fmt.Errorf("%w: BaseSHA is invalid", ErrInvalidCodexReviewSpec)
-	case !req.evaluatedCommitValid():
-		return fmt.Errorf("%w: EvaluatedSHA must be the observed workspace commit, distinct from HeadSHA and BaseSHA",
-			ErrInvalidCodexReviewSpec)
 	case !req.Network.valid() || req.Network.name != codexReviewNetworkName(req.RunID):
 		return fmt.Errorf("%w: runtime-backed provider network observation is required", ErrInvalidCodexReviewSpec)
 	case req.Prompt == "" || strings.IndexByte(req.Prompt, 0) >= 0 ||
@@ -1670,7 +1638,7 @@ func jwtExpiry(token string) (time.Time, error) {
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA, evaluatedSHA string) []string {
+func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA, headSHA string) []string {
 	schema := reviewFindingsJSONSchema
 	// CODEX_HOME lives on the fresh, writable container rootfs; auth.json and
 	// AGENTS.md are symlinks into the read-only snapshot volume, so the credential
@@ -1703,7 +1671,7 @@ func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA
 		"ln -s " + shellQuote(codexReviewSnapshotInstrSource) + " " + shellQuote(CodexInstructionTarget) + "; " +
 		"mkdir -p " + shellQuote(codexReviewOutputDir) + "; " +
 		"printf '%s' " + shellQuote(schema) + " > " + shellQuote(codexReviewSchemaPath) + "; " +
-		"set +e; ( " + codexReviewAccessCommand(workspaceTarget, baseSHA, headSHA, evaluatedSHA) +
+		"set +e; ( " + codexReviewAccessCommand(workspaceTarget, baseSHA, headSHA) +
 		" || exit " + strconv.Itoa(codexReviewAccessFailureExitStatus) + "; " +
 		"codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
 		" -m " + shellQuote(model) + " -c " + shellQuote("model_reasoning_effort=\""+reasoningEffort+"\"") +
@@ -2109,7 +2077,7 @@ func validateReviewAgentSpec(
 		return failf(CheckCredentialSeparation, "Codex review snapshot volume diverged from the admitted bytes")
 	}
 	wantCommand := provider.reviewCommand(
-		cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.commandHead(), req.EvaluatedSHA,
+		cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt, req.BaseSHA, req.Workspace.head,
 	)
 	wantEnv := append(provider.containerEnv(), proxyEnvironment(cfg.ProxyURL)...)
 	if spec.Name != reviewContainerName(provider, req.RunID) || spec.Image != req.Image ||

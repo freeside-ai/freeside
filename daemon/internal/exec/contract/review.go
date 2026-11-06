@@ -24,8 +24,7 @@ const (
 	ReviewCaseFailedOutcome        = "failed_outcome_after_restart"
 	ReviewCaseStaleHead            = "superseded_head"
 	ReviewCaseRequestAuthority     = "request_authority"
-	ReviewCaseEvaluatedMerge       = "evaluated_merge"
-	ReviewCaseEvaluatedWorkspace   = "evaluated_merge_workspace_at_head"
+	ReviewCaseLegacyEvaluated      = "legacy_evaluated_request"
 )
 
 var reviewCases = map[string]struct{}{
@@ -35,7 +34,7 @@ var reviewCases = map[string]struct{}{
 	ReviewCaseStatusVocabulary: {}, ReviewCaseStaleHead: {},
 	ReviewCaseFailedOutcome:    {},
 	ReviewCaseRequestAuthority: {},
-	ReviewCaseEvaluatedMerge:   {}, ReviewCaseEvaluatedWorkspace: {},
+	ReviewCaseLegacyEvaluated:  {},
 }
 
 // RunReviewSourceContract runs the reusable ReviewSource contract against one
@@ -263,51 +262,25 @@ func RunReviewSourceContract(t *testing.T, factory ReviewSourceFactory) {
 		return h.AuthorityRejectionComplete(t, id)
 	})
 
-	// A request that names an evaluated commit is reviewed in a workspace at
-	// that commit, and its result still binds the head the forge shows. The
-	// evaluated commit is never the identity a caller verifies against.
-	runCase(t, ReviewCaseEvaluatedMerge, divergences, func(t *testing.T) error {
-		h, id, request := prepareReviewScenario(t, factory, Scenario{
-			Outcome: OutcomeComplete, EvaluatedMerge: true,
-		})
-		if request.EvaluatedSHA == "" || request.WorkspaceSHA() != request.EvaluatedSHA {
-			return fmt.Errorf("harness prepared no evaluated commit: %#v", request)
-		}
-		source := h.Source()
-		if err := source.RequestReview(t.Context(), id, request); err != nil {
-			return fmt.Errorf("request review of an evaluated commit: %w", err)
-		}
-		h.Finish(t, id)
-		result, err := source.Poll(t.Context(), id)
-		if err != nil || result.BaseSHA != request.BaseSHA || result.HeadSHA != request.HeadSHA {
-			return wrongValue("Poll evaluated-commit review", result, err, "a result bound to the request's base and head")
-		}
-		if err := source.Verify(t.Context(), id, request.BaseSHA, request.HeadSHA); err != nil {
-			return fmt.Errorf("verify current head: %w", err)
-		}
-		if err := source.Verify(t.Context(), id, request.BaseSHA, request.EvaluatedSHA); !errors.Is(err, exec.ErrStaleHead) {
-			return wrongError("Verify the evaluated commit as the head", "ErrStaleHead", err)
-		}
-		return nil
-	})
-
-	// A workspace still at the head is not the candidate the request names, so
-	// the source refuses to review it and commits no result.
-	runCase(t, ReviewCaseEvaluatedWorkspace, divergences, func(t *testing.T) error {
-		h, id, request := prepareReviewScenario(t, factory, Scenario{
-			Outcome: OutcomeComplete, EvaluatedMerge: true, WorkspaceAtHead: true,
-		})
-		if request.EvaluatedSHA == "" {
-			return fmt.Errorf("harness prepared no evaluated commit: %#v", request)
+	// A retained request a daemon wrote before review stopped covering a
+	// prospective merge (#2660) names one. No source runs it: the refusal is
+	// permanent, never retried as transient or quota, and commits no result.
+	runCase(t, ReviewCaseLegacyEvaluated, divergences, func(t *testing.T) error {
+		h, id, request := newReviewScenario(t, factory, OutcomeComplete)
+		request.LegacyEvaluatedSHA = strings.Repeat("e", 40)
+		if err := request.Validate(); err != nil {
+			return fmt.Errorf("contract prepared an invalid legacy request: %w", err)
 		}
 		source := h.Source()
 		err := source.RequestReview(t.Context(), id, request)
 		var failure *exec.ReviewSourceFailure
-		if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureContradiction {
-			return wrongError("RequestReview with the workspace at the head", "a contradiction ReviewSourceFailure", err)
+		if !errors.As(err, &failure) || (failure.Class != domain.ReviewFailureConfiguration &&
+			failure.Class != domain.ReviewFailureContradiction) {
+			return wrongError("RequestReview of a legacy evaluated request",
+				"a configuration or contradiction ReviewSourceFailure", err)
 		}
 		if result, err := source.Poll(t.Context(), id); err == nil {
-			return wrongValue("Poll after a refused workspace", result, err, "no result")
+			return wrongValue("Poll after a refused legacy request", result, err, "no result")
 		}
 		return nil
 	})

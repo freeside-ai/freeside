@@ -353,7 +353,16 @@ type reviewLaunch struct {
 // source was composed with. The configuration digest stays the composed one:
 // the snapshot records the selected agent's values, and they are not
 // re-approved.
+//
+// A request recorded before review stopped covering a prospective merge
+// (#2660) names one, and no launch runs it: review covers the head only, so
+// the refusal is a configuration failure that never retries.
 func (s *CodexReviewSource) requestLaunch(ctx context.Context, req exec.ReviewRequest) (reviewLaunch, error) {
+	if req.LegacyEvaluatedSHA != "" {
+		return reviewLaunch{}, fmt.Errorf(
+			"%w: the request names prospective merge %s, and review covers only the head",
+			ErrInvalidCodexReviewSpec, req.LegacyEvaluatedSHA)
+	}
 	launch := reviewLaunch{review: s.cfg.Review, identity: s.cfg.AuthIdentityID, snapshot: s.cfg.AuthSnapshot}
 	admission := req.Admission
 	if admission.InvocationID == "" {
@@ -432,7 +441,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		}
 	}
 	candidate := domain.BaseRevision{
-		Repo: req.Repo, RepositoryID: req.RepositoryID, BaseRef: req.BaseRef, BaseSHA: req.WorkspaceSHA(),
+		Repo: req.Repo, RepositoryID: req.RepositoryID, BaseRef: req.BaseRef, BaseSHA: req.HeadSHA,
 	}
 	workspace, err := s.cfg.Journal.GetCodexReviewWorkspaceBinding(ctx, string(id))
 	if errors.Is(err, ErrCodexReviewWorkspaceNotFound) ||
@@ -469,7 +478,7 @@ func (s *CodexReviewSource) startRequestedReview(
 	launch, err := s.cfg.Lifecycle.codexReview(ctx, run.review, CodexReviewLaunchSpec{
 		RunID: string(id), WorkflowRunID: req.RunID, Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
-		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase, ExpectedEvaluated: req.EvaluatedSHA,
+		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase,
 		Prompt:   s.reviewProvider().reviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
 		AuthIdentityID: run.identity, AuthSnapshot: run.snapshot, Credential: run.credential,
@@ -781,26 +790,14 @@ func codexReviewLaunchCleanupFailure(launchErr, cleanupErr error) error {
 	}
 }
 
-// codexProductionReviewPrompt tells the reviewer which commit it is reading.
-// A request that names an evaluated commit is a base-advance re-entry: the
-// workspace holds the unpushed merge of the unchanged head into the advanced
-// base, so the prompt names that merge and says the head the forge shows has
-// not moved. Without one the text is the head-against-base prompt, unchanged.
+// codexProductionReviewPrompt tells the reviewer which commit it is reading:
+// the head, against the base.
 func codexProductionReviewPrompt(req exec.ReviewRequest) string {
 	evidence, _ := json.Marshal(req.Verification)
 	candidate := fmt.Sprintf(
 		"Review the exact candidate at head %s against base %s. The preceding verification evidence is %s.",
 		req.HeadSHA, req.BaseSHA, evidence)
 	introduced := "The head-versus-base change introduced it."
-	if req.EvaluatedSHA != "" {
-		candidate = fmt.Sprintf(
-			"Review the prospective merge %s: pull request head %s merged into base %s. "+
-				"The base advanced after that head was pushed. The merge was built locally and never pushed, "+
-				"so the pull request's head is still %s; your workspace holds the merge, and the reviewed diff "+
-				"runs from the base to the merge. The preceding verification evidence is %s.",
-			req.EvaluatedSHA, req.HeadSHA, req.BaseSHA, req.HeadSHA, evidence)
-		introduced = "The change from the base to the prospective merge introduced it."
-	}
 	return fmt.Sprintf(`%s
 
 Apply a precision-first admission test focused on correctness, security, data loss, and regressions. Admit a finding only when all of these are true:
@@ -1312,14 +1309,11 @@ func newCodexReviewConfigurationEnvelope(
 	}
 	endpoints := slices.Clone(cfg.ProviderEndpoints)
 	slices.Sort(endpoints)
-	// The approval covers both command shapes: the head review every launch
-	// uses today and the prospective-merge review, whose access check differs.
-	// Hashing only one would let an edit to the other keep its approval.
-	template := func(evaluated string) []string {
-		return provider.reviewCommand(
-			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
-			"<bound-base-sha>", "<bound-head-sha>", evaluated)
-	}
+	// The approval covers the one command shape a launch runs, the head
+	// review. Until #2647 it also hashed the prospective-merge shape.
+	template := provider.reviewCommand(
+		cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
+		"<bound-base-sha>", "<bound-head-sha>")
 	return codexReviewConfigurationEnvelope{
 		Version: provider.configurationVersion(), Topology: provider.topologyVersion(),
 		ApprovedImage: cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
@@ -1328,7 +1322,7 @@ func newCodexReviewConfigurationEnvelope(
 		AccessTokenLifetimeFloor:    int64(cfg.AccessTokenLifetimeFloor),
 		AccessTokenRefreshThreshold: int64(codexAuthRefreshThreshold(cfg)), AuthMode: authMode,
 		AuthIdentityID: authIdentityID, CostOwner: costOwner,
-		CommandTemplateDigest: digestStrings(append(template(""), template("<bound-evaluated-sha>")...)),
+		CommandTemplateDigest: digestStrings(template),
 		PromptProtocol:        provider.promptProtocol(),
 	}, nil
 }

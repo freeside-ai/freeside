@@ -79,14 +79,6 @@ func (h *reviewSourceContractHarness) Prepare(
 		Verification: testReviewVerificationEvidence(), Instructions: launch.InstructionBinding,
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
-	if scenario.EvaluatedMerge {
-		reviewRequest.EvaluatedSHA = testCodexReviewEvaluated
-		// The fixture volume holds the head; the runtime observes whatever
-		// commit the volume holds, so only a re-seeded volume is at the merge.
-		if !scenario.WorkspaceAtHead {
-			runtime.volBase[launch.WorkspaceVolume] = testCodexReviewEvaluated
-		}
-	}
 	return reviewRequest
 }
 
