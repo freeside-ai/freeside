@@ -539,7 +539,8 @@ All under `daemon/`:
 - **Verification verdicts, recipe approval, and trusted export:**
   `internal/verify/`, `internal/export/`, `cmd/freeside-export/`,
   `internal/store/entities.go`,
-  `internal/domain/artifact.go`.
+  `internal/domain/artifact.go`, and `internal/procbound/killgroup*.go`
+  (decides whether a canceled step's group reads as done).
 - **Approvals, decision binding, and trust records:**
   `internal/store/decision_surface.go`, `internal/store/trust.go`,
   `internal/store/shadow_review_configuration.go`,
