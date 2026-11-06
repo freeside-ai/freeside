@@ -639,19 +639,26 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 		uuid        = "require github.com/google/uuid v1.6.0\n"
 		otherRecipe = `{"commands":[["true"]],"capture":"none"}`
 	)
-	repo := newBaseInputsRepo(t)
-	base := repo.commit(map[string]string{
-		"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
-		verify.DefaultRecipePath: testRecipe,
-	})
-	image := domain.ProjectImage{
-		CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
-		Environment: &domain.ProjectImageEnvironment{
-			Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
-			GoModSHA256:       manifestSHA256([]byte(testGoMod)),
-			GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
-			PreparationDigest: PreparationDigest(),
-		},
+	// newBase gives each subtest its own repository at the image's base
+	// commit, so the subtests run in parallel instead of taking turns
+	// checking out one shared tree. The image names that base commit.
+	newBase := func(t *testing.T) (baseInputsRepo, string, domain.ProjectImage) {
+		t.Helper()
+		repo := newBaseInputsRepo(t)
+		base := repo.commit(map[string]string{
+			"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
+			verify.DefaultRecipePath: testRecipe,
+		})
+		image := domain.ProjectImage{
+			CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+			Environment: &domain.ProjectImageEnvironment{
+				Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
+				GoModSHA256:       manifestSHA256([]byte(testGoMod)),
+				GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
+				PreparationDigest: PreparationDigest(),
+			},
+		}
+		return repo, base, image
 	}
 	withUUID := map[string]string{"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum}
 	for _, test := range []struct {
@@ -795,7 +802,8 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repo.git("checkout", "-q", "--detach", base)
+			t.Parallel()
+			repo, base, image := newBase(t)
 			head := repo.commit(test.changes)
 			check := func(t *testing.T, decision RebuildDecision) {
 				t.Helper()
@@ -841,7 +849,8 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 		})
 	}
 	t.Run("unreadable go.mod", func(t *testing.T) {
-		repo.git("checkout", "-q", "--detach", base)
+		t.Parallel()
+		repo, base, image := newBase(t)
 		repo.git("rm", "-q", "daemon/go.mod")
 		repo.git("update-index", "--add", "--cacheinfo", "120000,"+
 			repo.git("hash-object", "-w", "daemon/go.sum")+",daemon/go.mod")
