@@ -52,7 +52,7 @@ func TestDecodeClaudeModelReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ClaudeModelReport{CLIBuild: "2.1.282 (Claude Code)", Models: wantClaudeModels()}
+	want := ModelReport{CLIBuild: "2.1.282 (Claude Code)", Models: wantClaudeModels()}
 	if !reflect.DeepEqual(report, want) {
 		t.Fatalf("report = %+v, want %+v", report, want)
 	}

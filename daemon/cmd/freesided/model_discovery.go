@@ -17,12 +17,12 @@ import (
 // runtime and rig authorizer; tests replace it.
 type claudeModelDiscoverer func(
 	ctx context.Context, image string, token ward.SetupToken,
-) (ward.ClaudeModelReport, error)
+) (ward.ModelReport, error)
 
 func productionClaudeModelDiscoverer(
 	runtime ward.Runtime, authorize ward.RuntimeResourceAuthorizer,
 ) claudeModelDiscoverer {
-	return func(ctx context.Context, image string, token ward.SetupToken) (ward.ClaudeModelReport, error) {
+	return func(ctx context.Context, image string, token ward.SetupToken) (ward.ModelReport, error) {
 		return ward.DiscoverClaudeModels(ctx, runtime, image, token, authorize)
 	}
 }

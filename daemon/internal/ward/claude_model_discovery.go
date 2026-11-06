@@ -40,15 +40,15 @@ var (
 // names no model of its own, so it is not recorded.
 const claudeDefaultModelValue = "default"
 
-// ClaudeModelReport is what the CLI reported: its build, from --version, and
+// ModelReport is what the CLI reported: its build, from --version, and
 // the models it offers, in its order.
-type ClaudeModelReport struct {
+type ModelReport struct {
 	CLIBuild string
 	Models   []domain.DiscoveredModel
 }
 
 // Catalog is the report as an enrollment's validated catalog.
-func (r ClaudeModelReport) Catalog(
+func (r ModelReport) Catalog(
 	enrollment domain.ClientEnrollmentID, observedAt time.Time,
 ) (domain.DiscoveredModelCatalog, error) {
 	catalog := domain.DiscoveredModelCatalog{
@@ -64,13 +64,13 @@ func (r ClaudeModelReport) Catalog(
 // and decodes its answer.
 func DiscoverClaudeModels(
 	ctx context.Context, rt Runtime, image string, token SetupToken, authorize RuntimeResourceAuthorizer,
-) (ClaudeModelReport, error) {
+) (ModelReport, error) {
 	out, err := ProbeLineupImage(ctx, rt, LineupProbe{
 		Harness: domain.HarnessClientClaudeCode, Image: image, Initialize: true,
 		Credential: SetupTokenProbeCredential(token),
 	}, authorize)
 	if err != nil {
-		return ClaudeModelReport{}, err
+		return ModelReport{}, err
 	}
 	return DecodeClaudeModelReport(out, token)
 }
@@ -103,9 +103,9 @@ type claudeReportedModel struct {
 // and effort levels must be values a launch can pass as an option, and the
 // models must form a valid catalog: at least one, unique ids, unique levels.
 // No error quotes the CLI's output.
-func DecodeClaudeModelReport(out LineupProbeOutput, token SetupToken) (ClaudeModelReport, error) {
+func DecodeClaudeModelReport(out LineupProbeOutput, token SetupToken) (ModelReport, error) {
 	if refusalCarriesToken(string(out.Stdout), token) || refusalCarriesToken(string(out.Version), token) {
-		return ClaudeModelReport{}, ErrModelReportCarriesCredential
+		return ModelReport{}, ErrModelReportCarriesCredential
 	}
 	var (
 		answer claudeControlResponse
@@ -120,36 +120,36 @@ func DecodeClaudeModelReport(out LineupProbeOutput, token SetupToken) (ClaudeMod
 		}
 		// The parser's own errors can quote the input, so they are replaced.
 		if RejectDuplicateJSONKeys(line) != nil {
-			return ClaudeModelReport{}, fmt.Errorf("%w: line %d is not one JSON value with unique keys",
+			return ModelReport{}, fmt.Errorf("%w: line %d is not one JSON value with unique keys",
 				ErrModelReportMalformed, lineNumber)
 		}
 		var candidate claudeControlResponse
 		if json.Unmarshal(line, &candidate) != nil {
-			return ClaudeModelReport{}, fmt.Errorf("%w: line %d does not decode", ErrModelReportMalformed, lineNumber)
+			return ModelReport{}, fmt.Errorf("%w: line %d does not decode", ErrModelReportMalformed, lineNumber)
 		}
 		if candidate.Type != "control_response" || candidate.Response.RequestID != lineupProbeInitializeRequestID {
 			continue
 		}
 		if found {
-			return ClaudeModelReport{}, fmt.Errorf("%w: answered twice", ErrModelReportMalformed)
+			return ModelReport{}, fmt.Errorf("%w: answered twice", ErrModelReportMalformed)
 		}
 		answer, found = candidate, true
 	}
 	switch {
 	case !found:
-		return ClaudeModelReport{}, ErrNoModelReport
+		return ModelReport{}, ErrNoModelReport
 	case answer.Response.Subtype != "success":
-		return ClaudeModelReport{}, fmt.Errorf("%w: the answer is not a success", ErrModelReportRefused)
+		return ModelReport{}, fmt.Errorf("%w: the answer is not a success", ErrModelReportRefused)
 	case out.ExitStatus != 0:
-		return ClaudeModelReport{}, fmt.Errorf("%w: the CLI exited %d", ErrModelReportRefused, out.ExitStatus)
+		return ModelReport{}, fmt.Errorf("%w: the CLI exited %d", ErrModelReportRefused, out.ExitStatus)
 	}
-	report := ClaudeModelReport{CLIBuild: firstLine(out.Version)}
+	report := ModelReport{CLIBuild: firstLine(out.Version)}
 	for i, reported := range answer.Response.Response.Models {
 		if reported.Value == claudeDefaultModelValue {
 			continue
 		}
 		if !launchableModelReport(reported) {
-			return ClaudeModelReport{}, fmt.Errorf("%w: model %d is not a launchable value", ErrModelReportMalformed, i)
+			return ModelReport{}, fmt.Errorf("%w: model %d is not a launchable value", ErrModelReportMalformed, i)
 		}
 		model := domain.DiscoveredModel{ID: reported.Value, DisplayName: reported.DisplayName, EffortLevels: []string{}}
 		if reported.ResolvedModel != "" {
@@ -161,7 +161,7 @@ func DecodeClaudeModelReport(out LineupProbeOutput, token SetupToken) (ClaudeMod
 		report.Models = append(report.Models, model)
 	}
 	if err := domain.ValidateDiscoveredModels(report.Models); err != nil {
-		return ClaudeModelReport{}, err
+		return ModelReport{}, err
 	}
 	return report, nil
 }
