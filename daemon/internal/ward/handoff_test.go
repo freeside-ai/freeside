@@ -29,6 +29,9 @@ type handoffFixture struct {
 	rt     *fakeRuntime
 	cfg    Config
 	sleeps *int
+	// scratchRoot is the test-owned host temp dir isolateScratch points
+	// TMPDIR at; empty until then.
+	scratchRoot string
 }
 
 func newHandoffFixture(t *testing.T) *handoffFixture {
@@ -45,6 +48,17 @@ func newHandoffFixture(t *testing.T) *handoffFixture {
 	}
 	cfg.checkSeedWorkspace = func(context.Context, string, int) error { return nil }
 	return &handoffFixture{rt: newFakeRuntime(t), cfg: cfg, sleeps: &sleeps}
+}
+
+// isolateScratch points TMPDIR at a directory this test owns, so the
+// handoff's os.MkdirTemp("", ...) scratch lands where no other test process
+// writes, and scratchDirs can attribute every match to this handoff. It is
+// opt-in rather than part of newHandoffFixture because t.Setenv panics in a
+// parallel test, and only the tests that inspect scratch need it.
+func (fx *handoffFixture) isolateScratch(t *testing.T) {
+	t.Helper()
+	fx.scratchRoot = t.TempDir()
+	t.Setenv("TMPDIR", fx.scratchRoot)
 }
 
 func (fx *handoffFixture) backend(t *testing.T) *Backend {
@@ -188,6 +202,7 @@ func wantCheckFailure(t *testing.T, err error, want Check) {
 
 func TestHandoffSuccess(t *testing.T) {
 	fx := newHandoffFixture(t)
+	fx.isolateScratch(t)
 	res, err := fx.run(t)
 	if err != nil {
 		t.Fatalf("Handoff = %v, want success", err)
@@ -211,14 +226,43 @@ func TestHandoffSuccess(t *testing.T) {
 		t.Errorf("released output parent = %q, want durable root %q",
 			filepath.Dir(res.ExportDir), fx.cfg.ExportRoot)
 	}
-	// Only the returned output dir survives: the archive scratch dir is
-	// removed, and no other handoff temp dir for this run lingers.
-	for _, d := range scratchDirs(t, testHandoffSpec().RunID) {
-		if d != res.ExportDir {
-			t.Errorf("unexpected leftover handoff temp dir: %s", d)
-		}
-	}
+	fx.assertOnlyExportSurvives(t, res)
 	fx.assertReaped(t)
+}
+
+// TestHandoffScratchCheckIgnoresForeignDirs: a scratch dir another process
+// left in the shared temp dir, named for the same fixture run ID, neither
+// fails this handoff's scratch check nor gets removed by it.
+func TestHandoffScratchCheckIgnoresForeignDirs(t *testing.T) {
+	shared := t.TempDir()
+	t.Setenv("TMPDIR", shared)
+	foreign := filepath.Join(shared, "freeside-handoff-"+testHandoffSpec().RunID+"-tar-foreign")
+	if err := os.Mkdir(foreign, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	fx := newHandoffFixture(t)
+	fx.isolateScratch(t)
+	res, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	fx.assertOnlyExportSurvives(t, res)
+	if _, err := os.Stat(foreign); err != nil {
+		t.Errorf("foreign scratch dir: %v", err)
+	}
+}
+
+// assertOnlyExportSurvives requires the returned output dir to be this run's
+// only scratch left: the archive dir is removed and no other handoff temp
+// dir lingers. Requiring the output dir to appear proves scratchDirs scans
+// ExportRoot.
+func (fx *handoffFixture) assertOnlyExportSurvives(t *testing.T, res *HandoffResult) {
+	t.Helper()
+	got := fx.scratchDirs(t, testHandoffSpec().RunID)
+	if len(got) != 1 || got[0] != res.ExportDir {
+		t.Errorf("handoff scratch left = %v, want only the output dir %s", got, res.ExportDir)
+	}
 }
 
 // The egress observation is read from the run's own proxy: provider_only
@@ -1679,7 +1723,7 @@ func TestHandoffPanicRemovesOutput(t *testing.T) {
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
 		panic("scanner boom")
 	})
-	before := scratchDirs(t, runID)
+	fx.isolateScratch(t)
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
@@ -1688,8 +1732,8 @@ func TestHandoffPanicRemovesOutput(t *testing.T) {
 		}()
 		_, _ = fx.backend(t).Handoff(context.Background(), testHandoffSpec())
 	}()
-	if after := scratchDirs(t, runID); len(after) > len(before) {
-		t.Errorf("panic unwind leaked unscanned output dir(s): %v", after)
+	if left := fx.scratchDirs(t, runID); len(left) > 0 {
+		t.Errorf("panic unwind leaked unscanned output dir(s): %v", left)
 	}
 	fx.assertReaped(t)
 }
@@ -1703,14 +1747,14 @@ func TestHandoffTeardownFailure(t *testing.T) {
 	fx.rt.onDeleteVolume = func(string) (bool, error) {
 		return true, errors.New("volume busy")
 	}
-	before := scratchDirs(t, runID)
+	fx.isolateScratch(t)
 	res, err := fx.run(t)
 	wantCheckFailure(t, err, CheckTeardown)
 	if res != nil {
 		t.Error("teardown failure still released a result")
 	}
-	if after := scratchDirs(t, runID); len(after) > len(before) {
-		t.Errorf("teardown failure after a good export leaked output dir(s): %v", after)
+	if left := fx.scratchDirs(t, runID); len(left) > 0 {
+		t.Errorf("teardown failure after a good export leaked output dir(s): %v", left)
 	}
 }
 
@@ -1819,21 +1863,33 @@ func TestHandoffScratchDirCleaned(t *testing.T) {
 		return errors.New("marker found")
 	})
 	runID := testHandoffSpec().RunID
-	before := scratchDirs(t, runID)
+	fx.isolateScratch(t)
 	_, err := fx.run(t)
 	wantCheckFailure(t, err, CheckExportVerification)
-	if after := scratchDirs(t, runID); len(after) > len(before) {
-		t.Errorf("failed run leaked scratch dir(s): before %v, after %v", before, after)
+	if left := fx.scratchDirs(t, runID); len(left) > 0 {
+		t.Errorf("failed run leaked scratch dir(s): %v", left)
 	}
 }
 
-// scratchDirs lists this run's handoff scratch directories in the host temp
-// dir (os.MkdirTemp names them "freeside-handoff-<runID>-{tar,out}-*").
-func scratchDirs(t *testing.T, runID string) []string {
+// scratchDirs lists this run's handoff scratch directories in both roots the
+// handoff writes to: the isolated host temp dir, which holds the archive and
+// the other os.MkdirTemp("", "freeside-handoff-<runID>-...") scratch, and
+// cfg.ExportRoot, which holds the output dir ("freeside-handoff-<runID>-out-*").
+// It fails the test unless isolateScratch ran and TMPDIR still points at its
+// root, so no caller can read another process's scratch as its own.
+func (fx *handoffFixture) scratchDirs(t *testing.T, runID string) []string {
 	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "freeside-handoff-"+runID+"-*"))
-	if err != nil {
-		t.Fatal(err)
+	if fx.scratchRoot == "" || os.TempDir() != fx.scratchRoot {
+		t.Fatalf("scratchDirs needs isolateScratch: scratch root %q, os.TempDir() %q",
+			fx.scratchRoot, os.TempDir())
+	}
+	var matches []string
+	for _, root := range []string{fx.scratchRoot, fx.cfg.ExportRoot} {
+		found, err := filepath.Glob(filepath.Join(root, "freeside-handoff-"+runID+"-*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		matches = append(matches, found...)
 	}
 	return matches
 }
