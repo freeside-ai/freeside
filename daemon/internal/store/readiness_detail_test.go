@@ -171,3 +171,64 @@ func TestLegacyReadyItemWithoutReadinessDetailDecodes(t *testing.T) {
 		t.Fatalf("legacy item = readiness %+v detail %+v", got.Readiness, got.ReadinessDetail)
 	}
 }
+
+// TestReadyItemHandoffTipRoundTripsAndLegacyRowsDecode: a detail naming the
+// handoff tip and merge (#1735) survives the store, and a row stored before
+// those fields existed, with neither key in the body or the column, still
+// decodes and lists with no tip.
+func TestReadyItemHandoffTipRoundTripsAndLegacyRowsDecode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	item := degradedReadyDetailItem(t)
+	detail := *item.ReadinessDetail
+	detail.HandoffTip = "tip"
+	detail.HandoffMerge = &domain.ProspectiveMergeIdentity{BaseSHA: "tip", HeadSHA: "head", MergeSHA: "merge"}
+	item.ReadinessDetail = &detail
+	st := openTestStore(t)
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	read := func(t *testing.T) (got, listed domain.AttentionItem) {
+		t.Helper()
+		if err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			if got, err = tx.GetAttentionItem(ctx, item.ID); err != nil {
+				return err
+			}
+			items, err := tx.ListAttentionItems(ctx)
+			for _, candidate := range items {
+				if candidate.Value.ID == item.ID {
+					listed = candidate.Value
+				}
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got, listed
+	}
+	got, listed := read(t)
+	for _, decoded := range []domain.AttentionItem{got, listed} {
+		if decoded.ReadinessDetail == nil || !reflect.DeepEqual(*decoded.ReadinessDetail, detail) {
+			t.Fatalf("handoff detail = %+v, want %+v", decoded.ReadinessDetail, detail)
+		}
+	}
+
+	if _, err := st.db.ExecContext(ctx, `UPDATE attention_items SET
+		body = json_remove(body, '$.readiness_detail.handoff_tip', '$.readiness_detail.handoff_merge'),
+		readiness_detail = json_remove(readiness_detail, '$.handoff_tip', '$.handoff_merge')
+		WHERE id = ?`, item.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, listed = read(t)
+	legacy := detail
+	legacy.HandoffTip, legacy.HandoffMerge = "", nil
+	for _, decoded := range []domain.AttentionItem{got, listed} {
+		if decoded.ReadinessDetail == nil || !reflect.DeepEqual(*decoded.ReadinessDetail, legacy) {
+			t.Fatalf("legacy detail = %+v, want %+v", decoded.ReadinessDetail, legacy)
+		}
+	}
+}

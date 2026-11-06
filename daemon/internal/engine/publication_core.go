@@ -351,6 +351,18 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	if legacyReadinessDetail {
 		normalized.ReadinessDetail = expected.ReadinessDetail
 	}
+	// A detail stored before #1735 names no handoff tip, and the detail is
+	// creation-immutable, so compare it as if it named the rebuilt tip and
+	// merge, then keep the stored shape as the transition baseline below.
+	legacyHandoff := !legacyReadinessDetail &&
+		current.ReadinessDetail != nil && expected.ReadinessDetail != nil &&
+		current.ReadinessDetail.HandoffTip == "" && expected.ReadinessDetail.HandoffTip != ""
+	if legacyHandoff {
+		detail := *current.ReadinessDetail
+		detail.HandoffTip = expected.ReadinessDetail.HandoffTip
+		detail.HandoffMerge = expected.ReadinessDetail.HandoffMerge
+		normalized.ReadinessDetail = &detail
+	}
 	legacyYieldHistory := current.YieldHistory == nil && expected.YieldHistory != nil
 	if legacyYieldHistory {
 		normalized.YieldHistory = expected.YieldHistory
@@ -390,6 +402,12 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	}
 	if legacyReadinessDetail {
 		expected.ReadinessDetail = nil
+	}
+	if legacyHandoff {
+		detail := *expected.ReadinessDetail
+		detail.HandoffTip = ""
+		detail.HandoffMerge = nil
+		expected.ReadinessDetail = &detail
 	}
 	if legacyYieldHistory {
 		expected.YieldHistory = nil

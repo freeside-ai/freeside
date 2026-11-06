@@ -130,7 +130,7 @@ func TestEvaluateReadinessPreservesCleanAndDegraded(t *testing.T) {
 
 	// The card-facing projection reproduces each verdict's class and carries
 	// its digest, head, and base without re-evaluating anything.
-	cleanDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{passed, optionalPassed})
+	cleanDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{passed, optionalPassed}, "base", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +138,20 @@ func TestEvaluateReadinessPreservesCleanAndDegraded(t *testing.T) {
 		cleanDetail.CandidateHead != "head" || cleanDetail.Base != (domain.ReadinessBoundBase{BaseRef: "refs/heads/main", BaseSHA: "base"}) ||
 		len(cleanDetail.Requirements) != 2 || cleanDetail.Requirements[0].RequirementKey != "optional" ||
 		cleanDetail.Requirements[1].State != domain.ReadinessRequirementPassed ||
-		cleanDetail.Requirements[1].ProofRecipeDigest == nil || *cleanDetail.Requirements[1].ProofRecipeDigest != "sha256:recipe" {
+		cleanDetail.Requirements[1].ProofRecipeDigest == nil || *cleanDetail.Requirements[1].ProofRecipeDigest != "sha256:recipe" ||
+		cleanDetail.HandoffTip != "base" || cleanDetail.HandoffMerge != nil {
 		t.Fatalf("clean detail = %+v", cleanDetail)
 	}
-	degradedDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), degraded, []domain.CheckState{optionalFailed, passed})
+	// A handoff at a moved tip names the merge of the candidate head into it.
+	movedDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{passed, optionalPassed}, "tip", "merge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if movedDetail.HandoffTip != "tip" || movedDetail.HandoffMerge == nil ||
+		*movedDetail.HandoffMerge != (domain.ProspectiveMergeIdentity{BaseSHA: "tip", HeadSHA: "head", MergeSHA: "merge"}) {
+		t.Fatalf("moved-tip detail = %+v", movedDetail)
+	}
+	degradedDetail, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), degraded, []domain.CheckState{optionalFailed, passed}, "base", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +161,17 @@ func TestEvaluateReadinessPreservesCleanAndDegraded(t *testing.T) {
 	}
 	// Recorded states that imply another class than the verdict are refused,
 	// so the projection cannot contradict the summary it explains.
-	if _, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{optionalFailed, passed}); !errors.Is(err, domain.ErrReadinessDetailInconsistent) {
+	if _, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{optionalFailed, passed}, "base", ""); !errors.Is(err, domain.ErrReadinessDetailInconsistent) {
 		t.Fatalf("NewReadinessDetail() with a degrading state under a clean verdict error = %v, want ErrReadinessDetailInconsistent", err)
 	}
-	if _, err := domain.NewReadinessDetail(readinessTarget(nil), clean, []domain.CheckState{passed, optionalPassed}); !errors.Is(err, domain.ErrEmptyField) {
+	if _, err := domain.NewReadinessDetail(readinessTarget(nil), clean, []domain.CheckState{passed, optionalPassed}, "base", ""); !errors.Is(err, domain.ErrEmptyField) {
 		t.Fatalf("NewReadinessDetail() without a base error = %v, want ErrEmptyField", err)
+	}
+	if _, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{passed, optionalPassed}, "", ""); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("NewReadinessDetail() without a handoff tip error = %v, want ErrEmptyField", err)
+	}
+	if _, err := domain.NewReadinessDetail(readinessTarget(readinessBase("base")), clean, []domain.CheckState{passed, optionalPassed}, "tip", ""); !errors.Is(err, domain.ErrReadinessDetailInconsistent) {
+		t.Fatalf("NewReadinessDetail() at a moved tip without a merge error = %v, want ErrReadinessDetailInconsistent", err)
 	}
 }
 

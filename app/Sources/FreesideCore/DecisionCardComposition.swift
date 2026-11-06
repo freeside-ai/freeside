@@ -1464,6 +1464,17 @@ struct DecisionChecklistPresentation: Equatable {
                 .init(
                     label: "Bound to", value: value, result: stale ? .failed : .passed,
                     isStale: stale))
+            // The tip the handoff check resolved (plan §7). A later advance
+            // of the target marks nothing stale, so this row never does; a
+            // detail recorded before the field existed shows no row.
+            if let tip = detail.handoff_tip {
+                var checked = "Tip \(AttentionDisplay.shortRevision(tip))"
+                if let merge = detail.handoff_merge {
+                    checked +=
+                        " · verified on merge \(AttentionDisplay.shortRevision(merge.merge_sha)) of the head into it"
+                }
+                rows.append(.init(label: "Checked at", value: checked, result: .passed))
+            }
         }
         if let invalidation {
             let movedCoordinateIsBound = detail != nil && invalidation.reason == .head_changed

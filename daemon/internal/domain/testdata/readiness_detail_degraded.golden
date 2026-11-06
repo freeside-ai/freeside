@@ -5,6 +5,7 @@
     "base_ref": "refs/heads/main",
     "base_sha": "base-sha"
   },
+  "handoff_tip": "base-sha",
   "requirements": [
     {
       "requirement_key": "repo-change-policy",

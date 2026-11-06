@@ -740,6 +740,7 @@ func cloneReadinessDetail(detail *ReadinessDetail) *ReadinessDetail {
 		return nil
 	}
 	cloned := *detail
+	cloned.HandoffMerge = clonePtr(detail.HandoffMerge)
 	cloned.Requirements = slices.Clone(detail.Requirements)
 	for index := range cloned.Requirements {
 		cloned.Requirements[index].ProofRecipeDigest = clonePtr(detail.Requirements[index].ProofRecipeDigest)

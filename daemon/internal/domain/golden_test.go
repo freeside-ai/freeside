@@ -2690,7 +2690,13 @@ func TestReadinessGoldenContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanDetail, err := domain.NewReadinessDetail(target, cleanVerdict, []domain.CheckState{passedState})
+	cleanDetail, err := domain.NewReadinessDetail(target, cleanVerdict, []domain.CheckState{passedState}, base.BaseSHA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The handoff found the target tip moved past the evidence base and
+	// verified the head's merge into it (#1735).
+	movedTipDetail, err := domain.NewReadinessDetail(target, cleanVerdict, []domain.CheckState{passedState}, "tip-sha", "handoff-merge-sha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2700,7 +2706,7 @@ func TestReadinessGoldenContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	degradedDetail, err := domain.NewReadinessDetail(target, degradedVerdict, []domain.CheckState{state, passedState})
+	degradedDetail, err := domain.NewReadinessDetail(target, degradedVerdict, []domain.CheckState{state, passedState}, base.BaseSHA, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2744,6 +2750,7 @@ func TestReadinessGoldenContracts(t *testing.T) {
 		{"readiness_detail_clean", cleanDetail},
 		{"readiness_detail_degraded", degradedDetail},
 		{"readiness_detail_blocked", blockedDetail},
+		{"readiness_detail_moved_tip", movedTipDetail},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {

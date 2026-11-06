@@ -174,6 +174,7 @@ func TestProductionReadyItemPreservesReadinessSummary(t *testing.T) {
 			EvaluationSetDigest: verdict.EvaluationSetDigest,
 			CandidateHead:       checkpoint.Imported.CommitSHA,
 			Base:                domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: strings.Repeat("b", 40)},
+			HandoffTip:          strings.Repeat("b", 40),
 			Requirements: []domain.ReadinessRequirement{{
 				RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
 				Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,

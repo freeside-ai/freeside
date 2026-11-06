@@ -525,6 +525,35 @@ func (w *productionPublicationWorkflow) applySealedHandoffCheck(
 	return nil
 }
 
+// withPublishedHandoff names on a published candidate's readiness detail the
+// tip its sealed handoff check resolved and the verified merge into it. A
+// publication intent committed before handoff checks existed has no sealed
+// check; reconcileHandoff treats its evidence base as the tip, and so does
+// this. A sealed moved tip without a merge never reaches publication, so one
+// here is a broken invariant.
+func (w *productionPublicationWorkflow) withPublishedHandoff(
+	ctx context.Context, task productionPublicationTask, binding productionBinding,
+	readiness productionReadiness,
+) (productionReadiness, error) {
+	check, found, err := w.loadHandoffCheck(ctx, task)
+	if err != nil {
+		return productionReadiness{}, err
+	}
+	if !found {
+		return readiness.withHandoff(binding.admission.Base.BaseSHA, "")
+	}
+	if !check.Proved() {
+		return productionReadiness{}, fmt.Errorf(
+			"published %s has an unproved handoff merge onto tip %s: %w",
+			task.PublicationID, check.TipSHA, domain.ErrParentKeyMismatch)
+	}
+	merge := ""
+	if check.Merge != nil {
+		merge = check.Merge.MergeSHA
+	}
+	return readiness.withHandoff(check.TipSHA, merge)
+}
+
 // handoffBlockArtifacts is the evidence a recovered handoff-verification block
 // shows: the stop row's, when the tip kept the merge from being verified, or
 // else the stored verification of the merge that failed.

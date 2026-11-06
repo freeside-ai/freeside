@@ -929,7 +929,21 @@ import Testing
                 .init(label: "Evaluation Set", value: "sha256:evaluation-clean"),
                 .init(label: "Bound Head", value: "cafebabe"),
                 .init(label: "Bound Base", value: "main@deadbeef"),
+                .init(label: "Handoff Tip", value: "deadbeef"),
             ])
+        var moved = clean
+        moved.readiness_detail = .init(
+            value1: AttentionFixtures.movedTipReadinessDetail(head: clean.pr_head_sha))
+        #expect(
+            AttentionDisplay.readinessIdentifierRows(moved).suffix(2) == [
+                .init(label: "Handoff Tip", value: "facefeed"),
+                .init(label: "Handoff Merge", value: "0ddba11"),
+            ])
+        var untipped = clean
+        untipped.readiness_detail?.value1.handoff_tip = nil
+        #expect(
+            AttentionDisplay.readinessIdentifierRows(untipped).last
+                == .init(label: "Bound Base", value: "main@deadbeef"))
         #expect(
             AttentionDisplay.readinessReadingRows(clean) == [
                 .init(label: "Readiness", value: "Clean"),

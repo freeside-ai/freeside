@@ -2298,11 +2298,27 @@ type productionTaskOutcome struct {
 }
 
 // productionReadiness is the §6 verdict beside its card-facing projection
-// (issue #982). currentReadinessVerdict builds both from one evaluation, so
-// the ready item's summary and detail can never describe different sets.
+// (issue #982). currentReadinessVerdict evaluates the verdict and keeps its
+// target and states; withHandoff projects the detail from those same inputs
+// once the handoff tip is known, so the ready item's summary and detail can
+// never describe different sets.
 type productionReadiness struct {
 	verdict domain.ReadinessVerdict
+	target  domain.EvaluationTarget
+	states  []domain.CheckState
 	detail  domain.ReadinessDetail
+}
+
+// withHandoff projects the card-facing detail, naming the target tip the
+// handoff check resolved and, when that tip had moved past the evidence base,
+// the verified merge of the head into it (#1735).
+func (r productionReadiness) withHandoff(tipSHA, mergeSHA string) (productionReadiness, error) {
+	detail, err := domain.NewReadinessDetail(r.target, r.verdict, r.states, tipSHA, mergeSHA)
+	if err != nil {
+		return productionReadiness{}, err
+	}
+	r.detail = detail
+	return r, nil
 }
 
 type productionBinding struct {
@@ -2825,6 +2841,12 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				}
 				return productionTaskOutcome{}, err
 			}
+			// A ready item recovered below is compared with one rebuilt from
+			// this readiness, so its detail names the same handoff tip.
+			readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
+			if err != nil {
+				return productionTaskOutcome{}, err
+			}
 			report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.verificationInvocationID())
 			if err != nil {
 				return productionTaskOutcome{}, productionPublicationRetryableError(err)
@@ -3315,13 +3337,6 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 		verdict.Class == domain.ReadinessBlocked {
 		return productionReadiness{}, nil, fmt.Errorf("current verification set is blocked: %w", domain.ErrParentKeyMismatch)
 	}
-	// The card-facing detail is projected from the same target, verdict, and
-	// states as the verdict itself, so its bound head, base, and entries are
-	// the evaluation's, never re-derived by the item producer.
-	detail, err := domain.NewReadinessDetail(target, verdict, states)
-	if err != nil {
-		return productionReadiness{}, nil, err
-	}
 	// The verdict above is a pure evaluation; persistence is a separate,
 	// recipe-gated step returned as a closure so the caller runs it only when
 	// it is actually creating new readiness under an approved recipe. Skipping
@@ -3346,7 +3361,11 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 			return tx.RecordCheckProof(ctx, reviewProof)
 		})
 	}
-	return productionReadiness{verdict: verdict, detail: detail}, persist, nil
+	// The card-facing detail is projected later, by withHandoff, from the
+	// same target, verdict, and states as the verdict itself, so its bound
+	// head, base, and entries are the evaluation's, never re-derived by the
+	// item producer.
+	return productionReadiness{verdict: verdict, target: target, states: states}, persist, nil
 }
 
 func (w *productionPublicationWorkflow) assertReviewedCandidate(
@@ -3455,6 +3474,10 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 				domain.HoldTrustBlocked,
 			)
 		}
+		return productionTaskOutcome{}, err
+	}
+	readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
+	if err != nil {
 		return productionTaskOutcome{}, err
 	}
 	yieldHistory, err := w.reviewYieldHistory(ctx, task.RunID)

@@ -31,7 +31,8 @@ func waivedRequirement(key domain.RequirementKey) domain.ReadinessRequirement {
 func cleanDetail(digest domain.Digest, head string) domain.ReadinessDetail {
 	return domain.ReadinessDetail{
 		EvaluationSetDigest: digest, CandidateHead: head,
-		Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
+		Base:       domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
+		HandoffTip: "base",
 		Requirements: []domain.ReadinessRequirement{
 			passedRequirement("clean-verification", domain.CheckClassCleanVerification),
 			passedRequirement("independent-review", domain.CheckClassIndependentReview),
@@ -50,6 +51,74 @@ func readyDetailInput() domain.AttentionItemInput {
 	detail := cleanDetail("sha256:evaluation", in.PRHeadSHA)
 	in.ReadinessDetail = &detail
 	return in
+}
+
+// movedTipDetail is a clean detail whose handoff found the target tip moved
+// past the evidence base and verified the head's merge into it.
+func movedTipDetail(head string) domain.ReadinessDetail {
+	detail := cleanDetail("sha256:evaluation", head)
+	detail.HandoffTip = "tip"
+	detail.HandoffMerge = &domain.ProspectiveMergeIdentity{BaseSHA: "tip", HeadSHA: head, MergeSHA: "merge"}
+	return detail
+}
+
+func TestReadinessDetailValidateAcceptsHandoffShapes(t *testing.T) {
+	t.Parallel()
+	for name, detail := range map[string]domain.ReadinessDetail{
+		"unchanged tip": cleanDetail("sha256:evaluation", "head"),
+		"moved tip":     movedTipDetail("head"),
+		"legacy, no tip": func() domain.ReadinessDetail {
+			detail := cleanDetail("sha256:evaluation", "head")
+			detail.HandoffTip = ""
+			return detail
+		}(),
+	} {
+		if err := detail.Validate(); err != nil {
+			t.Errorf("%s: Validate() = %v", name, err)
+		}
+	}
+}
+
+func TestReadinessDetailValidateRejectsInconsistentHandoff(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		mutate func(*domain.ReadinessDetail)
+		want   error
+	}{
+		"merge without a tip": {
+			func(d *domain.ReadinessDetail) { d.HandoffTip = "" }, domain.ErrEmptyField,
+		},
+		"merge at an unchanged tip": {
+			func(d *domain.ReadinessDetail) {
+				d.HandoffTip = d.Base.BaseSHA
+				d.HandoffMerge.BaseSHA = d.Base.BaseSHA
+			}, domain.ErrReadinessDetailInconsistent,
+		},
+		"moved tip without a merge": {
+			func(d *domain.ReadinessDetail) { d.HandoffMerge = nil }, domain.ErrReadinessDetailInconsistent,
+		},
+		"merge base not the tip": {
+			func(d *domain.ReadinessDetail) { d.HandoffMerge.BaseSHA = "other-tip" },
+			domain.ErrReadinessDetailInconsistent,
+		},
+		"merge head not the candidate head": {
+			func(d *domain.ReadinessDetail) { d.HandoffMerge.HeadSHA = "other-head" },
+			domain.ErrReadinessDetailInconsistent,
+		},
+		"merge repeats a parent": {
+			func(d *domain.ReadinessDetail) { d.HandoffMerge.MergeSHA = d.HandoffTip },
+			domain.ErrProspectiveMergeIdentityInconsistent,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			detail := movedTipDetail("head")
+			tc.mutate(&detail)
+			if err := detail.Validate(); !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() error = %v, want %v", err, tc.want)
+			}
+		})
+	}
 }
 
 func TestReadinessDetailClassFollowsTheEvaluationRule(t *testing.T) {
@@ -180,6 +249,18 @@ func TestReadyItemBindsReadinessDetailToItsSummary(t *testing.T) {
 	if err := item.Validate(); err != nil {
 		t.Fatalf("item shares its caller's detail: %v", err)
 	}
+	// Nor can the caller's handoff merge pointer.
+	movedInput := readyDetailInput()
+	moved := movedTipDetail(movedInput.PRHeadSHA)
+	movedInput.ReadinessDetail = &moved
+	movedItem, err := domain.NewAttentionItem(movedInput, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved.HandoffMerge.MergeSHA = moved.HandoffTip
+	if err := movedItem.Validate(); err != nil {
+		t.Fatalf("item shares its caller's handoff merge: %v", err)
+	}
 
 	for name, tc := range map[string]struct {
 		mutate func(*domain.AttentionItemInput)
@@ -245,6 +326,7 @@ func TestValidateAttentionItemReadinessDetailImmutable(t *testing.T) {
 		"replace": func(item *domain.AttentionItem) {
 			replaced := cleanDetail("sha256:evaluation", item.PRHeadSHA)
 			replaced.Base.BaseSHA = "other-base"
+			replaced.HandoffTip = "other-base"
 			item.ReadinessDetail = &replaced
 		},
 	} {

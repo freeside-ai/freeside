@@ -12,7 +12,8 @@ import "fmt"
 //
 // It is deliberately not ProspectiveMerge, the closure-approval binding: that
 // type binds a publication identity this one does not carry
-// (devlog/2026-10-02-2255-prospective-merge-identity.md).
+// (devlog/2026-10-02-2255-prospective-merge-identity.md). The readiness
+// detail reuses it to name the handoff check's merge (#1735).
 type ProspectiveMergeIdentity struct {
 	BaseSHA  string `json:"base_sha"`
 	HeadSHA  string `json:"head_sha"`

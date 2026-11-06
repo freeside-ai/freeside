@@ -185,6 +185,12 @@ func (p *productionPublicationHarness) assertReentered(
 		ready.ReadinessInvalidation != nil {
 		t.Fatalf("re-entered ready item = %#v", ready)
 	}
+	// The cycle verified against baseSHA and ran no handoff of its own, so its
+	// detail names that base as the tip and no merge.
+	if detail := ready.ReadinessDetail; detail == nil || detail.HandoffTip != baseSHA ||
+		detail.HandoffMerge != nil {
+		t.Fatalf("re-entered ready detail = %#v, want tip %s and no merge", detail, baseSHA)
+	}
 	var (
 		binding, prior domain.ReadyItemPRBinding
 		review         domain.ReviewRecord

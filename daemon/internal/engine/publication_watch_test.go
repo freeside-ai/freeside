@@ -285,6 +285,58 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly(t *testing.T)
 	}
 }
 
+// TestCompatibleTerminalItemAcceptsLegacyHandoffTipOnly: a ready item stored
+// before the detail named its handoff tip (#1735) recovers against a rebuilt
+// detail that names one, while a stored tip or merge that disagrees with the
+// rebuilt one is foreign.
+func TestCompatibleTerminalItemAcceptsLegacyHandoffTipOnly(t *testing.T) {
+	st := watchTestStore(t)
+	current := watchTestItem(t, st, domain.StatusOpen)
+	recipe := domain.Digest("sha256:recipe")
+	legacy := domain.ReadinessDetail{
+		EvaluationSetDigest: "sha256:evaluation", CandidateHead: current.PRHeadSHA,
+		Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
+		Requirements: []domain.ReadinessRequirement{{
+			RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
+			Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
+			ProofRecipeDigest: &recipe,
+		}},
+	}
+	current.Readiness = &domain.ReadinessSummary{
+		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
+	}
+	current.ReadinessDetail = &legacy
+	moved := legacy
+	moved.HandoffTip = "tip"
+	moved.HandoffMerge = &domain.ProspectiveMergeIdentity{
+		BaseSHA: "tip", HeadSHA: current.PRHeadSHA, MergeSHA: "merge",
+	}
+	expected := current
+	expected.ReadinessDetail = &moved
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("legacy detail without a handoff tip rejected during recovery compatibility")
+	}
+	if expected.ReadinessDetail.HandoffTip != "tip" || current.ReadinessDetail.HandoffTip != "" {
+		t.Fatal("recovery compatibility mutated a caller's detail")
+	}
+
+	stored := current
+	storedDetail := legacy
+	storedDetail.HandoffTip = "base"
+	stored.ReadinessDetail = &storedDetail
+	if compatibleTerminalItem(expected, stored) {
+		t.Fatal("stored handoff tip that disagrees with the rebuilt one accepted during recovery compatibility")
+	}
+	foreignMerge := moved
+	foreignMerge.HandoffMerge = &domain.ProspectiveMergeIdentity{
+		BaseSHA: "tip", HeadSHA: current.PRHeadSHA, MergeSHA: "other-merge",
+	}
+	stored.ReadinessDetail = &foreignMerge
+	if compatibleTerminalItem(expected, stored) {
+		t.Fatal("stored handoff merge that disagrees with the rebuilt one accepted during recovery compatibility")
+	}
+}
+
 func TestCompatibleTerminalItemAcceptsLegacyNilCardPresentation(t *testing.T) {
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)

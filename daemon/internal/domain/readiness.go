@@ -800,18 +800,31 @@ type ReadinessBoundBase struct {
 
 // ReadinessDetail is the card-facing projection of the §6 evaluation behind a
 // ready item's verdict (issue #982): the evaluation-set identity, the exact
-// candidate head and base the proofs bind, and every requirement of the
-// evaluated set with its state, proof recipe, or waiver. It is built by
-// NewReadinessDetail from the same inputs and output as the verdict, fixed at
-// creation, and carries facts only; the client derives no reason from the
-// verdict class. Blocked is representable here (a required non-pass without a
-// waiver) so goldens can pin the shape, but AttentionItem rejects it because
-// ReadinessSummary admits only the ready classes.
+// candidate head and base the proofs bind, the target tip the handoff check
+// resolved and the verified merge into it when that tip had moved (#1735), and
+// every requirement of the evaluated set with its state, proof recipe, or
+// waiver. It is built by NewReadinessDetail from the same inputs and output as
+// the verdict, fixed at creation, and carries facts only; the client derives
+// no reason from the verdict class. Blocked is representable here (a required
+// non-pass without a waiver) so goldens can pin the shape, but AttentionItem
+// rejects it because ReadinessSummary admits only the ready classes.
+//
+// HandoffTip and HandoffMerge omit instead of rendering null, against the
+// golden convention, for the reason CheckProof.MergeSHA does: every ready item
+// stored before #1735 lacks both keys, and the store compares a stored
+// detail's bytes with its re-encoding. An empty tip is such a legacy detail
+// and names no tip.
 type ReadinessDetail struct {
-	EvaluationSetDigest Digest                 `json:"evaluation_set_digest"`
-	CandidateHead       string                 `json:"candidate_head"`
-	Base                ReadinessBoundBase     `json:"base"`
-	Requirements        []ReadinessRequirement `json:"requirements"`
+	EvaluationSetDigest Digest             `json:"evaluation_set_digest"`
+	CandidateHead       string             `json:"candidate_head"`
+	Base                ReadinessBoundBase `json:"base"`
+	// HandoffTip is the target tip the handoff check resolved. It equals
+	// Base.BaseSHA when the tip had not moved past the evidence base.
+	HandoffTip string `json:"handoff_tip,omitempty"`
+	// HandoffMerge is the verified merge of CandidateHead into HandoffTip,
+	// present exactly when HandoffTip differs from Base.BaseSHA.
+	HandoffMerge *ProspectiveMergeIdentity `json:"handoff_merge,omitempty"`
+	Requirements []ReadinessRequirement    `json:"requirements"`
 }
 
 // Validate reports whether the detail is a complete, key-ordered projection.
@@ -819,6 +832,9 @@ func (d ReadinessDetail) Validate() error {
 	if d.EvaluationSetDigest == "" || d.CandidateHead == "" ||
 		d.Base.BaseRef == "" || d.Base.BaseSHA == "" {
 		return fmt.Errorf("readiness detail binding: %w", ErrEmptyField)
+	}
+	if err := d.validateHandoff(); err != nil {
+		return err
 	}
 	if len(d.Requirements) == 0 {
 		return fmt.Errorf("readiness detail requirements: %w", ErrRequirementSetEmpty)
@@ -831,6 +847,36 @@ func (d ReadinessDetail) Validate() error {
 			return fmt.Errorf("readiness detail requirement %q out of key order: %w",
 				requirement.RequirementKey, ErrReadinessDetailInconsistent)
 		}
+	}
+	return nil
+}
+
+// validateHandoff checks the tip and merge against each other and the binding.
+// An empty tip with no merge is a detail stored before #1735 and stays valid.
+func (d ReadinessDetail) validateHandoff() error {
+	if d.HandoffTip == "" {
+		if d.HandoffMerge != nil {
+			return fmt.Errorf("readiness detail handoff merge without a tip: %w", ErrEmptyField)
+		}
+		return nil
+	}
+	moved := d.HandoffTip != d.Base.BaseSHA
+	switch {
+	case moved && d.HandoffMerge == nil:
+		return fmt.Errorf("readiness detail handoff tip %q moved past base %q without a merge: %w",
+			d.HandoffTip, d.Base.BaseSHA, ErrReadinessDetailInconsistent)
+	case !moved && d.HandoffMerge != nil:
+		return fmt.Errorf("readiness detail handoff merge at an unchanged tip: %w", ErrReadinessDetailInconsistent)
+	case d.HandoffMerge == nil:
+		return nil
+	}
+	if err := d.HandoffMerge.Validate(); err != nil {
+		return err
+	}
+	if d.HandoffMerge.BaseSHA != d.HandoffTip || d.HandoffMerge.HeadSHA != d.CandidateHead {
+		return fmt.Errorf("readiness detail handoff merge %s+%s disagrees with tip %q and head %q: %w",
+			d.HandoffMerge.BaseSHA, d.HandoffMerge.HeadSHA, d.HandoffTip, d.CandidateHead,
+			ErrReadinessDetailInconsistent)
 	}
 	return nil
 }
@@ -856,12 +902,18 @@ func (d ReadinessDetail) Class() ReadinessVerdictClass {
 // It takes the verdict's own target and recorded states, never recomputes
 // the evaluation-set digest, and fails unless the class its entries imply is
 // the verdict's, so an item can never carry two disagreeing verdicts.
-func NewReadinessDetail(target EvaluationTarget, verdict ReadinessVerdict, recorded []CheckState) (ReadinessDetail, error) {
+// handoffTip is the target tip the handoff check resolved and is required;
+// handoffMerge is the verified merge of the candidate head into it, empty
+// when the tip had not moved past the target's base.
+func NewReadinessDetail(target EvaluationTarget, verdict ReadinessVerdict, recorded []CheckState, handoffTip, handoffMerge string) (ReadinessDetail, error) {
 	if err := verdict.Validate(); err != nil {
 		return ReadinessDetail{}, err
 	}
 	if target.Base == nil {
 		return ReadinessDetail{}, fmt.Errorf("readiness detail base: %w", ErrEmptyField)
+	}
+	if handoffTip == "" {
+		return ReadinessDetail{}, fmt.Errorf("readiness detail handoff tip: %w", ErrEmptyField)
 	}
 	requirements := make([]ReadinessRequirement, 0, len(recorded))
 	for _, state := range recorded {
@@ -877,7 +929,13 @@ func NewReadinessDetail(target EvaluationTarget, verdict ReadinessVerdict, recor
 		EvaluationSetDigest: verdict.EvaluationSetDigest,
 		CandidateHead:       target.CandidateHead,
 		Base:                ReadinessBoundBase{BaseRef: target.Base.BaseRef, BaseSHA: target.Base.BaseSHA},
+		HandoffTip:          handoffTip,
 		Requirements:        requirements,
+	}
+	if handoffMerge != "" {
+		detail.HandoffMerge = &ProspectiveMergeIdentity{
+			BaseSHA: handoffTip, HeadSHA: target.CandidateHead, MergeSHA: handoffMerge,
+		}
 	}
 	if err := detail.Validate(); err != nil {
 		return ReadinessDetail{}, err

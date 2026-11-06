@@ -989,14 +989,14 @@ import Testing
         #expect(clean.verdict?.result == .passed)
         #expect(clean.verdict?.value == "Clean")
         #expect(clean.rows.first(where: { $0.label == "Commit plan" })?.result == .note)
-        #expect(clean.verdictLine == "Clean · 1 note · 4 passed")
-        #expect(clean.summary == "Readiness checklist: Clean, 1 note, 4 passed.")
+        #expect(clean.verdictLine == "Clean · 1 note · 5 passed")
+        #expect(clean.summary == "Readiness checklist: Clean, 1 note, 5 passed.")
         #expect(
             clean.accessibilitySummary.contains(
                 "Commit plan: Plan present, not honored, informational"))
         #expect(degraded.verdict?.result == .failed)
         #expect(degraded.verdict?.value == "Degraded")
-        #expect(degraded.verdictLine == "Degraded · 1 waived · 1 advisory · 1 note · 4 passed")
+        #expect(degraded.verdictLine == "Degraded · 1 waived · 1 advisory · 1 note · 5 passed")
 
         var invalidated = AttentionFixtures.fixture(type: .ready_for_final_review).item
         invalidated.status = .superseded
@@ -1015,7 +1015,7 @@ import Testing
         #expect(invalidatedChecklist.priorVerdict == "was Clean")
         #expect(
             invalidatedChecklist.summary
-                == "Readiness checklist: Stale, was Clean, 1 note, 3 passed.")
+                == "Readiness checklist: Stale, was Clean, 1 note, 4 passed.")
         #expect(
             invalidatedChecklist.accessibilitySummary.contains(
                 "Verification verdict: Stale, needs attention"))
@@ -1083,21 +1083,39 @@ import Testing
         // Severity first, the daemon's order inside each class.
         #expect(
             clean.rows.map(\.label) == [
-                "Commit plan", "Bound to", "clean-verification", "independent-review",
+                "Commit plan", "Bound to", "Checked at", "clean-verification", "independent-review",
                 "Terminal review",
             ])
         #expect(
             clean.rows[1] == .init(label: "Bound to", value: "Head cafebabe · Base main@deadbeef", result: .passed))
-        #expect(clean.rows[2] == .init(label: "clean-verification", value: "Passed", result: .passed))
-        #expect(clean.passedRows.count == 4)
+        #expect(clean.rows[2] == .init(label: "Checked at", value: "Tip deadbeef", result: .passed))
+        #expect(clean.rows[3] == .init(label: "clean-verification", value: "Passed", result: .passed))
+        #expect(clean.passedRows.count == 5)
         #expect(clean.leadingRows.map(\.label) == ["Commit plan"])
+
+        // A handoff at a moved tip says verification ran on the merge of the
+        // head into it; a detail recorded before the tip existed shows no row.
+        var movedItem = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        movedItem.readiness_detail = .init(
+            value1: AttentionFixtures.movedTipReadinessDetail(head: movedItem.pr_head_sha))
+        let moved = try #require(DecisionChecklistPresentation(movedItem))
+        #expect(
+            moved.rows.first(where: { $0.label == "Checked at" })
+                == .init(
+                    label: "Checked at",
+                    value: "Tip facefeed · verified on merge 0ddba11 of the head into it",
+                    result: .passed))
+        var untippedItem = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        untippedItem.readiness_detail?.value1.handoff_tip = nil
+        let untipped = try #require(DecisionChecklistPresentation(untippedItem))
+        #expect(!untipped.rows.contains { $0.label == "Checked at" })
 
         let degraded = try #require(
             DecisionChecklistPresentation(AttentionFixtures.degradedReady().item))
         #expect(
             degraded.verdict == .init(label: "Verification verdict", value: "Degraded", result: .failed))
         #expect(
-            degraded.rows.map(\.result) == [.waived, .advisory, .note, .passed, .passed, .passed, .passed])
+            degraded.rows.map(\.result) == [.waived, .advisory, .note, .passed, .passed, .passed, .passed, .passed])
         #expect(degraded.rows.first?.label == "repo-change-policy")
         #expect(
             degraded.rows.first(where: { $0.label == "license-headers (optional)" })
@@ -1112,10 +1130,10 @@ import Testing
                     result: .waived))
         // The waiver sentence is the value the S6 fact-row rule stacks.
         #expect(try #require(degraded.rows.first).value.count > FactRow.stackThreshold)
-        #expect(degraded.passedRows.count == 4)
+        #expect(degraded.passedRows.count == 5)
         #expect(
             degraded.summary
-                == "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 4 passed.")
+                == "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 5 passed.")
 
         // The daemon's invalidation demotes the verdict, and the Bound-to
         // row leads with the coordinate that moved and both of its values
@@ -1190,10 +1208,10 @@ import Testing
         let degraded = try #require(
             DecisionChecklistPresentation(AttentionFixtures.degradedReady().item))
 
-        #expect(degraded.passedRows.count == 4)
+        #expect(degraded.passedRows.count == 5)
         #expect(
             degraded.accessibilitySummary.hasPrefix(
-                "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 4 passed. "
+                "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 5 passed. "
                     + "Verification verdict: Degraded, needs attention;"))
         for row in degraded.rows {
             #expect(

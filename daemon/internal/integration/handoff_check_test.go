@@ -64,6 +64,27 @@ func (p *productionPublicationHarness) assertHandoffVerified(t *testing.T, tip s
 	}
 }
 
+// assertReadyDetailNamesHandoff checks that the ready item's readiness detail
+// names tip as the target tip its handoff checked and, when merge is not
+// empty, the verified merge of the head into it (#1735).
+func (p *productionPublicationHarness) assertReadyDetailNamesHandoff(t *testing.T, tip, merge string) {
+	t.Helper()
+	detail := p.currentReadyItem(t).ReadinessDetail
+	if detail == nil || detail.HandoffTip != tip || detail.Base.BaseSHA != p.baseSHA {
+		t.Fatalf("ready detail = %#v, want handoff tip %s over base %s", detail, tip, p.baseSHA)
+	}
+	if merge == "" {
+		if detail.HandoffMerge != nil {
+			t.Fatalf("ready detail merge = %#v at an unchanged tip, want none", detail.HandoffMerge)
+		}
+		return
+	}
+	want := domain.ProspectiveMergeIdentity{BaseSHA: tip, HeadSHA: p.replay.HeadSHA, MergeSHA: merge}
+	if detail.HandoffMerge == nil || *detail.HandoffMerge != want {
+		t.Fatalf("ready detail merge = %#v, want %#v", detail.HandoffMerge, want)
+	}
+}
+
 // assertHandoffBlocked checks that the first publication stopped with an open
 // publish_blocked item naming reason, that nothing reached the forge, and
 // that the run sealed no successor.
@@ -145,6 +166,7 @@ func TestHandoffAtAMovedTipPublishesTheVerifiedHead(t *testing.T) {
 
 	p.assertHandoffVerified(t, advanced)
 	p.assertReviewedOnce(t, reviews)
+	p.assertReadyDetailNamesHandoff(t, advanced, p.handoffCheck(t).Merge.MergeSHA)
 	ready := p.currentReadyItem(t)
 	if ready.ID != domain.ProductionReadyItemID(p.runID) || ready.PRHeadSHA != p.replay.HeadSHA {
 		t.Fatalf("ready item = %#v, want the run's own at the unchanged head", ready)
@@ -196,6 +218,7 @@ func TestHandoffAtAnUnchangedTipPublishesAsBefore(t *testing.T) {
 	if check.TipSHA != p.baseSHA || check.EvidenceBaseSHA != p.baseSHA || check.Merge != nil {
 		t.Fatalf("handoff check = %#v, want an unchanged tip at %s with no merge", check, p.baseSHA)
 	}
+	p.assertReadyDetailNamesHandoff(t, p.baseSHA, "")
 	if p.room.runs != 1 || p.transport.MergeCount() != 0 {
 		t.Fatalf("verification runs = %d, merges = %d, want 1 and 0", p.room.runs, p.transport.MergeCount())
 	}
@@ -963,6 +986,9 @@ func TestHandoffRecoversAnIntentCommittedBeforeHandoffChecks(t *testing.T) {
 	if p.transport.MergeCount() != 0 {
 		t.Fatalf("recovered intent built %d merges, want none", p.transport.MergeCount())
 	}
+	// With no sealed check the detail names the evidence base as the tip,
+	// the rule the handoff applied when it recovered the intent.
+	p.assertReadyDetailNamesHandoff(t, p.baseSHA, "")
 	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
 	}
