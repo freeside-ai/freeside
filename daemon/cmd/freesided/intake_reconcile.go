@@ -416,7 +416,9 @@ func (r *intakeReconciler) admit(
 // operator on a propose card, or by a prior auto_start pass) is launched; an open
 // undecided card is either left for the operator (propose), refused (downgraded
 // mode, a repository the daemon may have filed issues in, or an exhausted WIP
-// cap), or auto-started.
+// cap), or auto-started. A refused card whose admitted start was never decided
+// has that start released (#1770), including one refused before the release
+// existed.
 func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {
 	if occurrence.Admission == nil {
 		return nil
@@ -440,9 +442,21 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 		return r.launch(ctx, init, occurrence)
 	}
 	// The card is open and undecided. A prior durable refusal leaves it an
-	// ordinary propose card; do not re-decide it.
+	// ordinary propose card; do not re-decide it. A refusal recorded before
+	// stranded starts were released may still hold the slot, so release it
+	// here. The read keeps a refused card from taking the write lock every pass.
 	if occurrence.Refusal != nil {
-		return nil
+		stranded := false
+		if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			_, stranded, err = strandedStart(ctx, tx, occurrence)
+			return err
+		}); err != nil || !stranded {
+			return err
+		}
+		return r.store.Write(ctx, func(tx *store.WriteTx) error {
+			return r.releaseStrandedStart(ctx, tx, occurrence)
+		})
 	}
 	var resolved domain.ResolvedPolicy
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -472,7 +486,9 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 // autoStart applies an authorized auto_start: it refuses on a missing or stale
 // subject input, on filing-ledger origin evidence (plan §5.17), or on an
 // exhausted WIP cap, each leaving the card an ordinary proposal; otherwise it
-// records the daemon-attributed start decision and launches.
+// records the daemon-attributed start decision and launches. A start a prior
+// pass recorded without reaching the decision is released in the refusal's
+// write (#1770); with no refusal, this pass keeps it and decides.
 func (r *intakeReconciler) autoStart(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence, policy intake.IntakePolicy,
 ) error {
@@ -505,6 +521,9 @@ func (r *intakeReconciler) autoStart(
 			return err
 		}
 		if origin.DemotesAutoStart() {
+			if err := r.releaseStrandedStart(ctx, tx, occurrence); err != nil {
+				return err
+			}
 			_, err := tx.RecordIntakeRefusal(ctx,
 				occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal,
 				domain.IntakeRefusalModeNotAuthorized, r.now())
@@ -519,6 +538,9 @@ func (r *intakeReconciler) autoStart(
 			return err
 		}
 		if policy.WIPCapExhausted(others) {
+			if err := r.releaseStrandedStart(ctx, tx, occurrence); err != nil {
+				return err
+			}
 			_, err := tx.RecordIntakeRefusal(ctx,
 				occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal,
 				domain.IntakeRefusalWIPCapExhausted, r.now())
@@ -707,16 +729,78 @@ func (r *intakeReconciler) startSpec(
 }
 
 // refuse records a durable start refusal and leaves the admitted card an
-// ordinary proposal.
+// ordinary proposal, releasing a stranded start in the same write.
 func (r *intakeReconciler) refuse(
 	ctx context.Context, occurrence domain.IntakeOccurrence, reason domain.IntakeStartRefusalReason,
 ) error {
 	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := r.releaseStrandedStart(ctx, tx, occurrence); err != nil {
+			return err
+		}
 		_, err := tx.RecordIntakeRefusal(ctx,
 			occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal,
 			reason, r.now())
 		return err
 	})
+}
+
+// strandedStart reports whether the occurrence's task holds a WIP slot for a
+// start no one decided: its newest start is the reserved specification run's,
+// the task still holds the slot, the run never launched (no dispatch marker),
+// and the proposal has no authenticated start decision. autoStart records the
+// start and the decision in separate writes, so a crash or a failed decision
+// write between them leaves this state, and a refusal or departure would
+// otherwise strand the slot (#1770). Matching the start's run keeps a release
+// from ending an episode another occurrence of the same issue started.
+func strandedStart(
+	ctx context.Context, tx *store.ReadTx, occurrence domain.IntakeOccurrence,
+) (domain.TaskID, bool, error) {
+	if occurrence.Admission == nil {
+		return "", false, nil
+	}
+	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
+	reserved, err := tx.GetRun(ctx, specificationRunID)
+	if err != nil {
+		return "", false, err
+	}
+	if reserved.TaskID == "" {
+		return "", false, nil
+	}
+	task, err := tx.GetTask(ctx, reserved.TaskID)
+	if err != nil {
+		return "", false, err
+	}
+	if start := task.CurrentStart(); start == nil || start.RunID != specificationRunID || !domain.TaskWIP(task) {
+		return "", false, nil
+	}
+	if _, err := tx.GetOutbox(ctx, engine.SpecificationDispatchMarkerKey(specificationRunID)); err == nil {
+		return "", false, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return "", false, err
+	}
+	decided, err := tx.AuthenticateStartDecision(ctx,
+		occurrence.Admission.ProposalInstanceID, occurrence.Admission.ProposalDigest)
+	if err != nil || decided {
+		return "", false, err
+	}
+	return task.ID, true, nil
+}
+
+// releaseStrandedStart abandons a stranded start inside the caller's write, so
+// the release commits with the refusal or departure that leaves the card
+// undecided. It does not close the workflow episode: the card stays startable,
+// and its launch records a fresh start (store.RecordTaskStartAfterRelease).
+func (r *intakeReconciler) releaseStrandedStart(
+	ctx context.Context, tx *store.WriteTx, occurrence domain.IntakeOccurrence,
+) error {
+	taskID, stranded, err := strandedStart(ctx, &tx.ReadTx, occurrence)
+	if err != nil || !stranded {
+		return err
+	}
+	if _, err := tx.AbandonTask(ctx, taskID, r.now()); err != nil {
+		return fmt.Errorf("release stranded start: %w", err)
+	}
+	return nil
 }
 
 // specificationStarted reports whether the reserved specification run's iteration-1
@@ -905,6 +989,10 @@ func (r *intakeReconciler) advanceDeparture(ctx context.Context, occurrence doma
 			} else if err != nil {
 				return err
 			}
+		} else if err := r.releaseStrandedStart(ctx, tx, occurrence); err != nil {
+			// No later pass revisits a departed occurrence, so an undecided
+			// admitted start is released with the supersession.
+			return err
 		}
 		_, err = tx.SupersedeIntakeProposal(ctx,
 			occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal,
