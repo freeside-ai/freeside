@@ -17,6 +17,8 @@ import (
 // provider was reached; whether the list then reflects the account is read
 // from the logged models. The auth.json is copied into a private root and
 // never logged.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexModelDiscovery(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1, FREESIDE_WARD_CODEX_AGENT_IMAGE, and FREESIDE_WARD_CODEX_REVIEW_AUTH; " +

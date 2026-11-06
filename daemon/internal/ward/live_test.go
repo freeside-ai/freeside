@@ -267,6 +267,7 @@ func startLiveFreesided(t *testing.T) *liveFreesided {
 	return &liveFreesided{port: port, done: done, waitErr: &waitErr}
 }
 
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveHandoffLifecycle(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live workspace-handoff test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
@@ -834,6 +835,8 @@ func TestRungitLiveIgnoresAmbientExcludes(t *testing.T) {
 // volume.
 //
 //	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveWorkspaceSeeding -v
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveWorkspaceSeeding(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live workspace-seeding test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
@@ -1009,6 +1012,8 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 //	FREESIDE_WARD_CLAUDE_AGENT_IMAGE=<digest-ref> \
 //	FREESIDE_WARD_CODEX_AGENT_IMAGE=<digest-ref> \
 //	go test ./internal/ward -run TestLiveWorkerGitIdentity -v
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveWorkerGitIdentity(t *testing.T) {
 	const requirements = "set FREESIDE_WARD_LIVE_TEST=1, FREESIDE_WARD_EXPORTER_IMAGE, FREESIDE_WARD_CLAUDE_AGENT_IMAGE, and FREESIDE_WARD_CODEX_AGENT_IMAGE (requires macOS, Apple container 1.1.0, and `container system start`)"
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" ||
@@ -1129,6 +1134,8 @@ func TestLiveWorkerGitIdentity(t *testing.T) {
 // tree. Copying it would hand the writer an empty workspace that still holds
 // the declared HEAD, which a HEAD-only attestation would report as seeded at
 // the exact base. The gate must refuse it on the host, before any VM runs.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveSeedRefusesWorktreelessCheckout(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live workspace-seeding test skipped: set FREESIDE_WARD_LIVE_TEST=1")
@@ -1205,6 +1212,8 @@ func waitLiveStopped(t *testing.T, rt Runtime, id string) {
 // export: the scanner refuses both the original and the rewritten secret.
 //
 //	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveLeasedMutationAndReadOnlyProbe -v
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live leased-mutation test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
@@ -1366,6 +1375,8 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 // here rather than passing on timing.
 //
 //	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveConcurrentReadHeldWriters -v
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveConcurrentReadHeldWriters(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live concurrent read-hold test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")

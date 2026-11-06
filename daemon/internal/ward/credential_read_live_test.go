@@ -24,6 +24,8 @@ import (
 //
 //	FREESIDE_WARD_LIVE_TEST=1 FREESIDE_WARD_EXPORTER_IMAGE=<digest-ref> \
 //	  go test ./internal/ward -run TestLiveSetupTokenRead -v
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveSetupTokenRead(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live credential-read test skipped: set FREESIDE_WARD_LIVE_TEST=1 and FREESIDE_WARD_EXPORTER_IMAGE (requires macOS, Apple container 1.1.0, and `container system start`)")

@@ -52,6 +52,8 @@ func requireLiveContainer(t *testing.T) string {
 // egress against the registry witness, the credential-containment probe, and
 // the read-write-attach exclusion probe on real VMs, and PreJob proves the
 // lightweight precondition path.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveConformanceSuite(t *testing.T) {
 	bin := requireLiveContainer(t)
 	ctx := context.Background()
@@ -160,6 +162,8 @@ func TestLiveConformanceSuite(t *testing.T) {
 // unmount is not a credential-device detach, so the same-VM fallback class is
 // not isolation. It drives the CLI directly (--cap-add CAP_SYS_ADMIN is
 // outside the gate's ContainerSpec vocabulary, by design).
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveConformanceSameVMRefutation(t *testing.T) {
 	bin := requireLiveContainer(t)
 	ctx := context.Background()

@@ -32,6 +32,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveClaudeReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live claude-review lifecycle test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, FREESIDE_WARD_EXPORTER_IMAGE, FREESIDE_WARD_CLAUDE_AGENT_IMAGE, and CLAUDE_CODE_OAUTH_TOKEN)")

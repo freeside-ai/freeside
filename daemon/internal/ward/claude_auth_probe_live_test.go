@@ -14,6 +14,8 @@ import (
 // TestLiveClaudeAuthProbe pins the refusal classifier to the actual CLI's
 // response through the production proxy. A valid token is optional; its
 // output is never logged.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveClaudeAuthProbe(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1 and FREESIDE_WARD_CLAUDE_AGENT_IMAGE; requires Apple container running")

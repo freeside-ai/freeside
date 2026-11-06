@@ -19,6 +19,8 @@ import (
 // This exercises the pinned CLI's own sandbox, not an outer-container Git
 // check. The latter succeeds as privileged root even when sandbox root cannot
 // traverse the host-owned 0700 checkout copied onto the volume.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexReviewSandboxWorkspaceAccess(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1 and the exporter/Codex image pins")

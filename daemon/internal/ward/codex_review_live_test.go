@@ -39,6 +39,8 @@ import (
 // create a missing nested mountpoint under the read-only workspace, so the
 // launch must omit exactly the workspace-local shadow, bind the reduced
 // topology durably, cross reconstruction, and actually start.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -210,6 +212,7 @@ func liveCodexReviewLifecycle(t *testing.T, slug string, withAgents bool) {
 	}
 }
 
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live codex-review snapshot test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
@@ -378,6 +381,7 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 }
 
 func TestCompareCodexReviewSnapshotBytesRejectsTrailingDifferences(t *testing.T) {
+	t.Parallel()
 	authBody := []byte(`{"auth_mode":"api_key","OPENAI_API_KEY":"live-fixture-key","tokens":null}`)
 	instructionBody := []byte("# Review instructions\nlive fixture\n")
 
@@ -419,6 +423,8 @@ func compareCodexReviewSnapshotBytes(name string, got, want []byte) error {
 // It runs the exact production launch command from codexReviewCommand, so it
 // cannot drift from the code under test. Like the sibling live test it is opt-in
 // and CI-blind (needs macOS, the `container` CLI, and the pinned alpine image).
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live codex-review fail-closed test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")

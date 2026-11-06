@@ -15,6 +15,8 @@ import (
 // survived. Opt-in:
 //
 //	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveDeclaredSizeAndMemoryLimitKill -v
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveDeclaredSizeAndMemoryLimitKill(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live size test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")

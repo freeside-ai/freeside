@@ -19,6 +19,8 @@ import (
 // (owner decision, issue #2594). An invalid token is enough for an answer; a
 // valid one in CLAUDE_CODE_OAUTH_TOKEN is used instead when set, and is never
 // logged.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveClaudeModelDiscovery(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1 and FREESIDE_WARD_CLAUDE_AGENT_IMAGE; requires Apple container running")
