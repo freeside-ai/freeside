@@ -185,7 +185,7 @@ import Testing
         let statuses = [
             "Approval beside capacity": "Specification Approval Required",
             "Stop requested beside capacity": "Stopping",
-            "Stop failed beside capacity": "Failed to Stop · Execution May Continue",
+            "Stop failed beside capacity": "Stop Unconfirmed · No New Work",
             "Stopped beside capacity": "Stopped",
             "Historical capacity": "Finished · See Recorded Outcome",
             "Failed beside capacity": "Execution Failed",
