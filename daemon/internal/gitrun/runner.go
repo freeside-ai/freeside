@@ -88,6 +88,9 @@ type Runner struct {
 	config  []string
 	env     []string
 	class   error
+	// format is the pinned checkout's object format, empty until
+	// PinCheckout; ObjectReader sizes the IDs it accepts from it.
+	format string
 }
 
 // New creates the runner's scratch home and replacement base environment.
@@ -139,7 +142,8 @@ func (r *Runner) PinCheckout(ctx context.Context, checkoutDir string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(format)), nil
+	r.format = strings.TrimSpace(string(format))
+	return r.format, nil
 }
 
 // Run executes one plumbing command and returns its stdout.
@@ -153,12 +157,7 @@ func (r *Runner) Run(ctx context.Context, stdin io.Reader, args ...string) ([]by
 
 // RunTo executes one plumbing command while streaming stdout to w.
 func (r *Runner) RunTo(ctx context.Context, stdin io.Reader, w io.Writer, args ...string) error {
-	baseline := Baseline()
-	argv := make([]string, 0, len(baseline)+len(r.config)+len(args))
-	argv = append(argv, baseline...)
-	argv = append(argv, r.config...)
-	argv = append(argv, args...)
-	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: callers supply fixed daemon plumbing argv; candidate bytes travel through stdin or audited stores
+	cmd := exec.CommandContext(ctx, r.gitPath, r.argv(args)...) //nolint:gosec // G204: callers supply fixed daemon plumbing argv; candidate bytes travel through stdin or audited stores
 	cmd.Dir = r.dir
 	cmd.Env = r.env
 	cmd.Stdin = stdin
@@ -168,4 +167,14 @@ func (r *Runner) RunTo(ctx context.Context, stdin io.Reader, w io.Writer, args .
 		return &GitError{Args: args, Stderr: stderr.String(), Class: r.class, Err: err}
 	}
 	return nil
+}
+
+// argv prefixes args with the baseline and the caller's config, the order
+// every process the runner starts must share.
+func (r *Runner) argv(args []string) []string {
+	baseline := Baseline()
+	argv := make([]string, 0, len(baseline)+len(r.config)+len(args))
+	argv = append(argv, baseline...)
+	argv = append(argv, r.config...)
+	return append(argv, args...)
 }

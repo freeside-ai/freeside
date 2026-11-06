@@ -3,7 +3,9 @@ package agenttree_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 )
 
@@ -462,4 +465,84 @@ func TestReadCommitRefusals(t *testing.T) {
 			t.Fatalf("ReadCommit = %v, want %v", err, agenttree.ErrMalformed)
 		}
 	})
+}
+
+func gitWithInput(t *testing.T, dir string, input []byte, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test fixture running git over test-owned repos with test-chosen arguments
+	cmd.Env = append(gitenv.Scrubbed(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+	cmd.Stdin = bytes.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// The read starts one cat-file for the whole tree, not one per file.
+func TestReadCommitStartsOneCatFile(t *testing.T) {
+	repo := newRepo(t)
+	const count = 60
+	want := agenttree.Files{}
+	for i := range count {
+		rel := fmt.Sprintf("fragments/extra-%02d", i)
+		want[rel] = fmt.Appendf(nil, "fragment %d\n", i)
+		if err := os.MkdirAll(filepath.Join(repo, "policy", "fragments"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "policy", rel), want[rel], 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "fragments")
+	commit := git(t, repo, "rev-parse", "HEAD")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	log := filepath.Join(bin, "calls")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s'\nexec '%s' \"$@\"\n", log, realGit)
+	execfixture.Write(t, filepath.Join(bin, "git"), []byte(script), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	read := must(agenttree.ReadCommit(t.Context(), repo, t.TempDir(), commit))
+	if !reflect.DeepEqual(read, want) {
+		t.Fatalf("ReadCommit read %d files, want the %d committed", len(read), len(want))
+	}
+	calls, err := os.ReadFile(log) //nolint:gosec // G304: test-owned invocation log in t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(calls), " cat-file "); n != 1 {
+		t.Fatalf("ReadCommit started %d cat-file processes, want 1:\n%s", n, calls)
+	}
+}
+
+// A blob-mode entry must name a blob. `cat-file blob` used to peel a tag to
+// the blob it points at; the batch read refuses it instead.
+func TestReadCommitRefusesATagInABlobEntry(t *testing.T) {
+	repo := newRepo(t)
+	blob := git(t, repo, "rev-parse", "HEAD:policy/README.md")
+	git(t, repo, "tag", "-a", "blob-tag", "-m", "tag", blob)
+	tag := git(t, repo, "rev-parse", "blob-tag")
+	raw, err := hex.DecodeString(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// mktree refuses a type mismatch, so the tree is written byte for byte.
+	agents := gitWithInput(t, repo, append([]byte("100644 linked\x00"), raw...),
+		"hash-object", "-t", "tree", "-w", "--stdin")
+	policy := gitWithInput(t, repo, []byte("040000 tree "+agents+"\tagents\n"), "mktree")
+	root := gitWithInput(t, repo, []byte("040000 tree "+policy+"\tpolicy\n"), "mktree")
+	commit := git(t, repo, "commit-tree", root, "-m", "tag in a blob entry")
+
+	if _, err := agenttree.ReadCommit(t.Context(), repo, t.TempDir(), commit); !errors.Is(err, agenttree.ErrMalformed) {
+		t.Fatalf("ReadCommit = %v, want %v", err, agenttree.ErrMalformed)
+	}
 }
