@@ -386,12 +386,13 @@ wait_for "$TMP/orphan-second.log" 'PASS: daemon test'
 kill "$(cat "$TMP/orphan.child")"
 wait "$waiter"
 
-# The stand-in go records the GIT_DIR it inherits and, on request, writes
-# through it the way an unscrubbed fixture helper would.
+# The stand-in go records its arguments and the GIT_DIR it inherits and, on
+# request, writes through it the way an unscrubbed fixture helper would.
 mkdir "$TMP/decoy-tests"
 printf '#!/bin/bash\necho Linux\n' >"$TMP/decoy-tests/uname"
 cat >"$TMP/decoy-tests/go" <<'STUB'
 #!/bin/bash
+printf '%s\n' "$@" >"$RUN.args"
 printf '%s\n' "${GIT_DIR-unset}" >"$RUN.git-dir"
 # Go's version-control stamping in a test build runs git status.
 git status --porcelain >/dev/null || exit 4
@@ -449,6 +450,48 @@ case $(cat "$TMP/decoy.git-dir") in
   *) report_failure "GIT_DIR was $(cat "$TMP/decoy.git-dir")" ;;
 esac
 [[ ! -e $TMP/decoy-off ]] || report_failure 'a run without a slot created state'
+
+begin_case "without -- the test step still runs every package"
+RUN=$TMP/full PATH=$decoy_path run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/full.args") == $'test\n./...' ]] ||
+  report_failure "go received $(cat "$TMP/full.args")"
+[[ $(tail -1 <<<"$OUT") == 'PASS: daemon test' ]] ||
+  report_failure 'a full run named a selection'
+
+begin_case "arguments after -- replace ./... under the held slot's decoy"
+RUN=$TMP/narrow PATH=$decoy_path GIT_DIR=$TMP/ambient/.git DAEMON_TEST_MAX_RUNS=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/narrow-state run_check daemon test -- ./internal/domain/... -run 'Test A'
+assert_rc 0
+[[ $(cat "$TMP/narrow.args") == $'test\n./internal/domain/...\n-run\nTest A' ]] ||
+  report_failure "go received $(cat "$TMP/narrow.args")"
+[[ $(cat "$TMP/narrow.git-dir") == "$TMP/narrow-state/slots/1.decoy/repo/.git/worktrees/wt" ]] ||
+  report_failure "GIT_DIR was $(cat "$TMP/narrow.git-dir")"
+assert_contains 'PASS: daemon test -- ./internal/domain/... -run Test A'
+assert_ambient_unchanged
+
+begin_case "a narrow run that writes to the decoy still fails"
+RUN=$TMP/narrow PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/narrow-state DECOY_WRITE=1 run_check daemon test -- ./internal/domain/...
+assert_rc 1
+[[ $(cat "$TMP/narrow.args") == $'test\n./internal/domain/...' ]] ||
+  report_failure "go received $(cat "$TMP/narrow.args")"
+assert_contains 'a test wrote to the decoy repository'
+case $OUT in
+  *'PASS: daemon'*) report_failure "PASS printed after a decoy write" ;;
+  *) pass=$((pass + 1)) ;;
+esac
+
+begin_case "a misplaced or empty -- is a usage error before go runs"
+for args in 'daemon test --' 'daemon -- ./x' 'daemon build test -- ./x' \
+    'daemon test build -- ./x' 'api lint -- ./x'; do
+  rm -f "$TMP/usage.args"
+  # shellcheck disable=SC2086 # deliberate word split of each argument list
+  RUN=$TMP/usage PATH=$decoy_path run_check $args
+  assert_rc 2
+  assert_contains "'--' must follow 'daemon test'"
+  [[ ! -e $TMP/usage.args ]] || report_failure "go ran for: $args"
+done
 
 if [[ -x /usr/bin/git ]]; then
   begin_case "macOS shim uses a stable git prefix and later steps keep PATH"
@@ -560,6 +603,20 @@ PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=darwin DAEMON_TEST_SHARD_INDEX=1 \
 assert_rc 0
 OUT=$(cat "$stub.args")
 assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\ndarwin\n--index\n1\n--count\n1'
+
+begin_case "shard runs refuse arguments after -- before go or the wrapper runs"
+rm -f "$stub.args" "$TMP/shard-args.args"
+RUN=$TMP/shard-args PATH="$TMP:$decoy_path" DAEMON_TEST_SHARD_KIND=rest DAEMON_TEST_SHARD_INDEX=1 \
+  DAEMON_TEST_SHARD_COUNT=1 DAEMON_TEST_INTEGRATION_SHARDS=3 \
+  DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test -- ./internal/domain/...
+assert_rc 2
+assert_contains "don't apply in shard mode"
+[[ ! -e $stub.args ]] || report_failure 'the shard wrapper ran'
+RUN=$TMP/shard-args PATH=$decoy_path DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence \
+  run_check daemon test -- ./internal/domain/...
+assert_rc 2
+assert_contains "don't apply in shard mode"
+[[ ! -e $TMP/shard-args.args ]] || report_failure 'go ran in shard mode'
 
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

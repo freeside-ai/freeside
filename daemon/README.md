@@ -33,7 +33,9 @@ discovery cannot find fails the shard. A new darwin-sensitive test runs on a
 PR's macOS job only once its family is added there.
 
 `bash scripts/check.sh daemon test` still runs the full local suite with its
-existing slot limiter and Git wrapper. CI supplies all five shard settings:
+existing slot limiter and Git wrapper. Shard runs refuse go test arguments
+after `--` (Local Test Runs on a Shared Machine). CI supplies all five shard
+settings:
 
 ```sh
 DAEMON_TEST_SHARD_KIND=integration \
@@ -796,7 +798,22 @@ whatever the global git config says. A test result cached by any earlier run,
 under the decoy or not, does not rerun, and opt-in live suites skip, so a
 local pass can miss a helper; CI's uncached shards run every default test.
 
-A bare `go test` uses none of the git change, the run limit, or the decoy.
+While iterating, run only the packages you're changing, then run the full
+`bash scripts/check.sh daemon` once before push:
+
+```sh
+bash scripts/check.sh daemon test -- ./internal/engine/...
+```
+
+Everything after `--` replaces `./...` as the `go test` arguments, run from
+`daemon/`, so flags such as `-run` work too; name at least one package, since
+flags alone test `daemon/` itself, which has no Go files. A narrow run keeps
+the run limit, the git change, and the decoy, and its `PASS:` line names the
+selection. Under the default limit of one it holds the same slot, and so the
+same decoy path, every time, which lets a repeated run reuse Go's cached
+results. A bare `go test` gets none of the git change, the run limit, or the
+decoy, and its different `PATH` and `GIT_DIR` can keep it from reusing results
+cached by `check.sh` runs.
 
 Other programs on the Mac can send requests to a test's loopback server. T3
 Code (Beta) sent `GET /` with `User-Agent: node` to listening `127.0.0.1`

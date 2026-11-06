@@ -2,6 +2,7 @@
 # check.sh — the single entry point for a component's standard checks.
 #
 # Usage: check.sh <component> [step...]
+#        check.sh daemon test -- <go test argument>...
 #        check.sh --list
 #
 # Runs the named steps for one component, in the order given, or every
@@ -63,6 +64,10 @@
 # DAEMON_TEST_INTEGRATION_SHARDS, and DAEMON_TEST_EVIDENCE_DIR. Indices are
 # one-based; the rest and darwin shards use 1/1.
 # Shards disable test-result caching and retain full execution evidence.
+# Arguments after `daemon test --` replace ./... as the go test arguments,
+# run from daemon/, under the same slot, git shim, and decoy as a full run;
+# name at least one package. Shard runs refuse them, and the PASS line names
+# them so a narrow run never reads as a full one.
 #
 # Convergence runs:
 #   CONVERGENCE_ALL_TESTS  non-empty runs every Swift test suite in the
@@ -89,7 +94,9 @@
 # Exit codes:
 #   0  every requested step passed
 #   1  a step failed (its command's output says which)
-#   2  usage error: unknown component or step, or malformed daemon test limit
+#   2  usage error: unknown component or step, malformed daemon test limit,
+#      or a misplaced `--` (anywhere but after `daemon test`, with nothing
+#      after it, or in a shard run)
 set -euo pipefail
 
 PROG=$(basename "$0")
@@ -113,7 +120,7 @@ steps_for() { # <component>; prints the component's steps in default order
 }
 
 usage() {
-  echo "usage: $PROG <component> [step...] | $PROG --list" >&2
+  echo "usage: $PROG <component> [step...] | $PROG daemon test -- <go test argument>... | $PROG --list" >&2
   exit 2
 }
 
@@ -147,9 +154,15 @@ daemon_build() {
     go build -o /dev/null ./cmd/freeside-export
 }
 daemon_test_run() {
+  local args=(./...)
+  ((${#daemon_test_args[@]} == 0)) || args=("${daemon_test_args[@]}")
   if [[ ! ${DAEMON_TEST_SHARD_KIND+x}${DAEMON_TEST_SHARD_INDEX+x}${DAEMON_TEST_SHARD_COUNT+x}${DAEMON_TEST_INTEGRATION_SHARDS+x}${DAEMON_TEST_EVIDENCE_DIR+x} ]]; then
-    in_dir "$ROOT/daemon" go test ./...
+    in_dir "$ROOT/daemon" go test "${args[@]}"
     return
+  fi
+  if ((${#daemon_test_args[@]} != 0)); then
+    echo "daemon test: go test arguments after '--' don't apply in shard mode" >&2
+    return 2
   fi
   local kind=${DAEMON_TEST_SHARD_KIND:-} index=${DAEMON_TEST_SHARD_INDEX:-}
   local count=${DAEMON_TEST_SHARD_COUNT:-} integration=${DAEMON_TEST_INTEGRATION_SHARDS:-}
@@ -441,6 +454,21 @@ if ! all_steps=$(steps_for "$component"); then
   echo "$PROG: unknown component '$component' (one of: $COMPONENTS)" >&2
   exit 2
 fi
+# Everything after the first `--` passes to go test verbatim, so it is split
+# off before the step names are read.
+daemon_test_args=()
+for ((i = 1; i <= $#; i++)); do
+  if [ "${!i}" = -- ]; then
+    daemon_test_args=("${@:i+1}")
+    set -- "${@:1:i-1}"
+    if [ "$component" != daemon ] || [ "$#" -ne 1 ] || [ "$1" != test ] ||
+        [ "${#daemon_test_args[@]}" -eq 0 ]; then
+      echo "$PROG: '--' must follow 'daemon test' as its only step and precede at least one go test argument" >&2
+      exit 2
+    fi
+    break
+  fi
+done
 if [ "$#" -eq 0 ]; then
   # shellcheck disable=SC2086 # deliberate word split of the step list
   set -- $all_steps
@@ -459,4 +487,8 @@ for step in "$@"; do
   echo "== $component $step" >&2
   "${component}_${step//-/_}"
 done
-echo "PASS: $component ${*}"
+if [ "${#daemon_test_args[@]}" -eq 0 ]; then
+  echo "PASS: $component ${*}"
+else
+  echo "PASS: $component ${*} -- ${daemon_test_args[*]}"
+fi

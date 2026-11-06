@@ -293,7 +293,8 @@ translate agent jargon or search for the conclusion.
 
 Run standard checks from the repo root with
 `bash scripts/check.sh <component> [step...]`; `--list` lists components and
-steps. Its step table is authoritative. Read its header for tool overrides
+steps, and `daemon test -- <go test argument>...` runs selected daemon
+packages. Its step table is authoritative. Read its header for tool overrides
 and opt-in live suites. CI uses the same script except daemon lint, which
 uses golangci-lint-action at the same pinned version.
 `.github/workflows/pull-request.yml` has no path filter: it calls reusable
@@ -330,6 +331,12 @@ run only the affected test suites. At the end, record screenshot digests per
 render-changing commit, then run the full `app` test step once before push.
 The full screenshot matrix takes minutes; a selected render takes seconds.
 Detail: `app/README.md` (Iterating on a Visible Change).
+
+While iterating on a `daemon/` change, run only the packages the step touches
+with `bash scripts/check.sh daemon test -- ./internal/<package>/...`, not a
+bare `go test`, which skips the run limit, git change, and decoy and may not
+reuse their cached results. Run the full `bash scripts/check.sh daemon` once
+before push. Detail: `daemon/README.md` (Local Test Runs on a Shared Machine).
 
 ## Daemon Coding Conventions
 
