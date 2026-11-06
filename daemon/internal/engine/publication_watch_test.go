@@ -76,6 +76,7 @@ func watchTestItem(t *testing.T, st *store.Store, status domain.ItemStatus) doma
 // convergent across reconcile passes (a later pass with a fresh clock must
 // not re-derive an armed deadline), and a concluded item arms nothing.
 func TestArmPublicationWatches(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := watchTestStore(t)
 	item := watchTestItem(t, st, domain.StatusOpen)
@@ -132,6 +133,7 @@ func TestArmPublicationWatches(t *testing.T) {
 }
 
 func TestArmPublicationWatchesSkipsConcludedItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := watchTestStore(t)
 	item := watchTestItem(t, st, domain.StatusResolved)
@@ -159,6 +161,7 @@ func TestArmPublicationWatchesSkipsConcludedItem(t *testing.T) {
 // a later version of it. Recovery must still accept it, or a notification
 // sent for a ready item would strand that item's publication task.
 func TestCompatibleTerminalItemIgnoresTiming(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	expected := watchTestItem(t, st, domain.StatusOpen)
 	submitted := time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC)
@@ -186,6 +189,7 @@ func TestCompatibleTerminalItemIgnoresTiming(t *testing.T) {
 // that item as compatible with the freshly derived ready shape (it does not
 // carry the fact) instead of failing "disagrees" and stranding the task.
 func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	expected := watchTestItem(t, st, domain.StatusOpen)
 	current := expected
@@ -210,6 +214,7 @@ func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
 }
 
 func TestCompatibleTerminalItemIgnoresSameVersionPersistenceProjections(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	expected := watchTestItem(t, st, domain.StatusOpen)
 	current := expected
@@ -232,6 +237,7 @@ func TestCompatibleTerminalItemIgnoresSameVersionPersistenceProjections(t *testi
 }
 
 func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)
 	expected := current
@@ -255,6 +261,7 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
 // persisted before the detail existed recovers against the freshly derived
 // shape, while a persisted detail that disagrees with it is foreign.
 func TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)
 	recipe := domain.Digest("sha256:recipe")
@@ -290,6 +297,7 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly(t *testing.T)
 // detail that names one, while a stored tip or merge that disagrees with the
 // rebuilt one is foreign.
 func TestCompatibleTerminalItemAcceptsLegacyHandoffTipOnly(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)
 	recipe := domain.Digest("sha256:recipe")
@@ -338,6 +346,7 @@ func TestCompatibleTerminalItemAcceptsLegacyHandoffTipOnly(t *testing.T) {
 }
 
 func TestCompatibleTerminalItemAcceptsLegacyNilCardPresentation(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)
 	expected := current
@@ -352,6 +361,7 @@ func TestCompatibleTerminalItemAcceptsLegacyNilCardPresentation(t *testing.T) {
 }
 
 func TestCompatibleTerminalItemIgnoresDisplayNameRenames(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(*domain.DisplayNames)

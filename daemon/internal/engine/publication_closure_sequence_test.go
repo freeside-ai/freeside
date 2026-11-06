@@ -294,6 +294,7 @@ func (f *closureSequenceFixture) requireRetired(t *testing.T, step string, publi
 // card, so at most one card is open and it names the current publication's
 // merge.
 func TestClosureCardsRetireAcrossTheExitRunSequence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureSequence(t)
 	runID := f.policy.RunID
@@ -334,6 +335,7 @@ func TestClosureCardsRetireAcrossTheExitRunSequence(t *testing.T) {
 // when no successor seal retired it, as an external-review successor leaves
 // it, and that the new publication's own card is the one left open.
 func TestClosureAdmissionRetiresTheEarlierPublicationsCard(t *testing.T) {
+	t.Parallel()
 	f := seedClosureSequence(t)
 	runID := f.policy.RunID
 	first := f.publish(t, domain.ProductionPublicationInvocationID(runID), closureSequenceHead1, closureSequenceBase1)
@@ -350,6 +352,7 @@ func TestClosureAdmissionRetiresTheEarlierPublicationsCard(t *testing.T) {
 // #2644 sealed, it returns the re-entered publication's answer, not the
 // first one's.
 func TestProductionPublicationClosureBeforeFirstPublication(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureSequence(t)
 	runID := f.policy.RunID

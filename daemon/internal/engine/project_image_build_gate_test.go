@@ -10,6 +10,7 @@ import (
 // The gate hands itself over oldest waiter first, a publication rebuild's
 // try never queues, and a waiter whose pass ends leaves the queue.
 func TestProjectImageBuildGateIsFIFO(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		var gate projectImageBuildGate
 		if !gate.tryAcquire() {

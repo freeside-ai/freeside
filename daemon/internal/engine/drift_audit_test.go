@@ -407,6 +407,7 @@ func requireSimplificationRound(
 // no audit with the knob unset, below the trigger round, on a reevaluation, or
 // on a round a deterministic cause stopped.
 func TestDriftAuditRunsOnlyWhenTriggered(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		options      driftAuditFixtureOptions
@@ -443,6 +444,7 @@ func TestDriftAuditRunsOnlyWhenTriggered(t *testing.T) {
 // fixed_recurrence stopped runs no audit, before or after the human decides,
 // and that its item carries the typed cause.
 func TestDriftAuditSkipsADeterministicallyStoppedRound(t *testing.T) {
+	t.Parallel()
 	f := newDriftAuditFixture(t, driftAuditFixtureOptions{recur: true})
 	f.script(fake.DriftAuditStuck)
 	if state := f.reconcile(t); state != productionReviewPending {
@@ -467,6 +469,7 @@ func TestDriftAuditSkipsADeterministicallyStoppedRound(t *testing.T) {
 // audit records one fact, parks nothing, lets the round continue as it would
 // with the audit off, and is not retried on a later reconcile of the round.
 func TestDriftAuditFailureIsRecordedOnce(t *testing.T) {
+	t.Parallel()
 	f := newDriftAuditFixture(t, driftAuditFixtureOptions{})
 	f.script(fake.DriftAuditMalformed)
 	interrupted := errors.New("interrupted before the write")
@@ -501,6 +504,7 @@ func TestDriftAuditFailureIsRecordedOnce(t *testing.T) {
 // TestDriftAuditConvergedRecordsOnlyTheArtifact shows converged changes
 // nothing about the round.
 func TestDriftAuditConvergedRecordsOnlyTheArtifact(t *testing.T) {
+	t.Parallel()
 	f := newDriftAuditFixture(t, driftAuditFixtureOptions{})
 	f.script(fake.DriftAuditConverged)
 	f.reconcile(t)
@@ -516,6 +520,7 @@ func TestDriftAuditConvergedRecordsOnlyTheArtifact(t *testing.T) {
 // candidate from round 1's stored remediation input, and fails safe when
 // nothing retained that candidate.
 func TestDriftAuditInputCarriesBothDiffs(t *testing.T) {
+	t.Parallel()
 	t.Run("stored round-1 input", func(t *testing.T) {
 		f := newDriftAuditFixture(t, driftAuditFixtureOptions{})
 		f.script(fake.DriftAuditConverged)
@@ -579,6 +584,7 @@ func (f *driftAuditFixture) putEvidence(
 // review_diminishing_returns item with the drift facts, and that a replay
 // neither audits again nor parks twice nor starts a remediation.
 func TestDriftAuditStuckParks(t *testing.T) {
+	t.Parallel()
 	f := newDriftAuditFixture(t, driftAuditFixtureOptions{})
 	f.script(fake.DriftAuditStuck)
 	for pass := range 2 {
@@ -614,6 +620,7 @@ func TestDriftAuditStuckParks(t *testing.T) {
 // a known decline, not a recurrence, and the stored input re-authenticates
 // against the records.
 func TestDriftAuditAutoRoutesOneSimplificationRound(t *testing.T) {
+	t.Parallel()
 	f := newDriftAuditFixture(t, driftAuditFixtureOptions{})
 	f.script(fake.DriftAuditOverHardened)
 	if state := f.reconcile(t); state != productionReviewPending {
@@ -732,6 +739,7 @@ func TestDriftAuditAutoRoutesOneSimplificationRound(t *testing.T) {
 // cases are the engine's own: the round limit's finish_now decision, and a
 // batch that routes no fix, which the gate does not read.
 func TestDriftAuditOverHardenedParks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		options driftAuditFixtureOptions
@@ -801,6 +809,7 @@ func TestDriftAuditOverHardenedParks(t *testing.T) {
 // and a card with no promise, from an invalid list or a stuck verdict, runs an
 // ordinary round.
 func TestDriftAuditContinueUnderPolicy(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name           string
 		options        driftAuditFixtureOptions
@@ -854,6 +863,7 @@ func TestDriftAuditContinueUnderPolicy(t *testing.T) {
 // side of the write that commits the simplification round and reconciles
 // again: one audit call, one remediation, one supersession record, no item.
 func TestDriftAuditRouteSurvivesAnInterruptedWrite(t *testing.T) {
+	t.Parallel()
 	for _, side := range []DurableTransitionSide{DurableTransitionBefore, DurableTransitionAfter} {
 		t.Run(fmt.Sprint(side), func(t *testing.T) {
 			f := newDriftAuditFixture(t, driftAuditFixtureOptions{})

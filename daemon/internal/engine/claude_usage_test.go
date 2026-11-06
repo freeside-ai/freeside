@@ -65,6 +65,7 @@ func (s *recordingClaudeUsageSink) ClaudeUsageCaptured(
 // with no capture or no agent binding nothing does; and a sink error leaves
 // the terminal as collected.
 func TestTerminalReportsClaudeUsage(t *testing.T) {
+	t.Parallel()
 	capture := loopbackClaudeUsage(t)
 	for _, tc := range []struct {
 		name    string
@@ -106,6 +107,7 @@ func TestTerminalReportsClaudeUsage(t *testing.T) {
 // sink installed, such as every test engine and a daemon without the Claude
 // collector: the capture is dropped and the terminal collected.
 func TestTerminalWithoutAClaudeUsageSinkDropsTheCapture(t *testing.T) {
+	t.Parallel()
 	engine, run, attempt := usageEngineFixtureWith(t, usageFixtureConfig{
 		bound: true, claude: true, claudeUsage: loopbackClaudeUsage(t),
 	})
@@ -137,6 +139,7 @@ func (s chainClaudeUsageSink) ClaudeUsageCaptured(
 // coordinator, and the store, and checks that the router's weeklyReading
 // then finds the pool's weekly reset.
 func TestClaudeUsageReachesWeeklyRouting(t *testing.T) {
+	t.Parallel()
 	capture := loopbackClaudeUsage(t)
 	engine, run, attempt := usageEngineFixtureWith(t, usageFixtureConfig{bound: true, claude: true, claudeUsage: capture})
 	now := claudeUsageObservedAt.Add(time.Minute)

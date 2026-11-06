@@ -97,6 +97,7 @@ var selectionTestImage = domain.ImageRef("ghcr.io/owner/project@sha256:" + strin
 // An attempt waiting on a rebuild holds visibly under image_upkeep_pending,
 // starts once an image serves its base, and the hold clears on dispatch.
 func TestImageUpkeepHoldClearsWhenTheAttemptDispatches(t *testing.T) {
+	t.Parallel()
 	h := newSelectionHoldFixture(t)
 	h.selectErr = &ImageUpkeepPendingError{Hold: domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}}
 	if started := h.dispatch(t); started != 0 {
@@ -128,6 +129,7 @@ func TestImageUpkeepHoldClearsWhenTheAttemptDispatches(t *testing.T) {
 // admission_policy_refused with no check detail, and resumes once an image
 // serves it.
 func TestUnservedBaseHoldsAndResumes(t *testing.T) {
+	t.Parallel()
 	h := newSelectionHoldFixture(t)
 	h.selectErr = ErrProjectImageUnserved
 	if started := h.dispatch(t); started != 0 {
@@ -157,6 +159,7 @@ func (b identityBackend) ConformanceIdentity() (string, domain.Digest) { return 
 // it is refused and held under backend_not_conformant, with no admission
 // recorded.
 func TestAdmissionRefusesAnImageTheBackendDoesNotProve(t *testing.T) {
+	t.Parallel()
 	h := newSelectionHoldFixture(t)
 	h.engine.admission.environment.OperatingMode = domain.ModeUnattended
 	h.engine.admission.backend = identityBackend{

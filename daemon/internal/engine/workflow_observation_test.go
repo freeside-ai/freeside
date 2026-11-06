@@ -35,6 +35,7 @@ func (s *closedReviewSource) Poll(ctx context.Context, id domain.InvocationID) (
 }
 
 func TestWorkflowClosureRetainsReviewHistoryAcrossConfigurationChange(t *testing.T) {
+	t.Parallel()
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "result", true: "failure with usage"}[failed], func(t *testing.T) {
 			e, run, attempt := usageEngineFixture(t, true)

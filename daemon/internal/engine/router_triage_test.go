@@ -102,6 +102,7 @@ func (f *agentAdmissionFixture) heads(t *testing.T) map[domain.RoleName]domain.T
 // version 2 over the triage line, and every other role lands on that pool. A
 // mark on the standard model does not move it.
 func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
+	t.Parallel()
 	at := agentTestAt.Add(time.Minute)
 	reset := agentTestAt.Add(time.Hour)
 	t.Run("counterpart marked", func(t *testing.T) {
@@ -157,6 +158,7 @@ func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
 
 // Every counterpart marked parks the specifier and writes nothing.
 func TestRouterParksAnEscalatedSpecifierWhenEveryCounterpartIsMarked(t *testing.T) {
+	t.Parallel()
 	f, _, _ := escalatedRoutingFixture(t)
 	triage := f.escalate(t)
 	model := f.routeModel(t, agentTestEscalatedAgent)
@@ -179,6 +181,7 @@ func TestRouterParksAnEscalatedSpecifierWhenEveryCounterpartIsMarked(t *testing.
 // roles route at the implementer's first admission, and the specifier keeps
 // its triage line.
 func TestRouterLeavesAnEscalatedSpecifierWithNoCounterpartOnTriage(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	f.addEscalatedSpecifier(t, true)
@@ -207,6 +210,7 @@ func TestRouterLeavesAnEscalatedSpecifierWithNoCounterpartOnTriage(t *testing.T)
 // Each widened anchor check refuses a line outside what an escalated
 // routing writes.
 func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
+	t.Parallel()
 	provenance := func(t *testing.T, f *agentAdmissionFixture, pool domain.UsagePoolID) *domain.TaskLineProvenance {
 		p := policyOrder(1, pool)
 		p.PassedOver = &domain.TaskLinePassedOverMark{

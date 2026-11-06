@@ -15,6 +15,7 @@ import (
 )
 
 func TestDeriveReviewYieldHistoryTracksNewRecurringAndDispositions(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	findings := map[domain.FindingID]domain.Finding{
 		"finding-round-1": {
@@ -62,6 +63,7 @@ func TestDeriveReviewYieldHistoryTracksNewRecurringAndDispositions(t *testing.T)
 }
 
 func TestDeriveReviewYieldHistoryCountsUnfingerprintableFindingsAsNew(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	findings := map[domain.FindingID]domain.Finding{
 		"review-level-round-1": {
@@ -123,6 +125,7 @@ func TestDeriveReviewYieldHistoryCountsUnfingerprintableFindingsAsNew(t *testing
 }
 
 func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	findings := map[domain.FindingID]domain.Finding{}
 	for round := 1; round <= 4; round++ {
@@ -181,6 +184,7 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *
 // already raised is new on another reviewer's first pass, and on the first
 // pass recorded with a snapshot after legacy rounds.
 func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	configuration := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	findings := map[domain.FindingID]domain.Finding{}
@@ -230,6 +234,7 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer(t *testing.T) {
 }
 
 func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	st := storetest.Open(t, dbPath, store.Options{})

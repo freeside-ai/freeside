@@ -83,6 +83,7 @@ func (s cancellationReviewSource) CancelReview(_ context.Context, id domain.Invo
 }
 
 func TestTaskCancellationStopsBothReviewArms(t *testing.T) {
+	t.Parallel()
 	for _, primaryFails := range []bool{false, true} {
 		st := watchTestStore(t)
 		review := domain.ReviewRequestRecord{InvocationID: "primary", RunID: "run", Round: 2}
@@ -112,6 +113,7 @@ func TestTaskCancellationStopsBothReviewArms(t *testing.T) {
 }
 
 func TestTaskCancellationMissingReviewSourceNeedsExactJournalAbsence(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	review := domain.ReviewRequestRecord{InvocationID: "primary", RunID: "run", Round: 1}
 	primary := cancellationReviewSource{cancel: func(domain.InvocationID) error { return nil }}
@@ -139,6 +141,7 @@ func TestTaskCancellationMissingReviewSourceNeedsExactJournalAbsence(t *testing.
 }
 
 func TestTaskCancellationRestartRetainsWIPForMissingShadowAdapter(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)
 		c := cancelledTaskFixture(t, st, 1, true)
@@ -182,6 +185,7 @@ func TestTaskCancellationRestartRetainsWIPForMissingShadowAdapter(t *testing.T) 
 }
 
 func TestTaskCancellationNoStartAndReplay(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	c := cancelledTaskFixture(t, st, 1, false)
 	e := &Engine{store: st}
@@ -203,6 +207,7 @@ func TestTaskCancellationNoStartAndReplay(t *testing.T) {
 }
 
 func TestTaskCancellationWithoutRuntimeProofKeepsWIP(t *testing.T) {
+	t.Parallel()
 	st := watchTestStore(t)
 	c := cancelledTaskFixture(t, st, 1, true)
 	e := &Engine{store: st}
@@ -216,6 +221,7 @@ func TestTaskCancellationWithoutRuntimeProofKeepsWIP(t *testing.T) {
 }
 
 func TestTaskCancellationRetryAfterMissingProofReleasesOnlyBoundWIP(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)
 		c := cancelledTaskFixture(t, st, 1, true)
@@ -328,6 +334,7 @@ func taskStopLogEngine(st *store.Store, runtime TaskCancellationRuntime) (*Engin
 }
 
 func TestTaskCancellationUnprovableStopIsAttemptedOnce(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)
 		c := cancelledTaskFixture(t, st, 1, true)
@@ -361,6 +368,7 @@ func TestTaskCancellationUnprovableStopIsAttemptedOnce(t *testing.T) {
 }
 
 func TestTaskCancellationClearableFailureBacksOff(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)
 		c := cancelledTaskFixture(t, st, 1, true)
@@ -424,6 +432,7 @@ func TestTaskCancellationClearableFailureBacksOff(t *testing.T) {
 }
 
 func TestTaskCancellationFailedUnprovableCheckKeepsTheStopRetryable(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)
 		c := cancelledTaskFixture(t, st, 1, true)
@@ -458,6 +467,7 @@ func TestTaskCancellationFailedUnprovableCheckKeepsTheStopRetryable(t *testing.T
 }
 
 func TestTaskCancellationRefusedAcknowledgementSettlesTheRequest(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		stopErr         error
@@ -522,6 +532,7 @@ func TestTaskCancellationRefusedAcknowledgementSettlesTheRequest(t *testing.T) {
 }
 
 func TestTaskCancellationTimeoutDoesNotBlockDiscoveryOrConfirm(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)
 		active := cancelledTaskFixture(t, st, 1, true)
@@ -569,6 +580,7 @@ func TestTaskCancellationTimeoutDoesNotBlockDiscoveryOrConfirm(t *testing.T) {
 }
 
 func TestTaskCancellationOrdersLaunchRegistrationAndStop(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newSpecificationFixture(t, true, 4)
 		f.submit(t)
@@ -637,6 +649,7 @@ func (d stopDuringStartDriver) Start(ctx context.Context, _ domain.InvocationID,
 }
 
 func TestTaskCancellationDuringStartDoesNotFailSharedReconcile(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 4)
 	f.submit(t)
 	run, err := f.run("specification-run")

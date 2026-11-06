@@ -13,6 +13,7 @@ import (
 )
 
 func TestRetireAbandonedTaskItemsLifecycle(t *testing.T) {
+	t.Parallel()
 	for _, lifecycle := range []string{"unstarted", "active", "abandoned", "readmitted", "finished"} {
 		t.Run(lifecycle, func(t *testing.T) {
 			ctx := t.Context()

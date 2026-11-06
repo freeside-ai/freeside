@@ -207,6 +207,7 @@ func (f legacyDiscussionFixture) assertSettled(t *testing.T) {
 // repeated passes over a queued legacy marker start one provider invocation,
 // never mint the current-family twin, and keep returning a nil error.
 func TestLegacyDiscussionMarkerRecoversWithoutATwin(t *testing.T) {
+	t.Parallel()
 	f := newLegacyDiscussionFixture(t)
 	engine := f.newEngine(t, f.driver)
 	started := 0
@@ -228,6 +229,7 @@ func TestLegacyDiscussionMarkerRecoversWithoutATwin(t *testing.T) {
 // the pass that starts the legacy marker and the pass that completes it, the
 // window the upgrade defect was found in.
 func TestLegacyDiscussionMarkerRecoversAcrossRestart(t *testing.T) {
+	t.Parallel()
 	f := newLegacyDiscussionFixture(t)
 	engine := f.newEngine(t, f.driver)
 	result, err := engine.Reconcile(t.Context())
@@ -343,6 +345,7 @@ func (f legacyDiscussionFixture) scriptTwin(t *testing.T) {
 // queued for one accepted command. Starting both is the #1100 failure, so
 // the legacy row keeps the identity and the twin is retired unstarted.
 func TestLegacyDiscussionMarkerRetiresAQueuedTwin(t *testing.T) {
+	t.Parallel()
 	f := newLegacyDiscussionFixture(t)
 	seedCurrentFamilyTwin(t, f.dbPath, legacyDiscussionCommandID)
 	f.specificationFixture = f.reopen(t)
@@ -369,6 +372,7 @@ func TestLegacyDiscussionMarkerRetiresAQueuedTwin(t *testing.T) {
 // on this version. Without the retire, the twin starts a second invocation
 // and its completion ends a later reconcile pass with ErrParentKeyMismatch.
 func TestLegacyDiscussionMarkerRetiresATwinPersistedMidFlight(t *testing.T) {
+	t.Parallel()
 	f := newLegacyDiscussionFixture(t)
 	engine := f.newEngine(t, f.driver)
 	result, err := engine.Reconcile(t.Context())
@@ -401,6 +405,7 @@ func TestLegacyDiscussionMarkerRetiresATwinPersistedMidFlight(t *testing.T) {
 // recorded-attempt recovery the start loop runs next without releasing the
 // attempt, so the marker is left exactly as that daemon left it.
 func TestLegacyDiscussionTwinWithARecordedAttemptIsNotRetired(t *testing.T) {
+	t.Parallel()
 	f := newLegacyDiscussionFixture(t)
 	seedCurrentFamilyTwin(t, f.dbPath, legacyDiscussionCommandID)
 	f.specificationFixture = f.reopen(t)
@@ -512,6 +517,7 @@ func newFrozenPreRenameFixture(t *testing.T) specificationFixture {
 // counter is zero); the identity assertion below is what ties the fix to
 // bytes a pre-rename daemon actually wrote.
 func TestFrozenPreRenameDatabaseReconcilesWithoutATwin(t *testing.T) {
+	t.Parallel()
 	f := newFrozenPreRenameFixture(t)
 	engine := f.newEngine(t, f.newDriver(t))
 	const (

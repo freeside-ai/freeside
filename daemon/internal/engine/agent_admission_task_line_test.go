@@ -204,6 +204,7 @@ func (f *agentAdmissionFixture) admit(t *testing.T) (domain.ExecutionAdmission, 
 // that agent's identity and credential, and cites the line. The prompt stays
 // the lineup line's.
 func TestTaskLineAdmissionBindsTheLinesAgent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	identity, enrollment := f.addSecondAgent(t)
@@ -258,6 +259,7 @@ func TestTaskLineAdmissionBindsTheLinesAgent(t *testing.T) {
 // TestTaskLineAdmissionReadsTheCurrentLineOfItsRole: the latest version of a
 // role's line decides, and a line for one role moves no other.
 func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
+	t.Parallel()
 	t.Run("the latest version wins", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, enrollment := f.addSecondAgent(t)
@@ -329,6 +331,7 @@ func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
 // attempt through the ordinary hold. It never admits the lineup's agent,
 // which in every case here would pass.
 func TestTaskLineAdmissionRefusals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// otherTask seeds a second run, and so a second task, in the project.
 	otherTask := func(t *testing.T, f *agentAdmissionFixture) domain.RunID {
@@ -710,6 +713,7 @@ func taskLineProposal(t *testing.T, f *agentAdmissionFixture) (ProposalAdmission
 }
 
 func TestProposalTaskLineAdmitsChosenSpecifier(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	_, enrollment := f.addSecondAgent(t)
 	_, service, command := taskLineProposal(t, f)
@@ -742,6 +746,7 @@ func TestProposalTaskLineAdmitsChosenSpecifier(t *testing.T) {
 }
 
 func TestProposalTaskLineAnchorRefusals(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, want string
 	}{
@@ -818,6 +823,7 @@ func TestProposalTaskLineAnchorRefusals(t *testing.T) {
 }
 
 func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	_, service, first := taskLineProposal(t, f)
@@ -874,6 +880,7 @@ func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
 // resolve from the lineup, and the startup check still proves the lineup's
 // agent. None of the three has a task in view.
 func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -940,6 +947,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 // admits the binding the lineup-only resolution yields, with the lineup as
 // its source and no record cited.
 func TestLinelessAdmissionSelectsFromTheLineup(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	admission, admitted, err := f.admit(t)
 	if err != nil || !admitted || admission.AgentBinding == nil {
@@ -1073,6 +1081,7 @@ func (f *agentAdmissionFixture) admitRole(t *testing.T, role domain.RoleName) (a
 // lineup names for its lineup agent, on that agent's enrollment, and the
 // admission cites the line.
 func TestTriageTaskLineAdmitsTheEscalatedSpecifier(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addEscalatedSpecifier(t, true)
 	task := f.task(t, f.run.ID)
@@ -1102,6 +1111,7 @@ func TestTriageTaskLineAdmitsTheEscalatedSpecifier(t *testing.T) {
 // Each check of a triage line's anchor refuses on its own, and a refused
 // line never falls back to the lineup's agent.
 func TestTriageTaskLineAnchorRefusals(t *testing.T) {
+	t.Parallel()
 	escalated := domain.TaskTriage{Outcome: domain.TriageOutcomeBudgetSpent, Escalated: true, RecordedAt: agentTestAt}
 	standard := domain.TaskTriage{
 		Outcome: domain.TriageOutcomeAnswered, Tier: new(domain.TriageTierStandard), RecordedAt: agentTestAt,
@@ -1196,6 +1206,7 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 // cli_line_change line naming the escalated agent admits the specifier on
 // it, with no triage record behind it.
 func TestOperatorLineEscalatesTheSpecifierByHand(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addEscalatedSpecifier(t, true)
 	task := f.task(t, f.run.ID)

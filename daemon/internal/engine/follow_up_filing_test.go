@@ -141,6 +141,7 @@ func assertOneFilingCard(
 // transaction that writes the row. A process lost after that commit, a replay
 // of the write, and a decision on the card add no second proposal or card.
 func TestDeferredDispositionProposesOneFollowUpFiling(t *testing.T) {
+	t.Parallel()
 	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer, map[string]string{
 		domain.PolicyFollowUpFilingLabels:    "lane:spine, deferral",
 		domain.PolicyFollowUpFilingMilestone: "1B",
@@ -209,6 +210,7 @@ func TestDeferredDispositionProposesOneFollowUpFiling(t *testing.T) {
 // route: none while the adjudication item is open, none after a stop, and
 // exactly one across the passes that follow an acceptance.
 func TestAcceptedSeparateWorkVerdictProposesOneFollowUpFiling(t *testing.T) {
+	t.Parallel()
 	for _, action := range []domain.Action{domain.ActionAcceptRecommendedRoute, domain.ActionStop} {
 		t.Run(string(action), func(t *testing.T) {
 			f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteParkSeparateWork, nil)
@@ -242,6 +244,7 @@ func TestAcceptedSeparateWorkVerdictProposesOneFollowUpFiling(t *testing.T) {
 // separate-work filing is proposed, or refused and noticed, a pass commits no
 // write, so the revision clients sync against stays where it was.
 func TestSeparateWorkFilingReplayWritesNothing(t *testing.T) {
+	t.Parallel()
 	for _, declared := range []bool{true, false} {
 		t.Run(strconv.FormatBool(declared), func(t *testing.T) {
 			f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteParkSeparateWork, nil)
@@ -276,6 +279,7 @@ func TestSeparateWorkFilingReplayWritesNothing(t *testing.T) {
 // A run that can carry no filing still records its disposition. It raises one
 // notice naming the run and the reason class, and a replay raises no second.
 func TestFollowUpFilingRefusalRaisesOneNotice(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		class                 string
 		policy                map[string]string
@@ -316,6 +320,7 @@ func TestFollowUpFilingRefusalRaisesOneNotice(t *testing.T) {
 // Only a route that concludes "separate work" proposes: a declined finding
 // and a P1 defer held on the dispute path yield nothing.
 func TestFollowUpFilingProposesNothingForOtherConclusions(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		severity domain.FindingSeverity
@@ -341,6 +346,7 @@ func TestFollowUpFilingProposesNothingForOtherConclusions(t *testing.T) {
 // A diminishing-returns finish defers the round's findings without an
 // adjudicated defer taking effect, so it proposes no filing.
 func TestDiminishingFinishProposesNoFollowUpFiling(t *testing.T) {
+	t.Parallel()
 	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer, nil)
 	seedFollowUpFilingSubject(t, f, true)
 	record, artifact := seedDiminishingReviewRound(t, f)
@@ -384,6 +390,7 @@ func TestDiminishingFinishProposesNoFollowUpFiling(t *testing.T) {
 // A replay that reaches a deferred row after a later round fixed the finding
 // skips it: the source no longer backs a filing, and nothing is raised.
 func TestFollowUpFilingSkipsAStaleSource(t *testing.T) {
+	t.Parallel()
 	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer, nil)
 	// The first pass runs before the run is declared, so it proposes nothing.
 	reconcileFollowUpFiling(t, f, productionReviewPassed)
@@ -438,6 +445,7 @@ func TestFollowUpFilingSkipsAStaleSource(t *testing.T) {
 // left as it is, even though this daemon would compose its text differently:
 // the replay skips the entry instead of meeting an immutable conflict.
 func TestFollowUpFilingReplayKeepsAnInstanceComposedDifferently(t *testing.T) {
+	t.Parallel()
 	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteParkSeparateWork, nil)
 	seedFollowUpFilingSubject(t, f, true)
 	reconcileFollowUpFiling(t, f, productionReviewPending)
@@ -483,6 +491,7 @@ func TestFollowUpFilingReplayKeepsAnInstanceComposedDifferently(t *testing.T) {
 // Each source kind selects the entries its own route concluded, by position
 // in the artifact, and none the operator moved to another route.
 func TestFollowUpFilingEntriesFollowTheEffectiveRoute(t *testing.T) {
+	t.Parallel()
 	var artifact domain.FindingAdjudication
 	routes := map[domain.FindingID]domain.AdjudicationRoute{}
 	for _, route := range domain.AllAdjudicationRoutes {
@@ -510,6 +519,7 @@ func TestFollowUpFilingEntriesFollowTheEffectiveRoute(t *testing.T) {
 // refuses takes its fixed text and leaves the other field alone, and an
 // over-long field is cut on a rune boundary.
 func TestFollowUpFilingTextScreensEachField(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 4, EndLine: 9}
 	long := "a" + strings.Repeat("é", 10<<10)
 	for _, tc := range []struct {

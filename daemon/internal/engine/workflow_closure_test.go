@@ -33,6 +33,7 @@ func (s *workflowClosurePreparationStore) Open(digest domain.Digest) (io.ReadClo
 }
 
 func TestWorkflowClosureDuringAdjudicationPreparationPreventsProviderDispatch(t *testing.T) {
+	t.Parallel()
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2,
 		&domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -95,6 +96,7 @@ func TestWorkflowClosureDuringAdjudicationPreparationPreventsProviderDispatch(t 
 }
 
 func TestWorkflowClosureDuringDiscussionPreparationDoesNotInventFallbackReply(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
 	f.submit(t)
@@ -142,6 +144,7 @@ func TestWorkflowClosureDuringDiscussionPreparationDoesNotInventFallbackReply(t 
 }
 
 func TestWorkflowClosureAfterDiscussionClaimAllowsPrivatePreparation(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{
 		Response: inference.Response{Output: []byte(`{"reply":"The claimed reply is history."}`), ComputeUnits: 1},
@@ -237,6 +240,7 @@ func closeWorkflowThroughEngineForTest(t *testing.T, e *Engine, runID domain.Run
 }
 
 func TestWorkflowClosureAfterStageClaimDoesNotRevokeLaunch(t *testing.T) {
+	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	e := f.engine(t, true)
 	launched := false
@@ -307,6 +311,7 @@ func closeWorkflowForTest(t *testing.T, st *store.Store, runID domain.RunID, cle
 }
 
 func TestWorkflowClosureRetiresBothSpecificationDiscussionIntents(t *testing.T) {
+	t.Parallel()
 	f, driver, id := discussionAwaitingReply(t, 0)
 	e := f.newEngine(t, driver)
 	// Materialize the specification-specific marker without dispatching it.
@@ -336,6 +341,7 @@ func TestWorkflowClosureRetiresBothSpecificationDiscussionIntents(t *testing.T) 
 }
 
 func TestWorkflowClosureCollectsLateExecutionWithoutSuccessor(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "Late provider failure.")
 	closeWorkflowForTest(t, f.store, f.run.ID, true)
 	for range 2 {
@@ -371,6 +377,7 @@ func TestWorkflowClosureCollectsLateExecutionWithoutSuccessor(t *testing.T) {
 }
 
 func TestWorkflowClosureAllowsRegisteredObservationButRefusesResume(t *testing.T) {
+	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	closeWorkflowForTest(t, f.store, "run-discussion", true)
 	e := f.engine(t, true)
@@ -393,6 +400,7 @@ func TestWorkflowClosureAllowsRegisteredObservationButRefusesResume(t *testing.T
 }
 
 func TestWorkflowClosureRetiresUnstartedDiscussionAcrossRestart(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
 	f.submit(t)
@@ -430,6 +438,7 @@ func TestWorkflowClosureRetiresUnstartedDiscussionAcrossRestart(t *testing.T) {
 }
 
 func TestWorkflowClosureRetainsInflightDiscussionWithoutDecisionAdvance(t *testing.T) {
+	t.Parallel()
 	for _, cleanup := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cleanup pending", true: "cleanup committed"}[cleanup], func(t *testing.T) {
 			var f *attentionDiscussionFixture

@@ -31,6 +31,7 @@ type remediationReviewFixture struct {
 }
 
 func TestDispatchableRemediationUsesDecidedRoutes(t *testing.T) {
+	t.Parallel()
 	artifact := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{
 		{FindingID: "fix", Route: domain.RouteRemediate},
 		{FindingID: "disputed", Route: domain.RouteDispute},
@@ -96,6 +97,7 @@ type remediationCloseErrorReader struct {
 func (r remediationCloseErrorReader) Close() error { return r.err }
 
 func TestActiveRemediationStageUsesHighestDurableTransition(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run-active-remediation")
 	run := domain.Run{ID: runID, Stages: []domain.Stage{{
 		ID: domain.StageID("implement-" + string(runID)), RunID: runID, Name: productionStageName,
@@ -115,6 +117,7 @@ func TestActiveRemediationStageUsesHighestDurableTransition(t *testing.T) {
 }
 
 func TestAuthenticateProductionRunTransitionLoadsCurrentRunWithinSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	runID := domain.RunID("run-current-remediation-transition")
@@ -139,6 +142,7 @@ func TestAuthenticateProductionRunTransitionLoadsCurrentRunWithinSnapshot(t *tes
 }
 
 func TestRemediationRequestRejectsNondeterministicInputArtifactID(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run-remediation-request")
 	request := remediationInvocationRequest{
 		Version: remediationRequestVersion, InvocationID: remediationInvocationID(runID, 1),
@@ -156,6 +160,7 @@ func TestRemediationRequestRejectsNondeterministicInputArtifactID(t *testing.T) 
 }
 
 func TestRemediationCandidatePatchPreservesNonUTF8Bytes(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runRemediationGit(t, repo, nil, "init", "-q", "-b", "main", "--object-format=sha1")
 	want := []byte("after \xfe\n")
@@ -322,6 +327,7 @@ func runRemediationGit(t *testing.T, dir string, stdin []byte, args ...string) [
 }
 
 func TestMalformedRemediationMarkerIsQuarantinedPerRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runIDs := []domain.RunID{"a-malformed-remediation", "z-malformed-remediation"}
@@ -372,6 +378,7 @@ func TestMalformedRemediationMarkerIsQuarantinedPerRun(t *testing.T) {
 }
 
 func TestUnattributableMalformedRemediationMarkerStaysLoud(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -387,6 +394,7 @@ func TestUnattributableMalformedRemediationMarkerStaysLoud(t *testing.T) {
 }
 
 func TestRemediationMarkerQuarantinesMissingAuthenticatedChain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, st := newQuarantineEngine(t, ctx)
 	runID := domain.RunID("missing-remediation-chain")
@@ -567,6 +575,7 @@ func newRemediationReviewFixtureWithBatch(
 }
 
 func TestRemediationReviewProvesFixedOnlyWhenIdentityIsAbsent(t *testing.T) {
+	t.Parallel()
 	f := newRemediationReviewFixture(t)
 	outcome, err := f.workflow.reconcileRemediationReview(
 		t.Context(), f.task, f.current, nil, nil)
@@ -585,6 +594,7 @@ func TestRemediationReviewProvesFixedOnlyWhenIdentityIsAbsent(t *testing.T) {
 }
 
 func TestRemediationReviewReemissionForcesFreshAdjudication(t *testing.T) {
+	t.Parallel()
 	f := newRemediationReviewFixture(t)
 	reemitted := f.prior
 	reemitted.ID = "finding-reemitted"
@@ -602,6 +612,7 @@ func TestRemediationReviewReemissionForcesFreshAdjudication(t *testing.T) {
 }
 
 func TestRemediatorPushbackEscalatesWithoutClaimingFixed(t *testing.T) {
+	t.Parallel()
 	f := newRemediationReviewFixture(t)
 	body, err := json.Marshal(remediatorPushback{
 		Version:    remediatorPushbackVersion,
@@ -636,6 +647,7 @@ func TestRemediatorPushbackEscalatesWithoutClaimingFixed(t *testing.T) {
 }
 
 func TestMalformedRemediatorPushbackFailsClosedWithoutClaimingFixed(t *testing.T) {
+	t.Parallel()
 	f := newRemediationReviewFixture(t)
 	text := domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: `{}`}
 	claim := domain.AgentClaim{
@@ -661,6 +673,7 @@ func TestMalformedRemediatorPushbackFailsClosedWithoutClaimingFixed(t *testing.T
 }
 
 func TestArtifactBackedRemediatorPushbackClassifiesDeterministicAndOperationalFailures(t *testing.T) {
+	t.Parallel()
 	openFailure := errors.New("artifact store unavailable")
 	readFailure := errors.New("artifact read interrupted")
 	closeFailure := errors.New("artifact close interrupted")
@@ -741,6 +754,7 @@ func TestArtifactBackedRemediatorPushbackClassifiesDeterministicAndOperationalFa
 }
 
 func TestRemediationNoopRequiresFullPushbackCoverage(t *testing.T) {
+	t.Parallel()
 	routed := []domain.FindingID{"finding-a", "finding-b"}
 	full := &remediatorPushback{
 		Version: remediatorPushbackVersion, FindingIDs: slices.Clone(routed),
@@ -775,6 +789,7 @@ func TestRemediationNoopRequiresFullPushbackCoverage(t *testing.T) {
 }
 
 func TestMixedRemediatorPushbackParksWithExactFindingIdentities(t *testing.T) {
+	t.Parallel()
 	f := newRemediationReviewFixtureWithBatch(t, true)
 	body, err := json.Marshal(remediatorPushback{
 		Version:    remediatorPushbackVersion,

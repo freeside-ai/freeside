@@ -52,6 +52,7 @@ func parkedReviewDispute(t *testing.T, prior bool) (*findingAdjudicationFixture,
 }
 
 func TestReviewDisputeHumanDecisionContinuesAndReplays(t *testing.T) {
+	t.Parallel()
 	for _, prior := range []bool{false, true} {
 		for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer, domain.RouteRemediate} {
 			t.Run(string(route)+map[bool]string{false: "/initial", true: "/successor"}[prior], func(t *testing.T) {
@@ -119,6 +120,7 @@ func TestReviewDisputeHumanDecisionContinuesAndReplays(t *testing.T) {
 }
 
 func TestReviewDisputeRejectsInvalidChoices(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*signet.ClientCommand){
 		"missing": func(c *signet.ClientCommand) { c.Payload.FindingRoutes = nil },
 		"duplicate": func(c *signet.ClientCommand) {
@@ -153,6 +155,7 @@ func TestReviewDisputeRejectsInvalidChoices(t *testing.T) {
 }
 
 func TestReviewDisputeRecoversAtHumanArtifactBoundary(t *testing.T) {
+	t.Parallel()
 	for _, side := range AllDurableTransitionSides {
 		t.Run(string(side), func(t *testing.T) {
 			f, command := parkedReviewDispute(t, false)
@@ -179,6 +182,7 @@ func TestReviewDisputeRecoversAtHumanArtifactBoundary(t *testing.T) {
 }
 
 func TestReviewDisputeBindingRejectsTamperedRows(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*domain.ReviewDisputeBinding){
 		"message":  func(b *domain.ReviewDisputeBinding) { b.Findings[0].Message = "forged" },
 		"location": func(b *domain.ReviewDisputeBinding) { b.Findings[0].Location.Path = "daemon/other.go" },
@@ -211,6 +215,7 @@ func TestReviewDisputeBindingRejectsTamperedRows(t *testing.T) {
 }
 
 func TestReviewDisputeRejectsAnotherCandidateHead(t *testing.T) {
+	t.Parallel()
 	f, command := parkedReviewDispute(t, false)
 	err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
 		item, err := tx.GetAttentionItem(f.ctx, command.Payload.ItemID)
@@ -227,6 +232,7 @@ func TestReviewDisputeRejectsAnotherCandidateHead(t *testing.T) {
 }
 
 func TestReviewDisputeHTTPCommandExecutesHumanRoutes(t *testing.T) {
+	t.Parallel()
 	f, command := parkedReviewDispute(t, false)
 	handler := signet.NewHTTPHandler(f.signet, func(*http.Request) (domain.DeviceID, bool) {
 		return command.DeviceID, true
@@ -258,6 +264,7 @@ func TestReviewDisputeHTTPCommandExecutesHumanRoutes(t *testing.T) {
 }
 
 func TestHumanArtifactRequiresExactDurableDecision(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*domain.FindingAdjudication){
 		"command": func(a *domain.FindingAdjudication) { a.Decision.CommandID = "other" },
 		"version": func(a *domain.FindingAdjudication) { a.Decision.ItemVersion++ },

@@ -22,6 +22,7 @@ import (
 // KindProductionPublicationRequested task, so the specification commit never
 // reaches the publication lane.
 func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const (
 		repo   = "owner/repo"

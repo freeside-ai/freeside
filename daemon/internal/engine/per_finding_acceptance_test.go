@@ -13,6 +13,7 @@ import (
 )
 
 func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
+	t.Parallel()
 	for _, acceptedRoute := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer, domain.RouteRemediate} {
 		for _, waitingRoute := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer, domain.RouteParkUnknown} {
 			t.Run(string(acceptedRoute)+"/"+string(waitingRoute), func(t *testing.T) {
@@ -130,6 +131,7 @@ func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 }
 
 func TestFindingAdjudicationRebuildsUnacceptedRequiredAnswer(t *testing.T) {
+	t.Parallel()
 	entry, err := domain.NewEngineModelAdjudicationEntry("finding-a", domain.GoalRequired, domain.ConfidenceLow, "uncertain fix", []string{"evidence"}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +151,7 @@ func TestFindingAdjudicationRebuildsUnacceptedRequiredAnswer(t *testing.T) {
 }
 
 func TestFindingAdjudicationMixedBatchPreservesSeverityCeiling(t *testing.T) {
+	t.Parallel()
 	for _, severity := range []domain.FindingSeverity{domain.FindingSeverityP0, domain.FindingSeverityP1} {
 		for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer} {
 			t.Run(string(severity)+"/"+string(route), func(t *testing.T) {
@@ -183,6 +186,7 @@ func TestFindingAdjudicationMixedBatchPreservesSeverityCeiling(t *testing.T) {
 }
 
 func TestFindingAdjudicationFailedCallStillParksWholeBatch(t *testing.T) {
+	t.Parallel()
 	f := newFindingAdjudicationFixtureWithOptions(t, domain.FindingSeverityP2, nil, "low", "high",
 		findingAdjudicationFixtureOptions{extraFindingIDs: []domain.FindingID{"finding-b"}})
 	f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{err: errors.New("adjudicator unavailable")}

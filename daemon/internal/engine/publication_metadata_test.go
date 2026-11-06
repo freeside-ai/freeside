@@ -25,6 +25,7 @@ func recipePublicationFixture() ProductionPublication {
 }
 
 func TestPublicMetadataRendersDeterministicInertClaim(t *testing.T) {
+	t.Parallel()
 	p := recipePublicationFixture()
 	p.SourceIssue = "https://github.com/example/project/issues/82"
 	claim := publicMetadataFixture("inv-current", "# Preserve retries\n\nKeep the entire change. <b>Not verified</b> & **plain**.\n\nLive checks remain unrun.\n")
@@ -49,6 +50,7 @@ func TestPublicMetadataRendersDeterministicInertClaim(t *testing.T) {
 }
 
 func TestPublicMetadataRendersFeedbackProducerAsInertText(t *testing.T) {
+	t.Parallel()
 	producer := operatorFeedbackInvocationID("`\n\n[link](https://example.org) ![image](https://example.org/image)\n</code></pre><b>text</b> &amp;")
 	claim := publicMetadataFixture(producer, "# Preserve retries\n\nWhole-change description.")
 	_, body, err := publicationMetadata(recipePublicationFixture(), producer, []domain.AgentClaim{claim})
@@ -62,6 +64,7 @@ func TestPublicMetadataRendersFeedbackProducerAsInertText(t *testing.T) {
 }
 
 func TestPublicMetadataScreensFeedbackProducer(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{
 		"`\n\nFixes #82", "&#70;ixes #82", "F&amp;#105;xes #82", "[skip ci]", "\nReviewed-by: Someone",
 		"ghp_" + strings.Repeat("A", 36), "ghp&#95;" + strings.Repeat("A", 36),
@@ -81,6 +84,7 @@ func TestPublicMetadataScreensFeedbackProducer(t *testing.T) {
 }
 
 func TestPublicMetadataRejectsUntrustedClaims(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		mutate func(*domain.AgentClaim)
@@ -123,6 +127,7 @@ func TestPublicMetadataRejectsUntrustedClaims(t *testing.T) {
 }
 
 func TestPublicMetadataRefusesPlaceholderTitle(t *testing.T) {
+	t.Parallel()
 	for _, text := range []string{
 		"# Outcome title\nDescription",
 		"# outcome title\nDescription",
@@ -143,6 +148,7 @@ func TestPublicMetadataRefusesPlaceholderTitle(t *testing.T) {
 }
 
 func TestPublicMetadataScreensFullArtifact(t *testing.T) {
+	t.Parallel()
 	// The structurally-invalid v1 inputs exercise the title/description shape;
 	// the unsafe-content escapes are shared with the v2 authored-field screen
 	// (publicationUnsafeContentCorpus).
@@ -175,6 +181,7 @@ func TestPublicMetadataScreensFullArtifact(t *testing.T) {
 }
 
 func TestPublicationRecipePreservesLiteralEncodingAndCanonicalRecovery(t *testing.T) {
+	t.Parallel()
 	const literal = `{"title":"Test production work item","body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`
 	var legacy ProductionPublication
 	if err := json.Unmarshal([]byte(literal), &legacy); err != nil {
@@ -223,6 +230,7 @@ func TestPublicationRecipePreservesLiteralEncodingAndCanonicalRecovery(t *testin
 // from submit and preflight: they name the offending keys and the two accepted
 // forms, and never echo submitted values into the composition manifest.
 func TestPublicationRecipeRefusalNamesKeys(t *testing.T) {
+	t.Parallel()
 	const (
 		title  = "Submitted literal title"
 		body   = "Submitted literal body."
@@ -269,6 +277,7 @@ func TestPublicationRecipeRefusalNamesKeys(t *testing.T) {
 // them without reading the agent's publication claim, and refuses a source
 // issue or empty literal text like a literal record.
 func TestIntakePublicationRecipeKeepsLiteralFallback(t *testing.T) {
+	t.Parallel()
 	p := ProductionPublication{
 		Title: "Resolve owner/repo#7", Body: "Automated resolution of issue #7.",
 		CommitAuthor: recipePublicationFixture().CommitAuthor, Recipe: IntakePublicationRecipe,
@@ -296,6 +305,7 @@ func TestIntakePublicationRecipeKeepsLiteralFallback(t *testing.T) {
 }
 
 func TestCanonicalPublicationSourceIssue(t *testing.T) {
+	t.Parallel()
 	canonical := "https://github.com/example/project/issues/82"
 	if canonicalSourceIssue(canonical) != canonical {
 		t.Fatal("canonical source not recognized")
@@ -313,6 +323,7 @@ func TestCanonicalPublicationSourceIssue(t *testing.T) {
 }
 
 func TestTaskSourceIssueTrimsOnlySurroundingWhitespace(t *testing.T) {
+	t.Parallel()
 	canonical := "https://github.com/example/project/issues/82"
 	for _, source := range []string{canonical, canonical + "\n", "\n  " + canonical + "\r\n\t"} {
 		if got := TaskSourceIssue([]byte(source)); got != canonical {

@@ -52,6 +52,7 @@ func summaryClaimFixture(invocationID domain.InvocationID, content string) domai
 }
 
 func TestNormalizeSummaryClaimsRequiresOneInvocationBoundMarkdownClaim(t *testing.T) {
+	t.Parallel()
 	invocationID := domain.InvocationID("inv-summary")
 	valid := summaryClaimFixture(invocationID, "Changed the import path; one decision remains open.")
 	ordinary := domain.AgentClaim{

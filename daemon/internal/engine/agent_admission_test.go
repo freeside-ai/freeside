@@ -263,6 +263,7 @@ func (f *agentAdmissionFixture) record(t *testing.T, admission domain.ExecutionA
 }
 
 func TestLineupAdmissionBindsTheRolesAgent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
@@ -325,6 +326,7 @@ func TestLineupAdmissionBindsTheRolesAgent(t *testing.T) {
 // daemon started without the tree admits the adopted identity as before and
 // its attempt mounts the interim volume.
 func TestFlagSelectedAdmissionStillAdmitsAnAdoptedIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	identity := f.identity.ID
@@ -345,6 +347,7 @@ func TestFlagSelectedAdmissionStillAdmitsAnAdoptedIdentity(t *testing.T) {
 }
 
 func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	launchDigest := func(role domain.RoleName) domain.Digest {
@@ -437,6 +440,7 @@ func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
 }
 
 func TestLineupAdmissionRefusals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	implementerPrompt := agentTestPrompts[domain.RoleImplementer].Digest
 	cases := []struct {
@@ -579,6 +583,7 @@ func renderDetail(detail *domain.AdmissionRefusal) string {
 // the latest record decides, so the earlier passed one no longer proves the
 // launch.
 func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	adapters, err := agentbaseline.Adapters()
@@ -616,6 +621,7 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 }
 
 func TestWithAdmissionRefusesAgentSelectionBesideAnIdentity(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	identity := f.identity.ID
 	env := f.engine.admission.environment
@@ -629,6 +635,7 @@ func TestWithAdmissionRefusesAgentSelectionBesideAnIdentity(t *testing.T) {
 // TestLineupAdmissionGateHoldsEveryAttempt closes the gate: no attempt is
 // admitted, and the refusal carries the gate's reason.
 func TestLineupAdmissionGateHoldsEveryAttempt(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	held := errors.New("selection is not active")
 	f.engine.admission.environment.Agents.Gate = func(context.Context) error { return held }
@@ -661,6 +668,7 @@ func TestLineupAdmissionGateHoldsEveryAttempt(t *testing.T) {
 // mounting the interim volume. The second was queued before the cutover with
 // no admission: the lineup daemon admits it with an agent binding.
 func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	identity := f.identity.ID
@@ -744,6 +752,7 @@ func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
 // probe marked is not credentialed, the refusal is typed through every
 // resolution path, and re-enrollment's new generation clears it.
 func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, finding := range domain.AllCredentialIntegrityFindings {
 		t.Run(string(finding), func(t *testing.T) {
@@ -914,6 +923,7 @@ func TestReviewCheckRefusesAMarkedGenerationAfterOtherChecks(t *testing.T) {
 // store's refusal arrives without ErrAgentNotAdmissible, and it must hold
 // the invocation as the read-side refusal does, not fail the reconcile pass.
 func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
@@ -955,6 +965,7 @@ func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
 // generation its enrollment would mount, and refuses a marked generation and
 // a name the tree lacks as not admissible.
 func TestResolveAgentByName(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	line, err := lineupLine(f.selection.Tree, domain.RoleImplementer)

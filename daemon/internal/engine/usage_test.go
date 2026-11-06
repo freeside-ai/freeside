@@ -171,6 +171,7 @@ func usageEngineFixtureWith(t *testing.T, cfg usageFixtureConfig) (*Engine, doma
 }
 
 func TestUsageObservationsPersistAfterStageCollect(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		bound bool
@@ -222,6 +223,7 @@ func TestUsageObservationsPersistAfterStageCollect(t *testing.T) {
 // write beside it, so this pins the helper alone: one revision for an insert,
 // none for a replay or for measurements with no agent binding to attribute.
 func TestAppendUsageObservationsRaisesRevisionOnlyOnInsert(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	measurements := []exec.UsageMeasurement{{
 		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
@@ -262,6 +264,7 @@ func TestAppendUsageObservationsRaisesRevisionOnlyOnInsert(t *testing.T) {
 // The client contract end to end: an append reaches the sync read under a
 // higher as_of_revision and leaves the run's entity_version alone (#1145).
 func TestUsageAppendRefreshesTheRunByRevisionAlone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	engine, run, attempt := usageEngineFixture(t, true)
 	service := signet.NewService(engine.store)
@@ -300,6 +303,7 @@ func TestUsageAppendRefreshesTheRunByRevisionAlone(t *testing.T) {
 // it; its later collect appends the same measurements and converges, as does
 // the driver's identical retry of the export write.
 func TestUsageObservationsPersistWithTheExport(t *testing.T) {
+	t.Parallel()
 	engine, run, attempt := usageEngineFixture(t, true)
 	ctx := context.Background()
 	var admission domain.ExecutionAdmission
@@ -351,6 +355,7 @@ func TestUsageObservationsPersistWithTheExport(t *testing.T) {
 }
 
 func TestUsageObservationsPersistWithRoutedReviewFailure(t *testing.T) {
+	t.Parallel()
 	engine, run, attempt := usageEngineFixture(t, true)
 	before, err := engine.store.ServerState(context.Background())
 	if err != nil {

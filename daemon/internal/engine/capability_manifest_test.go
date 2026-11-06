@@ -12,6 +12,7 @@ import (
 )
 
 func TestCapabilityManifestForRunRegatesPolicyAndComposition(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
@@ -67,6 +68,7 @@ func TestCapabilityManifestForRunRegatesPolicyAndComposition(t *testing.T) {
 // without a valid declared set its retry could only hold at admission; it is
 // not offered, even when the composition enforces the profile.
 func TestOfferableManifestsOmitChoicesAdmissionWouldRefuse(t *testing.T) {
+	t.Parallel()
 	registry, err := domain.NewCapabilityManifest("Package registries", domain.EgressProviderRegistry)
 	if err != nil {
 		t.Fatal(err)

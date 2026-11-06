@@ -68,6 +68,7 @@ func (f *agentAdmissionFixture) taskRevision(t *testing.T) store.Snapshot {
 // writes its record and a version citing it, and the next admission binds the
 // new agent and cites that version, which the store's gates accept.
 func TestChangedLineSelectsAtTheNextAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	identity, _ := f.addSecondAgent(t)
@@ -106,6 +107,7 @@ func TestChangedLineSelectsAtTheNextAdmission(t *testing.T) {
 // TestFirstChangeOfALinelessRole: a role with no line takes one the same way,
 // a first version that replaces nothing.
 func TestFirstChangeOfALinelessRole(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	line := f.changeLine(t, domain.RoleImplementer, agentTestSecondAgent, false).Line
@@ -123,6 +125,7 @@ func TestFirstChangeOfALinelessRole(t *testing.T) {
 // line, to another agent or to the one it already names, records a version
 // its own change backs. The role never goes through the lineup.
 func TestTaskLineChangeRecoversAPreFieldLine(t *testing.T) {
+	t.Parallel()
 	for name, agent := range map[string]string{
 		"to another agent":  agentTestWriterAgent,
 		"to the same agent": agentTestSecondAgent,
@@ -165,6 +168,7 @@ func TestTaskLineChangeRecoversAPreFieldLine(t *testing.T) {
 // the role's line, so the running attempt keeps it until it ends. Asking for
 // its agent is a change, and refused like any other, not a no-op.
 func TestRecoveryIsRefusedWhileItsRoleRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -196,6 +200,7 @@ func TestRecoveryIsRefusedWhileItsRoleRuns(t *testing.T) {
 // admission binds the lineup's selection, and a later change takes the role
 // off the lineup again.
 func TestClearReturnsARoleToTheLineup(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	f.submitLine(t, domain.RoleImplementer, agentTestSecondAgent)
@@ -225,6 +230,7 @@ func TestClearReturnsARoleToTheLineup(t *testing.T) {
 // TestAskingForTheCurrentLineRecordsNothing: the same agent, or a clear of a
 // role with no line or a cleared one, writes nothing and moves no revision.
 func TestAskingForTheCurrentLineRecordsNothing(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	unchanged := func(name string, role domain.RoleName, agent string, clear bool) {
@@ -255,6 +261,7 @@ func TestAskingForTheCurrentLineRecordsNothing(t *testing.T) {
 // line until the attempt's outcome, with its dispatch in any state, and no
 // other role's.
 func TestChangeIsRefusedWhileItsRoleRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -308,6 +315,7 @@ func TestChangeIsRefusedWhileItsRoleRuns(t *testing.T) {
 // TestAReviewRequestHoldsTheReviewerLine: a review runs from its request until
 // its record or failure, and holds no writer's line.
 func TestAReviewRequestHoldsTheReviewerLine(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const round, baseSHA, headSHA = 1, "base", "head"
 	invocation := ProductionReviewInvocationID("run-1", round)
@@ -369,6 +377,7 @@ func TestAReviewRequestHoldsTheReviewerLine(t *testing.T) {
 // open attempt and its open review may never record an end. The line stays
 // changeable, or the reattempt that recovers the task would run on it.
 func TestClosedWorkflowHoldsNoLine(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -424,6 +433,7 @@ func TestClosedWorkflowHoldsNoLine(t *testing.T) {
 // TestChangeRequestRefusals: a request that can't be recorded fails before
 // writing, and no refusal repeats the text it refused.
 func TestChangeRequestRefusals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	task := f.task(t, f.run.ID)
@@ -458,6 +468,7 @@ func TestChangeRequestRefusals(t *testing.T) {
 // the version it wrote, and appends one that disagrees in a single fact, so
 // the refusal can't come from a chain check instead.
 func TestForgedLineChangesRefuseAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	type forged struct {
 		line  domain.TaskLineInput
@@ -599,6 +610,7 @@ func TestForgedLineChangesRefuseAdmission(t *testing.T) {
 // operator's way out, because a refused review requested nothing and so
 // holds no line. The next review admission accepts the changed agent.
 func TestReviewerLineChangeLeavesARefusal(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	routed, _ := f.reviewTree(t)
 	refused := f.submitLine(t, domain.RoleReviewer, "not-in-the-tree")
@@ -622,6 +634,7 @@ func TestReviewerLineChangeLeavesARefusal(t *testing.T) {
 // TestClearedReviewerLineReviewsFromTheLineup: a clear returns the reviewer to
 // the lineup too, and a clear nothing backs refuses the review.
 func TestClearedReviewerLineReviewsFromTheLineup(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	routed, _ := f.reviewTree(t)
 	f.submitLine(t, domain.RoleReviewer, agentTestSecondAgent)

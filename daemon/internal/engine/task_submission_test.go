@@ -28,6 +28,7 @@ type initiatorHolder struct {
 }
 
 func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"", "Operator task name"} {
 		t.Run(name, func(t *testing.T) {
 			service, s, holder := newSubmitTaskHarness(t)
@@ -79,6 +80,7 @@ func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
 }
 
 func TestSubmitTaskPublicationSourceRequiresBareURL(t *testing.T) {
+	t.Parallel()
 	const issue = "https://github.com/example/project/issues/82"
 	for _, tc := range []struct{ name, source, want string }{
 		{"bare URL", issue, issue},
@@ -121,6 +123,7 @@ func TestSubmitTaskPublicationSourceRequiresBareURL(t *testing.T) {
 // unchanged v1 record under the current submitter, which freezes v2 only for a
 // new command.
 func TestSubmitTaskReplaysRecordedV1Command(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	s := storetest.Open(t, t.TempDir()+"/engine.db", store.Options{})
 	t.Cleanup(func() { _ = s.Close() })

@@ -93,6 +93,7 @@ func TestScreenAuthoredTextRejectsUnsafeContentInEveryField(t *testing.T) {
 }
 
 func TestScreenAuthoredTextFirstFailure(t *testing.T) {
+	t.Parallel()
 	a := domain.PublicationAuthoring{Title: "[skip ci]", Body: "## Verification", OutcomeSummary: "Closes #1"}
 	if err := screenAuthoredText(a); err == nil || err.Error() != "publication author title: message_rules" {
 		t.Fatalf("first failure = %v", err)
@@ -416,6 +417,7 @@ var (
 )
 
 func TestRenderAuthoredPublicationLiveMarkdownStaysInert(t *testing.T) {
+	t.Parallel()
 	liveMarkdownEnabled(t)
 	ref := domain.PublicationEvidenceReference{ArtifactID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("b", 64))}
 	a := authoredFixture(t, liveMarkdownCorpus, ref)
@@ -462,6 +464,7 @@ func adversarialSecretCorpus() []string {
 // accepted, turning "did I miss a GFM clause?" into a tested assertion rather
 // than hand-enumeration. Opt-in: it needs network access to the Markdown API.
 func TestScreenRefusesWhatGitHubReconstructs(t *testing.T) {
+	t.Parallel()
 	liveMarkdownEnabled(t)
 	for i, body := range adversarialSecretCorpus() {
 		a := domain.PublicationAuthoring{Title: "Safe title", Body: "# Fix\n\n" + body, OutcomeSummary: "Safe summary."}

@@ -306,6 +306,7 @@ func (f *attentionDiscussionFixture) assertReply(
 }
 
 func TestAttentionDiscussionRepliesPreserveEveryDecisionSetAndReplay(t *testing.T) {
+	t.Parallel()
 	types := []struct {
 		itemType domain.AttentionType
 		actions  []domain.Action
@@ -350,6 +351,7 @@ func TestAttentionDiscussionRepliesPreserveEveryDecisionSetAndReplay(t *testing.
 // must leave that binding intact, or the discussion is skipped on every pass
 // and never answered (#1946).
 func TestAttentionDiscussionReplySurvivesDeliveryBeforeReply(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
 		Output: []byte(`{"reply":"The decision set is unchanged."}`), ComputeUnits: 1,
@@ -373,6 +375,7 @@ func TestAttentionDiscussionReplySurvivesDeliveryBeforeReply(t *testing.T) {
 }
 
 func TestAttentionDiscussionFallbackReturnsConversationToIdle(t *testing.T) {
+	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	f.submit(t)
 	if result, err := f.engine(t, true).Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
@@ -387,6 +390,7 @@ func TestAttentionDiscussionFallbackReturnsConversationToIdle(t *testing.T) {
 }
 
 func TestAttentionDiscussionSecretInputUsesFallbackWithoutProvider(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
 	var snapshot store.Snapshot
@@ -421,6 +425,7 @@ func TestAttentionDiscussionSecretInputUsesFallbackWithoutProvider(t *testing.T)
 }
 
 func TestAttentionDiscussionHoldBlocksNewReplyButRetiresCompletion(t *testing.T) {
+	t.Parallel()
 	t.Run("pending reply", func(t *testing.T) {
 		driver := inferencefake.New()
 		driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
@@ -463,6 +468,7 @@ func TestAttentionDiscussionHoldBlocksNewReplyButRetiresCompletion(t *testing.T)
 }
 
 func TestAttentionDiscussionRetiresAcceptedReplyAfterVersionAdvance(t *testing.T) {
+	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	f.submit(t)
 	if err := f.signet.AcceptAgentCompletion(
@@ -477,6 +483,7 @@ func TestAttentionDiscussionRetiresAcceptedReplyAfterVersionAdvance(t *testing.T
 }
 
 func TestAttentionDiscussionRejectsForgedReplyWithoutCompletion(t *testing.T) {
+	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	f.submit(t)
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
@@ -519,6 +526,7 @@ func TestAttentionDiscussionRejectsForgedReplyWithoutCompletion(t *testing.T) {
 }
 
 func TestAttentionDiscussionIncludesReviewDisputeClaims(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
 		Output: []byte(`{"reply":"The remediator position is included."}`), ComputeUnits: 1,
@@ -543,6 +551,7 @@ func TestAttentionDiscussionIncludesReviewDisputeClaims(t *testing.T) {
 }
 
 func TestAttentionDiscussionReplyLandsAfterTerminalDecision(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
 		Output: []byte(`{"reply":"This late answer remains durable."}`), ComputeUnits: 1,
@@ -578,6 +587,7 @@ func TestAttentionDiscussionReplyLandsAfterTerminalDecision(t *testing.T) {
 }
 
 func TestAttentionDiscussionWithoutConfiguredSitePauses(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
 	f.submit(t)
@@ -609,6 +619,7 @@ func TestAttentionDiscussionWithoutConfiguredSitePauses(t *testing.T) {
 }
 
 func TestAttentionDiscussionRecoversAfterStoreRestart(t *testing.T) {
+	t.Parallel()
 	driver := inferencefake.New()
 	driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
 		Output: []byte(`{"reply":"Recovered after restart."}`), ComputeUnits: 1,

@@ -64,6 +64,7 @@ func taskNameForRun(t *testing.T, st *store.Store, id domain.RunID) domain.Displ
 }
 
 func TestSubmitSpecificationRunOperatorName(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T, body string) (specificationFixture, SpecificationRunSpec) {
 		t.Helper()
 		f := newSpecificationFixture(t, true, 3)
@@ -147,6 +148,7 @@ func TestSubmitSpecificationRunOperatorName(t *testing.T) {
 }
 
 func TestOperatorTaskName(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label string
 		raw   string
@@ -183,6 +185,7 @@ func TestOperatorTaskName(t *testing.T) {
 }
 
 func TestTaskNamingAfterSpecificationDispatch(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label, source, mode string
 		wantSource          domain.DisplayNameSource
@@ -296,6 +299,7 @@ func (f taskNamingDriverFunc) Complete(ctx context.Context, request inference.Re
 }
 
 func TestSlowTaskNameDoesNotBlockReconcileOrReplacePermanentName(t *testing.T) {
+	t.Parallel()
 	for _, source := range []domain.DisplayNameSource{domain.DisplayNameSourceOperator, domain.DisplayNameSourceSpecification} {
 		t.Run(string(source), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -366,6 +370,7 @@ func TestSlowTaskNameDoesNotBlockReconcileOrReplacePermanentName(t *testing.T) {
 }
 
 func TestTaskNameQueueDoesNotWaitWithoutWorker(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 3)
 	f.submit(t)
 	namer := inferencefake.New()
@@ -387,6 +392,7 @@ func TestTaskNameQueueDoesNotWaitWithoutWorker(t *testing.T) {
 }
 
 func TestEngineRunCancelsTaskNameWorker(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newSpecificationFixture(t, true, 3)
 		f.submit(t)
@@ -425,6 +431,7 @@ func TestEngineRunCancelsTaskNameWorker(t *testing.T) {
 }
 
 func TestTaskNamerFetchesIssueEvidence(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label  string
 		status int
@@ -524,6 +531,7 @@ func TestTaskNamerFetchesIssueEvidence(t *testing.T) {
 }
 
 func TestFirstSpecificationTitleRefinesTaskName(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label   string
 		initial domain.DisplayNameSource
@@ -592,6 +600,7 @@ func TestFirstSpecificationTitleRefinesTaskName(t *testing.T) {
 }
 
 func TestHeadingTaskNamesAreBounded(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ label, heading, want string }{
 		{"exact unicode bound", strings.Repeat("界", 60), strings.Repeat("界", 60)},
 		{"oversized unicode", strings.Repeat("界", 1000), strings.Repeat("界", 60)},
@@ -650,6 +659,7 @@ func TestHeadingTaskNamesAreBounded(t *testing.T) {
 }
 
 func TestSpecificationRevisionKeepsRefinedTaskName(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 3)
 	f.submit(t)
 	driver := f.newDriver(t)

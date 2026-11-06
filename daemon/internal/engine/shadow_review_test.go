@@ -150,6 +150,7 @@ func (retainingShadowTransport) ProspectiveMerge(
 }
 
 func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
@@ -404,6 +405,7 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 }
 
 func TestSplitShadowClaimTextPreservesBoundedUTF8(t *testing.T) {
+	t.Parallel()
 	content := strings.Repeat("é", domain.MaxClaimTextBytes/2+1)
 	chunks := splitShadowClaimText(content, domain.MaxClaimTextBytes)
 	if len(chunks) != 2 || strings.Join(chunks, "") != content {
@@ -433,6 +435,7 @@ func TestSplitShadowClaimTextPreservesBoundedUTF8(t *testing.T) {
 }
 
 func TestShadowReviewFindingNeedsAttentionUsesClassifierCeiling(t *testing.T) {
+	t.Parallel()
 	classification := domain.Classification{
 		FindingID: "finding-shadow-attention", Version: 1,
 		Materiality: string(inference.OrdinalHigh), Confidence: string(inference.OrdinalLow),
@@ -460,6 +463,7 @@ func TestShadowReviewFindingNeedsAttentionUsesClassifierCeiling(t *testing.T) {
 }
 
 func TestPersistedLowerShadowReviewRecoversBeforeDisabledLaunchPolicy(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
@@ -564,6 +568,7 @@ func TestPersistedLowerShadowReviewRecoversBeforeDisabledLaunchPolicy(t *testing
 }
 
 func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-failure")
@@ -679,6 +684,7 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 // the returned-snapshot rule: a result naming an agent other than the one the
 // invocation was admitted under is a contradiction and leaves no record.
 func TestShadowReviewRejectsResultUnderAnotherAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-other-admission")
@@ -767,6 +773,7 @@ func TestShadowReviewRejectsResultUnderAnotherAdmission(t *testing.T) {
 }
 
 func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-timeout")
@@ -871,6 +878,7 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 // shadow pass it is abandoned with the hold cleared, so a full pool never holds
 // the routed gate longer than a slow shadow review would.
 func TestShadowReviewWaitsForAPoolSlotWithinItsWindow(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-pool")
@@ -922,6 +930,7 @@ func TestShadowReviewWaitsForAPoolSlotWithinItsWindow(t *testing.T) {
 // for memory that a lowered budget can no longer fit is abandoned, and leaves
 // the memory order and its hold, so it holds back no launch behind it.
 func TestShadowReviewRefusedForGoodLeavesItsMemoryWait(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-shadow-memory")
@@ -974,6 +983,7 @@ func TestShadowReviewRefusedForGoodLeavesItsMemoryWait(t *testing.T) {
 // TestReviewAdmissionResetsThePaceOfTheHoldItEnds: the same wait returning
 // inside the refresh interval is a new wait, not a repeat of the one that ended.
 func TestReviewAdmissionResetsThePaceOfTheHoldItEnds(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-review-pace")
@@ -1018,6 +1028,7 @@ func serverRevision(t *testing.T, st *store.Store) int64 {
 }
 
 func TestResolvedShadowReviewRateFallsBackClampsAndSelectsStably(t *testing.T) {
+	t.Parallel()
 	policy, err := domain.NewResolvedPolicy("run-rate", []domain.PolicyKey{{
 		Key: shadowReviewRatePolicyKey, Value: "1.5",
 		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: shadowTestDigest("a")},
@@ -1043,6 +1054,7 @@ func TestResolvedShadowReviewRateFallsBackClampsAndSelectsStably(t *testing.T) {
 }
 
 func TestShadowReviewAttentionDecisionRequiresBoundTerminalCommand(t *testing.T) {
+	t.Parallel()
 	decidedAt := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
 	baseItem := domain.AttentionItem{
 		ID: "item-shadow-decision", Type: domain.AttentionReviewDispute,
@@ -1116,6 +1128,7 @@ func TestShadowReviewAttentionDecisionRequiresBoundTerminalCommand(t *testing.T)
 }
 
 func TestShadowReviewAttentionBindsCurrentTaskAndRecord(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run-shadow-binding")
 	headSHA := strings.Repeat("a", 40)
 	record := domain.ShadowReviewRecord{

@@ -11,6 +11,7 @@ import (
 // proposes no follow-up issue (issue #1767 decision 5), while a deferred
 // finding of Freeside's own in the same adjudication still does.
 func TestFollowUpFilingSkipsExternalFindings(t *testing.T) {
+	t.Parallel()
 	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer, nil)
 	seedFollowUpFilingSubject(t, f, true)
 	external, err := domain.NewExternalFinding(domain.ExternalFindingInput{

@@ -10,6 +10,7 @@ import (
 // the resolution-aware classifier. The first allocates a new attempt; the
 // second authenticates an interrupted allocation before its run is created.
 func TestProductionRetryGatesUseAuthenticatedConclusion(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"production_attempt.go", "production_workflow.go"} {
 		body, err := os.ReadFile(path) //nolint:gosec // fixed package-local source file
 		if err != nil {

@@ -142,6 +142,7 @@ func (h *closedPublicationHarness) requireSchedule(phase string) {
 // that hold and the schedule across a restart, and loses the hold once the
 // intent settles.
 func TestClosedPublicationObservationIsPacedAndHeld(t *testing.T) {
+	t.Parallel()
 	if defaultProductionHoldRetryInterval != 30*time.Second {
 		t.Fatalf("default hold-retry interval = %v; closedPublicationSchedule assumes 30s",
 			defaultProductionHoldRetryInterval)
@@ -210,6 +211,7 @@ func TestClosedPublicationObservationIsPacedAndHeld(t *testing.T) {
 // than an unsettled outcome, such as GitHub being unreachable, backs off on
 // the same schedule and is logged per attempt but asks the operator nothing.
 func TestClosedPublicationObservationPacesOtherErrors(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := newClosedPublicationHarness(t)
 		h.result = errors.New("list pulls: mint: installation resolution: GET /app/installations")
@@ -228,6 +230,7 @@ func TestClosedPublicationObservationPacesOtherErrors(t *testing.T) {
 // observation settles after only non-sentinel failures leaves no pacing
 // state behind, so a settled run is never skipped by a stale due time.
 func TestClosedPublicationObservationDropsPacingOnSettle(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := newClosedPublicationHarness(t)
 		w := h.workflow()
@@ -252,6 +255,7 @@ func TestClosedPublicationObservationDropsPacingOnSettle(t *testing.T) {
 // before it was abandoned. The sweep's hold keeps that row's invocation and
 // first instant, so the operator still sees when the conflict began.
 func TestClosedPublicationObservationKeepsBlockedTaskHold(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := newClosedPublicationHarness(t)
 		blockedAt := time.Now().UTC().Add(-time.Hour)

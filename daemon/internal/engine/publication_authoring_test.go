@@ -18,6 +18,7 @@ import (
 // distinct key. That is what makes the next clean review get its own author run
 // and never render an artifact written for a different candidate.
 func TestProductionAuthoringCheckpointKeyBindsCandidate(t *testing.T) {
+	t.Parallel()
 	base := productionAuthoringCheckpointKey("run-1", "head-a", "base-a")
 	for name, key := range map[string]string{
 		"same":          productionAuthoringCheckpointKey("run-1", "head-a", "base-a"),
@@ -42,6 +43,7 @@ func TestProductionAuthoringCheckpointKeyBindsCandidate(t *testing.T) {
 // closed: only a checkpoint whose identity matches the expected candidate and
 // whose fallback/artifact state is internally consistent is accepted.
 func TestValidateAuthoringCheckpoint(t *testing.T) {
+	t.Parallel()
 	want := productionAuthoringCheckpoint{
 		Version: productionAuthoringCheckpointVersion, RunID: "run-1",
 		HeadSHA: "head-a", BaseSHA: "base-a",
@@ -83,6 +85,7 @@ func TestValidateAuthoringCheckpoint(t *testing.T) {
 // the single-line contract literal and v1 titles hold: non-empty, trimmed, and
 // free of embedded carriage returns or newlines.
 func TestValidAuthoredPublicationTitle(t *testing.T) {
+	t.Parallel()
 	valid := []string{"Authored PR title", "Fix the pane focus race"}
 	for _, title := range valid {
 		if !validAuthoredPublicationTitle(title) {
@@ -108,6 +111,7 @@ func TestValidAuthoredPublicationTitle(t *testing.T) {
 // closed when the store returns bytes that do not hash to the requested digest,
 // so corrupted or incorrectly restored control-plane text cannot be substituted.
 func TestReadArtifactTextVerifiesDigest(t *testing.T) {
+	t.Parallel()
 	body := []byte("trusted instruction snapshot")
 	w := &productionPublicationWorkflow{artifacts: remediationArtifactStore{body: body}}
 
@@ -125,6 +129,7 @@ func TestReadArtifactTextVerifiesDigest(t *testing.T) {
 }
 
 func TestRepositoryVisibilityForClass(t *testing.T) {
+	t.Parallel()
 	for class, want := range map[domain.SensitivityClass]inference.RepositoryVisibility{
 		domain.SensitivityNormal:    inference.RepositoryPublic,
 		domain.SensitivitySensitive: inference.RepositoryPrivate,
@@ -137,6 +142,7 @@ func TestRepositoryVisibilityForClass(t *testing.T) {
 }
 
 func TestTrustedControlFileIsDigestConsistent(t *testing.T) {
+	t.Parallel()
 	for _, content := range []string{"", "instruction body", "pr template\nwith lines"} {
 		cf := trustedControlFile(content, "base-sha")
 		if cf.Content != content {
@@ -152,6 +158,7 @@ func TestTrustedControlFileIsDigestConsistent(t *testing.T) {
 }
 
 func TestBoundValidText(t *testing.T) {
+	t.Parallel()
 	if got := boundValidText("short", 16); got != "short" {
 		t.Fatalf("in-budget text changed: %q", got)
 	}
@@ -173,6 +180,7 @@ func TestBoundValidText(t *testing.T) {
 // files, so the test removes the worktree copy before reading to confirm the
 // read resolves the committed blob rather than the filesystem.
 func TestReadPRTemplate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	work := t.TempDir()
 	if got := readPRTemplate(ctx, work, "", "base"); got != "" {

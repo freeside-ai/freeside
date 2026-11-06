@@ -68,6 +68,7 @@ func (f *agentAdmissionFixture) offers(t *testing.T, failure alternateAgentFailu
 // agent. Without a policy, the only candidate is the lineup agent, which is
 // the one that failed; a held pool is not offered.
 func TestAlternateAgentOffersEscapeTheCause(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseQuota)
@@ -114,6 +115,7 @@ func TestAlternateAgentOffersEscapeTheCause(t *testing.T) {
 // failed agent, another pool than the one chosen, and a rule the cause does
 // not name are each refused.
 func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -237,6 +239,7 @@ func (f *agentAdmissionFixture) movedOffPool(t *testing.T, refused domain.UsageP
 // names the agent it left. The same line with no receipt is one no operator
 // moved: admission refuses it, and the park holds.
 func TestMovedLineAnchorsToItsCommand(t *testing.T) {
+	t.Parallel()
 	resetsAt := agentTestAt.Add(time.Hour)
 	left := &domain.TaskLinePassedOverMark{
 		Agent: agentTestWriterAgent, Pool: routerMainPool, Window: "five_hour",
@@ -277,6 +280,7 @@ func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 // TestMoveRefusesATaskThatIsNotParked: a move names a parked task, and a task
 // with no parked attempt is refused before anything is written.
 func TestMoveRefusesATaskThatIsNotParked(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -301,6 +305,7 @@ func TestMoveRefusesATaskThatIsNotParked(t *testing.T) {
 // the run holds that window and the policy orders the agent, which a line's
 // anchor requires of the agent it passed over.
 func TestMoveNamesTheAgentItLeft(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
@@ -381,6 +386,7 @@ func (f *agentAdmissionFixture) addSiblingAgent(t *testing.T) {
 // enrollment and generation would run the failed credential again, so it is
 // neither offered nor admitted from a card that names it.
 func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)

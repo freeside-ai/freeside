@@ -80,6 +80,7 @@ func scriptSpecification(t *testing.T, driver *fake.StageDriver, id domain.Invoc
 // beside the memory held puts it back to waiting and retires the notice; one
 // raised further admits it.
 func TestLoweredBudgetRefusesAWaitingDispatchForGood(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.launchBound = ward.LaunchBound{BudgetMiB: 3072, RuntimeVersion: ward.RuntimeNone}
@@ -145,6 +146,7 @@ func TestLoweredBudgetRefusesAWaitingDispatchForGood(t *testing.T) {
 // at the next pass once a recorded budget fits it beside the memory already
 // held, and leaves its hold and the order.
 func TestRaisedBudgetAdmitsAWaitingDispatch(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.launchBound = ward.LaunchBound{BudgetMiB: 3072, RuntimeVersion: ward.RuntimeNone}
@@ -182,6 +184,7 @@ func TestRaisedBudgetAdmitsAWaitingDispatch(t *testing.T) {
 // notice, its replayed admission still passes the gate, and its memory still
 // counts, so the next launch waits until it frees.
 func TestLoweredBudgetKeepsARunningDispatch(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.launchBound = ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: ward.RuntimeNone}
@@ -244,6 +247,7 @@ func TestLoweredBudgetKeepsARunningDispatch(t *testing.T) {
 // runs, from the next pass, with no per-VM overhead: a budget of exactly the
 // launch's size admits it.
 func TestRecordedBudgetBoundsAnUnbudgetedInstance(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.launchBound = ward.LaunchBound{RuntimeVersion: ward.RuntimeNone}
@@ -277,6 +281,7 @@ func TestRecordedBudgetBoundsAnUnbudgetedInstance(t *testing.T) {
 // held puts it back to waiting and retires the notice; one raised further
 // reserves it.
 func TestLoweredBudgetRefusesAWaitingVerificationForGood(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
@@ -345,6 +350,7 @@ func TestLoweredBudgetRefusesAWaitingVerificationForGood(t *testing.T) {
 // memory held puts it back to waiting and retires the notice; one raised
 // further admits it.
 func TestLoweredBudgetRefusesAWaitingReviewForGood(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)

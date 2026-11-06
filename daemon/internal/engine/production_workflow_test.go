@@ -40,6 +40,7 @@ func productionEntry(payload string) store.QueueEntry {
 }
 
 func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	runID := domain.RunID("run-delivery-refusal")
 	invocationID := remediationInvocationID(runID, 1)
@@ -248,6 +249,7 @@ func TestProductionBlockedItemCarriesInvocationBoundSummary(t *testing.T) {
 }
 
 func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(dir, "store.db"), store.Options{})
@@ -339,6 +341,7 @@ func (*transientCleanupReviewSource) VerifyRequestAuthority(
 }
 
 func TestNormalizeTerminalReviewFailurePreservesDeclaredClass(t *testing.T) {
+	t.Parallel()
 	for _, class := range []domain.ReviewFailureClass{
 		domain.ReviewFailureTransient,
 		domain.ReviewFailureConfiguration,
@@ -363,6 +366,7 @@ func TestNormalizeTerminalReviewFailurePreservesDeclaredClass(t *testing.T) {
 }
 
 func TestReviewConfigurationUnapprovedErrorNamesTheConfigurationMismatch(t *testing.T) {
+	t.Parallel()
 	pinned := domain.Digest("sha256:profile-pinned")
 	effective := domain.Digest("sha256:daemon-effective")
 	err := reviewConfigurationUnapprovedError(pinned, effective)
@@ -381,6 +385,7 @@ func TestReviewConfigurationUnapprovedErrorNamesTheConfigurationMismatch(t *test
 }
 
 func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	run := domain.Run{
@@ -428,6 +433,7 @@ func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *t
 }
 
 func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-review-cleanup-retry")
@@ -522,6 +528,7 @@ func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *
 // hold instead of failing the round, requests no review, and the admission
 // that follows once the window resets ends the hold (#2393).
 func TestProductionReviewWaitsOnARoutedReviewersMarkedWindow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-review-quota-window")
@@ -614,6 +621,7 @@ func TestProductionReviewWaitsOnARoutedReviewersMarkedWindow(t *testing.T) {
 }
 
 func TestProductionHoldRetryPruning(t *testing.T) {
+	t.Parallel()
 	pendingKey := productionPublicationTaskKey("run-pending")
 	finishedKey := productionPublicationTaskKey("run-finished")
 	w := productionPublicationWorkflow{holdRetryAfter: map[string]time.Time{
@@ -1991,6 +1999,7 @@ func validPublicationTask(
 }
 
 func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		action          domain.Action
@@ -2597,6 +2606,7 @@ func TestQueuedCompletionToleratesAConcurrentPublicationDispatch(t *testing.T) {
 // lineup keys resolve per role through CanonicalStageRole, and this is the
 // one legacy name the engine writes.
 func TestProductionStageNameResolvesToCanonicalRole(t *testing.T) {
+	t.Parallel()
 	role, err := domain.CanonicalStageRole(productionStageName)
 	if err != nil || role != domain.StageNameImplementation {
 		t.Fatalf("CanonicalStageRole(%q) = %q, %v; want %q",

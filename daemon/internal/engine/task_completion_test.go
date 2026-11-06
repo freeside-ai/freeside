@@ -220,6 +220,7 @@ func (f completionFixture) retire(t *testing.T) []domain.ItemID {
 }
 
 func TestRetireCompletedTaskItemsSupersedesTheEpisodeDispute(t *testing.T) {
+	t.Parallel()
 	f := newCompletionFixture(t, "completed")
 	before := f.items(t)
 	if ids := f.retire(t); !slices.Equal(ids, []domain.ItemID{f.dispute}) {
@@ -298,6 +299,7 @@ func (f completionFixture) item(t *testing.T, id domain.ItemID) domain.Attention
 }
 
 func TestRetireCompletedTaskItemsSupersedesOnlyItemsOpenAtCompletion(t *testing.T) {
+	t.Parallel()
 	f := newCompletionFixture(t, "completed")
 	ids := f.seedRunDisputes(t, -time.Minute, 0, time.Minute)
 	later := f.item(t, ids[time.Minute])
@@ -325,6 +327,7 @@ func TestRetireCompletedTaskItemsSupersedesOnlyItemsOpenAtCompletion(t *testing.
 }
 
 func TestRetireCompletedTaskItemsLeavesUnfinishedEpisodes(t *testing.T) {
+	t.Parallel()
 	for _, lifecycle := range []string{"active", "abandoned", "restarted", "recompleted"} {
 		t.Run(lifecycle, func(t *testing.T) {
 			f := newCompletionFixture(t, lifecycle)
@@ -340,6 +343,7 @@ func TestRetireCompletedTaskItemsLeavesUnfinishedEpisodes(t *testing.T) {
 }
 
 func TestCompletedEpisodeAgreesWithDisplayLifecycle(t *testing.T) {
+	t.Parallel()
 	first, second := domain.CampaignID("campaign-1"), domain.CampaignID("campaign-2")
 	fact := func(ordinal int, kind domain.TaskLifecycleFactKind, campaign *domain.CampaignID, episode int) domain.TaskLifecycleFact {
 		return domain.TaskLifecycleFact{Ordinal: ordinal, Kind: kind, CampaignID: campaign, EpisodeOrdinal: episode}
@@ -375,6 +379,7 @@ func TestCompletedEpisodeAgreesWithDisplayLifecycle(t *testing.T) {
 }
 
 func TestCompletionSupersedesAllButTheExemptTypes(t *testing.T) {
+	t.Parallel()
 	var exempt []domain.AttentionType
 	for _, kind := range domain.AllAttentionTypes {
 		if !completionSupersedes(kind) {
@@ -393,6 +398,7 @@ func TestCompletionSupersedesAllButTheExemptTypes(t *testing.T) {
 }
 
 func TestReconcileRetiresCompletedTaskItemsOnce(t *testing.T) {
+	t.Parallel()
 	f := newCompletionFixture(t, "completed")
 	e, err := New(f.store, signet.NewService(f.store), execfake.NewStageDriver())
 	if err != nil {
@@ -425,6 +431,7 @@ func TestReconcileRetiresCompletedTaskItemsOnce(t *testing.T) {
 }
 
 func TestReconcileLeavesItemsRaisedAfterCompletionOpen(t *testing.T) {
+	t.Parallel()
 	f := newCompletionFixture(t, "completed")
 	ids := f.seedRunDisputes(t, -time.Minute, time.Minute)
 	later := f.item(t, ids[time.Minute])
@@ -465,6 +472,7 @@ func TestReconcileLeavesItemsRaisedAfterCompletionOpen(t *testing.T) {
 }
 
 func TestReconcileCompletedTaskItemsContinuesPastABadTask(t *testing.T) {
+	t.Parallel()
 	f := newCompletionFixture(t, "completed")
 	ctx := t.Context()
 	other := domain.Run{ID: "completion-other-run", ProjectID: f.run.ProjectID, SpecDigest: "sha256:spec"}

@@ -10,6 +10,7 @@ import (
 // A move keeps an escalated specifier on a counterpart where the new pool has
 // one, and falls back to the pool's standard agent where it has none.
 func TestMoveKeepsAnEscalatedSpecifierEscalated(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		counterpart bool
