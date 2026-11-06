@@ -2327,7 +2327,9 @@ discussion messages, reach a writer only through a Ward-staged volume mounted
 read-only outside the workspace, whose every file's bytes, path, owner, and
 mode Ward proves before the writer starts; the agent's user can read them but
 not write them, and agent- or daemon-authored attachments are never
-delivered.
+delivered. A reviewer, routed or shadow, receives the task's attachments,
+never discussion attachments, through the same kind of proved read-only
+volume, which Ward proves again before the reviewer starts.
 
 #### The First Ward Gate
 
@@ -5301,8 +5303,8 @@ stale or false (Section [12](#12-exit-criteria-definitions)).
 
 The pass runs with fresh context independent of the implementing invocation, in
 a read-only workspace, with no publication credentials. It receives repository
-instructions and verification evidence, never the implementer's reasoning
-history. It returns normalized findings with severity, location, and
+instructions, verification evidence, and the task's attachments, never the
+implementer's reasoning history. It returns normalized findings with severity, location, and
 explanation, and a stable cross-round identity is derived from them (#702). It
 also records the provider, model configuration, invocation, cost owner, and
 completion evidence.
