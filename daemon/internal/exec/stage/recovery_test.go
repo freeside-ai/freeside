@@ -92,6 +92,15 @@ func orphanWithSpec(
 	t *testing.T, d *Driver, ph phase, released *releasedExport, spec exec.StartSpec,
 ) intent {
 	t.Helper()
+	return orphanInvocation(t, d, testInvoke, ph, released, spec)
+}
+
+// orphanInvocation is orphanWithSpec for invocation id, so a test can leave
+// several orphans in one driver directory. spec must name id's workspace.
+func orphanInvocation(
+	t *testing.T, d *Driver, id domain.InvocationID, ph phase, released *releasedExport, spec exec.StartSpec,
+) intent {
+	t.Helper()
 	inputs := stageInputs(t, &spec)
 	instructions, err := ward.VendorInstructionsFromStageInputs(inputs)
 	if err != nil {
@@ -102,8 +111,8 @@ func orphanWithSpec(
 		t.Fatalf("render prompt: %v", err)
 	}
 	in := intent{
-		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: ph, Spec: spec,
-		Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)), Prompt: prompt,
+		InvocationID: id, RunID: testRunIDFor(id), Phase: ph, Spec: spec,
+		Seed: filepath.Join(d.seedRoot, testRunIDFor(id)), Prompt: prompt,
 		Inputs: durableInputsFrom(inputs), Instructions: instructions, Export: released,
 		RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
@@ -179,9 +188,9 @@ func TestRecoveryErrorPreservesTheRunningIntent(t *testing.T) {
 	d := newTestDriver(t, gate, newStubExports())
 	orphan(t, d, phaseRunning, nil)
 
-	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) ||
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) ||
 		!errors.Is(err, recoveryErr) {
-		t.Fatalf("Reconcile error = %v, want retryable ward error", err)
+		t.Fatalf("held recovery error = %v, want retryable ward error", err)
 	}
 	reconstructed, err := d.loadIntent(ctx, testInvoke)
 	if err != nil {
@@ -209,9 +218,7 @@ func TestRecoveredWriterFailureCommitsCanonicalOutcome(t *testing.T) {
 	d := newTestDriver(t, gate, outcomes)
 	orphan(t, d, phaseRunning, nil)
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, testInvoke)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -245,9 +252,7 @@ func TestRecoveredPreparationFailureNamesTheEnvironmentFault(t *testing.T) {
 	d := newTestDriver(t, gate, outcomes)
 	orphan(t, d, phaseRunning, nil)
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, testInvoke)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -270,9 +275,7 @@ func TestRecoveredCancellationCommitsCanonicalOutcome(t *testing.T) {
 	d := newTestDriver(t, gate, outcomes)
 	orphan(t, d, phaseRunning, nil)
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, testInvoke)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -329,9 +332,7 @@ func TestDurableOutcomeRestoresBeforeMutablePolicy(t *testing.T) {
 			}
 			d.authority = stubAuthority{startErr: domain.ErrTrustProfileSuperseded}
 
-			if err := d.Reconcile(ctx); err != nil {
-				t.Fatalf("Reconcile outcome-written crash window: %v", err)
-			}
+			reconcileClean(t, ctx, d)
 			body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 			if err != nil {
 				t.Fatal(err)
@@ -553,8 +554,8 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	})
 	orphan(t, d, phaseRunning, nil)
 
-	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) {
-		t.Fatalf("Reconcile after state-write failure = %v, want retryable", err)
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) {
+		t.Fatalf("held recovery after state-write failure = %v, want retryable", err)
 	}
 	d.mu.Lock()
 	sess := d.running[testInvoke]
@@ -735,8 +736,8 @@ func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T)
 	})
 	orphan(t, d, phaseRunning, nil)
 
-	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) {
-		t.Fatalf("Reconcile after phase-write failure = %v, want retryable", err)
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) {
+		t.Fatalf("held recovery after phase-write failure = %v, want retryable", err)
 	}
 	if err := release(); err != nil {
 		t.Fatalf("restore driver intent record: %v", err)
@@ -787,9 +788,7 @@ func TestPreHandoffCrashRerunsInsteadOfRecovering(t *testing.T) {
 	d := newTestDriver(t, gate, newStubExports())
 	orphan(t, d, phaseSeeding, nil)
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	waitSessionDone(t, d, testInvoke)
 	if recovered {
 		t.Error("a pre-handoff intent was sent to gate recovery, which has no record to find")
@@ -847,9 +846,9 @@ func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 				}
 			}
 			d.authority = stubAuthority{startErr: drift, importErr: drift}
-			if _, err := d.listIntents(ctx); !errors.Is(err, drift) {
+			if failure := listFailure(t, ctx, d, testIntentEntry); !errors.Is(failure.err, drift) {
 				t.Fatalf("list %s intent = %v, want current-policy refusal",
-					preterminalPhase, err)
+					preterminalPhase, failure.err)
 			}
 		})
 	}
@@ -878,9 +877,7 @@ func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 			}
 
 			d.authority = stubAuthority{startErr: drift}
-			if err := d.Reconcile(ctx); err != nil {
-				t.Fatalf("Reconcile terminal intent after conformance drift: %v", err)
-			}
+			reconcileClean(t, ctx, d)
 			_, err := d.Collect(ctx, testInvoke)
 			if terminalPhase == phaseLost {
 				if !errors.Is(err, exec.ErrNoResult) {
@@ -908,8 +905,8 @@ func TestCurrentImportStartReturnedBindingIsReauthenticated(t *testing.T) {
 		InvocationID: testInvoke,
 		AdmissionID:  "sha256:other",
 	}
-	if _, err := d.listIntents(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("list intent with foreign import marker = %v, want parent mismatch", err)
+	if failure := listFailure(t, ctx, d, testIntentEntry); !errors.Is(failure.err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("list intent with foreign import marker = %v, want parent mismatch", failure.err)
 	}
 }
 
@@ -925,18 +922,14 @@ func TestGoneExportConvergesToLostAfterCurrentPolicyDrift(t *testing.T) {
 	})
 	d.authority = stubAuthority{startErr: errors.New("current backend conformance changed")}
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile exported intent after conformance drift: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if status, err := d.Inspect(ctx, in.InvocationID); err != nil || status.Status != exec.StatusGone {
 		t.Fatalf("Inspect after recovered loss = %#v, %v; want gone", status, err)
 	}
 	if _, err := d.Collect(ctx, in.InvocationID); !errors.Is(err, exec.ErrNoResult) {
 		t.Fatalf("Collect after recovered loss = %v, want ErrNoResult", err)
 	}
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("second Reconcile after recovered loss: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 }
 
 func TestSurvivingExportCompletesFromAdmissionAfterCurrentPolicyDrift(t *testing.T) {
@@ -965,8 +958,8 @@ func TestMarkedImportRequiresAuthenticatedRelease(t *testing.T) {
 	if err := d.recordCurrentImportStart(ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Reconcile(ctx); !errors.Is(err, ward.ErrInvalidJournalRecord) {
-		t.Fatalf("unproven released output accepted: %v", err)
+	if failure := reconcileQuarantined(t, ctx, d); !errors.Is(failure.Err, ward.ErrInvalidJournalRecord) {
+		t.Fatalf("unproven released output accepted: %v", failure.Err)
 	}
 	if len(exports.records) != 0 || len(gate.specs) != 0 {
 		t.Fatal("unproven release imported or started provider work")
@@ -1029,9 +1022,7 @@ func testSurvivingExportAfterDrift(t *testing.T, currentImport bool) {
 		}
 	}
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile surviving export after conformance drift: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if currentImport && (currentCalls == 0 || recordedCalls != 0) {
 		t.Fatalf("marked recovery used current=%d, recorded=%d import calls", currentCalls, recordedCalls)
 	}
@@ -1051,9 +1042,7 @@ func testSurvivingExportAfterDrift(t *testing.T, currentImport bool) {
 	if len(gate.specs) != 0 {
 		t.Fatal("export recovery started new agent work")
 	}
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("repeated recovery: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if len(exports.records) != 1 || len(gate.specs) != 0 {
 		t.Fatal("repeated recovery changed the export or started agent work")
 	}
@@ -1144,9 +1133,7 @@ func TestReconcileCleansSeedAfterTerminalSaveCrashWindow(t *testing.T) {
 		}
 	}
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile terminal cleanup: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	for _, path := range []string{in.Seed, in.Seed + "-import"} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("restart cleanup left %s: %v", path, err)
@@ -1211,9 +1198,7 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA, Replay: &executionReplay{},
 	})
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, testInvoke)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -1318,9 +1303,7 @@ func TestRecordedExportOutranksAStaleReleasedDirectory(t *testing.T) {
 	})
 	d.authority = stubAuthority{startErr: errors.New("current conformance lapsed")}
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, testInvoke)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -1366,8 +1349,9 @@ func TestConflictingDurableExportFailsRecoveryWithoutTerminalizing(t *testing.T)
 		Manifest: manifest, ObservedBaseSHA: testBase.BaseSHA,
 	})
 
-	if err := d.Reconcile(ctx); !errors.Is(err, errExportAuthorityConflict) {
-		t.Fatalf("Reconcile error = %v, want durable-authority conflict", err)
+	if failure := reconcileQuarantined(t, ctx, d); !errors.Is(failure.Err, errExportAuthorityConflict) ||
+		failure.Cause != QuarantineExportConflict {
+		t.Fatalf("quarantined %+v, want durable-authority conflict", failure)
 	}
 	if len(exports.outcomes) != 0 {
 		t.Fatalf("authority conflict recorded %d contradictory outcomes", len(exports.outcomes))
@@ -1461,9 +1445,7 @@ func testRecoveredExportCompletionTime(t *testing.T, completedAt time.Time) {
 	spec := testStartSpec()
 	spec.Base.BaseSHA = base
 	in := orphanWithSpec(t, d, phaseRunning, nil, spec)
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatal(err)
-	}
+	reconcileClean(t, ctx, d)
 	if result, err := d.Collect(ctx, testInvoke); err != nil || result.Status != exec.StatusCompleted {
 		t.Fatalf("Collect = %+v, %v; want completed", result, err)
 	}
@@ -1519,9 +1501,7 @@ func TestExportRecordedAtSurvivesRestartAndReplay(t *testing.T) {
 				}
 				now = now.Add(time.Hour)
 			}
-			if err := d.Reconcile(ctx); err != nil {
-				t.Fatal(err)
-			}
+			reconcileClean(t, ctx, d)
 			if result, err := d.Collect(ctx, testInvoke); err != nil || result.Status != exec.StatusCompleted {
 				t.Fatalf("Collect replay = %+v, %v; want completed", result, err)
 			}
@@ -1592,8 +1572,8 @@ func TestExportLookupErrorLeavesRecoveryRetryable(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 
-	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) {
-		t.Fatalf("Reconcile error = %v, want retryable recovery", err)
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) {
+		t.Fatalf("held recovery error = %v, want retryable recovery", err)
 	}
 	exports.lookupErr = nil
 	reconstructed, err := d.loadIntent(ctx, testInvoke)
@@ -1603,9 +1583,7 @@ func TestExportLookupErrorLeavesRecoveryRetryable(t *testing.T) {
 	if reconstructed.Phase != phaseExported {
 		t.Fatalf("phase = %q, want exported", reconstructed.Phase)
 	}
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("retry Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if _, err := d.Collect(ctx, in.InvocationID); !errors.Is(err, exec.ErrNoResult) {
 		t.Fatalf("Collect after confirmed absence = %v, want ErrNoResult", err)
 	}
@@ -1642,9 +1620,9 @@ func TestOperationalFinishFailurePreservesTheExport(t *testing.T) {
 		Dir: dir, Manifest: manifest, ObservedBaseSHA: testBase.BaseSHA,
 	})
 
-	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) ||
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) ||
 		!errors.Is(err, operationalErr) {
-		t.Fatalf("Reconcile error = %v, want retryable finish failure", err)
+		t.Fatalf("held recovery error = %v, want retryable finish failure", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, export.ManifestFilename)); err != nil {
 		t.Fatalf("released export was not preserved: %v", err)

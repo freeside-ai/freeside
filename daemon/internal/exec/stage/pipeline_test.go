@@ -1013,16 +1013,12 @@ func TestRecoverExportedAdoptsWrittenFailedOutcome(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile must adopt the written outcome, got: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if got := exports.outcomes[testInvoke].Status; got != domain.ExecutionOutcomeFailed {
 		t.Fatalf("recovered outcome = %q, want failed (adopted)", got)
 	}
 	// Idempotent: a second pass converges on the same write-once outcome.
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("second Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 }
 
 // TestRecoverExportedHonorsCanceledOutcome covers the shutdown race: a canceled
@@ -1050,9 +1046,7 @@ func TestRecoverExportedHonorsCanceledOutcome(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile must adopt the canceled outcome, got: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if got := exports.outcomes[testInvoke].Status; got != domain.ExecutionOutcomeCanceled {
 		t.Fatalf("recovered outcome = %q, want canceled (adopted, not resynthesized as failed)", got)
 	}

@@ -28,6 +28,23 @@ type Driver = stage.Driver
 // ExecutionReplay is the authenticated replay returned by the stage driver.
 type ExecutionReplay = stage.ExecutionReplay
 
+// IntentFailure is one intent the stage driver's restart recovery could not
+// adopt, and QuarantineCause classifies why.
+type (
+	IntentFailure   = stage.IntentFailure
+	QuarantineCause = stage.QuarantineCause
+)
+
+// The quarantine causes the stage driver reports.
+const (
+	QuarantineUnreadable      = stage.QuarantineUnreadable
+	QuarantineUnauthenticated = stage.QuarantineUnauthenticated
+	QuarantineExportConflict  = stage.QuarantineExportConflict
+)
+
+// AllQuarantineCauses registers every quarantine cause.
+var AllQuarantineCauses = stage.AllQuarantineCauses
+
 // AuthStoreVolumes resolves the trusted credential-volume binding used by
 // the Claude provider's handoff specification: the store the invocation
 // mounts under the identity it was admitted with.

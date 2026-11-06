@@ -1751,16 +1751,108 @@ func (d *Driver) authenticateLost(ctx context.Context, in intent) error {
 	return nil
 }
 
+// QuarantineCause classifies why restart recovery could not use an intent.
+// The zero value is invalid.
+type QuarantineCause string
+
+const (
+	// QuarantineUnreadable: the intent file could not be stat'ed, read, or
+	// decoded, or names a run whose canonical file is another.
+	QuarantineUnreadable QuarantineCause = "unreadable"
+	// QuarantineUnauthenticated: the decoded record failed the reconstruction
+	// gate (durable outcome restore or re-gate). It is also the fallback for
+	// a recovery error that is neither held nor an export conflict.
+	QuarantineUnauthenticated QuarantineCause = "unauthenticated"
+	// QuarantineExportConflict: the released export disagrees with the
+	// durable export record.
+	QuarantineExportConflict QuarantineCause = "export_conflict"
+)
+
+// AllQuarantineCauses registers every QuarantineCause.
+var AllQuarantineCauses = []QuarantineCause{
+	QuarantineUnreadable, QuarantineUnauthenticated, QuarantineExportConflict,
+}
+
+func (c QuarantineCause) valid() bool {
+	switch c {
+	case QuarantineUnreadable, QuarantineUnauthenticated, QuarantineExportConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// IntentFailure is one intent restart recovery could not adopt.
+type IntentFailure struct {
+	// Entry is the intent's file name in the driver directory; Path is its
+	// full path.
+	Entry, Path string
+	// Invocation is the invocation the record names, empty when the file did
+	// not decode that far.
+	Invocation domain.InvocationID
+	Cause      QuarantineCause
+	// Err is the full error. It can carry decoder text and record content,
+	// so it belongs in the daemon log, never in operator-facing text.
+	Err error
+}
+
+// RecoveryReport lists the intents one Reconcile pass could not adopt. A held
+// intent stays for Inspect's later retries; a quarantined one is never
+// adopted by this process.
+type RecoveryReport struct {
+	Held        []IntentFailure
+	Quarantined []IntentFailure
+}
+
 // Reconcile gives every intent this process did not start its first adoption
-// attempt after a daemon restart. A retryable operational failure preserves
-// the preterminal phase for the engine's later Inspect passes; permanent
-// reconstruction errors still fail startup.
-func (d *Driver) Reconcile(ctx context.Context) error {
+// attempt after a daemon restart, and isolates each intent's failure from the
+// others (#386): every intent is attempted, whatever order a failing one
+// has in the directory.
+//
+// A failure that ErrRecoveryRetryable marks, or that held accepts (a nil
+// held accepts none), is held: the intent keeps its preterminal phase for the
+// engine's later Inspect passes, as before. Every other failure, including a
+// released export that conflicts with durable authority, quarantines the
+// intent for the life of this process: Inspect reports it running without
+// reconstructing or adopting it, and the pass writes none of its files and
+// commits no outcome for it. The outcomes reconcileIntent itself commits for
+// an unrecoverable intent are unchanged. Each pass replaces the quarantine
+// set. The error is reserved for a pass that could not run at all: an intent
+// directory that cannot be listed.
+func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (RecoveryReport, error) {
 	d.mu.Lock()
-	intents, err := d.listIntents(ctx)
+	intents, listingFailures, err := d.listIntents(ctx)
 	d.mu.Unlock()
 	if err != nil {
-		return err
+		return RecoveryReport{}, err
+	}
+	var report RecoveryReport
+	record := func(failure IntentFailure) {
+		failure.Path = filepath.Join(d.dir, failure.Entry)
+		// Name the invocation only when this entry is its canonical file.
+		// Otherwise the decoded name is file content the entry does not
+		// authenticate, and naming it would point the operator at an
+		// invocation Inspect does not hold (it maps to another file).
+		if failure.Invocation != "" && !d.isIntentEntryOf(failure.Entry, failure.Invocation) {
+			failure.Invocation = ""
+		}
+		if errors.Is(failure.Err, ErrRecoveryRetryable) || (held != nil && held(failure.Err)) {
+			d.logger.Debug("stage recovery held",
+				"intent", failure.Entry, "invocation", string(failure.Invocation),
+				"error", failure.Err.Error())
+			report.Held = append(report.Held, failure)
+			return
+		}
+		d.logger.Error("stage intent quarantined",
+			"intent", failure.Path, "invocation", string(failure.Invocation),
+			"cause", string(failure.Cause), "error", failure.Err.Error())
+		report.Quarantined = append(report.Quarantined, failure)
+	}
+	for _, failure := range listingFailures {
+		record(IntentFailure{
+			Entry: failure.entry, Invocation: failure.invocation,
+			Cause: failure.cause, Err: failure.err,
+		})
 	}
 	for _, in := range intents {
 		if in.Phase == phaseCommitted || in.Phase == phaseLost {
@@ -1774,11 +1866,48 @@ func (d *Driver) Reconcile(ctx context.Context) error {
 			continue
 		}
 		if err := d.reconcileIntent(ctx, in); err != nil {
-			return err
+			cause := QuarantineUnauthenticated
+			if errors.Is(err, errExportAuthorityConflict) {
+				cause = QuarantineExportConflict
+			}
+			record(IntentFailure{
+				Entry: filepath.Base(d.intentPath(in.RunID)), Invocation: in.InvocationID,
+				Cause: cause, Err: err,
+			})
 		}
 	}
-	return nil
+	quarantined := make(map[string]struct{}, len(report.Quarantined))
+	for _, failure := range report.Quarantined {
+		quarantined[failure.Entry] = struct{}{}
+	}
+	d.mu.Lock()
+	d.quarantined = quarantined
+	d.mu.Unlock()
+	return report, nil
 }
+
+// isIntentEntryOf reports whether entry is invocation id's canonical intent
+// file name.
+func (d *Driver) isIntentEntryOf(entry string, id domain.InvocationID) bool {
+	runID, err := d.validatedProviderRunID(id)
+	return err == nil && entry == filepath.Base(d.intentPath(runID))
+}
+
+// quarantinedLocked reports whether the last Reconcile pass quarantined the
+// intent file of invocation id. The caller holds d.mu.
+func (d *Driver) quarantinedLocked(id domain.InvocationID) bool {
+	runID, err := d.validatedProviderRunID(id)
+	if err != nil {
+		return false
+	}
+	_, found := d.quarantined[filepath.Base(d.intentPath(runID))]
+	return found
+}
+
+// errIntentQuarantined refuses a stop of an invocation whose intent restart
+// recovery quarantined: stopping would reconstruct the intent and commit a
+// terminal outcome the quarantine promises not to write.
+var errIntentQuarantined = errors.New("stage intent is quarantined until a restart adopts it")
 
 func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 	d.mu.Lock()

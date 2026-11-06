@@ -2956,9 +2956,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 	if err := d.saveIntent(in); err != nil {
 		t.Fatalf("save intent: %v", err)
 	}
-	if _, err := d.listIntents(context.Background()); err != nil {
-		t.Fatalf("enumeration rejected a well-formed intent: %v", err)
-	}
+	listClean(t, context.Background(), d) // A well-formed intent is enumerated.
 
 	tamperings := []struct {
 		name   string
@@ -2983,8 +2981,8 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 			if err := os.WriteFile(d.intentPath(testRunIDFor(testInvoke)), body, 0o600); err != nil {
 				t.Fatalf("write tampered intent: %v", err)
 			}
-			if _, err := d.listIntents(context.Background()); !errors.Is(err, ErrUnsupportedStart) {
-				t.Fatalf("enumeration accepted tampered intent: err = %v", err)
+			if failure := listFailure(t, context.Background(), d, testIntentEntry); !errors.Is(failure.err, ErrUnsupportedStart) {
+				t.Fatalf("enumeration accepted tampered intent: err = %v", failure.err)
 			}
 			if _, err := d.loadIntent(context.Background(), testInvoke); !errors.Is(err, ErrUnsupportedStart) {
 				t.Fatalf("read path accepted tampered intent: err = %v", err)
@@ -3013,8 +3011,8 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 			t.Fatalf("write stale copy: %v", err)
 		}
 		defer func() { _ = os.Remove(copyPath) }()
-		if _, err := d.listIntents(context.Background()); !errors.Is(err, ErrUnsupportedStart) {
-			t.Fatalf("enumeration accepted a stale copy under another name: %v", err)
+		if failure := listFailure(t, context.Background(), d, "stale-copy.json"); !errors.Is(failure.err, ErrUnsupportedStart) {
+			t.Fatalf("enumeration accepted a stale copy under another name: %v", failure.err)
 		}
 	})
 
@@ -3034,7 +3032,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 			if _, err := d.loadIntent(context.Background(), testInvoke); err == nil {
 				t.Fatal("read path accepted malformed intent")
 			}
-			if _, err := d.listIntents(context.Background()); err == nil {
+			if failure := listFailure(t, context.Background(), d, testIntentEntry); failure.err == nil {
 				t.Fatal("enumeration accepted malformed intent")
 			}
 		})
@@ -3066,9 +3064,7 @@ func TestRecoveryOfLostHandoffReportsNoResult(t *testing.T) {
 	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusGone {
 		t.Fatalf("orphan Inspect = %q, %v; want gone", status.Status, err)
 	}
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	if _, err := d.Collect(ctx, testInvoke); !errors.Is(err, exec.ErrNoResult) {
 		t.Fatalf("Collect after loss = %v, want ErrNoResult", err)
 	}

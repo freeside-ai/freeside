@@ -38,9 +38,7 @@ func TestTaskCancellationRunningRecoveryKeepsRegistration(t *testing.T) {
 				defer func() { registered = false }()
 				return launch(ctx)
 			})
-			if err := d.Reconcile(t.Context()); err != nil {
-				t.Fatal(err)
-			}
+			reconcileClean(t, t.Context(), d)
 			result, err := d.Collect(t.Context(), testInvoke)
 			if err != nil || result.Status != exec.StatusCanceled {
 				t.Fatalf("recovered outcome = %+v, %v", result, err)
@@ -66,7 +64,7 @@ func TestTaskCancellationDuringRecoveryDoesNotRepeatStaleIntent(t *testing.T) {
 		}
 		return ErrTaskCancelled // The engine normalizes task-local cancellation.
 	})
-	if err := d.Reconcile(t.Context()); !errors.Is(err, ErrRecoveryRetryable) {
+	if err := reconcileHeld(t, t.Context(), d); !errors.Is(err, ErrRecoveryRetryable) {
 		t.Fatalf("interrupted recovery = %v", err)
 	}
 	if calls != 1 {
@@ -90,9 +88,7 @@ func TestCancelOrphanDoesNotResumePreJournalWork(t *testing.T) {
 			if err != nil || result.Status != exec.StatusCanceled {
 				t.Fatalf("orphan cancellation = %+v, %v", result, err)
 			}
-			if err := d.Reconcile(t.Context()); err != nil {
-				t.Fatalf("cancelled seed recovery: %v", err)
-			}
+			reconcileClean(t, t.Context(), d)
 			if err := d.CancelAndConfirm(t.Context(), testInvoke); !errors.Is(err, ErrRecoveryRetryable) {
 				t.Fatalf("orphan host process acquired a false absence proof: %v", err)
 			}
@@ -234,9 +230,7 @@ func TestTaskCancellationLiveHandoffCommitsCanceledResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
-	if err := reopened.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	reconcileClean(t, t.Context(), reopened)
 	result, err = reopened.Collect(t.Context(), testInvoke)
 	if err != nil || result.Status != exec.StatusCanceled || recoveryCalls != 2 || fencedRecoveryCalls != 2 {
 		t.Fatalf("reopened cancellation = %+v, err=%v, ward recoveries=%d, fenced recoveries=%d", result, err, recoveryCalls, fencedRecoveryCalls)

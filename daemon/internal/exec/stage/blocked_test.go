@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -121,9 +120,7 @@ func finishReleasedBlockedExport(
 		CommitPlanPresent: planErr == nil,
 		ObservedBaseSHA:   baseSHA,
 	}, spec)
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile released blocked export: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, in.InvocationID)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -330,9 +327,7 @@ func TestRecoveredBlockedOutcomeIsAdopted(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	result, err := d.Collect(ctx, testInvoke)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -342,7 +337,5 @@ func TestRecoveredBlockedOutcomeIsAdopted(t *testing.T) {
 		!reflect.DeepEqual(result.Usage, wantUsage) {
 		t.Fatalf("recovered result = %#v, want the recorded blocked outcome", result)
 	}
-	if !errors.Is(d.Reconcile(ctx), nil) {
-		t.Fatal("second reconcile did not converge")
-	}
+	reconcileClean(t, ctx, d) // The second pass converges.
 }
