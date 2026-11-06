@@ -141,7 +141,7 @@ func (a *GitHubWorkflowAuditor) Audit(ctx context.Context, repoName, baseRef str
 				return domain.WorkflowAudit{}, fmt.Errorf("workflow audit: retain evidence: %w", err)
 			}
 			audit := domain.WorkflowAudit{
-				Repo: repoName, AuditedCommitSHA: before.SHA, AuditedAt: a.now().UTC(),
+				Repo: repoName, AuditedCommitSHA: before.SHA, AuditedRef: baseRef, AuditedAt: a.now().UTC(),
 				WorkflowAuditDigest: retained.Digest(),
 				Evidence:            &retained,
 				EffectiveTokenPerms: facts.EffectiveTokenPerms,

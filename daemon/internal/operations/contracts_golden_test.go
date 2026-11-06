@@ -22,7 +22,8 @@ func TestOperationalContractGoldens(t *testing.T) {
 	auditedAt := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	audit := domain.WorkflowAudit{
 		Repo: "example/repo", AuditedCommitSHA: strings.Repeat("1", 40),
-		AuditedAt: auditedAt, WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
+		AuditedRef: "main",
+		AuditedAt:  auditedAt, WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
 	}
 	if err := audit.Validate(); err != nil {

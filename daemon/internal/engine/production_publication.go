@@ -3119,9 +3119,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 					domain.HoldTrustBlocked,
 				)
 			}
-			// An unsatisfied handoff check here is the daemon contradicting
-			// its own seal, never a moved tip: the handoff above verified the
-			// tip it sealed. It blocks with the base-advance rule all the same.
+			// An unsatisfied handoff check here is never a moved tip: the
+			// handoff above verified the tip it sealed. It is the daemon
+			// contradicting its own seal, or a check sealed before migration
+			// 0129 that names no audit (#2073); rerunning the task seals a
+			// new one. It blocks with the base-advance rule all the same.
 			reason := productionBlockTrust
 			if errors.Is(err, publish.ErrHandoffCheckUnsatisfied) {
 				reason = productionBlockBaseAdvanced

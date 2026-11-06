@@ -129,6 +129,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"DROP TABLE task_line_changes",
 				"DROP TABLE routing_policies",
 				"DROP TABLE client_command_receipts",
+				"ALTER TABLE workflow_audits DROP COLUMN audited_ref",
 				"ALTER TABLE run_hold_observations DROP COLUMN quota_pool",
 				"ALTER TABLE run_hold_observations DROP COLUMN quota_window",
 				"ALTER TABLE run_hold_observations DROP COLUMN quota_source",

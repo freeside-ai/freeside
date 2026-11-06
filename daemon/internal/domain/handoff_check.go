@@ -31,6 +31,14 @@ type HandoffCheck struct {
 	EvidenceBaseSHA string `json:"evidence_base_sha"`
 	// TipSHA is the target tip the handoff audit resolved.
 	TipSHA string `json:"tip_sha"`
+	// WorkflowAuditID is the workflow_audits row TipSHA was sealed from: an
+	// audit of the run's repository whose AuditedRef is the target ref and
+	// whose AuditedCommitSHA is TipSHA. The seal and the publication decision
+	// both re-check that row, so the store, not the engine's copy, proves
+	// the tip was observed on the run's own target. Zero on checks sealed
+	// before migration 0129; Validate accepts zero so recovery still decodes
+	// them, and the publication decision refuses them.
+	WorkflowAuditID int64 `json:"workflow_audit_id"`
 	// Merge is the verified merge of HeadSHA into TipSHA, nil until verified
 	// and always nil while TipSHA is EvidenceBaseSHA.
 	Merge *HandoffMerge `json:"merge"`

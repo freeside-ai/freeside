@@ -488,8 +488,15 @@ func (p AutomationTrustProfile) ExternalReviewAuthorityFor(
 // the audited automation-control surface; two identical audits at different
 // times are two real observations.
 type WorkflowAudit struct {
-	Repo                string    `json:"repo"`
-	AuditedCommitSHA    string    `json:"audited_commit_sha"`
+	Repo             string `json:"repo"`
+	AuditedCommitSHA string `json:"audited_commit_sha"`
+	// AuditedRef is the ref the auditor resolved AuditedCommitSHA from. A
+	// handoff check names the audit its tip came from (HandoffCheck
+	// .WorkflowAuditID), and the ref is what lets the store prove that audit
+	// observed the run's own target. It is empty on audits recorded before
+	// migration 0129, so Validate does not require it; a gate that spends a
+	// tip requires it there.
+	AuditedRef          string    `json:"audited_ref"`
 	AuditedAt           time.Time `json:"audited_at"`
 	WorkflowAuditDigest Digest    `json:"workflow_audit_digest"`
 	// Evidence is the sensitive canonical body addressed by

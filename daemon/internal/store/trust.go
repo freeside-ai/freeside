@@ -113,10 +113,10 @@ JOIN trust_profiles AS p
 WHERE a.repo = ? ORDER BY a.id DESC LIMIT 1`
 
 	recordWorkflowAuditSQL = `
-INSERT INTO workflow_audits (repo, audited_commit_sha, audited_at, workflow_audit_digest, body)
-VALUES (?, ?, ?, ?, ?)`
+INSERT INTO workflow_audits (repo, audited_commit_sha, audited_ref, audited_at, workflow_audit_digest, body)
+VALUES (?, ?, ?, ?, ?, ?)`
 	listWorkflowAuditsSQL = `
-SELECT id, repo, audited_commit_sha, workflow_audit_digest, body
+SELECT id, repo, audited_commit_sha, audited_ref, workflow_audit_digest, body
 FROM workflow_audits WHERE repo = ? ORDER BY id`
 	recordWorkflowAuditEvidenceSQL = `
 INSERT INTO workflow_audit_evidence (repo, workflow_audit_digest, body)
@@ -131,12 +131,15 @@ WHERE repo = ? AND workflow_audit_digest <> ? AND workflow_audit_digest <> ?`
 	deleteWorkflowAuditEvidenceSQL = `
 DELETE FROM workflow_audit_evidence WHERE repo = ?`
 	latestWorkflowAuditSQL = `
-SELECT id, repo, audited_commit_sha, workflow_audit_digest, body
+SELECT id, repo, audited_commit_sha, audited_ref, workflow_audit_digest, body
 FROM workflow_audits WHERE repo = ? ORDER BY id DESC LIMIT 1`
 	latestWorkflowAuditForDigestSQL = `
-SELECT id, repo, audited_commit_sha, workflow_audit_digest, body
+SELECT id, repo, audited_commit_sha, audited_ref, workflow_audit_digest, body
 FROM workflow_audits
 WHERE repo = ? AND workflow_audit_digest = ? ORDER BY id DESC LIMIT 1`
+	getWorkflowAuditSQL = `
+SELECT id, repo, audited_commit_sha, audited_ref, workflow_audit_digest, body
+FROM workflow_audits WHERE id = ?`
 	recordAuthorizationSQL = `
 INSERT INTO candidate_authorizations (id, repo, base_sha, head_sha, trust_profile_digest, created_at, body)
 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -532,8 +535,8 @@ func (tx *InternalTx) RecordWorkflowAudit(ctx context.Context, audit domain.Work
 		}
 	}
 	res, err = tx.tx.ExecContext(ctx, recordWorkflowAuditSQL,
-		audit.Repo, audit.AuditedCommitSHA, formatTime(audit.AuditedAt.UTC()),
-		audit.WorkflowAuditDigest, body)
+		audit.Repo, audit.AuditedCommitSHA, nullableString(audit.AuditedRef),
+		formatTime(audit.AuditedAt.UTC()), audit.WorkflowAuditDigest, body)
 	if err != nil {
 		return WorkflowAuditRecord{}, fmt.Errorf("record workflow audit %q: %w", audit.Repo, err)
 	}
@@ -635,25 +638,10 @@ func (tx *ReadTx) ListWorkflowAudits(ctx context.Context, repo string) ([]Workfl
 	defer func() { _ = rows.Close() }()
 	var recs []WorkflowAuditRecord
 	for rows.Next() {
-		var (
-			rec         WorkflowAuditRecord
-			rowRepo     string
-			commitSHA   string
-			auditDigest string
-			body        []byte
-		)
-		if err := rows.Scan(&rec.ID, &rowRepo, &commitSHA, &auditDigest, &body); err != nil {
-			return nil, fmt.Errorf("list workflow audits %q: %w", repo, err)
-		}
-		audit, err := decode[domain.WorkflowAudit](body)
+		rec, err := scanWorkflowAuditRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("list workflow audits %q: %w", repo, err)
 		}
-		if audit.Repo != rowRepo || audit.AuditedCommitSHA != commitSHA ||
-			audit.WorkflowAuditDigest != domain.Digest(auditDigest) {
-			return nil, fmt.Errorf("list workflow audits %q: %w", repo, errRowInconsistent)
-		}
-		rec.Audit = audit
 		recs = append(recs, rec)
 	}
 	if err := rows.Err(); err != nil {
@@ -727,26 +715,46 @@ func (tx *ReadTx) workflowAuditReviewForProfile(
 	}, nil
 }
 
+// GetWorkflowAudit returns one audit observation by its row id, for the
+// handoff check's seal and the publication decision, which re-check the
+// audit a sealed tip names. ErrNotFound when no row has the id.
+func (tx *ReadTx) GetWorkflowAudit(ctx context.Context, id int64) (WorkflowAuditRecord, error) {
+	rec, err := tx.scanWorkflowAuditRecord(ctx, getWorkflowAuditSQL, id)
+	if err != nil {
+		return WorkflowAuditRecord{}, fmt.Errorf("get workflow audit %d: %w", id, err)
+	}
+	return rec, nil
+}
+
 func (tx *ReadTx) scanWorkflowAuditRecord(
 	ctx context.Context, query string, args ...any,
 ) (WorkflowAuditRecord, error) {
+	rec, err := scanWorkflowAuditRow(tx.tx.QueryRowContext(ctx, query, args...))
+	return rec, notFoundOr(err)
+}
+
+// scanWorkflowAuditRow decodes one workflow_audits row selected as id, repo,
+// audited_commit_sha, audited_ref, workflow_audit_digest, body, and refuses a
+// row whose columns disagree with its body. A NULL audited_ref (an audit
+// recorded before migration 0129) agrees with an empty AuditedRef.
+func scanWorkflowAuditRow(row interface{ Scan(...any) error }) (WorkflowAuditRecord, error) {
 	var (
 		rec         WorkflowAuditRecord
 		rowRepo     string
 		commitSHA   string
+		ref         sql.NullString
 		auditDigest string
 		body        []byte
 	)
-	if err := tx.tx.QueryRowContext(ctx, query, args...).Scan(
-		&rec.ID, &rowRepo, &commitSHA, &auditDigest, &body,
-	); err != nil {
-		return WorkflowAuditRecord{}, notFoundOr(err)
+	if err := row.Scan(&rec.ID, &rowRepo, &commitSHA, &ref, &auditDigest, &body); err != nil {
+		return WorkflowAuditRecord{}, err
 	}
 	audit, err := decode[domain.WorkflowAudit](body)
 	if err != nil {
 		return WorkflowAuditRecord{}, err
 	}
 	if audit.Repo != rowRepo || audit.AuditedCommitSHA != commitSHA ||
+		audit.AuditedRef != ref.String ||
 		audit.WorkflowAuditDigest != domain.Digest(auditDigest) {
 		return WorkflowAuditRecord{}, errRowInconsistent
 	}

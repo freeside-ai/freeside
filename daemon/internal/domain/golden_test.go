@@ -913,6 +913,7 @@ func TestGolden(t *testing.T) {
 	workflowAudit := domain.WorkflowAudit{
 		Repo:                "freeside-ai/demo",
 		AuditedCommitSHA:    "cafebabe",
+		AuditedRef:          "main",
 		AuditedAt:           ts,
 		WorkflowAuditDigest: "sha256:workflow-audit",
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,

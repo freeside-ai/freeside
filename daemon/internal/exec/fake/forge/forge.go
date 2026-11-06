@@ -49,13 +49,17 @@ func (s TokenSource) Token(context.Context, string) (publish.InstallationToken, 
 	}, nil
 }
 
-// Auditor returns one fixed workflow audit for every repository and commit.
+// Auditor returns one fixed workflow audit for every repository and commit,
+// reporting the ref it was asked for as the GitHub auditor does, since the
+// handoff refuses an audit of another ref.
 type Auditor struct {
 	Result domain.WorkflowAudit
 }
 
-func (a Auditor) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
-	return a.Result, nil
+func (a Auditor) Audit(_ context.Context, _, baseRef string) (domain.WorkflowAudit, error) {
+	audit := a.Result
+	audit.AuditedRef = baseRef
+	return audit, nil
 }
 
 // PR is one pull request the Forge holds.

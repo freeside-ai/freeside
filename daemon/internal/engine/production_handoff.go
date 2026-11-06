@@ -254,9 +254,11 @@ func (w *productionPublicationWorkflow) sealHandoffTip(
 		EvidenceBaseSHA: base.BaseSHA, TipSHA: audit.AuditedCommitSHA,
 	}
 	if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		if _, err := tx.RecordWorkflowAudit(ctx, audit); err != nil {
+		record, err := tx.RecordWorkflowAudit(ctx, audit)
+		if err != nil {
 			return fmt.Errorf("record handoff workflow audit: %w", err)
 		}
+		check.WorkflowAuditID = record.ID
 		return tx.SealHandoffTip(ctx, check, w.now().UTC())
 	}); err != nil {
 		return domain.HandoffCheck{}, false, err

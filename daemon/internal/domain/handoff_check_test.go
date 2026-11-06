@@ -14,7 +14,7 @@ import (
 func movedHandoffCheck() domain.HandoffCheck {
 	return domain.HandoffCheck{
 		RunID: "run-1", PublicationID: "publish-run-1", HeadSHA: "head-1",
-		EvidenceBaseSHA: "base-1", TipSHA: "base-2",
+		EvidenceBaseSHA: "base-1", TipSHA: "base-2", WorkflowAuditID: 7,
 		Merge: &domain.HandoffMerge{
 			MergeSHA: "merge-1", VerificationProofDigest: "sha256:proof",
 		},
@@ -24,7 +24,7 @@ func movedHandoffCheck() domain.HandoffCheck {
 func TestHandoffCheckGolden(t *testing.T) {
 	for name, check := range map[string]domain.HandoffCheck{
 		"handoff_check":           movedHandoffCheck(),
-		"handoff_check_unchanged": {RunID: "run-1", PublicationID: "publish-run-1", HeadSHA: "head-1", EvidenceBaseSHA: "base-1", TipSHA: "base-1"},
+		"handoff_check_unchanged": {RunID: "run-1", PublicationID: "publish-run-1", HeadSHA: "head-1", EvidenceBaseSHA: "base-1", TipSHA: "base-1", WorkflowAuditID: 7},
 	} {
 		if err := check.Validate(); err != nil {
 			t.Fatalf("%s: %v", name, err)
