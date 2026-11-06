@@ -248,7 +248,7 @@ func deriveSymlink(ctx context.Context, g *gitRunner, base map[string]treeEntry,
 		}
 		// The untrusted manifest selects this base object. A malformed base
 		// can label an arbitrarily large blob as mode 120000, so decide a
-		// length mismatch with cat-file -s before buffering its content.
+		// length mismatch from the size query before buffering its content.
 		if baseSize == int64(len(*e.Target)) {
 			target, err := g.blobContent(ctx, be.oid)
 			if err != nil {
