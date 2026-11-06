@@ -30,6 +30,7 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		{"publication-successor-v4", externalReviewSuccessor()},
 		{"publication-successor-v5", unpublishedReentrySuccessor()},
 		{"publication-successor-v6", successorReentrySuccessor()},
+		{"publication-successor-v7", handoffConflictSuccessor()},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			if err := fixture.value.Validate(); err != nil {
@@ -70,6 +71,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value = unpublishedReentrySuccessor()
 		case domain.PublicationSuccessorBaseAdvance:
 			value = successorReentrySuccessor()
+		case domain.PublicationSuccessorHandoffConflict:
+			value = handoffConflictSuccessor()
 		case domain.PublicationSuccessorRemediation:
 		}
 		if err := value.Validate(); err != nil {
