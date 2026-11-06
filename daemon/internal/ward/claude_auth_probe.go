@@ -80,10 +80,24 @@ func claudeAuthRefusal(refusal string) bool {
 // refusalCarriesToken reports whether refusal holds any claudeProbeTokenWindow
 // bytes of the token past its public prefix.
 func refusalCarriesToken(refusal string, token SetupToken) bool {
-	secret := bytes.TrimPrefix(token.value, []byte(setupTokenPrefix))
-	text := []byte(refusal)
+	return carriesSecretRun([]byte(refusal), bytes.TrimPrefix(token.value, []byte(setupTokenPrefix)))
+}
+
+// carriesSecretRun reports whether text holds any claudeProbeTokenWindow
+// bytes of secret.
+func carriesSecretRun(text, secret []byte) bool {
 	for i := 0; i+claudeProbeTokenWindow <= len(secret); i++ {
 		if bytes.Contains(text, secret[i:i+claudeProbeTokenWindow]) {
+			return true
+		}
+	}
+	return false
+}
+
+// carriesAnySecretRun reports whether text carries a run of any of secrets.
+func carriesAnySecretRun(text []byte, secrets [][]byte) bool {
+	for _, secret := range secrets {
+		if carriesSecretRun(text, secret) {
 			return true
 		}
 	}

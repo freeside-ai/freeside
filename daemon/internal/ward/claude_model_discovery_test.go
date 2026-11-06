@@ -2,6 +2,7 @@ package ward
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,6 +26,16 @@ const claudeInitializeAnswer = `{"type":"control_response","response":{"subtype"
 	`"supportsEffort":true,"supportedEffortLevels":["low","medium","high","max"]},` +
 	`{"value":"claude-haiku-4-5-20251001","resolvedModel":"claude-haiku-4-5-20251001","displayName":"Haiku 4.5"}` +
 	`],"account":{"tokenSource":"CLAUDE_CODE_OAUTH_TOKEN"}},"pending_permission_requests":[]}}`
+
+// jsonEscaped spells every byte of s as a JSON \u escape, so no run of s
+// appears in the raw output while decoding restores it.
+func jsonEscaped(s string) string {
+	var b strings.Builder
+	for i := range len(s) {
+		fmt.Fprintf(&b, "\\u%04x", s[i])
+	}
+	return b.String()
+}
 
 func initializeOutput(stdout string, status int) LineupProbeOutput {
 	return LineupProbeOutput{Version: []byte("2.1.282 (Claude Code)\n"), Stdout: []byte(stdout), ExitStatus: status}
@@ -52,7 +63,7 @@ func TestDecodeClaudeModelReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ClaudeModelReport{CLIBuild: "2.1.282 (Claude Code)", Models: wantClaudeModels()}
+	want := ModelReport{CLIBuild: "2.1.282 (Claude Code)", Models: wantClaudeModels()}
 	if !reflect.DeepEqual(report, want) {
 		t.Fatalf("report = %+v, want %+v", report, want)
 	}
@@ -104,6 +115,11 @@ func TestDecodeClaudeModelReportRefusals(t *testing.T) {
 		},
 		{"token in a model", withToken, ErrModelReportCarriesCredential},
 		{"token in the version", tokenInVersion, ErrModelReportCarriesCredential},
+		{
+			"escaped token in a display name", initializeOutput(answer(
+				`{"value":"opus","displayName":"`+jsonEscaped(claudeEnrollmentTestToken)+`"}`), 0),
+			ErrModelReportCarriesCredential,
+		},
 		{"option-like id", initializeOutput(answer(model("--MARKER")), 0), ErrModelReportMalformed},
 		{"id with a space", initializeOutput(answer(model("opus MARKER")), 0), ErrModelReportMalformed},
 		{

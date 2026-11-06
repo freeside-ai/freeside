@@ -2117,8 +2117,13 @@ freesided auth add \
   -input-file /path/to/codex-enrollment-input/auth.json \
   -auth-store-root /path/to/freeside/review-inputs \
   -auth-store /path/to/freeside/review-inputs/codex-primary.json \
+  -agent-image <digest-pinned-agent-codex-image> \
   -approved-recipe sha256:<approved-verify-recipe-digest>
 ```
+
+`-agent-image` is optional for Codex. Given it, the command discovers the new
+enrollment's models once enrollment succeeds (below); without it, the command
+says the next daemon start with a Codex reviewer will.
 
 **Claude.** Run `claude setup-token` and give the printed token on standard
 input, never as an argument: at a terminal the command prompts without echo,
@@ -2163,6 +2168,28 @@ discovery succeeds. A failed discovery keeps the last catalog: `auth add`
 prints a warning and still succeeds, and the daemon logs one warning per
 enrollment. The CLI's `default` entry, a pointer at its own default model, is
 not recorded.
+
+Codex enrollments get the same `model_catalog`, from the pinned Codex CLI's
+`codex app-server`: one contained session in the Codex image that sends
+`initialize` and then `model/list`, following `nextCursor` to the end of the
+default (non-hidden) list, so no turn runs. Each model's id is its `model`
+value, the one `codex exec -m` takes, its effort levels are its supported
+reasoning efforts in the CLI's order, and Codex reports no resolved model. The
+session runs under the store's access token with the refresh token stripped,
+behind egress that admits only the Codex provider, and is refused when the
+token expires within ten minutes. `auth add -client codex_cli` and
+`renew-codex` discover after they succeed when given `-agent-image`. At daemon
+start the discovery runs only when the reviewer is a Codex subscription
+reviewer (an unattended daemon with `-review-auth-mode subscription`): each
+enabled identity's
+Codex OAuth enrollment is discovered in `-review-image`, its store read from
+`-review-input-root` under the identity's read hold, after the Claude
+enrollments. A store outside that root, a live mutation lease on the
+identity, or a failed session logs one warning and keeps the last catalog;
+the daemon logs one line when it skips Codex discovery. The CLI answers
+`model/list` from a bundled list even without a working credential, so a
+catalog shows what the pinned CLI lists, which may not be what the account
+can run.
 
 `auth add` cannot enroll a Claude identity whose volume already exists;
 `auth adopt` (below) enrolls an identity
@@ -2651,8 +2678,14 @@ freesided renew-codex \
   -auth-identity codex-primary \
   -auth-store-root /path/to/freeside/review-inputs \
   -auth-store /path/to/freeside/review-inputs/codex-primary.json \
+  -agent-image <digest-pinned-agent-codex-image> \
   -approved-recipe sha256:<approved-verify-recipe-digest>
 ```
+
+Given the optional `-agent-image`, renewal then rediscovers the models of the
+identity's Codex enrollments from the renewed store (see
+[Enroll An Agent Credential](#enroll-an-agent-credential)); a failed
+discovery prints a warning and renewal still succeeds.
 
 Pass the daemon's approved recipe set, repeating `-approved-recipe` as needed.
 Renewal requires the existing database to match the binary's schema and never

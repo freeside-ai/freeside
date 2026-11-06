@@ -680,6 +680,9 @@ type config struct {
 	// claudeModelDiscoverer runs the startup model discovery. Production
 	// leaves it nil and launches the initialize probe; tests set a fake.
 	claudeModelDiscoverer claudeModelDiscoverer
+	// codexModelDiscoverer runs the startup Codex model discovery. Production
+	// leaves it nil and launches the model/list probe; tests set a fake.
+	codexModelDiscoverer codexModelDiscoverer
 	// now is the attention service clock. Production leaves it nil for the
 	// wall clock; tests can advance startup across pairing-code expiry.
 	now func() time.Time
@@ -1703,7 +1706,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	// background, one container at a time, and nothing it meets stops the
 	// daemon.
 	if claudeWiring != nil {
-		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.containerBin, cfg.claudeModelDiscoverer, logger)
+		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.containerBin,
+			cfg.claudeModelDiscoverer, cfg.codexModelDiscoverer, logger)
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()

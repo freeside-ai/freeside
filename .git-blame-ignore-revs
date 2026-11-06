@@ -52,3 +52,6 @@ c5e65942551bb0ec863b0c882bc8904036ecccb5
 
 # Drop "fake" from the four publication core names (#559)
 9d01aee0f3daea0806d97c89cbc84f69b6bdb94e
+
+# Rename ward.ClaudeModelReport to ModelReport (#2705)
+b57067e1c55b3efa10fbcdc861a70091a1b9e950

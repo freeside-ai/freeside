@@ -19,8 +19,8 @@ import (
 
 const modelDiscoveryTestImage = "example.test/agent-claude@sha256:1111111111111111111111111111111111111111111111111111111111111111"
 
-func discoveredReport(ids ...string) ward.ClaudeModelReport {
-	report := ward.ClaudeModelReport{CLIBuild: "2.1.282 (Claude Code)"}
+func discoveredReport(ids ...string) ward.ModelReport {
+	report := ward.ModelReport{CLIBuild: "2.1.282 (Claude Code)"}
 	for _, id := range ids {
 		report.Models = append(report.Models, domain.DiscoveredModel{ID: id, DisplayName: id, EffortLevels: []string{}})
 	}
@@ -77,7 +77,7 @@ func TestModelCatalogRefreshDiscoversEachEnabledClaudeEnrollment(t *testing.T) {
 			}
 			return token, nil
 		},
-		discover: func(_ context.Context, image string, _ ward.SetupToken) (ward.ClaudeModelReport, error) {
+		discover: func(_ context.Context, image string, _ ward.SetupToken) (ward.ModelReport, error) {
 			if image != modelDiscoveryTestImage {
 				t.Errorf("discovered through %q", image)
 			}
@@ -129,13 +129,13 @@ func TestDiscoverAfterEnrollment(t *testing.T) {
 
 	st := storetest.Open(t, dbPath, store.Options{})
 	var stderr bytes.Buffer
-	discoverAfterEnrollment(t.Context(), st, func(context.Context, string, ward.SetupToken) (ward.ClaudeModelReport, error) {
-		return ward.ClaudeModelReport{}, errors.New("probe failed")
+	discoverAfterEnrollment(t.Context(), st, func(context.Context, string, ward.SetupToken) (ward.ModelReport, error) {
+		return ward.ModelReport{}, errors.New("probe failed")
 	}, modelDiscoveryTestImage, token, enrollment, &stderr)
 	if !strings.Contains(stderr.String(), "warning: model discovery for "+string(enrollment)) {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
-	discoverAfterEnrollment(t.Context(), st, func(context.Context, string, ward.SetupToken) (ward.ClaudeModelReport, error) {
+	discoverAfterEnrollment(t.Context(), st, func(context.Context, string, ward.SetupToken) (ward.ModelReport, error) {
 		return discoveredReport("opus"), nil
 	}, modelDiscoveryTestImage, token, enrollment, &stderr)
 	if err := st.Close(); err != nil {

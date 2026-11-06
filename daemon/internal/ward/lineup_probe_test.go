@@ -64,6 +64,12 @@ func codexReviewerProbe() LineupProbe {
 	}
 }
 
+func codexModelListProbe() LineupProbe {
+	p := codexReviewerProbe()
+	p.Model, p.NativeEffort, p.Initialize = "", "", true
+	return p
+}
+
 // TestLineupProbeCommandGolden pins the probe programs: the flags each CLI
 // launches with, the credential's removal before any output is written, the
 // prompt as a positional argument, and the initialize probe's fixed request
@@ -76,6 +82,8 @@ func TestLineupProbeCommandGolden(t *testing.T) {
 		"claude_code_initialize": lineupProbeCommand(claudeInitializeProbe(t),
 			claudeReviewProvider{}.homeTarget(), claudeReviewProvider{}.configHomeTarget()),
 		"codex_cli": lineupProbeCommand(codex, codexReviewProvider{}.homeTarget(), codexReviewProvider{}.configHomeTarget()),
+		"codex_cli_model_list": lineupProbeCommand(codexModelListProbe(),
+			codexReviewProvider{}.homeTarget(), codexReviewProvider{}.configHomeTarget()),
 	}
 	var body bytes.Buffer
 	enc := json.NewEncoder(&body)
@@ -485,7 +493,7 @@ func TestProbeLineupImageRefusesBeforeCreatingAnything(t *testing.T) {
 			*p = claudeInitializeProbe(t)
 			p.NativeEffort = "high"
 		},
-		"codex initialize": func(p *LineupProbe) { *p = codexReviewerProbe(); p.Initialize = true },
+		"codex initialize with a model": func(p *LineupProbe) { *p = codexModelListProbe(); p.Model = "gpt-6.1-sol" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := claudeWriterProbe(t)
