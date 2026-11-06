@@ -2389,10 +2389,221 @@ func TestFindingAdjudicationDecisionRejectsPayloadOnlyRouteAuthority(t *testing.
 // the git binary patch (and therefore the JSON input) overflows the 4 MiB
 // deliverable limit. prepareRemediationIntent then returns
 // ErrRemediationInputUndeliverable, executeFindingAdjudication terminalizes it as
-// a durable AttentionExecutionFailure item and returns productionReviewPending
-// (never a lane-fatal error). A second reconcile replays through the recorded
-// escalation without re-diffing, dispatching a marker, or duplicating the item.
+// a durable system_health advisory notice offering acknowledge (#1354) and
+// returns productionReviewPending (never a lane-fatal error). A second reconcile
+// replays through the recorded escalation without re-diffing, dispatching a
+// marker, or duplicating the item.
 func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
+	f, candidateRoot := newOversizedRemediationFixture(t)
+	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
+
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+	if err != nil {
+		t.Fatalf("first reconcile err = %v, want nil (lane not fatal)", err)
+	}
+	if state != productionReviewPending {
+		t.Fatalf("first reconcile state = %d, want pending", state)
+	}
+
+	var item domain.AttentionItem
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		item, readErr = tx.GetAttentionItem(f.ctx, itemID)
+		return readErr
+	}); err != nil {
+		t.Fatalf("undeliverable attention item = %v, want present", err)
+	}
+	if item.Type != domain.AttentionSystemHealth {
+		t.Fatalf("attention item type = %q, want %q", item.Type, domain.AttentionSystemHealth)
+	}
+	if item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory {
+		t.Fatalf("attention item posture = %v, want %q", item.Posture, domain.HealthPostureAdvisory)
+	}
+	if !slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionAcknowledge}) {
+		t.Fatalf("attention item decision = %v, want [acknowledge]", item.RequestedDecision)
+	}
+	if item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != "remediation_undeliverable" ||
+		item.HealthDiagnostic.Impairs != domain.ImpairedCapabilityNone {
+		t.Fatalf("attention item diagnostic = %+v, want remediation_undeliverable impairing none",
+			item.HealthDiagnostic)
+	}
+	if item.Subject.RunID == nil || *item.Subject.RunID != f.task.RunID {
+		t.Fatalf("attention item subject run = %v, want %q", item.Subject.RunID, f.task.RunID)
+	}
+	if got := countFixtureAttentionItems(t, f); got != 1 {
+		t.Fatalf("attention items after first reconcile = %d, want 1", got)
+	}
+	assertNoRemediationMarker(t, f)
+
+	// Replay must short-circuit through the recorded escalation: still pending,
+	// still no error, no duplicate item, no dispatched marker.
+	replayState, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+	if err != nil {
+		t.Fatalf("replay reconcile err = %v, want nil", err)
+	}
+	if replayState != productionReviewPending {
+		t.Fatalf("replay reconcile state = %d, want pending", replayState)
+	}
+	if got := countFixtureAttentionItems(t, f); got != 1 {
+		t.Fatalf("attention items after replay = %d, want 1 (no duplicate)", got)
+	}
+	assertNoRemediationMarker(t, f)
+}
+
+// TestRemediationUndeliverableNoticeAcceptsAcknowledge proves #1354: the
+// notice recordRemediationUndeliverable creates is one the operator can
+// answer. Signet accepts acknowledge against it, the item stays open (acknowledge
+// on system_health records the decision without a status transition), and the
+// run stays parked on the next reconcile.
+func TestRemediationUndeliverableNoticeAcceptsAcknowledge(t *testing.T) {
+	f, candidateRoot := newOversizedRemediationFixture(t)
+	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
+
+	if state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot); err != nil || state != productionReviewPending {
+		t.Fatalf("first reconcile = %d, %v, want pending, nil", state, err)
+	}
+	notice, err := f.signet.GetAttentionItem(f.ctx, itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+		CommandID: "ack-remediation-undeliverable", DeviceID: "device-test",
+		ExpectedEntityVersion: notice.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: notice.Item.ID, ItemVersion: notice.Item.ItemVersion,
+			PRHeadSHA: notice.Item.PRHeadSHA, ArtifactDigests: notice.Item.ArtifactDigests,
+			Action: domain.ActionAcknowledge,
+		},
+	}); err != nil {
+		t.Fatalf("acknowledge remediation-undeliverable notice: %v", err)
+	}
+	acknowledged, err := f.signet.GetAttentionItem(f.ctx, itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged.Item.Status != domain.StatusOpen {
+		t.Fatalf("acknowledged notice status = %q, want %q", acknowledged.Item.Status, domain.StatusOpen)
+	}
+
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+	if err != nil {
+		t.Fatalf("reconcile after acknowledge err = %v, want nil", err)
+	}
+	if state != productionReviewPending {
+		t.Fatalf("reconcile after acknowledge state = %d, want pending", state)
+	}
+	if got := countFixtureAttentionItems(t, f); got != 1 {
+		t.Fatalf("attention items after acknowledge = %d, want 1 (no new item)", got)
+	}
+	assertNoRemediationMarker(t, f)
+}
+
+// TestRemediationLegacyExecutionFailureNoticeStillParksRun covers an in-place
+// upgrade: a notice the pre-#1354 code stored as execution_failure under the
+// same deterministic ID must keep parking the run rather than fail every
+// reconcile with ErrParentKeyMismatch and stop the publication lane.
+func TestRemediationLegacyExecutionFailureNoticeStillParksRun(t *testing.T) {
+	f, candidateRoot := newOversizedRemediationFixture(t)
+	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
+	runID := f.task.RunID
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID}
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		names, err := tx.DisplayNamesFor(f.ctx, f.task.ProjectID, subject)
+		if err != nil {
+			return err
+		}
+		createdAt := f.workflow.attentionCreatedAt()
+		legacy, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: itemID, ProjectID: f.task.ProjectID,
+			Subject: subject, Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+			Reason:            "Remediation input for the adjudicated findings cannot be delivered to the remediator.",
+			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen,
+		}, f.workflow.operatorRecipes)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(f.ctx, legacy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+	if err != nil {
+		t.Fatalf("reconcile over legacy notice err = %v, want nil", err)
+	}
+	if state != productionReviewPending {
+		t.Fatalf("reconcile over legacy notice state = %d, want pending", state)
+	}
+	if got := countFixtureAttentionItems(t, f); got != 1 {
+		t.Fatalf("attention items over legacy notice = %d, want 1 (no new item)", got)
+	}
+	assertNoRemediationMarker(t, f)
+}
+
+// TestVerifyRemediationUndeliverableItemFailsClosed pins which rows the
+// verifier accepts at the notice's deterministic ID: the current
+// system_health advisory and the legacy execution_failure shape, and nothing
+// that disagrees with the run's project, subject, or advisory posture.
+func TestVerifyRemediationUndeliverableItemFailsClosed(t *testing.T) {
+	task := productionPublicationTask{RunID: "run-1", ProjectID: "project-1"}
+	itemID := productionRemediationUndeliverableItemID(task.RunID, 1)
+	advisory := domain.HealthPostureAdvisory
+	blocking := domain.HealthPostureBlocking
+	notice := func(mutate func(*domain.AttentionItem)) domain.AttentionItem {
+		runID := task.RunID
+		item := domain.AttentionItem{
+			ID: itemID, ProjectID: task.ProjectID, Type: domain.AttentionSystemHealth, Posture: &advisory,
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		}
+		mutate(&item)
+		return item
+	}
+	otherRun := domain.RunID("run-2")
+	cases := []struct {
+		name    string
+		item    domain.AttentionItem
+		wantErr bool
+	}{
+		{"system_health advisory", notice(func(*domain.AttentionItem) {}), false},
+		{"legacy execution_failure", notice(func(item *domain.AttentionItem) {
+			item.Type, item.Posture = domain.AttentionExecutionFailure, nil
+		}), false},
+		{"wrong project", notice(func(item *domain.AttentionItem) { item.ProjectID = "project-2" }), true},
+		{"wrong run subject", notice(func(item *domain.AttentionItem) {
+			item.Subject.ID, item.Subject.RunID = domain.SubjectID(otherRun), &otherRun
+		}), true},
+		{"wrong subject type", notice(func(item *domain.AttentionItem) { item.Subject.Type = domain.SubjectTask }), true},
+		{"system_health without posture", notice(func(item *domain.AttentionItem) { item.Posture = nil }), true},
+		{"system_health blocking", notice(func(item *domain.AttentionItem) { item.Posture = &blocking }), true},
+		{"unrelated type", notice(func(item *domain.AttentionItem) {
+			item.Type, item.Posture = domain.AttentionReviewDispute, nil
+		}), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyRemediationUndeliverableItem(tc.item, task, itemID)
+			if tc.wantErr && !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("verify = %v, want ErrParentKeyMismatch", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("verify = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// newOversizedRemediationFixture arms a finding-adjudication fixture whose
+// remediation input overflows the deliverable limit, and returns it with the
+// candidate checkout to reconcile against.
+func newOversizedRemediationFixture(t *testing.T) (*findingAdjudicationFixture, string) {
+	t.Helper()
 	location := &domain.FindingLocation{Path: "daemon/a.go"}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
 
@@ -2447,76 +2658,37 @@ func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
 	}
 	f.task.HeadSHA = headSHA
 	f.task.Replay.ObservedBaseSHA = baseSHA
+	return f, candidateRoot
+}
 
-	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
-	markerKey := string(remediationInvocationID(f.task.RunID, f.record.Round))
-
-	countAttentionItems := func() int {
-		var items []store.Snapshotted[domain.AttentionItem]
-		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
-			var readErr error
-			items, readErr = tx.ListAttentionItems(f.ctx)
-			return readErr
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return len(items)
-	}
-	assertNoDispatchedMarker := func() {
-		var markerErr error
-		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
-			_, markerErr = tx.GetOutbox(f.ctx, markerKey)
-			return nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if !errors.Is(markerErr, store.ErrNotFound) {
-			t.Fatalf("remediation marker lookup = %v, want ErrNotFound (never dispatched)", markerErr)
-		}
-	}
-
-	state, err := f.workflow.reconcileFindingAdjudication(
-		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
-	if err != nil {
-		t.Fatalf("first reconcile err = %v, want nil (lane not fatal)", err)
-	}
-	if state != productionReviewPending {
-		t.Fatalf("first reconcile state = %d, want pending", state)
-	}
-
-	var item domain.AttentionItem
+func countFixtureAttentionItems(t *testing.T, f *findingAdjudicationFixture) int {
+	t.Helper()
+	var items []store.Snapshotted[domain.AttentionItem]
 	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
 		var readErr error
-		item, readErr = tx.GetAttentionItem(f.ctx, itemID)
+		items, readErr = tx.ListAttentionItems(f.ctx)
 		return readErr
 	}); err != nil {
-		t.Fatalf("undeliverable attention item = %v, want present", err)
+		t.Fatal(err)
 	}
-	if item.Type != domain.AttentionExecutionFailure {
-		t.Fatalf("attention item type = %q, want %q", item.Type, domain.AttentionExecutionFailure)
-	}
-	if item.Subject.RunID == nil || *item.Subject.RunID != f.task.RunID {
-		t.Fatalf("attention item subject run = %v, want %q", item.Subject.RunID, f.task.RunID)
-	}
-	if got := countAttentionItems(); got != 1 {
-		t.Fatalf("attention items after first reconcile = %d, want 1", got)
-	}
-	assertNoDispatchedMarker()
+	return len(items)
+}
 
-	// Replay must short-circuit through the recorded escalation: still pending,
-	// still no error, no duplicate item, no dispatched marker.
-	replayState, err := f.workflow.reconcileFindingAdjudication(
-		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
-	if err != nil {
-		t.Fatalf("replay reconcile err = %v, want nil", err)
+// assertNoRemediationMarker requires that the fixture round's remediation
+// invocation was never queued.
+func assertNoRemediationMarker(t *testing.T, f *findingAdjudicationFixture) {
+	t.Helper()
+	markerKey := string(remediationInvocationID(f.task.RunID, f.record.Round))
+	var markerErr error
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		_, markerErr = tx.GetOutbox(f.ctx, markerKey)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if replayState != productionReviewPending {
-		t.Fatalf("replay reconcile state = %d, want pending", replayState)
+	if !errors.Is(markerErr, store.ErrNotFound) {
+		t.Fatalf("remediation marker lookup = %v, want ErrNotFound (never dispatched)", markerErr)
 	}
-	if got := countAttentionItems(); got != 1 {
-		t.Fatalf("attention items after replay = %d, want 1 (no duplicate)", got)
-	}
-	assertNoDispatchedMarker()
 }
 
 // A real candidate and durable publication task make the unfixed engine queue

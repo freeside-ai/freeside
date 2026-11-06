@@ -1562,14 +1562,14 @@ func (w *productionPublicationWorkflow) remediationUndeliverableRecorded(
 	return recorded, nil
 }
 
-// recordRemediationUndeliverable raises the durable per-run escalation for a
-// deterministic pre-invocation preparation refusal. It reuses the execution
-// failure attention type that the dispatch-phase delivery refusal already
-// raises, so both remediation-delivery boundaries terminalize consistently.
-// Like that sibling it writes the item directly and offers only acknowledge:
-// AttentionExecutionFailure's signet action policy excludes acknowledge because
-// retry has no honoring machinery here, so the intake service would reject it
-// (production_workflow.go recordProductionDeliveryRefusal shares this rationale).
+// recordRemediationUndeliverable raises the durable per-run notice for a
+// deterministic pre-invocation preparation refusal. It records a system_health
+// advisory offering acknowledge, the shape of the undeliverable
+// operator-feedback notice (#1342): the signet policy table excludes
+// acknowledge from execution_failure, so an execution_failure notice offering
+// only acknowledge would be an item no command can answer (#1354).
+// Acknowledging records the decision and leaves the run parked:
+// remediationUndeliverableRecorded keeps parking it on every later reconcile.
 // The get-or-put is idempotent across reconciliations.
 func (w *productionPublicationWorkflow) recordRemediationUndeliverable(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord, cause error,
@@ -1594,13 +1594,21 @@ func (w *productionPublicationWorkflow) recordRemediationUndeliverable(
 		if err != nil {
 			return err
 		}
+		advisory := domain.HealthPostureAdvisory
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID: itemID, ProjectID: task.ProjectID,
 			Subject:           subject,
-			Type:              domain.AttentionExecutionFailure,
+			Type:              domain.AttentionSystemHealth,
 			Priority:          domain.PriorityHigh,
 			Reason:            reason,
 			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+			// Advisory: only this run is parked, so no operator capability is
+			// degraded; the notice reports that the run's remediation input
+			// cannot be delivered.
+			HealthDiagnostic: &domain.HealthDiagnostic{
+				Code: "remediation_undeliverable", Impairs: domain.ImpairedCapabilityNone,
+			},
+			Posture:           &advisory,
 			ItemVersion:       1,
 			InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt:         &createdAt,
@@ -1623,8 +1631,15 @@ func verifyRemediationUndeliverableItem(
 	validSubject := item.Subject.Type == domain.SubjectRun &&
 		item.Subject.ID == domain.SubjectID(task.RunID) &&
 		item.Subject.RunID != nil && *item.Subject.RunID == task.RunID
-	if item.Type != domain.AttentionExecutionFailure ||
-		item.ProjectID != task.ProjectID || !validSubject {
+	// The write path creates the notice as a system_health advisory. A legacy
+	// execution_failure row is tolerated: before #1354 this path wrote the
+	// notice as execution_failure under the same deterministic ID, daemon state
+	// survives an in-place upgrade, and rejecting that row would fail every
+	// reconcile with ErrParentKeyMismatch and stop the publication lane.
+	validType := item.Type == domain.AttentionExecutionFailure ||
+		(item.Type == domain.AttentionSystemHealth &&
+			item.Posture != nil && *item.Posture == domain.HealthPostureAdvisory)
+	if !validType || item.ProjectID != task.ProjectID || !validSubject {
 		return fmt.Errorf(
 			"remediation-undeliverable attention item %q disagrees with run %q: %w",
 			itemID, task.RunID, domain.ErrParentKeyMismatch)
