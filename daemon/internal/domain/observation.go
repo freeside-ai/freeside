@@ -167,9 +167,11 @@ const (
 	// rewritten away.
 	PublicationBlockBaseAdvanced = "The target base advanced after admission; rerun and reverify against the current base."
 	// A handoff at a tip that moved past the evidence base verifies the
-	// head merged into that tip (plan §6, §7, revision 110). These end the
-	// run when that merge fails, each naming its cause. Freeside does not yet
-	// remediate at the current tip, so a person starts the next run.
+	// head merged into that tip (plan §6, §7, revision 110). A failed merge
+	// starts a remediation at that tip (issue #2646); these end the run, each
+	// naming its cause, only when no remediation may start. Their text
+	// predates that remediation and stays, because stored items are
+	// recognized by it.
 	PublicationBlockHandoffConflict     = "The target branch moved after admission, and the candidate conflicts with its current tip; Freeside cannot yet remediate at the current tip, so resolve the conflict and start a new run against the current base."
 	PublicationBlockHandoffVerification = "The target branch moved after admission, and the candidate merged into its current tip did not pass verification; Freeside cannot yet remediate at the current tip, so inspect the verification evidence and start a new run against the current base."
 	// PublicationBlockReentryRetired ends a re-entry cycle an earlier daemon

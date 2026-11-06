@@ -217,15 +217,16 @@ func (d *storePublicationDecision) prepare(
 			// effects may have begun, and recovery must converge them instead
 			// of stranding a branch.
 			if reservationState == invocationReserved {
-				// A first publication a stored unpublished re-entry (v5, now
-				// read-only legacy) replaced may no longer commit an intent:
-				// that cycle sealed against the reservation this one would
-				// settle.
+				// A first publication a later first-publication cycle
+				// replaced may no longer commit an intent: a stored
+				// unpublished re-entry (v5, now read-only legacy) or a
+				// handoff conflict's remediation sealed against the
+				// reservation this one would settle.
 				current, err := tx.CurrentPublicationSuccessor(ctx, c.RunID)
 				if err != nil {
 					return fmt.Errorf("read current publication successor: %w", err)
 				}
-				if c.Successor == nil && current != nil && current.RepublishesUnpublished() &&
+				if c.Successor == nil && current != nil && current.MakesFirstPublication() &&
 					current.PublicationID() != c.InvocationID {
 					decisionErr = fmt.Errorf("publication %s was replaced by %s: %w",
 						c.InvocationID, current.PublicationID(), ErrUnauthorizedPublication)

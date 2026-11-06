@@ -206,9 +206,10 @@ func authenticateTaskSuccessor(ctx context.Context, tx *store.ReadTx, task produ
 }
 
 func (w *productionPublicationWorkflow) bindSuccessorCandidate(ctx context.Context, task productionPublicationTask, candidate *publish.Candidate) error {
-	// An unpublished re-entry has no pull request to update: it is still the
+	// An unpublished re-entry, or a handoff conflict's remediation in a run
+	// that never published, has no pull request to update: it is still the
 	// run's first publication, under its authority's publication identity.
-	if task.Successor == nil || task.Successor.RepublishesUnpublished() {
+	if task.Successor == nil || task.Successor.MakesFirstPublication() {
 		return nil
 	}
 	return w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -228,7 +229,7 @@ func (w *productionPublicationWorkflow) publishCandidate(ctx context.Context, ta
 	if err != nil {
 		return publish.Result{}, err
 	}
-	if task.Successor != nil && !task.Successor.RepublishesUnpublished() {
+	if task.Successor != nil && !task.Successor.MakesFirstPublication() {
 		transport, ok := w.transport.(interface {
 			UpdateHead(context.Context, PublicationCheckout, publish.GatedUpdate) (publish.PushResult, error)
 		})
