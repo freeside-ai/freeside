@@ -573,7 +573,7 @@ func (r *intakeReconciler) autoStart(
 		// already-decided path relaunches it and the slot is legitimately held. If
 		// it was declined, snoozed, or superseded, no run will ever launch, so the
 		// recorded start would strand the slot until a manual abandon; release it
-		// now (AbandonTask is idempotent, keyed on the recorded start's episode).
+		// now (ReleaseTaskStart is idempotent, keyed on the recorded start).
 		decidedStart, err := r.proposalDecidedStart(ctx,
 			occurrence.Admission.ProposalInstanceID, occurrence.Admission.ProposalDigest)
 		if err != nil {
@@ -587,7 +587,7 @@ func (r *intakeReconciler) autoStart(
 			if err != nil {
 				return err
 			}
-			_, err = tx.AbandonTask(ctx, reserved.TaskID, r.now())
+			_, err = tx.ReleaseTaskStart(ctx, reserved.TaskID, r.now())
 			return err
 		}); err != nil {
 			return fmt.Errorf("release WIP slot after non-start: %w", err)
@@ -786,7 +786,7 @@ func strandedStart(
 	return task.ID, true, nil
 }
 
-// releaseStrandedStart abandons a stranded start inside the caller's write, so
+// releaseStrandedStart releases a stranded start inside the caller's write, so
 // the release commits with the refusal or departure that leaves the card
 // undecided. It does not close the workflow episode: the card stays startable,
 // and its launch records a fresh start (store.RecordTaskStartAfterRelease).
@@ -797,7 +797,7 @@ func (r *intakeReconciler) releaseStrandedStart(
 	if err != nil || !stranded {
 		return err
 	}
-	if _, err := tx.AbandonTask(ctx, taskID, r.now()); err != nil {
+	if _, err := tx.ReleaseTaskStart(ctx, taskID, r.now()); err != nil {
 		return fmt.Errorf("release stranded start: %w", err)
 	}
 	return nil
