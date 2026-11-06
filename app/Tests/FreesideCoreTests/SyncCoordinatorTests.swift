@@ -1760,8 +1760,13 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
     // wait's length from the long poll's start. A test that holds a poll
     // sets the mock's own long-poll bound to an hour of real time, so only
     // the loop's wait limit ends it.
+    //
+    // They carry no time limit. Every wait is asserted rather than timed,
+    // and a full app run starves the main actor long enough that a
+    // one-minute limit failed tests that were still making progress. A
+    // true deadlock here hangs the run until its job timeout instead.
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopLongPollsFromTheHighestObservedRevision() async throws {
+    @Test func heartbeatLoopLongPollsFromTheHighestObservedRevision() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
@@ -1779,7 +1784,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopBootstrapsOnceWhenTheLongPollReportsAChange() async throws {
+    @Test func heartbeatLoopBootstrapsOnceWhenTheLongPollReportsAChange() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
@@ -1813,7 +1818,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func manualRefreshDuringALongPollDoesNotJoinIt() async throws {
+    @Test func manualRefreshDuringALongPollDoesNotJoinIt() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
@@ -1830,7 +1835,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopHoldsAChangeToTheFloor() async throws {
+    @Test func heartbeatLoopHoldsAChangeToTheFloor() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
@@ -1866,7 +1871,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopAbandonsALongPollPastItsLimit() async throws {
+    @Test func heartbeatLoopAbandonsALongPollPastItsLimit() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
@@ -1903,7 +1908,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(await server.receivedRevisionAfters.prefix(4) == [nil, after, nil, after])
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopBacksOffAfterAFailedLongPoll() async throws {
+    @Test func heartbeatLoopBacksOffAfterAFailedLongPoll() async throws {
         let server = MockServer()
         let coordinator = makeCoordinator(server: server)
         let clock = ManualClock()
