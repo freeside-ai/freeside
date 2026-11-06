@@ -43,10 +43,17 @@ func classifyForgeCreate(status int, header http.Header, decoded bool, sendErr e
 	case http.StatusTooManyRequests:
 		return domain.FollowUpFilingResponseTransientRejection
 	case http.StatusForbidden:
-		if header.Get("X-RateLimit-Remaining") == "0" || header.Get("Retry-After") != "" {
+		if forbiddenByRateLimit(header) {
 			return domain.FollowUpFilingResponseTransientRejection
 		}
 		return domain.FollowUpFilingResponseDefiniteRejection
 	}
 	return domain.FollowUpFilingResponseUnproven
+}
+
+// forbiddenByRateLimit reports whether a 403's headers mark it as a rate
+// limit (primary: no requests remain; secondary: GitHub asks the client to
+// wait) rather than a refusal of the request itself.
+func forbiddenByRateLimit(header http.Header) bool {
+	return header.Get("X-RateLimit-Remaining") == "0" || header.Get("Retry-After") != ""
 }

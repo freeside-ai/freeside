@@ -62,14 +62,17 @@ type issueCacheEntry struct {
 // review activity independently: each carries its own validator, so an
 // unchanged sub-resource answers 304 and its cached items are reused while a
 // changed sibling re-reads. An empty per-part etag makes that part's next poll
-// unconditional.
+// unconditional. reactionsRefused records that the last pass's reactions read
+// was refused (PullReviewObservation.ReactionsUnavailable); its reactions and
+// etag are then empty, so the next read is unconditional.
 type reviewActivityCacheEntry struct {
-	reviewsETag   string
-	commentsETag  string
-	reactionsETag string
-	reviews       []PullReview
-	comments      []PullReviewComment
-	reactions     []PullDescriptionReaction
+	reviewsETag      string
+	commentsETag     string
+	reactionsETag    string
+	reviews          []PullReview
+	comments         []PullReviewComment
+	reactions        []PullDescriptionReaction
+	reactionsRefused bool
 }
 
 func refKey(repo, branch string) string {
@@ -155,13 +158,19 @@ type IssueObservation struct {
 // request (plan §5.16, §7): its submitted reviews, inline review comments, and
 // description reactions, as observed. It is raw transport, not durable
 // evidence — the reconciler filters by reviewer login, normalizes, and bounds
-// it before recording. NotModified reports that all three sub-resources
-// answered 304, so the whole activity is unchanged.
+// it before recording. NotModified reports that the whole activity is
+// unchanged: the reviews and review comments answered 304, and the reactions
+// either answered 304 or were refused on this pass and the one before it.
 type PullReviewObservation struct {
-	Reviews     []PullReview
-	Comments    []PullReviewComment
-	Reactions   []PullDescriptionReaction
-	NotModified bool
+	Reviews   []PullReview
+	Comments  []PullReviewComment
+	Reactions []PullDescriptionReaction
+	// ReactionsUnavailable is true when GitHub refused the reactions read with
+	// a 403 that isn't a rate limit (#2717). Reactions is then nil and means
+	// unknown, not "no reactions". The reviews and comments are still observed:
+	// the reactions only feed the clean-pass signal, which starts nothing.
+	ReactionsUnavailable bool
+	NotModified          bool
 }
 
 // LabelIssuesObservation is the reconciled set of open issues carrying one
@@ -379,8 +388,12 @@ func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int
 // description reactions, each conditionally when a prior observation holds a
 // validator. The three sub-resources are cached independently, so an unchanged
 // one rides its 304 while a changed sibling re-reads; the observation reports
-// NotModified only when all three are unchanged. Read-only: this never touches
-// publication or readiness state.
+// NotModified only when all three are unchanged. A reactions read GitHub
+// refuses with a non-rate-limited 403 doesn't fail the observation: the
+// reviews and comments are returned with ReactionsUnavailable set, and the
+// next pass reads the reactions unconditionally, so a fixed permission shows
+// up at once. Any other reactions error still fails the whole observation.
+// Read-only: this never touches publication or readiness state.
 func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo string, number int) (PullReviewObservation, error) {
 	ref, err := parseRepo(repo)
 	if err != nil {
@@ -405,8 +418,12 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
 	}
 	reactionsRead, err := r.forge.getIssueReactions(ctx, ref, number, entry.reactionsETag)
+	reactionsRefused := false
 	if err != nil {
-		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+		if !refusedRead(err) {
+			return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+		}
+		reactionsRefused = true
 	}
 
 	reviews, reviewsETag, err := resolveListPart(reviewsRead, entry.reviewsETag, entry.reviews)
@@ -417,20 +434,32 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 	if err != nil {
 		return PullReviewObservation{}, fmt.Errorf("reconcile review comments: %w", err)
 	}
-	reactions, reactionsETag, err := resolveListPart(reactionsRead, entry.reactionsETag, entry.reactions)
-	if err != nil {
-		return PullReviewObservation{}, fmt.Errorf("reconcile reactions: %w", err)
+	// A refused read leaves the reactions unknown, with no validator, so the
+	// next read is unconditional. The reactions count as unchanged only when
+	// the previous pass was refused too: a refusal after a successful read
+	// drops reactions the caller last saw, which is a change.
+	var reactions []PullDescriptionReaction
+	reactionsETag := ""
+	reactionsUnchanged := entry.reactionsRefused
+	if !reactionsRefused {
+		reactions, reactionsETag, err = resolveListPart(reactionsRead, entry.reactionsETag, entry.reactions)
+		if err != nil {
+			return PullReviewObservation{}, fmt.Errorf("reconcile reactions: %w", err)
+		}
+		reactionsUnchanged = reactionsRead.NotModified
 	}
 
 	obs := PullReviewObservation{
 		Reviews: reviews, Comments: comments, Reactions: reactions,
-		NotModified: reviewsRead.NotModified && commentsRead.NotModified && reactionsRead.NotModified,
+		ReactionsUnavailable: reactionsRefused,
+		NotModified:          reviewsRead.NotModified && commentsRead.NotModified && reactionsUnchanged,
 	}
 	r.mu.Lock()
 	if epoch == r.cacheEpoch {
 		r.reviewActivity[key] = reviewActivityCacheEntry{
 			reviewsETag: reviewsETag, commentsETag: commentsETag, reactionsETag: reactionsETag,
 			reviews: reviews, comments: comments, reactions: reactions,
+			reactionsRefused: reactionsRefused,
 		}
 	}
 	r.mu.Unlock()

@@ -266,6 +266,13 @@ var ErrGitHubAPI = errors.New("github api request failed")
 type APIError struct {
 	Status      int
 	RequestPath string
+	// refused is set only by the list reader, for a 403 that carries no
+	// rate-limit signal (forbiddenByRateLimit): GitHub refused the read
+	// itself, so retrying won't help until a permission changes. It's a
+	// positive bit rather than a rate-limit bit so that a 403 from any
+	// other request, such as the token mint that precedes the read, never
+	// reads as a refusal.
+	refused bool
 }
 
 func (e *APIError) Error() string {
@@ -275,3 +282,11 @@ func (e *APIError) Error() string {
 // Is lets errors.Is(err, ErrGitHubAPI) match the class while errors.As
 // recovers the status and path.
 func (e *APIError) Is(target error) bool { return target == ErrGitHubAPI }
+
+// refusedRead reports whether err is a list read GitHub refused with a 403
+// that isn't a rate limit. A rate-limited 403, any other status, and a
+// transport error are all false.
+func refusedRead(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.refused
+}

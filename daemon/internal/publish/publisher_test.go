@@ -142,6 +142,9 @@ type fakeGitHub struct {
 	reviewCommentRevs map[int]int
 	reactions         map[int][]fakeReaction
 	reactionRevs      map[int]int
+	// reactionsRefusal, when set for a PR number, answers its reactions read
+	// with that status and headers before any ETag check (#2717).
+	reactionsRefusal map[int]fakeRefusal
 
 	// createHeadRepo, when set, is the head repository the fake reports
 	// for PRs created through it (simulating a head resolved to a fork).
@@ -178,8 +181,15 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 		reviews:               map[int][]fakeReview{}, reviewRevs: map[int]int{},
 		reviewComments: map[int][]fakeReviewComment{}, reviewCommentRevs: map[int]int{},
 		reactions: map[int][]fakeReaction{}, reactionRevs: map[int]int{},
-		repositoryID: testRepoID,
+		reactionsRefusal: map[int]fakeRefusal{},
+		repositoryID:     testRepoID,
 	}
+}
+
+// fakeRefusal is a non-success response the fake serves in place of a list.
+type fakeRefusal struct {
+	Status int
+	Header map[string]string
 }
 
 type fakeReview struct {
@@ -488,6 +498,13 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/issues/"), "/reactions"))
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if refusal, ok := g.reactionsRefusal[number]; ok {
+			for name, value := range refusal.Header {
+				w.Header().Set(name, value)
+			}
+			w.WriteHeader(refusal.Status)
 			return
 		}
 		etag := fmt.Sprintf(`"reactions-%d-%d"`, number, g.reactionRevs[number])
