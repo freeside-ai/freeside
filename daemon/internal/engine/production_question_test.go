@@ -261,6 +261,7 @@ func (f blockedImplementationFixture) questionID() domain.ItemID {
 }
 
 func TestBlockedImplementationTerminalCreatesQuestionWithoutPublication(t *testing.T) {
+	t.Parallel()
 	for _, kind := range domain.AllBlockedKinds {
 		t.Run(string(kind), func(t *testing.T) {
 			f := newBlockedImplementationFixture(t, kind, decisionsFixture()[0].Question)
@@ -294,6 +295,7 @@ func TestBlockedImplementationTerminalCreatesQuestionWithoutPublication(t *testi
 // reaches the item facts in full while the terminal carries the bounded
 // summary every stage result is held to.
 func TestBlockedImplementationTerminalBoundsItsSummary(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("Which retention period applies to exported logs? ", 20)
 	f := newBlockedImplementationFixtureWithDecisions(t, domain.BlockedKindOwnerDecision, func(d []domain.Decision) {
 		d[0].Question = strings.TrimSpace(long)
@@ -309,6 +311,7 @@ func TestBlockedImplementationTerminalBoundsItsSummary(t *testing.T) {
 }
 
 func TestBlockedImplementationTerminalWithDriverOutcomeIsStillCollected(t *testing.T) {
+	t.Parallel()
 	f := newBlockedImplementationFixture(t, domain.BlockedKindScopeExpansion, decisionsFixture()[0].Question)
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		admission, err := tx.GetExecutionAdmissionRecord(t.Context(), f.attempt.InvocationID)
@@ -333,6 +336,7 @@ func TestBlockedImplementationTerminalWithDriverOutcomeIsStillCollected(t *testi
 // summary disagrees with the persisted decisions is refused, and no item or
 // publication task appears for it.
 func TestBlockedImplementationTerminalRejectsMismatchedOutcome(t *testing.T) {
+	t.Parallel()
 	f := newBlockedImplementationFixture(t, domain.BlockedKindOwnerDecision, "a different question")
 	if _, err := f.engine.Reconcile(t.Context()); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("reconcile with a mismatched summary = %v, want ErrParentKeyMismatch", err)
@@ -397,6 +401,7 @@ func (f blockedImplementationFixture) assertQuestion(t *testing.T) {
 // to retry_implementation re-invokes the implementer on the same run with the
 // answer as operator feedback, against the unchanged specification digest.
 func TestBlockedImplementationAnswerRetriesImplementer(t *testing.T) {
+	t.Parallel()
 	f := newBlockedImplementationFixture(t, domain.BlockedKindOwnerDecision, decisionsFixture()[0].Question)
 	f.engine.productionPublication = &productionPublicationWorkflow{
 		store: f.store, attention: f.signet, artifacts: f.blobs,
@@ -480,6 +485,7 @@ func TestBlockedImplementationAnswerRetriesImplementer(t *testing.T) {
 // specification run rooted at the revision (iteration 2), linked back to the
 // blocked run. The blocked run is untouched and a redelivery converges (#1083).
 func TestBlockedImplementationAnswerRevisesSpecification(t *testing.T) {
+	t.Parallel()
 	f := newBlockedImplementationCampaignFixture(t, domain.BlockedKindOwnerDecision, decisionsFixture()[0].Question)
 	if _, err := f.engine.Reconcile(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)

@@ -106,6 +106,7 @@ func closureStoreBinding(policy domain.ResolvedPolicy, taskID domain.TaskID) pro
 // store's verified determination for a same-repository issue-subject task, with
 // no proposed target (the daemon uses its bound issue).
 func TestDecideClosableSourceVerifiesIssueSubject(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, policy, taskID := seedClosureChain(t, "run-decide")
 	w := &productionPublicationWorkflow{store: s}
@@ -156,6 +157,7 @@ func TestDecideClosableSourceVerifiesIssueSubject(t *testing.T) {
 // determination matches its own), and records a policy approval that authorizes
 // closing for the bound merge.
 func TestReconcileClosureDefaultPolicyRecordsBindingApproval(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, policy, taskID := seedClosureChain(t, "run-emit")
 	w := &productionPublicationWorkflow{store: s}
@@ -234,6 +236,7 @@ func TestReconcileClosureDefaultPolicyRecordsBindingApproval(t *testing.T) {
 // restored or corrupted checkpoint naming another run's instance must fail closed
 // with ErrParentKeyMismatch before any approval is recorded.
 func TestBindClosureMergeRefusesForeignInstance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, policy, taskID := seedClosureChain(t, "run-own")
 	w := &productionPublicationWorkflow{store: s}
@@ -288,6 +291,7 @@ func TestBindClosureMergeRefusesForeignInstance(t *testing.T) {
 // TestAuthorSourceIssueSelection proves both author sites use the bound issue
 // subject for intake and read client source text only from the target repo.
 func TestAuthorSourceIssueSelection(t *testing.T) {
+	t.Parallel()
 	s, policy, taskID := seedClosureChain(t, "run-author-ref")
 	w := &productionPublicationWorkflow{store: s}
 	task := productionPublicationTask{

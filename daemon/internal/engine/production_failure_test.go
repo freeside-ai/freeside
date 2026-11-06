@@ -245,6 +245,7 @@ func (f failedImplementationFixture) assertFailure(
 // execution_failure item, and converges on the pre-recorded outcome. A replay
 // and a restart change nothing.
 func TestProductionFailedOutcomeConverges(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "the implementation could not be produced")
 	pre := f.preRecordOutcome(t, domain.ExecutionOutcomeFailed, "driver-recorded failure")
 	if _, err := f.engine.Reconcile(t.Context()); err != nil {
@@ -273,6 +274,7 @@ func TestProductionFailedOutcomeConverges(t *testing.T) {
 // engine records the driver's cause on the outcome and copies it onto the
 // item's facts (#2210); a replayed pass converges on the item it wrote.
 func TestProductionFailedItemCarriesDriverCause(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixtureScript(t, execfake.StageScript{
 		Outcome: execfake.OutcomeFail,
 		Result:  exec.StageResult{Summary: "quota exhausted", Cause: domain.FailureCauseQuota},
@@ -295,6 +297,7 @@ func TestProductionFailedItemCarriesDriverCause(t *testing.T) {
 // TestProductionLostOutcomeConverges: a session lost before any result, with a
 // pre-recorded lost outcome, records a gone terminal and a lost failure item.
 func TestProductionLostOutcomeConverges(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeCrashBeforeResult, "")
 	pre := f.preRecordOutcome(t, domain.ExecutionOutcomeLost, "")
 	if _, err := f.engine.Reconcile(t.Context()); err != nil {
@@ -307,6 +310,7 @@ func TestProductionLostOutcomeConverges(t *testing.T) {
 // shutdown), with a pre-recorded canceled outcome, records a canceled terminal
 // and a canceled failure item.
 func TestProductionCanceledOutcomeConverges(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeCancel, "the daemon shut down mid-stage")
 	pre := f.preRecordOutcome(t, domain.ExecutionOutcomeCanceled, "driver-recorded cancellation")
 	if _, err := f.engine.Reconcile(t.Context()); err != nil {
@@ -319,6 +323,7 @@ func TestProductionCanceledOutcomeConverges(t *testing.T) {
 // outcome under a driver that fails makes the collected terminal disagree with
 // the stored outcome, so the pass fails closed and raises no item.
 func TestProductionOutcomeStatusMismatchFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "the implementation could not be produced")
 	f.preRecordOutcome(t, domain.ExecutionOutcomeCanceled, "disagreeing pre-record")
 	if _, err := f.engine.Reconcile(t.Context()); !errors.Is(err, domain.ErrParentKeyMismatch) {
@@ -340,6 +345,7 @@ func TestProductionOutcomeStatusMismatchFailsClosed(t *testing.T) {
 // driver, so a driver that knows nothing about the invocation still yields
 // (false, nil) rather than an ErrUnknownInvocation collection error.
 func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -362,6 +368,7 @@ func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
 // for the same admitted invocation must compare against those stored values
 // and leave the item untouched (#2489).
 func TestProductionDeliveryRefusalReplayConvergesOnStoredItem(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -387,6 +394,7 @@ func TestProductionDeliveryRefusalReplayConvergesOnStoredItem(t *testing.T) {
 // receipt rewrites the stored item's timing without a new item version, so a
 // replay that follows it must still converge and keep that timing.
 func TestProductionDeliveryRefusalReplayConvergesAfterDelivery(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -420,6 +428,7 @@ func TestProductionDeliveryRefusalReplayConvergesAfterDelivery(t *testing.T) {
 // before #979 carries no admitted facts. A replay drops them before comparing,
 // and must still converge on that stored body.
 func TestProductionDeliveryRefusalReplayConvergesOnLegacyItem(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -472,6 +481,7 @@ func TestProductionDeliveryRefusalReplayConvergesOnLegacyItem(t *testing.T) {
 // projects row (#1537), so a replay that rebuilds the item under the new name
 // must still converge on the stored body (#2495).
 func TestProductionDeliveryRefusalReplayConvergesAfterProjectRename(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -498,6 +508,7 @@ func TestProductionDeliveryRefusalReplayConvergesAfterProjectRename(t *testing.T
 // changes the derived task label after the item is written. The store
 // projects the current name on read, so a replay must still converge (#2495).
 func TestProductionDeliveryRefusalReplayConvergesAfterTaskRename(t *testing.T) {
+	t.Parallel()
 	f := newUntitledFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -525,6 +536,7 @@ func TestProductionDeliveryRefusalReplayConvergesAfterTaskRename(t *testing.T) {
 // item whose reason differs from the replay's still refuses the replay, even
 // when its project label differs too.
 func TestProductionDeliveryRefusalReplayFailsClosedOnChangedReason(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
 	if !ok {
@@ -679,6 +691,7 @@ func (f failedImplementationFixture) outboxDispatched(t *testing.T) bool {
 // observation mirror is upsert-per-invocation, so the running-then-failed
 // timeline is proved by reading it between passes rather than as a stored list.
 func TestStrandedFailureConvergesWithVisibleTimeline(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixtureScript(t, execfake.StageScript{
 		RunningInspects: 1,
 		Outcome:         execfake.OutcomeFail,
@@ -775,6 +788,7 @@ func (d inspectErrorDriver) Inspect(context.Context, domain.InvocationID) (exec.
 // admission-policy refusal, it now records a run hold with the classified
 // reason instead of skipping silently.
 func TestPolicyRefusalRecordsRunHold(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	driver := inspectErrorDriver{
 		err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant),
@@ -810,6 +824,7 @@ func TestPolicyRefusalRecordsRunHold(t *testing.T) {
 // lets acceptProductionAttempt's one refusal branch record the hold for it;
 // TestPolicyRefusalRecordsRunHold covers that branch.
 func TestTerminalWriteRefusalClassifiesAsRunHold(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeComplete, "completed before the floor rose")
 	raised := f.withRaisedFloor(t)
 	engine := raised.newEngine(t, f.driver)
@@ -867,6 +882,7 @@ func (f failedImplementationFixture) runHold(t *testing.T) (domain.RunHoldObserv
 // instead of the stale reason (issue #1194). One engine sees both passes, so
 // the healthy pass really clears what the refusing pass recorded.
 func TestPolicyRefusalRecoveryClearsRunHold(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		err    error
@@ -909,6 +925,7 @@ func TestPolicyRefusalRecoveryClearsRunHold(t *testing.T) {
 // dispatch capacity hold recorded between the refusal and the healthy pass
 // survives with its first-observed instant.
 func TestPolicyRefusalRecoveryPreservesOtherHold(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	driver := &switchableInspectDriver{err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant)}
 	engine := f.newEngine(t, driver)
@@ -945,6 +962,7 @@ func TestPolicyRefusalRecoveryPreservesOtherHold(t *testing.T) {
 // a recovery is re-recorded on the same engine. The sentinel pace state the
 // clear stamps on the hold key must not suppress the next real reason.
 func TestPolicyRefusalAfterRecoveryIsRecorded(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	driver := &switchableInspectDriver{err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant)}
 	engine := f.newEngine(t, driver)
@@ -978,6 +996,7 @@ func TestPolicyRefusalAfterRecoveryIsRecorded(t *testing.T) {
 // keeps a transient clear failure from surfacing as an error that would strand
 // a completion the recording transaction already committed.
 func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "the implementation could not be produced")
 
 	// An earlier transient refusal left a classified hold on the run.
@@ -1008,6 +1027,7 @@ func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
 // in the set is reached by at least one sentinel. It fails when either function
 // gains a member the other, or this list, does not know.
 func TestRefusalHoldReasonsPinned(t *testing.T) {
+	t.Parallel()
 	// Every sentinel MutableAdmissionPolicyRefusal accepts (invocation.go).
 	sentinels := []error{
 		store.ErrBackendNotConformant,

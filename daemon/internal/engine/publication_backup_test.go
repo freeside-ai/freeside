@@ -106,6 +106,7 @@ func publicationBackupCases(t *testing.T, publication ProductionPublication) []p
 }
 
 func TestRecipePublicationBackupPreservesInputs(t *testing.T) {
+	t.Parallel()
 	p := recipePublicationFixture()
 	p.SourceIssue = "https://github.com/example/project/issues/82"
 	for _, tc := range publicationBackupCases(t, p) {
@@ -131,6 +132,7 @@ func TestRecipePublicationBackupPreservesInputs(t *testing.T) {
 }
 
 func TestHistoricalPublicationBackupDoesNotGrantLiveAuthority(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{"## Verification\n\nRun the tests.\n", strings.Repeat("x", 30<<10)} {
 		for _, tc := range historicalPublicationCases(t, body) {
 			t.Run(tc.name, func(t *testing.T) {
@@ -174,6 +176,7 @@ func TestHistoricalPublicationBackupDoesNotGrantLiveAuthority(t *testing.T) {
 }
 
 func TestHistoricalPublicationBackupKeepsMetadataValidation(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{"", " \n", strings.Repeat("x", (64<<10)+1)} {
 		for _, tc := range historicalPublicationCases(t, body) {
 			if _, err := tc.extract(tc.entry); err == nil {
@@ -184,6 +187,7 @@ func TestHistoricalPublicationBackupKeepsMetadataValidation(t *testing.T) {
 }
 
 func TestHistoricalSpecificationCheckpointRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	cases := historicalPublicationCases(t, "## Verification\n\nOld operator instructions.\n")
 	entries := []store.QueueEntry{cases[1].entry, cases[2].entry}

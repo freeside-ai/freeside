@@ -21,6 +21,7 @@ import (
 )
 
 func TestFakePublicationTerminalItemIDsUseWorkflowNamespace(t *testing.T) {
+	t.Parallel()
 	ids := []domain.ItemID{
 		FakePublicationReadyItemID("run-1"),
 		FakePublicationBlockedItemID("run-1"),
@@ -77,6 +78,7 @@ func (f fakePublicationReconciliationFixture) GetOutbox(
 }
 
 func TestFakePublicationReconciliationRevalidatesInvocationOwners(t *testing.T) {
+	t.Parallel()
 	task := validFakePublicationTask(t)
 	owners, err := expectedFakePublicationInvocationOwners(task)
 	if err != nil {
@@ -147,6 +149,7 @@ func TestFakePublicationReconciliationRevalidatesInvocationOwners(t *testing.T) 
 }
 
 func TestDecodeFakePublicationInvocationOwnerRejectsUppercaseBindingDigest(t *testing.T) {
+	t.Parallel()
 	task := validFakePublicationTask(t)
 	owners, err := expectedFakePublicationInvocationOwners(task)
 	if err != nil {
@@ -165,6 +168,7 @@ func TestDecodeFakePublicationInvocationOwnerRejectsUppercaseBindingDigest(t *te
 }
 
 func TestFakePublicationReconciliationRevalidatesResolvedPolicy(t *testing.T) {
+	t.Parallel()
 	task := validFakePublicationTask(t)
 	valid := fakePublicationReconciliationFixture{
 		run: publicationRun(task), policy: publicationPolicy(task),
@@ -194,6 +198,7 @@ func TestFakePublicationReconciliationRevalidatesResolvedPolicy(t *testing.T) {
 }
 
 func TestEnsureFakePublicationPolicyConvergesLegacyV1Run(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	task := validFakePublicationTask(t)
@@ -221,6 +226,7 @@ func TestEnsureFakePublicationPolicyConvergesLegacyV1Run(t *testing.T) {
 // their owning task dispatched. Startup recovery must authenticate that
 // pending owner's schedule before the scheduler can fire it.
 func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	task := validFakePublicationTask(t)
@@ -297,6 +303,7 @@ func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T
 }
 
 func TestFakePublicationDispatchedLegacyRecoveryRunsOncePerStoreEpoch(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	tempDir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(tempDir, "freeside.db"), store.Options{})
@@ -392,6 +399,7 @@ func validFakePublicationTask(t *testing.T) fakePublicationTask {
 }
 
 func TestFakePublicationBackupPayloadDigests(t *testing.T) {
+	t.Parallel()
 	task := validFakePublicationTask(t)
 	payload := mustEncodeFakePublicationTask(task)
 	entry := store.QueueEntry{
@@ -427,6 +435,7 @@ func TestFakePublicationBackupPayloadDigests(t *testing.T) {
 }
 
 func TestFakePublicationDurabilityHelpers(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	nested := filepath.Join(root, "one", "two")
 	if err := makeFakePublicationDirectory(nested, 0o700); err != nil {
@@ -444,6 +453,7 @@ func TestFakePublicationDurabilityHelpers(t *testing.T) {
 }
 
 func TestFakePublicationDurabilityHelpersRejectNonDirectoryAncestor(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	notDirectory := filepath.Join(root, "file")
 	if err := os.WriteFile(notDirectory, []byte("x"), 0o600); err != nil {
@@ -455,6 +465,7 @@ func TestFakePublicationDurabilityHelpersRejectNonDirectoryAncestor(t *testing.T
 }
 
 func TestOpenValidatedFakePublicationWorkspacePinsOriginalRoot(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	workspace := filepath.Join(parent, "workspace")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
@@ -493,6 +504,7 @@ func TestOpenValidatedFakePublicationWorkspacePinsOriginalRoot(t *testing.T) {
 }
 
 func TestMakeFakePublicationDirectoryRetriesExistingParentSync(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	target := filepath.Join(root, "candidate")
 	failedSync := errors.New("injected parent sync failure")
@@ -524,6 +536,7 @@ func TestMakeFakePublicationDirectoryRetriesExistingParentSync(t *testing.T) {
 }
 
 func TestSyncFakePublicationCheckpointDirectoryRetriesExistingEntry(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	path := filepath.Join(parent, "candidate.json")
 	failedSync := errors.New("injected checkpoint directory sync failure")
@@ -539,6 +552,7 @@ func TestSyncFakePublicationCheckpointDirectoryRetriesExistingEntry(t *testing.T
 }
 
 func TestInstallFakePublicationHandoffRollsBackAfterDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	output := filepath.Join(parent, "output")
 	destination := filepath.Join(parent, "handoff")
@@ -572,6 +586,7 @@ func TestInstallFakePublicationHandoffRollsBackAfterDirectorySyncFailure(t *test
 }
 
 func TestInstallFakePublicationCheckpointDoesNotReplaceConcurrentWinner(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	destination := filepath.Join(root, "candidate.json")
 	sources := []string{
@@ -627,6 +642,7 @@ func TestInstallFakePublicationCheckpointDoesNotReplaceConcurrentWinner(t *testi
 }
 
 func TestValidateFakePublicationRecipePath(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{
 		"",
 		"/verify.json",
@@ -649,6 +665,7 @@ func TestValidateFakePublicationRecipePath(t *testing.T) {
 }
 
 func TestFakePublicationTaskValidateReappliesAdmissionValidators(t *testing.T) {
+	t.Parallel()
 	valid := validFakePublicationTask(t)
 	if err := valid.validate(); err != nil {
 		t.Fatalf("valid task: %v", err)
@@ -690,6 +707,7 @@ func TestFakePublicationTaskValidateReappliesAdmissionValidators(t *testing.T) {
 }
 
 func TestValidSHA256Digest(t *testing.T) {
+	t.Parallel()
 	hex64 := strings.Repeat("a", 64)
 	tests := []struct {
 		name   string
@@ -715,6 +733,7 @@ func TestValidSHA256Digest(t *testing.T) {
 }
 
 func TestValidateFakePublicationCommitDateBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := map[string]struct {
 		commitDate time.Time
 		wantErr    bool
@@ -739,6 +758,7 @@ func TestValidateFakePublicationCommitDateBoundaries(t *testing.T) {
 }
 
 func TestValidateNewFakePublicationBindingsRejectsChangedEpochAndProfile(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
@@ -795,6 +815,7 @@ func TestValidateNewFakePublicationBindingsRejectsChangedEpochAndProfile(t *test
 }
 
 func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	attention := signet.NewService(st)
@@ -855,6 +876,7 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 }
 
 func TestFakePublicationTerminalBindingAcceptsPrePRReferenceDigest(t *testing.T) {
+	t.Parallel()
 	task := validFakePublicationTask(t)
 	runID := task.RunID
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{

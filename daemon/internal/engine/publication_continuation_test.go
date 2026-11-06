@@ -9,6 +9,7 @@ import (
 )
 
 func TestPublicationContinuationOfferDoesNotAdvanceRevisionForClosedDispute(t *testing.T) {
+	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionReviewDispute, nil)
 	item := f.item
 	item.ID = domain.ItemID(domain.PublicationContinuationItemPrefix + "old-recheck")

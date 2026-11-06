@@ -95,6 +95,7 @@ func (f *closureSequenceFixture) card(t *testing.T, publication int) domain.Atte
 // observed_at, with no task completion recorded, and that a second call
 // retires nothing.
 func TestSettledClosureCardsRetire(t *testing.T) {
+	t.Parallel()
 	boundIssue := closureStoreIssue
 	closedIssue := domain.IssueStateFact{
 		Repo: closureStoreRepo, RepositoryID: closureStoreRepoID, IssueNumber: closureStoreIssue,
@@ -153,6 +154,7 @@ func TestSettledClosureCardsRetire(t *testing.T) {
 // issue since reopened) keeps its state and version, and that a decided card
 // stays decided after its merge is observed.
 func TestUnsettledClosureCardsStayOpen(t *testing.T) {
+	t.Parallel()
 	requireUntouched := func(t *testing.T, f *closureSequenceFixture, status domain.ItemStatus, version int) {
 		t.Helper()
 		if got := f.retireSettled(t); len(got) != 0 {
@@ -214,6 +216,7 @@ func TestUnsettledClosureCardsStayOpen(t *testing.T) {
 // pass runs the sweep once the merge is observed, and that a pass over a held
 // card or an already retired one bumps no revision.
 func TestReconcileRetiresSettledClosureCardsOnce(t *testing.T) {
+	t.Parallel()
 	f := seedClosureSequence(t)
 	f.publish(t, domain.ProductionPublicationInvocationID(f.policy.RunID), closureSequenceHead1, closureSequenceBase1)
 	f.bindPR(t)

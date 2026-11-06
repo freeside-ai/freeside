@@ -25,6 +25,7 @@ func (sourceIssueTestToken) Token(context.Context, string) (publish.Installation
 }
 
 func TestPublicationSourceIssueSnapshotSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	for _, failed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("first_read_failed_%t", failed), func(t *testing.T) {
 			var reads atomic.Int32
@@ -78,6 +79,7 @@ func TestPublicationSourceIssueSnapshotSurvivesRestart(t *testing.T) {
 }
 
 func TestPublicationSourceIssueRestartRejectsMalformedText(t *testing.T) {
+	t.Parallel()
 	for _, title := range []string{"", " \t\n"} {
 		t.Run(fmt.Sprintf("title_%q", title), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "store.db")

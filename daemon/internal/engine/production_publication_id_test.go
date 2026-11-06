@@ -7,6 +7,7 @@ import (
 )
 
 func TestProductionReviewHardLimitItemIDPreservesLegacyAndSeparatesRecovery(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run")
 	if got, want := productionReviewHardLimitItemID(runID, 1, false),
 		productionReviewItemID(runID, 1); got != want {
@@ -28,6 +29,7 @@ func TestProductionReviewHardLimitItemIDPreservesLegacyAndSeparatesRecovery(t *t
 }
 
 func TestReadinessReentryExhaustionItemIDSeparatesCyclesAndNamespaces(t *testing.T) {
+	t.Parallel()
 	successor := domain.PublicationSuccessor{
 		RunID: "run", PredecessorItemID: "production-ready-run", ReviewRound: 2,
 		Origin: domain.PublicationSuccessorReadinessInvalidation,
