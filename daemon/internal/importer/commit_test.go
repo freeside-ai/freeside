@@ -34,6 +34,7 @@ func testImportOptions(base string) Options {
 }
 
 func TestBuildCommitClean(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		"a.txt":    "old\n",
 		"del.txt":  "bye\n",
@@ -96,6 +97,7 @@ func TestBuildCommitClean(t *testing.T) {
 }
 
 func TestBuildCommitEmptyChangeSet(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "same\n"})
 	g := newTestRunner(t, checkout, testImportOptions(base))
 	tree, commit, err := buildCommit(t.Context(), g, testImportOptions(base), nil)
@@ -111,6 +113,7 @@ func TestBuildCommitEmptyChangeSet(t *testing.T) {
 }
 
 func TestBuildCommitRejectsLyingOID(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	handoff := buildHandoff(t, []blobSpec{
 		{path: "a.txt", content: "new\n"},
@@ -130,6 +133,7 @@ func TestBuildCommitRejectsLyingOID(t *testing.T) {
 }
 
 func TestIngestBlobsUsesVerifiedSnapshotAfterHandoffReplacement(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(t *testing.T, path string)
@@ -196,6 +200,7 @@ func TestIngestBlobsUsesVerifiedSnapshotAfterHandoffReplacement(t *testing.T) {
 }
 
 func TestBuildCommitRejectsUnplannedElision(t *testing.T) {
+	t.Parallel()
 	// A "modification" identical to base produces no diff-tree record;
 	// the acceptance cross-check must refuse the mismatch rather than
 	// silently blessing a tree that differs from the plan.

@@ -10,6 +10,7 @@ import (
 )
 
 func TestReviewRequestPersistenceAndTamper(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, corruption := range []string{"none", "run", "round", "head", "body", "time"} {
 		t.Run(corruption, func(t *testing.T) {

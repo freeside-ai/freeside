@@ -13,6 +13,7 @@ import (
 )
 
 func TestAgentQuestionActionSetAuthentication(t *testing.T) {
+	t.Parallel()
 	t.Run("write", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()

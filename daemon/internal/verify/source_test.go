@@ -11,6 +11,7 @@ import (
 const testRecipePath = ".freeside/verify.json"
 
 func TestLoadTrustedRecipeFromBase(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{testRecipePath: trustedRecipeBytes})
 	g := newTestRunner(t, dir)
 	got, err := loadTrustedRecipeBytes(context.Background(), g, BaseCommitRecipe(), base, testRecipePath, 1<<20)
@@ -23,6 +24,7 @@ func TestLoadTrustedRecipeFromBase(t *testing.T) {
 }
 
 func TestLoadTrustedRecipeFromConfig(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"README.md": "hello"})
 	g := newTestRunner(t, dir)
 	got, err := loadTrustedRecipeBytes(context.Background(), g, ConfigRecipe([]byte(trustedRecipeBytes)), base, testRecipePath, 1<<20)
@@ -35,6 +37,7 @@ func TestLoadTrustedRecipeFromConfig(t *testing.T) {
 }
 
 func TestLoadTrustedRecipeFailsClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("absent at base", func(t *testing.T) {
 		dir, base := initRepo(t, map[string]string{"README.md": "hello"})
 		g := newTestRunner(t, dir)
@@ -73,6 +76,7 @@ func TestLoadTrustedRecipeFailsClosed(t *testing.T) {
 // candidate commits: a workspace-modified recipe copy is flagged, and
 // the trusted bytes are what the comparison holds against.
 func TestRecipeDivergence(t *testing.T) {
+	t.Parallel()
 	hostile := `{"commands": [["true"]], "capture": "none"}`
 	cases := []struct {
 		name       string
@@ -154,6 +158,7 @@ func TestRecipeDivergence(t *testing.T) {
 // recipe path into a directory: the trusted source still governs and
 // the swap is flagged.
 func TestRecipeDivergenceNonBlobHead(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"README.md": "keep"})
 	head := commitCandidate(t, dir, base, map[string]string{testRecipePath + "/nested": "x"})
 	g := newTestRunner(t, dir)
@@ -167,6 +172,7 @@ func TestRecipeDivergenceNonBlobHead(t *testing.T) {
 }
 
 func TestFindingKindValidity(t *testing.T) {
+	t.Parallel()
 	for _, k := range AllFindingKinds {
 		if !k.valid() {
 			t.Errorf("registered finding kind %q reports invalid", k)

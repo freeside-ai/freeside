@@ -671,6 +671,7 @@ func liveInt64(t *testing.T, name string) int64 {
 // reopening the store must adopt it without another POST. No labels or
 // milestone are assigned, and cleanup closes only issues this test created.
 func TestLiveFollowUpFilingEffectivelyOnce(t *testing.T) {
+	t.Parallel()
 	m, repo, profile, ks := newLiveMinterWithKeystore(t)
 	ctx := context.Background()
 	const baseURL = "https://api.github.com"

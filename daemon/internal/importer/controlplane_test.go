@@ -56,6 +56,7 @@ func fixtureTrustProfileProtecting(
 // exhaustive linter cannot give for a table literal. A new domain category with
 // no importer gate would fail here.
 func TestControlPlaneCategoryCoverage(t *testing.T) {
+	t.Parallel()
 	seen := map[domain.ControlPlaneCategory]int{}
 	for _, cl := range controlPlaneClasses {
 		seen[cl.category]++
@@ -76,6 +77,7 @@ func TestControlPlaneCategoryCoverage(t *testing.T) {
 // import-origin CandidateFinding of the expected class, control-plane kinds
 // carry their §5.8 category and the rest carry none.
 func TestFindingCandidateLift(t *testing.T) {
+	t.Parallel()
 	wantClass := map[FindingKind]domain.CandidateFindingClass{
 		FindingNonRegularChange:        domain.FindingClassImportIntegrity,
 		FindingInvalidPathEntry:        domain.FindingClassImportIntegrity,
@@ -140,6 +142,7 @@ func TestFindingCandidateLift(t *testing.T) {
 // publish-strict profiles, still fatal under the specification profile, and
 // AllAdvisory is the clean bar an import meets.
 func TestFindingAdvisoryStance(t *testing.T) {
+	t.Parallel()
 	strict := FindingProfilePublishStrict
 	spec := FindingProfileSpecification
 	for _, k := range AllFindingKinds {
@@ -166,6 +169,7 @@ func TestFindingAdvisoryStance(t *testing.T) {
 // carries PathHex losslessly and never a Path (mirrors the manifest's
 // mutual-exclusion, which CandidateFinding.Validate enforces).
 func TestFindingCandidateLiftPathHex(t *testing.T) {
+	t.Parallel()
 	cf := Finding{Kind: FindingReviewerInstructionPath, PathHex: "6261", Detail: "deleted"}.Candidate()
 	if err := cf.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
@@ -181,6 +185,7 @@ func TestFindingCandidateLiftPathHex(t *testing.T) {
 // to identical findings that NewCandidateAuthorization rejects as duplicates,
 // sinking the authorization instead of recording the blocking secrets.
 func TestFindingCandidateLiftSecretsDistinct(t *testing.T) {
+	t.Parallel()
 	a := Finding{Kind: FindingSecret, Path: "conf.env", Rule: "aws_key", Line: 3}.Candidate()
 	b := Finding{Kind: FindingSecret, Path: "conf.env", Rule: "gh_token", Line: 7}.Candidate()
 	if a.Detail == b.Detail {
@@ -210,6 +215,7 @@ func TestFindingCandidateLiftSecretsDistinct(t *testing.T) {
 // widens all seven Extra lists (including the verification_control →
 // verification_recipes crosswalk) without disturbing the mandatory defaults.
 func TestProtectedPathPolicyFailClosed(t *testing.T) {
+	t.Parallel()
 	// (a) An absent (zero-value) profile fails closed.
 	if _, err := (Policy{}).WithProtectedPaths(domain.AutomationTrustProfile{}); !errors.Is(err, ErrInvalidOptions) {
 		t.Fatalf("zero profile: err = %v, want ErrInvalidOptions", err)
@@ -263,6 +269,7 @@ func TestProtectedPathPolicyFailClosed(t *testing.T) {
 // boundary (a valid glob edit re-runs no digest check) must not narrow or
 // redirect control-plane coverage.
 func TestWithProtectedPathsSnapshots(t *testing.T) {
+	t.Parallel()
 	profile := fixtureTrustProfile(t)
 	got, err := (Policy{}).WithProtectedPaths(profile)
 	if err != nil {
@@ -278,6 +285,7 @@ func TestWithProtectedPathsSnapshots(t *testing.T) {
 // under an NTFS/HFS alias still gets its finding, so config-driven patterns run
 // the same normalizeAliases path as the defaulted classes.
 func TestControlPlaneConfigAliasNormalization(t *testing.T) {
+	t.Parallel()
 	pol := Policy{
 		ExtraPromptsPolicyPatterns:    []string{"prompts/system.md"},
 		ExtraMaterialityRulesPatterns: []string{"policy/materiality.yaml"},

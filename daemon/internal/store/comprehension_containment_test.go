@@ -19,6 +19,7 @@ import (
 // tx.go; the measurement package (observe) and the operator command are not in
 // the target set, so they may read the surface.
 func TestAdmissionAndPolicyPackagesCannotReadComprehension(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("..")
 	targets := []string{"domain", "store", "intake", "signet", "exec", "inference", "publish", "engine"}
 	inspected := 0

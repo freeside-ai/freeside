@@ -3,6 +3,7 @@ package importer
 import "testing"
 
 func TestChangeKindValid(t *testing.T) {
+	t.Parallel()
 	for _, k := range AllChangeKinds {
 		if !k.valid() {
 			t.Errorf("registered kind %q reported invalid", k)
@@ -16,6 +17,7 @@ func TestChangeKindValid(t *testing.T) {
 }
 
 func TestPlannedChangePublicRendering(t *testing.T) {
+	t.Parallel()
 	p := plannedChange{
 		path: "a.txt", kind: ChangeModified, mode: "100755",
 		oid: "unused-internally", digest: sha256Digest("x"), size: 1,

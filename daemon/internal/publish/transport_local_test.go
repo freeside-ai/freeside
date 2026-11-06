@@ -294,9 +294,9 @@ func TestValidBranchNameAgreesWithGit(t *testing.T) {
 // TestFetchBaseAcceptsRelativeDir pins that the checkout path is
 // resolved against the caller's working directory, not the private
 // scratch every git invocation runs in.
+//
+//nolint:paralleltest // Serial: t.Chdir mutates the process-global working directory, which the Go test runner forbids in a parallel test (it panics).
 func TestFetchBaseAcceptsRelativeDir(t *testing.T) {
-	// Serial: t.Chdir mutates the process-global working directory, which
-	// the Go test runner forbids in a parallel test (it panics).
 	remote := newLocalRemote(t)
 	t.Chdir(t.TempDir())
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, "nested/checkout")

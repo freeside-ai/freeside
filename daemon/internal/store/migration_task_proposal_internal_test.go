@@ -18,6 +18,7 @@ import (
 // effect-proposal encoding untouched so the proposal binding, decision surface,
 // and effect-proposal instance all still reconstruct.
 func TestTaskProposalVocabularyMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// The fixture is dumped against the schema immediately before 0070; load it
 	// there, then bring it to the real head just before 0074 to read the

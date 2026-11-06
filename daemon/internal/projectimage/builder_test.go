@@ -231,6 +231,7 @@ func validRequest() Request {
 }
 
 func TestValidatePublishedRefBindsApprovedDestination(t *testing.T) {
+	t.Parallel()
 	digest := "sha256:" + strings.Repeat("c", 64)
 	for _, tc := range []struct {
 		name string
@@ -285,6 +286,7 @@ func TestValidatePublishedRefBindsApprovedDestination(t *testing.T) {
 }
 
 func TestBuildBindsExactInputsAndProvesEveryFreshWorkspace(t *testing.T) {
+	t.Parallel()
 	source := &fakeSource{}
 	backend := newFakeBackend()
 	builder := newBuilder(source, backend, t.TempDir())
@@ -398,6 +400,7 @@ func TestBuildBindsExactInputsAndProvesEveryFreshWorkspace(t *testing.T) {
 }
 
 func TestBuildRejectsInvalidInputsBeforeSourceAccess(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*Request)
@@ -461,6 +464,7 @@ func TestBuildRejectsInvalidInputsBeforeSourceAccess(t *testing.T) {
 }
 
 func TestValidateRegistry(t *testing.T) {
+	t.Parallel()
 	for _, registry := range []string{
 		"registry.example.test",
 		"registry.example.test:5000/team",
@@ -507,6 +511,7 @@ func TestValidateRegistry(t *testing.T) {
 // faults that once shared this class are in
 // TestBuildKeepsRuntimeFaultsOutOfProofFailures.
 func TestBuildRefutesProofFailures(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*fakeBackend)
@@ -553,6 +558,7 @@ func TestBuildRefutesProofFailures(t *testing.T) {
 // the build without a verdict, so the publication lane retries them. These
 // cases asserted ErrProofFailed before #1792 narrowed it to a proof that ran.
 func TestBuildKeepsRuntimeFaultsOutOfProofFailures(t *testing.T) {
+	t.Parallel()
 	runtimeFailure := runtimeFault{errors.New("inspect image: exit status 1")}
 	runs := func(argv0 string, masked bool) func(runSpec) bool {
 		return func(spec runSpec) bool {
@@ -604,6 +610,7 @@ func TestBuildKeepsRuntimeFaultsOutOfProofFailures(t *testing.T) {
 }
 
 func TestBuildPassesInstallFailureThroughWithoutPublishing(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	backend.buildErr = fmt.Errorf("%w:\nnpm error code EINTEGRITY", ErrInstallFailed)
 	_, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest())
@@ -616,6 +623,7 @@ func TestBuildPassesInstallFailureThroughWithoutPublishing(t *testing.T) {
 }
 
 func TestBuildProvesCacheIndependentRecipeInFreshMaskedWorkspaces(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	backend.negativeErr = nil
 	if _, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest()); err != nil {
@@ -643,9 +651,12 @@ func TestBuildProvesCacheIndependentRecipeInFreshMaskedWorkspaces(t *testing.T) 
 
 func TestBuildContextWithRestrictiveUmask(t *testing.T) {
 	if os.Getenv("FREESIDE_TEST_BUILD_CONTEXT_UMASK") == "1" {
+		// The child runs only this test; the test it delegates to calls
+		// t.Parallel() itself, and a second call panics.
 		TestBuildContextPreparationBindsNPMInputs(t)
 		return
 	}
+	t.Parallel()
 	// Change the process-wide umask only in a child, isolated from other tests.
 	cmd := exec.CommandContext(t.Context(), "sh", "-c", `umask 077; exec "$@"`, "sh", os.Args[0], "-test.run=^TestBuildContextWithRestrictiveUmask$") //nolint:gosec // G204: this test executable and fixed shell script
 	cmd.Env = append(os.Environ(), "FREESIDE_TEST_BUILD_CONTEXT_UMASK=1")
@@ -655,6 +666,7 @@ func TestBuildContextWithRestrictiveUmask(t *testing.T) {
 }
 
 func TestBuildReverifiesRepositoryIdentityAfterFetch(t *testing.T) {
+	t.Parallel()
 	resolver := &fakeResolver{}
 	builder := newBuilder(&fakeSource{}, newFakeBackend(), t.TempDir())
 	builder.resolver = resolver
@@ -667,6 +679,7 @@ func TestBuildReverifiesRepositoryIdentityAfterFetch(t *testing.T) {
 }
 
 func TestBuildRefutesRepositoryIdentityDriftAfterFetch(t *testing.T) {
+	t.Parallel()
 	drift := fmt.Errorf("repository freeasinbird/gh-imgup resolved to id 999: %w", ErrInvalidRequest)
 	resolver := &fakeResolver{errs: []error{nil, drift}}
 	source := &fakeSource{}
@@ -686,6 +699,7 @@ func TestBuildRefutesRepositoryIdentityDriftAfterFetch(t *testing.T) {
 }
 
 func TestBuildCleansPublicationWhenDurableRecordingFails(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	builder := newBuilder(&fakeSource{}, backend, t.TempDir())
 	builder.record = func(context.Context, domain.ProjectImage) error {
@@ -716,6 +730,7 @@ func TestBuildCleansPublicationWhenDurableRecordingFails(t *testing.T) {
 }
 
 func TestBuildDiscardsSeededPublicationWhenPublishedProofFails(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	backend.published = domain.ImageRef("example.test/project@sha256:" + strings.Repeat("c", 64))
 	got, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest())
@@ -735,6 +750,7 @@ func TestBuildDiscardsSeededPublicationWhenPublishedProofFails(t *testing.T) {
 }
 
 func TestBuildThreadsRecordedRefLookupIntoPublish(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	builder := newBuilder(&fakeSource{}, backend, t.TempDir())
 	lookups := 0
@@ -755,6 +771,7 @@ func TestBuildThreadsRecordedRefLookupIntoPublish(t *testing.T) {
 }
 
 func TestBuildRemovesLocalImageAfterPostBuildFailure(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	backend.provenanceErr = errors.New("label mismatch")
 
@@ -768,6 +785,7 @@ func TestBuildRemovesLocalImageAfterPostBuildFailure(t *testing.T) {
 }
 
 func TestBuildFailsWhenLocalImageRemovalFails(t *testing.T) {
+	t.Parallel()
 	backend := newFakeBackend()
 	backend.removeLocalErr = errors.New("runtime unavailable")
 
@@ -778,6 +796,7 @@ func TestBuildFailsWhenLocalImageRemovalFails(t *testing.T) {
 }
 
 func TestBuildContextRejectsSymlinkedManifest(t *testing.T) {
+	t.Parallel()
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "real.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
@@ -795,6 +814,7 @@ func TestBuildContextRejectsSymlinkedManifest(t *testing.T) {
 }
 
 func TestBuildContextRejectsAlternateNPMInputs(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"npm-shrinkwrap.json", ".npmrc"} {
 		t.Run(name, func(t *testing.T) {
 			source := t.TempDir()
@@ -818,6 +838,7 @@ func TestBuildContextRejectsAlternateNPMInputs(t *testing.T) {
 }
 
 func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
+	t.Parallel()
 	source := t.TempDir()
 	if err := writeNPMFixture(source); err != nil {
 		t.Fatal(err)
@@ -927,6 +948,7 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 }
 
 func TestBuildFromLocalSourceMakesNoForgeRequest(t *testing.T) {
+	t.Parallel()
 	source := &fakeSource{}
 	resolver := &fakeResolver{}
 	builder := newBuilder(source, newFakeBackend(), t.TempDir())

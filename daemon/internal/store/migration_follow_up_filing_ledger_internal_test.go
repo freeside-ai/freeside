@@ -16,6 +16,7 @@ import (
 // instance row survives byte for byte, the three ledger tables start empty,
 // and they then accept rows that reference a preserved instance.
 func TestFollowUpFilingLedgerMigrationAppliesToExistingStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
@@ -114,6 +115,7 @@ func TestFollowUpFilingLedgerMigrationAppliesToExistingStore(t *testing.T) {
 // filer never sends a create or adopts for, so a later backfill would turn a
 // fail-closed row into a trusted one.
 func TestFollowUpFilingDispatchIdentityMigrationKeepsLegacyRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))

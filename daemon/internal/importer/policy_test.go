@@ -11,6 +11,7 @@ import (
 )
 
 func TestMatchAny(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		pattern string
 		path    string
@@ -42,6 +43,7 @@ func TestMatchAny(t *testing.T) {
 }
 
 func TestApplyPolicyClasses(t *testing.T) {
+	t.Parallel()
 	changes := []plannedChange{
 		{path: ".github/workflows/ci.yml", kind: ChangeDeleted},
 		{path: "AGENTS.md", kind: ChangeModified, size: 10},
@@ -85,6 +87,7 @@ func TestApplyPolicyClasses(t *testing.T) {
 // TestMandatoryGatesImmutable is the round-9 P1 regression: the §5.5 and
 // §5.8 gates are minimums that a caller can widen but never disable.
 func TestMandatoryGatesImmutable(t *testing.T) {
+	t.Parallel()
 	changes := []plannedChange{
 		{path: ".github/workflows/ci.yml", kind: ChangeAdded, size: 1},
 		{path: "AGENTS.md", kind: ChangeAdded, size: 1},
@@ -126,6 +129,7 @@ func TestMandatoryGatesImmutable(t *testing.T) {
 
 // TestNewAgentControlSurfaces pins the round-9 P1 coverage additions.
 func TestNewAgentControlSurfaces(t *testing.T) {
+	t.Parallel()
 	reviewer := []string{
 		".github/agents/my-agent.md", ".github/skills/s/skill.md",
 		".agents/skills/s/skill.md", ".windsurf/rules/r.md",
@@ -146,6 +150,7 @@ func TestNewAgentControlSurfaces(t *testing.T) {
 // unparseable custom pattern is rejected at validation, not silently
 // matching nothing.
 func TestInvalidGlobFailsClosed(t *testing.T) {
+	t.Parallel()
 	opts := Options{BaseSHA: testBaseSHA, Policy: Policy{ExtraReviewerInstructionPatterns: []string{"a[b"}}}
 	if err := opts.validate(); !errors.Is(err, ErrInvalidOptions) {
 		t.Fatalf("validate = %v, want %v for an invalid glob", err, ErrInvalidOptions)
@@ -163,6 +168,7 @@ func TestInvalidGlobFailsClosed(t *testing.T) {
 // finding on a non-representable path is reported by PathHex, never a
 // lossy raw Path.
 func TestApplyPolicyPathHexLossless(t *testing.T) {
+	t.Parallel()
 	// A non-UTF-8 directory holding an AGENTS.md, deleted from base.
 	raw := "bad\xe9/AGENTS.md"
 	c := plannedChange{path: raw, kind: ChangeDeleted, pathHex: "6261"}
@@ -188,6 +194,7 @@ func TestApplyPolicyPathHexLossless(t *testing.T) {
 // protected path added under an NTFS/HFS alias (which materializes as
 // the protected name downstream) still gets its mandatory-class finding.
 func TestApplyPolicyAliasNormalization(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		path string
 		want FindingKind
@@ -222,6 +229,7 @@ func TestApplyPolicyAliasNormalization(t *testing.T) {
 }
 
 func TestApplyPolicyAllowlist(t *testing.T) {
+	t.Parallel()
 	changes := []plannedChange{
 		{path: "docs/guide.md", kind: ChangeModified, size: 3},
 		{path: "src/main.go", kind: ChangeAdded, size: 3},
@@ -249,6 +257,7 @@ func TestApplyPolicyAllowlist(t *testing.T) {
 // a fromBase mode-only change introduces no new content, so its base
 // blob size must not be counted against the per-file or total caps.
 func TestApplyPolicySizeExcludesFromBase(t *testing.T) {
+	t.Parallel()
 	changes := []plannedChange{
 		{path: "big.bin", kind: ChangeModified, size: 5000, fromBase: true}, // chmod of a large tracked file
 		{path: "small.txt", kind: ChangeAdded, size: 10},
@@ -263,6 +272,7 @@ func TestApplyPolicySizeExcludesFromBase(t *testing.T) {
 }
 
 func TestApplyPolicySize(t *testing.T) {
+	t.Parallel()
 	changes := []plannedChange{
 		{path: "big.bin", kind: ChangeAdded, size: 600},
 		{path: "b2.bin", kind: ChangeAdded, size: 500},
@@ -286,6 +296,7 @@ func TestApplyPolicySize(t *testing.T) {
 // classes, flagged publish-blocking while the commit still exists for
 // the control-plane route.
 func TestImportPolicyPaths(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		".github/workflows/ci.yml": "on: push\n",
 		"AGENTS.md":                "old instructions\n",
@@ -330,6 +341,7 @@ func TestImportPolicyPaths(t *testing.T) {
 // variant and repository-specific locations. All are flagged publish-blocking
 // while the commit still exists for the control-plane route.
 func TestImportControlPlanePaths(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		".github/workflows/ci.yml": "on: push\n",     // deleted below (automation, default)
 		"AGENTS.md":                "old\n",          // modified (reviewer, default)
@@ -406,6 +418,7 @@ var freesideProtectedPaths = domain.ProtectedPathConfig{
 // finding, while ordinary daemon/, docs/, api/, and scripts/ edits, a
 // script's own regression suite included, draw none.
 func TestImportFreesideProtectedPaths(t *testing.T) {
+	t.Parallel()
 	if err := freesideProtectedPaths.Validate(); err != nil {
 		t.Fatalf("Freeside's protected paths: %v", err)
 	}
@@ -493,6 +506,7 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 // Like every prompts-and-policy path, it is protected because the operator's
 // trust profile names it, which is the condition this test sets up.
 func TestImportRegistrySetDeclarationIsControlPlane(t *testing.T) {
+	t.Parallel()
 	const declaration = "policy/egress.yaml"
 	checkout, base := initBaseRepo(t, map[string]string{
 		declaration: "registry_set: [pypi.org]\n",
@@ -531,6 +545,7 @@ func TestImportRegistrySetDeclarationIsControlPlane(t *testing.T) {
 
 // TestImportAllowlist pins the declared-scope enforcement end to end.
 func TestImportAllowlist(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"docs/a.md": "a\n"})
 	handoff := handoffFromEntries(t, []export.Entry{
 		regularEntryFor("docs/a.md", "a2\n", false),

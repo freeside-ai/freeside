@@ -13,6 +13,7 @@ import (
 )
 
 func TestTaskCancellationMigrationPreservesHistory(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
@@ -48,6 +49,7 @@ func TestTaskCancellationMigrationPreservesHistory(t *testing.T) {
 }
 
 func TestTaskCancellationReconstructionRejectsCorruption(t *testing.T) {
+	t.Parallel()
 	for _, query := range []string{
 		`UPDATE task_cancellations SET body=json_set(body,'$.state','confirmed')`,
 		`UPDATE task_cancellations SET body=json_set(body,'$.target.project_id','foreign')`,
@@ -102,6 +104,7 @@ func TestTaskCancellationReconstructionRejectsCorruption(t *testing.T) {
 // it closed, so replay cannot return a fabricated future revision that no
 // revision progress can settle.
 func TestTaskCancellationReconstructionRejectsFutureRevision(t *testing.T) {
+	t.Parallel()
 	s := openTestStore(t)
 	ctx := t.Context()
 	var task domain.Task

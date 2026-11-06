@@ -12,6 +12,7 @@ import (
 )
 
 func TestListOpenAttentionItemRecordsForTask(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	selected := attentionItemForRun(t, "selected-item", "run-selected")
@@ -46,6 +47,7 @@ func TestListOpenAttentionItemRecordsForTask(t *testing.T) {
 }
 
 func TestListOpenAttentionItemRecordsForTaskRejectsHiddenRows(t *testing.T) {
+	t.Parallel()
 	for _, mutation := range []string{
 		"column retargeted", "column cleared", "body retargeted", "malformed body",
 		"closed column", "wrong type", "duplicate subject", "case-fold task", "Unicode-fold task",
@@ -110,6 +112,7 @@ func TestListOpenAttentionItemRecordsForTaskRejectsHiddenRows(t *testing.T) {
 }
 
 func TestListOpenAttentionItemTaskIDs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	first := attentionItemForRun(t, "first-item", "run-first")

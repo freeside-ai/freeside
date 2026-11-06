@@ -9,6 +9,7 @@ import (
 )
 
 func TestUpdateHeadRequiresExactPredecessor(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"old", "new", "foreign", "missing"} {
 		t.Run(state, func(t *testing.T) {
 			t.Parallel()
@@ -54,6 +55,7 @@ func TestUpdateHeadRequiresExactPredecessor(t *testing.T) {
 }
 
 func TestOrdinaryPublisherRefusesSuccessorBeforeEffects(t *testing.T) {
+	t.Parallel()
 	candidate := Candidate{Successor: &publicationrecord.SuccessorTarget{}}
 	called := false
 	_, err := (&Publisher{}).PublishAfterGate(t.Context(), candidate, nil, func(_ context.Context, _ GatedHead) error {

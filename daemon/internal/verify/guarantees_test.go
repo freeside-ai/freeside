@@ -16,6 +16,7 @@ import (
 // directly. A new os/exec import anywhere else in the package is a structural
 // change to the trust story and must show up as a failing guarantee.
 func TestOnlyProcRoomImportsExec(t *testing.T) {
+	t.Parallel()
 	allowed := map[string]bool{"procroom.go": true}
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
@@ -44,6 +45,7 @@ func TestOnlyProcRoomImportsExec(t *testing.T) {
 // still at base, worktree clean. The hardened runner pins
 // core.hooksPath and a scratch index, and this is the executable proof.
 func TestVerifyFiresNoHooksAndLeavesCheckoutClean(t *testing.T) {
+	t.Parallel()
 	checkout, opts, _ := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	hookDir := filepath.Join(checkout, ".git", "hooks")
 	if err := os.MkdirAll(hookDir, 0o755); err != nil { //nolint:gosec // G301: test-owned fixture checkout

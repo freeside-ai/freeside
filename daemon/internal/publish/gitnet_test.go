@@ -8,6 +8,7 @@ import (
 )
 
 func TestNetRunnerArgvStartsWithTransportBaseline(t *testing.T) {
+	t.Parallel()
 	r := &netRunner{scheme: "https"}
 	args := []string{"fetch", "origin", "main"}
 	want := append(gitrun.TransportBaseline("https"), args...)

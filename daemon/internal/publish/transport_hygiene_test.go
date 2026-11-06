@@ -60,6 +60,7 @@ func scanTreeForTokenFormsWithRead(root string, read func(string) ([]byte, error
 }
 
 func TestScanTreeForTokenFormsToleratesVanishingFile(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	vanishing := filepath.Join(root, "a-vanishing")
 	surviving := filepath.Join(root, "b-surviving")
@@ -87,6 +88,7 @@ func TestScanTreeForTokenFormsToleratesVanishingFile(t *testing.T) {
 }
 
 func TestScanTreeForTokenFormsToleratesVanishingDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	trigger := filepath.Join(root, "a-trigger")
 	vanishing := filepath.Join(root, "b-vanishing")
@@ -111,6 +113,7 @@ func TestScanTreeForTokenFormsToleratesVanishingDirectory(t *testing.T) {
 }
 
 func TestScanTreeForTokenFormsRejectsOtherReadErrors(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	file := filepath.Join(root, "unreadable")
 	if err := os.WriteFile(file, []byte("content"), 0o600); err != nil {
@@ -126,6 +129,7 @@ func TestScanTreeForTokenFormsRejectsOtherReadErrors(t *testing.T) {
 }
 
 func TestScanTreeForTokenFormsRejectsMissingRoot(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "missing")
 	_, err := scanTreeForTokenFormsWithRead(root, os.ReadFile)
 	if !errors.Is(err, fs.ErrNotExist) {

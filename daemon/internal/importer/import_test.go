@@ -115,6 +115,7 @@ func goldenResult(t *testing.T, name string, r Result) {
 }
 
 func TestImportCleanEndToEnd(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		"a.txt":          "old\n",
 		"del.txt":        "bye\n",
@@ -179,6 +180,7 @@ func TestImportCleanEndToEnd(t *testing.T) {
 }
 
 func TestImportBlockedBySymlink(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "a.txt"), []byte("new\n"), 0o600); err != nil {
@@ -200,6 +202,7 @@ func TestImportBlockedBySymlink(t *testing.T) {
 }
 
 func TestImportUnchangedSymlinkImports(t *testing.T) {
+	t.Parallel()
 	checkout, _ := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	if err := os.Symlink("a.txt", filepath.Join(checkout, "ln")); err != nil {
 		t.Fatal(err)
@@ -238,6 +241,7 @@ func TestImportUnchangedSymlinkImports(t *testing.T) {
 // mode 120000. A short manifest target must be decided changed from the
 // cheap size query without buffering that base blob.
 func TestImportSymlinkSizeMismatchIsChanged(t *testing.T) {
+	t.Parallel()
 	checkout, parent := initBaseRepo(t, nil)
 	largePath := filepath.Join(t.TempDir(), "large-symlink-target")
 	if err := os.WriteFile(largePath, []byte(strings.Repeat("x", 8<<20)), 0o600); err != nil {
@@ -267,6 +271,7 @@ func TestImportSymlinkSizeMismatchIsChanged(t *testing.T) {
 // regression: JSON renders an invalid target byte as U+FFFD, which must
 // not compare equal to a base target that literally contains U+FFFD.
 func TestImportLossySymlinkTargetNeverElides(t *testing.T) {
+	t.Parallel()
 	checkout, _ := initBaseRepo(t, nil)
 	if err := os.Symlink("bad\ufffdtarget", filepath.Join(checkout, "ln")); err != nil {
 		t.Fatal(err)
@@ -290,6 +295,7 @@ func TestImportLossySymlinkTargetNeverElides(t *testing.T) {
 }
 
 func TestImportBlobOmittedChangedBlocks(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"b.txt": "old\n"})
 	handoff := handoffFromEntries(t, []export.Entry{
 		regularEntryFor("b.txt", "new-content\n", true),
@@ -311,6 +317,7 @@ func TestImportBlobOmittedChangedBlocks(t *testing.T) {
 // and hashing the base blob (a hostile size claim must not force hashing
 // a large base object).
 func TestImportOmittedSizeMismatchIsChanged(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"big.bin": "the base content is long\n"})
 	// Omitted entry claims a 1-byte size for the multi-byte base file:
 	// the size check alone proves it changed.
@@ -344,6 +351,7 @@ func TestImportOmittedSizeMismatchIsChanged(t *testing.T) {
 // both blob_omitted and the non_regular_change §5.6 classification, not
 // just blob_omitted.
 func TestImportOmittedReplacesNonRegular(t *testing.T) {
+	t.Parallel()
 	checkout, _ := initBaseRepo(t, map[string]string{"a.txt": "x\n"})
 	if err := os.Symlink("a.txt", filepath.Join(checkout, "ln")); err != nil {
 		t.Fatal(err)
@@ -379,6 +387,7 @@ func TestImportOmittedReplacesNonRegular(t *testing.T) {
 }
 
 func TestImportBlobOmittedUnchangedElides(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		"big.bin": "pretend this is oversized\n",
 		"a.txt":   "old\n",
@@ -401,6 +410,7 @@ func TestImportBlobOmittedUnchangedElides(t *testing.T) {
 }
 
 func TestImportSubmodulePointerRetained(t *testing.T) {
+	t.Parallel()
 	checkout, _ := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	const pointer = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"
 	rungit(t, checkout, "update-index", "--add", "--cacheinfo", "160000,"+pointer+",sub")
@@ -426,6 +436,7 @@ func TestImportSubmodulePointerRetained(t *testing.T) {
 }
 
 func TestImportNewSubmoduleBlockedAndOpaque(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		"sub/inner.txt": "data\n",
 		"a.txt":         "old\n",
@@ -451,6 +462,7 @@ func TestImportNewSubmoduleBlockedAndOpaque(t *testing.T) {
 }
 
 func TestImportDeletedSymlinkBlocks(t *testing.T) {
+	t.Parallel()
 	checkout, _ := initBaseRepo(t, map[string]string{"a.txt": "same\n"})
 	if err := os.Symlink("a.txt", filepath.Join(checkout, "ln")); err != nil {
 		t.Fatal(err)
@@ -480,6 +492,7 @@ func TestImportDeletedSymlinkBlocks(t *testing.T) {
 // beneath it exactly as a submodule does, so blindness never derives a
 // phantom mass-deletion.
 func TestImportInvalidPathDirectorySuppressesDeletions(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	rungit(t, dir, "init", "-q")
 	rungit(t, dir, "commit", "-q", "--allow-empty", "-m", "base0")
@@ -535,6 +548,7 @@ func TestImportInvalidPathDirectorySuppressesDeletions(t *testing.T) {
 // deleting a base path that is not canonical UTF-8 is blocking and
 // reported losslessly by PathHex, never as a raw (JSON-lossy) Path.
 func TestImportDeletesNonRepresentableBasePath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	rungit(t, dir, "init", "-q")
 	rungit(t, dir, "commit", "-q", "--allow-empty", "-m", "base0")
@@ -593,6 +607,7 @@ func TestImportDeletesNonRepresentableBasePath(t *testing.T) {
 // to base, imports cleanly by reusing the base object rather than
 // blocking on a withheld blob.
 func TestImportOmittedModeOnlyChange(t *testing.T) {
+	t.Parallel()
 	const content = "pretend this is oversized\n"
 	checkout, base := initBaseRepo(t, map[string]string{"big.sh": content})
 	mode := "0755"
@@ -626,6 +641,7 @@ func TestImportOmittedModeOnlyChange(t *testing.T) {
 // (or a symlink) at manifest.json must fail closed with a typed error,
 // never block the open or read through the link.
 func TestImportRejectsSpecialManifest(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 
 	t.Run("fifo manifest", func(t *testing.T) {
@@ -671,6 +687,7 @@ func TestImportRejectsSpecialManifest(t *testing.T) {
 // planted at a blob path fails closed rather than blocking or being
 // read as content.
 func TestImportRejectsSpecialBlob(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	handoff := buildHandoff(t, []blobSpec{{path: "a.txt", content: "new\n"}})
 	// Replace the blob file with a FIFO at the same digest name.
@@ -702,6 +719,7 @@ func TestImportRejectsSpecialBlob(t *testing.T) {
 // blob-present file identical to base but chmod'd imports cleanly with
 // no secret re-scan, reusing the base object.
 func TestImportBlobPresentModeOnlyChange(t *testing.T) {
+	t.Parallel()
 	token := "ghp_" + strings.Repeat("A", 36)
 	content := "TOKEN=" + token + "\n"
 	// Base already holds the token at 0644; the candidate only chmods it.
@@ -732,6 +750,7 @@ func TestImportBlobPresentModeOnlyChange(t *testing.T) {
 }
 
 func TestImportBaseMismatchFailsClosed(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "one\n"})
 	if err := os.WriteFile(filepath.Join(checkout, "a.txt"), []byte("two\n"), 0o600); err != nil {
 		t.Fatal(err)

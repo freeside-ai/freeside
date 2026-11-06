@@ -9,6 +9,7 @@ import (
 )
 
 func TestScopedCheckpointHealthRetainsLeaseAndCompiledRecipe(t *testing.T) {
+	t.Parallel()
 	files, err := NewDefaultLocalBackupFiles(filepath.Join(t.TempDir(), "freeside.db"))
 	if err != nil {
 		t.Fatal(err)

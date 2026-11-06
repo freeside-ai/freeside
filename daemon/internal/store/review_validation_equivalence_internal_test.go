@@ -13,6 +13,7 @@ import (
 // intact store and under each forged row. Each mutation runs alone, then in a
 // few combinations that forge two links of one binding, then all together.
 func TestReviewValidationEquivalence(t *testing.T) {
+	t.Parallel()
 	mutations := map[string]string{
 		"disposition reason":       `UPDATE finding_dispositions SET reason = 'forged'`,
 		"adjudication spec":        `UPDATE finding_adjudications SET approved_spec_digest = 'forged'`,
@@ -101,6 +102,7 @@ func TestReviewValidationEquivalence(t *testing.T) {
 }
 
 func TestReviewValidationReuseDoesNotKeepFailedChecks(t *testing.T) {
+	t.Parallel()
 	st, artifact, _ := seedReviewValidation(t, 2, 2)
 	ctx := t.Context()
 	if _, err := st.db.ExecContext(ctx, `UPDATE review_record_findings SET ordinal = 99 WHERE finding_id = 'reuse-finding-0'`); err != nil {
@@ -130,6 +132,7 @@ func TestReviewValidationReuseDoesNotKeepFailedChecks(t *testing.T) {
 // A boundary may authenticate scope without authorizing the disposition. A
 // later unrestricted read must still check its final authority.
 func TestReviewValidationReuseBoundaryDoesNotSkipBinding(t *testing.T) {
+	t.Parallel()
 	st, artifact, _ := seedReviewValidation(t, 2, 2)
 	ctx := t.Context()
 	if err := st.Read(ctx, func(tx *ReadTx) error {

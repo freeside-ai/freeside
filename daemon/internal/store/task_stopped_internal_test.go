@@ -9,6 +9,7 @@ import (
 )
 
 func TestCancellationCompletionOrderAndHistoricalProjection(t *testing.T) {
+	t.Parallel()
 	for _, order := range []string{"complete-first", "stop-first", "historical-confirmation", "late-old-result", "migration-pair"} {
 		t.Run(order, func(t *testing.T) {
 			s := openTestStore(t)

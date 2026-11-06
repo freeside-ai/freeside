@@ -154,6 +154,7 @@ func TestReconcilePullConditional(t *testing.T) {
 }
 
 func TestEvictResourceCachesForceUnconditionalRefetch(t *testing.T) {
+	t.Parallel()
 	t.Run("ref", func(t *testing.T) {
 		t.Parallel()
 		gh := newFakeGitHub(t)

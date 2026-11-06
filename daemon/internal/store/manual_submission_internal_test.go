@@ -12,6 +12,7 @@ import (
 )
 
 func TestManualSubmissionMigrationPreservesHistoricalState(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))

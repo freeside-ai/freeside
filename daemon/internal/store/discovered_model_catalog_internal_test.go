@@ -57,6 +57,7 @@ func readCatalog(t *testing.T, st *Store, id domain.ClientEnrollmentID) (domain.
 }
 
 func TestDiscoveredModelCatalogRoundTripsAndReplaces(t *testing.T) {
+	t.Parallel()
 	st := openEnrollmentStore(t)
 	recordEnrollmentFixtures(t, st)
 	recordPoolEnrollment(t, st, "auth-2", "enroll-2", "", observationAt)
@@ -98,6 +99,7 @@ func TestDiscoveredModelCatalogRoundTripsAndReplaces(t *testing.T) {
 }
 
 func TestDiscoveredModelCatalogRefusals(t *testing.T) {
+	t.Parallel()
 	st := openEnrollmentStore(t)
 	recordEnrollmentFixtures(t, st)
 	if err := recordCatalog(t, st, discoveredCatalog("enroll-unknown", observationAt, "opus")); !errors.Is(err, ErrNotFound) {
@@ -112,6 +114,7 @@ func TestDiscoveredModelCatalogRefusals(t *testing.T) {
 }
 
 func TestDiscoveredModelCatalogReadFailsOnABadRow(t *testing.T) {
+	t.Parallel()
 	st := openEnrollmentStore(t)
 	recordEnrollmentFixtures(t, st)
 	if err := recordCatalog(t, st, discoveredCatalog("enroll-1", observationAt, "opus")); err != nil {

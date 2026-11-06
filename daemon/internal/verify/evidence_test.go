@@ -35,6 +35,7 @@ func runVerifyFixture(t *testing.T, approved map[domain.Digest]bool) Result {
 // digest, pass the evidence-snapshot gate, and round-trip through the
 // real store's §5.15 persistence and reconstruction gates.
 func TestEvidenceProvenanceAndStoreGates(t *testing.T) {
+	t.Parallel()
 	trusted := RecipeDigest([]byte(trustedRecipeBytes))
 	approved := map[domain.Digest]bool{trusted: true}
 	res := runVerifyFixture(t, approved)
@@ -98,6 +99,7 @@ func TestEvidenceProvenanceAndStoreGates(t *testing.T) {
 // nothing the artifacts are structurally valid but publish-ineligible,
 // and the evidence gate refuses them.
 func TestEvidenceUnapprovedRecipeFailsClosed(t *testing.T) {
+	t.Parallel()
 	res := runVerifyFixture(t, nil)
 	for _, e := range res.Evidence {
 		if e.Artifact.PublishEligible {
@@ -118,6 +120,7 @@ func TestEvidenceUnapprovedRecipeFailsClosed(t *testing.T) {
 // agent artifact is refused by the evidence-snapshot gate that
 // NewAttentionItem and the store both run.
 func TestAgentArtifactCannotEnterEvidence(t *testing.T) {
+	t.Parallel()
 	trusted := RecipeDigest([]byte(trustedRecipeBytes))
 	approved := map[domain.Digest]bool{trusted: true}
 	forged := domain.Provenance{
@@ -159,6 +162,7 @@ func TestAgentArtifactCannotEnterEvidence(t *testing.T) {
 // channel: the verifier emits only its own authored account, so a
 // candidate-planted "evidence" file never reaches Result.Evidence.
 func TestVerifyNeverEmitsWorkspaceFiles(t *testing.T) {
+	t.Parallel()
 	planted := "PLANTED-EVIDENCE-BYTES"
 	checkout, opts, _ := verifyFixture(
 		t,
@@ -189,6 +193,7 @@ func TestVerifyNeverEmitsWorkspaceFiles(t *testing.T) {
 // must persist side by side, and a same-invocation replay must stay
 // idempotent.
 func TestEvidenceIDsDistinctAcrossInvocations(t *testing.T) {
+	t.Parallel()
 	trusted := RecipeDigest([]byte(trustedRecipeBytes))
 	approved := map[domain.Digest]bool{trusted: true}
 	checkout, opts, _ := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)

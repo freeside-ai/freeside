@@ -15,6 +15,7 @@ import (
 )
 
 func TestImportExcludesBaseIgnoredBuildOutput(t *testing.T) {
+	t.Parallel()
 	baseFiles := map[string]string{".gitignore": "dist/\n", "src/main.ts": "old\n"}
 	checkout, base := initBaseRepo(t, baseFiles)
 	workspace := t.TempDir()
@@ -49,6 +50,7 @@ func TestImportExcludesBaseIgnoredBuildOutput(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: the "ambient rules" subtest calls t.Setenv, which panics under a parallel parent.
 func TestImportIgnoredOutputKeepsScopeAndSecurityGates(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -124,6 +126,7 @@ func TestImportIgnoredOutputKeepsScopeAndSecurityGates(t *testing.T) {
 }
 
 func TestImportIgnoredOutputPreservesTrackedAndInScopeFiles(t *testing.T) {
+	t.Parallel()
 	baseFiles := map[string]string{".gitignore": "dist/\n", "dist/tracked.js": "old", "dist/deleted.js": "delete"}
 	checkout, _ := initBaseRepo(t, baseFiles)
 	rungit(t, checkout, "add", "-f", "--", "dist")
@@ -147,6 +150,7 @@ func TestImportIgnoredOutputPreservesTrackedAndInScopeFiles(t *testing.T) {
 }
 
 func TestImportUsesNestedBaseIgnoreRules(t *testing.T) {
+	t.Parallel()
 	baseFiles := map[string]string{".gitignore": "*.js\n", "pkg/.gitignore": "!keep.js\n", "src/main.ts": "old"}
 	checkout, base := initBaseRepo(t, baseFiles)
 	files := maps.Clone(baseFiles)
@@ -164,6 +168,7 @@ func TestImportUsesNestedBaseIgnoreRules(t *testing.T) {
 }
 
 func TestIgnoreMatcherDoesNotInventDirectoryCandidates(t *testing.T) {
+	t.Parallel()
 	baseFiles := map[string]string{".gitignore": "dist/\nhome/\n", "dist/.gitignore": "*.js\n"}
 	checkout, _ := initBaseRepo(t, baseFiles)
 	rungit(t, checkout, "add", "-f", "--", "dist/.gitignore")
@@ -184,6 +189,7 @@ func TestIgnoreMatcherDoesNotInventDirectoryCandidates(t *testing.T) {
 }
 
 func TestIgnoredOutputDoesNotChangeNoChangesOrSpecificationMode(t *testing.T) {
+	t.Parallel()
 	for _, specification := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no changes", true: "specification"}[specification], func(t *testing.T) {
 			files := map[string]string{".gitignore": "dist/\n"}
@@ -221,6 +227,7 @@ func ignoredFixtureHandoff(t *testing.T, files map[string]string) string {
 }
 
 func TestIgnoredOutputRetainsNonRegularAndIntegrityChecks(t *testing.T) {
+	t.Parallel()
 	files := map[string]string{".gitignore": "dist/\n"}
 	checkout, base := initBaseRepo(t, files)
 	opts := testImportOptions(base)
@@ -246,6 +253,7 @@ func TestIgnoredOutputRetainsNonRegularAndIntegrityChecks(t *testing.T) {
 }
 
 func TestIgnoreMatcherRejectsDirectoryAliases(t *testing.T) {
+	t.Parallel()
 	files := map[string]string{"Build/.gitignore": "*.js\n"}
 	checkout, base := initBaseRepo(t, files)
 	files["Build/out.js"], files["build/other.js"] = "first", "second"
@@ -257,6 +265,7 @@ func TestIgnoreMatcherRejectsDirectoryAliases(t *testing.T) {
 }
 
 func TestIgnoreSpellingsKeepAncestorGroupsTogether(t *testing.T) {
+	t.Parallel()
 	eligible := map[string]bool{"Foo/out.js": true, "foo-bridge/out.js": true, "foo/sub/out.js": true}
 	if err := validateIgnoreSpellings([]string{".gitignore"}, eligible); !errors.Is(err, ErrUnsupportedRepo) {
 		t.Fatalf("ancestor spelling alias was not refused: %v", err)
@@ -283,6 +292,7 @@ func BenchmarkIgnoreRulesDeepPaths(b *testing.B) {
 }
 
 func TestIgnoredOutputNeverEntersCommitPlan(t *testing.T) {
+	t.Parallel()
 	for _, namesExcluded := range []bool{false, true} {
 		t.Run(fmt.Sprint(namesExcluded), func(t *testing.T) {
 			paths := `"src/main.ts"`
@@ -316,6 +326,7 @@ func TestIgnoredOutputNeverEntersCommitPlan(t *testing.T) {
 }
 
 func TestIgnoreMatcherRejectsMalformedOutput(t *testing.T) {
+	t.Parallel()
 	for _, output := range []string{
 		"", ".gitignore\x001\x00*\x00dist/out.js", ".gitignore\x001\x00*\x00unknown.js\x00",
 		".gitignore\x001\x00*\x00dist/out.js\x00.gitignore\x001\x00*\x00dist/out.js\x00",

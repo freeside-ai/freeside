@@ -179,6 +179,7 @@ func (f closurePolicyFixture) reconstruct(t *testing.T, ctx context.Context) (*d
 // proposal digest, and authorizes the close for the merge it was recorded
 // against.
 func TestRecordPolicyClosureApprovalReconstructs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosurePolicyFixture(t, ctx, domain.ClosureFlagOriginProposeSite, true)
 
@@ -213,6 +214,7 @@ func TestRecordPolicyClosureApprovalReconstructs(t *testing.T) {
 // moved merge upserts one row: the reconstruction binds the new merge, and
 // neither binding authorizes the old merge.
 func TestRecordPolicyClosureApprovalReplacesMovedMerge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosurePolicyFixture(t, ctx, domain.ClosureFlagOriginProposeSite, true)
 
@@ -244,6 +246,7 @@ func TestRecordPolicyClosureApprovalReplacesMovedMerge(t *testing.T) {
 // TestRecordPolicyClosureApprovalRefusesFallback proves a daemon_fallback
 // closure is refused: that path gets the notice item, never an approval.
 func TestRecordPolicyClosureApprovalRefusesFallback(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosurePolicyFixture(t, ctx, domain.ClosureFlagOriginDaemonFallback, false)
 
@@ -256,6 +259,7 @@ func TestRecordPolicyClosureApprovalRefusesFallback(t *testing.T) {
 // read both fail closed when the closable source can no longer be confirmed: the
 // project's lookup column is tampered so the re-gate refuses it.
 func TestRecordPolicyClosureApprovalReGatesUnclosableSource(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Write path: an unconfirmable source admits no approval.
@@ -287,6 +291,7 @@ func TestRecordPolicyClosureApprovalReGatesUnclosableSource(t *testing.T) {
 // write refuses once the other actor recorded, and a reconstruction with both
 // rows present fails closed.
 func TestClosureApprovalActorConflict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("policy write refuses after a human decision", func(t *testing.T) {
@@ -339,6 +344,7 @@ func TestClosureApprovalActorConflict(t *testing.T) {
 // digest disagrees with the current proposal, or whose merge column is
 // malformed, is refused rather than reconstructed into a weakened approval.
 func TestPolicyClosureApprovalReconstructionFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("digest disagrees with current proposal", func(t *testing.T) {

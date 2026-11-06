@@ -11,6 +11,7 @@ import (
 )
 
 func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
+	t.Parallel()
 	for _, prefix := range []string{"work-held-", "raised-work-held-"} {
 		t.Run(prefix, func(t *testing.T) {
 			st := openTestStore(t)
@@ -182,6 +183,7 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 }
 
 func TestWorkflowClosureBindsEpisodeAndPreservesNewAdmission(t *testing.T) {
+	t.Parallel()
 	s := openTestStore(t)
 	ctx := t.Context()
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
@@ -349,6 +351,7 @@ func TestWorkflowClosureBindsEpisodeAndPreservesNewAdmission(t *testing.T) {
 }
 
 func TestWorkflowClosureRejectsCorruptAuthority(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{
 		`UPDATE task_workflow_closures SET start_ordinal = 2`,
 		`UPDATE task_workflow_closures SET start_run_id = 'foreign'`,
@@ -396,6 +399,7 @@ func TestWorkflowClosureRejectsCorruptAuthority(t *testing.T) {
 }
 
 func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
+	t.Parallel()
 	st := openTestStore(t)
 	ctx := t.Context()
 	if err := st.Write(ctx, func(tx *WriteTx) error {

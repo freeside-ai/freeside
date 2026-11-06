@@ -157,6 +157,7 @@ func writeEvidenceFile(t *testing.T, body []byte) string {
 // or intake-cap breach fails closed. media/type and blob checks are exercised
 // through Import below; this table isolates the decode boundary.
 func TestLoadEvidenceManifest(t *testing.T) {
+	t.Parallel()
 	valid := evidenceManifest(evidenceEntry("shot", "image/png", pngContent))
 	validBytes, err := valid.Encode()
 	if err != nil {
@@ -292,6 +293,7 @@ func dupEntriesKeyJSON(t *testing.T, a, b export.EvidenceEntry) []byte {
 // and mismatched, malformed, unlisted, scriptable, or truncated content fails
 // closed.
 func TestValidateEvidenceType(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		media   string
@@ -338,6 +340,7 @@ func TestValidateEvidenceType(t *testing.T) {
 }
 
 func TestBuildClaimsInlinesConformingMarkdown(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		content     string
@@ -392,6 +395,7 @@ func TestBuildClaimsInlinesConformingMarkdown(t *testing.T) {
 // two-entry evidence channel (both head-binding modes, two image types) imports
 // to a clean commit with two labeled agent claims and no findings.
 func TestImportEvidenceCleanEndToEnd(t *testing.T) {
+	t.Parallel()
 	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
 	em := evidenceManifest(
 		evidenceEntry("after-shot", "image/png", pngContent),
@@ -426,6 +430,7 @@ func TestImportEvidenceCleanEndToEnd(t *testing.T) {
 }
 
 func TestImportEvidenceSecretBecomesNonInliningFinding(t *testing.T) {
+	t.Parallel()
 	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
 	content := "Token: ghp_" + strings.Repeat("A", 36)
 	entry := evidenceEntry(export.SummaryEvidenceLabel, "text/markdown", content)
@@ -531,6 +536,7 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 // TestImportNoEvidenceChannel proves the channel is optional: a handoff with no
 // evidence.json imports exactly as before, with an empty claim list.
 func TestImportNoEvidenceChannel(t *testing.T) {
+	t.Parallel()
 	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
 	res, err := Import(t.Context(), handoff, clone, testImportOptions(base))
 	if err != nil {
@@ -547,6 +553,7 @@ func TestImportNoEvidenceChannel(t *testing.T) {
 // The evidence channel fails the whole import closed on any hostile blob or
 // forged type. Each case asserts a typed error and no Result.
 func TestImportEvidenceHostileBlobs(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		build   func(t *testing.T, handoff string)
@@ -640,6 +647,7 @@ func TestImportEvidenceHostileBlobs(t *testing.T) {
 // exactly the pre-evidence layout: a stray or planted evidence/ store with no
 // evidence.json is an orphan, not a silently accepted empty second channel.
 func TestImportEvidenceDirWithoutManifest(t *testing.T) {
+	t.Parallel()
 	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
 	// Plant an evidence store but write no evidence.json (emPresent stays false).
 	if err := os.MkdirAll(filepath.Join(handoff, export.EvidenceBlobsDirname, "sha256"), 0o750); err != nil {
@@ -659,6 +667,7 @@ func TestImportEvidenceDirWithoutManifest(t *testing.T) {
 // store (because a repo change carries the same bytes) cannot resolve, and the
 // evidence audit fails closed rather than borrowing the repo blob.
 func TestImportEvidenceCrossChannelSubstitution(t *testing.T) {
+	t.Parallel()
 	// The workspace adds a repo file whose content equals the evidence content,
 	// so sha256(pngContent) lands in the repo blobs/ store.
 	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n", "shared.dat": pngContent})

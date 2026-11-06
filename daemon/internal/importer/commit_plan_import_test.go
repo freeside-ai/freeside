@@ -54,6 +54,7 @@ func noticeIs(result Result, want domain.CommitPlanNoticeReason) bool {
 }
 
 func TestCommitPlanValidMultiGroup(t *testing.T) {
+	t.Parallel()
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[` +
 		`{"name":"modify","message":"Update a","paths":["a.txt"]},` +
 		`{"name":"add","message":"Add b","paths":["b.txt"]},` +
@@ -83,6 +84,7 @@ func TestCommitPlanValidMultiGroup(t *testing.T) {
 }
 
 func TestCommitPlanSingleGroupMatchesSingleCommitTree(t *testing.T) {
+	t.Parallel()
 	base := map[string]string{"a.txt": "old\n", "delete.txt": "bye\n"}
 	workspace := map[string]string{"a.txt": "new\n", "add.txt": "added\n"}
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[{"name":"all","message":"Apply candidate","remainder":true}]}`)
@@ -106,6 +108,7 @@ func TestCommitPlanSingleGroupMatchesSingleCommitTree(t *testing.T) {
 }
 
 func TestCommitPlanModesAndFallback(t *testing.T) {
+	t.Parallel()
 	base := map[string]string{"a.txt": "old\n"}
 	workspace := map[string]string{"a.txt": "new\n"}
 	t.Run("single absent unchanged", func(t *testing.T) {
@@ -150,6 +153,7 @@ func TestCommitPlanModesAndFallback(t *testing.T) {
 }
 
 func TestCommitPlanDecodedSecretDominatesFallback(t *testing.T) {
+	t.Parallel()
 	escaped := `ghp_\u0041` + strings.Repeat("A", 35)
 	for _, raw := range []string{
 		`{"version":"freeside.commit-plan/v1","groups":[],"unknown":"` + escaped + `"}`,
@@ -169,6 +173,7 @@ func TestCommitPlanDecodedSecretDominatesFallback(t *testing.T) {
 }
 
 func TestCommitPlanEmptyRemainderMessageHandling(t *testing.T) {
+	t.Parallel()
 	base := map[string]string{"a.txt": "old\n"}
 	workspace := map[string]string{"a.txt": "new\n"}
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[` +
@@ -193,6 +198,7 @@ func TestCommitPlanEmptyRemainderMessageHandling(t *testing.T) {
 }
 
 func TestCommitPlanZeroChangeDispatch(t *testing.T) {
+	t.Parallel()
 	base := map[string]string{"a.txt": "same\n"}
 	workspace := map[string]string{"a.txt": "same\n"}
 	for name, plan := range map[string][]byte{
@@ -222,6 +228,7 @@ func TestCommitPlanZeroChangeDispatch(t *testing.T) {
 }
 
 func TestCommitPlanBaseNamespacePreflight(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []domain.CommitPlanMode{domain.CommitPlanSingleCommit, domain.CommitPlanPlanPreferred} {
 		for _, collision := range []string{
 			export.CommitPlanFilename,
@@ -248,6 +255,7 @@ func TestCommitPlanBaseNamespacePreflight(t *testing.T) {
 }
 
 func TestImportRejectsForgedCommitPlanNamespaceEntry(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []domain.CommitPlanMode{domain.CommitPlanSingleCommit, domain.CommitPlanPlanPreferred} {
 		for _, path := range []string{
 			export.CommitPlanFilename,
@@ -270,6 +278,7 @@ func TestImportRejectsForgedCommitPlanNamespaceEntry(t *testing.T) {
 }
 
 func TestCommitPlanConstructAllSwapOnce(t *testing.T) {
+	t.Parallel()
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[` +
 		`{"name":"a","message":"Add a","paths":["a.txt"]},` +
 		`{"name":"b","message":"Add b","paths":["b.txt"]}]}`)
@@ -306,6 +315,7 @@ func TestCommitPlanConstructAllSwapOnce(t *testing.T) {
 }
 
 func TestCommitPlanOperationalValidationFailureDoesNotFallback(t *testing.T) {
+	t.Parallel()
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[{"name":"x","message":"Update a","remainder":true}]}`)
 	injected := errors.New("injected validation I/O failure")
 	res, err, _, _ := runCommitPlanImport(t,
@@ -319,6 +329,7 @@ func TestCommitPlanOperationalValidationFailureDoesNotFallback(t *testing.T) {
 }
 
 func TestCommitPlanSecretPastMessageCapStillBlocks(t *testing.T) {
+	t.Parallel()
 	escaped := `ghp_\u0041` + strings.Repeat("A", 35)
 	message := strings.Repeat("x", 64) + " " + escaped
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[{"name":"x","message":"` + message + `","remainder":true}]}`)
@@ -331,6 +342,7 @@ func TestCommitPlanSecretPastMessageCapStillBlocks(t *testing.T) {
 }
 
 func TestCommitPlanShapeAndOrdering(t *testing.T) {
+	t.Parallel()
 	changes := []plannedChange{
 		{path: "a.txt", kind: ChangeAdded, mode: "100644", oid: strings.Repeat("1", 40)},
 		{path: "b.txt", kind: ChangeAdded, mode: "100644", oid: strings.Repeat("2", 40)},
@@ -470,6 +482,7 @@ func TestCommitPlanShapeAndOrdering(t *testing.T) {
 }
 
 func TestGitHub1MessageScreening(t *testing.T) {
+	t.Parallel()
 	pol := Policy{}.withDefaults()
 	rejected := []string{
 		"", " \n\t", "bad\x00", "bad\r", "bad\x1b", "bad\x7f", "bad\u202e", "bad\u0085", "bad\u200b",
@@ -537,6 +550,7 @@ func TestGitHub1MessageScreening(t *testing.T) {
 }
 
 func TestCommitMessageFindingKindTokens(t *testing.T) {
+	t.Parallel()
 	wantTokens := map[commitMessageFindingKind]string{
 		messageFindingOverCap:        "message_over_cap",
 		messageFindingEmpty:          "message_empty",
@@ -566,6 +580,7 @@ func TestCommitMessageFindingKindTokens(t *testing.T) {
 }
 
 func TestCommitPlanPreboundsCaseFoldedDuplicateKeys(t *testing.T) {
+	t.Parallel()
 	pol := Policy{}.withDefaults()
 	pol.MaxCommitPlanGroups = 1
 	raw := []byte(`{"version":"freeside.commit-plan/v1","groups":[],"Groups":[{},{}]}`)
@@ -581,6 +596,7 @@ func TestCommitPlanPreboundsCaseFoldedDuplicateKeys(t *testing.T) {
 }
 
 func TestCommitPlanInvalidUTF8PrecedesPreallocationGate(t *testing.T) {
+	t.Parallel()
 	pol := Policy{}.withDefaults()
 	pol.MaxCommitPlanGroups = 1
 	raw := []byte("{\"version\":\"freeside.commit-plan/v1\",\"groups\":[{},{}],\"note\":\"\xff\"}")
@@ -591,6 +607,7 @@ func TestCommitPlanInvalidUTF8PrecedesPreallocationGate(t *testing.T) {
 }
 
 func TestCommitPlanGroupCap(t *testing.T) {
+	t.Parallel()
 	groups := strings.Repeat(`{"name":"x","message":"m","remainder":true},`, DefaultMaxCommitPlanGroups+1)
 	groups = strings.TrimSuffix(groups, ",")
 	raw := []byte(fmt.Sprintf(`{"version":"freeside.commit-plan/v1","groups":[%s]}`, groups))

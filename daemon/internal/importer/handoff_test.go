@@ -34,6 +34,7 @@ func manifestJSON(entries ...string) string {
 }
 
 func TestLoadManifestRejects(t *testing.T) {
+	t.Parallel()
 	// The #180 laundering regression: a raw invalid byte inside a path.
 	// encoding/json would replace it with U+FFFD on decode, so without the
 	// raw-bytes pre-check it becomes a valid-looking canonical path; the
@@ -183,6 +184,7 @@ func TestLoadManifestRejects(t *testing.T) {
 // over-long or over-deep path is rejected at intake, before the
 // superlinear gate and collision work runs.
 func TestLoadManifestPathCaps(t *testing.T) {
+	t.Parallel()
 	t.Run("over-long path", func(t *testing.T) {
 		long := strings.Repeat("a", 5000)
 		dir := writeHandoff(t, manifestJSON(regularEntryJSON(long)))
@@ -206,6 +208,7 @@ func TestLoadManifestPathCaps(t *testing.T) {
 }
 
 func TestLoadManifestMissingFile(t *testing.T) {
+	t.Parallel()
 	_, err := loadManifest(t.TempDir(), Policy{}.withDefaults())
 	if !errors.Is(err, ErrManifestUnreadable) {
 		t.Fatalf("loadManifest error = %v, want %v", err, ErrManifestUnreadable)
@@ -213,6 +216,7 @@ func TestLoadManifestMissingFile(t *testing.T) {
 }
 
 func TestLoadManifestAccepts(t *testing.T) {
+	t.Parallel()
 	manifest := manifestJSON(
 		`{"path":".git","kind":"git_dir","mode":null,"size":null,"digest":null,"target":null}`,
 		regularEntryJSON("a.txt"),
@@ -233,6 +237,7 @@ func TestLoadManifestAccepts(t *testing.T) {
 // m.Entries, so a case-sensitive count would let an over-cap array under an
 // alternate spelling reach the typed decode uncounted.
 func TestManifestEntryCountCaseInsensitive(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"entries", "Entries", "ENTRIES", "eNtRiEs"} {
 		body := []byte(`{"version":"x","` + key + `":[{},{}]}`)
 		if !manifestEntryCountExceeds(body, 1) {

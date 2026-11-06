@@ -814,6 +814,7 @@ func TestFindingAdjudicationRejectsForeignPredecessor(t *testing.T) {
 }
 
 func TestFindingAdjudicationConcurrentSuccessor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	runID := domain.RunID("run-concurrent-successor")
 	at := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)

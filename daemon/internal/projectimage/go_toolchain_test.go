@@ -44,6 +44,7 @@ func goRequest(moduleDir string) Request {
 }
 
 func TestBuildContextPreparationBindsGoInputs(t *testing.T) {
+	t.Parallel()
 	for _, moduleDir := range []string{"", "daemon", "tools/lint"} {
 		t.Run("module="+moduleDir, func(t *testing.T) {
 			source := t.TempDir()
@@ -163,6 +164,7 @@ func TestBuildContextPreparationBindsGoInputs(t *testing.T) {
 }
 
 func TestBuildContextRefusesUnsupportedGoInputs(t *testing.T) {
+	t.Parallel()
 	type tree map[string]string
 	cases := []struct {
 		name      string
@@ -317,6 +319,7 @@ func applyTree(t *testing.T, root string, entries map[string]string) {
 }
 
 func TestBuildContextKeepsNPMWhenNoModuleIsDeclared(t *testing.T) {
+	t.Parallel()
 	// A root package.json keeps every existing npm image on the npm path,
 	// even beside a root go.mod.
 	source := t.TempDir()
@@ -333,6 +336,7 @@ func TestBuildContextKeepsNPMWhenNoModuleIsDeclared(t *testing.T) {
 }
 
 func TestCheckGoModuleAcceptsWhatTheBakedToolchainServes(t *testing.T) {
+	t.Parallel()
 	for _, goMod := range []string{
 		testGoMod,
 		"module m\n\ngo " + goToolchainVersion + "\n\ntoolchain go" + goToolchainVersion + "\n",
@@ -370,6 +374,7 @@ func TestCheckGoModuleAcceptsWhatTheBakedToolchainServes(t *testing.T) {
 }
 
 func TestGoPrepareScriptChecksEveryUnsupportedEntry(t *testing.T) {
+	t.Parallel()
 	for moduleDir, want := range map[string][]string{
 		"":     {"module_dir='.'", "for entry in 'vendor' 'go.work'; do"},
 		"a/b":  {"module_dir='a/b'", "for entry in 'a/b/vendor' 'a/b/go.work' 'a/go.work' 'go.work'; do"},
@@ -407,6 +412,7 @@ func TestGoPrepareScriptChecksEveryUnsupportedEntry(t *testing.T) {
 }
 
 func TestBuildProvesAGoModuleInEveryFreshWorkspace(t *testing.T) {
+	t.Parallel()
 	for _, moduleDir := range []string{"", "daemon"} {
 		t.Run("module="+moduleDir, func(t *testing.T) {
 			source := &fakeSource{fixture: func(dir string) error { return writeGoFixture(dir, moduleDir) }}
@@ -460,6 +466,7 @@ func TestBuildProvesAGoModuleInEveryFreshWorkspace(t *testing.T) {
 }
 
 func TestBuildAcceptsOnlyGoOfflineRefusalsAsTheNegativeResult(t *testing.T) {
+	t.Parallel()
 	for output, ok := range map[string]bool{
 		"go: example.test/dep@v1.0.0: module lookup disabled by GOPROXY=off":             true,
 		"go: example.test/dep: Get \"https://proxy.golang.org/x\": dial tcp: lookup x":   true,
@@ -485,6 +492,7 @@ func TestBuildAcceptsOnlyGoOfflineRefusalsAsTheNegativeResult(t *testing.T) {
 }
 
 func TestBuildProvesACacheIndependentGoModuleInMaskedWorkspaces(t *testing.T) {
+	t.Parallel()
 	source := &fakeSource{fixture: func(dir string) error { return writeGoFixture(dir, "daemon") }}
 	backend := newFakeBackend()
 	backend.probe = goMaskedProbe("daemon")
@@ -503,6 +511,7 @@ func TestBuildProvesACacheIndependentGoModuleInMaskedWorkspaces(t *testing.T) {
 }
 
 func TestObserveGoBaseInputsAtTheModuleDirectory(t *testing.T) {
+	t.Parallel()
 	repo := newBaseInputsRepo(t)
 	build := repo.commit(map[string]string{
 		"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
@@ -633,25 +642,33 @@ const (
 )
 
 func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
+	t.Parallel()
 	const (
 		proxy       = `["proxy.golang.org"]`
 		npmOnly     = `["registry.npmjs.org"]`
 		uuid        = "require github.com/google/uuid v1.6.0\n"
 		otherRecipe = `{"commands":[["true"]],"capture":"none"}`
 	)
-	repo := newBaseInputsRepo(t)
-	base := repo.commit(map[string]string{
-		"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
-		verify.DefaultRecipePath: testRecipe,
-	})
-	image := domain.ProjectImage{
-		CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
-		Environment: &domain.ProjectImageEnvironment{
-			Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
-			GoModSHA256:       manifestSHA256([]byte(testGoMod)),
-			GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
-			PreparationDigest: PreparationDigest(),
-		},
+	// newBase gives each subtest its own repository at the image's base
+	// commit, so the subtests run in parallel instead of taking turns
+	// checking out one shared tree. The image names that base commit.
+	newBase := func(t *testing.T) (baseInputsRepo, string, domain.ProjectImage) {
+		t.Helper()
+		repo := newBaseInputsRepo(t)
+		base := repo.commit(map[string]string{
+			"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
+			verify.DefaultRecipePath: testRecipe,
+		})
+		image := domain.ProjectImage{
+			CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+			Environment: &domain.ProjectImageEnvironment{
+				Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
+				GoModSHA256:       manifestSHA256([]byte(testGoMod)),
+				GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
+				PreparationDigest: PreparationDigest(),
+			},
+		}
+		return repo, base, image
 	}
 	withUUID := map[string]string{"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum}
 	for _, test := range []struct {
@@ -795,7 +812,8 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repo.git("checkout", "-q", "--detach", base)
+			t.Parallel()
+			repo, base, image := newBase(t)
 			head := repo.commit(test.changes)
 			check := func(t *testing.T, decision RebuildDecision) {
 				t.Helper()
@@ -841,7 +859,8 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 		})
 	}
 	t.Run("unreadable go.mod", func(t *testing.T) {
-		repo.git("checkout", "-q", "--detach", base)
+		t.Parallel()
+		repo, base, image := newBase(t)
 		repo.git("rm", "-q", "daemon/go.mod")
 		repo.git("update-index", "--add", "--cacheinfo", "120000,"+
 			repo.git("hash-object", "-w", "daemon/go.sum")+",daemon/go.mod")
@@ -855,6 +874,7 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 }
 
 func TestRebuildRequestKeepsTheDeclaredGoModule(t *testing.T) {
+	t.Parallel()
 	const head = "1111111111111111111111111111111111111111"
 	image := rebuildTestImage(t, "127.0.0.1:5100/freeside-project-x@"+testImageDigest)
 	image.Environment = &domain.ProjectImageEnvironment{

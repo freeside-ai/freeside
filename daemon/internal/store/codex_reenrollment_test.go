@@ -55,6 +55,7 @@ func seedCodexReenrollmentIdentity(
 }
 
 func TestBeginCodexReenrollmentAuthenticatesCurrentMarkerBeforeLease(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
@@ -137,6 +138,7 @@ func TestBeginCodexReenrollmentAuthenticatesCurrentMarkerBeforeLease(t *testing.
 }
 
 func TestCodexReenrollmentJournalRecoversAndLatestFenceWins(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
@@ -260,6 +262,7 @@ func TestCodexReenrollmentJournalRecoversAndLatestFenceWins(t *testing.T) {
 }
 
 func TestLeaseLostCodexReenrollmentRequiresProvenLoss(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	start := func(
@@ -496,6 +499,7 @@ func TestPendingCodexReenrollmentSurvivesProcessKill(t *testing.T) {
 }
 
 func TestCodexReenrollmentKillWriter(t *testing.T) {
+	t.Parallel()
 	path := os.Getenv("FREESIDE_CODEX_REENROLLMENT_KILL_DB")
 	if path == "" {
 		t.Skip("helper process")
@@ -518,6 +522,7 @@ func TestCodexReenrollmentKillWriter(t *testing.T) {
 }
 
 func TestBeginCodexReenrollmentRefusesSameHolderConvergence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
@@ -539,6 +544,7 @@ func TestBeginCodexReenrollmentRefusesSameHolderConvergence(t *testing.T) {
 }
 
 func TestFailedCodexReenrollmentIsCredentialFreeAndDurable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	st := storetest.Open(t, path, store.Options{})

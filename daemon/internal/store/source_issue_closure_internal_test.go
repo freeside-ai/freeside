@@ -93,6 +93,7 @@ func allocateClosure(
 // repository (plan §5.13); a cross-repository source row, corrupted or
 // mistakenly created, must not yield a verified close to a foreign repository.
 func TestClosureVerifiedSourceMustNameProjectRepository(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 
@@ -128,6 +129,7 @@ func TestClosureVerifiedSourceMustNameProjectRepository(t *testing.T) {
 }
 
 func TestClosureProposalStoreRoundTripAndReGate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 
@@ -290,6 +292,7 @@ func TestClosureProposalStoreRoundTripAndReGate(t *testing.T) {
 // under the new name pass the store re-gate, and proposals admitted before the
 // rename still reconstruct.
 func TestClosureFollowsRepositoryRename(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 
@@ -381,6 +384,7 @@ func TestClosureFollowsRepositoryRename(t *testing.T) {
 // prospective merge, so the bind refuses one that is absent or whose candidate
 // head differs from the item's.
 func TestBindProposalItemRefusesClosureWithoutMerge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	source := domain.SpecificationSource{

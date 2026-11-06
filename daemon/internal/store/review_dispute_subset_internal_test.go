@@ -76,6 +76,7 @@ func putSubsetDispute(t *testing.T, f externalCycleFixture, item *domain.Attenti
 }
 
 func TestReviewDisputeSubsetAuthenticatesOmittedFindings(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"valid", "no prior", "missing external entry", "round", "finding", "evidence", "head", "message", "routes"} {
 		t.Run(name, func(t *testing.T) {
 			f, item, _ := subsetDisputeFixture(t, name != "no prior")
@@ -140,6 +141,7 @@ func decideSubsetDispute(t *testing.T, f externalCycleFixture, item domain.Atten
 }
 
 func TestReviewDisputeSubsetHumanAnswerPreservesPriorAndReadsBack(t *testing.T) {
+	t.Parallel()
 	// "valid" is a command stored before reasons existed. The reason cases
 	// hold the entry to the command's reason: the gate re-derives it.
 	for _, name := range []string{"valid", "with reason", "changed reason", "dropped reason", "missing choice", "omitted choice", "changed omitted", "dropped omitted"} {
@@ -213,6 +215,7 @@ func TestReviewDisputeSubsetHumanAnswerPreservesPriorAndReadsBack(t *testing.T) 
 }
 
 func TestReviewDisputeSubsetRefusesHumanFirstRevisionWithoutRecursion(t *testing.T) {
+	t.Parallel()
 	f, item, _ := subsetDisputeFixture(t, false)
 	item = fullDisputeRows(f, item)
 	putSubsetDispute(t, f, &item)
@@ -256,6 +259,7 @@ func TestReviewDisputeSubsetRefusesHumanFirstRevisionWithoutRecursion(t *testing
 }
 
 func TestReviewDisputeDisplayedSetRefusesTampering(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"delete row", "add row", "substitute row", "missing record", "corrupt record"} {
 		t.Run(name, func(t *testing.T) {
 			f, item, _ := subsetDisputeFixture(t, true)
@@ -329,6 +333,7 @@ func TestReviewDisputeDisplayedSetRefusesTampering(t *testing.T) {
 }
 
 func TestReviewDisputeFirstRoutedTransitionRecordsSet(t *testing.T) {
+	t.Parallel()
 	f, routed, _ := subsetDisputeFixture(t, true)
 	// A legacy card without a binding can gain its first routed binding.
 	legacy := routed
@@ -345,6 +350,7 @@ func TestReviewDisputeFirstRoutedTransitionRecordsSet(t *testing.T) {
 }
 
 func TestReviewDisputeRowsMigration(t *testing.T) {
+	t.Parallel()
 	f, item, _ := subsetDisputeFixture(t, true)
 	item = fullDisputeRows(f, item)
 	for _, name := range []string{"valid", "non routed", "partial", "duplicate", "corrupt"} {

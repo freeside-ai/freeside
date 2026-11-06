@@ -65,6 +65,7 @@ func openClosureCardAt(
 // their state, and a second call retires nothing. The sweep's candidate read
 // lists exactly the runs with an open closure card, before and after.
 func TestRetireOpenClosureProposals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	closureFor := func(projectID domain.ProjectID) (domain.ResolvedPolicy, domain.EffectProposal) {
@@ -238,6 +239,7 @@ func TestRetireOpenClosureProposals(t *testing.T) {
 // after the passed instant is concluded at its own creation: the settlement
 // sweep stamps at a fact's observed_at, which can precede a card bound later.
 func TestRetireOpenClosureProposalsNeverPredatesTheCard(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 	source := domain.SpecificationSource{
@@ -283,6 +285,7 @@ func TestRetireOpenClosureProposalsNeverPredatesTheCard(t *testing.T) {
 // retires the replaced publication's open closure card with the origin's
 // sentence, and that a replayed seal retires nothing further.
 func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedReentry(t, domain.ReadinessInvalidationBaseAdvanced, reentryOptions{})
 	var proposal domain.EffectProposal
@@ -359,6 +362,7 @@ func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
 // replaced closure card: every origin but an external review, whose in-place
 // cycle keeps the merge the card binds.
 func TestClosureRetirementReasonByOrigin(t *testing.T) {
+	t.Parallel()
 	for _, origin := range domain.AllPublicationSuccessorOrigins {
 		reason, retires := closureRetirementReason(origin)
 		if want := origin != domain.PublicationSuccessorExternalReview; retires != want {

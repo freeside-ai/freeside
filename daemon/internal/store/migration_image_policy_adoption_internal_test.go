@@ -16,6 +16,7 @@ import (
 // that reference one. The rebuilt table admits the adoption kind with no
 // resolved policy and still requires both policy columns of every other kind.
 func TestImagePolicyAdoptionMigrationPreservesRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))

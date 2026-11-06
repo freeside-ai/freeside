@@ -1111,6 +1111,7 @@ func newTestPublisherFull(t *testing.T, gh *fakeGitHub, ledger publish.IntentLed
 }
 
 func TestSourceIssueText(t *testing.T) {
+	t.Parallel()
 	body := "The issue requirements"
 	tests := []struct {
 		name      string

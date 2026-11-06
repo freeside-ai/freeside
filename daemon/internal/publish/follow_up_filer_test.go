@@ -27,6 +27,7 @@ var unprovenCommitted = fakeCreateResponse{Status: http.StatusInternalServerErro
 var unprovenLost = fakeCreateResponse{Status: http.StatusInternalServerError}
 
 func TestFollowUpFilerFilesAnApprovedFilingOnce(t *testing.T) {
+	t.Parallel()
 	h := newFilingHarness(t)
 	run := h.seedRun("run-a", nil, nil)
 	approved := h.approve(run, 0)
@@ -63,6 +64,7 @@ func TestFollowUpFilerFilesAnApprovedFilingOnce(t *testing.T) {
 }
 
 func TestFollowUpFilerWorkflowClosureBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"before intent", "before dispatch", "in flight"} {
 		t.Run(boundary, func(t *testing.T) {
 			h := newFilingHarness(t)
@@ -115,6 +117,7 @@ func TestFollowUpFilerWorkflowClosureBoundaries(t *testing.T) {
 }
 
 func TestFollowUpFilerWorkflowClosureAfterDispatchClaim(t *testing.T) {
+	t.Parallel()
 	for _, response := range []string{"success", "unproven", "transient rejection"} {
 		t.Run(response, func(t *testing.T) {
 			h := newFilingHarness(t)
@@ -168,6 +171,7 @@ func TestFollowUpFilerWorkflowClosureAfterDispatchClaim(t *testing.T) {
 }
 
 func TestFollowUpFilerClosureRetiresProvenUnsentReservation(t *testing.T) {
+	t.Parallel()
 	for _, response := range []string{"never dispatched", "transient rejection", "recorded definite rejection"} {
 		t.Run(response, func(t *testing.T) {
 			h := newFilingHarness(t)
@@ -224,6 +228,7 @@ func TestFollowUpFilerClosureRetiresProvenUnsentReservation(t *testing.T) {
 // the stop point, recovery ends in one issue and one ledger row, or in the
 // ambiguous outcome and its notice, and never sends a second create.
 func TestFollowUpFilerSurvivesAKillAtEveryStep(t *testing.T) {
+	t.Parallel()
 	const createPath = "POST " + testRepoPath + "/issues"
 	var stops []string
 	for kill := 1; ; kill++ {
@@ -297,6 +302,7 @@ func TestFollowUpFilerSurvivesAKillAtEveryStep(t *testing.T) {
 }
 
 func TestFollowUpFilerSerializesFilingsInARepository(t *testing.T) {
+	t.Parallel()
 	h := newFilingHarness(t)
 	run := h.seedRun("run-a", nil, nil)
 	first, second := h.approve(run, 0), h.approve(run, 1)
@@ -325,6 +331,7 @@ func TestFollowUpFilerSerializesFilingsInARepository(t *testing.T) {
 }
 
 func TestFollowUpFilerValidatesCandidates(t *testing.T) {
+	t.Parallel()
 	const adopted, none = "adopted", "ambiguous"
 	cases := []struct {
 		name string
@@ -433,6 +440,7 @@ func TestFollowUpFilerValidatesCandidates(t *testing.T) {
 }
 
 func TestFollowUpFilerBoundsAnIncompleteListing(t *testing.T) {
+	t.Parallel()
 	t.Run("recovers within the bound", func(t *testing.T) {
 		t.Parallel()
 		h := newFilingHarness(t)
@@ -486,6 +494,7 @@ func TestFollowUpFilerBoundsAnIncompleteListing(t *testing.T) {
 // Membership must be proved from the returned resource, even when its number
 // also exists in the target repository. A number lookup cannot prove lineage.
 func TestFollowUpFilerRequiresRepositoryMembership(t *testing.T) {
+	t.Parallel()
 	const target = "http://github.test/repos/" + filingRepo
 	invalid := map[string]map[string]string{
 		"foreign repository":       {"repository_url": "http://github.test/repos/owner/foreign", "url": "http://github.test/repos/owner/foreign/issues/500"},
@@ -600,6 +609,7 @@ func TestFollowUpFilerRecoversThroughCanonicalPagination(t *testing.T) {
 }
 
 func TestFollowUpFilerKeepsListingOnTheResolvedRepository(t *testing.T) {
+	t.Parallel()
 	for _, laterPage := range []bool{false, true} {
 		t.Run(fmt.Sprintf("later page=%t", laterPage), func(t *testing.T) {
 			t.Parallel()
@@ -637,6 +647,7 @@ func TestFollowUpFilerKeepsListingOnTheResolvedRepository(t *testing.T) {
 }
 
 func TestFollowUpFilerRejectsForeignCollectionLinks(t *testing.T) {
+	t.Parallel()
 	for _, next := range []string{
 		"/repos/owner/foreign/issues?page=2",
 		"/repos/" + filingRepo + "/pulls?page=2",
@@ -688,6 +699,7 @@ func TestFollowUpFilerRejectsForeignCollectionLinks(t *testing.T) {
 // the repository is registered to another App the filing neither sends a
 // create under the new one nor adopts one of its issues.
 func TestFollowUpFilerHoldsAFilingToItsDispatchingIdentity(t *testing.T) {
+	t.Parallel()
 	assertCreates := func(t *testing.T, h *filingHarness, want int) {
 		t.Helper()
 		// Nothing later changes the outcome or sends anything more.
@@ -792,6 +804,7 @@ func TestFollowUpFilerHoldsAFilingToItsDispatchingIdentity(t *testing.T) {
 // dispatching identity proves no authorship, so its filing sends no create
 // and adopts nothing, whatever the repository's App is now.
 func TestFollowUpFilerFailsClosedWithoutARecordedIdentity(t *testing.T) {
+	t.Parallel()
 	t.Run("an unproven create ends ambiguous", func(t *testing.T) {
 		t.Parallel()
 		h := newFilingHarness(t)
@@ -884,6 +897,7 @@ func TestFollowUpFilerFailsClosedWithoutARecordedIdentity(t *testing.T) {
 }
 
 func TestFollowUpFilerAmbiguousRepositoryAdoptsNothing(t *testing.T) {
+	t.Parallel()
 	h := newFilingHarness(t)
 	run := h.seedRun("run-a", nil, nil)
 	first := h.approve(run, 0)
@@ -912,6 +926,7 @@ func TestFollowUpFilerAmbiguousRepositoryAdoptsNothing(t *testing.T) {
 }
 
 func TestFollowUpFilerRefusesADefiniteRejection(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{
 		http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
 		http.StatusNotFound, http.StatusGone, http.StatusUnprocessableEntity,
@@ -940,6 +955,7 @@ func TestFollowUpFilerRefusesADefiniteRejection(t *testing.T) {
 }
 
 func TestFollowUpFilerRetriesATransientRejectionWithinTheBound(t *testing.T) {
+	t.Parallel()
 	transient := map[string]fakeCreateResponse{
 		"429":                      {Status: http.StatusTooManyRequests},
 		"403 rate limit exhausted": {Status: http.StatusForbidden, Header: map[string]string{"X-RateLimit-Remaining": "0"}},
@@ -988,6 +1004,7 @@ func TestFollowUpFilerRetriesATransientRejectionWithinTheBound(t *testing.T) {
 }
 
 func TestFollowUpFilerNeverResendsAnUnprovenCreate(t *testing.T) {
+	t.Parallel()
 	foreign := `{"number":1,"repository_url":"http://github.test/repos/freeside-ai/evidence-repo","url":"http://github.test/repos/freeside-ai/evidence-repo/issues/1","user":{"id":1,"type":"User"},"created_at":"2026-09-02T12:00:00Z"}`
 	unproven := map[string]fakeCreateResponse{
 		"500":                           {Status: http.StatusInternalServerError},
@@ -1041,6 +1058,7 @@ func TestFollowUpFilerNeverResendsAnUnprovenCreate(t *testing.T) {
 // text), so the filer never sends it; the pass raises a notice, reports the
 // error, and still files the other instances.
 func TestFollowUpFilerDoesNotFileAnInstanceThatFailsTheScreen(t *testing.T) {
+	t.Parallel()
 	const rejected = "Closes #12. Ask @octocat."
 	assertNotFiled := func(t *testing.T, h *filingHarness, instance domain.ProposalInstance, creates int) {
 		t.Helper()
@@ -1120,6 +1138,7 @@ func TestFollowUpFilerDoesNotFileAnInstanceThatFailsTheScreen(t *testing.T) {
 }
 
 func TestFollowUpFilerWaitingNoticeClearsWhileRepositoryBusy(t *testing.T) {
+	t.Parallel()
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
 			t.Parallel()
@@ -1177,6 +1196,7 @@ func TestFollowUpFilerWaitingNoticeClearsWhileRepositoryBusy(t *testing.T) {
 }
 
 func TestFollowUpFilerWaitingNoticeSurvivesStoreErrors(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []string{"cap count read", "intent insert"} {
 		t.Run(fault, func(t *testing.T) {
 			t.Parallel()
@@ -1265,6 +1285,7 @@ func TestFollowUpFilerWaitingNoticeSurvivesStoreErrors(t *testing.T) {
 }
 
 func TestFollowUpFilerRateCap(t *testing.T) {
+	t.Parallel()
 	t.Run("set", func(t *testing.T) {
 		t.Parallel()
 		h := newFilingHarness(t)
@@ -1480,6 +1501,7 @@ func TestFollowUpFilerNoticesAStalledFiling(t *testing.T) {
 }
 
 func TestFollowUpFilerPerRunCap(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		policy map[string]string
 		want   int
@@ -1517,6 +1539,7 @@ func TestFollowUpFilerPerRunCap(t *testing.T) {
 }
 
 func TestFollowUpFilerDepthCap(t *testing.T) {
+	t.Parallel()
 	// file runs one filing from a run bound to parent and returns the issue
 	// number it filed, or 0 when it was refused.
 	file := func(h *filingHarness, name string, policy map[string]string, parent *int) (domain.ProposalInstance, int) {
@@ -1573,6 +1596,7 @@ func TestFollowUpFilerDepthCap(t *testing.T) {
 }
 
 func TestFollowUpFilerRefusesAMalformedCap(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{
 		"follow_up_filing.settle_interval", "follow_up_filing.max_per_day",
 		"follow_up_filing.max_depth", "follow_up_filing.max_per_run",
@@ -1597,6 +1621,7 @@ func TestFollowUpFilerRefusesAMalformedCap(t *testing.T) {
 }
 
 func TestFollowUpFilerRefusesWithoutTheIssuesPermission(t *testing.T) {
+	t.Parallel()
 	denials := map[string]error{
 		"grant mismatch": fmt.Errorf("mint: %w", publish.ErrGrantMismatch),
 		"mint rejected": &publish.APIError{
@@ -1623,6 +1648,7 @@ func TestFollowUpFilerRefusesWithoutTheIssuesPermission(t *testing.T) {
 }
 
 func TestFollowUpFilerRefusesAnUnresolvableTarget(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(h *filingHarness){
 		"milestone gone":             func(h *filingHarness) { h.gh.filing.milestones = nil },
 		"repository rebound by name": func(h *filingHarness) { h.gh.repositoryID = testRepoID + 1 },
@@ -1647,6 +1673,7 @@ func TestFollowUpFilerRefusesAnUnresolvableTarget(t *testing.T) {
 // behavior: a sweep when it starts, which is the recovery after a restart,
 // one per tick, and one as soon as it is woken.
 func TestFollowUpFilerRunSweepsAtStartOnTickAndOnWake(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := newFilingHarness(t)
 		run := h.seedRun("run-a", nil, nil)
@@ -1689,6 +1716,7 @@ func TestFollowUpFilerRunSweepsAtStartOnTickAndOnWake(t *testing.T) {
 }
 
 func TestFollowUpFilerRunRejectsANonPositiveInterval(t *testing.T) {
+	t.Parallel()
 	h := newFilingHarness(t)
 	if err := h.filer.Run(context.Background(), 0, nil); err == nil {
 		t.Fatal("Run accepted a zero sweep interval")
@@ -1696,6 +1724,7 @@ func TestFollowUpFilerRunRejectsANonPositiveInterval(t *testing.T) {
 }
 
 func TestFollowUpFilerWakeOnANilFilerIsANoOp(t *testing.T) {
+	t.Parallel()
 	var filer *publish.FollowUpFiler
 	filer.Wake()
 }

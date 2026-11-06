@@ -81,6 +81,7 @@ func seedReviewValidation(t *testing.T, count, stored int) (*Store, domain.Findi
 }
 
 func TestReviewValidationReuseBoundsWork(t *testing.T) {
+	t.Parallel()
 	st, artifact, dispositions := seedReviewValidation(t, 5, 5)
 	ctx := t.Context()
 	if err := st.Read(ctx, func(tx *ReadTx) error {
@@ -128,6 +129,7 @@ func reviewValidationWrite(st *Store, ctx context.Context, mode string, fn func(
 }
 
 func TestReviewValidationReuseStopsAtWritesAndTransactions(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"read", "write", "internal"} {
 		for name, sql := range map[string]string{
 			"disposition":       `UPDATE finding_dispositions SET reason = 'forged'`,
@@ -179,6 +181,7 @@ func TestReviewValidationReuseStopsAtWritesAndTransactions(t *testing.T) {
 }
 
 func TestReviewValidationReuseSeesNewDisposition(t *testing.T) {
+	t.Parallel()
 	st, artifact, dispositions := seedReviewValidation(t, 2, 1)
 	ctx := t.Context()
 	if err := st.Write(ctx, func(tx *WriteTx) error {
@@ -206,6 +209,7 @@ func TestReviewValidationReuseSeesNewDisposition(t *testing.T) {
 }
 
 func TestReviewValidationReusePathCancellationAndCopies(t *testing.T) {
+	t.Parallel()
 	st, artifact, _ := seedReviewValidation(t, 2, 2)
 	ctx := t.Context()
 	if err := st.Read(ctx, func(tx *ReadTx) error {

@@ -375,6 +375,7 @@ func (h *replyHarness) outcome() externalReplyOutcome {
 }
 
 func TestExternalReviewReplierPostsOnce(t *testing.T) {
+	t.Parallel()
 	for _, thread := range []string{"review/42", "review_comment/43"} {
 		t.Run(thread, func(t *testing.T) {
 			h := newReplyHarness(t, thread, domain.ReviewDispositionDeclined, "Already checked.")
@@ -396,6 +397,7 @@ func TestExternalReviewReplierPostsOnce(t *testing.T) {
 // and defer in the target repository's terms: a maintainer decided, with no
 // placeholder reason and no adjudication digest (#2349).
 func TestExternalReviewReplierNamesAPersonsDecision(t *testing.T) {
+	t.Parallel()
 	for disposition, want := range map[domain.ReviewDisposition]string{
 		domain.ReviewDispositionDeclined: "A maintainer declined this finding.\n",
 		domain.ReviewDispositionDeferred: "A maintainer deferred this finding.\n",
@@ -416,6 +418,7 @@ func TestExternalReviewReplierNamesAPersonsDecision(t *testing.T) {
 }
 
 func TestExternalReviewReplierSurvivesEachBoundary(t *testing.T) {
+	t.Parallel()
 	for kill := 1; kill < 20; kill++ {
 		stopped := false
 		t.Run(fmt.Sprint(kill), func(t *testing.T) {
@@ -454,6 +457,7 @@ func TestExternalReviewReplierSurvivesEachBoundary(t *testing.T) {
 }
 
 func TestExternalReviewReplierUnknownOutcomes(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{0, 1, 2} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
@@ -486,6 +490,7 @@ func TestExternalReviewReplierUnknownOutcomes(t *testing.T) {
 }
 
 func TestExternalReviewReplierRefusals(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"@codex review", "Already checked."} {
 		t.Run(reason, func(t *testing.T) {
 			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, reason)
@@ -507,6 +512,7 @@ func TestExternalReviewReplierRefusals(t *testing.T) {
 }
 
 func TestExternalReviewReplierRevokedReviewer(t *testing.T) {
+	t.Parallel()
 	for _, pending := range []bool{false, true} {
 		t.Run(fmt.Sprint(pending), func(t *testing.T) {
 			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
@@ -530,6 +536,7 @@ func TestExternalReviewReplierRevokedReviewer(t *testing.T) {
 }
 
 func TestExternalReviewReplierReconcilesUnknownSendAfterRevocation(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.status = http.StatusInternalServerError
 	h.commitUnknown = true
@@ -544,6 +551,7 @@ func TestExternalReviewReplierReconcilesUnknownSendAfterRevocation(t *testing.T)
 }
 
 func TestExternalReviewReplierRejectsMismatchedDispatchingIntentAfterRevocation(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.status = http.StatusInternalServerError
 	h.pass()
@@ -587,6 +595,7 @@ func TestExternalReviewReplierRejectsMismatchedDispatchingIntentAfterRevocation(
 }
 
 func TestExternalReviewReplierAcceptsSkewedSuccessfulResponse(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.pass()
 	h.now = h.now.Add(-time.Second)
@@ -597,6 +606,7 @@ func TestExternalReviewReplierAcceptsSkewedSuccessfulResponse(t *testing.T) {
 }
 
 func TestExternalReviewReplierDoesNotAdoptSkewedUnknownResponse(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.status = http.StatusInternalServerError
 	h.commitUnknown = true
@@ -611,6 +621,7 @@ func TestExternalReviewReplierDoesNotAdoptSkewedUnknownResponse(t *testing.T) {
 }
 
 func TestExternalReviewReplierRechecksAdmissionAfterTokenResolution(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.pass()
 	h.step = func(name string) {
@@ -625,6 +636,7 @@ func TestExternalReviewReplierRechecksAdmissionAfterTokenResolution(t *testing.T
 }
 
 func TestExternalReviewReplierWorkflowClosureBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"before intent", "before send", "in flight"} {
 		t.Run(boundary, func(t *testing.T) {
 			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
@@ -697,6 +709,7 @@ func TestExternalReviewReplierWorkflowClosureBoundaries(t *testing.T) {
 }
 
 func TestExternalReviewReplierWorkflowClosureAfterDispatchClaim(t *testing.T) {
+	t.Parallel()
 	for _, response := range []string{"success", "unproven", "transient rejection"} {
 		t.Run(response, func(t *testing.T) {
 			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
@@ -752,6 +765,7 @@ func TestExternalReviewReplierWorkflowClosureAfterDispatchClaim(t *testing.T) {
 }
 
 func TestExternalReviewReplierClosureRetiresProvenUnsentReservation(t *testing.T) {
+	t.Parallel()
 	for _, rejected := range []bool{false, true} {
 		t.Run(fmt.Sprintf("transient-rejection-%t", rejected), func(t *testing.T) {
 			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
@@ -795,6 +809,7 @@ func TestExternalReviewReplierClosureRetiresProvenUnsentReservation(t *testing.T
 }
 
 func TestExternalReviewReplierIgnoresNeverListedFinding(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	f, err := domain.NewExternalFinding(domain.ExternalFindingInput{
 		RunID: h.f.run.ID, Forge: domain.ExternalReviewForgeGitHub,
@@ -814,6 +829,7 @@ func TestExternalReviewReplierIgnoresNeverListedFinding(t *testing.T) {
 }
 
 func TestExternalReviewReplierRetriesOnlyProvenRateLimitRejections(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.status = 429
 	h.pass()
@@ -837,6 +853,7 @@ func TestExternalReviewReplierRetriesOnlyProvenRateLimitRejections(t *testing.T)
 }
 
 func TestExternalReviewReplierFixedWaitsForPublication(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionFixed, "Reviewed a remediated head.")
 	h.pass()
 	h.pass()
@@ -854,6 +871,7 @@ func TestExternalReviewReplierFixedWaitsForPublication(t *testing.T) {
 }
 
 func TestExternalReviewReplierSerializesPullRequest(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.write(func(tx *store.WriteTx) error { return tx.PutExternalFindingDisposition(context.Background(), h.second) })
 	h.status = 500
@@ -881,6 +899,7 @@ func TestExternalReviewReplierSerializesPullRequest(t *testing.T) {
 }
 
 func TestExternalReviewReplierScreensAgainBeforeSend(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.pass()
 	var i externalReplyIntent
@@ -908,6 +927,7 @@ func TestExternalReviewReplierScreensAgainBeforeSend(t *testing.T) {
 }
 
 func TestExternalReviewReplierNeverEchoesTransportToken(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.pass()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -932,6 +952,7 @@ func TestExternalReviewReplierNeverEchoesTransportToken(t *testing.T) {
 }
 
 func TestExternalReviewReplierRejectsSubstitutedPublishedHead(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionFixed, "Reviewed a remediated head.")
 	h.review(4, h.f.binding.HeadSHA)
 	h.pass()
@@ -964,6 +985,7 @@ func TestExternalReviewReplierRejectsSubstitutedPublishedHead(t *testing.T) {
 }
 
 func TestExternalReviewReplierDoesNotAdoptExistingOrForeignComment(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.comments = append(h.comments, h.comment(80, 123))
 	h.pass()
@@ -980,6 +1002,7 @@ func TestExternalReviewReplierDoesNotAdoptExistingOrForeignComment(t *testing.T)
 }
 
 func TestExternalReviewReplierUnreadableDispositionRaisesOneSafeNotice(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	if err := h.f.st.Close(); err != nil {
 		t.Fatal(err)
@@ -1013,6 +1036,7 @@ func TestExternalReviewReplierUnreadableDispositionRaisesOneSafeNotice(t *testin
 }
 
 func TestExternalReviewReplyBackupRecordsHaveNoArtifactDigests(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.pass()
 	h.pass()
@@ -1037,6 +1061,7 @@ func TestExternalReviewReplyBackupRecordsHaveNoArtifactDigests(t *testing.T) {
 }
 
 func TestExternalReviewReplierRun(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 		ctx, cancel := context.WithCancel(context.Background())

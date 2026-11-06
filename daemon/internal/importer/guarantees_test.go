@@ -15,6 +15,7 @@ import (
 // subprocesses go through internal/gitrun. A direct os/exec import in this
 // package is the escape this test exists to catch.
 func TestImporterDoesNotImportExec(t *testing.T) {
+	t.Parallel()
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +44,7 @@ func TestImporterDoesNotImportExec(t *testing.T) {
 // the handoff; this drives the whole pipeline and then proves the
 // daemon-owned checkout's own .git is byte-unchanged and no hook fired.
 func TestImportDoesNotInfluenceCheckoutGit(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 
 	// A sentinel-writing pre-commit hook in the checkout: if any git
@@ -109,6 +111,7 @@ func TestImportDoesNotInfluenceCheckoutGit(t *testing.T) {
 // writes candidate bytes only into the git object database (and its
 // private scratch), never the handoff or the checkout's working tree.
 func TestImportLeavesHandoffAndWorkingTreeUnchanged(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	handoff := handoffFromEntries(t, []export.Entry{
 		regularEntryFor("a.txt", "new\n", false),

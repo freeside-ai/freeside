@@ -15,6 +15,7 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 }
 
 func TestGitHubRepositoryResolverAuthenticatesPrivateIdentityLookup(t *testing.T) {
+	t.Parallel()
 	tokens := &projectImageTokenSource{token: testProjectImageToken()}
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if got := r.Header.Get("Authorization"); got != "Bearer private-repository-token" {
@@ -41,6 +42,7 @@ func TestGitHubRepositoryResolverAuthenticatesPrivateIdentityLookup(t *testing.T
 }
 
 func TestGitHubRepositoryResolverDoesNotRedirectCredentials(t *testing.T) {
+	t.Parallel()
 	tokens := &projectImageTokenSource{token: testProjectImageToken()}
 	calls := 0
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -69,6 +71,7 @@ func TestGitHubRepositoryResolverDoesNotRedirectCredentials(t *testing.T) {
 }
 
 func TestGitHubRepositoryResolverBindsCanonicalNameAndNumericID(t *testing.T) {
+	t.Parallel()
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Header.Get("User-Agent") == "" || r.Header.Get("X-GitHub-Api-Version") == "" {
 			t.Error("identity request lacks stable GitHub headers")

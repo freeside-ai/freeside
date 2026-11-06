@@ -14,6 +14,7 @@ import (
 )
 
 func TestReadOCIConfigBindsManifestDescriptor(t *testing.T) {
+	t.Parallel()
 	configBody := []byte(`{"config":{"Labels":{"proof":"bound"}},"rootfs":{"diff_ids":["sha256:` +
 		strings.Repeat("a", 64) + `"]}}`)
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(configBody))
@@ -63,6 +64,7 @@ func TestReadOCIConfigBindsManifestDescriptor(t *testing.T) {
 }
 
 func TestVerifyOCIDiffIDsHashesUncompressedLayerBytes(t *testing.T) {
+	t.Parallel()
 	body := []byte("uncompressed layer bytes")
 	diffID := fmt.Sprintf("sha256:%x", sha256.Sum256(body))
 	plainPath := t.TempDir() + "/plain.layer"
@@ -109,6 +111,7 @@ func TestVerifyOCIDiffIDsHashesUncompressedLayerBytes(t *testing.T) {
 }
 
 func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
+	t.Parallel()
 	type archiveEntry struct {
 		name     string
 		body     string

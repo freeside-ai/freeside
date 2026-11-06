@@ -21,6 +21,7 @@ func (f cacheTestRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, erro
 }
 
 func TestReconcilerEvictorsDropOnlyTheSelectedResource(t *testing.T) {
+	t.Parallel()
 	const (
 		repo    = "owner/repo"
 		sibling = "owner/sibling"
@@ -68,6 +69,7 @@ func TestReconcilerEvictorsDropOnlyTheSelectedResource(t *testing.T) {
 }
 
 func TestReconcilerEvictionWinsOverInFlightFill(t *testing.T) {
+	t.Parallel()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	client := &http.Client{Transport: cacheTestRoundTripFunc(func(*http.Request) (*http.Response, error) {

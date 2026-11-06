@@ -11,6 +11,7 @@ import (
 )
 
 func TestTaskMigrationRebindsOnlyAuthenticatedFakeTerminals(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"ready", "blocked", "v1", "reason", "label", "task", "surface"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()

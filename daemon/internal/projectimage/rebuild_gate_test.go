@@ -89,6 +89,7 @@ func firstRefusal(findings gateFindings) *lockfileRefusal {
 }
 
 func TestLockfileDeltaAdmitsOnlyPinnedPackagesFromDeclaredHosts(t *testing.T) {
+	t.Parallel()
 	registries := gateRegistrySet(t, "registry.npmjs.org")
 	const overridden = `{"name":"app","overrides":{"left":"1.0.0"},"dependencies":{"left":"^1.0.0"`
 	for _, test := range []struct {
@@ -568,6 +569,7 @@ func TestLockfileDeltaAdmitsOnlyPinnedPackagesFromDeclaredHosts(t *testing.T) {
 // satisfied only from that source. So a candidate that declares one makes npm
 // fetch from it whatever the entry is pinned to.
 func TestLockfileDeltaAdmitsOnlyRegistrySpecsInWhatTheCandidateDeclares(t *testing.T) {
+	t.Parallel()
 	registries := gateRegistrySet(t, "registry.npmjs.org")
 	evaluate := func(t *testing.T, field, spec string) *lockfileRefusal {
 		t.Helper()
@@ -624,6 +626,7 @@ func TestLockfileDeltaAdmitsOnlyRegistrySpecsInWhatTheCandidateDeclares(t *testi
 }
 
 func TestLockfileDeltaSummarizesTheChange(t *testing.T) {
+	t.Parallel()
 	// The head drops the base's package and adds two from two declared hosts.
 	head := `{"lockfileVersion":2,"packages":{` +
 		`"":{"dependencies":{"right":"^2.0.0"},"optionalDependencies":{"@scope/other":"1"}},` +
@@ -647,6 +650,7 @@ func TestLockfileDeltaSummarizesTheChange(t *testing.T) {
 // npm reads a URL on a git forge it knows as a repository and clones it with
 // no integrity check, so declaring such a host does not make it a registry.
 func TestLockfileDeltaRefusesARegistryOnAGitForgeHost(t *testing.T) {
+	t.Parallel()
 	registries := gateRegistrySet(t, "gitlab.com", "www.github.com")
 	for _, resolved := range []string{"https://gitlab.com/owner/right", "https://www.github.com/owner/right.tgz"} {
 		_, findings := evaluateLockfileDelta(
@@ -659,6 +663,7 @@ func TestLockfileDeltaRefusesARegistryOnAGitForgeHost(t *testing.T) {
 }
 
 func TestLockfileRefusalBoundsCandidateText(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("a", 4096)
 	for name, lock := range map[string]string{
 		"host":  gateHeadLock(gateResolvedFrom("https://" + long + ".example.com/right.tgz")),
@@ -692,6 +697,7 @@ func gatePolicy(t *testing.T, registrySet string) domain.ResolvedPolicy {
 }
 
 func TestEvaluateRebuildAppliesEachClauseAtTheExactCommits(t *testing.T) {
+	t.Parallel()
 	const declared = `["registry.npmjs.org"]`
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{
@@ -816,6 +822,7 @@ func TestEvaluateRebuildAppliesEachClauseAtTheExactCommits(t *testing.T) {
 }
 
 func TestEvaluateRebuildRefusesAnUnreadableManifest(t *testing.T) {
+	t.Parallel()
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{
 		"package.json": gateBasePackageJSON, "package-lock.json": gateBasePackageLock,
@@ -847,6 +854,7 @@ func TestEvaluateRebuildRefusesAnUnreadableManifest(t *testing.T) {
 }
 
 func TestEvaluateRebuildReturnsACheckoutFaultAsAnError(t *testing.T) {
+	t.Parallel()
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{"package.json": gateBasePackageJSON})
 	_, err := EvaluateRebuild(t.Context(), "git", repo.dir, domain.ProjectImage{},
@@ -902,6 +910,7 @@ func rebuildTestImage(t *testing.T, ref string) domain.ProjectImage {
 }
 
 func TestRebuildRequestKeepsEverythingTheImageBinds(t *testing.T) {
+	t.Parallel()
 	const head = "1111111111111111111111111111111111111111"
 	inputs := BuildInputs{
 		BaseBuildRef: "freeside-agent-claude:local",
@@ -940,6 +949,7 @@ func TestRebuildRequestKeepsEverythingTheImageBinds(t *testing.T) {
 }
 
 func TestRebuildRequestRefusesInputsTheImageDoesNotBind(t *testing.T) {
+	t.Parallel()
 	const head = "1111111111111111111111111111111111111111"
 	image := rebuildTestImage(t, "127.0.0.1:5100/freeside-project-x@"+testImageDigest)
 	inputs := BuildInputs{BaseBuildRef: "freeside-agent-claude:local"}
@@ -1010,6 +1020,7 @@ func findingClauses(findings []domain.ImageUpkeepClauseFinding) []RebuildRefusal
 // The upkeep job classifies every clause that refused, so the gate reports
 // them all, the publication lane's one still first.
 func TestEvaluateRebuildReportsEveryRefusingClause(t *testing.T) {
+	t.Parallel()
 	const declared = `["registry.npmjs.org"]`
 	repo, base, image := newGateRepo(t)
 	unpinned := gateHeadLock(gateResolvedFrom("http://registry.npmjs.org/right.tgz"))
@@ -1097,6 +1108,7 @@ func TestEvaluateRebuildReportsEveryRefusingClause(t *testing.T) {
 }
 
 func TestEvaluateUpkeepMeasuresTheTipFromTheBuildCommit(t *testing.T) {
+	t.Parallel()
 	const declared = `["registry.npmjs.org"]`
 	repo, base, current := newGateRepo(t)
 	upgraded := current
@@ -1183,6 +1195,7 @@ func TestEvaluateUpkeepMeasuresTheTipFromTheBuildCommit(t *testing.T) {
 }
 
 func TestEvaluateUpkeepAdmitsAGoToolchainOnlyDelta(t *testing.T) {
+	t.Parallel()
 	const goMod = "module example.test/app\n\ngo 1.22\n"
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{
@@ -1220,6 +1233,7 @@ func TestEvaluateUpkeepAdmitsAGoToolchainOnlyDelta(t *testing.T) {
 // An adopted host joins the declared set at the gate, for the publication
 // lane and upkeep alike, and alone forms the set when none is declared.
 func TestRebuildGateAdmitsAnAdoptedHost(t *testing.T) {
+	t.Parallel()
 	repo, base, image := newGateRepo(t)
 	head := repo.commit(map[string]string{
 		"package.json": gateHeadPackageJSON,

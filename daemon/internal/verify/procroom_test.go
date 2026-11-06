@@ -19,6 +19,7 @@ func newProcRoom(t *testing.T) *ProcRoom {
 }
 
 func TestProcRoomExitCodes(t *testing.T) {
+	t.Parallel()
 	r := newProcRoom(t)
 	pass, err := r.Run(context.Background(), t.TempDir(), []string{"true"})
 	if err != nil || pass.ExitCode != 0 {
@@ -34,6 +35,7 @@ func TestProcRoomExitCodes(t *testing.T) {
 }
 
 func TestProcRoomCapturesAndBoundsOutput(t *testing.T) {
+	t.Parallel()
 	r := newProcRoom(t)
 	res, err := r.Run(context.Background(), t.TempDir(), []string{"echo", "hello"})
 	if err != nil {
@@ -77,6 +79,7 @@ func TestProcRoomScrubsEnvironment(t *testing.T) {
 }
 
 func TestProcRoomTimeoutIsAFailedStep(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	r := newProcRoom(t)
@@ -90,6 +93,7 @@ func TestProcRoomTimeoutIsAFailedStep(t *testing.T) {
 }
 
 func TestProcRoomFailsLoud(t *testing.T) {
+	t.Parallel()
 	t.Run("missing binary", func(t *testing.T) {
 		r := newProcRoom(t)
 		if _, err := r.Run(context.Background(), t.TempDir(), []string{"freeside-no-such-binary"}); err == nil {
@@ -118,6 +122,7 @@ func TestProcRoomFailsLoud(t *testing.T) {
 }
 
 func TestProcRoomRecordsInvocations(t *testing.T) {
+	t.Parallel()
 	r := newProcRoom(t)
 	dir := t.TempDir()
 	if _, err := r.Run(context.Background(), dir, []string{"true"}); err != nil {
@@ -139,6 +144,7 @@ func TestProcRoomRecordsInvocations(t *testing.T) {
 // output pipe must not block Run past the wait delay, and must read as
 // a failed step, never a passed one.
 func TestProcRoomWaitDelayUnblocksHeldPipe(t *testing.T) {
+	t.Parallel()
 	r := newProcRoom(t)
 	r.WaitDelay = 200 * time.Millisecond
 	start := time.Now()
@@ -159,6 +165,7 @@ func TestProcRoomWaitDelayUnblocksHeldPipe(t *testing.T) {
 // step on the host; the room kills the whole process group before
 // reporting the step complete.
 func TestProcRoomReapsDescendants(t *testing.T) {
+	t.Parallel()
 	r := newProcRoom(t)
 	r.WaitDelay = 200 * time.Millisecond
 	res, err := r.Run(context.Background(), t.TempDir(), []string{"sh", "-c", "sleep 30 & echo $!"})
@@ -194,6 +201,7 @@ func TestProcRoomReapsDescendants(t *testing.T) {
 // Run does, puts the callback in exactly that state deterministically,
 // without having to win a race.
 func TestProcRoomCancelReportsAVanishedGroupAsDone(t *testing.T) {
+	t.Parallel()
 	cmd := exec.CommandContext(context.Background(), "true")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = cancelProcessGroup(cmd)

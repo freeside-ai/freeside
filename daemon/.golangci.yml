@@ -91,7 +91,6 @@ linters:
           |internal/fakepublication\
           |internal/gitrun\
           |internal/golden\
-          |internal/importer\
           |internal/inference\
           |internal/inference/fake\
           |internal/intake\
@@ -102,19 +101,15 @@ linters:
           |internal/operations\
           |internal/pathfold\
           |internal/procbound\
-          |internal/projectimage\
           |internal/publicationtext\
-          |internal/publish\
           |internal/repotemplate\
           |internal/scheduler\
           |internal/seedfixture\
           |internal/signet\
           |internal/specify\
           |internal/specify/fake\
-          |internal/store\
           |internal/strictjson\
           |internal/topicstore\
-          |internal/verify\
           |internal/wardstore\
           )/[^/]+_test[.]go$"
         linters:

@@ -8,6 +8,7 @@ import (
 )
 
 func TestInstallationAuthorityAllowsRepositoryRevalidatesCredentialBinding(t *testing.T) {
+	t.Parallel()
 	const (
 		appID        = int64(12345)
 		ownerID      = int64(67890)

@@ -12,6 +12,7 @@ import (
 )
 
 func TestTaskAdmissionRejectsLateMilestoneAfterSlotIsTaken(t *testing.T) {
+	t.Parallel()
 	s := openStore(t, store.Options{})
 	ctx := t.Context()
 	now := time.Now().UTC()

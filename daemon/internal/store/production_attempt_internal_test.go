@@ -24,6 +24,7 @@ func testInitialProductionAttempt() domain.ProductionAttempt {
 }
 
 func TestProductionAttemptApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+	t.Parallel()
 	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
 	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
 	if !authenticSpecificationApprovalDecisionSet(legacy) || !authenticSpecificationApprovalDecisionSet(current) {
@@ -256,6 +257,7 @@ func TestProductionAttemptAuthenticationRejectsRetryAsSpecification(t *testing.T
 }
 
 func TestInitialApprovalClaimsRequireMarkdownAndCanonicalDigests(t *testing.T) {
+	t.Parallel()
 	text := domain.ClaimText{
 		MediaType: domain.MediaTypeTextMarkdown, Content: "# Specification\n\nImplement the bounded workflow.",
 	}
