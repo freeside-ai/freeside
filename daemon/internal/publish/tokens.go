@@ -179,6 +179,13 @@ func NewCachedTokenSource(m *Minter, now func() time.Time) *CachedTokenSource {
 	}
 }
 
+// Format renders the source without its cache. fmt prints values reached
+// through an unexported field raw, without calling Secret's Formatter, so
+// a default rendering of the cache would print every cached token.
+func (*CachedTokenSource) Format(f fmt.State, _ rune) {
+	io.WriteString(f, "publish.CachedTokenSource") //nolint:errcheck,gosec // fmt.State writes cannot be usefully handled
+}
+
 // Token returns a cached token still comfortably inside its lifetime,
 // or mints, caches, and returns a fresh one.
 func (s *CachedTokenSource) Token(ctx context.Context, repo string) (InstallationToken, error) {
@@ -221,6 +228,13 @@ type FollowUpFilingTokenSource struct {
 
 func NewFollowUpFilingTokenSource(m *Minter, now func() time.Time) *FollowUpFilingTokenSource {
 	return &FollowUpFilingTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]InstallationToken{}}
+}
+
+// Format renders the source without its cache. fmt prints values reached
+// through an unexported field raw, without calling Secret's Formatter, so
+// a default rendering of the cache would print every cached token.
+func (*FollowUpFilingTokenSource) Format(f fmt.State, _ rune) {
+	io.WriteString(f, "publish.FollowUpFilingTokenSource") //nolint:errcheck,gosec // fmt.State writes cannot be usefully handled
 }
 
 // Token resolves the current trusted installation before looking in the cache,
@@ -337,6 +351,13 @@ func NewOnboardingTokenSource(
 		registrationID: registrationID, repositoryID: repositoryID, now: now,
 		tokens: map[tokenCacheKey]InstallationToken{},
 	}
+}
+
+// Format renders the source without its cache. fmt prints values reached
+// through an unexported field raw, without calling Secret's Formatter, so
+// a default rendering of the cache would print every cached token.
+func (*OnboardingTokenSource) Format(f fmt.State, _ rune) {
+	io.WriteString(f, "publish.OnboardingTokenSource") //nolint:errcheck,gosec // fmt.State writes cannot be usefully handled
 }
 
 func (s *OnboardingTokenSource) Token(
