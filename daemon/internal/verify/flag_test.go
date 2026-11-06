@@ -18,6 +18,7 @@ func changed(path string) importer.Change {
 // ADS suffix, HFS-ignorables): the class must fire on the name a
 // downstream checkout would materialize.
 func TestFlagControlPathsDefaults(t *testing.T) {
+	t.Parallel()
 	flagged := []string{
 		"go.mod",
 		"go.sum",
@@ -104,6 +105,7 @@ func TestFlagControlPathsDefaults(t *testing.T) {
 // removing a Makefile or the recipe steers verification exactly as
 // rewriting one does.
 func TestFlagControlPathsDeletions(t *testing.T) {
+	t.Parallel()
 	del := importer.Change{Path: "Makefile", Kind: importer.ChangeDeleted}
 	got := flagControlPaths([]importer.Change{del}, nil, nil, testRecipePath)
 	if len(got) != 1 || got[0].Detail != "deleted" {
@@ -114,6 +116,7 @@ func TestFlagControlPathsDeletions(t *testing.T) {
 // TestFlagControlPathsNonUTF8 pins that a non-canonical path is flagged
 // unconditionally: an unmatchable name must not bypass the class.
 func TestFlagControlPathsNonUTF8(t *testing.T) {
+	t.Parallel()
 	raw := importer.Change{PathHex: "676f2e6d6f64ff", Kind: importer.ChangeAdded}
 	got := flagControlPaths([]importer.Change{raw}, nil, nil, testRecipePath)
 	if len(got) != 1 || got[0].PathHex != raw.PathHex || got[0].Path != "" {
@@ -125,6 +128,7 @@ func TestFlagControlPathsNonUTF8(t *testing.T) {
 // widening is added, and no extra set can drop a default or the recipe
 // path from the class.
 func TestVerificationControlWidenOnly(t *testing.T) {
+	t.Parallel()
 	for _, extra := range [][]string{nil, {}, {"**/scripts/verify.sh"}} {
 		patterns := verificationControl(extra, testRecipePath)
 		for _, want := range DefaultVerificationControlPatterns {
@@ -143,6 +147,7 @@ func TestVerificationControlWidenOnly(t *testing.T) {
 }
 
 func TestFlagControlPathsGolden(t *testing.T) {
+	t.Parallel()
 	changes := []importer.Change{
 		changed("go.mod"),
 		{Path: "Makefile", Kind: importer.ChangeDeleted},
@@ -163,6 +168,7 @@ func TestFlagControlPathsGolden(t *testing.T) {
 // a verification-control surface, so a candidate change to it is
 // flagged without the recipe author duplicating it in policy.
 func TestFlagControlPathsCommandEntrypoints(t *testing.T) {
+	t.Parallel()
 	commandPaths := Recipe{Commands: [][]string{{"bash", "scripts/verify.sh"}, {"./tools/lint"}}}.CommandPaths()
 	flagged := flagControlPaths([]importer.Change{
 		changed("scripts/verify.sh"),
@@ -188,6 +194,7 @@ func TestFlagControlPathsCommandEntrypoints(t *testing.T) {
 // never over-match a pattern expansion. Each name is used as a recipe
 // entrypoint; a candidate change to that exact name must be flagged.
 func TestCommandEntrypointFilenameEnumeration(t *testing.T) {
+	t.Parallel()
 	names := []string{
 		"scripts/verify.sh",        // ordinary
 		"scripts/check[fast].sh",   // glob char class

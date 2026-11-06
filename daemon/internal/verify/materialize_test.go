@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaterializeWritesHeadTree(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{
 		testRecipePath: trustedRecipeBytes,
 		"README.md":    "base readme",
@@ -50,6 +51,7 @@ func TestMaterializeWritesHeadTree(t *testing.T) {
 // half: a head the checkout does not hold is a typed error and no
 // workspace is materialized.
 func TestMaterializeMismatchedHeadFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"README.md": "base"})
 	g := newTestRunner(t, dir)
 	dest := filepath.Join(t.TempDir(), "workspace")
@@ -66,6 +68,7 @@ func TestMaterializeMismatchedHeadFailsClosed(t *testing.T) {
 // only the scratch index: the daemon-owned checkout's worktree and HEAD
 // stay exactly at the enforced base.
 func TestMaterializeLeavesCheckoutUntouched(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"README.md": "base readme"})
 	head := commitCandidate(t, dir, base, map[string]string{"README.md": "candidate readme"})
 	g := newTestRunner(t, dir)
@@ -92,6 +95,7 @@ func TestMaterializeLeavesCheckoutUntouched(t *testing.T) {
 // conversion must not change a single materialized byte, or the recipe
 // would verify content the bound head does not hold.
 func TestMaterializePreservesBytesUnderAttributes(t *testing.T) {
+	t.Parallel()
 	attrs := "id.txt ident\n*.txt text eol=crlf\n"
 	idBlob := "$Id$\nhello\n"
 	unixBlob := "a\nb\n"
@@ -120,6 +124,7 @@ func TestMaterializePreservesBytesUnderAttributes(t *testing.T) {
 // TestMaterializePreservesSymlinks pins that a base symlink survives
 // materialization and the byte re-verification accepts it.
 func TestMaterializePreservesSymlinks(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"real.txt": "content\n"})
 	if err := os.Symlink("real.txt", filepath.Join(dir, "link.txt")); err != nil {
 		t.Fatalf("symlink: %v", err)
@@ -146,6 +151,7 @@ func TestMaterializePreservesSymlinks(t *testing.T) {
 // honest materialization and proves the byte re-verification rejects
 // both a changed file and a stray one.
 func TestVerifyMaterializedFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"README.md": "base"})
 	head := commitCandidate(t, dir, base, map[string]string{"main.go": "package main\n"})
 	g := newTestRunner(t, dir)
@@ -194,6 +200,7 @@ func TestVerifyMaterializedFailsClosed(t *testing.T) {
 // can observe; materialization must fail closed rather than verify a
 // workspace of a different shape than the bound head.
 func TestMaterializeRejectsSymlinkDowngrade(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"real.txt": "content\n"})
 	if err := os.Symlink("real.txt", filepath.Join(dir, "link.txt")); err != nil {
 		t.Fatalf("symlink: %v", err)
@@ -227,6 +234,7 @@ func TestMaterializeRejectsSymlinkDowngrade(t *testing.T) {
 // materializes owner-executable and passes; flipping the bit in either
 // direction after materialization is a workspace mismatch.
 func TestMaterializePreservesExecutableBit(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"plain.txt": "data\n"})
 	script := filepath.Join(dir, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrue\n"), 0o755); err != nil { //nolint:gosec // G306: fixture needs the exec bit; content is inert test data
@@ -277,6 +285,7 @@ func TestMaterializePreservesExecutableBit(t *testing.T) {
 // as an empty directory (clone parity) and passes; a populated
 // directory or a file at the gitlink path fails closed.
 func TestMaterializeGitlinkShape(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"a.txt": "hi\n"})
 	runGit(t, dir, "update-index", "--add", "--cacheinfo",
 		"160000,1111111111111111111111111111111111111111,sub")
@@ -330,6 +339,7 @@ func TestMaterializeGitlinkShape(t *testing.T) {
 // accept it. materialize clears the destination first; verifyMaterialized
 // rejects a stray directory as the backstop.
 func TestVerifyMaterializedRejectsStrayDir(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"pkg/a.go": "package pkg\n"})
 	head := commitCandidate(t, dir, base, map[string]string{"main.go": "package main\n"})
 	g := newTestRunner(t, dir)
@@ -377,6 +387,7 @@ func TestVerifyMaterializedRejectsStrayDir(t *testing.T) {
 // Room). A filter configured in the checkout that writes a sentinel
 // must not fire, and the materialized bytes must be the committed blob.
 func TestMaterializeRunsNoFilters(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"code.txt": "committed\n"})
 	head := commitCandidate(t, dir, base, map[string]string{"main.go": "package main\n"})
 	sentinel := filepath.Join(t.TempDir(), "filter-fired")
@@ -408,6 +419,7 @@ func TestMaterializeRunsNoFilters(t *testing.T) {
 // any write, so materialize cannot follow the symlink prefix and write
 // `a/b` outside the workspace to an arbitrary host path.
 func TestMaterializeRejectsMalformedTree(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
 
 	// Blob whose bytes are a symlink target escaping the workspace.
@@ -446,6 +458,7 @@ func TestMaterializeRejectsMalformedTree(t *testing.T) {
 // FS-independent invariant (on a case-sensitive FS the two paths are
 // genuinely distinct and materialize succeeds honestly).
 func TestMaterializeRejectsCaseFoldingSymlinkCollision(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
 
 	// escapeDir is outside any workspace: a distinct temp root from the
@@ -507,6 +520,7 @@ func fsFoldsCase(t *testing.T) bool {
 // (writes the last), so listTree must reject every one as
 // ErrMalformedTree before any write.
 func TestMaterializeRejectsMalformedTreePaths(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
 	blob := runGitStdin(t, dir, []byte("data\n"), "hash-object", "-w", "--stdin")
 

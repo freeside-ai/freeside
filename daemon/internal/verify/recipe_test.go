@@ -15,6 +15,7 @@ import (
 const trustedRecipeBytes = `{"commands": [["go", "test", "./..."], ["go", "vet", "./..."]], "capture": "none"}`
 
 func TestParseRecipeGolden(t *testing.T) {
+	t.Parallel()
 	r, err := ParseRecipe([]byte(trustedRecipeBytes))
 	if err != nil {
 		t.Fatalf("ParseRecipe: %v", err)
@@ -32,6 +33,7 @@ func TestParseRecipeGolden(t *testing.T) {
 }
 
 func TestParseRecipeRejects(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		raw  string
@@ -83,6 +85,7 @@ func TestParseRecipeRejects(t *testing.T) {
 // parse verbatim as one element. Nothing is split, folded, or rewritten,
 // so the destination reaches the room as a single argument.
 func TestParseRecipeArgvOpaque(t *testing.T) {
+	t.Parallel()
 	raw := `{"commands": [` +
 		`["xcodebuild", "-destination", "generic/platform=iOS Simulator"], ` +
 		`["grep", "-E", "a|b > c", "."]` +
@@ -106,6 +109,7 @@ func TestParseRecipeArgvOpaque(t *testing.T) {
 // without a shell command-string option remains valid, as do opaque
 // multi-word operands for non-shell tools.
 func TestParseRecipeRejectsShellCommandString(t *testing.T) {
+	t.Parallel()
 	reject := [][]string{
 		{"sh", "-c", "./scripts/verify.sh --fast"},
 		{"/bin/sh", "-ec", "./scripts/verify.sh --fast"},
@@ -156,6 +160,7 @@ func TestParseRecipeRejectsShellCommandString(t *testing.T) {
 // position, depth, or surrounding tokens, while a ".." that is only part
 // of a real filename must survive as an opaque argument.
 func TestParseRecipeRejectsDotDotToken(t *testing.T) {
+	t.Parallel()
 	reject := []string{
 		"..",
 		"../x",
@@ -201,6 +206,7 @@ func marshalRecipe(t *testing.T, commands [][]string) []byte {
 // bytes as loaded: a semantically identical recipe with different
 // whitespace is a different digest, so approvals can never alias.
 func TestRecipeDigestBindsExactBytes(t *testing.T) {
+	t.Parallel()
 	a := RecipeDigest([]byte(`{"commands":[["true"]],"capture":"none"}`))
 	b := RecipeDigest([]byte(`{"commands": [["true"]], "capture": "none"}`))
 	if a == b {
@@ -209,6 +215,7 @@ func TestRecipeDigestBindsExactBytes(t *testing.T) {
 }
 
 func TestCaptureModeValidity(t *testing.T) {
+	t.Parallel()
 	for _, m := range AllCaptureModes {
 		if !m.valid() {
 			t.Errorf("registered capture mode %q reports invalid", m)
@@ -220,6 +227,7 @@ func TestCaptureModeValidity(t *testing.T) {
 }
 
 func TestRecipeSourceValidity(t *testing.T) {
+	t.Parallel()
 	if (RecipeSource{}).valid() {
 		t.Error("zero recipe source reports valid")
 	}
@@ -239,6 +247,7 @@ func TestRecipeSourceValidity(t *testing.T) {
 // script arguments, but not PATH toolchains, package patterns, flags,
 // or absolute paths.
 func TestRecipeCommandPaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		cmds [][]string

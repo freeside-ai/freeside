@@ -72,6 +72,7 @@ func verifyFixture(t *testing.T, changes map[string]string, changeList []importe
 // the materialized workspace (so it demonstrably existed and was
 // ignored), and the divergence is flagged.
 func TestVerifyExecutesTrustedRecipeNotWorkspaceCopy(t *testing.T) {
+	t.Parallel()
 	hostile := `{"commands": [["true"]], "capture": "none"}`
 	checkout, opts, room := verifyFixture(
 		t,
@@ -122,6 +123,7 @@ func TestVerifyExecutesTrustedRecipeNotWorkspaceCopy(t *testing.T) {
 // half: a head the checkout does not hold is a typed error, no command
 // runs, and no evidence exists.
 func TestVerifyMismatchedHeadFailsClosed(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	opts.HeadSHA = "0123456789abcdef0123456789abcdef01234567"
 	res, err := Verify(context.Background(), checkout, opts)
@@ -139,6 +141,7 @@ func TestVerifyMismatchedHeadFailsClosed(t *testing.T) {
 // TestVerifyFailedCommandFailsFast pins the outcome semantics: a
 // non-zero exit fails the verification and later commands do not run.
 func TestVerifyFailedCommandFailsFast(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	room.results = map[string]StepResult{
 		"go test ./...": {ExitCode: 2, Output: []byte("FAIL\n")},
@@ -158,6 +161,7 @@ func TestVerifyFailedCommandFailsFast(t *testing.T) {
 // TestVerifyRoomFailureFailsClosed: a room that cannot execute at all
 // is an infrastructure failure, not a verification outcome.
 func TestVerifyRoomFailureFailsClosed(t *testing.T) {
+	t.Parallel()
 	checkout, opts, _ := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	opts.Room = failingRoom{}
 	if _, err := Verify(context.Background(), checkout, opts); err == nil {
@@ -173,6 +177,7 @@ func (failingRoom) Run(context.Context, string, []string) (StepResult, error) {
 
 // TestVerifyInvalidOptions enumerates the fail-loud option boundary.
 func TestVerifyInvalidOptions(t *testing.T) {
+	t.Parallel()
 	checkout, valid, _ := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	cases := []struct {
 		name   string
@@ -209,6 +214,7 @@ func TestVerifyInvalidOptions(t *testing.T) {
 // and recipe digest. The fixture's SHAs are deterministic (pinned
 // dates, identity, and content), so the golden holds real values.
 func TestVerifyReportGolden(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(
 		t,
 		map[string]string{"main.go": "package main\n", "go.mod": "module example.test\n"},
@@ -246,6 +252,7 @@ func TestVerifyReportGolden(t *testing.T) {
 // empty token) is quoted, since an argument is an opaque execve token,
 // not shell text.
 func TestRenderArgvQuotesUnsafeTokens(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		argv []string
@@ -268,6 +275,7 @@ func TestRenderArgvQuotesUnsafeTokens(t *testing.T) {
 }
 
 func TestOutcomeValidity(t *testing.T) {
+	t.Parallel()
 	for _, o := range AllOutcomes {
 		if !o.valid() {
 			t.Errorf("registered outcome %q reports invalid", o)
@@ -281,6 +289,7 @@ func TestOutcomeValidity(t *testing.T) {
 // TestVerifyTranscriptCapIsHonest pins that hitting the transcript cap
 // is recorded on the result and in the report, not silently dropped.
 func TestVerifyTranscriptCapIsHonest(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	room.results = map[string]StepResult{
 		"go test ./...": {Output: []byte("a long line of test output\n")},
@@ -302,6 +311,7 @@ func TestVerifyTranscriptCapIsHonest(t *testing.T) {
 // transcript survives: a noisy first step must not push a later failing
 // step's output and exit line out of the record.
 func TestVerifyTranscriptKeepsTheFailingStep(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	const failure = "main.go:1: vet: unreachable code\n"
 	room.results = map[string]StepResult{
@@ -335,6 +345,7 @@ func TestVerifyTranscriptKeepsTheFailingStep(t *testing.T) {
 // and reads it on the second, asserting the mutation did not carry over
 // and the two commands used different workspaces.
 func TestVerifyFreshWorkspacePerCommand(t *testing.T) {
+	t.Parallel()
 	checkout, opts, _ := verifyFixture(t, map[string]string{"src.go": "package main\n"}, nil)
 	var firstDir, secondDir, secondContent string
 	mutating := &sequencedRoom{onRun: func(n int, workdir string) {
@@ -379,6 +390,7 @@ func (r *sequencedRoom) Run(_ context.Context, workdir string, _ []string) (Step
 // silently serve as the recipe source while the report claims it as the
 // enforced base commit. It must fail closed instead.
 func TestVerifyBaseMustBeACommit(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
 	treeSHA := runGit(t, checkout, "rev-parse", opts.BaseSHA+"^{tree}")
 	opts.BaseSHA = treeSHA
@@ -397,6 +409,7 @@ func TestVerifyBaseMustBeACommit(t *testing.T) {
 // the real control surface; verification fails closed rather than
 // silently flagging only the link.
 func TestVerifyRejectsSymlinkEntrypoint(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"scripts/verify.sh": "#!/bin/sh\ntrue\n"})
 	if err := os.Symlink("scripts/verify.sh", filepath.Join(dir, "run-check")); err != nil {
 		t.Fatalf("symlink: %v", err)
@@ -429,6 +442,7 @@ func TestVerifyRejectsSymlinkEntrypoint(t *testing.T) {
 // target the lexical path does not name, so it fails closed like a
 // direct symlink entrypoint.
 func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"scripts/verify.sh": "#!/bin/sh\ntrue\n"})
 	if err := os.Symlink("scripts", filepath.Join(dir, "run-check")); err != nil {
 		t.Fatalf("symlink: %v", err)
@@ -458,6 +472,7 @@ func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
 // no longer evade the verification-control-path account because the
 // trusted recipe fails closed before any command runs.
 func TestVerifyRejectsShellCommandString(t *testing.T) {
+	t.Parallel()
 	checkout, opts, room := verifyFixture(t, map[string]string{
 		"scripts/verify.sh": "#!/bin/sh\ntrue\n",
 	}, []importer.Change{changed("scripts/verify.sh")})
@@ -483,6 +498,7 @@ func TestVerifyRejectsShellCommandString(t *testing.T) {
 // `run-check/verify.sh` (TestVerifyRejectsSymlinkPrefixEntrypoint),
 // which stays guarded.
 func TestVerifyOperandWithSymlinkPrefixNotEntrypoint(t *testing.T) {
+	t.Parallel()
 	dir, _ := initRepo(t, map[string]string{"scripts/verify.sh": "#!/bin/sh\ntrue\n"})
 	if err := os.Symlink("scripts", filepath.Join(dir, "generic")); err != nil {
 		t.Fatalf("symlink: %v", err)

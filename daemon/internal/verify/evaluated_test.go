@@ -72,6 +72,7 @@ func commitWithParents(t *testing.T, dir, tree string, parents ...string) string
 // account names the base, the head, and the merge, and the evidence
 // still binds the head the forge shows.
 func TestVerifyEvaluatedMergeVerifiesMergedTree(t *testing.T) {
+	t.Parallel()
 	f := newMergeFixture(t)
 	f.room.results = map[string]StepResult{
 		"go test ./...": {Output: []byte("ok  \texample.test\t0.01s\n")},
@@ -135,6 +136,7 @@ func TestVerifyEvaluatedMergeVerifiesMergedTree(t *testing.T) {
 // the head predates the base's later commit, so its tree answers each
 // check differently from the tree the commands run in.
 func TestVerifyEvaluatedMergeInspectsTheMergedTree(t *testing.T) {
+	t.Parallel()
 	divergent := func(res Result) bool {
 		for _, f := range res.Findings {
 			if f.Kind == FindingRecipeDivergence {
@@ -220,6 +222,7 @@ func TestVerifyEvaluatedMergeInspectsTheMergedTree(t *testing.T) {
 // closed before any command runs: the report would otherwise claim the
 // named tree's result for this head on this base.
 func TestVerifyEvaluatedMustBeTheMergeOfHeadIntoBase(t *testing.T) {
+	t.Parallel()
 	f := newMergeFixture(t)
 	base, head, merge := f.opts.BaseSHA, f.opts.HeadSHA, f.opts.EvaluatedSHA
 	tree := runGit(t, f.checkout, "rev-parse", merge+"^{tree}")

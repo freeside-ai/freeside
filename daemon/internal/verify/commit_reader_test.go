@@ -59,6 +59,7 @@ func countedCommitGit(t *testing.T) (string, func(int, int)) {
 }
 
 func TestCommitReaderPinsOnceAndKeepsReadChecks(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"file": "base", "nested/file": "nested"})
 	if err := os.Symlink("file", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
@@ -96,6 +97,7 @@ func TestCommitReaderPinsOnceAndKeepsReadChecks(t *testing.T) {
 }
 
 func TestCommitReaderSurvivesHeadAndWorktreeMovement(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"file": "base"})
 	reader, err := OpenCommitReader(t.Context(), "git", dir)
 	if err != nil {
@@ -111,6 +113,7 @@ func TestCommitReaderSurvivesHeadAndWorktreeMovement(t *testing.T) {
 }
 
 func TestCommitReaderKeepsTheResolvedCheckout(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"file": "base"})
 	other, otherHead := initRepo(t, map[string]string{"file": "other"})
 	link := filepath.Join(t.TempDir(), "checkout")
@@ -134,6 +137,7 @@ func TestCommitReaderKeepsTheResolvedCheckout(t *testing.T) {
 }
 
 func TestCommitReaderFailsClosedWhenItsGitDirectoryChanges(t *testing.T) {
+	t.Parallel()
 	for _, replacement := range []string{"sha1", "sha256", "removed"} {
 		t.Run(replacement, func(t *testing.T) {
 			dir, base := initRepo(t, map[string]string{"file": "base"})

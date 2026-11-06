@@ -10,6 +10,7 @@ import (
 )
 
 func TestReadRecipeAtCommitUsesExactTree(t *testing.T) {
+	t.Parallel()
 	dir, commit := initRepo(t, map[string]string{
 		DefaultRecipePath: trustedRecipeBytes,
 	})
@@ -30,6 +31,7 @@ func TestReadRecipeAtCommitUsesExactTree(t *testing.T) {
 }
 
 func TestReadFileAtCommitSeparatesAbsentFromUnreadable(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{
 		"package.json":   `{"name":"fixture"}`,
 		"nested/file.js": "export {};\n",
@@ -79,6 +81,7 @@ func TestReadFileAtCommitSeparatesAbsentFromUnreadable(t *testing.T) {
 // An exact-base fetch leaves the worktree empty on purpose; the reader works
 // from the object store alone.
 func TestReadFileAtCommitReadsWithoutAWorktree(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"package.json": `{"name":"fixture"}`})
 	bare := filepath.Join(t.TempDir(), "bare.git")
 	runGit(t, dir, "clone", "-q", "--bare", dir, bare)
@@ -90,6 +93,7 @@ func TestReadFileAtCommitReadsWithoutAWorktree(t *testing.T) {
 }
 
 func TestReadRecipeAtCommitRefusesAnAbsentRecipe(t *testing.T) {
+	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"package.json": `{"name":"fixture"}`})
 	if _, err := ReadRecipeAtCommit(context.Background(), "git", dir, base); !errors.Is(err, ErrRecipeUnreadable) {
 		t.Fatalf("absent recipe error = %v, want ErrRecipeUnreadable", err)
