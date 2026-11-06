@@ -53,6 +53,21 @@ func currentWorkUnitCompletedMilestone(ctx context.Context, tx *store.ReadTx, ru
 	return milestone, nil
 }
 
+// workUnitCompletedMilestone is the observation mirror of a recorded
+// completion (#1134): invocation-only, on the run's publication invocation,
+// at the record's instant. The record stays the single authority for the
+// PR, merge commit, and bound issue; the sync boundary re-binds the
+// milestone to it on every read. Writers go through
+// appendWorkUnitCompletedMilestone, which applies the boundary's
+// precondition.
+func workUnitCompletedMilestone(runID domain.RunID, completion domain.WorkUnitCompletion) domain.RunMilestone {
+	invocation := domain.ProductionPublicationInvocationID(runID)
+	return domain.RunMilestone{
+		RunID: runID, Kind: domain.MilestoneWorkUnitCompleted,
+		InvocationID: &invocation, RecordedAt: completion.RecordedAt,
+	}
+}
+
 // reconcileWorkUnitCompletionMilestones is the one-time start-up pass that
 // gives a completion recorded before migration 0066 its work_unit_completed
 // milestone (#1134), so a run that finished under an older daemon lists as

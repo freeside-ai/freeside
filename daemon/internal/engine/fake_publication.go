@@ -1344,8 +1344,7 @@ func (w *fakePublicationWorkflow) completePublishedTask(
 	}); err != nil {
 		return taskOutcome{}, fmt.Errorf("arm publication watches: %w", err)
 	}
-	if err := armPublicationWatches(ctx, w.store, stored,
-		task.Repo, task.BaseRef, task.BaseSHA, w.now()); err != nil {
+	if err := armPublicationWatches(ctx, w.store, stored, w.now()); err != nil {
 		return taskOutcome{}, fmt.Errorf("arm publication watches: %w", err)
 	}
 	if err := w.finishTask(ctx, task); err != nil {

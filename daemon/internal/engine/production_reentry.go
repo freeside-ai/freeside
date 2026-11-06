@@ -48,8 +48,6 @@ const (
 	// import account and no stored authorization, so a reader of the original
 	// kind can never decode one as a publishable candidate.
 	productionReentryCheckpointKind = "production_reentry_verification_checkpoint"
-	// reentryConflictPathLimit bounds the conflicting paths a stop item names.
-	reentryConflictPathLimit = 20
 	// reentryQuotedTextLimit bounds, in bytes, one piece of quoted
 	// tree-derived text in a stop item's reason.
 	reentryQuotedTextLimit = 256
@@ -412,31 +410,11 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		}
 		return w.reentryTransportFailure(ctx, task, "fetch pull request head", err)
 	}
-	if task.Successor.Reentry.Reason == domain.ReadinessInvalidationBaseAdvanced {
-		if task.HeadSHA == base.BaseSHA {
-			return w.stopReentryCycle(ctx, task, fmt.Sprintf(
-				"Readiness re-entry stopped because the pull request head %s is the base commit itself, so there is nothing to merge. Inspect the pull request.",
-				task.HeadSHA), nil)
-		}
-		merge, err := w.transport.ProspectiveMerge(ctx, checkout, task.HeadSHA)
-		if err != nil {
-			var conflict *publish.MergeConflictError
-			if errors.As(err, &conflict) {
-				return w.stopReentryCycle(ctx, task, reentryConflictReason(task, base.BaseSHA, conflict), nil)
-			}
-			return w.reentryTransportFailure(ctx, task, "build prospective merge", err)
-		}
-		// The merge is evidence only for the pair the authority sealed. Nothing
-		// verifies, reviews, or proves against it before this gate admits it.
-		if !task.Successor.AllowsProspectiveMerge(domain.ProspectiveMergeIdentity{
-			BaseSHA: base.BaseSHA, HeadSHA: task.HeadSHA, MergeSHA: merge,
-		}) {
-			return productionTaskOutcome{}, fmt.Errorf(
-				"re-entry authority does not admit prospective merge %q: %w",
-				merge, domain.ErrParentKeyMismatch)
-		}
-		binding.evaluatedSHA = merge
-	} else if !fetched.DescendsFromBase {
+	// A cycle evaluates its head and nothing else. A base_advanced authority
+	// sealed before plan revision 110 once evaluated the head's merge into the
+	// advanced base; one still in flight now evaluates its head like any
+	// other, so a head built on the old base stops below for a person.
+	if !fetched.DescendsFromBase {
 		if task.answersExternalReview() {
 			// The last review covered the head's merge into an advanced base.
 			// The external review authority admits no prospective merge, so
@@ -445,9 +423,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 				"Freeside did not review pull request head %s again because it does not descend from the reviewed base %s. That is expected after the base advanced: the last review covered their merge, and this cycle reviews only the head.",
 				task.HeadSHA, base.BaseSHA), nil)
 		}
-		return w.stopReentryCycle(ctx, task, fmt.Sprintf(
-			"Readiness re-entry stopped because the pull request head %s does not descend from the reviewed base %s. Inspect the pull request.",
-			task.HeadSHA, base.BaseSHA), nil)
+		return w.stopReentryCycle(ctx, task, reentryUndescendedHeadReason(task, base.BaseSHA), nil)
 	}
 	reviewInstructions, heldOutcome, err := w.exactBaseReviewInstructions(
 		ctx, task, checkout, filepath.Join(scratch, "base-instructions"), base.BaseSHA)
@@ -566,6 +542,22 @@ func (w *productionPublicationWorkflow) reentryTransportFailure(
 	return productionTaskOutcome{}, fmt.Errorf("%s: %w", step, err)
 }
 
+// reentryUndescendedHeadReason names why a cycle stops on a head that does
+// not descend from the cycle's base. A base_advanced cycle sealed before plan
+// revision 110 carries the advanced tip as its base and the unchanged
+// reviewed head, so its reason says the advance alone stopped it rather than
+// asking a person to look for a problem in the pull request.
+func reentryUndescendedHeadReason(task productionPublicationTask, baseSHA string) string {
+	if task.Successor.Reentry.Reason == domain.ReadinessInvalidationBaseAdvanced {
+		return fmt.Sprintf(
+			"Readiness re-entry stopped because it began when the base advanced to %s, and Freeside no longer re-verifies a handed-off pull request when its base moves (plan revision 110). Pull request head %s is the head that was reviewed; decide on it as you would at handoff.",
+			baseSHA, task.HeadSHA)
+	}
+	return fmt.Sprintf(
+		"Readiness re-entry stopped because the pull request head %s does not descend from the reviewed base %s. Inspect the pull request.",
+		task.HeadSHA, baseSHA)
+}
+
 func reentryMissingHeadReason(task productionPublicationTask, branch string) string {
 	return fmt.Sprintf(
 		"Readiness re-entry stopped because pull request branch %s does not contain the head commit %s it must evaluate. Inspect the pull request.",
@@ -642,30 +634,6 @@ func reentryMemoryLimitReason(
 	return fmt.Sprintf(
 		"Readiness re-entry stopped because the verification container was killed at its declared memory limit while verifying pull request head %s against base %s. Raise execution.verification_memory_mib and rerun the work.",
 		task.HeadSHA, baseSHA), true
-}
-
-// reentryConflictReason names both commits and the conflicting paths. The
-// paths are tree paths from a branch anyone with push access can write, so
-// each is quoted and bounded, and so is the list.
-func reentryConflictReason(
-	task productionPublicationTask, baseSHA string, conflict *publish.MergeConflictError,
-) string {
-	paths := conflict.Paths
-	more := conflict.Truncated
-	if len(paths) > reentryConflictPathLimit {
-		paths, more = paths[:reentryConflictPathLimit], true
-	}
-	quoted := make([]string, len(paths))
-	for i, path := range paths {
-		quoted[i] = reentryQuoted(path)
-	}
-	listing := strings.Join(quoted, ", ")
-	if more {
-		listing += ", and more"
-	}
-	return fmt.Sprintf(
-		"Readiness re-entry stopped because pull request head %s conflicts with base %s in: %s. Resolve the conflict on the pull request.",
-		task.HeadSHA, baseSHA, listing)
 }
 
 // stopReentryCycle ends a re-entered cycle on a condition no retry can clear:
@@ -1389,10 +1357,7 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 		ctx, task, binding.admission.Base, cycle.predecessor.PRNumber); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	// The binding's admission carries the cycle's base, so the base watch is
-	// armed with the base this cycle evaluated and does not fire until that
-	// base moves again.
-	if err := w.armReadyItemWatches(ctx, task, binding); err != nil {
+	if err := w.armReadyItemWatches(ctx, task); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	if err := w.appendPublicationMilestone(ctx, task, domain.MilestonePublicationReady, nil); err != nil {

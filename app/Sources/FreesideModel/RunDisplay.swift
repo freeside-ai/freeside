@@ -558,7 +558,6 @@ package enum RunDisplay {
         switch value {
         case .pr_checks_deadline: "Checks"
         case .review_wait_threshold: "Review"
-        case .base_advance_watch: "Base watch"
         case .installation_poll: "Install watch"
         case .doctor: "Doctor"
         case .janitor: "Janitor"

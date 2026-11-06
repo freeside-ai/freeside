@@ -96,12 +96,6 @@ func (p *productionPublicationHarness) invalidateReady(
 	}
 	fact.ObservedAt = p.now.UTC()
 	item.ReadinessInvalidation = &fact
-	if fact.Reason == domain.ReadinessInvalidationBaseAdvanced {
-		item.BaseFreshness = &domain.BaseFreshness{
-			BaseRef: "main", AdmittedBaseSHA: fact.Bound, ObservedBaseSHA: fact.Observed,
-			Advanced: true, ObservedAt: fact.ObservedAt,
-		}
-	}
 	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
 	started := false
@@ -224,96 +218,17 @@ func (p *productionPublicationHarness) assertReentered(
 	return ready
 }
 
-func TestReadinessReentersAfterBaseAdvance(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarnessWithBoundIssue(t, "", 1986)
-	first := p.publishReady(t)
-	pushes, body := p.transport.PushCount(), p.forge.PullRequests()[0].Body
-
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
-	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-	})
-	if !started {
-		t.Fatal("a base advance started no re-entry")
-	}
-	reviews := p.recordReviews(t)
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
-	result, err := p.reconcileLanes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 ||
-		result.BlockedItemsCreated != 0 {
-		t.Fatalf("re-entry result = %#v", result)
-	}
-	// The reviewer is handed the merge of the head into the advanced base,
-	// named as the evaluated commit, while the request still binds the head
-	// the forge shows.
-	if len(reviews.requests) != 1 {
-		t.Fatalf("review requests = %d, want 1", len(reviews.requests))
-	}
-	request, tree := reviews.requests[0], reviews.files[0]
-	if request.Round != 2 || request.BaseSHA != advanced || request.HeadSHA != p.replay.HeadSHA ||
-		request.EvaluatedSHA == "" || request.EvaluatedSHA == p.replay.HeadSHA ||
-		request.EvaluatedSHA == advanced {
-		t.Fatalf("review request = %#v", request)
-	}
-	if tree["README.md"] != "production change\n" || tree["UPSTREAM.md"] != "upstream change\n" {
-		t.Fatalf("reviewed tree = %#v, want the head's change on the advanced base", tree)
-	}
-	p.assertReentered(t, superseded, 2, advanced, p.replay.HeadSHA)
-	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
-	if first.ID != superseded.ID {
-		t.Fatalf("superseded %s, want the first ready item %s", superseded.ID, first.ID)
-	}
-	if p.room.runs != 2 || p.transport.MergeCount() != 1 {
-		t.Fatalf("verification runs = %d, merges = %d, want 2 and 1",
-			p.room.runs, p.transport.MergeCount())
-	}
-	if p.transport.PushCount() != pushes || p.forge.PullRequests()[0].Body != body {
-		t.Fatal("re-entry pushed or rewrote the pull request")
-	}
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 ||
-		result.PublicationTasksCompleted != 0 {
-		t.Fatalf("converged replay = %#v, %v", result, err)
-	}
-	if p.room.runs != 2 {
-		t.Fatalf("converged replay re-ran verification: %d runs", p.room.runs)
-	}
-	// Completion must authenticate the re-entered cycle even though it has
-	// no producing terminal of its own.
-	recordOriginalCompletion(t, p)
-	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
-		invocation, err := tx.PublishedPublicationInvocationID(p.ctx, p.runID)
-		if err != nil {
-			return err
-		}
-		return tx.AppendRunMilestone(p.ctx, domain.RunMilestone{
-			RunID: p.runID, Kind: domain.MilestoneWorkUnitCompleted,
-			InvocationID: &invocation, RecordedAt: p.now,
-		})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	want := domain.RunConclusion{Outcome: domain.RunOutcomeCompleted, Final: true}
-	assertObservedReentryConclusion(t, p, want)
-	if got := authenticatedProductionConclusion(t, p); got != want {
-		t.Fatalf("engine conclusion = %#v, want %#v", got, want)
-	}
-}
-
 func TestReadinessReentryConclusionAuthenticatesTaskSuccessor(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.scriptCleanReview(2, p.baseSHA, pushed)
 	p.reconcileUntilReady(t, 1)
 	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
 	var successor *domain.PublicationSuccessor
@@ -354,13 +269,13 @@ func TestReadinessReentryConclusionRequiresReadyProof(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.scriptCleanReview(2, p.baseSHA, pushed)
 	p.reconcileUntilReady(t, 1)
 	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
 	item := p.currentReadyItem(t)
@@ -385,7 +300,7 @@ func TestReadinessReentryConclusionRequiresReadyProof(t *testing.T) {
 
 func TestReadinessReentersAfterHeadChange(t *testing.T) {
 	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
+	p := newProductionPublicationHarnessWithBoundIssue(t, "", 1986)
 	p.publishReady(t)
 	head := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
@@ -410,11 +325,69 @@ func TestReadinessReentersAfterHeadChange(t *testing.T) {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0",
 			p.room.runs, p.transport.MergeCount())
 	}
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("converged replay = %#v, %v", result, err)
+	}
+	if p.room.runs != 2 {
+		t.Fatalf("converged replay re-ran verification: %d runs", p.room.runs)
+	}
+	// Completion must authenticate the re-entered cycle even though it has
+	// no producing terminal of its own. The pull merges at the pushed head,
+	// which the effective binding carries; the first-publication record
+	// keeps the original one.
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		binding, err := tx.EffectiveWorkUnitPRBinding(p.ctx, p.declaration.ID)
+		if err != nil {
+			return err
+		}
+		if binding.HeadSHA != head {
+			t.Fatalf("effective binding head = %s, want the pushed head %s", binding.HeadSHA, head)
+		}
+		pull := domain.PullMergeFact{
+			Repo: binding.Repo, RepositoryID: binding.RepositoryID, PRNumber: binding.PRNumber,
+			State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+			BaseRef: binding.BaseRef, HeadSHA: binding.HeadSHA, ObservedAt: p.now,
+		}
+		issue := domain.IssueStateFact{
+			Repo: binding.Repo, RepositoryID: binding.RepositoryID, IssueNumber: *p.declaration.BoundIssue,
+			State: domain.IssueClosed, ClosedByCommitSHA: "deadbeef", ObservedAt: p.now,
+		}
+		if _, err := tx.AppendPullMergeFact(p.ctx, pull); err != nil {
+			return err
+		}
+		if _, err := tx.AppendIssueStateFact(p.ctx, issue); err != nil {
+			return err
+		}
+		completion, ok := domain.EvaluateWorkUnitCompletion(*p.declaration, binding, pull, &issue)
+		if !ok {
+			t.Fatal("fixture did not derive work-unit completion")
+		}
+		if err := tx.RecordWorkUnitCompletion(p.ctx, completion); err != nil {
+			return err
+		}
+		invocation, err := tx.PublishedPublicationInvocationID(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(p.ctx, domain.RunMilestone{
+			RunID: p.runID, Kind: domain.MilestoneWorkUnitCompleted,
+			InvocationID: &invocation, RecordedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.RunConclusion{Outcome: domain.RunOutcomeCompleted, Final: true}
+	assertObservedReentryConclusion(t, p, want)
+	if got := authenticatedProductionConclusion(t, p); got != want {
+		t.Fatalf("engine conclusion = %#v, want %#v", got, want)
+	}
 }
 
 func TestReadinessReentryAtTheRoundLimitKeepsItsOwnItem(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"resolved dispute", "adjudication", "other head", "unoccupied", "open legacy exhaustion", "resolved legacy exhaustion"} {
+	for _, name := range []string{"resolved dispute", "adjudication", "unoccupied", "open legacy exhaustion", "resolved legacy exhaustion"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			hardLimit := 1
@@ -462,14 +435,9 @@ func TestReadinessReentryAtTheRoundLimitKeepsItsOwnItem(t *testing.T) {
 					}
 				}
 			}
+			head = p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 			fact := domain.ReadinessInvalidation{
-				Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA,
-			}
-			if name == "other head" {
-				head = p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
-				fact.Reason, fact.Bound, fact.Observed = domain.ReadinessInvalidationHeadChanged, p.replay.HeadSHA, head
-			} else {
-				fact.Observed = p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+				Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: head,
 			}
 			if _, started := p.invalidateReady(t, fact); !started {
 				t.Fatal("invalidation started no re-entry")
@@ -479,15 +447,25 @@ func TestReadinessReentryAtTheRoundLimitKeepsItsOwnItem(t *testing.T) {
 				t.Fatalf("re-entry result = %#v, %v", result, err)
 			}
 			end := p.externalReviewEnd(t)
-			if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+			// An open legacy exhaustion card is on the earlier head, so it
+			// stays open beside the cycle's own card for the pushed head.
+			wantItems := 1
+			if name == "open legacy exhaustion" {
+				wantItems = 2
+			}
+			if len(end.reviewItems) != wantItems || end.readyItem || end.pending != 0 {
 				t.Fatalf("cycle end = %#v", end)
 			}
 			want := domain.ItemID("production-readiness-review-exhaustion-" +
 				strings.TrimPrefix(string(end.successor.PublicationID()), "publish-reentry-"))
-			if name == "open legacy exhaustion" {
-				want = occupied
+			var item domain.AttentionItem
+			for _, candidate := range end.reviewItems {
+				if candidate.ID == want {
+					item = candidate
+				} else if candidate.ID != occupied || candidate.Status != domain.StatusOpen {
+					t.Fatalf("unexpected review item = %#v", candidate)
+				}
 			}
-			item := end.reviewItems[0]
 			if item.ID != want || item.Type != domain.AttentionReviewDiminishing || item.PRHeadSHA != head {
 				t.Fatalf("exhaustion item = %#v, want %s on %s", item, want, head)
 			}
@@ -597,88 +575,6 @@ func (p *productionPublicationHarness) seedReadinessRoundLimitAdjudication(t *te
 	}
 }
 
-func TestReadinessReentryStopsOnMergeConflict(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	p.publishReady(t)
-	advanced := p.advanceBase(t, "README.md", "conflicting upstream change\n")
-	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-	})
-	if !started {
-		t.Fatal("a base advance started no re-entry")
-	}
-	result, err := p.reconcileLanes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
-		t.Fatalf("conflict result = %#v", result)
-	}
-	var stop domain.AttentionItem
-	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		successor, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
-		if err != nil {
-			return err
-		}
-		stop, err = tx.GetAttentionItem(p.ctx, successor.BlockedItemID())
-		if err != nil {
-			return err
-		}
-		if successor.PredecessorItemID != superseded.ID {
-			t.Errorf("cycle predecessor = %s, want %s", successor.PredecessorItemID, superseded.ID)
-		}
-		if _, err := tx.GetAttentionItem(p.ctx, successor.ReadyItemID()); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("a conflicted cycle wrote a ready item: %v", err)
-		}
-		if hold, held, err := tx.GetRunHold(p.ctx, p.runID); err != nil || held {
-			t.Errorf("a stopped cycle left run hold %#v, %v", hold, err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if stop.Status != domain.StatusOpen || stop.Type != domain.AttentionPublishBlocked ||
-		!strings.Contains(stop.Reason, "README.md") ||
-		!strings.Contains(stop.Reason, advanced) {
-		t.Fatalf("stop item = %#v", stop)
-	}
-	if p.room.runs != 1 {
-		t.Fatalf("a conflicted cycle ran verification: %d runs", p.room.runs)
-	}
-	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 0 {
-		t.Fatalf("stopped cycle replayed = %#v, %v", result, err)
-	}
-}
-
-// baseWatchBase returns the base an armed base watch on itemID was admitted
-// against.
-func (p *productionPublicationHarness) baseWatchBase(t *testing.T, itemID domain.ItemID) string {
-	t.Helper()
-	var bases []string
-	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		schedules, err := tx.ListSchedules(p.ctx)
-		if err != nil {
-			return err
-		}
-		for _, snapshot := range schedules {
-			schedule := snapshot.Value
-			if schedule.BaseWatch == nil || schedule.Subject.ItemID == nil ||
-				*schedule.Subject.ItemID != itemID || schedule.Status != domain.ScheduleArmed {
-				continue
-			}
-			bases = append(bases, schedule.BaseWatch.AdmittedBaseSHA)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(bases) != 1 {
-		t.Fatalf("armed base watches on %s = %v, want one", itemID, bases)
-	}
-	return bases[0]
-}
-
 // reconcileUntilReady runs lane passes until the run's current ready item is
 // open, and fails after maxPasses.
 func (p *productionPublicationHarness) reconcileUntilReady(t *testing.T, maxPasses int) {
@@ -710,42 +606,6 @@ func (p *productionPublicationHarness) reconcileUntilReady(t *testing.T, maxPass
 	t.Fatalf("no open ready item within %d passes", maxPasses)
 }
 
-// TestReadinessReentersThreeTimesAndWatchesTheCycleBase: the re-entered item's base
-// watch is admitted against the cycle's base, so it stays quiet until the
-// base moves again, and three advances in a row each re-enter from the item
-// the previous cycle produced.
-func TestReadinessReentersThreeTimesAndWatchesTheCycleBase(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	first := p.publishReady(t)
-	if got := p.baseWatchBase(t, first.ID); got != p.baseSHA {
-		t.Fatalf("first watch base = %s, want admission base %s", got, p.baseSHA)
-	}
-	bound := p.baseSHA
-	for cycle := 1; cycle <= 3; cycle++ {
-		advanced := p.advanceBase(t, fmt.Sprintf("UPSTREAM-%d.md", cycle), "upstream change\n")
-		superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: bound, Observed: advanced,
-		})
-		if !started {
-			t.Fatalf("advance %d started no re-entry", cycle)
-		}
-		p.scriptCleanReview(cycle+1, advanced, p.replay.HeadSHA)
-		if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-			t.Fatalf("advance %d result = %#v, %v", cycle, result, err)
-		}
-		ready := p.assertReentered(t, superseded, cycle+1, advanced, p.replay.HeadSHA)
-		if got := p.baseWatchBase(t, ready.ID); got != advanced {
-			t.Fatalf("advance %d watch base = %s, want cycle base %s", cycle, got, advanced)
-		}
-		bound = advanced
-	}
-	if p.room.runs != 4 || p.transport.MergeCount() != 3 {
-		t.Fatalf("verification runs = %d, merges = %d, want 4 and 3",
-			p.room.runs, p.transport.MergeCount())
-	}
-}
-
 // TestReadinessReentryConvergesAcrossRestarts interrupts a base-advance cycle
 // at each durable boundary it crosses, restarts, and requires the same end
 // state with one verification and one review request per boundary crossed.
@@ -762,19 +622,19 @@ func TestReadinessReentryConvergesAcrossRestarts(t *testing.T) {
 				t.Parallel()
 				p := newProductionPublicationHarness(t, "")
 				p.publishReady(t)
-				advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+				pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 				superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-					Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+					Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 				})
 				if !started {
-					t.Fatal("a base advance started no re-entry")
+					t.Fatal("a head change started no re-entry")
 				}
 				// A restart between the invalidation and the first pass of
 				// the cycle: the task row alone carries it.
 				p.restartDurableState(t)
 				reviewCalls := &faultReviewSource{ReviewSource: p.reviewer}
 				p.reviewSource = reviewCalls
-				p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+				p.scriptCleanReview(2, p.baseSHA, pushed)
 				injected := false
 				p.workflow = p.newEngine(t, productionCrashSeams{
 					transitionHook: func(
@@ -798,14 +658,11 @@ func TestReadinessReentryConvergesAcrossRestarts(t *testing.T) {
 					// as on the first cycle.
 					round = 3
 				}
-				p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
-				p.scriptCleanReview(3, advanced, p.replay.HeadSHA)
+				p.scriptCleanReview(2, p.baseSHA, pushed)
+				p.scriptCleanReview(3, p.baseSHA, pushed)
 				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 				p.reconcileUntilReady(t, 3)
-				ready := p.assertReentered(t, superseded, round, advanced, p.replay.HeadSHA)
-				if got := p.baseWatchBase(t, ready.ID); got != advanced {
-					t.Fatalf("watch base = %s, want cycle base %s", got, advanced)
-				}
+				ready := p.assertReentered(t, superseded, round, p.baseSHA, pushed)
 				p.restartDurableState(t)
 				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 				for range 2 {
@@ -974,11 +831,11 @@ func TestReadinessReentryStopsOnFailedVerification(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("a base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
 	p.room.fail = true
 	result, err := p.reconcileLanes()
@@ -986,7 +843,7 @@ func TestReadinessReentryStopsOnFailedVerification(t *testing.T) {
 		t.Fatalf("failed verification result = %#v, %v", result, err)
 	}
 	stop := p.reentryStopItem(t)
-	if len(stop.EvidenceSnapshot) == 0 || !strings.Contains(stop.Reason, advanced) {
+	if len(stop.EvidenceSnapshot) == 0 || !strings.Contains(stop.Reason, pushed) {
 		t.Fatalf("stop item = %#v", stop)
 	}
 	var review domain.ReviewRecord
@@ -1061,13 +918,13 @@ func TestReadinessReentryStopWithdrawsItsOwnReadyItem(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("a base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.scriptCleanReview(2, p.baseSHA, pushed)
 	injected := false
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		transitionHook: func(got engine.DurableTransition, side engine.DurableTransitionSide) error {
@@ -1118,7 +975,7 @@ func TestReadinessReentryStopWithdrawsItsOwnReadyItem(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if stop.Status != domain.StatusOpen || !strings.Contains(stop.Reason, p.replay.HeadSHA) {
+		if stop.Status != domain.StatusOpen || !strings.Contains(stop.Reason, pushed) {
 			t.Errorf("stop item = %#v", stop)
 		}
 		pending, err := tx.ListPendingOutbox(p.ctx, engine.KindProductionPublicationRequested)
@@ -1138,16 +995,16 @@ func TestReadinessReentryFindingsRaiseReviewItem(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("a base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
-			BaseSHA: advanced, HeadSHA: p.replay.HeadSHA,
+			BaseSHA: p.baseSHA, HeadSHA: pushed,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("re-entry findings")),
 			Findings: []domain.Finding{{
 				ID: "reentry-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -1167,7 +1024,7 @@ func TestReadinessReentryFindingsRaiseReviewItem(t *testing.T) {
 			return err
 		}
 		if item.Type != domain.AttentionReviewDispute || item.Status != domain.StatusOpen ||
-			item.PRHeadSHA != p.replay.HeadSHA {
+			item.PRHeadSHA != pushed {
 			t.Errorf("review item = %#v", item)
 		}
 		successor, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
@@ -1200,14 +1057,14 @@ func TestReadinessReentryHoldCarriesThePullRequest(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	})
 	if !started {
-		t.Fatal("a base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.scriptCleanReview(2, p.baseSHA, pushed)
 	p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{}, true,
 		map[domain.Digest]bool{productionDigest([]byte("another recipe")): true})
 	result, err := p.reconcileLanes()
@@ -1241,7 +1098,7 @@ func TestReadinessReentryHoldCarriesThePullRequest(t *testing.T) {
 	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.reconcileUntilReady(t, 2)
-	p.assertReentered(t, superseded, 2, advanced, p.replay.HeadSHA)
+	p.assertReentered(t, superseded, 2, p.baseSHA, pushed)
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		item, err := tx.GetAttentionItem(p.ctx, holdItem)
 		if err != nil {
@@ -1267,11 +1124,11 @@ func TestReadinessReentryFindingsEndAnEarlierHold(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("a base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
 	p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{}, true,
 		map[domain.Digest]bool{productionDigest([]byte("another recipe")): true})
@@ -1281,7 +1138,7 @@ func TestReadinessReentryFindingsEndAnEarlierHold(t *testing.T) {
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
-			BaseSHA: advanced, HeadSHA: p.replay.HeadSHA,
+			BaseSHA: p.baseSHA, HeadSHA: pushed,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("re-entry findings")),
 			Findings: []domain.Finding{{
 				ID: "reentry-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -1333,11 +1190,23 @@ func TestReadinessReentryFindingsEndAnEarlierHold(t *testing.T) {
 }
 
 // TestReadinessReentryStartsOnlyFromTheCurrentInvalidation covers what starts
-// no cycle: an invalidation the cycle cannot answer, a head change that does
-// not start from the bound head, and the second of two writers that observed
-// one invalidation.
+// no cycle: an invalidation the cycle cannot answer, a base advance (retired
+// by plan revision 110), a head change that does not start from the bound
+// head, and the second of two writers that observed one invalidation.
 func TestReadinessReentryStartsOnlyFromTheCurrentInvalidation(t *testing.T) {
 	t.Parallel()
+	t.Run("base advanced", func(t *testing.T) {
+		t.Parallel()
+		p := newProductionPublicationHarness(t, "")
+		p.publishReady(t)
+		advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+		if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
+			Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		}); started {
+			t.Fatal("a base advance re-entered")
+		}
+		p.assertNoPublicationTask(t)
+	})
 	t.Run("retargeted", func(t *testing.T) {
 		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
@@ -1365,12 +1234,12 @@ func TestReadinessReentryStartsOnlyFromTheCurrentInvalidation(t *testing.T) {
 		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.publishReady(t)
-		advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+		head := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 		superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+			Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: head,
 		})
 		if !started {
-			t.Fatal("a base advance started no re-entry")
+			t.Fatal("a head change started no re-entry")
 		}
 		if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 			again, err := engine.StartReadinessReentry(p.ctx, tx, superseded)
@@ -1420,52 +1289,6 @@ func (p *productionPublicationHarness) assertNoPublicationTask(t *testing.T) {
 	}
 }
 
-// TestReadinessReentryRefusesMergeThatDiffersFromTheVerifiedOne: the stored
-// verification is evidence for one merge commit. A rebuild that yields
-// another commit for the same pair is refused loudly, never reviewed or made
-// ready on the earlier evidence.
-func TestReadinessReentryRefusesMergeThatDiffersFromTheVerifiedOne(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
-	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-	}); !started {
-		t.Fatal("a base advance started no re-entry")
-	}
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
-	p.workflow = p.newEngine(t, productionCrashSeams{
-		afterVerification: func() error { return errors.New("injected process loss") },
-	}, true)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("the crash seam after verification did not interrupt the cycle")
-	}
-	p.restartDurableState(t)
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
-	reviews := p.recordReviews(t)
-	p.transport.RebuildMergesAs("another merge of the same pair")
-	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("differing merge: err = %v, want a parent-key mismatch", err)
-	}
-	if len(reviews.requests) != 0 || p.room.runs != 2 {
-		t.Fatalf("a differing merge reached review (%d requests) or re-verified (%d runs)",
-			len(reviews.requests), p.room.runs)
-	}
-	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		successor, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.GetAttentionItem(p.ctx, successor.ReadyItemID()); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("a differing merge wrote a ready item: %v", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestReadinessReentryReadsItsVerdictFromTheVerificationReport: the cycle
 // stores no candidate authorization, so the checkpoint row is the only place
 // its outcome is written down. A row that claims a pass its own report does
@@ -1474,11 +1297,11 @@ func TestReadinessReentryReadsItsVerdictFromTheVerificationReport(t *testing.T) 
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.publishReady(t)
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	pushed := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
 	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: pushed,
 	}); !started {
-		t.Fatal("a base advance started no re-entry")
+		t.Fatal("a head change started no re-entry")
 	}
 	p.room.fail = true
 	p.workflow = p.newEngine(t, productionCrashSeams{
@@ -1513,7 +1336,7 @@ func TestReadinessReentryReadsItsVerdictFromTheVerificationReport(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.scriptCleanReview(2, p.baseSHA, pushed)
 	reviews := p.recordReviews(t)
 	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("altered verdict: err = %v, want a parent-key mismatch", err)
@@ -1551,7 +1374,7 @@ func TestUnreadableReentryTaskDoesNotEndTheEngineLoop(t *testing.T) {
 		ReviewRound:             2,
 		Origin:                  domain.PublicationSuccessorReadinessInvalidation,
 		Reentry: &domain.PublicationSuccessorReentry{
-			Reason:  domain.ReadinessInvalidationBaseAdvanced,
+			Reason:  domain.ReadinessInvalidationHeadChanged,
 			BaseSHA: strings.Repeat("b", 40), HeadSHA: strings.Repeat("c", 40),
 		},
 	}.TaskKey()

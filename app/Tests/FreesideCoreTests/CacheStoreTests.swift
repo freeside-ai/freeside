@@ -520,6 +520,45 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(migrated.pendingCommands == state.pendingCommands)
     }
 
+    @Test func aCachedBaseAdvanceWatchIsDroppedAndTheLedgerKept() throws {
+        // Plan revision 110 retired the base_advance_watch kind (#2645).
+        // A cached schedule of that kind would throw on decode and discard
+        // the whole cache, ledger included, so the load path drops only that
+        // schedule.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.schedules = RunFixtures.defaultSchedules()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var schedules = try #require(persistedState["schedules"] as? [[String: Any]])
+        var retired = schedules[0]
+        var schedule = try #require(retired["schedule"] as? [String: Any])
+        schedule["id"] = "schedule-base-654"
+        schedule["kind"] = "base_advance_watch"
+        schedule["base_watch"] = [
+            "repo": "freeside-ai/freeside", "base_ref": "main",
+            "admitted_base_sha": String(repeating: "a", count: 40),
+        ]
+        retired["schedule"] = schedule
+        schedules.append(retired)
+        persistedState["schedules"] = schedules
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.schedules == state.schedules)
+        #expect(migrated.cursors == state.cursors)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
     @Test func aCachedRunTimelineWithoutAdmissionsIsDroppedAndTheLedgerKept() throws {
         // Run timelines gained the required admissions list (#979). A cached
         // timeline without it would throw on decode and discard the whole

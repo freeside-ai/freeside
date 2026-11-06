@@ -39,15 +39,6 @@ import Testing
                     { $0.readiness_invalidation = AttentionFixtures.staleReady().item.readiness_invalidation }
                 ),
                 (
-                    "base advanced",
-                    {
-                        $0.base_freshness = .init(
-                            value1: .init(
-                                base_ref: "main", admitted_base_sha: "deadbeef", observed_base_sha: "0badf00d",
-                                advanced: true, observed_at: AttentionFixtures.createdInstant))
-                    }
-                ),
-                (
                     "foreign task",
                     {
                         $0.subject = .run(
@@ -296,7 +287,7 @@ import Testing
         #expect(retryWatches.map(\.schedule.run_id).allSatisfy { $0 == RunFixtures.activeRunID })
         #expect(Set(retryWatches.map(\.schedule.kind)) == [.pr_checks_deadline, .review_wait_threshold])
         #expect(retryWatches.allSatisfy { $0.schedule.status == .armed })
-        #expect(TaskDisplay.armedSchedules(for: ready, in: schedules).map(\.schedule.kind) == [.base_advance_watch])
+        #expect(TaskDisplay.armedSchedules(for: ready, in: schedules).isEmpty)
         #expect(TaskDisplay.armedSchedules(for: legacy, in: schedules).isEmpty)
 
         // A schedule that is no longer armed stays off the row.

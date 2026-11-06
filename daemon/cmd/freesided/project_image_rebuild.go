@@ -86,12 +86,11 @@ func composeImageUpkeep(
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	watch := domain.ScheduleBaseWatch{Repo: cfg.Claude.Repo, BaseRef: cfg.Claude.BaseRef}
 	upkeep := &engine.ImageUpkeep{
 		Store: st, Rebuild: rebuild, RepositoryID: cfg.Claude.RepositoryID,
 		Projects: imageUpkeepProjects(cfg, manualProjects), Blobs: blobs,
 		ReadTip: func(ctx context.Context) (string, error) {
-			return wiring.observeBaseTip(ctx, watch)
+			return wiring.observeRepositoryTip(ctx, cfg.Claude.Repo, cfg.Claude.BaseRef)
 		},
 		Checkout: wiring.fetchTip,
 		NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {

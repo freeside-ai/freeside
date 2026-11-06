@@ -2007,18 +2007,6 @@ func TestGolden(t *testing.T) {
 		},
 	}
 
-	// A ready item carrying the base-advance watch's maintained fact
-	// (§5.16): the api AttentionItem example's base_freshness branch.
-	freshItem := item
-	freshItem.ItemVersion = item.ItemVersion + 1
-	freshItem.BaseFreshness = &domain.BaseFreshness{
-		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
-		Advanced: true, ObservedAt: ts.Add(45 * time.Minute),
-	}
-	if err := freshItem.Validate(); err != nil {
-		t.Fatal(err)
-	}
-
 	// A ready item superseded because its earned-against head moved (§7, issue
 	// #496): the daemon records the readiness_invalidation fact in the same
 	// transition that supersedes it, so the api example's
@@ -2064,22 +2052,6 @@ func TestGolden(t *testing.T) {
 		},
 		RunID: &scheduleRunID, PolicyDigest: &schedulePolicyDigest,
 		CreatedAt: ts, FireAt: &deadlineAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	watchInterval := int64(900)
-	watchSchedule, err := domain.NewSchedule(domain.ScheduleInput{
-		ID: "schedule-base_advance_watch-item-1", ProjectID: "project-1",
-		Kind: domain.ScheduleBaseAdvanceWatch,
-		Subject: domain.ScheduleSubject{
-			Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &itemVersion,
-		},
-		RunID: &scheduleRunID, PolicyDigest: &schedulePolicyDigest,
-		CreatedAt: ts, IntervalSeconds: &watchInterval,
-		BaseWatch: &domain.ScheduleBaseWatch{
-			Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2328,11 +2300,9 @@ func TestGolden(t *testing.T) {
 		{"intake_occurrence_admitted", intakeAdmittedOccurrence},
 		{"specification_source_work_item", intakeSpecSource},
 		{"specification_source_issue", intakeIssueSource},
-		{"attention_item_base_freshness", freshItem},
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},
 		{"schedule_deadline", deadlineSchedule},
-		{"schedule_base_advance_watch", watchSchedule},
 		{"schedule_installation_poll", pollSchedule},
 		{"schedule_janitor", janitorSchedule},
 		{"schedule_image_upkeep", imageUpkeepSchedule},

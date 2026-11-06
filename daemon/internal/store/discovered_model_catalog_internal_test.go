@@ -15,6 +15,7 @@ import (
 // at 0126 holds.
 func rewindDiscoveredModelCatalogs(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindRetireBaseAdvanceWatch(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE discovered_model_catalogs`,
 		`DELETE FROM schema_migrations WHERE name = '0127_discovered_model_catalogs.sql'`,

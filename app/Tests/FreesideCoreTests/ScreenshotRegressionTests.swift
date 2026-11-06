@@ -1778,27 +1778,14 @@
                                     snapshot.item,
                                     at: dynamicTypeSize))))
                     // A verdict the daemon invalidated (issue #982), rendered
-                    // stale beside the bound and observed heads (frame 7.3),
-                    // and the other staleness axis (the base watch) on the
-                    // phone. The degraded verdict is the 4b surfaces'.
+                    // stale beside the bound and observed heads (frame 7.3).
+                    // The degraded verdict is the 4b surfaces'.
                     surfaces.append(
                         Surface(
                             name: "decision-ready_for_final_review-stale",
                             view: AnyView(
                                 detail.screenshotCard(
                                     AttentionFixtures.staleReady().item, at: dynamicTypeSize))))
-                    var baseAdvanced = snapshot.item
-                    baseAdvanced.base_freshness = .init(
-                        value1: .init(
-                            base_ref: "main", admitted_base_sha: "deadbeef",
-                            observed_base_sha: "0badf00d", advanced: true,
-                            observed_at: AttentionFixtures.createdInstant))
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-stale-base-phone",
-                            width: 390,
-                            view: AnyView(
-                                detail.screenshotCard(baseAdvanced, at: dynamicTypeSize))))
                 }
 
                 if snapshot.item._type == .publish_blocked {

@@ -8566,14 +8566,13 @@ public enum Components {
                 case schedule
             }
         }
-        /// The closed union of durable schedule kinds (plan §5.16; mirrors domain.ScheduleKind): the four 1B timer kinds and the permanent trusted-config jobs. Widening it is a contract change.
+        /// The closed union of durable schedule kinds (plan §5.16; mirrors domain.ScheduleKind): the three 1B timer kinds and the permanent trusted-config jobs. Widening it is a contract change. Nothing watches the target branch after handoff (plan §5.16, revision 110), so base_advance_watch is gone and the daemon deletes its rows.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ScheduleKind`.
         @frozen public enum ScheduleKind: String, Codable, Hashable, Sendable, CaseIterable {
             case pr_checks_deadline = "pr_checks_deadline"
             case review_wait_threshold = "review_wait_threshold"
-            case base_advance_watch = "base_advance_watch"
             case installation_poll = "installation_poll"
             case doctor = "doctor"
             case janitor = "janitor"
@@ -8684,39 +8683,7 @@ public enum Components {
                 case durable_intent_revision
             }
         }
-        /// Kind-scoped detail of a base_advance_watch (mirrors domain.ScheduleBaseWatch): the repository, target base ref, and the base tip the publication was admitted against, daemon-recorded from the trusted authorization.
-        ///
-        ///
-        /// - Remark: Generated from `#/components/schemas/ScheduleBaseWatch`.
-        public struct ScheduleBaseWatch: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/ScheduleBaseWatch/repo`.
-            public var repo: Swift.String
-            /// - Remark: Generated from `#/components/schemas/ScheduleBaseWatch/base_ref`.
-            public var base_ref: Swift.String
-            /// - Remark: Generated from `#/components/schemas/ScheduleBaseWatch/admitted_base_sha`.
-            public var admitted_base_sha: Swift.String
-            /// Creates a new `ScheduleBaseWatch`.
-            ///
-            /// - Parameters:
-            ///   - repo:
-            ///   - base_ref:
-            ///   - admitted_base_sha:
-            public init(
-                repo: Swift.String,
-                base_ref: Swift.String,
-                admitted_base_sha: Swift.String
-            ) {
-                self.repo = repo
-                self.base_ref = base_ref
-                self.admitted_base_sha = admitted_base_sha
-            }
-            public enum CodingKeys: String, CodingKey {
-                case repo
-                case base_ref
-                case admitted_base_sha
-            }
-        }
-        /// One durable deferred check (plan §5.16; mirrors domain.Schedule): the synchronized aggregate carrying the subject binding, cadence or deadline, expiry, and terminal resolution. The rolling next-nominal-fire clock and the occurrence ledger are daemon-internal bookkeeping, deliberately absent from this surface. run_id and policy_digest are present exactly for attention-item workload kinds and bind their fire-time authority independently. fire_at is present exactly for one-shot kinds; interval_seconds exactly for recurring kinds; base_watch exactly for base_advance_watch; resolution exactly when status is terminal.
+        /// One durable deferred check (plan §5.16; mirrors domain.Schedule): the synchronized aggregate carrying the subject binding, cadence or deadline, expiry, and terminal resolution. The rolling next-nominal-fire clock and the occurrence ledger are daemon-internal bookkeeping, deliberately absent from this surface. run_id and policy_digest are present exactly for attention-item workload kinds and bind their fire-time authority independently. fire_at is present exactly for one-shot kinds; interval_seconds exactly for recurring kinds; resolution exactly when status is terminal.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/Schedule`.
@@ -8745,26 +8712,6 @@ public enum Components {
             public var interval_seconds: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/Schedule/expires_at`.
             public var expires_at: Foundation.Date?
-            /// - Remark: Generated from `#/components/schemas/Schedule/base_watch`.
-            public struct base_watchPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/Schedule/base_watch/value1`.
-                public var value1: Components.Schemas.ScheduleBaseWatch
-                /// Creates a new `base_watchPayload`.
-                ///
-                /// - Parameters:
-                ///   - value1:
-                public init(value1: Components.Schemas.ScheduleBaseWatch) {
-                    self.value1 = value1
-                }
-                public init(from decoder: any Swift.Decoder) throws {
-                    self.value1 = try .init(from: decoder)
-                }
-                public func encode(to encoder: any Swift.Encoder) throws {
-                    try self.value1.encode(to: encoder)
-                }
-            }
-            /// - Remark: Generated from `#/components/schemas/Schedule/base_watch`.
-            public var base_watch: Components.Schemas.Schedule.base_watchPayload?
             /// - Remark: Generated from `#/components/schemas/Schedule/status`.
             public var status: Components.Schemas.ScheduleStatus
             /// - Remark: Generated from `#/components/schemas/Schedule/resolution`.
@@ -8801,7 +8748,6 @@ public enum Components {
             ///   - fire_at:
             ///   - interval_seconds:
             ///   - expires_at:
-            ///   - base_watch:
             ///   - status:
             ///   - resolution:
             public init(
@@ -8816,7 +8762,6 @@ public enum Components {
                 fire_at: Foundation.Date? = nil,
                 interval_seconds: Swift.Int64? = nil,
                 expires_at: Foundation.Date? = nil,
-                base_watch: Components.Schemas.Schedule.base_watchPayload? = nil,
                 status: Components.Schemas.ScheduleStatus,
                 resolution: Components.Schemas.Schedule.resolutionPayload? = nil
             ) {
@@ -8831,7 +8776,6 @@ public enum Components {
                 self.fire_at = fire_at
                 self.interval_seconds = interval_seconds
                 self.expires_at = expires_at
-                self.base_watch = base_watch
                 self.status = status
                 self.resolution = resolution
             }
@@ -8847,7 +8791,6 @@ public enum Components {
                 case fire_at
                 case interval_seconds
                 case expires_at
-                case base_watch
                 case status
                 case resolution
             }
@@ -12418,7 +12361,7 @@ public enum Components {
                 ])
             }
         }
-        /// The evaluation behind a ready item's verdict (plan §6; mirrors domain.ReadinessDetail): the evaluation-set digest, the exact candidate head and base the proofs bind, and every requirement of the evaluated set in key order with its state, proof recipe, or waiver. Built by the daemon from the same evaluation that produced readiness, so its digest equals readiness.evaluation_set_digest and its candidate_head equals pr_head_sha. Clients compare only these daemon-supplied coordinates against readiness_invalidation and base_freshness to render a stale verdict as stale.
+        /// The evaluation behind a ready item's verdict (plan §6; mirrors domain.ReadinessDetail): the evaluation-set digest, the exact candidate head and base the proofs bind, and every requirement of the evaluated set in key order with its state, proof recipe, or waiver. Built by the daemon from the same evaluation that produced readiness, so its digest equals readiness.evaluation_set_digest and its candidate_head equals pr_head_sha. Clients compare only these daemon-supplied coordinates against readiness_invalidation to render a stale verdict as stale.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReadinessDetail`.
@@ -15875,32 +15818,6 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/scope_decision`.
             public var scope_decision: Components.Schemas.AttentionItem.scope_decisionPayload?
-            /// The base-advance staleness watch's maintained fact (plan §5.16; mirrors domain.AttentionItem.BaseFreshness): the daemon's last observation of the item's target base against the admitted base. Present only on ready_for_final_review items once the watch has observed the base; updated on material change only, with the version bump that a real base advance implies. Never client-set.
-            ///
-            ///
-            /// - Remark: Generated from `#/components/schemas/AttentionItem/base_freshness`.
-            public struct base_freshnessPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/AttentionItem/base_freshness/value1`.
-                public var value1: Components.Schemas.BaseFreshness
-                /// Creates a new `base_freshnessPayload`.
-                ///
-                /// - Parameters:
-                ///   - value1:
-                public init(value1: Components.Schemas.BaseFreshness) {
-                    self.value1 = value1
-                }
-                public init(from decoder: any Swift.Decoder) throws {
-                    self.value1 = try .init(from: decoder)
-                }
-                public func encode(to encoder: any Swift.Encoder) throws {
-                    try self.value1.encode(to: encoder)
-                }
-            }
-            /// The base-advance staleness watch's maintained fact (plan §5.16; mirrors domain.AttentionItem.BaseFreshness): the daemon's last observation of the item's target base against the admitted base. Present only on ready_for_final_review items once the watch has observed the base; updated on material change only, with the version bump that a real base advance implies. Never client-set.
-            ///
-            ///
-            /// - Remark: Generated from `#/components/schemas/AttentionItem/base_freshness`.
-            public var base_freshness: Components.Schemas.AttentionItem.base_freshnessPayload?
             /// The daemon-recorded fact that this ready_for_final_review item's clean-pass claim was invalidated by a base/head/identity change the review was not run against (plan §7; mirrors domain.AttentionItem.ReadinessInvalidation). Written in the same transaction that supersedes the item, so the staleness is item-visible and the version bump stales any command prepared against the old ready claim. Present only on a superseded ready item; null otherwise. Never client-set.
             ///
             ///
@@ -16434,7 +16351,6 @@ public enum Components {
             ///   - yield_history: The daemon-derived per-round review yield for this ready_for_final_review or review_diminishing_returns item (mirrors domain.AttentionItem.YieldHistory). Production-created ready items always carry it; null is tolerated for legacy persisted items, fake-mode items, and diminishing items created before their producer lands. It is fixed at creation and never client-set.
             ///   - commit_plan_notice: The daemon-derived commit-plan notice (plan §5.6; mirrors domain.AttentionItem.CommitPlanNotice): set when the reserved plan channel was consumed without a plan structuring the import, null otherwise. Classified by the daemon, never client-set; null until emission lands (#212).
             ///   - scope_decision: Present on ready items after the operator kept the scope; the named obligation remains unmet.
-            ///   - base_freshness: The base-advance staleness watch's maintained fact (plan §5.16; mirrors domain.AttentionItem.BaseFreshness): the daemon's last observation of the item's target base against the admitted base. Present only on ready_for_final_review items once the watch has observed the base; updated on material change only, with the version bump that a real base advance implies. Never client-set.
             ///   - readiness_invalidation: The daemon-recorded fact that this ready_for_final_review item's clean-pass claim was invalidated by a base/head/identity change the review was not run against (plan §7; mirrors domain.AttentionItem.ReadinessInvalidation). Written in the same transaction that supersedes the item, so the staleness is item-visible and the version bump stales any command prepared against the old ready claim. Present only on a superseded ready item; null otherwise. Never client-set.
             ///   - review_recovery_binding: The exact persisted contradiction this review_contradiction item offers to recover (issue #580; mirrors domain.AttentionItem.ReviewRecoveryBinding). It binds the run, invocation, round, base, head, and immutable failure-row body digest displayed to the operator; null on every other item.
             ///   - codex_reenrollment_recovery_binding: The exact completed and verified auth-store replacement that may resolve a revoked Codex identity's system_health item (issue #684; mirrors domain.AttentionItem.CodexReenrollmentRecoveryBinding). Null while re-enrollment is pending or failed and on unrelated items; immutable once projected onto the open marker.
@@ -16484,7 +16400,6 @@ public enum Components {
                 yield_history: Components.Schemas.AttentionItem.yield_historyPayload? = nil,
                 commit_plan_notice: Components.Schemas.AttentionItem.commit_plan_noticePayload? = nil,
                 scope_decision: Components.Schemas.AttentionItem.scope_decisionPayload? = nil,
-                base_freshness: Components.Schemas.AttentionItem.base_freshnessPayload? = nil,
                 readiness_invalidation: Components.Schemas.AttentionItem.readiness_invalidationPayload? = nil,
                 review_recovery_binding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? = nil,
                 codex_reenrollment_recovery_binding: Components.Schemas.AttentionItem.codex_reenrollment_recovery_bindingPayload? = nil,
@@ -16534,7 +16449,6 @@ public enum Components {
                 self.yield_history = yield_history
                 self.commit_plan_notice = commit_plan_notice
                 self.scope_decision = scope_decision
-                self.base_freshness = base_freshness
                 self.readiness_invalidation = readiness_invalidation
                 self.review_recovery_binding = review_recovery_binding
                 self.codex_reenrollment_recovery_binding = codex_reenrollment_recovery_binding
@@ -16585,7 +16499,6 @@ public enum Components {
                 case yield_history
                 case commit_plan_notice
                 case scope_decision
-                case base_freshness
                 case readiness_invalidation
                 case review_recovery_binding
                 case codex_reenrollment_recovery_binding
@@ -18831,51 +18744,7 @@ public enum Components {
         @frozen public enum SupersessionKind: String, Codable, Hashable, Sendable, CaseIterable {
             case backup_encryption_waiver = "backup_encryption_waiver"
         }
-        /// The base-advance staleness watch's fact (plan §5.16; mirrors domain.BaseFreshness): advanced is derived (observed differs from admitted) and revalidated by the daemon, so a fact cannot claim a freshness its own coordinates contradict.
-        ///
-        ///
-        /// - Remark: Generated from `#/components/schemas/BaseFreshness`.
-        public struct BaseFreshness: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/BaseFreshness/base_ref`.
-            public var base_ref: Swift.String
-            /// - Remark: Generated from `#/components/schemas/BaseFreshness/admitted_base_sha`.
-            public var admitted_base_sha: Swift.String
-            /// - Remark: Generated from `#/components/schemas/BaseFreshness/observed_base_sha`.
-            public var observed_base_sha: Swift.String
-            /// - Remark: Generated from `#/components/schemas/BaseFreshness/advanced`.
-            public var advanced: Swift.Bool
-            /// - Remark: Generated from `#/components/schemas/BaseFreshness/observed_at`.
-            public var observed_at: Foundation.Date
-            /// Creates a new `BaseFreshness`.
-            ///
-            /// - Parameters:
-            ///   - base_ref:
-            ///   - admitted_base_sha:
-            ///   - observed_base_sha:
-            ///   - advanced:
-            ///   - observed_at:
-            public init(
-                base_ref: Swift.String,
-                admitted_base_sha: Swift.String,
-                observed_base_sha: Swift.String,
-                advanced: Swift.Bool,
-                observed_at: Foundation.Date
-            ) {
-                self.base_ref = base_ref
-                self.admitted_base_sha = admitted_base_sha
-                self.observed_base_sha = observed_base_sha
-                self.advanced = advanced
-                self.observed_at = observed_at
-            }
-            public enum CodingKeys: String, CodingKey {
-                case base_ref
-                case admitted_base_sha
-                case observed_base_sha
-                case advanced
-                case observed_at
-            }
-        }
-        /// The axis on which a ready_for_final_review item's exact binding diverged from the daemon's live observation (plan §7; domain attention_item.go): head_changed (observed PR head SHA moved), base_advanced (observed target-base tip advanced past the admitted base), retargeted (PR base ref changed), identity_changed (observed repository ID or PR number differs from the ready item's immutable binding). Identity divergence withdraws the daemon's stale ready claim without treating the foreign observation as authority for the bound PR.
+        /// The axis on which a ready_for_final_review item's exact binding diverged from the daemon's live observation (plan §7; domain attention_item.go): head_changed (observed PR head SHA moved), base_advanced (observed target-base tip advanced past the admitted base), retargeted (PR base ref changed), identity_changed (observed repository ID or PR number differs from the ready item's immutable binding). Identity divergence withdraws the daemon's stale ready claim without treating the foreign observation as authority for the bound PR. Nothing watches the target branch after handoff (plan §5.16, revision 110), so the daemon no longer records base_advanced on a published item; the value stays for items concluded before then.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReadinessInvalidationReason`.
@@ -18885,7 +18754,7 @@ public enum Components {
             case retargeted = "retargeted"
             case identity_changed = "identity_changed"
         }
-        /// The daemon-recorded fact that a ready_for_final_review item's clean-pass claim was invalidated (plan §7; mirrors domain.ReadinessInvalidation). observed differs from bound by construction, and that divergence (revalidated by the daemon) is what invalidates the pass, mirroring BaseFreshness.advanced.
+        /// The daemon-recorded fact that a ready_for_final_review item's clean-pass claim was invalidated (plan §7; mirrors domain.ReadinessInvalidation). observed differs from bound by construction, and that divergence (revalidated by the daemon) is what invalidates the pass.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReadinessInvalidation`.

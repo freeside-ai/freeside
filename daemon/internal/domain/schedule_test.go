@@ -32,15 +32,6 @@ func validScheduleInput(kind ScheduleKind) ScheduleInput {
 			Type: ScheduleSubjectAttentionItem, ItemID: ptr(ItemID("item-1")), ItemVersion: ptr(1),
 		}
 		in.FireAt = ptr(ts.Add(30 * time.Minute))
-	case ScheduleBaseAdvanceWatch:
-		in.RunID, in.PolicyDigest = &runID, &policyDigest
-		in.Subject = ScheduleSubject{
-			Type: ScheduleSubjectAttentionItem, ItemID: ptr(ItemID("item-1")), ItemVersion: ptr(1),
-		}
-		in.IntervalSeconds = ptr(int64(900))
-		in.BaseWatch = &ScheduleBaseWatch{
-			Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",
-		}
 	case ScheduleInstallationPoll:
 		in.Subject = ScheduleSubject{
 			Type:           ScheduleSubjectInstallationIntent,
@@ -142,9 +133,6 @@ func TestScheduleValidateDetailContract(t *testing.T) {
 		{"zero generation", func(s *Schedule) { s.Generation = 0 }, ErrNonPositive},
 		{"one-shot without fire_at", func(s *Schedule) { s.FireAt = nil }, ErrScheduleDetailMismatch},
 		{"one-shot with interval", func(s *Schedule) { s.IntervalSeconds = ptr(int64(60)) }, ErrScheduleDetailMismatch},
-		{"one-shot with base watch", func(s *Schedule) {
-			s.BaseWatch = &ScheduleBaseWatch{Repo: "o/r", BaseRef: "main", AdmittedBaseSHA: "sha"}
-		}, ErrScheduleDetailMismatch},
 		{"wrong subject class", func(s *Schedule) {
 			s.Subject = ScheduleSubject{Type: ScheduleSubjectTrustedConfig}
 		}, ErrScheduleDetailMismatch},
@@ -171,25 +159,15 @@ func TestScheduleValidateDetailContract(t *testing.T) {
 	}
 
 	t.Run("recurring detail", func(t *testing.T) {
-		s := mustSchedule(t, ScheduleBaseAdvanceWatch)
+		s := mustSchedule(t, ScheduleInstallationPoll)
 		s.IntervalSeconds = nil
 		if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
 			t.Fatalf("recurring without interval: %v", err)
 		}
-		s = mustSchedule(t, ScheduleBaseAdvanceWatch)
+		s = mustSchedule(t, ScheduleInstallationPoll)
 		s.IntervalSeconds = ptr(int64(0))
 		if err := s.Validate(); !errors.Is(err, ErrNonPositive) {
 			t.Fatalf("zero interval: %v", err)
-		}
-		s = mustSchedule(t, ScheduleBaseAdvanceWatch)
-		s.BaseWatch = nil
-		if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
-			t.Fatalf("base watch without detail: %v", err)
-		}
-		s = mustSchedule(t, ScheduleBaseAdvanceWatch)
-		s.BaseWatch.AdmittedBaseSHA = ""
-		if err := s.Validate(); !errors.Is(err, ErrEmptyField) {
-			t.Fatalf("empty admitted base: %v", err)
 		}
 	})
 
@@ -311,7 +289,7 @@ func TestScheduleConcluded(t *testing.T) {
 	}
 	// A recurring kind cannot terminate fired; a permanent job cannot
 	// terminate at all.
-	watch := mustSchedule(t, ScheduleBaseAdvanceWatch)
+	watch := mustSchedule(t, ScheduleInstallationPoll)
 	if _, err := watch.Concluded(ScheduleFired, ResolutionDeadlineElapsed, ts); !errors.Is(err, ErrInvalidScheduleStatus) {
 		t.Fatalf("recurring fired: %v", err)
 	}

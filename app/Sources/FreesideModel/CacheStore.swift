@@ -341,6 +341,10 @@ public struct DiskCacheStore: CacheStore {
     ///    arm would throw and discard the cache, ledger included. The task is
     ///    dropped; the format bump discards the rest of that file's snapshots
     ///    and its cursors, so the bootstrap restores it with its digest.
+    /// 7. Plan revision 110 retired the `base_advance_watch` schedule kind
+    ///    (#2645). `ScheduleKind` decodes strictly, so a cached schedule of
+    ///    that kind would throw and discard the cache, ledger included. The
+    ///    schedule is dropped, matching the daemon, which deletes those rows.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -451,6 +455,16 @@ public struct DiskCacheStore: CacheStore {
             }
             if current.count != tasks.count {
                 state["tasks"] = current
+                changed = true
+            }
+        }
+
+        if let schedules = state["schedules"] as? [[String: Any]] {
+            let current = schedules.filter { snapshot in
+                (snapshot["schedule"] as? [String: Any])?["kind"] as? String != "base_advance_watch"
+            }
+            if current.count != schedules.count {
+                state["schedules"] = current
                 changed = true
             }
         }

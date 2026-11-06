@@ -3938,12 +3938,13 @@ components:
       type: string
       description: >
         The closed union of durable schedule kinds (plan §5.16; mirrors
-        domain.ScheduleKind): the four 1B timer kinds and the permanent
-        trusted-config jobs. Widening it is a contract change.
+        domain.ScheduleKind): the three 1B timer kinds and the permanent
+        trusted-config jobs. Widening it is a contract change. Nothing
+        watches the target branch after handoff (plan §5.16, revision 110),
+        so base_advance_watch is gone and the daemon deletes its rows.
       enum:
         - pr_checks_deadline
         - review_wait_threshold
-        - base_advance_watch
         - installation_poll
         - doctor
         - janitor
@@ -4030,25 +4031,6 @@ components:
           minimum: 1
           nullable: true
 
-    ScheduleBaseWatch:
-      type: object
-      description: >
-        Kind-scoped detail of a base_advance_watch (mirrors
-        domain.ScheduleBaseWatch): the repository, target base ref, and the
-        base tip the publication was admitted against, daemon-recorded from
-        the trusted authorization.
-      required: [repo, base_ref, admitted_base_sha]
-      properties:
-        repo:
-          type: string
-          minLength: 1
-        base_ref:
-          type: string
-          minLength: 1
-        admitted_base_sha:
-          type: string
-          minLength: 1
-
     Schedule:
       type: object
       description: >
@@ -4060,8 +4042,8 @@ components:
         run_id and policy_digest are present exactly for attention-item
         workload kinds and bind their fire-time authority independently.
         fire_at is present exactly for one-shot kinds; interval_seconds
-        exactly for recurring kinds; base_watch exactly for
-        base_advance_watch; resolution exactly when status is terminal.
+        exactly for recurring kinds; resolution exactly when status is
+        terminal.
       required:
         - id
         - project_id
@@ -4074,7 +4056,6 @@ components:
         - fire_at
         - interval_seconds
         - expires_at
-        - base_watch
         - status
         - resolution
       properties:
@@ -4117,10 +4098,6 @@ components:
           type: string
           format: date-time
           nullable: true
-        base_watch:
-          nullable: true
-          allOf:
-            - $ref: "#/components/schemas/ScheduleBaseWatch"
         status:
           $ref: "#/components/schemas/ScheduleStatus"
         resolution:
@@ -4145,7 +4122,6 @@ components:
         fire_at: "2026-01-02T03:34:05Z"
         interval_seconds: null
         expires_at: null
-        base_watch: null
         status: "fired"
         resolution:
           reason: "deadline_elapsed"
@@ -5714,8 +5690,8 @@ components:
         waiver. Built by the daemon from the same evaluation that produced
         readiness, so its digest equals readiness.evaluation_set_digest and
         its candidate_head equals pr_head_sha. Clients compare only these
-        daemon-supplied coordinates against readiness_invalidation and
-        base_freshness to render a stale verdict as stale.
+        daemon-supplied coordinates against readiness_invalidation to
+        render a stale verdict as stale.
       additionalProperties: false
       required: [evaluation_set_digest, candidate_head, base, requirements]
       properties:
@@ -6905,7 +6881,6 @@ components:
         - yield_history
         - commit_plan_notice
         - scope_decision
-        - base_freshness
         - readiness_invalidation
         - review_recovery_binding
         - codex_reenrollment_recovery_binding
@@ -7057,18 +7032,6 @@ components:
           allOf:
             - $ref: "#/components/schemas/ScopeDecisionFacts"
           description: Present on ready items after the operator kept the scope; the named obligation remains unmet.
-        base_freshness:
-          nullable: true
-          allOf:
-            - $ref: "#/components/schemas/BaseFreshness"
-          description: >
-            The base-advance staleness watch's maintained fact (plan §5.16;
-            mirrors domain.AttentionItem.BaseFreshness): the daemon's last
-            observation of the item's target base against the admitted
-            base. Present only on ready_for_final_review items once the
-            watch has observed the base; updated on material change only,
-            with the version bump that a real base advance implies. Never
-            client-set.
         readiness_invalidation:
           nullable: true
           allOf:
@@ -7384,7 +7347,6 @@ components:
           terminal_outcome: "clean"
         commit_plan_notice: "present_but_not_honored"
         scope_decision: null
-        base_freshness: null
         readiness_invalidation: null
         review_recovery_binding: null
         codex_reenrollment_recovery_binding: null
@@ -8729,36 +8691,6 @@ components:
       enum:
         - backup_encryption_waiver
 
-    BaseFreshness:
-      type: object
-      description: >
-        The base-advance staleness watch's fact (plan §5.16; mirrors
-        domain.BaseFreshness): advanced is derived (observed differs from
-        admitted) and revalidated by the daemon, so a fact cannot claim a
-        freshness its own coordinates contradict.
-      required: [base_ref, admitted_base_sha, observed_base_sha, advanced, observed_at]
-      properties:
-        base_ref:
-          type: string
-          minLength: 1
-        admitted_base_sha:
-          type: string
-          minLength: 1
-        observed_base_sha:
-          type: string
-          minLength: 1
-        advanced:
-          type: boolean
-        observed_at:
-          type: string
-          format: date-time
-      example:
-        base_ref: "main"
-        admitted_base_sha: "cafebabe"
-        observed_base_sha: "deadbeef"
-        advanced: true
-        observed_at: "2026-01-02T03:49:05Z"
-
     ReadinessInvalidationReason:
       type: string
       description: >
@@ -8770,6 +8702,9 @@ components:
         repository ID or PR number differs from the ready item's immutable
         binding). Identity divergence withdraws the daemon's stale ready claim
         without treating the foreign observation as authority for the bound PR.
+        Nothing watches the target branch after handoff (plan §5.16, revision
+        110), so the daemon no longer records base_advanced on a published
+        item; the value stays for items concluded before then.
       enum:
         - head_changed
         - base_advanced
@@ -8783,7 +8718,7 @@ components:
         clean-pass claim was invalidated (plan §7; mirrors
         domain.ReadinessInvalidation). observed differs from bound by
         construction, and that divergence (revalidated by the daemon) is
-        what invalidates the pass, mirroring BaseFreshness.advanced.
+        what invalidates the pass.
       required: [reason, bound, observed, observed_at]
       properties:
         reason:

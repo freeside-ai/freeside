@@ -17,7 +17,6 @@
   "fire_at": null,
   "interval_seconds": 30,
   "expires_at": null,
-  "base_watch": null,
   "status": "armed",
   "resolution": null
 }

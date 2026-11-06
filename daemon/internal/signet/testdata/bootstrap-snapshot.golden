@@ -36,7 +36,6 @@
         "yield_history": null,
         "commit_plan_notice": null,
         "scope_decision": null,
-        "base_freshness": null,
         "readiness_invalidation": null,
         "review_recovery_binding": null,
         "codex_reenrollment_recovery_binding": null,
@@ -278,7 +277,6 @@
         "fire_at": null,
         "interval_seconds": 3600,
         "expires_at": null,
-        "base_watch": null,
         "status": "armed",
         "resolution": null
       }

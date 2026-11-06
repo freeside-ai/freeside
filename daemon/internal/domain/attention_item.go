@@ -317,50 +317,6 @@ func (s BlockingSupersession) Supersedes(policy AdmissionPolicy) error {
 	return fmt.Errorf("blocking supersession kind %q: %w", s.Kind, ErrInvalidSupersessionKind)
 }
 
-// BaseFreshness is the base-advance staleness watch's fact (plan §5.16,
-// issue #442): the daemon's last observation of a ready_for_final_review
-// item's target base against the base the publication was admitted for. It
-// is maintained by the schedule's consuming handler, never client-supplied
-// (AttentionItemInput carries no path to it), and updates only on material
-// change, so a routine watch fire does not churn item versions — while a
-// base advance does, correctly invalidating commands prepared against the
-// stale base claim.
-type BaseFreshness struct {
-	BaseRef         string `json:"base_ref"`
-	AdmittedBaseSHA string `json:"admitted_base_sha"`
-	ObservedBaseSHA string `json:"observed_base_sha"`
-	// Advanced is derived: the observed tip differs from the admitted base.
-	// Stored and revalidated so a decoded fact cannot claim freshness its
-	// own coordinates contradict.
-	Advanced bool `json:"advanced"`
-	// ObservedAt is the UTC instant of the observation.
-	ObservedAt time.Time `json:"observed_at"`
-}
-
-// Validate reports whether the fact is structurally sound and internally
-// consistent.
-func (b BaseFreshness) Validate() error {
-	for name, v := range map[string]string{
-		"base_ref": b.BaseRef, "admitted_base_sha": b.AdmittedBaseSHA,
-		"observed_base_sha": b.ObservedBaseSHA,
-	} {
-		if v == "" {
-			return fmt.Errorf("base freshness %s: %w", name, ErrEmptyField)
-		}
-	}
-	if b.Advanced != (b.ObservedBaseSHA != b.AdmittedBaseSHA) {
-		return fmt.Errorf("base freshness advanced=%v with observed %q against admitted %q: %w",
-			b.Advanced, b.ObservedBaseSHA, b.AdmittedBaseSHA, ErrBaseFreshnessInconsistent)
-	}
-	if b.ObservedAt.IsZero() {
-		return fmt.Errorf("base freshness observed_at: %w", ErrMissingTimestamp)
-	}
-	if b.ObservedAt.Location() != time.UTC {
-		return fmt.Errorf("base freshness observed_at: %w", ErrTimestampNotUTC)
-	}
-	return nil
-}
-
 // ReadinessInvalidationReason names the axis on which a ready_for_final_review
 // item's exact binding diverged from the daemon's live observation, so a clean
 // review pass no longer describes the current candidate (plan §7, issue #496).
@@ -372,7 +328,11 @@ const (
 	// the head the ready item was earned against (a force-push or new commit).
 	ReadinessInvalidationHeadChanged ReadinessInvalidationReason = "head_changed"
 	// ReadinessInvalidationBaseAdvanced: the observed target-base tip advanced
-	// past the base the publication was admitted for.
+	// past the base the publication was admitted for. Retired for published
+	// items (plan §5.16, revision 110): nothing watches the target branch after
+	// handoff, so it appears only on ready items concluded before that
+	// revision, and a re-entry before publication still names it. It stays
+	// registered so that history decodes.
 	ReadinessInvalidationBaseAdvanced ReadinessInvalidationReason = "base_advanced"
 	// ReadinessInvalidationRetargeted: the PR's base ref changed (the pull was
 	// retargeted at a different branch).
@@ -422,7 +382,7 @@ type ReadinessInvalidation struct {
 	// Observed is the daemon's live observation on that same axis. It differs
 	// from Bound by construction; that divergence is what invalidates the pass,
 	// so it is revalidated (a decoded fact cannot claim an invalidation its own
-	// coordinates contradict), mirroring BaseFreshness.Advanced.
+	// coordinates contradict).
 	Observed string `json:"observed"`
 	// ObservedAt is the UTC instant of the observation.
 	ObservedAt time.Time `json:"observed_at"`
@@ -539,11 +499,6 @@ type AttentionItem struct {
 	// lands.
 	CommitPlanNotice *CommitPlanNoticeReason `json:"commit_plan_notice"`
 	ScopeDecision    *ScopeDecisionFacts     `json:"scope_decision"`
-	// BaseFreshness is the base-advance staleness watch's maintained fact,
-	// present only on ready_for_final_review items once the watch has
-	// observed the base (plan §5.16); nil renders explicit null. Daemon-set
-	// by the consuming handler; there is no client input path.
-	BaseFreshness *BaseFreshness `json:"base_freshness"`
 	// ReadinessInvalidation is the daemon-recorded fact that a
 	// ready_for_final_review item's clean-pass claim was invalidated by a
 	// base/head/identity change (plan §7, issue #496), present only on a
@@ -1245,18 +1200,6 @@ func (i AttentionItem) Validate() error {
 				i.ID, ErrSupersessionOnAdvisoryHealth)
 		}
 		if err := i.BlockingSupersession.Validate(); err != nil {
-			return fmt.Errorf("item %s: %w", i.ID, err)
-		}
-	}
-	if i.BaseFreshness != nil {
-		// Base freshness is a ready_for_final_review semantic (plan §5.16):
-		// the watch binds to a published PR awaiting review, so the fact on
-		// any other type is a malformed item.
-		if i.Type != AttentionReadyForFinalReview {
-			return fmt.Errorf("item %s type %q carries base freshness: %w",
-				i.ID, i.Type, ErrBaseFreshnessOutsideReview)
-		}
-		if err := i.BaseFreshness.Validate(); err != nil {
 			return fmt.Errorf("item %s: %w", i.ID, err)
 		}
 	}

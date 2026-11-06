@@ -1411,19 +1411,16 @@ type claudeComposition struct {
 	runConformance  func(context.Context) error
 	closer          sessionCloser
 	janitor         *janitorSession
-	// observeBaseTip is the base-advance watch's conditional ref read
-	// through the publish reconciler (§5.11 conditional requests; §5.16
-	// base_advance_watch consumer).
-	observeBaseTip func(context.Context, domain.ScheduleBaseWatch) (string, error)
-	// observeRepositoryTip is the same read for the active-resource
-	// reconciler's tip watch, which feeds project-image upkeep (§5.7).
+	// observeRepositoryTip is the conditional ref read through the publish
+	// reconciler (§5.11 conditional requests) for the active-resource
+	// reconciler's tip watch and image upkeep, which feed project-image
+	// upkeep (§5.7).
 	observeRepositoryTip func(ctx context.Context, repo, branch string) (string, error)
 	// fetchTip fetches the configured base branch at tipSHA into dir for
 	// image upkeep and returns the repository ID the checkout carries.
 	fetchTip func(ctx context.Context, tipSHA, dir string) (int64, error)
-	// observePull and observeIssue are the §5.18 base-watch capture and
-	// status-independent completion sweep's conditional reads through the same
-	// reconciler.
+	// observePull and observeIssue are the §5.18 completion sweep's
+	// conditional reads through the same reconciler.
 	observePull  pullObserver
 	observeIssue issueObserver
 	// observeLabelIssues is the label-intake loop's conditional read of the open
@@ -1928,9 +1925,6 @@ func composeClaudeDriver(
 				return nil
 			})
 			return repositoryID, err
-		},
-		observeBaseTip: func(obsCtx context.Context, watch domain.ScheduleBaseWatch) (string, error) {
-			return observeRefTip(obsCtx, watch.Repo, watch.BaseRef)
 		},
 		observeRepositoryTip: observeRefTip,
 		observePull: func(obsCtx context.Context, repo string, number int) (publish.PullObservation, error) {

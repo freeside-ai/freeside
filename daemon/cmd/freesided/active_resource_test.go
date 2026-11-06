@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,6 @@ func armActiveTestSchedules(t *testing.T, st *store.Store, item domain.Attention
 	runID := *item.Subject.RunID
 	policy := schedTestResolvedPolicy(runID)
 	deadline := activeResourceTestTime.Add(time.Hour)
-	interval := int64(60)
 	inputs := []domain.ScheduleInput{
 		{
 			ID:        engineScheduleID(domain.SchedulePRChecksDeadline, item.ID),
@@ -86,14 +86,6 @@ func armActiveTestSchedules(t *testing.T, st *store.Store, item domain.Attention
 			Subject: domain.ScheduleSubject{Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &version},
 			RunID:   &runID, PolicyDigest: &policy.Digest, CreatedAt: activeResourceTestTime, FireAt: &deadline,
 		},
-		{
-			ID:        engineScheduleID(domain.ScheduleBaseAdvanceWatch, item.ID),
-			ProjectID: item.ProjectID, Kind: domain.ScheduleBaseAdvanceWatch,
-			Subject: domain.ScheduleSubject{Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &version},
-			RunID:   &runID, PolicyDigest: &policy.Digest, CreatedAt: activeResourceTestTime,
-			IntervalSeconds: &interval,
-			BaseWatch:       &domain.ScheduleBaseWatch{Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe"},
-		},
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		for _, input := range inputs {
@@ -104,13 +96,7 @@ func armActiveTestSchedules(t *testing.T, st *store.Store, item domain.Attention
 			if err := tx.PutSchedule(ctx, schedule); err != nil {
 				return err
 			}
-			var next time.Time
-			if schedule.FireAt != nil {
-				next = *schedule.FireAt
-			} else {
-				next = schedule.CreatedAt.Add(time.Duration(*schedule.IntervalSeconds) * time.Second)
-			}
-			if err := tx.SetScheduleTimer(ctx, schedule.ID, schedule.Generation, next); err != nil {
+			if err := tx.SetScheduleTimer(ctx, schedule.ID, schedule.Generation, *schedule.FireAt); err != nil {
 				return err
 			}
 		}
@@ -1205,10 +1191,6 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 	item := capturedRun(t, st)
 	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
-	item.BaseFreshness = &domain.BaseFreshness{
-		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
-		Advanced: true, ObservedAt: activeResourceTestTime,
-	}
 	item.ReadinessInvalidation = &domain.ReadinessInvalidation{
 		Reason: domain.ReadinessInvalidationBaseAdvanced,
 		Bound:  "cafebabe", Observed: "deadbeef", ObservedAt: activeResourceTestTime,
@@ -1253,6 +1235,105 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 	pulls, issues, completion = readCaptureState(t, st)
 	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
 		t.Fatalf("write-once capture = %v %v %v", pulls, issues, completion)
+	}
+}
+
+// TestActiveResourceReconcileRequiresWorkUnitBindingAnchor: a work-unit
+// binding that no longer restates the independently reconstructed ready
+// binding is refused before anything is recorded through it, so a corrupt
+// row never settles the unit.
+func TestActiveResourceReconcileRequiresWorkUnitBindingAnchor(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	item := capturedRun(t, st)
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE work_unit_pr_bindings
+		SET repository_id = 515151, pr_number = 451,
+			body = json_set(body, '$.repository_id', 515151, '$.pr_number', 451)
+		WHERE unit_id = ?`, domain.WorkUnitIDForRun("run-cap")); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 1 || !strings.Contains(failures[0].Error(), "disagrees with ready resource") {
+		t.Fatalf("Reconcile = %v, %v; want one binding-anchor failure", failures, err)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("corrupt binding reached the observer %d times", pullCalls)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen ||
+		got.ItemVersion != item.ItemVersion {
+		t.Fatalf("item settled through a corrupt binding: %+v", got)
+	}
+	assertNoActiveCompletion(t, st, item)
+}
+
+// TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead: a concluded
+// item whose published head no longer restates its ready binding fails the
+// store's re-gate, so the completion pass observes and records nothing
+// through the unanchored binding.
+func TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	mismatched := item
+	mismatched.ItemVersion++
+	mismatched.Status = domain.StatusResolved
+	mismatched.PRHeadSHA = "0ther5ha"
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		mismatched = domaintest.MustConclude(mismatched)
+		return tx.PutAttentionItem(ctx, mismatched)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		now: func() time.Time { return activeResourceTestTime },
+	}
+	if _, err := reconcileActiveResource(&reconciler, ctx); err == nil ||
+		!strings.Contains(err.Error(), "stored row body inconsistent") {
+		t.Fatalf("Reconcile error = %v, want corrupt ready-item authority", err)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("the pass observed through an unanchored binding (%d pulls)", pullCalls)
+	}
+	if pulls, _, completion := readCaptureState(t, st); len(pulls) != 0 || completion != nil {
+		t.Fatalf("unanchored binding recorded: %v %v", pulls, completion)
 	}
 }
 

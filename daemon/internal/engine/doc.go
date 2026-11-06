@@ -95,8 +95,7 @@
 //     source-issue text
 //   - publication_closure.go, publication_closure_wait.go
 //     the source-issue closure gate and the wait for a published task's closure
-//   - publication_watch.go the published PR's checks, review, and base-advance
-//     watches
+//   - publication_watch.go the published PR's checks and review watches
 //   - publish_block_facts.go the facts a publish-block card carries
 //   - publication_continuation.go, publication_successor.go
 //     publication re-evaluation and successor candidates

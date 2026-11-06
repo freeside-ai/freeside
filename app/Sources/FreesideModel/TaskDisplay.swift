@@ -573,7 +573,7 @@ package enum TaskDisplay {
                 let detail = item.readiness_detail?.value1,
                 detail.candidate_head == item.pr_head_sha,
                 detail.evaluation_set_digest == readiness.evaluation_set_digest,
-                item.readiness_invalidation == nil, item.base_freshness?.value1.advanced != true
+                item.readiness_invalidation == nil
             else { return false }
             return true
         }

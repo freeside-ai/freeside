@@ -17,7 +17,6 @@
   "fire_at": "2026-01-02T03:34:05Z",
   "interval_seconds": null,
   "expires_at": null,
-  "base_watch": null,
   "status": "armed",
   "resolution": null
 }

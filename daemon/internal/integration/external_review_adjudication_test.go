@@ -899,49 +899,6 @@ func TestExternalReviewCardOutlivesARestartWithoutAnAdjudicator(t *testing.T) {
 	}
 }
 
-// TestExternalReviewCycleAfterABaseAdvanceJudgesNothing: the base advanced
-// after the run's producer was admitted. The cycle's base is then not the
-// base a remediation could be admitted at, so even with an adjudicator the
-// cycle judges nothing and ends on a person, on an item that names the
-// reviewer's finding (issue #1767 decision 1).
-func TestExternalReviewCycleAfterABaseAdvanceJudgesNothing(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	driver := p.configureAdjudicator(t)
-	p.publishReady(t)
-	head := p.replay.HeadSHA
-	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
-	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
-	}); !started {
-		t.Fatal("a base advance started no re-entry")
-	}
-	p.scriptCleanReview(2, advanced, head)
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-		t.Fatalf("base advance re-entry = %#v, %v", result, err)
-	}
-
-	p.listExternalReviewers(t, externalMaintainer())
-	finding := p.leaveExternalFinding(t, 1, externalMaintainer(), head, "this leaks the handle")
-	if !p.startExternalReview(t) {
-		t.Fatal("an admitted finding started no cycle after a base advance")
-	}
-	scriptAdjudication(t, driver, declineVerdict(finding.ID))
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
-		t.Fatalf("cycle result = %#v, %v", result, err)
-	}
-	if stop := p.reentryStopItem(t); !strings.Contains(stop.Reason,
-		`maintainer on review_comment/1: "this leaks the handle"`) {
-		t.Fatalf("stop item reason:\n%s", stop.Reason)
-	}
-	if end := p.externalReviewEnd(t); end.readyItem || end.pending != 0 {
-		t.Fatalf("cycle end = %#v", end)
-	}
-	if len(adjudicatorRequests(driver)) != 0 || len(p.externalDispositions(t)) != 0 {
-		t.Fatal("a cycle at a base other than the admitted one adjudicated")
-	}
-}
-
 // TestExternalReviewCycleNeverDismissesAnUnratedFindingAlone: most review
 // comments carry no severity, and a missing severity reads as high (plan §7).
 // Adjudication alone never declines such a finding: the cycle ends on a

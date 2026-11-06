@@ -464,6 +464,9 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 	wantBase, wantHead := "", ""
 	switch reentry.Reason {
 	case domain.ReadinessInvalidationBaseAdvanced:
+		// Nothing seals this reason for a published item since plan
+		// revision 110, but an authority sealed before it is history every
+		// ready-binding and closure read re-gates, so it still validates.
 		wantBase, wantHead = fact.Observed, ready.HeadSHA
 	case domain.ReadinessInvalidationHeadChanged:
 		if fact.Bound != ready.HeadSHA {

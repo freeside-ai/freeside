@@ -12,9 +12,10 @@ import (
 )
 
 // The publication lane is the 1B consumer of the §5.16 watch and deadline
-// kinds: a durably ready_for_final_review item arms the PR-checks deadline,
-// the review-wait threshold, and the base-advance staleness watch, all
-// bound to the item and its version. Arming is convergent (scheduler
+// kinds: a durably ready_for_final_review item arms the PR-checks deadline
+// and the review-wait threshold, both bound to the item and its version.
+// Nothing watches the target branch: a base advance after handoff starts
+// nothing (plan §5.16, revision 110). Arming is convergent (scheduler
 // Converge semantics) and runs on the same reconcile passes that ensure the
 // item, so a crash between the item and its watches heals on the next pass;
 // the watches resolve themselves with recorded proof once the item
@@ -29,9 +30,6 @@ const (
 	// DefaultReviewWaitThreshold bounds how long a published PR may wait for
 	// its concluding decision before the threshold fires.
 	DefaultReviewWaitThreshold = 24 * time.Hour
-	// DefaultBaseAdvanceInterval is the base-advance staleness watch's
-	// recurring observation cadence.
-	DefaultBaseAdvanceInterval = 15 * time.Minute
 )
 
 // PublicationWatchScheduleID is the deterministic identity of one watch
@@ -40,14 +38,13 @@ func PublicationWatchScheduleID(kind domain.ScheduleKind, itemID domain.ItemID) 
 	return domain.ScheduleID(fmt.Sprintf("schedule-%s-%s", kind, itemID))
 }
 
-// armPublicationWatches converges the three watch schedules for one live
+// armPublicationWatches converges the two deadline schedules for one live
 // ready_for_final_review item. A concluded item arms nothing: its watches
 // either never existed or resolve with recorded proof at their next fire.
 func armPublicationWatches(
 	ctx context.Context,
 	st *store.Store,
 	item domain.AttentionItem,
-	repo, baseRef, admittedBaseSHA string,
 	now time.Time,
 ) error {
 	now = now.UTC()
@@ -85,7 +82,6 @@ func armPublicationWatches(
 		}
 		checksFireAt := now.Add(DefaultPRChecksDeadline)
 		reviewFireAt := now.Add(DefaultReviewWaitThreshold)
-		watchInterval := int64(DefaultBaseAdvanceInterval / time.Second)
 		inputs := []domain.ScheduleInput{
 			{
 				ID:        PublicationWatchScheduleID(domain.SchedulePRChecksDeadline, current.ID),
@@ -98,15 +94,6 @@ func armPublicationWatches(
 				ProjectID: current.ProjectID, Kind: domain.ScheduleReviewWaitThreshold,
 				Subject: subject, RunID: &runID, PolicyDigest: &policyDigest,
 				CreatedAt: now, FireAt: &reviewFireAt,
-			},
-			{
-				ID:        PublicationWatchScheduleID(domain.ScheduleBaseAdvanceWatch, current.ID),
-				ProjectID: current.ProjectID, Kind: domain.ScheduleBaseAdvanceWatch,
-				Subject: subject, RunID: &runID, PolicyDigest: &policyDigest,
-				CreatedAt: now, IntervalSeconds: &watchInterval,
-				BaseWatch: &domain.ScheduleBaseWatch{
-					Repo: repo, BaseRef: baseRef, AdmittedBaseSHA: admittedBaseSHA,
-				},
 			},
 		}
 		for _, in := range inputs {
@@ -127,11 +114,7 @@ func armPublicationWatches(
 			if err != nil {
 				return fmt.Errorf("arm publication watch %s: %w", in.ID, err)
 			}
-			first := now
-			if desired.IntervalSeconds != nil {
-				first = now.Add(time.Duration(*desired.IntervalSeconds) * time.Second)
-			}
-			if err := scheduler.Converge(ctx, tx, desired, first); err != nil {
+			if err := scheduler.Converge(ctx, tx, desired, now); err != nil {
 				return fmt.Errorf("arm publication watch %s: %w", in.ID, err)
 			}
 		}
