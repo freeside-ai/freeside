@@ -1,8 +1,13 @@
 {
-  "id": "sha256:03c2e299f80141af27051719a7615f2adc7a78c2e6e4820e4052a8e7cb8eb997",
+  "id": "sha256:367f4330991e7401270c9a1a956adac2adc48bb7d2e33904467f188945c35061",
+  "encoding": "freeside.task_line/v2",
   "task_id": "task-1",
   "role": "implementer",
-  "agent": "claude-b",
+  "selection": {
+    "enrollment_id": "claude-max-b",
+    "model_id": "claude-sonnet-4-5",
+    "effort": "medium"
+  },
   "version": 1,
   "predecessor_id": null,
   "source": "router",

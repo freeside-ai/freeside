@@ -428,14 +428,22 @@ func TestGetTaskLineFailsClosedOnABrokenChain(t *testing.T) {
 	}
 }
 
-// recordTaskLineChange records a change and its line, as the engine does.
+// testSelection is a well-formed selection named after an enrollment.
+func testSelection(enrollment string) *domain.TaskLineSelection {
+	return &domain.TaskLineSelection{
+		EnrollmentID: domain.ClientEnrollmentID(enrollment), ModelID: "model-" + enrollment, Effort: "high",
+	}
+}
+
+// recordTaskLineChange records a change and its line, as the engine does: a
+// nil selection clears the role.
 func recordTaskLineChange(
-	t *testing.T, s *store.Store, taskID domain.TaskID, role domain.RoleName, agent string, cleared bool,
+	t *testing.T, s *store.Store, taskID domain.TaskID, role domain.RoleName, selection *domain.TaskLineSelection,
 	replaces *domain.Digest, at time.Time,
 ) (domain.TaskLine, error) {
 	t.Helper()
 	ctx := context.Background()
-	change, err := domain.NewTaskLineChange(taskID, role, agent, cleared, replaces, at)
+	change, err := domain.NewTaskLineChange(taskID, role, selection, replaces, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +472,7 @@ func TestClearedHeadReadsAsNoLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleared, err := recordTaskLineChange(t, s, taskID, domain.RoleReviewer, "", true, &first.ID, taskLineSetAt.Add(time.Hour))
+	cleared, err := recordTaskLineChange(t, s, taskID, domain.RoleReviewer, nil, &first.ID, taskLineSetAt.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +515,7 @@ func TestClearedHeadReadsAsNoLine(t *testing.T) {
 		t.Fatalf("a cleared version stored agent %q, want NULL", agent.String)
 	}
 
-	again, err := recordTaskLineChange(t, s, taskID, domain.RoleReviewer, "claude-b", false, &cleared.ID, taskLineSetAt.Add(2*time.Hour))
+	again, err := recordTaskLineChange(t, s, taskID, domain.RoleReviewer, testSelection("claude-b"), &cleared.ID, taskLineSetAt.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,15 +535,15 @@ func TestRecordTaskLineChangeRefusesAVersionItDidNotSee(t *testing.T) {
 	ctx := context.Background()
 	s := openStoreAt(t, filepath.Join(t.TempDir(), "task-lines.db"), store.Options{})
 	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
-	first, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "codex", false, nil, taskLineSetAt)
+	first, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, testSelection("codex"), nil, taskLineSetAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "claude-b", false, &first.ID, taskLineSetAt.Add(time.Hour))
+	second, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, testSelection("claude-b"), &first.ID, taskLineSetAt.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale, err := domain.NewTaskLineChange(taskID, domain.RoleImplementer, "claude-c", false, &first.ID, taskLineSetAt.Add(2*time.Hour))
+	stale, err := domain.NewTaskLineChange(taskID, domain.RoleImplementer, testSelection("claude-c"), &first.ID, taskLineSetAt.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +553,7 @@ func TestRecordTaskLineChangeRefusesAVersionItDidNotSee(t *testing.T) {
 	}); !errors.Is(err, domain.ErrTaskLineInconsistent) {
 		t.Fatalf("a stale change: %v", err)
 	}
-	if _, err := recordTaskLineChange(t, s, taskID, domain.RoleSpecifier, "codex", false, &first.ID, taskLineSetAt); err == nil {
+	if _, err := recordTaskLineChange(t, s, taskID, domain.RoleSpecifier, testSelection("codex"), &first.ID, taskLineSetAt); err == nil {
 		t.Fatal("a change replacing a version of a role with no line was recorded")
 	}
 	all, _, err := readTaskLines(t, s, taskID)
@@ -583,7 +591,7 @@ func TestRecordTaskLineChangeAdvancesTheTask(t *testing.T) {
 		return snapshot
 	}
 	before := version()
-	if _, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "codex", false, nil, taskLineSetAt); err != nil {
+	if _, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, testSelection("codex"), nil, taskLineSetAt); err != nil {
 		t.Fatal(err)
 	}
 	if after := version(); after.EntityVersion != before.EntityVersion+1 || after.AsOfRevision <= before.AsOfRevision {
@@ -605,7 +613,7 @@ func TestGetTaskLineChangeFailsClosedOnAnEditedRow(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "task-lines.db")
 			s := openStoreAt(t, path, store.Options{})
 			taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
-			line, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "codex", false, nil, taskLineSetAt)
+			line, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, testSelection("codex"), nil, taskLineSetAt)
 			if err != nil {
 				t.Fatal(err)
 			}

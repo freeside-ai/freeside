@@ -37,8 +37,8 @@ type TaskSubmissionInput struct {
 	Source        []byte
 	SourceDigest  domain.Digest
 	OperatorName  string
-	// TaskLines are validated and in canonical role order; the submitter
-	// records one line per entry on the task it creates.
+	// TaskLines are validated selection choices in canonical role order; the
+	// submitter records one line per entry on the task it creates.
 	TaskLines []domain.TaskLineChoice
 	// Attachments are resolved against the blob store and validated as a
 	// list (ResolveTaskAttachments), in submitted order; the submitter
@@ -150,10 +150,17 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		if err := gateActiveDevice(ctx, tx, in.DeviceID); err != nil {
 			return err
 		}
+		// The request digest above keeps the names the client sent, so a
+		// retry is matched by its own bytes; the record and the lines hold
+		// the selections those names map to now.
+		selected, err := s.lineSelections(p.TaskLines)
+		if err != nil {
+			return fmt.Errorf("submit command %q: %w", in.CommandID, err)
+		}
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
 			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice, RequestDigest: requestDigest,
 			ProjectID: p.ProjectID, Source: source, SourceDigest: digest, OperatorName: p.Name,
-			TaskLines: p.TaskLines, Attachments: attachments,
+			TaskLines: selected, Attachments: attachments,
 		})
 		if err != nil {
 			return err
@@ -162,7 +169,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice,
 			DeviceID: &in.DeviceID, ProjectID: p.ProjectID,
 			SourceDigest: digest, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
-			Name: outcome.Name, TaskLines: p.TaskLines,
+			Name: outcome.Name, TaskLines: selected,
 		}
 		if err := tx.PutTaskSubmissionRequest(ctx, submission, requestDigest); err != nil {
 			return err
@@ -338,13 +345,23 @@ func OpenImageRepairTask(
 // role: the contract's minItems, which the decoder does not enforce.
 var errEmptyTaskLines = errors.New("task_lines must name at least one role when present")
 
-// canonicalTaskLines validates a command's task lines and returns them in
-// canonical role order; nil in, nil out. The error is safe to return to the
-// client: domain.ValidateTaskLineChoices never puts refused request text in
-// one.
+// errTaskLineSelectionOnWire rejects a command choice that carries a
+// selection: the wire names agents until #2598, and signet alone translates a
+// name to the selection a line records (Service.lineSelections).
+var errTaskLineSelectionOnWire = errors.New("task_lines name an agent, not a selection")
+
+// canonicalTaskLines validates a command's task lines, each naming an agent,
+// and returns them in canonical role order; nil in, nil out. The error is
+// safe to return to the client: domain.ValidateTaskLineChoices never puts
+// refused request text in one.
 func canonicalTaskLines(lines []domain.TaskLineChoice) ([]domain.TaskLineChoice, error) {
 	if lines != nil && len(lines) == 0 {
 		return nil, errEmptyTaskLines
+	}
+	for _, line := range lines {
+		if line.Selection != nil {
+			return nil, errTaskLineSelectionOnWire
+		}
 	}
 	return domain.CanonicalTaskLineChoices(lines)
 }

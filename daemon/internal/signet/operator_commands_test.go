@@ -61,7 +61,7 @@ func engineTaskLineChanger(
 	ctx context.Context, tx *store.WriteTx, change signet.TaskLineChange, now time.Time,
 ) (signet.TaskLineChangeOutcome, error) {
 	result, err := engine.ChangeTaskLineTx(ctx, tx, engine.ChangeTaskLineRequest{
-		TaskID: change.TaskID, Role: change.Role, Agent: change.Agent, Clear: change.Clear, Source: change.Source,
+		TaskID: change.TaskID, Role: change.Role, Selection: change.Selection, Clear: change.Clear, Source: change.Source,
 	}, now)
 	return signet.TaskLineChangeOutcome{Recorded: result.Recorded, Line: result.Line}, err
 }
@@ -205,7 +205,7 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+				signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 			before := serverRevision(t, st)
 			result, err := svc.Submit(t.Context(), tc.command(id))
 			if err != nil {
@@ -318,7 +318,7 @@ func TestUsageCommandsRunTheirEffectOnlyAfterCommit(t *testing.T) {
 }
 
 func TestChangeTaskLineRecordsRepeatsAndClears(t *testing.T) {
-	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(engineTaskLineChanger))
+	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents())
 	steps := []struct {
 		agent    *string
 		recorded bool
@@ -343,7 +343,7 @@ func TestChangeTaskLineRecordsRepeatsAndClears(t *testing.T) {
 			}
 			continue
 		}
-		if receipt.Line == nil || receipt.Line.Agent != *step.agent ||
+		if receipt.Line == nil || receipt.Line.Selection == nil || *receipt.Line.Selection != lineSelectionOf(*step.agent) ||
 			receipt.Line.Source != domain.TaskLineSourceClientLineChange || receipt.Line.Version != 1 {
 			t.Fatalf("step %d line = %+v", i, receipt.Line)
 		}
@@ -373,7 +373,7 @@ func TestChangeTaskLineRefusesARunningRole(t *testing.T) {
 	running := func(context.Context, *store.WriteTx, signet.TaskLineChange, time.Time) (signet.TaskLineChangeOutcome, error) {
 		return signet.TaskLineChangeOutcome{}, domain.ErrTaskLineRoleRunning
 	}
-	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(running))
+	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(running), withTestLineAgents())
 	state, err := st.ServerState(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -525,7 +525,7 @@ func TestOperatorCommandsFailClosedWithoutTheirHook(t *testing.T) {
 
 func TestOperatorCommandsHTTP(t *testing.T) {
 	svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-		signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+		signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 	handler := signet.NewHTTPHandler(svc, testAuthorizer)
 	post := func(t *testing.T, body string) (int, map[string]any) {
 		t.Helper()
@@ -609,7 +609,7 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 	running := func(context.Context, *store.WriteTx, signet.TaskLineChange, time.Time) (signet.TaskLineChangeOutcome, error) {
 		return signet.TaskLineChangeOutcome{}, domain.ErrTaskLineRoleRunning
 	}
-	runningSvc, _, runningID := newOperatorService(t, signet.WithTaskLineChanger(running))
+	runningSvc, _, runningID := newOperatorService(t, signet.WithTaskLineChanger(running), withTestLineAgents())
 	response := authenticatedRequest(t, signet.NewHTTPHandler(runningSvc, testAuthorizer), http.MethodPost, "/commands",
 		bytes.NewReader([]byte(command("h-running", `{"kind":"change_task_line","task_id":"`+string(runningID)+`","role":"implementer","agent":"codex-primary"}`))))
 	var rejection struct {

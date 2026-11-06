@@ -1,0 +1,31 @@
+{
+  "command_id": "cmd-5",
+  "origin": "device",
+  "device_id": "device-1",
+  "project_id": "proj-1",
+  "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "task_id": "task-4",
+  "specification_run_id": "run-4",
+  "name": {
+    "text": "Improve task navigation",
+    "source": "operator"
+  },
+  "task_lines": [
+    {
+      "role": "implementer",
+      "selection": {
+        "enrollment_id": "claude-max-b",
+        "model_id": "claude-sonnet-4-5",
+        "effort": "medium"
+      }
+    },
+    {
+      "role": "reviewer",
+      "selection": {
+        "enrollment_id": "codex-pro",
+        "model_id": "gpt-5.1-codex",
+        "effort": "xhigh"
+      }
+    }
+  ]
+}

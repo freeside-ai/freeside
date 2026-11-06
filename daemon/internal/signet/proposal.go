@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -275,7 +274,7 @@ func recordProposalTaskLines(ctx context.Context, tx *store.WriteTx, command dom
 	}
 	for _, choice := range lines {
 		if _, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
-			TaskID: taskID, Role: choice.Role, Agent: choice.Agent,
+			TaskID: taskID, Role: choice.Role, Selection: choice.Selection,
 			Source: domain.TaskLineSourceProposalStart, SetBy: command.CommandID,
 		}, now); err != nil {
 			return err
@@ -286,7 +285,12 @@ func recordProposalTaskLines(ctx context.Context, tx *store.WriteTx, command dom
 
 // The command row has no line payload. Compare all versions this command
 // wrote, including choices that a later start on the same task superseded.
-func replayProposalTaskLines(ctx context.Context, tx *store.WriteTx, command domain.Command, lines []domain.TaskLineChoice) error {
+// names are the retry's choices and selected the selections they map to now,
+// in the same order: a v1 line, which a start before #2597 wrote, matches its
+// name, and a v2 line its selection.
+func replayProposalTaskLines(
+	ctx context.Context, tx *store.WriteTx, command domain.Command, names, selected []domain.TaskLineChoice,
+) error {
 	taskID, err := tx.ProposalTask(ctx, command.ItemID)
 	if err != nil {
 		return err
@@ -298,14 +302,18 @@ func replayProposalTaskLines(ctx context.Context, tx *store.WriteTx, command dom
 	var recorded []domain.TaskLineChoice
 	for _, line := range stored {
 		if line.Source == domain.TaskLineSourceProposalStart && line.SetBy == command.CommandID {
-			recorded = append(recorded, domain.TaskLineChoice{Role: line.Role, Agent: line.Agent})
+			recorded = append(recorded, line.Choice())
 		}
 	}
 	recorded, err = domain.CanonicalTaskLineChoices(recorded)
 	if err != nil {
 		return err
 	}
-	if !slices.Equal(recorded, lines) {
+	matches := len(recorded) == len(names)
+	for i := 0; matches && i < len(recorded); i++ {
+		matches = recorded[i].Same(names[i]) || recorded[i].Same(selected[i])
+	}
+	if !matches {
 		return fmt.Errorf("proposal start command %q task lines: %w", command.CommandID, store.ErrImmutableConflict)
 	}
 	return nil

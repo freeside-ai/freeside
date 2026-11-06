@@ -277,11 +277,15 @@ func implementerMovedOffPool(
 	if selection == nil {
 		return false, nil
 	}
-	line, found, err := RunTaskLine(ctx, tx, runID, domain.RoleImplementer)
+	line, found, err := RunTaskLine(ctx, tx, selection.Tree, runID, domain.RoleImplementer)
 	if err != nil || !found {
 		return false, nil
 	}
-	candidate, ok, err := selection.routeCandidate(ctx, tx, line.Agent)
+	agent, err := selection.Tree.LineAgent(line)
+	if err != nil {
+		return false, nil
+	}
+	candidate, ok, err := selection.routeCandidate(ctx, tx, agent)
 	if err != nil || !ok {
 		return false, err
 	}

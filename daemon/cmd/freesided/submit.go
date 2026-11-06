@@ -131,9 +131,9 @@ func runSubmitMain(args []string) {
 	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
 	retrySubmissionID := flags.String("retry-submission-id", "", "manually retry a saved submission using its original inputs")
 	var taskLines taskLineFlag
-	flags.Var(&taskLines, "task-line", "choose this task's agent for one role, as role=agent (repeatable; roles: "+
-		taskLineRoleList()+"); a line that cannot be honored refuses the attempt and never falls back to the lineup; "+
-		"a reviewer line must name the agent the review source runs, or the task's review is refused")
+	flags.Var(&taskLines, "task-line", "choose what runs this task's role, as role=enrollment/model/effort "+
+		"(repeatable; roles: "+taskLineRoleList()+"); a line that cannot be honored refuses the attempt and never "+
+		"falls back to the lineup; a reviewer line must select what the review source runs, or the task's review is refused")
 	var attachPaths attachFlag
 	flags.Var(&attachPaths, "attach", "attach this file to the task under its base name (repeatable; files only, "+
 		"an image at most 10 MiB, any other file at most 32 MiB, 100 MiB and 1,000 files per task); "+
@@ -207,19 +207,35 @@ type submitCommandConfig struct {
 	attachmentFiles []attachmentFile
 }
 
-// taskLineFlag collects repeated --task-line role=agent values. It checks
-// only the role=agent form; runSubmitCommand validates the set.
+// taskLineFlag collects repeated --task-line role=enrollment/model/effort
+// values. It checks only that form; runSubmitCommand validates the set. An
+// enrollment id carries a slash of its own (<identity>/<client>), so the
+// effort and the model are the last two segments and the enrollment is the
+// rest; neither an effort nor a model id of a supported harness carries one.
 type taskLineFlag []domain.TaskLineChoice
 
 func (f *taskLineFlag) String() string { return "" }
 
 func (f *taskLineFlag) Set(value string) error {
-	role, agent, found := strings.Cut(value, "=")
-	if !found || role == "" || agent == "" {
-		return errors.New("want role=agent")
+	role, selection, found := strings.Cut(value, "=")
+	rest, effort, cutEffort := cutLast(selection, "/")
+	enrollment, model, cutModel := cutLast(rest, "/")
+	if !found || !cutEffort || !cutModel || role == "" || enrollment == "" || model == "" || effort == "" {
+		return errors.New("want role=enrollment/model/effort")
 	}
-	*f = append(*f, domain.TaskLineChoice{Role: domain.RoleName(role), Agent: agent})
+	*f = append(*f, domain.TaskLineChoice{Role: domain.RoleName(role), Selection: &domain.TaskLineSelection{
+		EnrollmentID: domain.ClientEnrollmentID(enrollment), ModelID: model, Effort: effort,
+	}})
 	return nil
+}
+
+// cutLast is strings.Cut at the last sep.
+func cutLast(s, sep string) (before, after string, found bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return s, "", false
+	}
+	return s[:i], s[i+len(sep):], true
 }
 
 func taskLineRoleList() string {
@@ -939,7 +955,10 @@ func applyLaunchSubmission(
 }
 
 // recordSubmittedTaskLines appends the operator's lines to the task a CLI
-// submission just created. Each line is set when its task is created.
+// submission just created. Each line is set when its task is created. The
+// flag writes selections; a choice naming an agent comes only from a
+// recovery journal saved before #2597, and its retry writes the v1 line its
+// record backs.
 func recordSubmittedTaskLines(
 	ctx context.Context, tx *store.WriteTx, taskID domain.TaskID, lines []domain.TaskLineChoice, setBy string,
 ) error {
@@ -952,7 +971,7 @@ func recordSubmittedTaskLines(
 	}
 	for _, line := range lines {
 		if _, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
-			TaskID: taskID, Role: line.Role, Agent: line.Agent,
+			TaskID: taskID, Role: line.Role, Agent: line.Agent, Selection: line.Selection,
 			Source: domain.TaskLineSourceCLISubmit, SetBy: setBy,
 		}, task.CreatedAt); err != nil {
 			return fmt.Errorf("record task line: %w", err)
@@ -968,7 +987,7 @@ func validateSubmitApply(req submitApplyRequest) error {
 	if err != nil {
 		return err
 	}
-	if !slices.Equal(lines, req.TaskLines) {
+	if !slices.EqualFunc(lines, req.TaskLines, domain.TaskLineChoice.Same) {
 		return errors.New("task lines are not in canonical role order")
 	}
 	if req.LegacyRunID != "" && len(req.TaskLines) != 0 {

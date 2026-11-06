@@ -110,7 +110,11 @@ func recordSpecifierTriage(
 	var line *domain.TaskLine
 	err := s.Write(ctx, func(tx *store.WriteTx) error {
 		var err error
-		line, err = tx.RecordSpecifierTriage(ctx, record, counterpart)
+		var selection *domain.TaskLineSelection
+		if counterpart != "" {
+			selection = testSelection(counterpart)
+		}
+		line, err = tx.RecordSpecifierTriage(ctx, record, selection)
 		return err
 	})
 	return line, err
@@ -175,7 +179,7 @@ func TestRecordSpecifierTriage(t *testing.T) {
 					return
 				}
 				if line == nil || len(lines) != 1 || !reflect.DeepEqual(lines[0], *line) ||
-					line.Role != domain.RoleSpecifier || line.Agent != counterpart || line.Version != 1 ||
+					line.Role != domain.RoleSpecifier || *line.Selection != *testSelection(counterpart) || line.Version != 1 ||
 					line.Source != domain.TaskLineSourceTriage || line.SetBy != string(taskID) ||
 					!line.SetAt.Equal(record.RecordedAt) {
 					t.Fatalf("triage line = %+v, lines %+v", line, lines)
@@ -302,7 +306,7 @@ func TestRecordRouterTaskLinesOverTriage(t *testing.T) {
 
 	operator := openStore(t, store.Options{})
 	operatorTask, _ := seedTaskSubmissionTarget(t, ctx, operator)
-	if _, err := recordTaskLineChange(t, operator, operatorTask, domain.RoleSpecifier, "claude-a", false, nil, triageRecordedAt); err != nil {
+	if _, err := recordTaskLineChange(t, operator, operatorTask, domain.RoleSpecifier, testSelection("claude-a"), nil, triageRecordedAt); err != nil {
 		t.Fatal(err)
 	}
 	specifier.TaskID, specifier.SetBy = operatorTask, "router:"+string(operatorTask)

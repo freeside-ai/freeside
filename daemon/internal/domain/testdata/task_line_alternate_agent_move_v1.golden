@@ -1,0 +1,25 @@
+{
+  "id": "sha256:e48024ddd1f9b5e1bfd21645fca619fd8dfa153a15c47a82ee4041e6b06cfb7e",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "claude-b",
+  "version": 2,
+  "predecessor_id": "sha256:03c2e299f80141af27051719a7615f2adc7a78c2e6e4820e4052a8e7cb8eb997",
+  "source": "alternate_agent_move",
+  "set_by": "sha256:a522335cbe5b428841b0e8c9bfffc0a34067c0e2fd73db986640b2c90eaf6683",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": {
+    "policy_revision": 1,
+    "tier": "policy_order",
+    "pool": "claude-max-b",
+    "ranked_by": [],
+    "passed_over": {
+      "agent": "claude-a",
+      "pool": "claude-max-a",
+      "window": "seven_day_opus",
+      "source": "provider_refusal",
+      "marked_at": "2026-01-02T02:04:05Z",
+      "resets_at": "2026-01-04T05:04:05Z"
+    }
+  }
+}

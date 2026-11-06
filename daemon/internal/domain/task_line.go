@@ -4,16 +4,96 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
-// taskLineEncodingVersion tags the canonical serialization
-// TaskLine.ComputeID digests. A change to the encoding changes every line's
-// identity, and an admission cites a line by that identity.
-const taskLineEncodingVersion = "freeside.task_line/v1"
+// TaskLineEncoding tags the canonical serialization TaskLine.ComputeID
+// digests. A change to the encoding changes every line's identity, and an
+// admission cites a line by that identity, so a new shape is a new encoding
+// beside the old one and a stored line keeps the encoding it was written
+// under.
+type TaskLineEncoding string
+
+const (
+	// TaskLineEncodingV1 names the agent by its name in the project's tree.
+	// Lines written before #2597 hold it; #2599 converts them.
+	TaskLineEncodingV1 TaskLineEncoding = "freeside.task_line/v1"
+	// TaskLineEncodingV2 names the enrollment, model, and effort
+	// (TaskLineSelection). Every writer writes it.
+	TaskLineEncodingV2 TaskLineEncoding = "freeside.task_line/v2"
+)
+
+// AllTaskLineEncodings lists every valid TaskLineEncoding; it is the single
+// registration point.
+var AllTaskLineEncodings = []TaskLineEncoding{TaskLineEncodingV1, TaskLineEncodingV2}
+
+func (e TaskLineEncoding) valid() bool {
+	switch e {
+	case TaskLineEncodingV1, TaskLineEncodingV2:
+		return true
+	default:
+		return false
+	}
+}
+
+// TaskLineSelection is the enrollment, model, and effort a task line chooses
+// for its role (plan §5.4): the operator-facing names an AgentSelection
+// resolves from (AgentSelectionNames). Effort is the harness's effort string,
+// as a selection holds it, not an EffortLevel. It checks shape only; whether
+// the enrollment exists and serves the model at that effort is admission's
+// question, asked at the admitting revision.
+type TaskLineSelection struct {
+	EnrollmentID ClientEnrollmentID `json:"enrollment_id"`
+	ModelID      string             `json:"model_id"`
+	Effort       string             `json:"effort"`
+}
+
+// Validate reports whether each name is present and one launch option value.
+// Like ValidateTaskLineChoices, the error names the field and never the
+// refused text, which an operator typed.
+func (s TaskLineSelection) Validate() error {
+	for _, field := range []struct{ name, value string }{
+		{"enrollment_id", string(s.EnrollmentID)}, {"model_id", s.ModelID}, {"effort", s.Effort},
+	} {
+		if !ValidLaunchOptionValue(field.value) || field.value == "" {
+			return fmt.Errorf("task line selection %s: %w", field.name, ErrInvalidTaskLineSelection)
+		}
+	}
+	return nil
+}
+
+// AgentText is how a wire that names agents shows a selection no one agent
+// runs, until the API carries selections (#2598): enrollment/model/effort,
+// the form `freesided submit --task-line` takes. An agent name holds no
+// slash, so the text never names an agent.
+func (s TaskLineSelection) AgentText() string {
+	return string(s.EnrollmentID) + "/" + s.ModelID + "/" + s.Effort
+}
+
+// validLineAgentText reports whether text is what a wire line may show for
+// its agent: an agent name, or a valid selection's AgentText. An enrollment
+// id holds a slash itself, so the model and the effort are cut from the
+// right.
+func validLineAgentText(text string) bool {
+	if validAgentName(text) {
+		return true
+	}
+	cut := strings.LastIndexByte(text, '/')
+	if cut < 0 {
+		return false
+	}
+	rest, effort := text[:cut], text[cut+1:]
+	cut = strings.LastIndexByte(rest, '/')
+	if cut < 0 {
+		return false
+	}
+	selection := TaskLineSelection{EnrollmentID: ClientEnrollmentID(rest[:cut]), ModelID: rest[cut+1:], Effort: effort}
+	return selection.Validate() == nil
+}
 
 // TaskLineSource is the path that set a task line (plan §5.4, Admitted
 // Agents). Every member but the router and the triager is an authenticated
@@ -345,16 +425,23 @@ func (r RoleName) TaskLineEligible() bool {
 }
 
 // TaskLineChoice is one role's requested agent as an operator submits it:
-// the caller-supplied half of a line, before any task exists to hold it.
+// the caller-supplied half of a line, before any task exists to hold it. It
+// holds exactly one of Agent and Selection. A client command carries a name,
+// which the daemon translates through its tree before it records a line
+// (#2598 moves the wire to the tuple); `freesided submit` carries the tuple.
+// Agent is omitted when empty, so a name choice keeps the byte form every
+// recorded command and submission digested before Selection existed.
 type TaskLineChoice struct {
-	Role  RoleName `json:"role"`
-	Agent string   `json:"agent"`
+	Role      RoleName           `json:"role"`
+	Agent     string             `json:"agent,omitempty"`
+	Selection *TaskLineSelection `json:"selection,omitempty"`
 }
 
 // ValidateTaskLineChoices reports whether the choices are a well-formed set:
-// each role eligible and named at most once, each agent a well-formed agent
-// name. It checks shape only. Whether the agent resolves in the project's
-// tree is admission's question, asked at the admitting revision.
+// each role eligible and named at most once, each choosing a well-formed
+// agent name or a well-formed selection, never both. It checks shape only.
+// Whether the agent or the selection resolves in the project's tree is
+// admission's question, asked at the admitting revision.
 //
 // The error names the choice by its position and by its role once the role
 // is known to be eligible. It never carries text that failed a check: a
@@ -370,7 +457,15 @@ func ValidateTaskLineChoices(choices []TaskLineChoice) error {
 			return fmt.Errorf("task line %d role %s: %w", i+1, choice.Role, ErrDuplicateTaskLineRole)
 		}
 		seen[choice.Role] = true
-		if !validAgentName(choice.Agent) {
+		if choice.Selection != nil {
+			if choice.Agent != "" {
+				return fmt.Errorf("task line %d (%s) names an agent and a selection: %w",
+					i+1, choice.Role, ErrInvalidTaskLineSelection)
+			}
+			if err := choice.Selection.Validate(); err != nil {
+				return fmt.Errorf("task line %d (%s): %w", i+1, choice.Role, err)
+			}
+		} else if !validAgentName(choice.Agent) {
 			return fmt.Errorf("task line %d (%s) agent: %w", i+1, choice.Role, ErrInvalidAgentName)
 		}
 	}
@@ -390,6 +485,7 @@ func CanonicalTaskLineChoices(choices []TaskLineChoice) ([]TaskLineChoice, error
 	}
 	byRole := make(map[RoleName]TaskLineChoice, len(choices))
 	for _, choice := range choices {
+		choice.Selection = clonePtr(choice.Selection)
 		byRole[choice.Role] = choice
 	}
 	canonical := make([]TaskLineChoice, 0, len(choices))
@@ -413,26 +509,47 @@ func ValidateRecordedTaskLines(lines []TaskLineChoice) error {
 	if err != nil {
 		return err
 	}
-	if len(lines) == 0 || !slices.Equal(lines, canonical) {
+	if len(lines) == 0 || !slices.EqualFunc(lines, canonical, TaskLineChoice.Same) {
 		return ErrTaskLinesNotCanonical
 	}
 	return nil
+}
+
+// Same reports whether two choices choose the same thing for the same role:
+// the same name, or equal selections.
+func (c TaskLineChoice) Same(other TaskLineChoice) bool {
+	if (c.Selection == nil) != (other.Selection == nil) {
+		return false
+	}
+	return c.Role == other.Role && c.Agent == other.Agent && (c.Selection == nil || *c.Selection == *other.Selection)
+}
+
+// Choice is the role and the agent or selection the line holds, as a
+// submission records them. A cleared line's choice holds neither.
+func (l TaskLine) Choice() TaskLineChoice {
+	return TaskLineChoice{Role: l.Role, Agent: l.Agent, Selection: l.Selection}
 }
 
 // TaskLineInput carries the caller-supplied fields of a TaskLine. It has no
 // ID, Version, or PredecessorID: the store assigns the version and the
 // predecessor inside the write transaction and the identity is a content
 // address, so no input path can set them.
+//
+// The input sets the line's encoding: Agent writes a v1 line, which only
+// records from before #2597 and their test fixtures hold; Selection, or a
+// clear, writes v2. Every writer in the daemon passes Selection.
 type TaskLineInput struct {
-	TaskID TaskID
-	Role   RoleName
-	Agent  string
-	Source TaskLineSource
+	TaskID    TaskID
+	Role      RoleName
+	Agent     string
+	Selection *TaskLineSelection
+	Source    TaskLineSource
 	// SetBy is the command or submission identity that set the line.
 	SetBy string
 	// Provenance is set exactly for a router or alternate-agent-move line.
 	Provenance *TaskLineProvenance
-	// Cleared records a version that names no agent; Agent stays empty.
+	// Cleared records a version that names no agent; Agent and Selection
+	// stay empty.
 	Cleared bool
 }
 
@@ -442,42 +559,57 @@ type TaskLineInput struct {
 // never edited, so the line an admission cites stays the choice that
 // authorized that attempt. It selects an agent only: the role's prompt stays
 // the one its lineup line names.
+//
+// Its JSON form depends on the encoding (MarshalJSON): a v1 line keeps the
+// form it was stored and synced under, and a v2 line names its encoding.
 type TaskLine struct {
 	// ID is the content address of every other field.
-	ID     Digest   `json:"id"`
-	TaskID TaskID   `json:"task_id"`
-	Role   RoleName `json:"role"`
-	// Agent is the agent's name in the project's tree, empty exactly when
-	// Cleared. It is not resolved here: admission resolves it at the
-	// admitting revision.
-	Agent string `json:"agent"`
+	ID Digest
+	// Encoding is the canonical serialization ID addresses.
+	Encoding TaskLineEncoding
+	TaskID   TaskID
+	Role     RoleName
+	// Agent is a v1 line's agent name in the project's tree, empty when
+	// Cleared and on every v2 line. It is not resolved here: admission
+	// resolves it at the admitting revision.
+	Agent string
+	// Selection is a v2 line's enrollment, model, and effort, nil when
+	// Cleared and on every v1 line. Admission resolves it at the admitting
+	// revision.
+	Selection *TaskLineSelection
 	// Version counts the role's lines in this task from 1.
-	Version int `json:"version"`
+	Version int
 	// PredecessorID is the line this version supersedes: nil for version 1
 	// and set for every later one.
-	PredecessorID *Digest        `json:"predecessor_id"`
-	Source        TaskLineSource `json:"source"`
-	SetBy         string         `json:"set_by"`
-	SetAt         time.Time      `json:"set_at"`
+	PredecessorID *Digest
+	Source        TaskLineSource
+	SetBy         string
+	SetAt         time.Time
 	// Provenance is how the router, or a move from an exhausted pool, chose
 	// the agent: set exactly when Source is router or alternate_agent_move
 	// (CarriesProvenance), nil for every other source.
-	Provenance *TaskLineProvenance `json:"provenance"`
-	// Cleared is a version that takes the role back to the lineup. It is
-	// omitted when false because the API's TaskLine has no such field: the
+	Provenance *TaskLineProvenance
+	// Cleared is a version that takes the role back to the lineup. Its JSON
+	// is omitted when false because the API's TaskLine has no such field: the
 	// synced task carries only each role's current line, and a cleared role
 	// has none.
-	Cleared bool `json:"cleared,omitempty"`
+	Cleared bool
 }
 
 // NewTaskLine builds a validated line version in canonical byte-form: the
 // predecessor and provenance are detached, the timestamps are normalized to
 // UTC, and the ID is computed last from the bound facts.
 func NewTaskLine(in TaskLineInput, version int, predecessor *Digest, setAt time.Time) (TaskLine, error) {
+	encoding := TaskLineEncodingV2
+	if in.Agent != "" {
+		encoding = TaskLineEncodingV1
+	}
 	line := TaskLine{
+		Encoding:      encoding,
 		TaskID:        in.TaskID,
 		Role:          in.Role,
 		Agent:         in.Agent,
+		Selection:     clonePtr(in.Selection),
 		Version:       version,
 		PredecessorID: clonePtr(predecessor),
 		Source:        in.Source,
@@ -497,18 +629,18 @@ func NewTaskLine(in TaskLineInput, version int, predecessor *Digest, setAt time.
 	return line, nil
 }
 
-// canonicalTaskLine is the versioned serialization ComputeID digests: every
-// bound fact and nothing derived (ID is this value).
-type canonicalTaskLine struct {
-	Version       string         `json:"version"`
-	TaskID        TaskID         `json:"task_id"`
-	Role          RoleName       `json:"role"`
-	Agent         string         `json:"agent"`
-	LineVersion   int            `json:"line_version"`
-	PredecessorID *Digest        `json:"predecessor_id"`
-	Source        TaskLineSource `json:"source"`
-	SetBy         string         `json:"set_by"`
-	SetAt         time.Time      `json:"set_at"`
+// canonicalTaskLineV1 is the v1 serialization ComputeID digests: every bound
+// fact and nothing derived (ID is this value).
+type canonicalTaskLineV1 struct {
+	Version       TaskLineEncoding `json:"version"`
+	TaskID        TaskID           `json:"task_id"`
+	Role          RoleName         `json:"role"`
+	Agent         string           `json:"agent"`
+	LineVersion   int              `json:"line_version"`
+	PredecessorID *Digest          `json:"predecessor_id"`
+	Source        TaskLineSource   `json:"source"`
+	SetBy         string           `json:"set_by"`
+	SetAt         time.Time        `json:"set_at"`
 	// Provenance is omitted when nil, so an operator line keeps the v1 byte
 	// form and the id it was stored under before router lines existed.
 	Provenance *TaskLineProvenance `json:"provenance,omitempty"`
@@ -517,22 +649,43 @@ type canonicalTaskLine struct {
 	Cleared bool `json:"cleared,omitempty"`
 }
 
-// ComputeID returns the content address of the line: a sha256 over its
-// versioned canonical serialization.
+// canonicalTaskLineV2 is the v2 serialization: the selection in place of the
+// agent, null on a clear.
+type canonicalTaskLineV2 struct {
+	Version       TaskLineEncoding    `json:"version"`
+	TaskID        TaskID              `json:"task_id"`
+	Role          RoleName            `json:"role"`
+	Selection     *TaskLineSelection  `json:"selection"`
+	LineVersion   int                 `json:"line_version"`
+	PredecessorID *Digest             `json:"predecessor_id"`
+	Source        TaskLineSource      `json:"source"`
+	SetBy         string              `json:"set_by"`
+	SetAt         time.Time           `json:"set_at"`
+	Provenance    *TaskLineProvenance `json:"provenance"`
+	Cleared       bool                `json:"cleared"`
+}
+
+// ComputeID returns the content address of the line: a sha256 over the
+// canonical serialization of the encoding the line declares.
 func (l TaskLine) ComputeID() (Digest, error) {
-	body, err := json.Marshal(canonicalTaskLine{
-		Version:       taskLineEncodingVersion,
-		TaskID:        l.TaskID,
-		Role:          l.Role,
-		Agent:         l.Agent,
-		LineVersion:   l.Version,
-		PredecessorID: l.PredecessorID,
-		Source:        l.Source,
-		SetBy:         l.SetBy,
-		SetAt:         l.SetAt,
-		Provenance:    l.Provenance,
-		Cleared:       l.Cleared,
-	})
+	var canonical any
+	switch l.Encoding {
+	case TaskLineEncodingV1:
+		canonical = canonicalTaskLineV1{
+			Version: l.Encoding, TaskID: l.TaskID, Role: l.Role, Agent: l.Agent,
+			LineVersion: l.Version, PredecessorID: l.PredecessorID, Source: l.Source,
+			SetBy: l.SetBy, SetAt: l.SetAt, Provenance: l.Provenance, Cleared: l.Cleared,
+		}
+	case TaskLineEncodingV2:
+		canonical = canonicalTaskLineV2{
+			Version: l.Encoding, TaskID: l.TaskID, Role: l.Role, Selection: l.Selection,
+			LineVersion: l.Version, PredecessorID: l.PredecessorID, Source: l.Source,
+			SetBy: l.SetBy, SetAt: l.SetAt, Provenance: l.Provenance, Cleared: l.Cleared,
+		}
+	default:
+		return "", fmt.Errorf("task line id: encoding %q: %w", l.Encoding, ErrInvalidTaskLineEncoding)
+	}
+	body, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("task line id: %w", err)
 	}
@@ -549,12 +702,28 @@ func (l TaskLine) Validate() error {
 	if !l.Role.TaskLineEligible() {
 		return fmt.Errorf("task line %s role %q: %w", l.TaskID, l.Role, ErrTaskLineRoleIneligible)
 	}
-	if l.Cleared {
+	if !l.Encoding.valid() {
+		return fmt.Errorf("task line %s %s encoding %q: %w", l.TaskID, l.Role, l.Encoding, ErrInvalidTaskLineEncoding)
+	}
+	// A v1 line names an agent and a v2 line selects one; neither holds the
+	// other's field.
+	if (l.Encoding == TaskLineEncodingV1 && l.Selection != nil) || (l.Encoding == TaskLineEncodingV2 && l.Agent != "") {
+		return fmt.Errorf("task line %s %s %s: %w", l.TaskID, l.Role, l.Encoding, ErrInvalidTaskLineEncoding)
+	}
+	switch {
+	case l.Cleared:
 		// A clear supersedes a line, so it never starts a chain.
-		if l.Agent != "" || !l.Source.IsLineChange() || l.Version == 1 {
+		if l.Agent != "" || l.Selection != nil || !l.Source.IsLineChange() || l.Version == 1 {
 			return fmt.Errorf("task line %s %s version %d clear: %w", l.TaskID, l.Role, l.Version, ErrTaskLineInconsistent)
 		}
-	} else if !validAgentName(l.Agent) {
+	case l.Encoding == TaskLineEncodingV2:
+		if l.Selection == nil {
+			return fmt.Errorf("task line %s %s selects nothing: %w", l.TaskID, l.Role, ErrInvalidTaskLineSelection)
+		}
+		if err := l.Selection.Validate(); err != nil {
+			return fmt.Errorf("task line %s %s: %w", l.TaskID, l.Role, err)
+		}
+	case !validAgentName(l.Agent):
 		return fmt.Errorf("task line %s %s agent %q: %w", l.TaskID, l.Role, l.Agent, ErrInvalidAgentName)
 	}
 	if l.Version < 1 {
@@ -600,6 +769,95 @@ func (l TaskLine) Validate() error {
 	}
 	if l.ID != computed {
 		return fmt.Errorf("task line %s, content resolves to %s: %w", l.ID, computed, ErrTaskLineInconsistent)
+	}
+	return nil
+}
+
+// taskLineV1JSON is a v1 line's JSON form, unchanged since before v2: the
+// form change receipts stored, so a stored receipt still decodes and a v1
+// fixture keeps its bytes.
+type taskLineV1JSON struct {
+	ID            Digest              `json:"id"`
+	TaskID        TaskID              `json:"task_id"`
+	Role          RoleName            `json:"role"`
+	Agent         string              `json:"agent"`
+	Version       int                 `json:"version"`
+	PredecessorID *Digest             `json:"predecessor_id"`
+	Source        TaskLineSource      `json:"source"`
+	SetBy         string              `json:"set_by"`
+	SetAt         time.Time           `json:"set_at"`
+	Provenance    *TaskLineProvenance `json:"provenance"`
+	Cleared       bool                `json:"cleared,omitempty"`
+}
+
+// taskLineV2JSON is a v2 line's JSON form: it names its encoding, which a v1
+// form never carries, and the selection in place of the agent.
+type taskLineV2JSON struct {
+	ID            Digest              `json:"id"`
+	Encoding      TaskLineEncoding    `json:"encoding"`
+	TaskID        TaskID              `json:"task_id"`
+	Role          RoleName            `json:"role"`
+	Selection     *TaskLineSelection  `json:"selection"`
+	Version       int                 `json:"version"`
+	PredecessorID *Digest             `json:"predecessor_id"`
+	Source        TaskLineSource      `json:"source"`
+	SetBy         string              `json:"set_by"`
+	SetAt         time.Time           `json:"set_at"`
+	Provenance    *TaskLineProvenance `json:"provenance"`
+	Cleared       bool                `json:"cleared,omitempty"`
+}
+
+// MarshalJSON writes the form of the line's encoding.
+func (l TaskLine) MarshalJSON() ([]byte, error) {
+	switch l.Encoding {
+	case TaskLineEncodingV1:
+		return json.Marshal(taskLineV1JSON{
+			ID: l.ID, TaskID: l.TaskID, Role: l.Role, Agent: l.Agent, Version: l.Version,
+			PredecessorID: l.PredecessorID, Source: l.Source, SetBy: l.SetBy, SetAt: l.SetAt,
+			Provenance: l.Provenance, Cleared: l.Cleared,
+		})
+	case TaskLineEncodingV2:
+		return json.Marshal(taskLineV2JSON{
+			ID: l.ID, Encoding: l.Encoding, TaskID: l.TaskID, Role: l.Role, Selection: l.Selection,
+			Version: l.Version, PredecessorID: l.PredecessorID, Source: l.Source, SetBy: l.SetBy,
+			SetAt: l.SetAt, Provenance: l.Provenance, Cleared: l.Cleared,
+		})
+	}
+	return nil, fmt.Errorf("task line %s encoding %q: %w", l.ID, l.Encoding, ErrInvalidTaskLineEncoding)
+}
+
+// UnmarshalJSON reads either form: one with no encoding is v1, the form
+// written before v2 existed. It decodes only; the caller validates.
+func (l *TaskLine) UnmarshalJSON(data []byte) error {
+	var probe struct {
+		Encoding *TaskLineEncoding `json:"encoding"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if probe.Encoding == nil {
+		var v1 taskLineV1JSON
+		if err := json.Unmarshal(data, &v1); err != nil {
+			return err
+		}
+		*l = TaskLine{
+			ID: v1.ID, Encoding: TaskLineEncodingV1, TaskID: v1.TaskID, Role: v1.Role, Agent: v1.Agent,
+			Version: v1.Version, PredecessorID: v1.PredecessorID, Source: v1.Source, SetBy: v1.SetBy,
+			SetAt: v1.SetAt, Provenance: v1.Provenance, Cleared: v1.Cleared,
+		}
+		return nil
+	}
+	if *probe.Encoding != TaskLineEncodingV2 {
+		return fmt.Errorf("task line encoding %q: %w", *probe.Encoding, ErrInvalidTaskLineEncoding)
+	}
+	var v2 taskLineV2JSON
+	if err := json.Unmarshal(data, &v2); err != nil {
+		return err
+	}
+	*l = TaskLine{
+		ID: v2.ID, Encoding: v2.Encoding, TaskID: v2.TaskID, Role: v2.Role, Selection: v2.Selection,
+		Version: v2.Version, PredecessorID: v2.PredecessorID, Source: v2.Source, SetBy: v2.SetBy,
+		SetAt: v2.SetAt, Provenance: v2.Provenance, Cleared: v2.Cleared,
 	}
 	return nil
 }

@@ -15,9 +15,12 @@ import (
 // next version for its task and role. Migration 0111 adds a router line's
 // provenance as JSON, NULL for every operator line. Migration 0113 adds the
 // cleared version, whose agent is NULL, and the change records that back a
-// cli_line_change or client_line_change line.
+// cli_line_change or client_line_change line. Migration 0130 adds the
+// encoding and a v2 line's selection columns (enrollment_id, model_id,
+// effort), NULL on every v1 and cleared row.
 
-const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, source, set_by, set_at, provenance, cleared`
+const taskLineColumns = `task_id, role, version, id, encoding, agent, enrollment_id, model_id, effort, ` +
+	`predecessor_id, source, set_by, set_at, provenance, cleared`
 
 // AppendTaskLine records the next version of a task's line for one role and
 // returns it. The version and the predecessor are assigned here, from the
@@ -29,7 +32,7 @@ const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, sour
 // replaying a recorded command must not call it again (the submission paths
 // return their recorded result before reaching it).
 //
-// The role, the agent name's shape, and the source are refused by
+// The role, the agent name's or selection's shape, and the source are refused by
 // domain.TaskLine.Validate before any row is written, so a line no known
 // path set, or a router line without its provenance, never reaches the table.
 func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, setAt time.Time) (domain.TaskLine, error) {
@@ -54,9 +57,12 @@ func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, 
 	if err != nil {
 		return domain.TaskLine{}, fmt.Errorf("append task line %q %q: %w", in.TaskID, in.Role, err)
 	}
-	var agent, predecessorID, provenance any
-	if !line.Cleared {
+	var agent, enrollmentID, modelID, effort, predecessorID, provenance any
+	if line.Agent != "" {
 		agent = line.Agent
+	}
+	if line.Selection != nil {
+		enrollmentID, modelID, effort = string(line.Selection.EnrollmentID), line.Selection.ModelID, line.Selection.Effort
 	}
 	if line.PredecessorID != nil {
 		predecessorID = string(*line.PredecessorID)
@@ -69,9 +75,9 @@ func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, 
 		provenance = string(body)
 	}
 	if _, err := tx.tx.ExecContext(ctx, `INSERT INTO task_lines (`+taskLineColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		line.TaskID, line.Role, line.Version, line.ID, agent, predecessorID,
-		line.Source, line.SetBy, formatTime(line.SetAt), provenance, line.Cleared); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		line.TaskID, line.Role, line.Version, line.ID, line.Encoding, agent, enrollmentID, modelID, effort,
+		predecessorID, line.Source, line.SetBy, formatTime(line.SetAt), provenance, line.Cleared); err != nil {
 		return domain.TaskLine{}, fmt.Errorf("append task line %q %q: %w", in.TaskID, in.Role, err)
 	}
 	return line, nil
@@ -98,6 +104,11 @@ func (tx *WriteTx) RecordTaskLineChange(
 	if err := change.Validate(); err != nil {
 		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
 	}
+	// A v1 record only ever decodes: it would write a line of the other
+	// encoding than the one it names, which it could not back.
+	if change.Encoding != domain.TaskLineChangeEncodingV2 {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, domain.ErrInvalidTaskLineEncoding)
+	}
 	body, err := json.Marshal(change)
 	if err != nil {
 		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
@@ -107,7 +118,7 @@ func (tx *WriteTx) RecordTaskLineChange(
 		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
 	}
 	line, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
-		TaskID: change.TaskID, Role: change.Role, Agent: change.Agent, Cleared: change.Cleared,
+		TaskID: change.TaskID, Role: change.Role, Selection: change.Selection, Cleared: change.Cleared,
 		Source: source, SetBy: string(change.ID),
 	}, change.RecordedAt)
 	if err != nil {
@@ -298,17 +309,25 @@ func (tx *ReadTx) queryTaskLines(ctx context.Context, query string, args ...any)
 
 func scanTaskLine(row scanner) (domain.TaskLine, error) {
 	var (
-		line        domain.TaskLine
-		agent       sql.NullString
-		predecessor sql.NullString
-		setAt       string
-		provenance  sql.NullString
+		line                                 domain.TaskLine
+		agent, enrollmentID, modelID, effort sql.NullString
+		predecessor                          sql.NullString
+		setAt                                string
+		provenance                           sql.NullString
 	)
-	if err := row.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &agent,
-		&predecessor, &line.Source, &line.SetBy, &setAt, &provenance, &line.Cleared); err != nil {
+	if err := row.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &line.Encoding, &agent,
+		&enrollmentID, &modelID, &effort, &predecessor, &line.Source, &line.SetBy, &setAt, &provenance,
+		&line.Cleared); err != nil {
 		return domain.TaskLine{}, err
 	}
 	line.Agent = agent.String
+	// The table holds the three selection columns NULL together or set
+	// together (0130's CHECK).
+	if enrollmentID.Valid {
+		line.Selection = &domain.TaskLineSelection{
+			EnrollmentID: domain.ClientEnrollmentID(enrollmentID.String), ModelID: modelID.String, Effort: effort.String,
+		}
+	}
 	if provenance.Valid {
 		line.Provenance = new(domain.TaskLineProvenance)
 		if err := json.Unmarshal([]byte(provenance.String), line.Provenance); err != nil {

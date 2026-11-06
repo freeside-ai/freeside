@@ -82,14 +82,15 @@ type UsageOperator interface {
 	) (after func(), err error)
 }
 
-// TaskLineChange is one line change for the TaskLineChanger: Agent is empty
+// TaskLineChange is one line change for the TaskLineChanger: Selection is
+// the one the client's agent name maps to (Service.lineSelection), nil
 // exactly when Clear.
 type TaskLineChange struct {
-	TaskID domain.TaskID
-	Role   domain.RoleName
-	Agent  string
-	Clear  bool
-	Source domain.TaskLineSource
+	TaskID    domain.TaskID
+	Role      domain.RoleName
+	Selection *domain.TaskLineSelection
+	Clear     bool
+	Source    domain.TaskLineSource
 }
 
 // TaskLineChangeOutcome is the role's newest line after the change, nil when
@@ -333,7 +334,6 @@ func (s *Service) changeTaskLine(ctx context.Context, in ClientCommand) (Command
 		TaskID: p.TaskID, Role: p.Role, Clear: p.Agent == nil, Source: domain.TaskLineSourceClientLineChange,
 	}
 	if p.Agent != nil {
-		change.Agent = *p.Agent
 		if err := domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: p.Role, Agent: *p.Agent}}); err != nil {
 			return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
 		}
@@ -348,6 +348,16 @@ func (s *Service) changeTaskLine(ctx context.Context, in ClientCommand) (Command
 		func(tx *store.WriteTx, now time.Time) (domain.CommandReceipt, error) {
 			if s.taskLineChanger == nil {
 				return domain.CommandReceipt{}, ErrOperatorSettingUnavailable
+			}
+			// Translated only for a new command. A replay compares the
+			// request with the stored one above and reads no tree here;
+			// its receipt goes out under the current tree (choiceAgent).
+			if p.Agent != nil {
+				selection, err := s.lineSelection(p.Role, *p.Agent)
+				if err != nil {
+					return domain.CommandReceipt{}, err
+				}
+				change.Selection = &selection
 			}
 			outcome, err := s.taskLineChanger(ctx, tx, change, now)
 			if errors.Is(err, domain.ErrTaskLineRoleRunning) {
@@ -376,7 +386,7 @@ func (s *Service) taskLineRoleRunning(ctx context.Context, tx *store.WriteTx, id
 	if err != nil {
 		return err
 	}
-	snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task)
+	snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task, s.TaskLineAgents())
 	if err != nil {
 		return err
 	}

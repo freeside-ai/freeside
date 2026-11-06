@@ -204,8 +204,11 @@ func (r TaskLineChangeReceipt) Validate() error {
 	if err := r.Line.Validate(); err != nil {
 		return fmt.Errorf("task line change receipt %q line: %w", r.CommandID, err)
 	}
+	// A v2 line holds the selection the daemon's tree translated the
+	// request's agent to when it was accepted; which selection that was is
+	// the tree's question, so only a v1 line is compared by name here.
 	if r.Line.Cleared || r.Line.TaskID != r.TaskID || r.Line.Role != r.Role ||
-		r.Agent == nil || r.Line.Agent != *r.Agent {
+		r.Agent == nil || (r.Line.Encoding == TaskLineEncodingV1 && r.Line.Agent != *r.Agent) {
 		return fmt.Errorf("task line change receipt %q line: %w", r.CommandID, ErrParentKeyMismatch)
 	}
 	if r.Recorded && r.Line.Source != TaskLineSourceClientLineChange {
@@ -312,7 +315,8 @@ func (r ParkedTaskMoveReceipt) Validate() error {
 		return fmt.Errorf("parked task move receipt %q retry: %w", r.CommandID, ErrParentKeyMismatch)
 	}
 	// The parked role's line is always among them: it names the chosen
-	// agent.
+	// agent, or on a v2 line the selection the tree translated it to, which
+	// admission holds to the record (anchorAlternateAgentMoveLine).
 	moved := false
 	for _, line := range r.Lines {
 		if err := line.Validate(); err != nil {
@@ -322,7 +326,7 @@ func (r ParkedTaskMoveReceipt) Validate() error {
 			line.SetBy != string(r.Retry.ID) {
 			return fmt.Errorf("parked task move receipt %q line %s: %w", r.CommandID, line.ID, ErrParentKeyMismatch)
 		}
-		moved = moved || line.Role == r.Retry.Role && line.Agent == r.Agent
+		moved = moved || line.Role == r.Retry.Role && (line.Encoding == TaskLineEncodingV2 || line.Agent == r.Agent)
 	}
 	if !moved {
 		return fmt.Errorf("parked task move receipt %q moves no %s line: %w",

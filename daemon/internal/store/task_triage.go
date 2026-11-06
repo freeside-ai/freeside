@@ -77,7 +77,7 @@ func (tx *ReadTx) GetTaskTriage(ctx context.Context, taskID domain.TaskID) (doma
 }
 
 // RecordSpecifierTriage stores the task's triage record and, when the record
-// escalates, the specifier's triage line naming counterpart, in the caller's
+// escalates, the specifier's triage line selecting counterpart, in the caller's
 // transaction (plan §5.13, Specifier Triage). The line is set at the record's
 // instant and must be the specifier's first version: triage runs only for a
 // specifier with no line, so a role that gained one since the engine read
@@ -88,11 +88,11 @@ func (tx *ReadTx) GetTaskTriage(ctx context.Context, taskID domain.TaskID) (doma
 // Every outcome advances the task's own version, so sync serves the task and
 // its timeline afresh. It returns the line, or nil when none was written.
 func (tx *WriteTx) RecordSpecifierTriage(
-	ctx context.Context, record domain.TaskTriage, counterpart string,
+	ctx context.Context, record domain.TaskTriage, counterpart *domain.TaskLineSelection,
 ) (*domain.TaskLine, error) {
-	if record.Escalated != (counterpart != "") {
-		return nil, fmt.Errorf("record specifier triage %q: escalated %t with counterpart %q: %w",
-			record.TaskID, record.Escalated, counterpart, domain.ErrTaskTriageInconsistent)
+	if record.Escalated != (counterpart != nil) {
+		return nil, fmt.Errorf("record specifier triage %q: escalated %t with counterpart %t: %w",
+			record.TaskID, record.Escalated, counterpart != nil, domain.ErrTaskTriageInconsistent)
 	}
 	if err := tx.RecordTaskTriage(ctx, record); err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (tx *WriteTx) RecordSpecifierTriage(
 	var line *domain.TaskLine
 	if record.Escalated {
 		appended, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
-			TaskID: record.TaskID, Role: domain.RoleSpecifier, Agent: counterpart,
+			TaskID: record.TaskID, Role: domain.RoleSpecifier, Selection: counterpart,
 			Source: domain.TaskLineSourceTriage, SetBy: string(record.TaskID),
 		}, record.RecordedAt)
 		if err != nil {
