@@ -570,6 +570,7 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-inputs-init",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-inputs-obs",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-codex",
+			"freeside-review-review-" + strings.Repeat("a", 24) + "-claude",
 		},
 		Volumes: []string{
 			"freeside-handoff-review-" + strings.Repeat("a", 24) + "-ws",
@@ -590,7 +591,7 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 	if _, err := BindRigRuntimeResources(
 		cfg.StateRoot, lease.Token(), valid.Containers, valid.Volumes, valid.Networks,
 	); err != nil {
-		t.Fatalf("bind exact current and legacy Codex review names: %v", err)
+		t.Fatalf("bind exact current and legacy Codex and Claude review names: %v", err)
 	}
 	for _, tc := range []struct {
 		name       string
@@ -600,6 +601,7 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 	}{
 		{name: "unknown container role", containers: []string{"freeside-review-review-" + strings.Repeat("a", 24) + "-shell"}},
 		{name: "short review id", containers: []string{"freeside-review-review-" + strings.Repeat("a", 23) + "-codex"}},
+		{name: "short Claude review id", containers: []string{"freeside-review-review-" + strings.Repeat("a", 23) + "-claude"}},
 		{name: "review handoff agent", containers: []string{"freeside-handoff-review-" + strings.Repeat("a", 24) + "-agent"}},
 		{name: "unknown review volume", volumes: []string{"freeside-review-review-" + strings.Repeat("a", 24) + "-workspace"}},
 		{name: "handoff review network", networks: []string{"freeside-handoff-review-" + strings.Repeat("a", 24) + "-egress"}},
