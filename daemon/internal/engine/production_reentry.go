@@ -777,7 +777,7 @@ func (w *productionPublicationWorkflow) escalateReentryFindings(
 }
 
 // reentryWorkspaceSHA is the commit a cycle verifies: the prospective merge
-// for a base advance, the head otherwise.
+// a handoff verifies (production_handoff.go), the head otherwise.
 func reentryWorkspaceSHA(task productionPublicationTask, binding productionBinding) string {
 	if binding.evaluatedSHA != "" {
 		return binding.evaluatedSHA

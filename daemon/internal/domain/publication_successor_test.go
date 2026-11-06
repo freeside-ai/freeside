@@ -417,14 +417,6 @@ func TestPublicationSuccessorUnpublishedReentryRules(t *testing.T) {
 	if unpublished.AllowsRemediation(request) {
 		t.Fatal("unpublished re-entry admitted remediation at the superseded base")
 	}
-	merge := domain.ProspectiveMergeIdentity{BaseSHA: unpublished.Reentry.BaseSHA, HeadSHA: unpublished.Reentry.HeadSHA, MergeSHA: "merge-1"}
-	if !unpublished.AllowsProspectiveMerge(merge) {
-		t.Fatal("unpublished re-entry refused its prospective merge")
-	}
-	merge.BaseSHA = "base-1"
-	if unpublished.AllowsProspectiveMerge(merge) {
-		t.Fatal("unpublished re-entry admitted a merge into another base")
-	}
 }
 
 func TestPublicationSuccessorReentryRemediation(t *testing.T) {
@@ -499,14 +491,6 @@ func TestPublicationSuccessorSuccessorReentry(t *testing.T) {
 	}
 	if valid.AllowsRemediation(request) {
 		t.Fatal("successor re-entry admitted remediation")
-	}
-	merge := domain.ProspectiveMergeIdentity{BaseSHA: valid.Reentry.BaseSHA, HeadSHA: valid.Reentry.HeadSHA, MergeSHA: "merge-1"}
-	if !valid.AllowsProspectiveMerge(merge) {
-		t.Fatal("successor re-entry refused its prospective merge")
-	}
-	merge.HeadSHA = "head-1"
-	if valid.AllowsProspectiveMerge(merge) {
-		t.Fatal("successor re-entry admitted a merge of another head")
 	}
 }
 
