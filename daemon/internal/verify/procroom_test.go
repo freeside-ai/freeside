@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -178,5 +180,34 @@ func TestProcRoomReapsDescendants(t *testing.T) {
 			t.Fatalf("descendant %d still alive after the step completed", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestProcRoomCancelReportsAVanishedGroupAsDone guards a verdict
+// misclassification: os/exec treats only os.ErrProcessDone as a benign
+// Cancel result and wraps anything else as "exec: canceling Cmd: ...",
+// which Wait returns when the process exited 0. So when the step's
+// context is canceled just after its process is reaped, a raw ESRCH
+// from the group kill turns a step that passed into a room error.
+//
+// Running the command to completion and killing its group first, as
+// Run does, puts the callback in exactly that state deterministically,
+// without having to win a race.
+func TestProcRoomCancelReportsAVanishedGroupAsDone(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "true")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = cancelProcessGroup(cmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+
+	err := cmd.Cancel()
+	if errors.Is(err, syscall.ESRCH) {
+		t.Fatal("Cancel returned a raw ESRCH; os/exec turns that into " +
+			"\"exec: canceling Cmd: no such process\" on a step that passed")
+	}
+	if err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Fatalf("Cancel err = %v, want nil or os.ErrProcessDone", err)
 	}
 }
