@@ -105,12 +105,7 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 	// leaves behind must not outlive the step on the host (WaitDelay
 	// unblocks Run but reaps nothing by itself).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	cmd.Cancel = cancelProcessGroup(cmd)
 	out := procbound.NewTailBuffer(maxBytes)
 	cmd.Stdout, cmd.Stderr = out, out
 	r.Invocations = append(r.Invocations, Invocation{Argv: argv, Dir: workdir, Env: env})
@@ -136,4 +131,29 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 		return res, nil
 	}
 	return StepResult{}, fmt.Errorf("room could not execute %q: %w", argv[0], err)
+}
+
+// cancelProcessGroup returns the cmd.Cancel callback that kills the
+// command's whole process group. It maps ESRCH to os.ErrProcessDone and
+// returns every other kill error unchanged, as procbound.Bind does.
+//
+// ESRCH means the group is already gone: the command was reaped before
+// cancellation (the per-command timeout or a daemon shutdown) reached
+// it. os/exec treats only os.ErrProcessDone as a benign Cancel result
+// and wraps anything else as "exec: canceling Cmd: ...", which Wait
+// returns when the process itself exited 0, so a raw ESRCH would turn a
+// step that passed into a room error. A step that exited nonzero or by
+// signal is unaffected either way: Wait prefers its *exec.ExitError
+// over the Cancel result.
+func cancelProcessGroup(cmd *exec.Cmd) func() error {
+	return func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 }
