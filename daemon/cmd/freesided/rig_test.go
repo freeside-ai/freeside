@@ -1031,6 +1031,7 @@ func TestRigRecoverPassesMigrateOnlyWhenAsked(t *testing.T) {
 }
 
 func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
+	t.Parallel()
 	for _, migrate := range []bool{false, true} {
 		root := t.TempDir()
 		path := filepath.Join(root, "missing.db")
@@ -1050,6 +1051,7 @@ func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
 // a lease an older build left, with recorded review volumes, refuses with
 // both schemas and the ways out, and recovers through -migrate.
 func TestRigReviewJournalMigratesAnOlderBuildsDatabaseOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
 	head, err := store.CurrentSchemaVersion()
 	if err != nil {
 		t.Fatal(err)
@@ -1116,6 +1118,7 @@ func droppedDial(context.Context, string, string) (net.Conn, error) {
 }
 
 func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener
 	if err != nil {
 		t.Fatal(err)
@@ -1137,6 +1140,7 @@ func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
 }
 
 func TestProbeDaemonStillFailsClosedWhenItCannotAnswer(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		dial    func(context.Context, string, string) (net.Conn, error)
 		address string

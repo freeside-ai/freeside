@@ -93,6 +93,7 @@ func assertHoldUntouched(t *testing.T, st *store.Store, item domain.AttentionIte
 }
 
 func TestActiveResourceRecordsHeldPullRequestEndAndLeavesHoldOpen(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		merged    bool
@@ -139,6 +140,7 @@ func TestActiveResourceRecordsHeldPullRequestEndAndLeavesHoldOpen(t *testing.T) 
 }
 
 func TestActiveResourceCompletesDeclaredHeldRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	boundIssue := 443
@@ -190,6 +192,7 @@ func TestActiveResourceCompletesDeclaredHeldRun(t *testing.T) {
 }
 
 func TestActiveResourceSkipsHoldWithoutBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := heldRun(t, st, false, nil)
@@ -208,6 +211,7 @@ func TestActiveResourceSkipsHoldWithoutBinding(t *testing.T) {
 }
 
 func TestActiveResourceObservesHeldRunWithReadyItemOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	held := heldRun(t, st, true, nil)
@@ -268,6 +272,7 @@ func TestActiveResourceObservesHeldRunWithReadyItemOnce(t *testing.T) {
 // can no longer prove fails the pass at the item listing, before any hold is
 // observed. Nothing is polled through it.
 func TestActiveResourceRefusesUnprovableHeldBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	st := storetest.Open(t, dbPath, store.Options{

@@ -48,6 +48,7 @@ func readSeededPointer(t *testing.T, st *store.Store, repositoryID int64) (domai
 // The configured agent image seeds a repository's pointer only when it has
 // none; once a pointer exists, a start with another configured image keeps it.
 func TestSeedAdmittedImagePointerSeedsOnlyWhenAbsent(t *testing.T) {
+	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	first, second := seedTestImage(t, "b"), seedTestImage(t, "d")
 	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {

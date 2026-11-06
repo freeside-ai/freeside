@@ -238,6 +238,7 @@ func openDeputyItems(t *testing.T, st *store.Store, prefix string) []domain.Atte
 }
 
 func TestDeputyPreflightCardNamesFailedChecksAndClearsOnPass(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openDeputyTestStore(t)
 	failed := deputySelfCheckResult{Failed: []string{"images", "codex_credential"}, Remediation: "pull the images"}
@@ -264,6 +265,7 @@ func TestDeputyPreflightCardNamesFailedChecksAndClearsOnPass(t *testing.T) {
 }
 
 func TestDeputyInterruptedCardNamesThePriorRun(t *testing.T) {
+	t.Parallel()
 	st := openDeputyTestStore(t)
 	prior := daemonlock.RigManifest{
 		Owner:      daemonlock.RigOwner{User: "operator", Host: "mac", PID: 4242},
@@ -281,6 +283,7 @@ func TestDeputyInterruptedCardNamesThePriorRun(t *testing.T) {
 }
 
 func TestRecordDeputyIdentitiesRecordsOnceAndRefusesDrift(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openDeputyTestStore(t)
 	snapshot := filepath.Join(t.TempDir(), "auth.json")
@@ -460,6 +463,7 @@ func withDeputyTestStore(ctx context.Context, dbPath string, fn func(*store.Stor
 // the second writer changed or was dropped or the first writer changed. A
 // Claude reviewer the settings name is not stray.
 func TestRecordDeputyIdentitiesRefusesAStrayClaudeIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := secondWriterDeputySettings(t)
 	for name, tc := range map[string]struct {
@@ -531,6 +535,7 @@ func deputyTestGit(t *testing.T, dir string, args ...string) string {
 }
 
 func TestAgentTreeMatchesComparesTheCommittedPolicyTree(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	checkout := t.TempDir()
 	deputyTestGit(t, checkout, "init", "-q")
@@ -577,6 +582,7 @@ func TestDeputyEvidenceSitsAtTheStandingRoot(t *testing.T) {
 }
 
 func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
+	t.Parallel()
 	path, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
 	settings, err := loadDeputySettings(path)
 	if err != nil {
@@ -863,6 +869,7 @@ func TestAdoptDeputyAgentTreeNamesAMissingExporter(t *testing.T) {
 }
 
 func TestPublishCompositionEvidenceIsNoClobber(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "composition")
 	first, err := publishCompositionEvidence(dir, []byte("manifest\n"))
 	if err != nil {

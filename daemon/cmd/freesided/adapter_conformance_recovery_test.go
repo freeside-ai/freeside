@@ -43,6 +43,7 @@ func (g *conformanceRecoveryGate) Recover(context.Context, string, ward.HandoffS
 }
 
 func TestAdapterConformanceRecoveryRetainsInputsUntilQuiescent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	seedRoot := filepath.Join(root, "seeds")
 	seed := filepath.Join(seedRoot, "run")
@@ -109,6 +110,7 @@ func TestAdapterConformanceRecoveryRetainsInputsUntilQuiescent(t *testing.T) {
 }
 
 func TestAdapterConformanceRecoveryRefusesSeedOutsideRoot(t *testing.T) {
+	t.Parallel()
 	root, unrelated := t.TempDir(), t.TempDir()
 	const id domain.InvocationID = "adapter-conformance-invalid"
 	intent := adapterConformanceIntent{Version: 1, InvocationID: id, Spec: ward.HandoffSpec{

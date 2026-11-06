@@ -16,6 +16,7 @@ import (
 // worker runs the start pass first, then the handed-off tip, and the failure
 // of either is logged rather than ending it.
 func TestImageUpkeepTriggerRunsTheStartPassThenTheNewestTip(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		trigger := newImageUpkeepTrigger()
 		for _, tip := range []string{"older", "newer"} {
@@ -56,6 +57,7 @@ func TestImageUpkeepTriggerRunsTheStartPassThenTheNewestTip(t *testing.T) {
 // A wake runs one more start pass, and wakes the worker has not taken yet
 // collapse into one.
 func TestImageUpkeepTriggerRunsAPassPerWake(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		trigger := newImageUpkeepTrigger()
 		trigger.wake()

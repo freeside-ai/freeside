@@ -98,6 +98,7 @@ func reconcileTipWatch(t *testing.T, r *activeResourceReconciler) []error {
 }
 
 func TestActiveResourceTipWatchHandsEachNewTipToUpkeepOnce(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	h := &tipWatchHarness{tip: tipA, now: activeResourceTestTime}
 	r := h.reconciler(st)
@@ -168,6 +169,7 @@ func (f *tipWatchForge) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // ref cache. When the base watch reads a new tip first, the tip watch's read
 // is a 304 carrying that newer SHA, and it must still fire.
 func TestActiveResourceTipWatchFiresOnSharedCacheNotModified(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	seedTipObservation(t, st, tipA, tipA)
@@ -200,6 +202,7 @@ func TestActiveResourceTipWatchFiresOnSharedCacheNotModified(t *testing.T) {
 }
 
 func TestActiveResourceTipWatchReadFailureWritesNothing(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	activeReadyItem(t, st)
 	h := &tipWatchHarness{readErr: errors.New("token mint unavailable"), now: activeResourceTestTime}
@@ -226,6 +229,7 @@ func TestActiveResourceTipWatchReadFailureWritesNothing(t *testing.T) {
 }
 
 func TestActiveResourceTipWatchUpkeepFailureRetriesNextPass(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	activeReadyItem(t, st)
 	seedTipObservation(t, st, tipA, tipA)
@@ -259,6 +263,7 @@ func TestActiveResourceTipWatchUpkeepFailureRetriesNextPass(t *testing.T) {
 }
 
 func TestActiveResourceTipWatchDoesNotRefireAfterRestart(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	seedTipObservation(t, st, tipA, tipA)
 	h := &tipWatchHarness{tip: tipA, now: activeResourceTestTime}
@@ -275,6 +280,7 @@ func TestActiveResourceTipWatchDoesNotRefireAfterRestart(t *testing.T) {
 // The tip changing between the call and its recording leaves the newer tip
 // pending: only the handled tip is recorded, and only UpkeepTipSHA changes.
 func TestActiveResourceTipWatchRecordsOnlyTheHandledTip(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	seedTipObservation(t, st, tipA, "")
 	h := &tipWatchHarness{tip: tipA, now: activeResourceTestTime}
@@ -297,6 +303,7 @@ func TestActiveResourceTipWatchRecordsOnlyTheHandledTip(t *testing.T) {
 // Another writer (the upkeep job's own triggers) may record UpkeepTipSHA
 // while the entry point runs; the handled-tip write must not regress it.
 func TestActiveResourceTipWatchKeepsAnotherWritersUpkeepTip(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	seedTipObservation(t, st, tipA, "")
 	h := &tipWatchHarness{tip: tipA, now: activeResourceTestTime}
@@ -319,6 +326,7 @@ func TestActiveResourceTipWatchKeepsAnotherWritersUpkeepTip(t *testing.T) {
 // A reconfigured branch at the same SHA rewrites the row to name the new
 // branch, but the tip is already handled, so upkeep is not called.
 func TestActiveResourceTipWatchRecordsBranchChangeWithoutRefiring(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
 		return tx.RecordRepositoryTipObservation(context.Background(), domain.RepositoryTipObservation{
@@ -343,6 +351,7 @@ func TestActiveResourceTipWatchRecordsBranchChangeWithoutRefiring(t *testing.T) 
 }
 
 func TestActiveResourceWithoutTipWatchReadsNoTip(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	h := &tipWatchHarness{tip: tipA, now: activeResourceTestTime}
 	r := h.reconciler(st)
