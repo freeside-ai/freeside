@@ -236,6 +236,7 @@ func newOnboardIntentFixture(t *testing.T) onboardIntentFixture {
 	if err := os.WriteFile(recipe, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	return onboardIntentFixture{authority: authority, args: []string{
 		"example/repo", "-db", filepath.Join(root, "freeside.db"), "-state-dir", stateDir, "-credentials-dir", credentialsDir,
 		"-registration-id", "91", "-repository-id", "55", "-account", "example", "-account-id", "42",

@@ -13,8 +13,7 @@ import (
 func TestCommandBackupBindingMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0015_")
+	db := openRawThrough(t, "0015_")
 
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO attention_items

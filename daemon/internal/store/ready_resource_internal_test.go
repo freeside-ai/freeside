@@ -142,8 +142,7 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0036_")
+	db := openRawThrough(t, "0036_")
 	if got := rawVersion(t, db); got != 35 {
 		t.Fatalf("prior schema version = %d, want 35", got)
 	}
@@ -250,8 +249,7 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 func TestAttentionPRReferenceMigrationBackfillsLegacyFakePublication(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0036_")
+	db := openRawThrough(t, "0036_")
 
 	runID := domain.RunID("run-legacy-fake-ready")
 	fixedTime := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)

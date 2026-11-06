@@ -217,6 +217,7 @@ func TestReattemptTaskRetriesFailedSpecification(t *testing.T) {
 func TestReattemptTaskWithoutCampaignRetriesItsSpecificationRun(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)

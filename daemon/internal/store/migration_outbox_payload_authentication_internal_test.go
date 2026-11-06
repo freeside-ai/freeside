@@ -18,8 +18,7 @@ const migratedLegacyPublicationKey = "publish/legacy-publication/publish.publica
 func TestOutboxPayloadAuthenticationMigrationMarksLegacyAndQuarantinesInvalid(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0039_")
+	db := openRawThrough(t, "0039_")
 	legacyPayload, err := json.Marshal(map[string]any{
 		"identity":         "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
 		"invocation_id":    "legacy-publication",
@@ -152,8 +151,7 @@ func TestRestoreRejectsWeakenedPublicationInsertGuard(t *testing.T) {
 
 func migratedLegacyPublicationStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0039_")
+	db := openRawThrough(t, "0039_")
 	payload, err := json.Marshal(map[string]any{
 		"identity":         "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
 		"invocation_id":    "legacy-publication",

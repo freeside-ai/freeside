@@ -212,6 +212,7 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 		CompositionPath: manifestPath, RequireComposition: true, SubmissionID: "composition-test",
 		ProjectID: "proj-submit",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	result, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -463,6 +464,7 @@ func TestSubmitRefusesALaunchManifestWithoutItsDeputy(t *testing.T) {
 	root := t.TempDir()
 	writeLaunchManifest(t, root, func(*compositionManifest) {})
 	dbPath := filepath.Join(root, "freeside.db")
+	seedTemplateStore(t, dbPath)
 	_, err := runSubmitCommand(t.Context(), launchSubmitConfig(t, root, dbPath))
 	if !errors.Is(err, domain.ErrParentKeyMismatch) || !strings.Contains(err.Error(), "no deputy serves") {
 		t.Fatalf("submit with no deputy: %v", err)
@@ -512,6 +514,7 @@ func TestSubmitReplaysAV1Manifest(t *testing.T) {
 	if err := os.WriteFile(manifestPath, legacy, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	if _, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
 		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
@@ -1345,6 +1348,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit-message",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	submitted, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1456,6 +1460,7 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 
 	missing := base
 	missing.TaskPath = filepath.Join(root, "absent.md")
+	seedTemplateStore(t, base.DBPath)
 	if _, err := runSubmitCommand(ctx, missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing spec error = %v, want ErrNotExist", err)
 	}
@@ -1598,6 +1603,7 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 		ProjectID:    "proj-submit",
 	}
 
+	seedTemplateStore(t, cfg.DBPath)
 	declared, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -1697,6 +1703,7 @@ func TestSubmitCommandEmptyDependencyDeclarationConverges(t *testing.T) {
 		WorkUnitPath: workUnitPath,
 		ProjectID:    "proj-submit",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)

@@ -14,6 +14,7 @@ func TestSubmitDeclaredBranchPersistsAndChangesRunIdentity(t *testing.T) {
 	root := t.TempDir()
 	work, policy, publicationPath := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{DBPath: filepath.Join(root, "freeside.db"), TaskPath: work, PolicyPath: policy, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath, ProjectID: "proj-submit"}
+	seedTemplateStore(t, cfg.DBPath)
 	initial, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +38,7 @@ func TestSubmitDeclaredBranchPersistsAndChangesRunIdentity(t *testing.T) {
 	// A second store: in the first the declared branch is a duplicate of the
 	// unfinished task, and the identity is what this test compares.
 	cfg.DBPath = filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, cfg.DBPath)
 	declared, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

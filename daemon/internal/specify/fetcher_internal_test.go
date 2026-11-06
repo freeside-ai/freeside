@@ -1,7 +1,6 @@
 package specify
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"net"
@@ -11,6 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestPublicResearchIPRejectsSpecialUseSpace(t *testing.T) {
@@ -50,11 +50,7 @@ func TestPublicResearchIPRejectsSpecialUseSpace(t *testing.T) {
 // than handing either reading to the specifier, and never refetches.
 func TestRecoverRejectsAMixedResearchEnvelope(t *testing.T) {
 	t.Parallel()
-	st, err := store.Open(context.Background(), t.TempDir()+"/state.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, t.TempDir()+"/state.db", store.Options{})
 	blobs, err := signet.NewBlobStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

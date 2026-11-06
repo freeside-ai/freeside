@@ -16,8 +16,7 @@ import (
 func TestReviewRecoveryMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0032_")
+	db := openRawThrough(t, "0032_")
 	if got := rawVersion(t, db); got != 31 {
 		t.Fatalf("prior schema version = %d, want 31", got)
 	}

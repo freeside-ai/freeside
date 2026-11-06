@@ -72,6 +72,7 @@ func TestAuthAddCodexEnrollsAndListsTheEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
+	seedTemplateStore(t, dbPath)
 	err = runAuthAddCommand(context.Background(), []string{
 		"-db", dbPath, "-client", "codex_cli", "-auth-identity", "codex-primary",
 		"-route", "openai-subscription", "-cost-owner", "operator", "-project", "project-1",
@@ -116,6 +117,7 @@ func TestAuthAddCodexEnrollsAndListsTheEnrollment(t *testing.T) {
 func TestAuthAddClaudeFailureLeavesARetryableEnrollment(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	var stdout, stderr bytes.Buffer
+	seedTemplateStore(t, dbPath)
 	err := runAuthAddCommand(context.Background(), claudeAuthAddArgs(dbPath),
 		strings.NewReader(authAddTestToken+"\n"), &stdout, &stderr, authAddTestDeps())
 	if err == nil || !strings.Contains(err.Error(), "runtime unavailable") {
@@ -245,6 +247,7 @@ func TestMaskAccountBinding(t *testing.T) {
 
 func TestAuthListOnAnEmptyStore(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(context.Background(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)

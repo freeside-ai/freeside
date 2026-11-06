@@ -16,12 +16,14 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestSnapshotWithoutDaemon(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
+	storetest.Copy(t, dbPath)
 	st, err := store.Open(t.Context(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +68,7 @@ func TestSnapshotRejectsBadArguments(t *testing.T) {
 func TestSnapshotThroughExclusiveDaemon(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
+	seedTemplateStore(t, dbPath)
 	// The dev tier selects exclusive locking. Its supervised-path guards
 	// run in main, not run, so a temporary database is safe here.
 	h, err := run(t.Context(), nil, config{Environment: environmentDev, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})

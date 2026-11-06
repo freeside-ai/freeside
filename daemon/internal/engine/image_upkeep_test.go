@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -277,11 +278,7 @@ func newUpkeepHarness(t *testing.T, st *store.Store, repo upkeepRepo, registrySe
 
 func openUpkeepStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	return st
 }
 

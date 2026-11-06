@@ -409,11 +409,11 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
+	copySnapshotThrough(t, path, "0058_")
 	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatalf("openDB: %v", err)
 	}
-	migrateThrough(t, ctx, db, "0058_")
 	if got := rawVersion(t, db); got != 57 {
 		t.Fatalf("prior schema version = %d, want 57", got)
 	}
@@ -500,11 +500,11 @@ func TestAttentionDecisionSurfacesMigrationRetiresLegacyAdjudicate(t *testing.T)
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
+	copySnapshotThrough(t, path, "0058_")
 	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrateThrough(t, ctx, db, "0058_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -625,11 +625,11 @@ func TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
+	copySnapshotThrough(t, path, "0059_")
 	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrateThrough(t, ctx, db, "0059_")
 	if got := rawVersion(t, db); got != 58 {
 		t.Fatalf("prior schema version = %d, want 58", got)
 	}

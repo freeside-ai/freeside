@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -36,11 +37,7 @@ func (v conformanceVolumes) AuthStoreVolume(context.Context, domain.AuthIdentity
 }
 
 func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapter, err := agentbaseline.ClaudeWardAdapter()
 	if err != nil {
 		t.Fatal(err)
@@ -116,11 +113,7 @@ func recordTestClaudeAdapterConformance(ctx context.Context, st *store.Store, at
 }
 
 func TestRecordObservedAdapterConformance(t *testing.T) {
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	provedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	observed := slices.DeleteFunc(testObservedClaudeCapabilities(), func(c domain.LaunchCapability) bool { return c == domain.LaunchCapMutationTools })
 	observed = append(observed, domain.LaunchCapAuxiliaryInferenceControl)

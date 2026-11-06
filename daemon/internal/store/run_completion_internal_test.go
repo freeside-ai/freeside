@@ -19,8 +19,7 @@ import (
 func TestWorkUnitCompletedMilestoneMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0066_")
+	db := openRawThrough(t, "0066_")
 	if got := rawVersion(t, db); got != 65 {
 		t.Fatalf("prior schema version = %d, want 65", got)
 	}

@@ -7,12 +7,15 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func TestUnprovableTaskStopFollowsTheCoverageRecord(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	storetest.Copy(t, path)
+	st, err := store.Open(ctx, path, store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

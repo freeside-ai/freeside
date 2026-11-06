@@ -15,8 +15,7 @@ import (
 func TestShadowReviewConfigurationApprovalMigrationAppliesFromPriorHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0056_")
+	db := openRawThrough(t, "0056_")
 	if got := rawVersion(t, db); got != 55 {
 		t.Fatalf("prior schema version = %d, want 55", got)
 	}

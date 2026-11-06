@@ -21,10 +21,9 @@ import (
 // is not (started, abandoned).
 func TestBackfillTaskLifecycleFactsClassifiesLegacyTasks(t *testing.T) {
 	ctx := t.Context()
-	db := openRaw(t)
 	// Seed legacy rows at the pre-0072 schema, then migrate to head so the
 	// backfill runs exactly as it would on a real upgrade.
-	migrateThrough(t, ctx, db, "0072_")
+	db := openRawThrough(t, "0072_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -470,8 +469,7 @@ func TestTaskReconstructionRejectsCoherentRunRetarget(t *testing.T) {
 
 func TestTaskMigrationDoesNotGroupOrphanThroughForgedAttemptColumn(t *testing.T) {
 	ctx := t.Context()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0070_")
+	db := openRawThrough(t, "0070_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -516,8 +514,7 @@ func TestTaskMigrationAuthenticatesStartedLabelIntake(t *testing.T) {
 	for _, mutation := range []string{"", "declaration", "occurrence"} {
 		t.Run(mutation, func(t *testing.T) {
 			ctx := t.Context()
-			db := openRaw(t)
-			migrateThrough(t, ctx, db, "0070_")
+			db := openRawThrough(t, "0070_")
 			dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
 			if err != nil {
 				t.Fatal(err)
@@ -579,8 +576,7 @@ func TestTaskMigrationAuthenticatesStartedLabelIntake(t *testing.T) {
 
 func TestTaskMigrationRetainsUnstartedLabelIntake(t *testing.T) {
 	ctx := t.Context()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0070_")
+	db := openRawThrough(t, "0070_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}

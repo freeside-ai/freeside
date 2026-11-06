@@ -99,8 +99,7 @@ func (f externalCycleFixture) insertRaw(t *testing.T, d domain.ExternalFindingDi
 func TestExternalFindingDispositionMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0090_")
+	db := openRawThrough(t, "0090_")
 	if got := rawVersion(t, db); got != 89 {
 		t.Fatalf("prior schema version = %d, want 89", got)
 	}

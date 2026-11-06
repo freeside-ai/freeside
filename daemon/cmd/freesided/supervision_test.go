@@ -145,6 +145,7 @@ func TestReadinessGolden(t *testing.T) {
 func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
 	start := func() string {
 		t.Helper()
 		h, err := run(t.Context(), nil, config{Environment: environmentProd, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
@@ -193,6 +194,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	var clockMu sync.Mutex
 	clockNow := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithCancel(context.Background())
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment:       environmentDev,
 		DBPath:            filepath.Join(root, "freeside.db"),
@@ -278,6 +280,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	lifetime, cancelLifetime := context.WithCancel(context.Background())
+	seedTemplateStore(t, dbPath)
 	h, err := run(lifetime, nil, config{
 		Environment:       environmentEphemeral,
 		DBPath:            dbPath,

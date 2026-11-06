@@ -43,8 +43,7 @@ func openProjectImageStore(t *testing.T) *Store {
 func TestProjectImageMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0016_")
+	db := openRawThrough(t, "0016_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
@@ -229,8 +228,7 @@ func projectImageEnvironmentColumn(t *testing.T, s *Store, id domain.Digest) sql
 func TestProjectImageEnvironmentMigrationKeepsLegacyRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0091_")
+	db := openRawThrough(t, "0091_")
 
 	legacy := testProjectImage(t)
 	current, err := json.Marshal(legacy)

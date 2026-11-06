@@ -122,8 +122,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 func TestMintAuditIssuesMigrationPreservesLegacyRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0092_")
+	db := openRawThrough(t, "0092_")
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO publish_mint_audits (
     minted_at, registration_id, installation_id, repository_id, repo,

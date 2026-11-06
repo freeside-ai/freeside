@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func seedTestImage(t *testing.T, ref string) domain.ProjectImage {
@@ -47,11 +48,7 @@ func readSeededPointer(t *testing.T, st *store.Store, repositoryID int64) (domai
 // The configured agent image seeds a repository's pointer only when it has
 // none; once a pointer exists, a start with another configured image keeps it.
 func TestSeedAdmittedImagePointerSeedsOnlyWhenAbsent(t *testing.T) {
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	first, second := seedTestImage(t, "b"), seedTestImage(t, "d")
 	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
 		if err := tx.RecordProjectImage(t.Context(), first); err != nil {

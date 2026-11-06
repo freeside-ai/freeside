@@ -18,8 +18,7 @@ import (
 func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0014_")
+	db := openRawThrough(t, "0014_")
 
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body)
@@ -69,8 +68,7 @@ func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 func TestCurrentImportStartsMigrationAndReconstruction(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0047_")
+	db := openRawThrough(t, "0047_")
 	if got := rawVersion(t, db); got != 46 {
 		t.Fatalf("prior schema version = %d, want 46", got)
 	}
@@ -106,8 +104,7 @@ func TestCurrentImportStartsMigrationAndReconstruction(t *testing.T) {
 func TestExecutionIdentityParallelismIndexAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0042_")
+	db := openRawThrough(t, "0042_")
 
 	var before int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema

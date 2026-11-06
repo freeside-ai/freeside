@@ -66,11 +66,11 @@ func TestUsagePoolsMigrationNeverRaisesConcurrency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := t.TempDir() + "/usage-pools.db"
+	copySnapshotThrough(t, path, "0111_")
 	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrateThrough(t, ctx, db, "0111_")
 	const recorded = "2026-01-02T03:04:05Z"
 	seeds := []struct {
 		id, provider, pool string

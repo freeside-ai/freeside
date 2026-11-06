@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestShadowReviewConfigurationApprovalTwoPassAndReplay(t *testing.T) {
@@ -128,13 +129,7 @@ func assertShadowConfigurationOperationGolden(
 
 func openShadowConfigurationOperationStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(
-		context.Background(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	return st
 }
 

@@ -16,6 +16,7 @@ import (
 func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	root := t.TempDir()
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),

@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type publicationBackupCase struct {
@@ -202,11 +203,7 @@ func TestHistoricalSpecificationCheckpointRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.Open(ctx, path, store.Options{BackupHealthSource: source})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := storetest.Open(t, path, store.Options{BackupHealthSource: source})
 	configuration := digestProductionBytes([]byte("backup regression backend"))
 	conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: domain.ConformancePassed,

@@ -28,6 +28,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: work,
 		PolicyPath: policyFile, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationFile, ProjectID: "released-import",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	submitted, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)

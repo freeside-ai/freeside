@@ -17,6 +17,7 @@ import (
 func TestDefaultExecutionDisabled(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",

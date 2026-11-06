@@ -148,8 +148,7 @@ func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
 func TestHandoffMigrationLeavesLegacyLeasedIdentitiesUnboundAndRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0019_")
+	db := openRawThrough(t, "0019_")
 	recordedAt := "2026-07-28T12:00:00Z"
 	identityBody := `{"identity":{"id":"auth-legacy","provider":"claude","auth_store_mutation_lease":true,"max_parallel_executions":1,"refresh_strategy":"refresh_on_demand","supports_read_only_auth_snapshot":false},"recorded_at":"2026-07-28T12:00:00Z"}`
 	if _, err := db.ExecContext(ctx, `
@@ -214,8 +213,7 @@ VALUES ('auth-legacy', 'inv-legacy', 1, '2026-07-28T12:00:00Z',
 func TestFailedHandoffOutcomeMigrationAppliesFromPriorHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0022_")
+	db := openRawThrough(t, "0022_")
 
 	const (
 		runID = "journal-before-failed-outcome"
@@ -274,8 +272,7 @@ WHERE run_id = ?`, runID).Scan(&gotOutcome, &gotInstructions, &gotBody); err != 
 func TestReadHoldMigrationAppliesFromPriorHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0082_")
+	db := openRawThrough(t, "0082_")
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO auth_identities (id, provider, auth_store_mutation_lease, auth_store_volume,
     max_parallel_executions, refresh_strategy, supports_read_only_auth_snapshot,

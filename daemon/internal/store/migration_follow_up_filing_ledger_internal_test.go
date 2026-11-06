@@ -17,9 +17,7 @@ import (
 // and they then accept rows that reference a preserved instance.
 func TestFollowUpFilingLedgerMigrationAppliesToExistingStore(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-
-	migrateThrough(t, ctx, db, "0070_")
+	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
 	if err != nil {
 		t.Fatal(err)
@@ -117,9 +115,7 @@ func TestFollowUpFilingLedgerMigrationAppliesToExistingStore(t *testing.T) {
 // fail-closed row into a trusted one.
 func TestFollowUpFilingDispatchIdentityMigrationKeepsLegacyRows(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-
-	migrateThrough(t, ctx, db, "0070_")
+	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
 	if err != nil {
 		t.Fatal(err)

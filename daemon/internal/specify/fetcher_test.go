@@ -2,7 +2,6 @@ package specify_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestDecodeResearchEvidenceClassifiesLegacyContentTypeLimit(t *testing.T) {
@@ -347,12 +347,7 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(context.Background(), t.TempDir()+"/state.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
+	return storetest.Open(t, t.TempDir()+"/state.db", store.Options{})
 }
 
 func response(request *http.Request, status int, contentType, body string) *http.Response {

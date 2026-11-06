@@ -14,8 +14,7 @@ import (
 func TestDeclaredBranchMigrationPreservesV2AndRequiresV3(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0068_")
+	db := openRawThrough(t, "0068_")
 	intent := publicationrecord.Intent{
 		FormatVersion: publicationrecord.IntentFormatHistory,
 		Identity:      domain.Digest("sha256:" + strings.Repeat("a", 64)),

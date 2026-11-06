@@ -18,9 +18,7 @@ import (
 // before 0070.
 func TestEffectProposalApprovalsMigrationPreservesRows(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-
-	migrateThrough(t, ctx, db, "0070_")
+	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
 	if err != nil {
 		t.Fatal(err)

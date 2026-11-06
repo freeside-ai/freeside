@@ -20,6 +20,7 @@ import (
 
 func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	root := t.TempDir()
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral, DBPath: filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"), ListenAddr: "127.0.0.1:0",
@@ -451,6 +452,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 	sink := newNtfySink(t, http.StatusOK)
 	root := t.TempDir()
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(t.Context(), nil, config{
 		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),

@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
@@ -181,6 +182,7 @@ func TestObserveSnapshotProjectsPublicationCompletionIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedTopicStore(t, path)
 	st, _, err := topicstore.Open(ctx, path, store.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -459,6 +461,7 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		t.Fatalf("NewReviewRecord: %v", err)
 	}
 
+	seedTopicStore(t, path)
 	st, _, err := topicstore.Open(ctx, path, store.Options{
 		ApprovedRecipes: staleRecipes,
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
@@ -655,11 +658,7 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 func TestObserveSnapshotProjectsShadowEvidence(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, path, store.Options{})
 	now := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
 	run := domain.Run{
 		ID: "run-shadow-observe", ProjectID: "project-shadow",
@@ -886,11 +885,7 @@ func seedAdjudicationRun(
 func TestObserveSnapshotProjectsAdjudicationDispatch(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, path, store.Options{})
 	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 
 	// Run 1 carries the fast-path, model-residue, low-confidence, and
@@ -1283,6 +1278,7 @@ func keys(m map[string]bool) []string {
 func TestObserveConclusionRefusesUnauthenticatedCompletion(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
+	seedTopicStore(t, path)
 	st, _, err := topicstore.Open(ctx, path, store.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -1310,4 +1306,16 @@ func TestObserveConclusionRefusesUnauthenticatedCompletion(t *testing.T) {
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("ObserveConclusion() = %+v, %v, want ErrParentKeyMismatch", conclusion, err)
 	}
+}
+
+// seedTopicStore lays down a topic key and then the migrated template at
+// path, in the order topicstore.Open's store-birth rule needs: a store that
+// exists without its key fails closed. The topicstore.Open that follows
+// opens an existing store with its key and runs no migrations.
+func seedTopicStore(t *testing.T, path string) {
+	t.Helper()
+	if _, err := topicstore.LoadOrCreateKey(path, false); err != nil {
+		t.Fatalf("create topic key: %v", err)
+	}
+	storetest.Copy(t, path)
 }

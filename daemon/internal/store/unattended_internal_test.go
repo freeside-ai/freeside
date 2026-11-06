@@ -24,8 +24,7 @@ func healthPosturePtr(posture domain.HealthPosture) *domain.HealthPosture {
 func TestUnattendedOperationMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0017_")
+	db := openRawThrough(t, "0017_")
 
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1",
@@ -86,8 +85,7 @@ func TestUnattendedOperationMigrationAppliesFromHead(t *testing.T) {
 func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0035_")
+	db := openRawThrough(t, "0035_")
 	if got := rawVersion(t, db); got != 34 {
 		t.Fatalf("prior schema version = %d, want 34", got)
 	}

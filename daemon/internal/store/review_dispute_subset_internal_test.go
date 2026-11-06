@@ -350,8 +350,7 @@ func TestReviewDisputeRowsMigration(t *testing.T) {
 	for _, name := range []string{"valid", "non routed", "partial", "duplicate", "corrupt"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			db := openRaw(t)
-			migrateThrough(t, ctx, db, "0098_")
+			db := openRawThrough(t, "0098_")
 			candidate := item
 			binding := *item.ReviewDispute
 			binding.Findings = slices.Clone(binding.Findings)

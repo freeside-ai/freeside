@@ -20,6 +20,7 @@ func TestResumeTargetsExactLiveRunAndRefusesTerminal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +105,7 @@ func TestResumeTaskUsesNewestRun(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +174,7 @@ func TestResumeTaskBeforeSpecificationApproval(t *testing.T) {
 	root := t.TempDir()
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	dbPath := filepath.Join(root, "state.db")
+	seedTemplateStore(t, dbPath)
 	submitted, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath,
 		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath, ProjectID: "project-resume",
@@ -206,6 +209,7 @@ func TestResumeTaskBeforeSpecificationApproval(t *testing.T) {
 func TestResumeTaskWithoutRuns(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)

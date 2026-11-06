@@ -243,8 +243,7 @@ func TestCodexReenrollmentVerifiedRequiresUnexpiredEvidence(t *testing.T) {
 
 func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0039_")
+	db := openRawThrough(t, "0039_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
@@ -264,8 +263,7 @@ func TestCodexReenrollmentMigrationAppliesFromHead(t *testing.T) {
 
 func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0039_")
+	db := openRawThrough(t, "0039_")
 	identities := []domain.AuthIdentityID{
 		"codex-legacy",
 		"codex-\"slash\\control\nunicode-鳥",
@@ -412,8 +410,7 @@ func TestCodexReenrollmentMigrationNormalizesOnlyAuthenticatedLegacyMarkers(t *t
 
 func TestCodexReenrollmentMigrationNoMatchPreservesRevision(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0039_")
+	db := openRawThrough(t, "0039_")
 	var before int64
 	if err := db.QueryRowContext(ctx, `SELECT revision FROM server_state WHERE id = 1`).Scan(&before); err != nil {
 		t.Fatal(err)

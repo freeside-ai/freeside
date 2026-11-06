@@ -182,6 +182,7 @@ func TestRetainedMalformedEgressSubmissionDoesNotCreateWork(t *testing.T) {
 	if _, err := retainSubmission(prepared); err != nil {
 		t.Fatal(err)
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	if _, err := runSubmitCommand(t.Context(), submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID}); !errors.Is(err, domain.ErrInvalidEgressProfile) {
 		t.Fatalf("journal-only retry = %v, want invalid egress profile", err)
 	}
