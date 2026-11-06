@@ -560,6 +560,27 @@ func buildProductionReplayWithFilesAt(
 	for name, content := range files {
 		writeFile(t, workspace, name, content)
 	}
+	return exportProductionReplay(
+		t, h, h.baseSHA, workspace, runID, specDigest, specBody, boundIssue, invocationID, commitDate, allowlist,
+	)
+}
+
+// exportProductionReplay exports workspace as a candidate's whole tree and
+// imports it onto base, which is the harness base unless a test builds a
+// candidate on a tip the base advanced to.
+func exportProductionReplay(
+	t *testing.T,
+	h *publicationHarness,
+	base, workspace string,
+	runID domain.RunID,
+	specDigest domain.Digest,
+	specBody []byte,
+	boundIssue *int,
+	invocationID domain.InvocationID,
+	commitDate time.Time,
+	allowlist []string,
+) engine.ProductionReplay {
+	t.Helper()
 	handoff := filepath.Join(t.TempDir(), "handoff")
 	manifest, err := export.Export(os.DirFS(workspace), handoff, export.Options{})
 	if err != nil {
@@ -590,7 +611,7 @@ func buildProductionReplayWithFilesAt(
 		t.Fatal(err)
 	}
 	options := importer.Options{
-		BaseSHA: h.baseSHA, CommitDate: commitDate,
+		BaseSHA: base, CommitDate: commitDate,
 		AuthorName:  productionPublicationMetadata().CommitAuthor.Name(),
 		AuthorEmail: productionPublicationMetadata().CommitAuthor.Email(),
 		Policy:      policy,
@@ -615,7 +636,7 @@ func buildProductionReplayWithFilesAt(
 	}
 	return engine.ProductionReplay{
 		InvocationID:    invocationID,
-		ObservedBaseSHA: h.baseSHA, HeadSHA: imported.CommitSHA,
+		ObservedBaseSHA: base, HeadSHA: imported.CommitSHA,
 		Manifest: manifest, ManifestDigest: manifestDigest, ImportOptions: options,
 	}
 }

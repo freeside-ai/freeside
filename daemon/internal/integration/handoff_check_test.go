@@ -277,26 +277,6 @@ func TestHandoffBindsTheClosureToTheTip(t *testing.T) {
 	}
 }
 
-// TestHandoffConflictBlocks: a head that conflicts with the tip has no merge
-// to verify, so the run ends on publish_blocked naming the conflict.
-func TestHandoffConflictBlocks(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	p.startAndRecordExport(t)
-	_, reviews := p.advanceBaseBeforePublication(t, "README.md", "conflicting upstream change\n")
-	for range 3 {
-		if _, err := p.reconcileLanes(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	p.assertHandoffBlocked(t, domain.PublicationBlockHandoffConflict)
-	p.assertNoReviewAtTheTip(t, reviews)
-	if len(reviews.requests) != 1 || p.room.runs != 1 {
-		t.Fatalf("conflicting handoff reviewed %d times, verified %d times, want 1 and 1",
-			len(reviews.requests), p.room.runs)
-	}
-}
-
 // failHandoffVerification rebuilds the engine so the room fails every
 // verification after the run's own, which the handoff's verification is.
 func (p *productionPublicationHarness) failHandoffVerification(t *testing.T, fail func(*productionRoom)) {
@@ -307,29 +287,6 @@ func (p *productionPublicationHarness) failHandoffVerification(t *testing.T, fai
 			return nil
 		},
 	}, true)
-}
-
-// TestHandoffVerificationFailureBlocks: a merge into the tip that fails
-// verification ends the run on publish_blocked naming the handoff's
-// verification, with nothing published and no later pass verifying again.
-func TestHandoffVerificationFailureBlocks(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	p.startAndRecordExport(t)
-	p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
-	p.failHandoffVerification(t, func(room *productionRoom) { room.fail = true })
-	for range 3 {
-		if _, err := p.reconcileLanes(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	p.assertHandoffBlocked(t, domain.PublicationBlockHandoffVerification)
-	if p.room.runs != 2 {
-		t.Fatalf("failed handoff verified %d times, want 2", p.room.runs)
-	}
-	if check := p.handoffCheck(t); check.Merge != nil {
-		t.Fatalf("failed handoff recorded merge %#v", check.Merge)
-	}
 }
 
 // assertHandoffStopEvidence checks a handoff the tip stopped: it blocked on

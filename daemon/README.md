@@ -3661,6 +3661,16 @@ depends on the cycle:
   no image the run may verify with serves while upkeep has nothing
   pending, block the same way, their evidence naming the cause and the
   tip.
+  A code change cannot fix these stops, so they block. A textual conflict
+  with the tip, or a merge whose verification fails, does not block: the
+  daemon seals a `handoff_conflict` successor at the tip and starts a
+  remediation there (issue #2646). Its input carries the conflicted paths,
+  or the failed verification's steps and transcript tail, and its new head
+  is verified, reviewed, and handed off again under the successor's own
+  publication. The run blocks on the conflict's reason as before only when
+  the review bound has no room for the remediation's review, the head is
+  someone else's (a `head_changed` re-entry), or the task re-evaluates a
+  blocked run's trust.
 - **Re-entered cycle:** The cycle stops, and the stop item's reason names the
   clause and the commit.
 
