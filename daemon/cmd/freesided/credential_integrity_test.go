@@ -108,6 +108,7 @@ func (absentVolumeRuntime) ListVolumes(context.Context) ([]ward.VolumeSummary, e
 // attention items, the logs, or the database. A later pass with no daemon
 // reports the recorded marks and observes nothing.
 func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	// The store opens the way the daemon opens it, over an initialized
@@ -346,6 +347,7 @@ func integrityFinding(t *testing.T, report []byte) operations.DoctorFinding {
 // a replay of that result, so a later pass never reuses an earlier pass's
 // observation, and no probe stays no probe.
 func TestCredentialIntegrityProbeRunOnce(t *testing.T) {
+	t.Parallel()
 	if replay := credentialIntegrityProbe(nil).runOnce(t.Context()); replay != nil {
 		t.Error("a nil probe produced a replay, so a pass with no probe would claim it probed")
 	}

@@ -19,6 +19,7 @@ import (
 )
 
 func TestRenewCodexRecoveryWithExecutionDisabled(t *testing.T) {
+	t.Parallel()
 	db := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, db)
 	_, output, _, err := runEnrollCodexAgainst(t, db)
@@ -111,6 +112,7 @@ func renewalCommandFixture(t *testing.T, dbPath string, approved map[domain.Dige
 }
 
 func TestRenewCodexCommandReadyWithoutHoldForLegacyDisabledIdentity(t *testing.T) {
+	t.Parallel()
 	args := renewalCommandFixture(t, filepath.Join(t.TempDir(), "freeside.db"), nil)
 	refresher := &commandCodexAuthRefresher{}
 	var stdout, stderr bytes.Buffer
@@ -140,6 +142,7 @@ func TestRenewCodexCommandReadyWithoutHoldForLegacyDisabledIdentity(t *testing.T
 }
 
 func TestRenewCodexCommandRefusesSchemaMigration(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	args := renewalCommandFixture(t, dbPath, nil)
 	version, err := store.CurrentSchemaVersion()
@@ -170,6 +173,7 @@ func TestRenewCodexCommandRefusesSchemaMigration(t *testing.T) {
 }
 
 func TestRenewCodexCommandFailsClosedWithoutApprovedRecipe(t *testing.T) {
+	t.Parallel()
 	db := filepath.Join(t.TempDir(), "freeside.db")
 	recipe := seedRecipeGatedEvidence(t, db)
 	args := renewalCommandFixture(t, db, map[domain.Digest]bool{recipe: true})
@@ -186,6 +190,7 @@ func TestRenewCodexCommandFailsClosedWithoutApprovedRecipe(t *testing.T) {
 }
 
 func TestRenewCodexCommandFlagValidation(t *testing.T) {
+	t.Parallel()
 	valid := []string{"-db", "db", "-auth-identity", "id", "-auth-store-root", "root", "-auth-store", "store"}
 	for i := 0; i < len(valid); i += 2 {
 		t.Run(valid[i], func(t *testing.T) {

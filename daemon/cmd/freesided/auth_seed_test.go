@@ -84,6 +84,7 @@ func TestAuthSeedExhaustedMarksAModelWindow(t *testing.T) {
 }
 
 func TestAuthSeedExhaustedUsesTheRunningDaemon(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{

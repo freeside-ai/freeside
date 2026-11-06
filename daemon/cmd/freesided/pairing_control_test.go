@@ -23,6 +23,7 @@ import (
 )
 
 func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// This valid state path cannot itself hold a macOS Unix socket address.
 	stateDir := filepath.Join(root, strings.Repeat("long-state-", 12))
@@ -277,6 +278,7 @@ func startPairingControlTest(t *testing.T, peerUID func(*net.UnixConn) (uint32, 
 }
 
 func TestPairingControlRejectsUnauthorizedPeers(t *testing.T) {
+	t.Parallel()
 	for name, peerUID := range map[string]func(*net.UnixConn) (uint32, error){
 		"different user": func(conn *net.UnixConn) (uint32, error) {
 			uid, err := unixPeerUID(conn)
@@ -298,6 +300,7 @@ func TestPairingControlRejectsUnauthorizedPeers(t *testing.T) {
 }
 
 func TestPairingControlRejectsWrongDaemonAndConflictingOwner(t *testing.T) {
+	t.Parallel()
 	p, calls := startPairingControlTest(t, nil)
 	wrongState := t.TempDir()
 	address, err := os.ReadFile(filepath.Join(p.stateDir, pairingControlFileName))
@@ -326,6 +329,7 @@ func TestPairingControlRejectsWrongDaemonAndConflictingOwner(t *testing.T) {
 }
 
 func TestRunRejectsPairingConflictBeforeOpeningDatabase(t *testing.T) {
+	t.Parallel()
 	p, _ := startPairingControlTest(t, nil)
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, StateDir: p.stateDir, ListenAddr: "127.0.0.1:0"})
@@ -342,6 +346,7 @@ func TestRunRejectsPairingConflictBeforeOpeningDatabase(t *testing.T) {
 }
 
 func TestPairingCodeRefusesUnavailableDaemon(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{nil, {"-state-dir", t.TempDir()}, {"-state-dir", filepath.Join(t.TempDir(), "missing")}, {"unexpected"}} {
 		var stdout bytes.Buffer
 		if err := runPairingCodeCommand(t.Context(), args, &stdout, io.Discard); err == nil || stdout.Len() != 0 {
@@ -383,6 +388,7 @@ func TestPairingCodeRefusesUnavailableDaemon(t *testing.T) {
 }
 
 func TestPairingControlCreatesStateOnlyOnDaemonStartup(t *testing.T) {
+	t.Parallel()
 	stateDir := filepath.Join(t.TempDir(), "fresh", "state")
 	if err := runPairingCodeCommand(t.Context(), []string{"-state-dir", stateDir}, io.Discard, io.Discard); err == nil {
 		t.Fatal("command accepted an absent daemon state directory")
@@ -404,6 +410,7 @@ func TestPairingControlCreatesStateOnlyOnDaemonStartup(t *testing.T) {
 }
 
 func TestPairingControlCleanupPreservesReplacements(t *testing.T) {
+	t.Parallel()
 	p, _ := startPairingControlTest(t, nil)
 	socketPath := p.listener.Addr().String()
 	movedSocket := socketPath + ".retained"

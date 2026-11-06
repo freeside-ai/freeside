@@ -347,6 +347,7 @@ func withJudgmentCredentialRig(t *testing.T, fn func(r *judgmentCredentialRig)) 
 // daemon reads each generation's volume once, a new generation is read
 // again, and the record says where the bytes came from.
 func TestJudgmentCallsCarryTheirEnrollmentsToken(t *testing.T) {
+	t.Parallel()
 	withJudgmentCredentialRig(t, func(r *judgmentCredentialRig) {
 		// A second enrollment, with the task namer's line moved onto an
 		// agent that names it.
@@ -681,6 +682,7 @@ func TestJudgmentCredentialStaysOutOfEveryOutput(t *testing.T) {
 // The credential source remembers only a token: a nil source and a read that
 // hands back nothing are both the fixed refusal.
 func TestJudgmentCredentialsFailClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const enrollment = domain.ClientEnrollmentID("claude-main/claude_code")
 	var none *judgmentCredentials
@@ -731,6 +733,7 @@ func TestJudgmentCredentialsFailClosed(t *testing.T) {
 // Callers that miss at once share one read, and a caller waiting behind a
 // read that does not end leaves at its own deadline with no token.
 func TestJudgmentCredentialsShareOneReadAndWaitNoLongerThanTheirDeadline(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()
 		const enrollment = domain.ClientEnrollmentID("claude-main/claude_code")

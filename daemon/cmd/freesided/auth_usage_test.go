@@ -197,6 +197,7 @@ func (c *blockingUsageCollector) asked() []domain.ClientEnrollmentID {
 }
 
 func TestAuthUsageCommandsUseTheRunningDaemon(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	collector := &blockingUsageCollector{called: make(chan struct{}, 8), release: make(chan struct{})}
 	seedTemplateStore(t, dbPath)

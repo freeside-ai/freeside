@@ -50,6 +50,7 @@ func claudeAuthAddArgs(dbPath string) []string {
 }
 
 func TestAuthAddCodexEnrollsAndListsTheEnrollment(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	inputRoot, storeRoot := filepath.Join(root, "input"), filepath.Join(root, "store")
@@ -115,6 +116,7 @@ func TestAuthAddCodexEnrollsAndListsTheEnrollment(t *testing.T) {
 // to the runtime: the identity and enrollment are recorded, no generation
 // is, and neither output stream nor the error carries the token.
 func TestAuthAddClaudeFailureLeavesARetryableEnrollment(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	var stdout, stderr bytes.Buffer
 	seedTemplateStore(t, dbPath)
@@ -142,6 +144,7 @@ func TestAuthAddClaudeFailureLeavesARetryableEnrollment(t *testing.T) {
 }
 
 func TestAuthAddClaudeRefusesABadTokenBeforeTouchingTheStore(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	apiKey := "sk-ant-api03-" + strings.Repeat("k", 40)
 	err := runAuthAddCommand(context.Background(), claudeAuthAddArgs(dbPath),
@@ -155,6 +158,7 @@ func TestAuthAddClaudeRefusesABadTokenBeforeTouchingTheStore(t *testing.T) {
 }
 
 func TestAuthAddRequiresEachClientsFlags(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	without := func(args []string, flag string) []string {
 		i := slices.Index(args, flag)
@@ -194,6 +198,7 @@ func TestAuthAddRequiresEachClientsFlags(t *testing.T) {
 }
 
 func TestReadSetupTokenFromAPipe(t *testing.T) {
+	t.Parallel()
 	for name, input := range map[string]string{
 		"bare": authAddTestToken, "newline": authAddTestToken + "\n", "crlf": authAddTestToken + "\r\n",
 	} {
@@ -224,6 +229,7 @@ func TestReadSetupTokenFromAPipe(t *testing.T) {
 }
 
 func TestAuthCommandDispatch(t *testing.T) {
+	t.Parallel()
 	if err := runAuthCommand(context.Background(), nil, nil, io.Discard, io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "usage") {
 		t.Fatalf("no subcommand = %v", err)
@@ -235,6 +241,7 @@ func TestAuthCommandDispatch(t *testing.T) {
 }
 
 func TestMaskAccountBinding(t *testing.T) {
+	t.Parallel()
 	for binding, want := range map[string]string{
 		"": "", "short": "****", "12345678": "****", "123456789": "****6789",
 		"acct-fixture-0001": "****0001",
@@ -246,6 +253,7 @@ func TestMaskAccountBinding(t *testing.T) {
 }
 
 func TestAuthListOnAnEmptyStore(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(context.Background(), dbPath, store.Options{})
