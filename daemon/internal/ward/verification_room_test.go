@@ -129,6 +129,7 @@ func TestProjectImageRoomRunsPreparationAndRecipeNetworkless(t *testing.T) {
 }
 
 func TestProjectImageRoomReadsBoundRecipeWithoutWorkspace(t *testing.T) {
+	t.Parallel()
 	recipe := []byte(`{"commands":[["npm","test"]],"capture":"none"}`)
 	runtime := newFakeRuntime(t)
 	var calls [][]string
@@ -176,6 +177,7 @@ func TestProjectImageRoomReadsBoundRecipeWithoutWorkspace(t *testing.T) {
 }
 
 func TestProjectImageRoomRejectsUnauthenticatedRecipeOutput(t *testing.T) {
+	t.Parallel()
 	recipe := []byte(`{"commands":[["npm","test"]],"capture":"none"}`)
 	tests := []struct {
 		name   string
@@ -203,6 +205,7 @@ func TestProjectImageRoomRejectsUnauthenticatedRecipeOutput(t *testing.T) {
 }
 
 func TestProjectImageRoomRecipeCancellationStillReapsOwnedContainer(t *testing.T) {
+	t.Parallel()
 	recipe := []byte(`{"commands":[["npm","test"]],"capture":"none"}`)
 	runtime := newFakeRuntime(t)
 	var calls [][]string
@@ -230,6 +233,7 @@ func TestProjectImageRoomRecipeCancellationStillReapsOwnedContainer(t *testing.T
 // A verification command's output keeps its end, where a failing command
 // prints its diagnosis, and the truncation is reported.
 func TestVerificationOutputKeepsItsTail(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "runtime")
 	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf 'noise-'\nprintf 'FAIL\\n' >&2\nexit 1\n"), 0o700)
 	result, err := runVerificationCommand(t.Context(), path, nil, 5)
@@ -241,6 +245,7 @@ func TestVerificationOutputKeepsItsTail(t *testing.T) {
 // Recipe extraction still fails closed on output past its cap, whichever
 // end the bound keeps.
 func TestRecipeReadCommandFailsClosedOnTruncation(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "runtime")
 	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf '0123456789'\n"), 0o700)
 	result, err := runRecipeReadCommand(t.Context(), path, nil, 4)
@@ -254,6 +259,7 @@ func TestRecipeReadCommandFailsClosedOnTruncation(t *testing.T) {
 }
 
 func TestRecipeReadCommandSeparatesRuntimeDiagnostics(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "runtime")
 	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf 'runtime progress\\n' >&2\nprintf 'recipe bytes'\n"), 0o700)
 	result, err := runRecipeReadCommand(t.Context(), path, nil, 1<<10)
@@ -263,6 +269,7 @@ func TestRecipeReadCommandSeparatesRuntimeDiagnostics(t *testing.T) {
 }
 
 func TestProjectImageRoomStopsAfterPreparationFailure(t *testing.T) {
+	t.Parallel()
 	runtime := newFakeRuntime(t)
 	var calls [][]string
 	room := newProjectImageRoom(
@@ -282,6 +289,7 @@ func TestProjectImageRoomStopsAfterPreparationFailure(t *testing.T) {
 }
 
 func TestProjectImageRoomCancellationStillReapsOwnedContainer(t *testing.T) {
+	t.Parallel()
 	runtime := newFakeRuntime(t)
 	var calls [][]string
 	ctx, cancel := context.WithCancel(t.Context())
@@ -307,6 +315,7 @@ func TestProjectImageRoomCancellationStillReapsOwnedContainer(t *testing.T) {
 }
 
 func TestProjectImageRoomRefusesForeignRuntimeIdentity(t *testing.T) {
+	t.Parallel()
 	runtime := newFakeRuntime(t)
 	runner := func(_ context.Context, _ string, args []string, _ int64) (verify.StepResult, error) {
 		var cidPath string
@@ -346,6 +355,7 @@ func TestProjectImageRoomRefusesForeignRuntimeIdentity(t *testing.T) {
 // holds no route out: the rebuild fetched what the candidate declares, and
 // verification still fetches nothing.
 func TestProjectImageRoomIsNetworklessForARebuiltImage(t *testing.T) {
+	t.Parallel()
 	recipe := []byte(`{"commands":[["verify"]],"capture":"none"}`)
 	rebuilt, err := domain.NewProjectImage(domain.ProjectImageInput{
 		Repository: "owner/repo", RepositoryID: 42, CommitSHA: strings.Repeat("b", 40),

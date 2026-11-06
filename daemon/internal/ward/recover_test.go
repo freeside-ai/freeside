@@ -147,6 +147,7 @@ func (fx *recoveryFixture) wantOpen(t *testing.T, runID string) {
 // TestRecoveryOutcomeEnum pins the enum shape: every registered member is
 // valid, and the zero value is invalid by design.
 func TestRecoveryOutcomeEnum(t *testing.T) {
+	t.Parallel()
 	for _, o := range AllRecoveryOutcomes {
 		if !o.valid() {
 			t.Errorf("registered outcome %q reports invalid", o)
@@ -163,6 +164,7 @@ func TestRecoveryOutcomeEnum(t *testing.T) {
 // records are tampered in the journal itself — Recover reads the row, so the
 // row is the trust boundary.
 func TestRecoverRefusals(t *testing.T) {
+	t.Parallel()
 	completed := HandoffCompleted
 	cases := []struct {
 		name    string
@@ -275,6 +277,7 @@ func TestRecoverRefusals(t *testing.T) {
 }
 
 func TestRecoverRefusesMismatchedBoundAuthStoreVolume(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	fx.openRecord(t, hs)
@@ -312,6 +315,7 @@ func (j *deadlineJournal) Get(ctx context.Context, runID string) (HandoffJournal
 // detached teardown, so it must survive the run deadline the same way — a
 // spurious audit failure after teardown voids delivered work.
 func TestAuditRunAbsentDetachesFromExpiredContext(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	b := fx.backend(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -326,6 +330,7 @@ func TestAuditRunAbsentDetachesFromExpiredContext(t *testing.T) {
 // journal and lease-store reads too, so an adapter that honors its context
 // cannot block restart recovery indefinitely.
 func TestRecoverBoundsDurableReads(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -343,6 +348,7 @@ func TestRecoverBoundsDurableReads(t *testing.T) {
 // TestRecoverMissingRecordRefuses: a run the journal has never seen has
 // nothing durable to recover; the refusal touches nothing.
 func TestRecoverMissingRecordRefuses(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	if _, err := fx.recover(t, hs.RunID, hs); err == nil {
@@ -358,6 +364,7 @@ func TestRecoverMissingRecordRefuses(t *testing.T) {
 // TestRecoverNilJournalRefuses: recovery without a journal has nothing
 // durable to commit to.
 func TestRecoverNilJournalRefuses(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -370,6 +377,7 @@ func TestRecoverNilJournalRefuses(t *testing.T) {
 // TestRecoverLeasedNilLeaserRefuses: a leased record without a leaser cannot
 // end its window and refuses up front.
 func TestRecoverLeasedNilLeaserRefuses(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	fx.openRecord(t, hs)
@@ -385,6 +393,7 @@ func TestRecoverLeasedNilLeaserRefuses(t *testing.T) {
 // daemon — so the stranded objects, including a still-running writer, are
 // reaped and the loss durably committed.
 func TestRecoverPreWriterCompleteTearsDownAndCommitsLoss(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -413,6 +422,7 @@ func TestRecoverPreWriterCompleteTearsDownAndCommitsLoss(t *testing.T) {
 // TestRecoverUnamendedNonzeroMarkerCommitsFailure closes the crash window
 // after writer exit but before the live daemon amended the journal.
 func TestRecoverUnamendedNonzeroMarkerCommitsFailure(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
@@ -448,6 +458,7 @@ func TestRecoverUnamendedNonzeroMarkerCommitsFailure(t *testing.T) {
 // the journal and the result both carry the kill. A writer still running at recovery is stopped
 // first, and its log read once it is stopped.
 func TestRecoverUnamendedMemoryLimitKillNamesTheKill(t *testing.T) {
+	t.Parallel()
 	for _, running := range []bool{false, true} {
 		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
 			fx := newRecoveryFixture(t)
@@ -491,6 +502,7 @@ func TestRecoverUnamendedMemoryLimitKillNamesTheKill(t *testing.T) {
 // before it amended the failure status: the boot log is gone, the journal
 // carries the kill, and recovery classifies the status from the marker.
 func TestRecoverJournaledMemoryLimitKillNamesTheFailure(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
@@ -517,6 +529,7 @@ func TestRecoverJournaledMemoryLimitKillNamesTheFailure(t *testing.T) {
 // live daemon amended both the kill and the failure status: the journal
 // alone carries the result.
 func TestRecoverAmendedMemoryLimitKillReportsIt(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
@@ -544,6 +557,7 @@ func TestRecoverAmendedMemoryLimitKillReportsIt(t *testing.T) {
 // the only safe current-only values: explicit vendor-instruction absence and
 // the exhaustive trusted-base instruction policy.
 func TestRecoverLegacyPreWriterCompleteCommitsLoss(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openLegacyRecord(t, hs)
@@ -570,6 +584,7 @@ func TestRecoverLegacyPreWriterCompleteCommitsLoss(t *testing.T) {
 // mark and a provably-owned workspace, recovery runs a fresh exporter and
 // releases a freshly verified export; the record closes completed.
 func TestRecoverWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -643,6 +658,7 @@ func TestRecoverWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
 // digest path preserves the other recovery outcome: a completed writer's
 // owned workspace is still adopted, verified, and released.
 func TestRecoverLegacyWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openLegacyRecord(t, hs)
@@ -667,6 +683,7 @@ func TestRecoverLegacyWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
 // workspace no longer exists — nothing of this run's to export, and the loss
 // says why.
 func TestRecoverWriterCompleteWorkspaceGoneCommitsLoss(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -688,6 +705,7 @@ func TestRecoverWriterCompleteWorkspaceGoneCommitsLoss(t *testing.T) {
 // carrying someone else's token is not this run's; recovery commits loss
 // without touching it.
 func TestRecoverForeignWorkspaceCommitsLossUntouched(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -721,6 +739,7 @@ func TestRecoverForeignWorkspaceCommitsLossUntouched(t *testing.T) {
 // observed prove neither ownership nor absence; recovery errors, commits
 // nothing, and leaves the record open for a retry.
 func TestRecoverUnprovableWorkspaceErrsWithoutLoss(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -755,6 +774,7 @@ func TestRecoverUnprovableWorkspaceErrsWithoutLoss(t *testing.T) {
 // carrying this run's token fails the final audit — the loss cannot be
 // committed while anything of the run's provably survives.
 func TestRecoverTokenOrphanFailsAudit(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -774,6 +794,7 @@ func TestRecoverTokenOrphanFailsAudit(t *testing.T) {
 // TestRecoverClosedLossIsIdempotent: the first recovery closes the record;
 // replaying its durable loss is safe and touches no runtime object.
 func TestRecoverClosedLossIsIdempotent(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -797,6 +818,7 @@ func TestRecoverClosedLossIsIdempotent(t *testing.T) {
 // window expired (the common crash case) treats the ended window as nothing
 // left to release and still commits its outcome.
 func TestRecoverLeasedLapsedWindowTolerated(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	fx.openRecord(t, hs)
@@ -826,6 +848,7 @@ func TestRecoverLeasedLapsedWindowTolerated(t *testing.T) {
 // not an ended window is a real teardown problem; recovery errors and the
 // record stays open.
 func TestRecoverLeasedReleaseFailureKeepsRecordOpen(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -850,6 +873,7 @@ func TestRecoverLeasedReleaseFailureKeepsRecordOpen(t *testing.T) {
 // is evidence about the run — here the scanner refusing the export — commits
 // loss: a retry would refuse the same way, and rerun is the honest signal.
 func TestRecoverAdoptionConformanceFailureCommitsLoss(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
 		return errors.New("fixture: refuse every export")
@@ -879,6 +903,7 @@ func TestRecoverAdoptionConformanceFailureCommitsLoss(t *testing.T) {
 // says nothing about the world; the workspace survives, the record stays
 // open, and the recovery can be retried.
 func TestRecoverAdoptionOperationalFailureRetryable(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -924,6 +949,7 @@ func TestRecoverAdoptionOperationalFailureRetryable(t *testing.T) {
 // collision — is never evidence against the completed workspace; recovery
 // errors retryably, the workspace survives, and the retry adopts.
 func TestRecoverLeasedObserverFailureRetryable(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -980,6 +1006,7 @@ func TestRecoverLeasedObserverFailureRetryable(t *testing.T) {
 // false, no observer run, no window taken) instead of attributing an
 // intervening holder's mutation to this run.
 func TestRecoverLapsedWindowReportsAttestationLost(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -1026,6 +1053,7 @@ func TestRecoverLapsedWindowReportsAttestationLost(t *testing.T) {
 // observation is skipped and reported unattested; the still-live window is
 // still released after the clean audit.
 func TestRecoverShortWindowSkipsObservation(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -1065,6 +1093,7 @@ func TestRecoverShortWindowSkipsObservation(t *testing.T) {
 // like an inspect error — must preserve the completed workspace and leave
 // the record open; only verifyExport's refusals commit loss.
 func TestRecoverExporterLifecycleFailureRetryable(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -1109,6 +1138,7 @@ func TestRecoverExporterLifecycleFailureRetryable(t *testing.T) {
 // exporting — and reaps nothing it cannot name. A foreign-token container
 // under an unexpected name is none of this run's business.
 func TestRecoverTokenStrayContainerRefusesAdoption(t *testing.T) {
+	t.Parallel()
 	for _, stray := range []string{"ours", "foreign"} {
 		t.Run(stray, func(t *testing.T) {
 			fx := newRecoveryFixture(t)
@@ -1167,6 +1197,7 @@ func TestRecoverTokenStrayContainerRefusesAdoption(t *testing.T) {
 // loss, delivering the caller its rerun-safe signal instead of an open
 // record that can never close.
 func TestRecoverOversizeExportCommitsLoss(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	fx.cfg.MaxExportBytes = 1
 	hs := testHandoffSpec()
@@ -1193,6 +1224,7 @@ func TestRecoverOversizeExportCommitsLoss(t *testing.T) {
 // retry adopts. The regression pins the fail-safe default: an unmarked
 // conformance failure never destroys the workspace.
 func TestRecoverVerifyExportOperationalFailureRetryable(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -1241,6 +1273,7 @@ func TestRecoverVerifyExportOperationalFailureRetryable(t *testing.T) {
 // (which would have satisfied an acquisition-precedes-Begin test) changes
 // nothing.
 func TestRecoverLeasedLaterWindowNeverReleased(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -1274,6 +1307,7 @@ func TestRecoverLeasedLaterWindowNeverReleased(t *testing.T) {
 // errors retryably — destroying nothing, releasing nothing, committing
 // nothing — instead of proceeding as though the window were not this run's.
 func TestRecoverLeasedIncoherentRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	rows := map[string]domain.AuthStoreMutationLease{
 		"malformed": {
 			AuthIdentityID: "identity-fixture", Holder: "holder-fixture", Fence: 1,
@@ -1308,6 +1342,7 @@ func TestRecoverLeasedIncoherentRowFailsClosed(t *testing.T) {
 // observed base — or any base on a blank-seed record — is a damaged row, not
 // an attestation; both refuse before any action.
 func TestRecoverMismatchedObservedBaseRefused(t *testing.T) {
+	t.Parallel()
 	t.Run("seeded record with a different base", func(t *testing.T) {
 		fx := newRecoveryFixture(t)
 		hs := testHandoffSpec()
@@ -1338,6 +1373,7 @@ func TestRecoverMismatchedObservedBaseRefused(t *testing.T) {
 // writer container standing beside a writer-complete record contradicts the
 // record; adoption refuses, commits nothing, and touches nothing.
 func TestRecoverWriterSurvivorContradictsCompletionClaim(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -1370,6 +1406,7 @@ func TestRecoverWriterSurvivorContradictsCompletionClaim(t *testing.T) {
 // window held, or a new holder could acquire the identity beside a
 // credential-bearing survivor.
 func TestRecoverTokenOrphanBlocksLeaseRelease(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)
@@ -1396,6 +1433,7 @@ func TestRecoverTokenOrphanBlocksLeaseRelease(t *testing.T) {
 // still releases the window it re-gated as this run's — the audit-ordered
 // release is a stronger gate, not a dropped release.
 func TestRecoverLeasedReleasesAfterCleanAudit(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	rec := fx.openRecord(t, hs)

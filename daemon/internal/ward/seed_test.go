@@ -88,6 +88,7 @@ func writeGitConfig(t *testing.T, dir, contents string) {
 }
 
 func TestWorkspaceSeedValidate(t *testing.T) {
+	t.Parallel()
 	valid := WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: "/seeds/checkout", Base: testBaseRevision()}
 	if err := valid.validate(); err != nil {
 		t.Fatalf("valid base_checkout seed: validate() = %v, want nil", err)
@@ -137,6 +138,7 @@ func TestWorkspaceSeedValidate(t *testing.T) {
 }
 
 func TestAllSeedModesValid(t *testing.T) {
+	t.Parallel()
 	if (SeedMode("")).valid() {
 		t.Error("the zero SeedMode is valid; it must not be")
 	}
@@ -159,6 +161,7 @@ func TestAllSeedModesValid(t *testing.T) {
 const dropField = "\x00drop"
 
 func TestVerifyBaseProof(t *testing.T) {
+	t.Parallel()
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const tree = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
 	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA +
@@ -265,6 +268,7 @@ func TestVerifyBaseProof(t *testing.T) {
 // rule as check 5's: the bytes come out of an archive nothing has scanned, so
 // a refusal names the violation and never repeats what it read.
 func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
+	t.Parallel()
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const planted = "attacker-controlled-fixture-value"
 	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+
@@ -287,6 +291,7 @@ func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
 // bytes as a regular file whose digest and irregular=absent report agree with
 // each other about the wrong thing.
 func TestCopySeedFileRefusesSymlink(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	outside := filepath.Join(dir, "outside.txt")
 	if err := os.WriteFile(outside, []byte("host data\n"), 0o600); err != nil {
@@ -317,6 +322,7 @@ func TestCopySeedFileRefusesSymlink(t *testing.T) {
 // TestCopySeedFileTakesModeFromTheDescriptor proves the executable bit is read
 // from what was opened, not from a walk entry that may since have changed.
 func TestCopySeedFileTakesModeFromTheDescriptor(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "run.sh")
 	//nolint:gosec // the executable bit is the property under test
@@ -343,6 +349,7 @@ func TestCopySeedFileTakesModeFromTheDescriptor(t *testing.T) {
 }
 
 func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	cfg := testConfig()
@@ -449,6 +456,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 }
 
 func TestStageSeedSourceExcludesOSMetadata(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o700); err != nil {
@@ -496,6 +504,7 @@ func TestStageSeedSourceExcludesOSMetadata(t *testing.T) {
 }
 
 func TestCheckCanonicalSeedWorkspaceClean(t *testing.T) {
+	t.Parallel()
 	newCheckout := func(t *testing.T) string {
 		t.Helper()
 		dir := initLiveSeedCheckout(t, t.TempDir())
@@ -627,6 +636,7 @@ func TestCheckCanonicalSeedWorkspaceClean(t *testing.T) {
 }
 
 func TestStageSeedSourceUsesRootedPaths(t *testing.T) {
+	t.Parallel()
 	seedRoot := t.TempDir()
 	source := writeSeedCheckout(t, seedRoot, testBaseSHA)
 	sourceRoot, err := os.OpenRoot(source)
@@ -687,6 +697,7 @@ func TestStageSeedSourceUsesRootedPaths(t *testing.T) {
 }
 
 func TestVerifySeedSourceAllowsEmptyCommitCandidate(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	if err := os.Remove(filepath.Join(dir, "README.md")); err != nil {
@@ -702,6 +713,7 @@ func TestVerifySeedSourceAllowsEmptyCommitCandidate(t *testing.T) {
 }
 
 func TestVerifySeedSourceFailsClosed(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		// build returns the source directory to verify and may adjust cfg; both
@@ -1004,6 +1016,7 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 }
 
 func TestVerifySeedSourceDoesNotEchoRejectedGitConfig(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	cfg := testConfig()
 	cfg.SeedRoot = root

@@ -66,6 +66,7 @@ func caseSensitive(t *testing.T, dir string) bool {
 // hash commands are translated, and the case pair is skipped on a
 // case-insensitive temp directory.
 func TestInputScriptsDeliverManifestTreeAndRejectChanges(t *testing.T) {
+	t.Parallel()
 	segment := strings.Repeat("s", domain.MaxTaskAttachmentSegmentBytes)
 	longPath := "task/" + strings.Repeat(strings.Repeat("l", 200)+"/", 4) + "end.txt"
 	pairs := []string{
@@ -196,6 +197,7 @@ func TestInputScriptsDeliverManifestTreeAndRejectChanges(t *testing.T) {
 }
 
 func TestInputHandoffBindsObservedTreeBeforeWriter(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := newFakeJournal()
 	fx.cfg.Journal = j
@@ -249,6 +251,7 @@ func TestInputHandoffBindsObservedTreeBeforeWriter(t *testing.T) {
 }
 
 func TestInputPreparationFailuresNeverCreateWriter(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{
 		"blob_bytes", "blob_short", "blob_long", "blob_missing", "changed_copy",
 		"tampered_tree", "extra_entry", "wrong_proof", "interrupted_copy",
@@ -354,6 +357,7 @@ func rewriteArchiveFile(path, name string, body []byte) error {
 }
 
 func TestInputHandoffWithoutBlobSourceCreatesNothing(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	files, _ := testInputs("task/shot.png", "pixels")
 	hs := fx.seed(t)
@@ -370,6 +374,7 @@ func TestInputHandoffWithoutBlobSourceCreatesNothing(t *testing.T) {
 }
 
 func TestInputManifestValidation(t *testing.T) {
+	t.Parallel()
 	plain := testHandoffSpec()
 	body, err := json.Marshal(plain)
 	if err != nil || bytes.Contains(body, []byte("Inputs")) {
@@ -422,6 +427,7 @@ func TestInputManifestValidation(t *testing.T) {
 }
 
 func TestInputMountCannotBeRedirectedOrMadeWritable(t *testing.T) {
+	t.Parallel()
 	files, _ := testInputs("task/shot.png", "pixels")
 	hs := testHandoffSpec()
 	hs.Agent.LaunchState = LaunchStateClaudeClean
@@ -466,6 +472,7 @@ func TestInputMountCannotBeRedirectedOrMadeWritable(t *testing.T) {
 }
 
 func TestInputRecoveryRejectsMissingOrRetargetedProof(t *testing.T) {
+	t.Parallel()
 	for _, corruption := range []string{"missing", "wrong_digest", "half_pair", "no_inputs_with_proof", "legacy_digest"} {
 		t.Run(corruption, func(t *testing.T) {
 			fx := newHandoffFixture(t)
@@ -511,6 +518,7 @@ func TestInputRecoveryRejectsMissingOrRetargetedProof(t *testing.T) {
 }
 
 func TestInputRecoveryReapsInterruptedPreparation(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	files, _ := testInputs("task/shot.png", "pixels")
 	hs := fx.seed(t)

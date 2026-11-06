@@ -425,6 +425,7 @@ func (j *fakeJournal) Close(_ context.Context, runID string, outcome HandoffJour
 // amendments only on an open record, Close terminal, and injected failures
 // surfaced verbatim.
 func TestFakeJournalContract(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	j := newFakeJournal()
 	rec := testJournalRecord()
@@ -567,6 +568,7 @@ func TestHandoffStartedDistinguishesAbsenceFromAuthority(t *testing.T) {
 // vocabulary the #237 store adapter persists, so a drift must be a reviewed
 // diff.
 func TestHandoffJournalRecordGolden(t *testing.T) {
+	t.Parallel()
 	got, err := json.MarshalIndent(testJournalRecord(), "", "  ")
 	if err != nil {
 		t.Fatalf("marshal journal record: %v", err)
@@ -578,6 +580,7 @@ func TestHandoffJournalRecordGolden(t *testing.T) {
 // record read back after a restart is untrusted input, and every malformed
 // shape is refused before it can steer recovery.
 func TestHandoffJournalRecordValidate(t *testing.T) {
+	t.Parallel()
 	if err := testJournalRecord().Validate(); err != nil {
 		t.Fatalf("valid fixture: validate() = %v, want nil", err)
 	}
@@ -671,6 +674,7 @@ func testJournalInstructions() *HandoffJournalInstructions {
 // recovery only validates and dispositions such a binding against the runtime
 // world, never recomposing the pre-fencing bundle.
 func TestHandoffJournalInstructionsAcceptPersistedCompositionVersions(t *testing.T) {
+	t.Parallel()
 	for _, version := range []string{
 		instructionCompositionVersionV2,
 		instructionCompositionVersion,
@@ -697,6 +701,7 @@ func TestHandoffJournalInstructionsAcceptPersistedCompositionVersions(t *testing
 // TestSpecDigest pins the digest's two properties: deterministic for equal
 // specs, distinct for any spec difference recovery must not conflate.
 func TestSpecDigest(t *testing.T) {
+	t.Parallel()
 	a, err := specDigest(testHandoffSpec())
 	if err != nil {
 		t.Fatalf("specDigest: %v", err)

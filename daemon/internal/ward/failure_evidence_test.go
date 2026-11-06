@@ -18,6 +18,7 @@ import (
 )
 
 func TestFailureObserverUsesConfiguredWorkspaceAndRejectsLinks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		status int
 		linked bool
@@ -62,6 +63,7 @@ func TestFailureObserverUsesConfiguredWorkspaceAndRejectsLinks(t *testing.T) {
 }
 
 func TestFailureTranscriptRejectsDuplicateAndSymlinkArchiveEntries(t *testing.T) {
+	t.Parallel()
 	_, _, hs := failedTranscriptFixture(t)
 	descriptor, _ := json.Marshal(export.EvidenceSourceManifest{Version: export.EvidenceSourceVersion, Sources: []export.EvidenceSource{*hs.Agent.FailureTranscript}})
 	for _, entry := range []tarEntry{
@@ -105,6 +107,7 @@ func failedTranscriptFixture(t *testing.T) (*handoffFixture, *fakeJournal, Hando
 }
 
 func TestFailedWriterRetainsTranscriptWithoutSourceExport(t *testing.T) {
+	t.Parallel()
 	fx, j, hs := failedTranscriptFixture(t)
 	// The ordinary source exporter is deliberately unusable. Diagnostics must
 	// not depend on whether partially written source forms a valid export.
@@ -127,6 +130,7 @@ func TestFailedWriterRetainsTranscriptWithoutSourceExport(t *testing.T) {
 }
 
 func TestFailureTranscriptUpgradePreservesHistoricalHandoff(t *testing.T) {
+	t.Parallel()
 	fx, _, hs := failedTranscriptFixture(t)
 	legacy := hs
 	legacy.Agent.FailureTranscript = nil
@@ -145,6 +149,7 @@ func TestFailureTranscriptUpgradePreservesHistoricalHandoff(t *testing.T) {
 }
 
 func TestFailureEvidenceAmendmentFailurePreservesWorkspace(t *testing.T) {
+	t.Parallel()
 	fx, j, hs := failedTranscriptFixture(t)
 	j.failFailureEvidence = errors.New("temporary journal failure")
 	b := fx.backend(t)
@@ -164,6 +169,7 @@ func TestFailureEvidenceAmendmentFailurePreservesWorkspace(t *testing.T) {
 }
 
 func TestFailureEvidenceScannerIOFailurePreservesWorkspace(t *testing.T) {
+	t.Parallel()
 	fx, j, hs := failedTranscriptFixture(t)
 	scanErr := error(os.ErrPermission)
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error { return scanErr })
@@ -184,6 +190,7 @@ func TestFailureEvidenceScannerIOFailurePreservesWorkspace(t *testing.T) {
 }
 
 func TestFailedWriterObserverDeleteFailureKeepsFailedOutcome(t *testing.T) {
+	t.Parallel()
 	fx, j, hs := failedTranscriptFixture(t)
 	failed := false
 	fx.rt.onDeleteContainer = func(id string) (bool, error) {
@@ -218,6 +225,7 @@ type failedArchiveSeek struct{ *bytes.Reader }
 func (failedArchiveSeek) Seek(int64, int) (int64, error) { return 0, os.ErrPermission }
 
 func TestFailureTranscriptArchiveIOErrorRemainsRetryable(t *testing.T) {
+	t.Parallel()
 	_, _, hs := failedTranscriptFixture(t)
 	_, valid, err := readFailureTranscript(failedArchiveSeek{bytes.NewReader(nil)}, *hs.Agent.FailureTranscript)
 	if valid || !errors.Is(err, os.ErrPermission) {
@@ -226,6 +234,7 @@ func TestFailureTranscriptArchiveIOErrorRemainsRetryable(t *testing.T) {
 }
 
 func TestFailureEvidenceRefusalKeepsFailedOutcome(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"descriptor", "oversized", "invalid utf8", "scanner", "foreign invocation"} {
 		t.Run(kind, func(t *testing.T) {
 			fx, j, hs := failedTranscriptFixture(t)
@@ -258,6 +267,7 @@ func TestFailureEvidenceRefusalKeepsFailedOutcome(t *testing.T) {
 }
 
 func TestFailureEvidenceReplayRejectsTamperedPrivateFile(t *testing.T) {
+	t.Parallel()
 	fx, j, hs := failedTranscriptFixture(t)
 	b := fx.backend(t)
 	if _, err := b.Handoff(context.Background(), hs); !errors.Is(err, ErrWriterFailed) {
