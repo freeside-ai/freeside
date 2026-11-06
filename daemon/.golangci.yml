@@ -84,7 +84,6 @@ linters:
           |internal/diffscope\
           |internal/doclayout\
           |internal/domain\
-          |internal/engine\
           |internal/exec\
           |internal/exec/claude\
           |internal/exec/fake\
