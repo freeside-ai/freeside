@@ -1847,12 +1847,19 @@ func TestDispositionAwareReviewSatisfiesReadinessWithoutRereview(t *testing.T) {
 	// The card-facing detail (issue #982) comes from this same evaluation:
 	// bound to the task head and admitted base, listing the production set's
 	// two required checks as passed under their proof recipes, in key order.
+	// Publication projects it once the handoff names its tip (#1735); an
+	// unchanged tip is the admitted base, with no merge.
+	readiness, err = readiness.withHandoff(f.binding.admission.Base.BaseSHA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	detail := readiness.detail
 	if detail.EvaluationSetDigest != readiness.verdict.EvaluationSetDigest ||
 		detail.CandidateHead != f.task.HeadSHA ||
 		detail.Base != (domain.ReadinessBoundBase{
 			BaseRef: f.binding.admission.Base.BaseRef, BaseSHA: f.binding.admission.Base.BaseSHA,
-		}) || detail.Class() != readiness.verdict.Class {
+		}) || detail.HandoffTip != f.binding.admission.Base.BaseSHA ||
+		detail.HandoffMerge != nil || detail.Class() != readiness.verdict.Class {
 		t.Fatalf("readiness detail = %#v against verdict %#v", detail, readiness.verdict)
 	}
 	if len(detail.Requirements) != 2 ||

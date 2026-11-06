@@ -1304,6 +1304,13 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 		}
 		return productionTaskOutcome{}, err
 	}
+	// The cycle verified the head on the base its authority names, and ran
+	// no handoff of its own: the sealed check under this publication ID is
+	// the original publication's and names the old head.
+	readiness, err = readiness.withHandoff(binding.admission.Base.BaseSHA, "")
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
 	yieldHistory, err := w.reviewYieldHistory(ctx, task.RunID)
 	if err != nil {
 		return productionTaskOutcome{}, err
