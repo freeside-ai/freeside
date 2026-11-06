@@ -371,17 +371,17 @@ func (tx *WriteTx) AdmitTaskStart(ctx context.Context, runID domain.RunID, recor
 }
 
 // RecordTaskStartAfterRelease records a fresh start for a run whose own newest
-// start was released by its bound abandonment before the run launched (#1770):
-// label intake releases an admitted start whose proposal was never decided,
-// and the card can still be started later. RecordTaskStart refuses such a task
-// and AdmitTaskStart refuses a second admission of the run, so this is the
-// only way that run takes a slot again. The caller vouches that the run never
-// launched. The bound abandonment is the same fact `freesided abandon`
-// records before it closes the episode, so a decided start an operator
-// abandoned whose closure has not committed also restarts here (#2696).
-// A closed workflow episode, a cancellation fence, or any other
+// start label intake released (ReleaseTaskStart) before the run launched
+// (#1770): label intake releases an admitted start whose proposal was never
+// decided, and the card can still be started later. RecordTaskStart refuses
+// such a task and AdmitTaskStart refuses a second admission of the run, so
+// this is the only way that run takes a slot again. The caller vouches that
+// the run never launched. An operator abandonment of that start (from
+// `freesided abandon` or a confirmed cancellation) never restarts, whether it
+// stands alone or follows a release, even before its workflow closure commits
+// (#2696). A closed workflow episode, a cancellation fence, or any other
 // lifecycle state still refuses. A task that holds its slot records nothing,
-// so replay converges. The source id names the abandonment it follows, so it
+// so replay converges. The source id names the release it follows, so it
 // never collides with the run's first start or an earlier restart.
 func (tx *WriteTx) RecordTaskStartAfterRelease(ctx context.Context, runID domain.RunID, recordedAt time.Time) error {
 	run, err := tx.GetRun(ctx, runID)
@@ -409,13 +409,21 @@ func (tx *WriteTx) RecordTaskStartAfterRelease(ctx context.Context, runID domain
 		return ErrTaskAdmissionRequired
 	}
 	var release *domain.TaskLifecycleFact
+	abandoned := false
 	for _, fact := range task.LifecycleFacts {
-		if fact.Ordinal > start.Ordinal && fact.Kind == domain.TaskLifecycleAbandoned &&
-			fact.RunID == runID && fact.SourceID == abandonSourceID(*start) {
-			release = &fact
+		if fact.Ordinal <= start.Ordinal {
+			continue
+		}
+		switch fact.SourceID {
+		case abandonSourceID(*start):
+			abandoned = true
+		case releaseSourceID(*start):
+			if fact.Kind == domain.TaskLifecycleAbandoned && fact.RunID == runID {
+				release = &fact
+			}
 		}
 	}
-	if release == nil {
+	if release == nil || abandoned {
 		return ErrTaskAdmissionRequired
 	}
 	var campaign *domain.CampaignID
@@ -532,7 +540,23 @@ func (tx *WriteTx) RecordTaskCompletion(ctx context.Context, runID domain.RunID,
 // records nothing while an authorized restart can be abandoned again. A task
 // with no recorded start holds no slot and records nothing. It reports whether
 // the task was WIP before this call (i.e. whether a held slot was released).
+// Only this fact binds a workflow closure, and it bars a restart of the start
+// it abandons.
 func (tx *WriteTx) AbandonTask(ctx context.Context, taskID domain.TaskID, recordedAt time.Time) (bool, error) {
+	return tx.endTaskStart(ctx, taskID, recordedAt, abandonSourceID)
+}
+
+// ReleaseTaskStart records label intake's release of a start nobody decided
+// (#1770). Like AbandonTask it records an abandoned fact that ends the slot,
+// with the same return contract, but under its own source id, so the card
+// stays startable through RecordTaskStartAfterRelease and a workflow closure
+// never binds to it (#2696). The fact kind is shared so WIP, display, and
+// history read a release as the abandonment it is.
+func (tx *WriteTx) ReleaseTaskStart(ctx context.Context, taskID domain.TaskID, recordedAt time.Time) (bool, error) {
+	return tx.endTaskStart(ctx, taskID, recordedAt, releaseSourceID)
+}
+
+func (tx *WriteTx) endTaskStart(ctx context.Context, taskID domain.TaskID, recordedAt time.Time, sourceID func(domain.TaskLifecycleFact) string) (bool, error) {
 	task, err := tx.GetTask(ctx, taskID)
 	if err != nil {
 		return false, err
@@ -544,7 +568,7 @@ func (tx *WriteTx) AbandonTask(ctx context.Context, taskID domain.TaskID, record
 	held := domain.TaskWIP(task)
 	fact := domain.TaskLifecycleFact{
 		Kind: domain.TaskLifecycleAbandoned, RunID: start.RunID,
-		SourceID: abandonSourceID(*start), RecordedAt: recordedAt.UTC(),
+		SourceID: sourceID(*start), RecordedAt: recordedAt.UTC(),
 	}
 	if err := tx.RecordTaskLifecycleFact(ctx, taskID, fact); err != nil {
 		return false, err
@@ -555,10 +579,17 @@ func (tx *WriteTx) AbandonTask(ctx context.Context, taskID domain.TaskID, record
 // abandonSourceID ties an abandonment to the work episode its start opened, so
 // an abandon records one idempotent fact per episode: repeating it is a no-op,
 // while an authorized restart opens a new episode that can be abandoned again.
-// The `freesided abandon` command (#1318 D6) is the caller today; a future
-// no-artifact spec-run stop can reuse this sink once that path exists.
+// The `freesided abandon` command (#1318 D6) and confirmed cancellation are
+// the callers today; a future no-artifact spec-run stop can reuse this sink
+// once that path exists.
 func abandonSourceID(start domain.TaskLifecycleFact) string {
 	return "abandon:" + start.SourceID
+}
+
+// releaseSourceID ties a label-intake release to the start it ends, one per
+// start, and keeps it distinct from an operator abandonment of that start.
+func releaseSourceID(start domain.TaskLifecycleFact) string {
+	return "release:" + start.SourceID
 }
 
 // tableExists reports whether a table is present in the current schema. It
