@@ -1,12 +1,14 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,10 +62,34 @@ func (s *recordingClaudeUsageSink) ClaudeUsageCaptured(
 	return s.err
 }
 
+// usageWarnings returns a logger over a buffer and a reader of the
+// warnings it has logged so far.
+func usageWarnings() (*slog.Logger, func() []string) {
+	var logs bytes.Buffer
+	return slog.New(slog.NewTextHandler(&logs, nil)), func() []string {
+		var warnings []string
+		for line := range strings.Lines(logs.String()) {
+			if strings.Contains(line, "level=WARN") {
+				warnings = append(warnings, line)
+			}
+		}
+		return warnings
+	}
+}
+
+// assertOneDropWarning requires exactly one warning, naming the invocation.
+func assertOneDropWarning(t *testing.T, warnings []string, invocationID domain.InvocationID) {
+	t.Helper()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "invocation="+string(invocationID)) {
+		t.Fatalf("warnings = %q, want one naming invocation %s", warnings, invocationID)
+	}
+}
+
 // TestTerminalReportsClaudeUsage covers the terminal-path hook: a capture
 // reaches the sink under the admission's enrollment, generation, and pool;
 // with no capture or no agent binding nothing does; and a sink error leaves
-// the terminal as collected.
+// the terminal as collected. Every lost capture logs a warning; a delivered
+// one, or no capture at all, logs none.
 func TestTerminalReportsClaudeUsage(t *testing.T) {
 	t.Parallel()
 	capture := loopbackClaudeUsage(t)
@@ -72,6 +98,7 @@ func TestTerminalReportsClaudeUsage(t *testing.T) {
 		cfg     usageFixtureConfig
 		sinkErr error
 		want    []capturedUsage
+		warns   bool
 	}{
 		{
 			name: "bound admission", cfg: usageFixtureConfig{bound: true, claude: true, claudeUsage: capture},
@@ -81,14 +108,16 @@ func TestTerminalReportsClaudeUsage(t *testing.T) {
 			name: "sink error", cfg: usageFixtureConfig{bound: true, claude: true, claudeUsage: capture},
 			sinkErr: errors.New("store unavailable"),
 			want:    []capturedUsage{{"pool-usage-1", "enrollment-usage-1", 1, *capture}},
+			warns:   true,
 		},
 		{name: "no capture", cfg: usageFixtureConfig{bound: true, claude: true}},
-		{name: "unbound admission", cfg: usageFixtureConfig{claude: true, claudeUsage: capture}},
+		{name: "unbound admission", cfg: usageFixtureConfig{claude: true, claudeUsage: capture}, warns: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine, run, attempt := usageEngineFixtureWith(t, tc.cfg)
 			sink := &recordingClaudeUsageSink{err: tc.sinkErr}
-			engine.claudeUsage, engine.logger = sink, slog.New(slog.DiscardHandler)
+			logger, warnings := usageWarnings()
+			engine.claudeUsage, engine.logger = sink, logger
 			result, ready, err := engine.collectTerminal(t.Context(), run.ID, attempt)
 			if err != nil || !ready {
 				t.Fatalf("collectTerminal = ready %t, err %v; want the terminal collected", ready, err)
@@ -99,20 +128,66 @@ func TestTerminalReportsClaudeUsage(t *testing.T) {
 			if !reflect.DeepEqual(sink.captured, tc.want) {
 				t.Fatalf("sink got %+v, want %+v", sink.captured, tc.want)
 			}
+			if tc.warns {
+				assertOneDropWarning(t, warnings(), attempt.InvocationID)
+			} else if got := warnings(); len(got) != 0 {
+				t.Fatalf("warnings = %q, want none", got)
+			}
 		})
 	}
 }
 
 // TestTerminalWithoutAClaudeUsageSinkDropsTheCapture covers an engine with no
 // sink installed, such as every test engine and a daemon without the Claude
-// collector: the capture is dropped and the terminal collected.
+// collector: the capture is dropped with a warning naming the invocation,
+// and the terminal is collected.
 func TestTerminalWithoutAClaudeUsageSinkDropsTheCapture(t *testing.T) {
 	t.Parallel()
 	engine, run, attempt := usageEngineFixtureWith(t, usageFixtureConfig{
 		bound: true, claude: true, claudeUsage: loopbackClaudeUsage(t),
 	})
+	logger, warnings := usageWarnings()
+	engine.logger = logger
 	if _, ready, err := engine.collectTerminal(t.Context(), run.ID, attempt); err != nil || !ready {
 		t.Fatalf("collectTerminal = ready %t, err %v", ready, err)
+	}
+	assertOneDropWarning(t, warnings(), attempt.InvocationID)
+}
+
+// TestExportOnlyRecordReportsNoClaudeUsage pins that an export-only arm (here
+// attended) reports nothing when its export is recorded, even with a capture
+// on the replay: its terminal is collected later and reports it then.
+func TestExportOnlyRecordReportsNoClaudeUsage(t *testing.T) {
+	t.Parallel()
+	engine, _, attempt := usageEngineFixtureWith(t, usageFixtureConfig{bound: true, claude: true})
+	ctx := t.Context()
+	var admission domain.ExecutionAdmission
+	if err := engine.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, attempt.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: attempt.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: admission.AdmittedAt.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingClaudeUsageSink{}
+	logger, warnings := usageWarnings()
+	if err := RecordExecutionExport(ctx, engine.store, export,
+		ProductionReplay{ClaudeUsage: loopbackClaudeUsage(t)}, sink, logger); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.captured) != 0 {
+		t.Fatalf("sink got %+v at export time, want nothing", sink.captured)
+	}
+	if got := warnings(); len(got) != 0 {
+		t.Fatalf("warnings = %q, want none", got)
 	}
 }
 

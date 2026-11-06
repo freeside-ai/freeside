@@ -1778,9 +1778,13 @@ store.
 
 Claude's collector reads memory, not the provider. Each writer turn ends with
 the CLI's own usage answer and rate-limit events (`claude_usage` on the stage
-result); when the turn ran under the pool's collector enrollment at its
-current generation, the daemon keeps that answer and collects the pool at
-once, even during a backoff. A turn with rate-limit events and no answer,
+result). An attended turn's answer arrives when its terminal is collected; an
+unattended implementation turn's arrives when its export is recorded, since
+that export is never collected. When the turn ran under the pool's collector
+enrollment at its current generation, the daemon keeps that answer and
+collects the pool at once, even during a backoff. An answer lost on the way,
+for example to an admission with no enrollment, logs a `claude usage capture`
+warning naming the invocation. A turn with rate-limit events and no answer,
 such as a specification turn, is not kept: a collection replaces the pool's
 window set, and events alone would drop the weekly reading. A collection maps `five_hour` (5 hours) and
 `seven_day` (7 days) to readings with their length, reset, and used share; a

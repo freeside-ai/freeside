@@ -169,7 +169,7 @@ func returnToAgentAfterRemediation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.RecordExecutionExport(p.ctx, p.store, exported, returned); err != nil {
+	if err := engine.RecordExecutionExport(p.ctx, p.store, exported, returned, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	p.replay = returned

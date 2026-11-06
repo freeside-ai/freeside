@@ -221,11 +221,13 @@ func TestUsageExtractorFailureDoesNotFailTheStage(t *testing.T) {
 	}
 }
 
-// TestCompletedExportHandsItsUsageToTheRecorder is the #2212 regression: an
-// unattended export is never collected, so the recorder must receive the
-// extracted usage with the export. The usage is observed at the pinned export
-// stamp, so replaying the import-and-record crash window with a later clock
-// hands over the identical replay and converges on the stored record.
+// TestCompletedExportHandsItsUsageToTheRecorder is the #2212 and #2716
+// regression: an unattended export is never collected, so the recorder must
+// receive the extracted usage and the Claude usage capture with the export.
+// The usage is observed at the pinned export stamp, so replaying the
+// import-and-record crash window with a later clock hands over the identical
+// replay and converges on the stored record. The durable replay carries
+// neither: both are recording-path data.
 func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -270,6 +272,7 @@ func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 	}
 	now := fixedNow.Add(time.Hour)
 	d.now = func() time.Time { return now }
+	var result exec.StageResult
 	for attempt := range 2 {
 		if attempt > 0 {
 			// The first attempt consumed the released directory; restore it
@@ -278,7 +281,7 @@ func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		result, err := d.completeReleasedExportWithOptions(
+		result, err = d.completeReleasedExportWithOptions(
 			ctx, in, in.Export.outcome(), d.authority.ImportOptionsRecord)
 		if err != nil || result.Status != exec.StatusCompleted {
 			t.Fatalf("attempt %d = %+v, %v; want completed", attempt, result, err)
@@ -292,7 +295,20 @@ func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 		if got := exports.replays[testInvoke].Usage; !reflect.DeepEqual(got, want) {
 			t.Fatalf("attempt %d recorded usage = %#v, want %#v", attempt, got, want)
 		}
+		if got := exports.replays[testInvoke].ClaudeUsage; !reflect.DeepEqual(got, testClaudeUsage()) {
+			t.Fatalf("attempt %d recorded capture = %#v, want the extracted capture", attempt, got)
+		}
 		now = now.Add(time.Hour)
+	}
+	if err := d.commitResult(testInvoke, result); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := d.LoadExecutionReplay(ctx, testInvoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Usage != nil || loaded.ClaudeUsage != nil {
+		t.Fatalf("loaded replay usage = %#v, capture = %#v; want none", loaded.Usage, loaded.ClaudeUsage)
 	}
 }
 

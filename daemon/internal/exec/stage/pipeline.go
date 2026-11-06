@@ -344,7 +344,7 @@ type importOptionsProvider func(
 // asserting evidence that was not persisted.
 func (d *Driver) finish(
 	ctx context.Context, in intent, out exportOutcome, importOptions importOptionsProvider,
-	usage []exec.UsageMeasurement,
+	usage []exec.UsageMeasurement, capture *exec.ClaudeUsageCapture,
 ) (exec.StageResult, error) {
 	checkoutDir := filepath.Join(in.Seed+"-import", "checkout")
 	if err := os.RemoveAll(filepath.Dir(checkoutDir)); err != nil {
@@ -456,6 +456,7 @@ func (d *Driver) finish(
 		CommitPlanDigest:       cloneDigest(replay.CommitPlanDigest),
 		ImportOptions:          opts,
 		Usage:                  usage,
+		ClaudeUsage:            capture,
 	}
 	if err := d.recordExport(ctx, record, durableReplay); err != nil {
 		return exec.StageResult{}, err
@@ -681,13 +682,15 @@ func (d *Driver) completeReleasedExportWithOptions(
 	// write replays this import, and the usage rows written with the export
 	// must converge rather than conflict on a fresh observed_at.
 	usage, capture := d.extractUsage(in, out, in.exportRecordedAt())
-	result, err := d.finish(ctx, in, out, importOptions, usage)
+	result, err := d.finish(ctx, in, out, importOptions, usage, capture)
 	if err != nil {
 		result.Usage = usage
 	}
 	// The capture rides on every result this export yields, completed,
 	// blocked, or failed: the writer's turn happened either way, and the
-	// capture decides nothing about the stage.
+	// capture decides nothing about the stage. A collected terminal reports
+	// it from here; an unattended production export, never collected, has
+	// already reported it through the export recorder (finish).
 	result.ClaudeUsage = capture
 	return classifyExportCompletion(out.dir, result, err)
 }

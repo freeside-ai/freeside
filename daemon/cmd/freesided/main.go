@@ -1129,6 +1129,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	usage := usagecollect.New(st, usageCollectors, usagecollect.Config{
 		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
 	})
+	// One sink serves both capture paths: a collected terminal (the engine)
+	// and an unattended export (the driver's export recorder). It stays a nil
+	// interface without the Claude collector, never a typed nil.
+	var claudeUsageCaptures engine.ClaudeUsageSink
+	if claudeUsage != nil {
+		claudeUsageCaptures = claudeUsageSink{collector: claudeUsage, usage: usage}
+	}
 	attention := signet.NewService(st,
 		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
 			if workflow == nil {
@@ -1245,7 +1252,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 		}
 	} else if cfg.Claude != nil {
-		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, cfg.Logger)
+		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, claudeUsageCaptures, cfg.Logger)
 		if err != nil {
 			// A review role the lineup cannot fill stops startup: the review
 			// sources cannot be composed without its identity. Leave the
@@ -1479,10 +1486,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if cfg.Logger != nil {
 			engineOptions = append(engineOptions, engine.WithLogger(cfg.Logger))
 		}
-		if claudeUsage != nil {
-			engineOptions = append(engineOptions, engine.WithClaudeUsageSink(claudeUsageSink{
-				collector: claudeUsage, usage: usage,
-			}))
+		if claudeUsageCaptures != nil {
+			engineOptions = append(engineOptions, engine.WithClaudeUsageSink(claudeUsageCaptures))
 		}
 		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
 		if err != nil {

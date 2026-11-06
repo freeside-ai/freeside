@@ -141,7 +141,7 @@ func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.
 	// The specification and attended arms read only the replay's usage (the
 	// production path consumes the rest), so the export-only write needs no
 	// populated replay.
-	if err := RecordExecutionExport(ctx, st, export, ProductionReplay{}); err != nil {
+	if err := RecordExecutionExport(ctx, st, export, ProductionReplay{}, nil, nil); err != nil {
 		t.Fatalf("record unattended specification export: %v", err)
 	}
 

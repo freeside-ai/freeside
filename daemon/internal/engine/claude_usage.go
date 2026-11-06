@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -10,11 +11,14 @@ import (
 )
 
 // ClaudeUsageSink receives a finished Claude writer turn's usage capture
-// (exec.StageResult.ClaudeUsage) with the enrollment and generation the turn
-// was admitted under and the usage pool that enrollment's identity meters
-// (plan §10, usage collection rules). The daemon's sink holds it for the
-// pool's Claude usage collector and starts a collection. The capture is
-// advisory: an error is logged and never fails the terminal it rode on.
+// with the enrollment and generation the turn was admitted under and the
+// usage pool that enrollment's identity meters (plan §10, usage collection
+// rules). It arrives by one of two paths: a collected terminal's
+// exec.StageResult.ClaudeUsage, or, for an unattended production export that
+// is never collected, ProductionReplay.ClaudeUsage once RecordExecutionExport
+// commits the export. The daemon's sink holds it for the pool's Claude usage
+// collector and starts a collection. The capture is advisory: an error is
+// logged and never fails the terminal or export it rode on.
 type ClaudeUsageSink interface {
 	ClaudeUsageCaptured(
 		ctx context.Context, pool domain.UsagePoolID, enrollment domain.ClientEnrollmentID, generation int,
@@ -23,7 +27,8 @@ type ClaudeUsageSink interface {
 }
 
 // WithClaudeUsageSink installs the sink a writer turn's usage capture goes to
-// once its terminal is collected. Without it a capture is dropped.
+// once its terminal is collected. RecordExecutionExport takes the same sink
+// for the export-time path. Without it a capture is dropped with a warning.
 func WithClaudeUsageSink(sink ClaudeUsageSink) Option {
 	return func(e *Engine) error {
 		if sink == nil {
@@ -34,16 +39,34 @@ func WithClaudeUsageSink(sink ClaudeUsageSink) Option {
 	}
 }
 
-// reportClaudeUsage hands a collected terminal's usage capture to the sink,
-// under the enrollment and generation its stored admission binds. Every
-// collection of the terminal reports it again; the sink drops a capture no
-// newer than the one it holds. Nothing here fails the terminal: a capture
-// whose admission has no agent binding or no pool, or a read error, is
-// logged and dropped.
+// reportClaudeUsage hands a collected terminal's usage capture to the sink.
+// Every collection of the terminal reports it again; the sink drops a capture
+// no newer than the one it holds.
 func (e *Engine) reportClaudeUsage(
 	ctx context.Context, invocationID domain.InvocationID, capture *exec.ClaudeUsageCapture,
 ) {
-	if e.claudeUsage == nil || capture == nil {
+	reportClaudeUsageCapture(ctx, e.store, e.claudeUsage, e.logger, invocationID, capture)
+}
+
+// reportClaudeUsageCapture hands a writer turn's usage capture to the sink,
+// under the enrollment and generation the invocation's stored admission
+// binds. It runs outside any store transaction: the sink reads the store.
+// Nothing here fails the caller. A nil capture is no usage answer and returns
+// quietly; every other drop (no sink installed, an admission with no agent
+// binding or no pool, a read error, a sink error) is logged naming the
+// invocation, so a lost answer is visible.
+func reportClaudeUsageCapture(
+	ctx context.Context, st *store.Store, sink ClaudeUsageSink, logger *slog.Logger,
+	invocationID domain.InvocationID, capture *exec.ClaudeUsageCapture,
+) {
+	if capture == nil {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if sink == nil {
+		logger.Warn("claude usage capture dropped: no usage sink installed", "invocation", invocationID)
 		return
 	}
 	var (
@@ -51,22 +74,22 @@ func (e *Engine) reportClaudeUsage(
 		pool      domain.UsagePoolID
 		found     bool
 	)
-	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		admission, pool, found, err = admittedPool(ctx, tx, invocationID)
 		return err
 	}); err != nil {
-		e.logger.Warn("claude usage capture dropped", "invocation", invocationID, "error", err)
+		logger.Warn("claude usage capture dropped", "invocation", invocationID, "error", err)
 		return
 	}
 	binding := admission.AgentBinding
 	if !found || binding == nil {
-		e.logger.Warn("claude usage capture dropped: no admitted enrollment and pool", "invocation", invocationID)
+		logger.Warn("claude usage capture dropped: no admitted enrollment and pool", "invocation", invocationID)
 		return
 	}
-	if err := e.claudeUsage.ClaudeUsageCaptured(
+	if err := sink.ClaudeUsageCaptured(
 		ctx, pool, binding.EnrollmentID, binding.EnrollmentGeneration, *capture,
 	); err != nil {
-		e.logger.Warn("claude usage capture not collected", "invocation", invocationID, "pool", pool, "error", err)
+		logger.Warn("claude usage capture not collected", "invocation", invocationID, "pool", pool, "error", err)
 	}
 }
