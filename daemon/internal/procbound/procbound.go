@@ -37,7 +37,6 @@ package procbound
 import (
 	"context"
 	"errors"
-	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -70,17 +69,7 @@ func Bind(cmd *exec.Cmd, waitDelay time.Duration) {
 		if cmd.Process == nil {
 			return nil
 		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			// The group is already gone, so the command finished before
-			// cancellation reached it. os/exec treats only os.ErrProcessDone
-			// as a benign Cancel result and wraps anything else as
-			// "exec: canceling Cmd: ...", which would turn a git or container
-			// call that succeeded into a failure whenever a shutdown races
-			// its exit.
-			return os.ErrProcessDone
-		}
-		return err
+		return KillGroup(cmd.Process.Pid)
 	}
 }
 

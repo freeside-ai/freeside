@@ -134,26 +134,19 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 }
 
 // cancelProcessGroup returns the cmd.Cancel callback that kills the
-// command's whole process group. It maps ESRCH to os.ErrProcessDone and
-// returns every other kill error unchanged, as procbound.Bind does.
-//
-// ESRCH means the group is already gone: the command was reaped before
-// cancellation (the per-command timeout or a daemon shutdown) reached
-// it. os/exec treats only os.ErrProcessDone as a benign Cancel result
-// and wraps anything else as "exec: canceling Cmd: ...", which Wait
-// returns when the process itself exited 0, so a raw ESRCH would turn a
-// step that passed into a room error. A step that exited nonzero or by
-// signal is unaffected either way: Wait prefers its *exec.ExitError
-// over the Cancel result.
+// command's whole process group through procbound.KillGroup, the rule
+// procbound.Bind's callback shares. KillGroup reports a group that has
+// already finished as os.ErrProcessDone, so cancellation (the
+// per-command timeout or a daemon shutdown) racing a step that exited 0
+// leaves it passed rather than a room error, and it does so only when no
+// member can still be alive. A step that exited nonzero or by signal is
+// unaffected either way: Wait prefers its *exec.ExitError over the
+// Cancel result.
 func cancelProcessGroup(cmd *exec.Cmd) func() error {
 	return func() error {
 		if cmd.Process == nil {
 			return nil
 		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
+		return procbound.KillGroup(cmd.Process.Pid)
 	}
 }
