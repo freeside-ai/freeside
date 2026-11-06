@@ -115,6 +115,13 @@ type ProductionReplay struct {
 	// that records the export. It is not replay data, so the publication
 	// task never persists it and a decoded task replay carries none.
 	Usage []exec.UsageMeasurement `json:"-"`
+	// ClaudeUsage is the writer turn's Claude usage capture, which
+	// RecordExecutionExport hands to the sink after a committed production
+	// write, because that export is never collected. Like Usage it is driver
+	// data, not replay data: the publication task never persists it, so a
+	// decoded task replay carries none and the publication lane reports
+	// nothing.
+	ClaudeUsage *exec.ClaudeUsageCapture `json:"-"`
 }
 
 // ProductionPublicationConfig supplies the real boundaries required after a
@@ -875,11 +882,18 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 // admission that owns the export, not from the daemon's current mode. A
 // recovered unattended attempt therefore cannot be downgraded to an
 // export-only write after an attended-mode restart.
+//
+// A production-arm export mints its publication task and is never
+// collected, so once that write commits, replay.ClaudeUsage goes to usage
+// (nil drops it with a warning on logger). Export-only arms report nothing
+// here: their terminal is collected later and reports the capture then.
 func RecordExecutionExport(
 	ctx context.Context,
 	st *store.Store,
 	executionExport domain.ExecutionExport,
 	replay ProductionReplay,
+	usage ClaudeUsageSink,
+	logger *slog.Logger,
 ) error {
 	if st == nil {
 		return errors.New("record execution export: nil store")
@@ -912,7 +926,7 @@ func RecordExecutionExport(
 			return err
 		}
 		if publishedParent && admission.OperatingMode == domain.ModeUnattended {
-			return RecordProductionExecutionExport(ctx, st, executionExport, replay)
+			return recordProductionExportAndReportUsage(ctx, st, executionExport, replay, usage, logger)
 		}
 		// A feedback invocation resumes implementation from durable input, but
 		// its first export is not itself a publication candidate. Recording it
@@ -952,10 +966,30 @@ func RecordExecutionExport(
 		if request.Legacy {
 			return recordExportOnly(ctx, st, executionExport, replay.Usage)
 		}
-		return RecordProductionExecutionExport(ctx, st, executionExport, replay)
+		return recordProductionExportAndReportUsage(ctx, st, executionExport, replay, usage, logger)
 	}
 	return fmt.Errorf("execution admission %q has invalid operating mode %q: %w",
 		admission.InvocationID, admission.OperatingMode, domain.ErrInvalidOperatingMode)
+}
+
+// recordProductionExportAndReportUsage commits the production export and
+// then reports the writer turn's capture. Reporting waits for the commit,
+// outside the write, because the sink reads the store; a failed write
+// reports nothing. A convergent re-record reports the same capture again,
+// which the sink drops as no newer than the one it holds.
+func recordProductionExportAndReportUsage(
+	ctx context.Context,
+	st *store.Store,
+	executionExport domain.ExecutionExport,
+	replay ProductionReplay,
+	usage ClaudeUsageSink,
+	logger *slog.Logger,
+) error {
+	if err := RecordProductionExecutionExport(ctx, st, executionExport, replay); err != nil {
+		return err
+	}
+	reportClaudeUsageCapture(ctx, st, usage, logger, executionExport.InvocationID, replay.ClaudeUsage)
+	return nil
 }
 
 // recordExportOnly records an export that mints no publication task, with

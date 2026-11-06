@@ -453,7 +453,7 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.RecordExecutionExport(p.ctx, p.store, exported, replay); err != nil {
+	if err := engine.RecordExecutionExport(p.ctx, p.store, exported, replay, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertRealRunCheckpoint(t, p, true, "retained")

@@ -669,7 +669,7 @@ func TestLegacyProductionRunFinishesWithoutPublicationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.RecordExecutionExport(ctx, f.store, executionExport, engine.ProductionReplay{}); err != nil {
+	if err := engine.RecordExecutionExport(ctx, f.store, executionExport, engine.ProductionReplay{}, nil, nil); err != nil {
 		t.Fatalf("record legacy export-only completion: %v", err)
 	}
 

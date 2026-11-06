@@ -154,6 +154,43 @@ func TestTerminalWithoutAClaudeUsageSinkDropsTheCapture(t *testing.T) {
 	assertOneDropWarning(t, warnings(), attempt.InvocationID)
 }
 
+// TestExportOnlyRecordReportsNoClaudeUsage pins that an export-only arm (here
+// attended) reports nothing when its export is recorded, even with a capture
+// on the replay: its terminal is collected later and reports it then.
+func TestExportOnlyRecordReportsNoClaudeUsage(t *testing.T) {
+	t.Parallel()
+	engine, _, attempt := usageEngineFixtureWith(t, usageFixtureConfig{bound: true, claude: true})
+	ctx := t.Context()
+	var admission domain.ExecutionAdmission
+	if err := engine.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, attempt.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: attempt.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: admission.AdmittedAt.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingClaudeUsageSink{}
+	logger, warnings := usageWarnings()
+	if err := RecordExecutionExport(ctx, engine.store, export,
+		ProductionReplay{ClaudeUsage: loopbackClaudeUsage(t)}, sink, logger); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.captured) != 0 {
+		t.Fatalf("sink got %+v at export time, want nothing", sink.captured)
+	}
+	if got := warnings(); len(got) != 0 {
+		t.Fatalf("warnings = %q, want none", got)
+	}
+}
+
 // chainClaudeUsageSink is the daemon's sink shape over the real collector and
 // coordinator: hold the capture, then start a collection only when it was
 // kept.

@@ -303,6 +303,11 @@ type ExecutionReplay struct {
 	// never collected, so no later step would record it. It is set only on
 	// the recording path; LoadExecutionReplay leaves it empty.
 	Usage []exec.UsageMeasurement
+	// ClaudeUsage is the writer turn's Claude usage capture, handed to the
+	// recorder for the same reason as Usage: an unattended export is never
+	// collected, so the recorder reports it once the export commits. It is
+	// set only on the recording path; LoadExecutionReplay leaves it nil.
+	ClaudeUsage *exec.ClaudeUsageCapture
 }
 
 func (r releasedExport) outcome() exportOutcome {

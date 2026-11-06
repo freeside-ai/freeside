@@ -1492,7 +1492,7 @@ func TestExportRecordedAtSurvivesRestartAndReplay(t *testing.T) {
 			for attempt := range 2 {
 				// Re-run the import-and-record crash window against the same
 				// immutable row, keeping the released directory until both finish.
-				result, err := d.finish(ctx, in, in.Export.outcome(), d.authority.ImportOptionsRecord, nil)
+				result, err := d.finish(ctx, in, in.Export.outcome(), d.authority.ImportOptionsRecord, nil, nil)
 				if err != nil || result.Status != exec.StatusCompleted {
 					t.Fatalf("finish attempt %d = %+v, %v; want completed", attempt, result, err)
 				}

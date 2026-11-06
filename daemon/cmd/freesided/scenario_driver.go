@@ -167,7 +167,7 @@ func (d scenarioStageDriver) deliver(ctx context.Context, id domain.InvocationID
 	return engine.RecordExecutionExport(ctx, d.store, record, engine.ProductionReplay{
 		InvocationID: id, ObservedBaseSHA: spec.Base.BaseSHA, HeadSHA: imported.CommitSHA,
 		Manifest: manifest, ManifestDigest: manifestDigest, ImportOptions: options,
-	})
+	}, nil, nil)
 }
 
 // putExport stores the export's manifest and every regular file's blob,

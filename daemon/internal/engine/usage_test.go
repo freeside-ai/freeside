@@ -339,7 +339,7 @@ func TestUsageObservationsPersistWithTheExport(t *testing.T) {
 		return observations
 	}
 	for attempt := range 2 {
-		if err := RecordExecutionExport(ctx, engine.store, export, ProductionReplay{Usage: usage}); err != nil {
+		if err := RecordExecutionExport(ctx, engine.store, export, ProductionReplay{Usage: usage}, nil, nil); err != nil {
 			t.Fatalf("record export attempt %d: %v", attempt, err)
 		}
 	}

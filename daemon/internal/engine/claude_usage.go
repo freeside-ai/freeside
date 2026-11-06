@@ -11,11 +11,14 @@ import (
 )
 
 // ClaudeUsageSink receives a finished Claude writer turn's usage capture
-// (exec.StageResult.ClaudeUsage) with the enrollment and generation the turn
-// was admitted under and the usage pool that enrollment's identity meters
-// (plan §10, usage collection rules). The daemon's sink holds it for the
-// pool's Claude usage collector and starts a collection. The capture is
-// advisory: an error is logged and never fails the terminal it rode on.
+// with the enrollment and generation the turn was admitted under and the
+// usage pool that enrollment's identity meters (plan §10, usage collection
+// rules). It arrives by one of two paths: a collected terminal's
+// exec.StageResult.ClaudeUsage, or, for an unattended production export that
+// is never collected, ProductionReplay.ClaudeUsage once RecordExecutionExport
+// commits the export. The daemon's sink holds it for the pool's Claude usage
+// collector and starts a collection. The capture is advisory: an error is
+// logged and never fails the terminal or export it rode on.
 type ClaudeUsageSink interface {
 	ClaudeUsageCaptured(
 		ctx context.Context, pool domain.UsagePoolID, enrollment domain.ClientEnrollmentID, generation int,
@@ -24,8 +27,8 @@ type ClaudeUsageSink interface {
 }
 
 // WithClaudeUsageSink installs the sink a writer turn's usage capture goes to
-// once its terminal is collected. Without it a capture is dropped with a
-// warning.
+// once its terminal is collected. RecordExecutionExport takes the same sink
+// for the export-time path. Without it a capture is dropped with a warning.
 func WithClaudeUsageSink(sink ClaudeUsageSink) Option {
 	return func(e *Engine) error {
 		if sink == nil {

@@ -5119,7 +5119,7 @@ func TestUnattendedExecutionExportUsesAtomicPathAfterAttendedRestart(t *testing.
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 	})
 	p.store = restarted
-	if err := engine.RecordExecutionExport(p.ctx, p.store, record, p.replay); !errors.Is(err, domain.ErrImmutableTransition) {
+	if err := engine.RecordExecutionExport(p.ctx, p.store, record, p.replay, nil, nil); !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("attended-restart completion error = %v, want atomic task conflict", err)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {

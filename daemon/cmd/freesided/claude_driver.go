@@ -343,9 +343,14 @@ var unattendedAdmissionFloor = []exec.Capability{
 
 // exportRecorder adapts the store's internal-transaction export seam to the
 // driver's port (the wardstore adapter precedent: the driver holds no store
-// handle, and RecordExecutionExport is not client-visible state).
+// handle, and RecordExecutionExport is not client-visible state). usage
+// receives an unattended export's Claude usage capture once the export
+// commits, since that export is never collected; nil drops it with a warning
+// on logger.
 type exportRecorder struct {
-	store *store.Store
+	store  *store.Store
+	usage  engine.ClaudeUsageSink
+	logger *slog.Logger
 }
 
 func (r exportRecorder) RecordExecutionExport(
@@ -353,7 +358,18 @@ func (r exportRecorder) RecordExecutionExport(
 	record domain.ExecutionExport,
 	replay claude.ExecutionReplay,
 ) error {
-	err := engine.RecordExecutionExport(ctx, r.store, record, engine.ProductionReplay{
+	err := engine.RecordExecutionExport(ctx, r.store, record, productionReplayFrom(replay), r.usage, r.logger)
+	if errors.Is(err, store.ErrImmutableConflict) {
+		return errors.Join(err, domain.ErrImmutableTransition)
+	}
+	return err
+}
+
+// productionReplayFrom carries every field of the driver's replay to the
+// engine's. A field left behind is lost silently, as the Claude usage
+// capture once was (#2716), so a test pins that the two field sets match.
+func productionReplayFrom(replay claude.ExecutionReplay) engine.ProductionReplay {
+	return engine.ProductionReplay{
 		InvocationID: replay.InvocationID, ObservedBaseSHA: replay.ObservedBaseSHA,
 		HeadSHA: replay.HeadSHA, Manifest: replay.Manifest,
 		ManifestDigest: replay.ManifestDigest, Evidence: replay.Evidence,
@@ -361,11 +377,8 @@ func (r exportRecorder) RecordExecutionExport(
 		CommitPlanDigest:       replay.CommitPlanDigest,
 		ImportOptions:          replay.ImportOptions,
 		Usage:                  replay.Usage,
-	})
-	if errors.Is(err, store.ErrImmutableConflict) {
-		return errors.Join(err, domain.ErrImmutableTransition)
+		ClaudeUsage:            replay.ClaudeUsage,
 	}
-	return err
 }
 
 // storeAdmissionAuthority binds private driver state back to the durable
@@ -1530,9 +1543,12 @@ func wardEnforceableEgressProfiles() []domain.EgressProfile {
 // than the configured base. It starts no runtime work unless cfg.RunConformance
 // asks for the suite; the caller runs the driver's restart reconciliation
 // before the engine loop starts.
+// usage receives an unattended writer turn's Claude usage capture when its
+// export is recorded; nil, as for a daemon without the Claude collector,
+// drops it with a warning.
 func composeClaudeDriver(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg claudeDriverConfig,
-	logger *slog.Logger,
+	usage engine.ClaudeUsageSink, logger *slog.Logger,
 ) (_ *claudeComposition, err error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -1826,9 +1842,9 @@ func composeClaudeDriver(
 		ExportRoot:   filepath.Join(cfg.StateDir, "ward-exports"),
 		Gate:         backend,
 		Seeder:       transportSeeder{transport: transport},
-		Exports:      exportRecorder{store: st},
-		ImportStarts: exportRecorder{store: st},
-		Outcomes:     exportRecorder{store: st},
+		Exports:      exportRecorder{store: st, usage: usage, logger: logger},
+		ImportStarts: exportRecorder{store: st, usage: usage, logger: logger},
+		Outcomes:     exportRecorder{store: st, usage: usage, logger: logger},
 		Authority: storeAdmissionAuthority{
 			store: st, blobs: blobs, allowedPaths: slices.Clone(cfg.AllowedPaths),
 			commitAuthors:             commitAuthors,
