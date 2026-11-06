@@ -31,9 +31,9 @@ func runRenewCodexMain(args []string) {
 func runRenewCodexCommand(
 	ctx context.Context, args []string, stdout, stderr io.Writer,
 ) (err error) {
-	return runRenewCodexCommandWithRefresher(
-		ctx, args, stdout, stderr, ward.NewCodexAuthHTTPRefresher(),
-	)
+	deps := productionAuthAddDeps()
+	return runRenewCodexCommandWithDeps(ctx, args, stdout, stderr, ward.NewCodexAuthHTTPRefresher(),
+		deps.runtime, deps.codexModelDiscovery)
 }
 
 func runRenewCodexCommandWithRefresher(
@@ -42,12 +42,28 @@ func runRenewCodexCommandWithRefresher(
 	stdout, stderr io.Writer,
 	refresher ward.CodexAuthRefresher,
 ) (err error) {
+	deps := productionAuthAddDeps()
+	return runRenewCodexCommandWithDeps(ctx, args, stdout, stderr, refresher, deps.runtime, deps.codexModelDiscovery)
+}
+
+// runRenewCodexCommandWithDeps is renew-codex with its token endpoint,
+// container runtime, and model discovery replaceable by tests.
+func runRenewCodexCommandWithDeps(
+	ctx context.Context,
+	args []string,
+	stdout, stderr io.Writer,
+	refresher ward.CodexAuthRefresher,
+	runtime func(containerBin string) ward.Runtime,
+	discovery func(ward.Runtime) codexModelDiscoverer,
+) (err error) {
 	flags := flag.NewFlagSet("freesided renew-codex", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
 	authIdentityID := flags.String("auth-identity", "", "Codex auth identity id (required)")
 	authStoreRoot := flags.String("auth-store-root", "", "separate private root containing live Codex auth stores (required)")
 	authStorePath := flags.String("auth-store", "", "live auth.json path under auth-store-root (required; immutable after initial enrollment)")
+	agentImage := flags.String("agent-image", "", "optional digest-pinned Codex image model discovery runs in")
+	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest (repeatable)")
@@ -66,6 +82,8 @@ func runRenewCodexCommandWithRefresher(
 		return errors.New("-auth-store-root is required")
 	case *authStorePath == "":
 		return errors.New("-auth-store is required")
+	case *agentImage != "" && domain.ImageRef(*agentImage).Validate() != nil:
+		return errors.New("-agent-image must be digest-pinned")
 	}
 
 	lock, err := requireNoDaemon("renew-codex", *dbPath)
@@ -103,8 +121,33 @@ func runRenewCodexCommandWithRefresher(
 		}
 		return err
 	}
+	enrollments, err := codexOAuthEnrollments(ctx, st, result.AuthIdentityID)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: model discovery skipped: enrollments not read: %v\n", err)
+	} else {
+		discoverCodexAfterAuthChange(ctx, st, runtime, discovery, *containerBin, *agentImage,
+			*authStoreRoot, result.AuthStorePath, enrollments, stderr)
+	}
 	if err := json.NewEncoder(stdout).Encode(result); err != nil {
 		return fmt.Errorf("write renewal result: %w", err)
 	}
 	return nil
+}
+
+// codexOAuthEnrollments lists an identity's Codex CLI OAuth enrollments,
+// whose catalogs a renewal refreshes.
+func codexOAuthEnrollments(
+	ctx context.Context, st *store.Store, identity domain.AuthIdentityID,
+) ([]domain.ClientEnrollmentID, error) {
+	var ids []domain.ClientEnrollmentID
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		enrollments, err := tx.ListClientEnrollments(ctx, identity)
+		for _, enrollment := range enrollments {
+			if enrollment.HarnessClient == domain.HarnessClientCodexCLI && enrollment.AuthMethod == domain.AuthMethodOAuth {
+				ids = append(ids, enrollment.ID)
+			}
+		}
+		return err
+	})
+	return ids, err
 }

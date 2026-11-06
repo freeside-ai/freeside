@@ -19,12 +19,13 @@ import (
 )
 
 // authAddDeps are the side-effecting collaborators a test replaces: the Codex
-// token endpoint, the container runtime, and the model discovery that runs on
+// token endpoint, the container runtime, and the model discoveries that run on
 // it.
 type authAddDeps struct {
-	codexRefresher ward.CodexAuthRefresher
-	runtime        func(containerBin string) ward.Runtime
-	modelDiscovery func(runtime ward.Runtime) claudeModelDiscoverer
+	codexRefresher      ward.CodexAuthRefresher
+	runtime             func(containerBin string) ward.Runtime
+	modelDiscovery      func(runtime ward.Runtime) claudeModelDiscoverer
+	codexModelDiscovery func(runtime ward.Runtime) codexModelDiscoverer
 }
 
 func productionAuthAddDeps() authAddDeps {
@@ -34,6 +35,9 @@ func productionAuthAddDeps() authAddDeps {
 		// auth add authorizes no rig resources, as its enrollment probe doesn't.
 		modelDiscovery: func(runtime ward.Runtime) claudeModelDiscoverer {
 			return productionClaudeModelDiscoverer(runtime, nil)
+		},
+		codexModelDiscovery: func(runtime ward.Runtime) codexModelDiscoverer {
+			return productionCodexModelDiscoverer(runtime, nil)
 		},
 	}
 }
@@ -51,7 +55,8 @@ type authAddConfig struct {
 	InputRoot, InputFile, AuthStoreRoot, AuthStorePath string
 
 	// Claude: the attested account, the volume to author, and the images
-	// that author it and probe the token.
+	// that author it and probe the token. Codex takes AgentImage and
+	// ContainerBin too, optionally, for model discovery.
 	Account, AuthVolume, ContainerBin, ExporterImage, AgentImage string
 }
 
@@ -105,6 +110,10 @@ func runAuthAddCommand(
 			Journal: adapters.Enrollment, AuthStoreLeaser: adapters.Leaser,
 			AuthRefresher: deps.codexRefresher,
 		})
+		if err == nil {
+			discoverCodexAfterAuthChange(ctx, st, deps.runtime, deps.codexModelDiscovery, cfg.ContainerBin, cfg.AgentImage,
+				cfg.AuthStoreRoot, cfg.AuthStorePath, []domain.ClientEnrollmentID{enrollmentID}, stderr)
+		}
 	case domain.HarnessClientClaudeCode:
 		runtime := deps.runtime(cfg.ContainerBin)
 		result, err = ward.EnrollClaudeSetupToken(ctx, ward.ClaudeAuthEnrollmentConfig{
@@ -152,10 +161,11 @@ func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) 
 	flags.StringVar(&cfg.Account, "account", "",
 		"claude_code: operator-attested subscription account the token belongs to")
 	flags.StringVar(&cfg.AuthVolume, "auth-volume", "", "claude_code: credential volume to create")
-	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "claude_code: Apple container CLI path")
+	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "Apple container CLI path")
 	flags.StringVar(&cfg.ExporterImage, "exporter-image", "", "claude_code: digest-pinned exporter image")
 	flags.StringVar(&cfg.AgentImage, "agent-image", "",
-		"claude_code: digest-pinned Claude agent image the provider probe runs")
+		"claude_code: digest-pinned Claude agent image the provider probe runs; "+
+			"codex_cli: optional digest-pinned Codex image model discovery runs in")
 	if err := flags.Parse(args); err != nil {
 		return authAddConfig{}, err
 	}
@@ -192,7 +202,7 @@ func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) 
 			return authAddConfig{}, fmt.Errorf("-%s is required", flag.name)
 		}
 	}
-	if cfg.Client == domain.HarnessClientClaudeCode && domain.ImageRef(cfg.AgentImage).Validate() != nil {
+	if cfg.AgentImage != "" && domain.ImageRef(cfg.AgentImage).Validate() != nil {
 		return authAddConfig{}, errors.New("-agent-image must be digest-pinned")
 	}
 	return cfg, nil
@@ -243,5 +253,48 @@ func discoverAfterEnrollment(
 		func() time.Time { return time.Now().UTC() }); err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: model discovery for %s failed; the next daemon start retries it: %v\n",
 			enrollment, err)
+	}
+}
+
+// discoverCodexAfterAuthChange records the model catalog of each Codex
+// enrollment an auth command just enrolled or renewed, under the live store
+// it wrote. It never fails the command: without an image it prints how the
+// catalog will be discovered, and a failed discovery prints one warning. The
+// command holds the daemon lock and has released its mutation lease, so no
+// mutation runs beside the read and no read hold is taken.
+func discoverCodexAfterAuthChange(
+	ctx context.Context, st *store.Store, runtime func(string) ward.Runtime,
+	discovery func(ward.Runtime) codexModelDiscoverer, containerBin, image, storeRoot, storePath string,
+	enrollments []domain.ClientEnrollmentID, stderr io.Writer,
+) {
+	if len(enrollments) == 0 {
+		return
+	}
+	if image == "" {
+		_, _ = fmt.Fprintf(stderr, "note: model discovery for %v skipped without -agent-image; "+
+			"the next daemon start with a Codex reviewer discovers it\n", enrollments)
+		return
+	}
+	now := func() time.Time { return time.Now().UTC() }
+	err := func() error {
+		credential, err := ward.ReviewSnapshotProbeCredential(
+			domain.HarnessClientCodexCLI, ward.CodexAuthSubscription, storeRoot, storePath, now())
+		if err != nil {
+			return err
+		}
+		report, err := discovery(runtime(containerBin))(ctx, image, credential)
+		if err != nil {
+			return err
+		}
+		for _, enrollment := range enrollments {
+			if _, err := recordModelCatalog(ctx, st, report, enrollment, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: model discovery for %v failed; the next daemon start "+
+			"with a Codex reviewer retries it: %v\n", enrollments, err)
 	}
 }
