@@ -379,6 +379,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	if err := e.reconcileHeldWorkNotices(ctx); err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile held-work notices: %w", err)
 	}
+	// Also after the collectors, so a canceled result collected after its
+	// Stop was confirmed is expired in the pass that raised its card.
+	if err := e.reconcileStoppedTaskItems(ctx); err != nil {
+		return ReconcileResult{}, fmt.Errorf("reconcile stopped task items: %w", err)
+	}
 	result := ReconcileResult{
 		RunTransitions:     runTransitions,
 		InvocationsStarted: started,

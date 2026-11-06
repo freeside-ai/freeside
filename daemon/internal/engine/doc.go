@@ -72,8 +72,10 @@
 //     task names and the display names cards carry
 //   - task_execution.go, task_cancellation.go
 //     task-fenced invocation resume and recovery, and task cancellation
-//   - task_completion.go, task_abandonment.go, closure_settlement.go
-//     retiring a task's items on completion, closure, or settled closure
+//   - task_completion.go, task_abandonment.go, closure_settlement.go,
+//     task_stop_items.go
+//     retiring a task's items on completion, closure, settled closure, or
+//     confirmed Stop
 //   - attention_discussion.go conversation intents on attention items
 //   - specification.go, specification_discussion.go, specification_retry.go
 //     the specification workflow, its discussion, and its retry

@@ -7254,7 +7254,19 @@ needed to distinguish an accepted Stop from confirmed termination.
 
 A bound confirmed acknowledgement atomically releases
 any held episode and projects `stopped`; an already completed episode stays
-`finished`. Explicit abandonment projects `abandoned` without claiming that
+`finished`. The confirming write normally also expires each open
+`execution_failure` card that the Stop's own cancellation raised: canceled
+facts on a target run in the target episode, with the outcome recorded no
+earlier than the Stop was requested. The daemon usually records an outcome when
+it collects the result, so a cancellation the driver finished before the Stop
+but the daemon collected after it is treated as the Stop's. Reconcile expires
+such a card collected after confirmation, in the pass that collects it, or
+left open by an older daemon. A Stop leaves every other card open, and
+retires nothing while it is `requested` or `failed_to_stop`. Card cleanup
+never holds back the confirmation: if it fails, the Stop is confirmed without
+it and Reconcile retries the cards. The terminal result and execution outcome
+stay as history.
+Explicit abandonment projects `abandoned` without claiming that
 execution stopped. `freesided abandon -db <database> -task <task-id>` commits
 slot release, durable workflow closure, and card cleanup in that order, as
 separate transactions. The JSON result preserves `released` and
