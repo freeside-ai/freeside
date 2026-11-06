@@ -92,7 +92,7 @@ func TestTaskAdmissionRejectsLateMilestoneAfterSlotIsTaken(t *testing.T) {
 }
 
 // releasedRunFixture opens a store holding one task with the runs "released"
-// and "other", then admits and abandons "released": the state label intake
+// and "other", then admits and releases "released": the state label intake
 // leaves when it releases an undecided admitted start (#1770).
 func releasedRunFixture(t *testing.T, path string) (*store.Store, domain.TaskID) {
 	t.Helper()
@@ -114,7 +114,7 @@ func releasedRunFixture(t *testing.T, path string) (*store.Store, domain.TaskID)
 		if err := tx.AdmitTaskStart(ctx, "released", now, 1); err != nil {
 			return err
 		}
-		_, err = tx.AbandonTask(ctx, task.ID, now)
+		_, err = tx.ReleaseTaskStart(ctx, task.ID, now)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -201,7 +201,8 @@ func TestRecordTaskStartAfterReleaseRestartsReleasedRun(t *testing.T) {
 
 // TestRecordTaskStartAfterReleaseRefusesOtherStates covers the refusals: a
 // restart needs the run's own newest start followed by that start's bound
-// abandonment, an open workflow episode, and no cancellation fence.
+// release and no operator abandonment of it, an open workflow episode, and no
+// cancellation fence.
 func TestRecordTaskStartAfterReleaseRefusesOtherStates(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
@@ -219,17 +220,35 @@ func TestRecordTaskStartAfterReleaseRefusesOtherStates(t *testing.T) {
 			_, err := tx.AbandonTask(ctx, taskID, now)
 			return err
 		}, "released", store.ErrTaskAdmissionRequired},
-		{"newest start has no bound abandonment", func(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID) error {
+		{"newest start has no bound release", func(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID) error {
 			if err := tx.RecordTaskStartAfterRelease(ctx, "released", now); err != nil {
 				return err
 			}
-			// An abandonment not bound to the restart still releases the slot,
+			// An abandonment not bound to the restart still ends the slot,
 			// but it is not the released state a restart follows.
 			return tx.RecordTaskLifecycleFact(ctx, taskID, domain.TaskLifecycleFact{
 				Kind: domain.TaskLifecycleAbandoned, RunID: "released", SourceID: "abandon:unbound", RecordedAt: now,
 			})
 		}, "released", store.ErrTaskAdmissionRequired},
+		// An operator abandon of a decided start whose closure has not yet
+		// committed (#2696): the start's only end is the operator's.
+		{"operator abandoned the newest start", func(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID) error {
+			if err := tx.RecordTaskStartAfterRelease(ctx, "released", now); err != nil {
+				return err
+			}
+			_, err := tx.AbandonTask(ctx, taskID, now)
+			return err
+		}, "released", store.ErrTaskAdmissionRequired},
+		{"operator abandoned after the release", func(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID) error {
+			_, err := tx.AbandonTask(ctx, taskID, now)
+			return err
+		}, "released", store.ErrTaskAdmissionRequired},
+		// What `freesided abandon` does on a released task: its own abandonment,
+		// then the closure that binds to it.
 		{"operator closed the released episode", func(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID) error {
+			if _, err := tx.AbandonTask(ctx, taskID, now); err != nil {
+				return err
+			}
 			_, _, err := tx.CloseTaskWorkflow(ctx, taskID, 1, now)
 			return err
 		}, "released", store.ErrTaskWorkflowClosed},
@@ -265,5 +284,52 @@ func TestRecordTaskStartAfterReleaseRefusesOtherStates(t *testing.T) {
 				t.Fatalf("refused restart recorded facts: %+v", after.LifecycleFacts)
 			}
 		})
+	}
+}
+
+// TestReleaseTaskStart covers label intake's release: one abandoned fact under
+// the release source id that ends the slot, a no-op replay, and nothing for a
+// task with no start.
+func TestReleaseTaskStart(t *testing.T) {
+	t.Parallel()
+	s, taskID := releasedRunFixture(t, tempDBPath(t))
+	ctx := t.Context()
+	task := readTask(t, s, taskID)
+	if domain.TaskWIP(task) || len(task.LifecycleFacts) != 2 {
+		t.Fatalf("release: WIP = %v, facts = %+v", domain.TaskWIP(task), task.LifecycleFacts)
+	}
+	start, release := task.LifecycleFacts[0], task.LifecycleFacts[1]
+	if release.Kind != domain.TaskLifecycleAbandoned || release.RunID != "released" ||
+		release.SourceID != "release:"+start.SourceID {
+		t.Fatalf("release fact = %+v, want an abandoned fact bound to start %q", release, start.SourceID)
+	}
+	var released bool
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		var err error
+		released, err = tx.ReleaseTaskStart(ctx, taskID, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if after := readTask(t, s, taskID); released || len(after.LifecycleFacts) != 2 {
+		t.Fatalf("replayed release: released = %v, facts = %+v", released, after.LifecycleFacts)
+	}
+
+	var fresh domain.TaskID
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		source := taskIssueSource()
+		source.IssueSubject.IssueNumber = 43
+		task, err := tx.GetOrCreateTask(ctx, "project", source)
+		if err != nil {
+			return err
+		}
+		fresh = task.ID
+		released, err = tx.ReleaseTaskStart(ctx, task.ID, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if after := readTask(t, s, fresh); released || len(after.LifecycleFacts) != 0 {
+		t.Fatalf("release with no start: released = %v, facts = %+v", released, after.LifecycleFacts)
 	}
 }

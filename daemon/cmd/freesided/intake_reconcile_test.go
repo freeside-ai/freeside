@@ -1278,6 +1278,63 @@ func TestIntakeKeepsDecidedStartSlot(t *testing.T) {
 	}
 }
 
+// TestIntakeOperatorAbandonedDecidedStartStaysDown covers `freesided abandon`
+// on a decided, unlaunched start whose closure write has not committed (#2696):
+// the abandonment commits alone, as the command leaves it when its closure
+// fails or the reconciler runs between its two writes. The next pass must not
+// relaunch the run under a new episode, so closing the abandoned episode, the
+// command's repair, still succeeds.
+func TestIntakeOperatorAbandonedDecidedStartStaysDown(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r.reconcile(t.Context(), nil)
+	o := f.latestOccurrence(t, 7)
+	f.strandStart(t, o)
+	if _, err := f.attention.StartTaskProposalUnattended(t.Context(),
+		domain.ItemID(o.Admission.ProposalInstanceID), "operator-start-7"); err != nil {
+		t.Fatal(err)
+	}
+	runID := o.Admission.Subject.SpecificationRunID
+	var taskID domain.TaskID
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(t.Context(), runID)
+		if err != nil {
+			return err
+		}
+		taskID = run.TaskID
+		_, err = tx.AbandonTask(t.Context(), taskID, f.now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r.reconcile(t.Context(), nil)
+	if f.started(t, runID) {
+		t.Fatal("an operator-abandoned start must not relaunch")
+	}
+	var kinds []domain.TaskLifecycleFactKind
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		task, err := tx.GetTask(t.Context(), taskID)
+		for _, fact := range task.LifecycleFacts {
+			kinds = append(kinds, fact.Kind)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(kinds, []domain.TaskLifecycleFactKind{domain.TaskLifecycleStarted, domain.TaskLifecycleAbandoned}) {
+		t.Fatalf("lifecycle facts = %v, want the start and its operator abandonment only", kinds)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, _, err := tx.CloseTaskWorkflow(t.Context(), taskID, 1, f.now)
+		return err
+	}); err != nil {
+		t.Fatalf("close the abandoned episode: %v", err)
+	}
+}
+
 // TestIntakeReleaseLeavesAnotherOccurrencesStart covers the wrong-episode
 // hazard: a relabeled issue's new occurrence shares the task, whose newest
 // start belongs to the first occurrence's launched run, so refusing or
