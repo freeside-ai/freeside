@@ -1072,7 +1072,15 @@ func submitIssueSubjectSpecificationRun(
 		}); err != nil {
 			return err
 		}
-		// An admitted spec-run submission is a task start (issue #1318 D3).
+		// An admitted spec-run submission is a task start (issue #1318 D3). Label
+		// intake may have released this run's admitted start while its card was
+		// still undecided (#1770); this branch is the run's first launch, so it
+		// takes the slot again with a fresh start.
+		if released, err := issueSubjectStartReleased(ctx, tx, existing); err != nil {
+			return err
+		} else if released {
+			return tx.RecordTaskStartAfterRelease(ctx, spec.SpecificationRunID, time.Now().UTC())
+		}
 		return tx.RecordTaskStart(ctx, spec.SpecificationRunID, time.Now().UTC())
 	})
 	if err != nil {
@@ -1085,6 +1093,21 @@ func submitIssueSubjectSpecificationRun(
 		ImplementationInvocationID: productionInvocationID(spec.ImplementationRunID),
 		ImplementationStageID:      productionStageID(spec.ImplementationRunID),
 	}, nil
+}
+
+// issueSubjectStartReleased reports whether the reserved run's task has its
+// newest start on this run and no longer holds the slot: the state label
+// intake leaves when it releases an undecided admitted start.
+func issueSubjectStartReleased(ctx context.Context, tx *store.WriteTx, run domain.Run) (bool, error) {
+	if run.TaskID == "" {
+		return false, nil
+	}
+	task, err := tx.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return false, err
+	}
+	start := task.CurrentStart()
+	return start != nil && start.RunID == run.ID && !domain.TaskWIP(task), nil
 }
 
 // specificationWorkUnitMatchesDeclaration reports whether the caller-supplied work

@@ -1030,3 +1030,286 @@ func TestIntakeRegistersOwnProjectAndAdmits(t *testing.T) {
 		t.Fatalf("project repository = %d, want %d", project.RepositoryID, intakeTestRepoID)
 	}
 }
+
+// authorizedAutoStart is an override-authorized auto_start policy, for driving
+// autoStart directly on a card a propose-mode pass admitted.
+func authorizedAutoStart(wipCap int) intake.IntakePolicy {
+	return intake.IntakePolicy{WIPCap: wipCap, Mode: domain.InitiatorModeAutoStart, ModeProvenance: domain.ProvenanceOverride}
+}
+
+// holdsSlot reports whether the occurrence's task holds a WIP admission slot.
+func (f intakeFixture) holdsSlot(t *testing.T, o domain.IntakeOccurrence) bool {
+	t.Helper()
+	var wip bool
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(t.Context(), o.Admission.Subject.SpecificationRunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), run.TaskID)
+		wip = domain.TaskWIP(task)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return wip
+}
+
+// strandStart records the occurrence's start with no start decision: the state
+// a crash, or a failed decision write, between autoStart's two writes leaves
+// (#1770).
+func (f intakeFixture) strandStart(t *testing.T, o domain.IntakeOccurrence) {
+	t.Helper()
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.AdmitTaskStart(t.Context(), o.Admission.Subject.SpecificationRunID, f.now, 5)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.holdsSlot(t, o) {
+		t.Fatal("the stranded start should hold a slot")
+	}
+}
+
+// operatorStartLaunches decides start on the occurrence's card as an operator
+// and checks that the next pass launches it and the task takes its slot again.
+func (f intakeFixture) operatorStartLaunches(t *testing.T, r *intakeReconciler, o domain.IntakeOccurrence) {
+	t.Helper()
+	started, err := f.attention.StartTaskProposalUnattended(t.Context(),
+		domain.ItemID(o.Admission.ProposalInstanceID), "operator-start-"+strconv.Itoa(o.IssueNumber))
+	if err != nil || !started {
+		t.Fatalf("operator start on the released card: started = %v, err = %v", started, err)
+	}
+	r.reconcile(t.Context(), nil)
+	if !f.started(t, o.Admission.Subject.SpecificationRunID) {
+		t.Fatal("an operator start on a released card must launch on the next pass")
+	}
+	if !f.holdsSlot(t, o) {
+		t.Fatal("the launched run must hold its slot")
+	}
+}
+
+// TestIntakeReleasesStrandedStartOnOriginDemotion covers the review finding on
+// PR #1769: a retry that the origin gate demotes releases the start a prior
+// pass recorded but never decided, and the released card still launches when
+// an operator starts it.
+func TestIntakeReleasesStrandedStartOnOriginDemotion(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r.reconcile(t.Context(), nil)
+	o := f.latestOccurrence(t, 7)
+	f.strandStart(t, o)
+
+	storetest.LedgerFiledFollowUpIssue(t, f.store, intakeRepoFiling(), 7)
+	if err := r.autoStart(t.Context(), init, o, authorizedAutoStart(5)); err != nil {
+		t.Fatalf("autoStart: %v", err)
+	}
+	f.assertOriginDemoted(t, 7)
+	if f.holdsSlot(t, o) {
+		t.Fatal("a demoted retry must release the stranded start")
+	}
+	f.operatorStartLaunches(t, r, o)
+}
+
+// TestIntakeReleasesStrandedStartOnWIPCapRefusal covers a retry refused because
+// other tasks took the remaining slots: the stranded start is released and the
+// other task keeps its slot.
+func TestIntakeReleasesStrandedStartOnWIPCapRefusal(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7, 8), nil)
+	r.reconcile(t.Context(), nil)
+	stranded, other := f.latestOccurrence(t, 7), f.latestOccurrence(t, 8)
+	f.strandStart(t, other)
+	f.strandStart(t, stranded)
+
+	if err := r.autoStart(t.Context(), init, stranded, authorizedAutoStart(1)); err != nil {
+		t.Fatalf("autoStart: %v", err)
+	}
+	if o := f.latestOccurrence(t, 7); o.Refusal == nil || o.Refusal.Reason != domain.IntakeRefusalWIPCapExhausted {
+		t.Fatalf("refusal = %+v, want wip_cap_exhausted", o.Refusal)
+	}
+	if f.holdsSlot(t, stranded) {
+		t.Fatal("a cap-refused retry must release the stranded start")
+	}
+	if !f.holdsSlot(t, other) {
+		t.Fatal("the other task's slot must stay held")
+	}
+}
+
+// TestIntakeReleasesStrandedStartOnSubjectInputRefusal covers a retry refused
+// because the policy artifact or work-item source is missing or stale. No
+// reconciler test makes an input go missing, so refuse is called directly.
+func TestIntakeReleasesStrandedStartOnSubjectInputRefusal(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []domain.IntakeStartRefusalReason{
+		domain.IntakeRefusalSubjectInputMissing, domain.IntakeRefusalSubjectInputStale,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			f := newIntakeFixture(t)
+			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+			r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+			r.reconcile(t.Context(), nil)
+			o := f.latestOccurrence(t, 7)
+			f.strandStart(t, o)
+
+			if err := r.refuse(t.Context(), o, reason); err != nil {
+				t.Fatalf("refuse: %v", err)
+			}
+			if after := f.latestOccurrence(t, 7); after.Refusal == nil || after.Refusal.Reason != reason {
+				t.Fatalf("refusal = %+v, want %q", after.Refusal, reason)
+			}
+			if f.holdsSlot(t, o) {
+				t.Fatal("a subject-input refusal must release the stranded start")
+			}
+		})
+	}
+}
+
+// TestIntakeReleasesStrandedStartOnDeparture covers a departure before the
+// retry: no later pass revisits the occurrence, so the supersession releases
+// the stranded start.
+func TestIntakeReleasesStrandedStartOnDeparture(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{"open", "closed"} {
+		t.Run("issue "+state, func(t *testing.T) {
+			t.Parallel()
+			f := newIntakeFixture(t)
+			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+			f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+			o := f.latestOccurrence(t, 7)
+			f.strandStart(t, o)
+
+			f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: state}).reconcile(t.Context(), nil)
+			after := f.latestOccurrence(t, 7)
+			if after.State == domain.IntakeOccurrencePresent || after.Supersession == nil {
+				t.Fatalf("occurrence = state %q, supersession %+v; want departed and superseded", after.State, after.Supersession)
+			}
+			if f.holdsSlot(t, o) {
+				t.Fatal("a departure must release the stranded start")
+			}
+		})
+	}
+}
+
+// TestIntakeReleasesStrandedStartRefusedBeforeTheFix covers an occurrence
+// refused, with its start stranded, before refusals released it: the next
+// pass releases the slot, a later pass changes nothing, and an operator start
+// still launches.
+func TestIntakeReleasesStrandedStartRefusedBeforeTheFix(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r.reconcile(t.Context(), nil)
+	o := f.latestOccurrence(t, 7)
+	f.strandStart(t, o)
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, err := tx.RecordIntakeRefusal(t.Context(), o.RepositoryID, o.IssueNumber, o.Label, o.Ordinal,
+			domain.IntakeRefusalModeNotAuthorized, f.now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r.reconcile(t.Context(), nil)
+	if f.holdsSlot(t, o) {
+		t.Fatal("the next pass must release a stranded start refused before the fix")
+	}
+	r.reconcile(t.Context(), nil)
+	var kinds []domain.TaskLifecycleFactKind
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(t.Context(), o.Admission.Subject.SpecificationRunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), run.TaskID)
+		for _, fact := range task.LifecycleFacts {
+			kinds = append(kinds, fact.Kind)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(kinds, []domain.TaskLifecycleFactKind{domain.TaskLifecycleStarted, domain.TaskLifecycleAbandoned}) {
+		t.Fatalf("lifecycle facts = %v, want one start and its release", kinds)
+	}
+	f.operatorStartLaunches(t, r, o)
+}
+
+// TestIntakeKeepsDecidedStartSlot covers the boundary: a start that was decided
+// but has not launched is not stranded, so it keeps its slot through a
+// departure and through its launch. The store already rejects a refusal on a
+// decided card, so the release every refusal runs is checked directly.
+func TestIntakeKeepsDecidedStartSlot(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r.reconcile(t.Context(), nil)
+	o := f.latestOccurrence(t, 7)
+	f.strandStart(t, o)
+	if _, err := f.attention.StartTaskProposalUnattended(t.Context(),
+		domain.ItemID(o.Admission.ProposalInstanceID), "operator-start-7"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return r.releaseStrandedStart(t.Context(), tx, o)
+	}); err != nil {
+		t.Fatalf("releaseStrandedStart: %v", err)
+	}
+	if !f.holdsSlot(t, o) {
+		t.Fatal("a refusal's release must not touch a decided start")
+	}
+	departed := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
+	if err := departed.advanceDeparture(t.Context(), o); !errors.Is(err, errIntakeDeferDepartureRetire) {
+		t.Fatalf("advanceDeparture: err = %v, want defer", err)
+	}
+	if !f.holdsSlot(t, o) {
+		t.Fatal("a departure must not release a decided start")
+	}
+	r.reconcile(t.Context(), nil)
+	if !f.started(t, o.Admission.Subject.SpecificationRunID) || !f.holdsSlot(t, o) {
+		t.Fatal("the decided start must launch and keep its slot")
+	}
+}
+
+// TestIntakeReleaseLeavesAnotherOccurrencesStart covers the wrong-episode
+// hazard: a relabeled issue's new occurrence shares the task, whose newest
+// start belongs to the first occurrence's launched run, so refusing or
+// retiring the new occurrence releases nothing.
+func TestIntakeReleaseLeavesAnotherOccurrencesStart(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	auto := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
+	f.reconciler([]intakeInitiator{auto}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	first := f.latestOccurrence(t, 7)
+	if !f.started(t, first.Admission.Subject.SpecificationRunID) {
+		t.Fatal("the first occurrence should have auto-started")
+	}
+	f.reconciler([]intakeInitiator{auto}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	propose := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]intakeInitiator{propose}, labeledOpen(7), nil)
+	r.reconcile(t.Context(), nil)
+	second := f.latestOccurrence(t, 7)
+	if second.Ordinal != 2 || second.Admission == nil {
+		t.Fatalf("relabel occurrence = ordinal %d, admitted %v; want an admitted second occurrence", second.Ordinal, second.Admission != nil)
+	}
+	if !f.holdsSlot(t, first) {
+		t.Fatal("the first occurrence's launched run should hold the task's slot")
+	}
+
+	if err := r.refuse(t.Context(), second, domain.IntakeRefusalSubjectInputMissing); err != nil {
+		t.Fatalf("refuse: %v", err)
+	}
+	if err := r.advanceDeparture(t.Context(), second); err != nil {
+		t.Fatalf("advanceDeparture: %v", err)
+	}
+	if !f.holdsSlot(t, first) {
+		t.Fatal("releasing the second occurrence must not end the first occurrence's episode")
+	}
+}
