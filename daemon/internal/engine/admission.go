@@ -302,9 +302,11 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 // workspace volume, and the trusted base tip moves between submissions), and
 // the composition, not the engine, knows the ward's workspace naming scheme
 // and how the operator resolves a base (#237). The engine replaces the
-// derived base commit for a maintenance task alone: it runs at its refusal's
-// tip, read from the immutable refusal record, so every attempt derives the
-// same base without the Run carrying one (repairTaskRefusal).
+// derived base commit in two cases: a maintenance task runs at its refusal's
+// tip (repairTaskRefusal), and a handoff conflict's remediation at the tip
+// its sealed authority names (handoffConflictAdmission). Each tip is read
+// from an immutable record, so every attempt derives the same base without
+// the Run carrying one.
 type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
 
 // WithAdmissionDerivation configures per-attempt workspace and base
@@ -499,6 +501,21 @@ func (e *Engine) admitAttempt(
 		}
 		env.Base.BaseSHA = repair.TipSHA
 		hydration = domain.WorkspaceHydrationNone
+	}
+	// A remediation under a handoff conflict's authority runs at the tip that
+	// authority sealed (issue #2646), so its writer is seeded there and its
+	// export, verification, and review follow that base.
+	if tip, conflict, err := handoffConflictAdmission(ctx, e.store, binding.run.ID, invocationID); err != nil {
+		return domain.ExecutionAdmission{}, false, fmt.Errorf(
+			"admit invocation %q: read handoff conflict authority: %w", invocationID, err)
+	} else if conflict {
+		if env.Base.Repo != tip.Repo || env.Base.RepositoryID != tip.RepositoryID || env.Base.BaseRef != tip.BaseRef {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: base %s#%d@%s, the run was admitted at %s#%d@%s: %w",
+				invocationID, env.Base.Repo, env.Base.RepositoryID, env.Base.BaseRef,
+				tip.Repo, tip.RepositoryID, tip.BaseRef, domain.ErrRepositoryIdentityMismatch)
+		}
+		env.Base.BaseSHA = tip.BaseSHA
 	}
 	promptPackageDigest := e.admission.environment.PromptPackageDigest
 	isSpecification := stage.ID == specificationStageID(binding.run.ID) && stage.Name == specificationStageName
@@ -997,4 +1014,54 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 		}
 	}
 	return snapshot, nil
+}
+
+// handoffConflictAdmission returns the base a remediation under a handoff
+// conflict's authority is admitted at, and false for every other invocation.
+// The commit is the tip the authority sealed, read through the authority's
+// gate, which proved it against the predecessor's sealed handoff check; the
+// request's own base is never the source. The repository coordinates are the
+// run's production admission's, the ones the handoff audited, so the caller
+// refuses a derived base of another repository or branch.
+func handoffConflictAdmission(
+	ctx context.Context, st *store.Store, runID domain.RunID, invocationID domain.InvocationID,
+) (domain.BaseRevision, bool, error) {
+	if _, ok := remediationRoundForInvocation(runID, invocationID); !ok {
+		return domain.BaseRevision{}, false, nil
+	}
+	var (
+		base     domain.BaseRevision
+		conflict bool
+	)
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(ctx, string(invocationID))
+		// The dispatch lane admits a remediation only from its intent, so one
+		// without an intent is under no handoff conflict authority.
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		request, err := decodeRemediationRequest(entry)
+		if err != nil || request.SuccessorPublicationID == "" {
+			return err
+		}
+		successor, err := tx.GetPublicationSuccessor(ctx, runID, request.SuccessorPublicationID)
+		if err != nil || !successor.RemediatesHandoffConflict() {
+			return err
+		}
+		if !successor.AllowsRemediation(domain.RemediationInvocationIntent(request)) {
+			return domain.ErrParentKeyMismatch
+		}
+		production, err := tx.GetExecutionAdmissionRecord(ctx, productionInvocationID(runID))
+		if err != nil {
+			return err
+		}
+		base = production.Base
+		base.BaseSHA = successor.Reentry.BaseSHA
+		conflict = true
+		return nil
+	})
+	return base, conflict, err
 }
