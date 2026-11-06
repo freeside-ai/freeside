@@ -590,6 +590,7 @@ func conformantWorkflowAudit() domain.WorkflowAudit {
 	return domain.WorkflowAudit{
 		Repo:                "freeside-ai/demo",
 		AuditedCommitSHA:    "cafebabe",
+		AuditedRef:          "main",
 		AuditedAt:           time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 		WorkflowAuditDigest: "sha256:workflow-audit",
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,

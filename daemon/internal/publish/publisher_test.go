@@ -861,14 +861,7 @@ func testDispositionHistory(
 		_, err := tx.GetRun(t.Context(), runID)
 		return err
 	}); errors.Is(err, store.ErrNotFound) {
-		if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
-			return tx.PutRun(t.Context(), domain.Run{
-				ID: runID, ProjectID: "project-disposition-history",
-				SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
-			})
-		}); err != nil {
-			t.Fatal(err)
-		}
+		admitBareTestRun(t, st, candidate)
 	} else if err != nil {
 		t.Fatal(err)
 	}
@@ -953,6 +946,58 @@ func testDispositionHistory(
 	return &history
 }
 
+// admitBareTestRun records a run with one attended-dev admission on the
+// candidate's repository and base ref. A handoff tip seals only from an audit
+// of the repository the run's admissions name.
+func admitBareTestRun(t *testing.T, st *store.Store, candidate publish.Candidate) {
+	t.Helper()
+	runID := candidate.RunID
+	stageID, attemptID := domain.StageID("implement-"+runID), domain.AttemptID("attempt-"+runID)
+	invocationID := domain.InvocationID("inv-producing-" + runID)
+	run := domain.Run{
+		ID: runID, ProjectID: "project-disposition-history",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{
+			ID: stageID, RunID: runID, Name: "implement",
+			Attempts: []domain.Attempt{{ID: attemptID, StageID: stageID, Number: 1, InvocationID: invocationID}},
+		}},
+	}
+	identity := domain.AuthIdentity{
+		ID: domain.AuthIdentityID("auth-" + string(runID)), Provider: "claude", AuthStoreMutationLease: true,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+	}
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: invocationID, RunID: runID, StageID: stageID, AttemptID: attemptID,
+		Backend: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Capabilities: domain.NewCapabilitySnapshot(
+			domain.CapDetachableWorkspace, domain.CapPostExitExport,
+		),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressProviderOnly,
+		ImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
+		Base: domain.BaseRevision{
+			Repo: candidate.Repo, RepositoryID: fixtureRepositoryID,
+			BaseRef: candidate.BaseRef, BaseSHA: testBaseSHA,
+		},
+		Workspace: "workspace-" + string(runID), AuthIdentityID: &identity.ID, AdmittedAt: fixtureTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		if err := tx.RecordAuthIdentity(t.Context(), identity, fixtureTime); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(t.Context(), admission)
+	}); err != nil {
+		t.Fatalf("admit bare test run: %v", err)
+	}
+}
+
 // testProductionResolutions are the run's production readiness
 // requirements, resolved as the engine resolves them.
 func testProductionResolutions(t *testing.T, st *store.Store, runID domain.RunID) []domain.RequirementResolution {
@@ -1004,12 +1049,44 @@ func withTestHandoff(t *testing.T, st *store.Store, candidate *publish.Candidate
 			return err
 		}
 		check.EvidenceBaseSHA, check.TipSHA = auth.BaseSHA, auth.BaseSHA
+		if check.WorkflowAuditID, err = recordRunHandoffAudit(t, tx, candidate.RunID, check.TipSHA); err != nil {
+			return err
+		}
 		return tx.SealHandoffTip(t.Context(), check, fixtureTime)
 	}); err != nil {
 		t.Fatalf("seal test handoff: %v", err)
 	}
 	candidate.BaseSHA = check.TipSHA
 	candidate.HandoffCheck = &check
+}
+
+// recordTestHandoffAudit records the audit a sealed handoff check names: a
+// conformant audit of repo that resolved ref to tip. It returns the row id.
+func recordTestHandoffAudit(t *testing.T, tx *store.InternalTx, repo, ref, tip string) (int64, error) {
+	t.Helper()
+	audit := workflowAuditForRepo(t, repo)
+	audit.AuditedRef, audit.AuditedCommitSHA = ref, tip
+	rec, err := tx.RecordWorkflowAudit(t.Context(), audit)
+	return rec.ID, err
+}
+
+// recordRunHandoffAudit records the handoff audit of the repository and ref
+// the run's admission names, as the engine audits the admission's target,
+// so a candidate that names another repository still seals and is refused
+// by the decision it is testing. It reads the admission records without the
+// current-policy gate, as the seal does, so a test of an admission the
+// decision refuses still seals.
+func recordRunHandoffAudit(t *testing.T, tx *store.InternalTx, runID domain.RunID, tip string) (int64, error) {
+	t.Helper()
+	admissions, err := tx.ListRunExecutionAdmissionRecords(t.Context(), runID)
+	if err != nil {
+		return 0, err
+	}
+	if len(admissions) == 0 {
+		return 0, fmt.Errorf("run %s has no admission to audit the target of", runID)
+	}
+	base := admissions[0].Base
+	return recordTestHandoffAudit(t, tx, base.Repo, base.BaseRef, tip)
 }
 
 // newTestPublisher wires a publisher whose drift gate passes for

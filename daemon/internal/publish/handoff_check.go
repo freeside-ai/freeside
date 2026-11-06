@@ -12,8 +12,8 @@ import (
 
 // AuditHandoffTip runs the workflow audit a publication's handoff resolves
 // its target tip from (plan §6, revision 110). The caller records the audit
-// in the transaction that seals the tip, so the run's audit history holds
-// every tip a handoff relied on.
+// in the transaction that seals the tip and names the recorded row on the
+// check, so the store can prove the tip came from an audit of this ref.
 func (p *Publisher) AuditHandoffTip(ctx context.Context, repo, baseRef string) (domain.WorkflowAudit, error) {
 	if p.auditor == nil {
 		return domain.WorkflowAudit{}, errors.New("handoff audit: no workflow auditor")
@@ -22,9 +22,9 @@ func (p *Publisher) AuditHandoffTip(ctx context.Context, repo, baseRef string) (
 	if err != nil {
 		return domain.WorkflowAudit{}, fmt.Errorf("handoff audit: %w", err)
 	}
-	if audit.Repo != repo || !validCommitSHA(audit.AuditedCommitSHA) {
-		return domain.WorkflowAudit{}, fmt.Errorf("handoff audit of %s@%s observed %s at %q: %w",
-			repo, baseRef, audit.Repo, audit.AuditedCommitSHA, ErrUnauthorizedPublication)
+	if audit.Repo != repo || audit.AuditedRef != baseRef || !validCommitSHA(audit.AuditedCommitSHA) {
+		return domain.WorkflowAudit{}, fmt.Errorf("handoff audit of %s@%s observed %s@%s at %q: %w",
+			repo, baseRef, audit.Repo, audit.AuditedRef, audit.AuditedCommitSHA, ErrUnauthorizedPublication)
 	}
 	return audit, nil
 }
@@ -36,6 +36,11 @@ func (p *Publisher) AuditHandoffTip(ctx context.Context, repo, baseRef string) (
 //   - the copy equals the sealed row, whose head is the candidate's, whose
 //     tip is the candidate's BaseSHA, and whose evidence base is the
 //     authorization's base;
+//   - the sealed row names the workflow audit its tip came from, and that
+//     recorded audit observed the tip on the candidate's repository and
+//     BaseRef, so the tip is the store's observation of the run's own
+//     target, not a value the engine copied (#2073); a row sealed before
+//     the binding existed names none and is refused;
 //   - every readiness proof binds the head at that evidence base, or the tip
 //     counts as moved (plan §7, revision 110);
 //   - a moved tip has a recorded merge whose CheckProof proves the merge of
@@ -66,6 +71,21 @@ func validateHandoffCheck(
 	if sealed.HeadSHA != c.HeadSHA || sealed.TipSHA != c.BaseSHA || sealed.EvidenceBaseSHA != auth.BaseSHA {
 		return unsatisfied("sealed check names head %s at tip %s over %s, candidate publishes %s at %s over %s",
 			sealed.HeadSHA, sealed.TipSHA, sealed.EvidenceBaseSHA, c.HeadSHA, c.BaseSHA, auth.BaseSHA)
+	}
+	if sealed.WorkflowAuditID == 0 {
+		return unsatisfied("sealed check names no workflow audit for tip %s", sealed.TipSHA)
+	}
+	auditRecord, err := tx.GetWorkflowAudit(ctx, sealed.WorkflowAuditID)
+	if errors.Is(err, store.ErrNotFound) {
+		return unsatisfied("sealed check cites workflow audit %d, which is not recorded", sealed.WorkflowAuditID)
+	}
+	if err != nil {
+		return err
+	}
+	if audit := auditRecord.Audit; audit.Repo != c.Repo || audit.AuditedRef != c.BaseRef ||
+		audit.AuditedCommitSHA != sealed.TipSHA {
+		return unsatisfied("sealed check cites workflow audit %d of %s@%s at %s, candidate targets %s@%s at %s",
+			auditRecord.ID, audit.Repo, audit.AuditedRef, audit.AuditedCommitSHA, c.Repo, c.BaseRef, sealed.TipSHA)
 	}
 	moved := sealed.Moved()
 	var cleanVerification domain.Digest

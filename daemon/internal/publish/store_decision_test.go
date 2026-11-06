@@ -338,8 +338,16 @@ func assertDecisionRows(t *testing.T, s *store.Store, wantAudits, wantIntents in
 		if err != nil {
 			return err
 		}
-		if len(audits) != wantAudits {
-			t.Errorf("workflow audits = %d, want %d", len(audits), wantAudits)
+		// The decision's audits come from fixture auditors that report no
+		// ref; the handoff audits a sealing fixture seeded name theirs.
+		decisionAudits := 0
+		for _, audit := range audits {
+			if audit.Audit.AuditedRef == "" {
+				decisionAudits++
+			}
+		}
+		if decisionAudits != wantAudits {
+			t.Errorf("workflow audits = %d, want %d", decisionAudits, wantAudits)
 		}
 		intents, err := tx.ListPendingOutbox(t.Context(), publish.IntentKindPublication)
 		if err != nil {
@@ -605,6 +613,9 @@ func sealMovedHandoff(
 			return err
 		}
 		check.EvidenceBaseSHA = auth.BaseSHA
+		if check.WorkflowAuditID, err = recordRunHandoffAudit(t, tx, candidate.RunID, check.TipSHA); err != nil {
+			return err
+		}
 		if err := tx.SealHandoffTip(t.Context(), check, fixtureTime); err != nil {
 			return err
 		}
@@ -642,12 +653,21 @@ func sealMovedHandoff(
 // gate (issue #2644): a new execution publication publishes only under the
 // sealed handoff check of its own run and publication, and a tip that moved
 // past the evidence base only with a verified merge of the head into it. The
-// tip is never re-resolved: an advance after the seal publishes.
+// tip is never re-resolved: an advance after the seal publishes. The sealed
+// check must cite a recorded audit that observed its tip on the candidate's
+// repository and base ref (#2073).
 func TestPublishExecutionHandoffGate(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
 		prepare func(t *testing.T, s *store.Store, candidate *publish.Candidate)
-		wantErr error
+		// rebind, when set, repoints the sealed row (and the candidate's
+		// copy) at the audit it returns, zero for none, after prepare. The
+		// seal refuses each such audit, so the rows are written past it to
+		// prove the decision refuses them on its own; wantMessage names the
+		// audit refusal so an earlier refusal cannot satisfy the case.
+		rebind      func(t *testing.T, tx *store.InternalTx, candidate publish.Candidate) (int64, error)
+		wantErr     error
+		wantMessage string
 	}{
 		"advance after an unchanged seal": {
 			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
@@ -689,6 +709,10 @@ func TestPublishExecutionHandoffGate(t *testing.T) {
 					HeadSHA: candidate.HeadSHA, EvidenceBaseSHA: testOtherSHA, TipSHA: testOtherSHA,
 				}
 				if err := s.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+					var err error
+					if check.WorkflowAuditID, err = recordRunHandoffAudit(t, tx, candidate.RunID, check.TipSHA); err != nil {
+						return err
+					}
 					return tx.SealHandoffTip(t.Context(), check, fixtureTime)
 				}); err != nil {
 					t.Fatal(err)
@@ -740,11 +764,62 @@ func TestPublishExecutionHandoffGate(t *testing.T) {
 			},
 			wantErr: publish.ErrHandoffCheckUnsatisfied,
 		},
+		"audit of another ref": {
+			prepare: withTestHandoff,
+			rebind: func(t *testing.T, tx *store.InternalTx, c publish.Candidate) (int64, error) {
+				return recordTestHandoffAudit(t, tx, c.Repo, "release", c.BaseSHA)
+			},
+			wantErr:     publish.ErrHandoffCheckUnsatisfied,
+			wantMessage: "cites workflow audit",
+		},
+		"audit of another commit": {
+			prepare: withTestHandoff,
+			rebind: func(t *testing.T, tx *store.InternalTx, c publish.Candidate) (int64, error) {
+				return recordTestHandoffAudit(t, tx, c.Repo, c.BaseRef, testOtherSHA)
+			},
+			wantErr:     publish.ErrHandoffCheckUnsatisfied,
+			wantMessage: "cites workflow audit",
+		},
+		"audit of another repository": {
+			prepare: withTestHandoff,
+			rebind: func(t *testing.T, tx *store.InternalTx, c publish.Candidate) (int64, error) {
+				return recordTestHandoffAudit(t, tx, "freeside-ai/other-repo", c.BaseRef, c.BaseSHA)
+			},
+			wantErr:     publish.ErrHandoffCheckUnsatisfied,
+			wantMessage: "cites workflow audit",
+		},
+		"moved tip from an audit of another ref": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				sealMovedHandoff(t, s, candidate, func(*domain.BaseRevision) {})
+			},
+			rebind: func(t *testing.T, tx *store.InternalTx, c publish.Candidate) (int64, error) {
+				return recordTestHandoffAudit(t, tx, c.Repo, "release", c.BaseSHA)
+			},
+			wantErr:     publish.ErrHandoffCheckUnsatisfied,
+			wantMessage: "cites workflow audit",
+		},
+		"no audit binding": {
+			prepare: withTestHandoff,
+			rebind: func(*testing.T, *store.InternalTx, publish.Candidate) (int64, error) {
+				return 0, nil
+			},
+			wantErr:     publish.ErrHandoffCheckUnsatisfied,
+			wantMessage: "names no workflow audit",
+		},
+		"unrecorded audit": {
+			prepare: withTestHandoff,
+			rebind: func(*testing.T, *store.InternalTx, publish.Candidate) (int64, error) {
+				return 1 << 40, nil
+			},
+			wantErr:     publish.ErrHandoffCheckUnsatisfied,
+			wantMessage: "which is not recorded",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			head := testHeadSHA
-			s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+			path := filepath.Join(t.TempDir(), "store.db")
+			s := newExecutionBoundStoreAt(t, path, executionChainOptions{exportHead: &head})
 			seedDecisionRecords(t, s)
 			reservation := seedExecutionPublicationChain(
 				t, s, executionChainOptions{exportHead: &head},
@@ -758,6 +833,9 @@ func TestPublishExecutionHandoffGate(t *testing.T) {
 			candidate := testCandidate(t)
 			candidate.RunID = reservation.RunID
 			test.prepare(t, s, &candidate)
+			if test.rebind != nil {
+				rebindHandoffAudit(t, s, path, &candidate, test.rebind)
+			}
 
 			_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
 				Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
@@ -768,8 +846,8 @@ func TestPublishExecutionHandoffGate(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, test.wantErr) {
-				t.Fatalf("PublishExecution error = %v, want %v", err, test.wantErr)
+			if !errors.Is(err, test.wantErr) || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("PublishExecution error = %v, want %v naming %q", err, test.wantErr, test.wantMessage)
 			}
 			assertDecisionRows(t, s, 1, 0)
 			if requests := gh.requestLog(); len(requests) != 0 {
@@ -793,6 +871,45 @@ func TestPublishExecutionHandoffGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rebindHandoffAudit repoints a sealed handoff check, and the candidate's
+// copy of it, at the audit rebind records or names, writing the row directly
+// because the seal refuses most of the audits the decision must also refuse.
+func rebindHandoffAudit(
+	t *testing.T, s *store.Store, path string, candidate *publish.Candidate,
+	rebind func(t *testing.T, tx *store.InternalTx, candidate publish.Candidate) (int64, error),
+) {
+	t.Helper()
+	var auditID int64
+	if err := s.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		var err error
+		auditID, err = rebind(t, tx, *candidate)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var column any
+	if auditID != 0 {
+		column = auditID
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, updateErr := raw.ExecContext(t.Context(),
+		`UPDATE publication_handoff_checks SET workflow_audit_id = ? WHERE run_id = ? AND publication_id = ?`,
+		column, candidate.RunID, candidate.InvocationID)
+	closeErr := raw.Close()
+	if updateErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(updateErr, closeErr))
+	}
+	if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+		t.Fatalf("handoff checks rebound = %d, %v, want 1", updated, err)
+	}
+	rebound := *candidate.HandoffCheck
+	rebound.WorkflowAuditID = auditID
+	candidate.HandoffCheck = &rebound
 }
 
 func TestPublishExecutionRejectsDispositionHistoryFromAnotherStore(t *testing.T) {

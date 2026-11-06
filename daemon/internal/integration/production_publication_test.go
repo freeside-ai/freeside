@@ -769,11 +769,14 @@ func (p *productionPublicationHarness) newPublisher(t *testing.T) *publish.Publi
 	)
 }
 
-// liveHarnessAuditor reports the harness's audit as it stands at each call.
+// liveHarnessAuditor reports the harness's audit as it stands at each call,
+// of the ref it was asked for.
 type liveHarnessAuditor struct{ p *productionPublicationHarness }
 
-func (a liveHarnessAuditor) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
-	return a.p.audit, nil
+func (a liveHarnessAuditor) Audit(_ context.Context, _, baseRef string) (domain.WorkflowAudit, error) {
+	audit := a.p.audit
+	audit.AuditedRef = baseRef
+	return audit, nil
 }
 
 // reconcileLanes makes one pass over both loops a daemon runs for this engine:

@@ -4,6 +4,7 @@
   "head_sha": "head-1",
   "evidence_base_sha": "base-1",
   "tip_sha": "base-2",
+  "workflow_audit_id": 7,
   "merge": {
     "merge_sha": "merge-1",
     "verification_proof_digest": "sha256:proof"

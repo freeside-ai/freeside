@@ -110,6 +110,7 @@ func TestRetireBaseAdvanceWatchMigrationDeletesOnlyTheKind(t *testing.T) {
 // them.
 func rewindRetireBaseAdvanceWatch(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindHandoffAuditBinding(t, ctx, db)
 	if _, err := db.ExecContext(ctx,
 		`DELETE FROM schema_migrations WHERE name = '0128_retire_base_advance_watch.sql'`); err != nil {
 		t.Fatal(err)

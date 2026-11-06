@@ -4,5 +4,6 @@
   "head_sha": "head-1",
   "evidence_base_sha": "base-1",
   "tip_sha": "base-1",
+  "workflow_audit_id": 7,
   "merge": null
 }

@@ -217,8 +217,10 @@ func (s trustSource) CurrentTrust(context.Context, string) (publish.CurrentTrust
 	return publish.CurrentTrust{Profile: &s.profile, Audit: &s.audit}, nil
 }
 
-func (s trustSource) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
-	return s.audit, nil
+func (s trustSource) Audit(_ context.Context, _, baseRef string) (domain.WorkflowAudit, error) {
+	audit := s.audit
+	audit.AuditedRef = baseRef
+	return audit, nil
 }
 
 type authzSource struct {

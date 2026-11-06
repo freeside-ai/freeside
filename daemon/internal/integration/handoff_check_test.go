@@ -521,6 +521,74 @@ func TestHandoffDoesNotReresolveAnAdvanceAfterTheSeal(t *testing.T) {
 	}
 }
 
+// TestHandoffTipIsBoundToItsOwnAudit: the sealed check names the audit row
+// its tip came from, an audit of the run's own target ref (#2073). An audit
+// of another ref of the same repository, recorded after the seal at another
+// commit, changes neither the audit the check names nor the tip the merge is
+// verified into, and the publication lands against that tip.
+func TestHandoffTipIsBoundToItsOwnAudit(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	first, _ := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
+	// Stop right after the handoff's verification, before the merge is
+	// proved, so the foreign audit lands between the seal and the proof.
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterVerification: func() error {
+			if p.room.runs >= 2 {
+				return errors.New("stop after the handoff verification")
+			}
+			return nil
+		},
+	}, true)
+	if result, err := p.reconcileLanes(); err == nil {
+		t.Fatalf("handoff seam did not interrupt the pass: %#v", result)
+	}
+	sealed := p.handoffCheck(t)
+	assertHandoffAudit := func(check domain.HandoffCheck) {
+		t.Helper()
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			rec, err := tx.GetWorkflowAudit(p.ctx, check.WorkflowAuditID)
+			if err != nil {
+				return err
+			}
+			if rec.Audit.Repo != fakePublicationRepo || rec.Audit.AuditedRef != "main" ||
+				rec.Audit.AuditedCommitSHA != first {
+				t.Fatalf("sealed check cites audit %d of %s@%s at %s, want %s@main at %s",
+					rec.ID, rec.Audit.Repo, rec.Audit.AuditedRef, rec.Audit.AuditedCommitSHA,
+					fakePublicationRepo, first)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sealed.TipSHA != first || sealed.WorkflowAuditID == 0 {
+		t.Fatalf("interrupted handoff = %#v, want sealed at %s from an audit", sealed, first)
+	}
+	assertHandoffAudit(sealed)
+
+	foreign := p.audit
+	foreign.AuditedRef = "release"
+	foreign.AuditedCommitSHA = strings.Repeat("9", 40)
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(p.ctx, foreign)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.reconcileUntilReady(t, 3)
+
+	p.assertHandoffVerified(t, first)
+	if check := p.handoffCheck(t); check.WorkflowAuditID != sealed.WorkflowAuditID {
+		t.Fatalf("published check cites audit %d, want the sealed %d", check.WorkflowAuditID, sealed.WorkflowAuditID)
+	}
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
+		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
+	}
+}
+
 // advanceBaseDuringThePass rebuilds the engine so the target advances while
 // the pass verifies the head: after the pass fetched its checkout and before
 // the handoff's audit. It returns the tip the audit then observes.

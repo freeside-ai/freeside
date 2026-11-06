@@ -1,6 +1,7 @@
 {
   "repo": "freeside-ai/demo",
   "audited_commit_sha": "cafebabe",
+  "audited_ref": "main",
   "audited_at": "2026-01-02T03:04:05Z",
   "workflow_audit_digest": "sha256:workflow-audit",
   "effective_token_permissions": "read_only",
