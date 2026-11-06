@@ -106,10 +106,8 @@ func TestRecoverExportedKeepsRecordedFailureCause(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 
-	for pass := range 2 {
-		if err := d.Reconcile(ctx); err != nil {
-			t.Fatalf("Reconcile pass %d: %v", pass+1, err)
-		}
+	for range 2 {
+		reconcileClean(t, ctx, d)
 	}
 	in, err := d.loadIntent(ctx, testInvoke)
 	if err != nil || in.Result == nil {

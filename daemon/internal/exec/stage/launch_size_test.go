@@ -124,9 +124,7 @@ func TestWriterMemoryLimitKillNamesTheFailedResult(t *testing.T) {
 		}},
 		{"restart", func(t *testing.T, d *Driver) {
 			orphan(t, d, phaseRunning, nil)
-			if err := d.Reconcile(context.Background()); err != nil {
-				t.Fatalf("Reconcile: %v", err)
-			}
+			reconcileClean(t, context.Background(), d)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,9 +163,7 @@ func TestWriterFailureWithoutAKillRecordsNoMemoryLimit(t *testing.T) {
 	}}
 	d := newTestDriver(t, gate, outcomes)
 	orphan(t, d, phaseRunning, nil)
-	if err := d.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileClean(t, ctx, d)
 	got, err := d.Collect(ctx, testInvoke)
 	if err != nil || strings.Contains(got.Summary, "memory limit") {
 		t.Fatalf("result = %+v, %v; want a plain failure", got, err)

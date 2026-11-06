@@ -103,9 +103,7 @@ func TestScopeConflictReleasedPipeline(t *testing.T) {
 			spec := testStartSpec()
 			spec.Base.BaseSHA = base
 			in := orphanWithSpec(t, d, phaseExported, &releasedExport{Dir: outDir, Manifest: manifest, Evidence: evidence, EvidencePresent: true, ObservedBaseSHA: base}, spec)
-			if err := d.Reconcile(context.Background()); err != nil {
-				t.Fatal(err)
-			}
+			reconcileClean(t, context.Background(), d)
 			result, err := d.Collect(context.Background(), in.InvocationID)
 			if err != nil {
 				t.Fatal(err)

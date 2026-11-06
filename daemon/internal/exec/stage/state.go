@@ -803,61 +803,100 @@ func isPromptRefusalSummary(summary string, promptErr error) bool {
 	return summary == truncateFailureSummary(text) || summary == exec.TruncateSummary(text)
 }
 
-// listIntents returns every durable intent, for restart reconciliation.
-func (d *Driver) listIntents(ctx context.Context) ([]intent, error) {
+// intentListingFailure is one intent-directory entry listIntents could not
+// return: its file name, the invocation its record names when decoding got
+// that far, why it failed, and the error exactly as a whole-listing failure
+// used to return it.
+type intentListingFailure struct {
+	entry      string
+	invocation domain.InvocationID
+	cause      QuarantineCause
+	err        error
+}
+
+// listIntents returns every durable intent that passes the reconstruction
+// gate, for restart reconciliation, and one failure per entry that does not.
+// A bad entry never hides the entries after it: recovery isolates each
+// intent (#386). Only a directory that cannot be listed fails the whole call.
+func (d *Driver) listIntents(ctx context.Context) ([]intent, []intentListingFailure, error) {
 	entries, err := os.ReadDir(d.dir)
 	if err != nil {
-		return nil, fmt.Errorf("list driver intents: %w", err)
+		return nil, nil, fmt.Errorf("list driver intents: %w", err)
 	}
 	out := make([]intent, 0, len(entries))
+	var failures []intentListingFailure
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("inspect driver intent %s: %w", entry.Name(), err)
-		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("%w: driver intent %s is not a regular file",
-				ErrUnsupportedStart, entry.Name())
-		}
-		body, err := os.ReadFile(filepath.Join(d.dir, entry.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("read driver intent %s: %w", entry.Name(), err)
-		}
-		in, err := decodeIntent(body)
-		if err != nil {
-			return nil, fmt.Errorf("decode driver intent %s: %w", entry.Name(), err)
-		}
-		if err := validateRunID(in.RunID); err != nil {
-			return nil, fmt.Errorf("driver intent %s run ID: %w", entry.Name(), err)
-		}
-		if entry.Name() != filepath.Base(d.intentPath(in.RunID)) {
-			return nil, fmt.Errorf(
-				"%w: driver intent %s names invocation %s whose canonical file is %s",
-				ErrUnsupportedStart, entry.Name(), in.InvocationID,
-				filepath.Base(d.intentPath(in.RunID)))
-		}
-		// The same fail-closed reconstruction gate loadIntent runs. Recovery
-		// hands this record's RunID straight to the ward gate, so an
-		// enumeration path that skipped the gate would let a corrupted or
-		// tampered file retarget recovery at another run's objects.
-		var restored bool
-		in, restored, err = d.restoreDurableOutcome(ctx, in)
-		if err != nil {
-			return nil, err
-		}
-		if err := d.regate(ctx, in, false); err != nil {
-			return nil, err
-		}
-		if restored {
-			if err := d.saveIntent(in); err != nil {
-				return nil, fmt.Errorf("%w: persist recovered outcome %s: %w",
-					ErrRecoveryRetryable, in.InvocationID, err)
-			}
+		in, failure := d.listIntent(ctx, entry)
+		if failure != nil {
+			failures = append(failures, *failure)
+			continue
 		}
 		out = append(out, in)
 	}
-	return out, nil
+	return out, failures, nil
+}
+
+// listIntent runs one directory entry through every check listIntents makes,
+// in order, and reports the first that fails.
+func (d *Driver) listIntent(ctx context.Context, entry os.DirEntry) (intent, *intentListingFailure) {
+	unreadable := func(invocation domain.InvocationID, err error) (intent, *intentListingFailure) {
+		return intent{}, &intentListingFailure{
+			entry: entry.Name(), invocation: invocation, cause: QuarantineUnreadable, err: err,
+		}
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return unreadable("", fmt.Errorf("inspect driver intent %s: %w", entry.Name(), err))
+	}
+	if !info.Mode().IsRegular() {
+		return unreadable("", fmt.Errorf("%w: driver intent %s is not a regular file",
+			ErrUnsupportedStart, entry.Name()))
+	}
+	body, err := os.ReadFile(filepath.Join(d.dir, entry.Name()))
+	if err != nil {
+		return unreadable("", fmt.Errorf("read driver intent %s: %w", entry.Name(), err))
+	}
+	in, err := decodeIntent(body)
+	if err != nil {
+		return unreadable("", fmt.Errorf("decode driver intent %s: %w", entry.Name(), err))
+	}
+	if err := validateRunID(in.RunID); err != nil {
+		return unreadable(in.InvocationID, fmt.Errorf("driver intent %s run ID: %w", entry.Name(), err))
+	}
+	if entry.Name() != filepath.Base(d.intentPath(in.RunID)) {
+		return unreadable(in.InvocationID, fmt.Errorf(
+			"%w: driver intent %s names invocation %s whose canonical file is %s",
+			ErrUnsupportedStart, entry.Name(), in.InvocationID,
+			filepath.Base(d.intentPath(in.RunID))))
+	}
+	unauthenticated := func(err error) (intent, *intentListingFailure) {
+		cause := QuarantineUnauthenticated
+		if errors.Is(err, errExportAuthorityConflict) {
+			cause = QuarantineExportConflict
+		}
+		return intent{}, &intentListingFailure{
+			entry: entry.Name(), invocation: in.InvocationID, cause: cause, err: err,
+		}
+	}
+	// The same fail-closed reconstruction gate loadIntent runs. Recovery
+	// hands this record's RunID straight to the ward gate, so an
+	// enumeration path that skipped the gate would let a corrupted or
+	// tampered file retarget recovery at another run's objects.
+	in, restored, err := d.restoreDurableOutcome(ctx, in)
+	if err != nil {
+		return unauthenticated(err)
+	}
+	if err := d.regate(ctx, in, false); err != nil {
+		return unauthenticated(err)
+	}
+	if restored {
+		if err := d.saveIntent(in); err != nil {
+			return unauthenticated(fmt.Errorf("%w: persist recovered outcome %s: %w",
+				ErrRecoveryRetryable, in.InvocationID, err))
+		}
+	}
+	return in, nil
 }

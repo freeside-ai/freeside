@@ -1531,6 +1531,54 @@ holds every row, including device credentials and pairing codes, so delete it
 when you are done. While the copy is written, the daemon's other database work
 waits for it.
 
+### Repair A Quarantined Stage Intent
+
+At each start, restart recovery gives every stage intent in
+`<state dir>/claude-driver` its first adoption attempt, and one intent's
+failure never costs the others theirs (#386). An operational retry, or a
+refusal under mutable admission policy, holds the intent: the engine's later
+passes retry it with no item. Any other failure quarantines that intent for
+the life of the process and the daemon starts anyway. Three classes do:
+
+- **Unreadable:** the file could not be stat'ed, read, or decoded, or is not
+  named for the run it records.
+- **Unauthenticated:** the record failed the reconstruction check (its durable
+  outcome or the re-gate against its admission and current policy).
+- **Export conflict:** its released export under `<state dir>/ward-exports`
+  no longer matches the export record in the database.
+
+Each quarantined intent opens one advisory `system_health` item
+(`stage_intent_quarantined`, impairing nothing) that names the file, the
+class, the repair, and the invocation when the file decoded that far and is
+that invocation's own file. The full error goes to the daemon log at error
+level as `stage intent quarantined`; the item never carries it, since it can
+hold decoder text or record content. A later start that quarantines the
+intent for the same class keeps the same item, one for another class
+replaces it, and the first start that doesn't quarantine it resolves it.
+Only a Claude-driver start reads the intents, so only such a start resolves
+the item.
+
+While quarantined, the invocation reports running (not live), so the engine
+pass carries on instead of failing on it. The daemon never adopts or
+collects it, commits no outcome for it, and leaves the intent file, its export
+directory, and its journal and export rows as it found them, so its run stays
+open and keeps its usage-pool slot. Then:
+
+- **To resume it,** restore what the class names from a copy taken before it
+  changed: the intent file, the record the logged error names, or the export
+  directory. Then restart.
+- **To stop it,** repair it first: the driver refuses every stop attempt for
+  a quarantined invocation, since a stop would commit a terminal outcome for
+  it, so `stop_task` keeps failing until a start adopts the intent.
+- **To give the task up,** `freesided abandon` (Task Cancellation Contract)
+  closes its workflow; abandonment skips an invocation that reports running,
+  so it collects nothing from the quarantined one. The item stays open while
+  the intent still fails at start.
+
+An intent directory that cannot be listed, or an item the store cannot write,
+still stops startup (`reconcile orphaned handoffs`, `report quarantined stage
+intents`).
+
 ### Configure Client Task Submission
 
 Pass `-manual-submission-config /absolute/manual-submission.json` to the

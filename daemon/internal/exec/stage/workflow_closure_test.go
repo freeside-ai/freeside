@@ -31,9 +31,7 @@ func TestWorkflowClosureNeverRestartsOrFabricatesAResult(t *testing.T) {
 				return nil
 			})
 			for range 2 {
-				if err := d.Reconcile(t.Context()); err != nil {
-					t.Fatal(err)
-				}
+				reconcileClean(t, t.Context(), d)
 				if _, err := d.Collect(t.Context(), testInvoke); !errors.Is(err, exec.ErrResultNotReady) {
 					t.Fatalf("suppressed restart manufactured a result: %v", err)
 				}
@@ -87,9 +85,7 @@ func TestWorkflowClosureRecoversAnExistingProviderUnderStopRegistration(t *testi
 				return observe(ctx)
 			})
 			for range 2 {
-				if err := d.Reconcile(t.Context()); err != nil {
-					t.Fatal(err)
-				}
+				reconcileClean(t, t.Context(), d)
 			}
 			result, err := d.Collect(t.Context(), testInvoke)
 			want := exec.StatusFailed

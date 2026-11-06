@@ -167,7 +167,11 @@ type Driver struct {
 	// (issue #1181). Guarded by mu. In memory only: a restart restarts the
 	// clock, and a persistent fault re-accumulates within one more grace.
 	deferred map[domain.InvocationID]recoveryDeferral
-	closed   bool
+	// quarantined holds the intent file names the last Reconcile pass
+	// quarantined (#386). Guarded by mu. In memory only: each start
+	// re-derives it, so a repaired intent is adopted at the next start.
+	quarantined map[string]struct{}
+	closed      bool
 }
 
 // recoveryDeferral records the running state of one released export's bounded
@@ -837,6 +841,15 @@ func (d *Driver) Close(ctx context.Context) error {
 // output: status derives from the durable intent and the driver's own
 // pipeline state, per the §5.6 containment guarantee.
 func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Inspection, error) {
+	// A quarantined intent is neither reconstructed nor adopted: answering
+	// running keeps its invocation open, as for a window recovery owns,
+	// without an error that would abort every engine pass (#386).
+	d.mu.Lock()
+	quarantined := d.quarantinedLocked(id)
+	d.mu.Unlock()
+	if quarantined {
+		return exec.Inspection{Status: exec.StatusRunning}, nil
+	}
 	in, live, err := d.inspectIntent(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
@@ -934,9 +947,15 @@ func (d *Driver) Stream(ctx context.Context, id domain.InvocationID) (io.ReadClo
 
 // Cancel stops an in-flight handoff. The gate's own teardown reaps the
 // runtime objects; the terminal result is committed by the pipeline as it
-// unwinds. Cancelling a terminal invocation is a no-op.
+// unwinds. Cancelling a terminal invocation is a no-op. A stop of an
+// invocation restart recovery quarantined is refused, so it writes nothing
+// for that intent (#386).
 func (d *Driver) Cancel(ctx context.Context, id domain.InvocationID) error {
 	d.mu.Lock()
+	if d.quarantinedLocked(id) {
+		d.mu.Unlock()
+		return fmt.Errorf("invocation %s: %w", id, errIntentQuarantined)
+	}
 	in, err := d.loadIntentAdmission(ctx, id)
 	if err != nil {
 		d.mu.Unlock()

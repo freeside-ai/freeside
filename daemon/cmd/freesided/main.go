@@ -34,7 +34,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
-	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
@@ -1507,11 +1506,18 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 		}
 		// Give every orphan its first adoption attempt before the engine loop.
-		// A permanent reconstruction failure stops startup; an operational
-		// retry leaves the intent running so the attempt's later Inspect pass
-		// drives the same recovery again without a process restart.
-		if err := holdRetryableClaudeRecovery(claudeWiring.driver.Reconcile(ctx)); err != nil {
-			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", err)
+		// An operational retry or a mutable policy refusal holds the intent,
+		// so the attempt's later Inspect passes drive the same recovery again
+		// without a process restart. Any other failure quarantines only
+		// that intent and raises its item, and the daemon still starts (#386).
+		// An intent directory that cannot be listed, or an item that cannot
+		// be written, still stops startup.
+		recovery, reconcileErr := claudeWiring.driver.Reconcile(ctx, heldClaudeRecovery)
+		if reconcileErr != nil {
+			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", reconcileErr)
+		}
+		if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.now)); err != nil {
+			return nil, fmt.Errorf("report quarantined stage intents: %w", err)
 		}
 	} else if cfg.Scenario != nil {
 		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg, bound)
@@ -1966,14 +1972,6 @@ func closeStartupSessions(success bool, closer sessionCloser, stop func()) error
 		stop()
 	}
 	return closer.Close(context.Background())
-}
-
-func holdRetryableClaudeRecovery(err error) error {
-	if errors.Is(err, claude.ErrRecoveryRetryable) ||
-		engine.MutableAdmissionPolicyRefusal(err) {
-		return nil
-	}
-	return err
 }
 
 // autoScriptStageDriver gives the standalone 1A.0 daemon a complete fake

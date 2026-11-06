@@ -367,7 +367,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	}
 }
 
-func TestHoldRetryableClaudeRecovery(t *testing.T) {
+func TestHeldClaudeRecovery(t *testing.T) {
 	t.Parallel()
 	for _, held := range []error{
 		fmt.Errorf("journal unavailable: %w", claude.ErrRecoveryRetryable),
@@ -375,13 +375,13 @@ func TestHoldRetryableClaudeRecovery(t *testing.T) {
 		fmt.Errorf("checkpoint drift: %w", domain.ErrCheckpointNotCurrent),
 		fmt.Errorf("conformance drift: %w", domain.ErrAdmissionConfigurationMismatch),
 	} {
-		if err := holdRetryableClaudeRecovery(held); err != nil {
-			t.Fatalf("held recovery remained startup-fatal: %v", err)
+		if !heldClaudeRecovery(held) {
+			t.Fatalf("held recovery would be quarantined: %v", held)
 		}
 	}
 	permanent := errors.New("intent authentication failed")
-	if err := holdRetryableClaudeRecovery(permanent); !errors.Is(err, permanent) {
-		t.Fatalf("permanent recovery error = %v, want %v", err, permanent)
+	if heldClaudeRecovery(permanent) {
+		t.Fatalf("permanent recovery error %v would be held, want quarantined", permanent)
 	}
 }
 

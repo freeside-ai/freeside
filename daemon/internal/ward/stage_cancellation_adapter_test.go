@@ -225,8 +225,9 @@ func TestTaskCancellationRealStageAndJournaledWard(t *testing.T) {
 	}
 	reopened := newDriver(fixture.ReopenBackend(t))
 	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
-	if err := reopened.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
+	if report, err := reopened.Reconcile(t.Context(), nil); err != nil ||
+		len(report.Held) != 0 || len(report.Quarantined) != 0 {
+		t.Fatalf("Reconcile = %+v, %v; want a clean pass", report, err)
 	}
 	if err := reopened.CancelAndConfirm(t.Context(), id); err != nil {
 		t.Fatalf("reopened cancellation retry: %v", err)
