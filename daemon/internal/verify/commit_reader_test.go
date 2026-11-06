@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -92,7 +93,44 @@ func TestCommitReaderPinsOnceAndKeepsReadChecks(t *testing.T) {
 			t.Fatalf("read %s at %s = %q, %t, %v; want %q, %t, %v", tc.path, tc.commit, content, present, err, tc.want, tc.present, tc.err)
 		}
 	}
-	check(7, 2)
+	// One batch process serves every blob read.
+	check(7, 1)
+}
+
+// tagOver writes an annotated tag over target, of targetType, into dir's
+// object store and returns the tag's object name. A tree entry may name
+// it under any mode, which git's own tree builder never does.
+func tagOver(t *testing.T, dir, target, targetType string) string {
+	t.Helper()
+	raw := fmt.Sprintf("object %s\ntype %s\ntag over\ntagger test <test@example.invalid> 1752600000 +0000\n\ntag\n", target, targetType)
+	return runGitStdin(t, dir, []byte(raw), "mktag")
+}
+
+// TestCommitReaderRefusesNonBlobEntries pins the size-cap bypass the batch
+// read closes. ls-tree -l lists a blob-mode entry naming a tag at the tag's
+// own size, so the cap passes; `cat-file blob` then followed the tag and
+// returned the whole tagged blob as present content. A blob-mode entry
+// naming a tree is refused the same way.
+func TestCommitReaderRefusesNonBlobEntries(t *testing.T) {
+	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
+	const max = 1024
+	big := runGitStdin(t, dir, []byte(strings.Repeat("b", 4*max)), "hash-object", "-w", "--stdin")
+	tag := tagOver(t, dir, big, "blob")
+	// The fixture only proves the bypass if the tag itself fits the cap.
+	if size, err := strconv.Atoi(runGit(t, dir, "cat-file", "-s", tag)); err != nil || size >= max {
+		t.Fatalf("tag size = %d, %v; want under the %d-byte cap", size, err, max)
+	}
+	subtree := runGitStdin(t, dir, treeRecord("100644", "b", big), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+	for name, object := range map[string]string{"tag": tag, "tree": subtree} {
+		t.Run(name, func(t *testing.T) {
+			tree := runGitStdin(t, dir, treeRecord("100644", "file", object), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+			head := runGit(t, dir, "commit-tree", tree, "-p", base, "-m", name+" entry")
+			content, present, err := ReadFileAtCommit(t.Context(), "git", dir, head, "file", max)
+			if !errors.Is(err, ErrMalformedTree) || present || content != nil {
+				t.Fatalf("read = %d bytes, %t, %v; want no content and ErrMalformedTree", len(content), present, err)
+			}
+		})
+	}
 }
 
 func TestCommitReaderSurvivesHeadAndWorktreeMovement(t *testing.T) {

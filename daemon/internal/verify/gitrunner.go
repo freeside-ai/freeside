@@ -17,8 +17,13 @@ import (
 // no commits, so the commit-reproducibility pins
 // (i18n.commitEncoding, commit.gpgsign, author identity and date) are
 // deliberately absent rather than copied dead.
+//
+// objects reads every blob through one long-lived batch process that runs
+// under the context the runner was made with, so whoever makes a gitRunner
+// closes it before that context ends.
 type gitRunner struct {
-	shared *gitrun.Runner
+	shared  *gitrun.Runner
+	objects *gitrun.ObjectReader
 }
 
 // verifyConfig is appended to the shared baseline. protectHFS and protectNTFS
@@ -71,7 +76,14 @@ func newGitRunner(ctx context.Context, gitPath, checkoutDir, scratch string) (*g
 	if format != "sha1" {
 		return nil, fmt.Errorf("checkout object format %q: %w", format, ErrUnsupportedRepo)
 	}
-	return &gitRunner{shared: shared}, nil
+	// Built only on a pinned sha1 runner; the reader starts no process
+	// until its first read.
+	return &gitRunner{shared: shared, objects: shared.Objects(ctx)}, nil
+}
+
+// close stops the object reader's process. The reader never fails Close.
+func (g *gitRunner) close() {
+	_ = g.objects.Close()
 }
 
 // run executes one plumbing command and returns its stdout.
@@ -103,6 +115,14 @@ const (
 // max bytes. commitSHA and path are daemon-supplied (validated
 // options), never candidate bytes; GIT_LITERAL_PATHSPECS pins the path
 // argument as a literal name. Plumbing failures propagate as errors.
+//
+// The listed size is checked against max before the read, and the read
+// must find a blob of exactly that size. The batch read does not peel, so
+// an entry naming a tag, whose listed size is the tag's own, fails with
+// ErrMalformedTree instead of returning the tagged blob past the cap. The
+// refused content is left unread, which usually ends the reader. Callers
+// read past ErrCommitFileUnreadable, never ErrMalformedTree, so no caller
+// reads again after a refusal.
 func (g *gitRunner) blobAt(ctx context.Context, commitSHA, path string, max int64) ([]byte, blobState, error) {
 	out, err := g.run(ctx, nil, "ls-tree", "-z", "-l", "--full-tree", commitSHA, "--", path)
 	if err != nil {
@@ -128,7 +148,15 @@ func (g *gitRunner) blobAt(ctx context.Context, commitSHA, path string, max int6
 	if size > max {
 		return nil, blobTooLarge, nil
 	}
-	content, err := g.run(ctx, nil, "cat-file", "blob", oid)
+	info, body, err := g.objects.Open(ctx, oid)
+	if err != nil {
+		return nil, blobAbsent, err
+	}
+	if info.Type != gitrun.ObjectBlob || info.Size != size {
+		return nil, blobAbsent, fmt.Errorf("%s names a %s of %d bytes, listed as a blob of %d: %w",
+			path, info.Type, info.Size, size, ErrMalformedTree)
+	}
+	content, err := io.ReadAll(body)
 	if err != nil {
 		return nil, blobAbsent, err
 	}
