@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -26,13 +30,20 @@ import (
 // admitted recipe, records the merge and its proof on the handoff check, and
 // publishes the unchanged head. Review is not rerun: the head did not change.
 //
-// A textual conflict or a verification failure on the merge ends the run on
-// the ordinary publish_blocked item, its reason naming the cause. So does a
-// merge the tip keeps from being verified at all: a rebuild trust refuses, a
-// merged tree the image cannot materialize, or an image that cannot serve the
-// tip. Those block on the handoff-verification reason, and their one
-// daemon-written evidence artifact names the cause, the head, and the tip,
-// recorded on a write-once stop row recovery reads it back from.
+// A textual conflict or a verification failure on the merge starts a
+// remediation at the sealed tip (plan §7, revision 110; issue #2646): the
+// conflicted task ends, a handoff_conflict successor authority is sealed, and
+// the remediation's new head is verified, reviewed, and handed off under that
+// authority's own publication, like any head Freeside changed. When no
+// remediation may start (the review bound has no room for its review, the
+// head is someone else's, the task recovers a pre-handoff intent or a trust
+// re-evaluation) the run ends on the ordinary publish_blocked item instead,
+// its reason naming the cause. So does a merge the tip keeps from being
+// verified at all: a rebuild trust refuses, a merged tree the image cannot
+// materialize, or an image that cannot serve the tip. Those block on the
+// handoff-verification reason, and their one daemon-written evidence artifact
+// names the cause, the head, and the tip, recorded on a write-once stop row
+// recovery reads it back from.
 
 const (
 	productionHandoffStopKind    = "production_handoff_stop"
@@ -132,7 +143,8 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 	if err != nil {
 		var conflict *publish.MergeConflictError
 		if errors.As(err, &conflict) {
-			return block(productionBlockHandoffConflict, checkpoint.Artifacts)
+			return w.remediateHandoffConflict(ctx, task, binding, checkpoint, check, checkoutDir,
+				handoffConflict{cause: domain.HandoffConflictTextual, merge: conflict})
 		}
 		if errors.Is(err, publish.ErrRemoteMissingBase) {
 			if sealedNow {
@@ -218,6 +230,13 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 					errors.Join(err, errProductionCrashSeam))
 			}
 		}
+	}
+	// Only a failed step is the remediator's to fix. A merge that passed with
+	// candidate findings carries policy findings (control-plane content,
+	// import integrity) that no code change at the tip answers, so it blocks.
+	if stored.Outcome == domain.VerificationFailed {
+		return w.remediateHandoffConflict(ctx, task, binding, checkpoint, check, checkoutDir,
+			handoffConflict{cause: domain.HandoffConflictMergeVerificationFailed, verification: stored.Artifacts})
 	}
 	if !stored.clean() {
 		return block(productionBlockHandoffVerification, stored.Artifacts)
@@ -729,4 +748,359 @@ func derefOutcome(outcome *productionTaskOutcome) productionTaskOutcome {
 		return productionTaskOutcome{}
 	}
 	return *outcome
+}
+
+// handoffConflict is what the handoff check found that a code change can fix:
+// the textual conflict of the merge, or the evidence of its failed
+// verification.
+type handoffConflict struct {
+	cause        domain.HandoffConflictCause
+	merge        *publish.MergeConflictError
+	verification []domain.Artifact
+}
+
+// blockReason and blockArtifacts are the publish_blocked item the conflict
+// ends the run on when no remediation may start: today's handoff item.
+func (c handoffConflict) blockReason() string {
+	if c.cause == domain.HandoffConflictTextual {
+		return productionBlockHandoffConflict
+	}
+	return productionBlockHandoffVerification
+}
+
+func (c handoffConflict) blockArtifacts(checkpoint productionVerificationCheckpoint) []domain.Artifact {
+	if c.cause == domain.HandoffConflictTextual {
+		return checkpoint.Artifacts
+	}
+	return c.verification
+}
+
+// remediateHandoffConflict ends the conflicted task and starts a remediation
+// at the sealed tip, in one write that seals the handoff_conflict authority,
+// marks the task's row done, and commits the remediation's intent. It blocks
+// as before when no remediation may start: the head is someone else's, the
+// remediation's review would pass the hard round limit, the task re-evaluates
+// trust on a blocked run, the round's remediation identity is taken, or the
+// input would pass the delivery cap. A state the run's own records contradict
+// (a latest review of another head or base, an unreadable verification
+// report) is an error the task retries, never a block: it is a daemon fault,
+// not a conflict a remediation answers.
+//
+// The write is atomic, so a crash leaves either the task to reconcile again,
+// which reaches the same sealed tip and the same conflict without auditing
+// again, or the remediation's intent for the dispatch lane to admit.
+func (w *productionPublicationWorkflow) remediateHandoffConflict(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	check domain.HandoffCheck,
+	checkoutDir string,
+	conflict handoffConflict,
+) (domain.HandoffCheck, *productionTaskOutcome, error) {
+	block := func() (domain.HandoffCheck, *productionTaskOutcome, error) {
+		outcome, err := w.blockHandoff(ctx, task, binding.run, checkpoint,
+			conflict.blockArtifacts(checkpoint), conflict.blockReason())
+		return domain.HandoffCheck{}, &outcome, err
+	}
+	successor, prior, ok, err := w.handoffConflictSuccessor(ctx, task, check, conflict.cause)
+	if err != nil {
+		return domain.HandoffCheck{}, nil, err
+	}
+	if !ok {
+		return block()
+	}
+	intent, err := w.prepareHandoffConflictRemediation(ctx, task, successor, prior, check, checkoutDir, conflict)
+	if errors.Is(err, ErrRemediationInputUndeliverable) {
+		return block()
+	}
+	if err != nil {
+		return domain.HandoffCheck{}, nil, err
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return intent.persistHandoffConflict(ctx, tx, task, successor)
+	}); err != nil {
+		return domain.HandoffCheck{}, nil, err
+	}
+	return domain.HandoffCheck{}, &productionTaskOutcome{completed: true}, nil
+}
+
+// handoffConflictSuccessor builds the authority a conflict at the task's
+// handoff seals, and reports false when no remediation may start. The store
+// gate re-proves every coordinate when the authority is sealed and on every
+// read; these checks only choose blocking over a refused seal. A check sealed
+// before migration 0129 names no workflow audit, so the gate would refuse its
+// tip as the remediation base.
+func (w *productionPublicationWorkflow) handoffConflictSuccessor(
+	ctx context.Context, task productionPublicationTask, check domain.HandoffCheck, cause domain.HandoffConflictCause,
+) (domain.PublicationSuccessor, domain.ReviewRecord, bool, error) {
+	none := domain.PublicationSuccessor{}
+	if check.WorkflowAuditID == 0 || task.reevaluation != nil || task.continuation != nil ||
+		(task.Successor != nil && task.Successor.CarriesForeignHead()) {
+		return none, domain.ReviewRecord{}, false, nil
+	}
+	limit, err := w.reviewHardRoundLimit(ctx, task.RunID)
+	if err != nil {
+		return none, domain.ReviewRecord{}, false, err
+	}
+	var (
+		prior domain.ReviewRecord
+		taken bool
+	)
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		prior, err = tx.LatestReviewRecord(ctx, task.RunID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.GetOutbox(ctx, string(remediationInvocationID(task.RunID, prior.Round)))
+		taken = err == nil
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return none, domain.ReviewRecord{}, false, err
+	}
+	if prior.HeadSHA != task.HeadSHA || prior.BaseSHA != check.EvidenceBaseSHA {
+		return none, domain.ReviewRecord{}, false, fmt.Errorf(
+			"handoff conflict of %s: latest review covers %s at %s, the handoff checked %s at %s: %w",
+			task.PublicationID, prior.HeadSHA, prior.BaseSHA, task.HeadSHA, check.EvidenceBaseSHA,
+			domain.ErrParentKeyMismatch)
+	}
+	if taken || prior.Round+1 > limit {
+		return none, domain.ReviewRecord{}, false, nil
+	}
+	successor := domain.PublicationSuccessor{
+		Version: domain.PublicationHandoffConflictVersion, Origin: domain.PublicationSuccessorHandoffConflict,
+		RunID: task.RunID, PredecessorItemID: task.readyItemID(),
+		PriorReviewInvocationID: prior.InvocationID, ReviewRound: prior.Round + 1,
+		Reentry:              &domain.PublicationSuccessorReentry{BaseSHA: check.TipSHA, HeadSHA: task.HeadSHA},
+		HandoffConflictCause: cause,
+		// The run's first publication never happened when the conflicted
+		// task was the root's, or was itself a first publication.
+		FirstPublication: task.Successor == nil || task.Successor.MakesFirstPublication(),
+	}
+	return successor, prior, true, successor.Validate()
+}
+
+// prepareHandoffConflictRemediation builds the first remediation of a
+// handoff conflict: on the prior review's round, at the sealed tip, with the
+// candidate's patch against the evidence base it was written on and the
+// account of what the merge into the tip found. It answers no review, so it
+// carries no adjudication and no findings.
+func (w *productionPublicationWorkflow) prepareHandoffConflictRemediation(
+	ctx context.Context,
+	task productionPublicationTask,
+	successor domain.PublicationSuccessor,
+	prior domain.ReviewRecord,
+	check domain.HandoffCheck,
+	checkoutDir string,
+	conflict handoffConflict,
+) (*preparedRemediationIntent, error) {
+	var initial domain.AgentInvocation
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		initial, err = tx.GetAgentInvocation(ctx, productionInvocationID(task.RunID))
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if len(initial.InputIDs) != 1 {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	account, err := w.handoffConflictAccount(check, conflict, handoffVerificationInvocationID(task))
+	if err != nil {
+		return nil, err
+	}
+	patch, err := remediationCandidatePatch(ctx, w.workDir, checkoutDir, check.EvidenceBaseSHA, task.HeadSHA)
+	if err != nil {
+		return nil, err
+	}
+	input := remediationInput{
+		Version: remediationInputVersion, RunID: task.RunID, Round: prior.Round,
+		BaseSHA: check.TipSHA, HeadSHA: task.HeadSHA,
+		Instruction:          handoffConflictInstruction,
+		CandidatePatchBase64: patch,
+		Findings:             []domain.Finding{},
+		HandoffConflict:      &account,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > exec.ProductionMaxInputBytes {
+		return nil, errors.Join(ErrRemediationInputUndeliverable, fmt.Errorf(
+			"handoff remediation input is %d bytes, limit %d: %w",
+			len(body), exec.ProductionMaxInputBytes, strictjson.ErrLimitExceeded))
+	}
+	digest := domain.Digest(contentaddr.Sum(body))
+	if _, err := w.artifacts.Put(digest, bytes.NewReader(body)); err != nil {
+		return nil, fmt.Errorf("store handoff remediation input: %w", err)
+	}
+	artifactID := remediationInputArtifactID(task.RunID, prior.Round)
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: artifactID, Type: domain.ArtifactKindEvidence, Digest: digest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: prior.InvocationID,
+			HeadBinding: domain.HeadBound, SourceHeadSHA: task.HeadSHA,
+			SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+			CreatedAt: w.now().UTC(), Source: domain.EvidenceSourceRun,
+			Availability: domain.EvidenceAvailable,
+		},
+	}, w.operatorRecipes)
+	if err != nil {
+		return nil, err
+	}
+	invocationID := remediationInvocationID(task.RunID, prior.Round)
+	invocation, err := domain.NewAgentInvocation(
+		invocationID, []domain.ArtifactID{initial.InputIDs[0], artifactID}, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	request := remediationInvocationRequest{
+		Version: remediationRequestVersion, InvocationID: invocationID,
+		RunID: task.RunID, StageID: remediationStageID(task.RunID, prior.Round),
+		Round: prior.Round, ReviewInvocationID: prior.InvocationID,
+		InputArtifactID: artifactID, InputArtifactDigest: digest,
+		BaseSHA: check.TipSHA, HeadSHA: task.HeadSHA,
+		SuccessorPublicationID: successor.PublicationID(),
+	}
+	if !successor.AdmitsHandoffConflictRemediation(domain.RemediationInvocationIntent(request)) {
+		return nil, fmt.Errorf("handoff remediation request outside its authority: %w", domain.ErrParentKeyMismatch)
+	}
+	payload, err := encodeRemediationRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	return &preparedRemediationIntent{
+		request: request, payload: payload, artifact: artifact, invocation: invocation,
+		stage:        domain.Stage{ID: request.StageID, RunID: request.RunID, Name: productionStageName},
+		publication:  task,
+		reviewRecord: prior,
+	}, nil
+}
+
+// handoffConflictAccount is the input's account of the conflict. A textual
+// conflict names its paths, bounded and quoted. A failed verification names
+// the recipe's steps from the verifier's report and the tail of its
+// transcript, each read back from the artifact store under its digest.
+func (w *productionPublicationWorkflow) handoffConflictAccount(
+	check domain.HandoffCheck, conflict handoffConflict, verification domain.InvocationID,
+) (handoffConflictInput, error) {
+	account := handoffConflictInput{TipSHA: check.TipSHA, Cause: conflict.cause}
+	switch conflict.cause {
+	case domain.HandoffConflictTextual:
+		paths := conflict.merge.Paths
+		account.PathsTruncated = conflict.merge.Truncated
+		if len(paths) > handoffConflictPathLimit {
+			paths, account.PathsTruncated = paths[:handoffConflictPathLimit], true
+		}
+		for _, path := range paths {
+			account.ConflictedPaths = append(account.ConflictedPaths, quotedWithin(path, handoffConflictPathBytes))
+		}
+		return account, nil
+	case domain.HandoffConflictMergeVerificationFailed:
+		raw, err := loadVerificationReport(w.artifacts, conflict.verification, verification)
+		if err != nil {
+			return handoffConflictInput{}, err
+		}
+		report, err := verify.ParseReport(raw)
+		if err != nil {
+			return handoffConflictInput{}, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		account.ReportDigest = domain.Digest(contentaddr.Sum(raw))
+		account.VerificationSteps = report.Steps
+		account.TranscriptTruncated = report.TranscriptTruncated
+		for _, artifact := range conflict.verification {
+			if artifact.Type != domain.ArtifactKindCommandTranscript {
+				continue
+			}
+			if account.TranscriptDigest != "" || artifact.Provenance.ProducerInvocationID != verification {
+				return handoffConflictInput{}, fmt.Errorf(
+					"handoff verification transcript count or invocation mismatch: %w", domain.ErrParentKeyMismatch)
+			}
+			transcript, err := loadArtifactBlob(w.artifacts, artifact.Digest)
+			if err != nil {
+				return handoffConflictInput{}, err
+			}
+			if len(transcript) > handoffConflictTranscriptBytes {
+				transcript, account.TranscriptTruncated = transcript[len(transcript)-handoffConflictTranscriptBytes:], true
+			}
+			account.TranscriptDigest = artifact.Digest
+			account.VerificationTranscript = strings.ToValidUTF8(string(transcript), "")
+		}
+		return account, nil
+	}
+	return handoffConflictInput{}, fmt.Errorf("handoff conflict cause %q: %w", conflict.cause, domain.ErrParentKeyMismatch)
+}
+
+// persistHandoffConflict commits a handoff conflict's first remediation: it
+// seals the authority, ends the conflicted task, whose candidate the
+// remediation replaces under the authority's own task, and commits the
+// remediation's stage, input, invocation, and intent. The store gate
+// re-proves the authority against the sealed handoff check as it seals.
+func (intent *preparedRemediationIntent) persistHandoffConflict(
+	ctx context.Context, tx *store.WriteTx, task productionPublicationTask, successor domain.PublicationSuccessor,
+) error {
+	if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, intent.request.RunID); err != nil {
+		return err
+	}
+	// The authority's prior review must still be the run's latest: the
+	// store gate proves its round and coordinates on every read, and only
+	// here, as the authority is sealed, that nothing reviewed since.
+	latest, err := tx.LatestReviewRecord(ctx, intent.request.RunID)
+	if err != nil || !reflect.DeepEqual(latest, intent.reviewRecord) {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	taskEntry, err := tx.GetOutbox(ctx, task.intentKey())
+	if err != nil {
+		return err
+	}
+	currentTask, err := decodeProductionPublicationTask(taskEntry)
+	if err != nil {
+		return err
+	}
+	task.scopeDecision = nil
+	if taskEntry.Dispatched() || !reflect.DeepEqual(currentTask, task) {
+		return domain.ErrImmutableTransition
+	}
+	if _, err := tx.GetOutbox(ctx, successor.TaskKey()); !errors.Is(err, store.ErrNotFound) {
+		return errors.Join(err, domain.ErrImmutableTransition)
+	}
+	if err := tx.RecordPublicationSuccessor(ctx, successor); err != nil {
+		return err
+	}
+	if err := tx.MarkOutboxDispatched(ctx, task.intentKey()); err != nil {
+		return err
+	}
+	run, err := tx.GetRun(ctx, intent.request.RunID)
+	if err != nil {
+		return err
+	}
+	if _, found := findRemediationStage(run, intent.request.Round); found {
+		return domain.ErrImmutableTransition
+	}
+	run.Stages = append(run.Stages, intent.stage)
+	if err := tx.PutRun(ctx, run); err != nil {
+		return err
+	}
+	if err := tx.PutArtifact(ctx, intent.artifact); err != nil {
+		return err
+	}
+	if err := tx.PutAgentInvocation(ctx, intent.invocation); err != nil {
+		return err
+	}
+	entry, created, err := tx.EnqueueOutbox(
+		ctx, string(intent.request.InvocationID), KindRemediationInvocationRequested, intent.payload)
+	if err != nil {
+		return err
+	}
+	if !created || entry.Kind != KindRemediationInvocationRequested || !bytes.Equal(entry.Payload, intent.payload) {
+		return domain.ErrImmutableTransition
+	}
+	return nil
 }
