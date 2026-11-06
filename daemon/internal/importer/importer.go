@@ -76,6 +76,9 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	if err != nil {
 		return Result{}, err
 	}
+	// Registered after the scratch removal, so it runs first: the reader's
+	// git processes are gone before their scratch HOME is removed.
+	defer g.close()
 	if err := g.verifyBase(ctx, opts.BaseSHA); err != nil {
 		return Result{}, err
 	}

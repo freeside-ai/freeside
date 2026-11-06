@@ -22,8 +22,14 @@ import (
 // and a pinned daemon identity and date. Candidate file bytes enter git only
 // from bounded, daemon-private snapshots of the audited blob store; validated
 // plan messages use stdin. Neither is ever argument-vector material.
+//
+// Base object reads go through one batch reader per import, so an import
+// starts at most two cat-file processes however many base blobs it checks.
+// The reader serves one goroutine, which the importer's single-goroutine
+// derivation satisfies.
 type gitRunner struct {
-	shared *gitrun.Runner
+	shared  *gitrun.Runner
+	objects *gitrun.ObjectReader
 }
 
 // importConfig is appended to the shared baseline, whose -c overrides outrank
@@ -75,18 +81,18 @@ func newGitRunner(ctx context.Context, opts Options, checkoutDir, scratch string
 	if format != "sha1" {
 		return nil, fmt.Errorf("checkout object format %q: %w", format, ErrUnsupportedRepo)
 	}
-	return &gitRunner{shared: shared}, nil
+	return &gitRunner{shared: shared, objects: shared.Objects(ctx)}, nil
+}
+
+// close stops the batch reader's cat-file processes. Import defers it as soon
+// as the runner exists, so no process outlives the import on any path.
+func (g *gitRunner) close() {
+	_ = g.objects.Close()
 }
 
 // run executes one plumbing command and returns its stdout.
 func (g *gitRunner) run(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
 	return g.shared.Run(ctx, stdin, args...)
-}
-
-// runTo executes one plumbing command streaming stdout to w, so large
-// base blobs never buffer in memory.
-func (g *gitRunner) runTo(ctx context.Context, stdin io.Reader, w io.Writer, args ...string) error {
-	return g.shared.RunTo(ctx, stdin, w, args...)
 }
 
 // verifyBase enforces the base binding: the enforced SHA must resolve
@@ -138,24 +144,30 @@ func (g *gitRunner) baseTree(ctx context.Context, baseSHA string) (map[string]tr
 }
 
 // blobContent returns a base blob's bytes (symlink targets and other
-// deliberately small reads only).
+// deliberately small reads only; callers check blobSize first).
 func (g *gitRunner) blobContent(ctx context.Context, oid string) ([]byte, error) {
-	return g.run(ctx, nil, "cat-file", "blob", oid)
+	r, err := g.openBlob(ctx, oid)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(r)
 }
 
-// blobSize returns a base blob's size without reading its content
-// (cat-file -s), so a caller can reject a size mismatch cheaply before
-// deciding whether to stream and hash the blob.
+// blobSize returns a base blob's size from cat-file --batch-check, which
+// never streams content, so a caller can reject a size mismatch cheaply
+// before deciding whether to stream and hash the blob. An object that is
+// not a blob fails here, before any content read: a tag would otherwise
+// report its own small size while a content read reaches the object it
+// points at, carrying a blob of any size past the caller's size gate.
 func (g *gitRunner) blobSize(ctx context.Context, oid string) (int64, error) {
-	out, err := g.run(ctx, nil, "cat-file", "-s", oid)
+	info, err := g.objects.Info(ctx, oid)
 	if err != nil {
 		return 0, err
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("unparseable cat-file -s output %q: %w", out, ErrGitPlumbing)
+	if err := requireBlob(info); err != nil {
+		return 0, err
 	}
-	return n, nil
+	return info.Size, nil
 }
 
 // blobDigest streams a base blob through sha256, returning the digest
@@ -165,11 +177,42 @@ func (g *gitRunner) blobSize(ctx context.Context, oid string) (int64, error) {
 // so a hostile size claim must not force streaming an arbitrarily large
 // base object.
 func (g *gitRunner) blobDigest(ctx context.Context, oid string) (export.Digest, int64, error) {
+	r, err := g.openBlob(ctx, oid)
+	if err != nil {
+		return "", 0, err
+	}
 	h := newBlobHasher()
-	if err := g.runTo(ctx, nil, h, "cat-file", "blob", oid); err != nil {
+	if _, err := io.Copy(h, r); err != nil {
 		return "", 0, err
 	}
 	return h.digest(), h.size, nil
+}
+
+// openBlob opens a base object's content through cat-file --batch and
+// refuses a non-blob, since --batch does not peel a tag. The caller must
+// read the returned content to io.EOF before the next object read, or the
+// reader fails; a refused non-blob's unread content fails it the same way,
+// which is safe because every caller returns the error at once.
+func (g *gitRunner) openBlob(ctx context.Context, oid string) (io.Reader, error) {
+	info, r, err := g.objects.Open(ctx, oid)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireBlob(info); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// requireBlob refuses a base object the importer reads as a file but git
+// stores as a tag, tree, or commit. Only a hand-built tree can put one in a
+// blob entry, so the import fails with ErrGitPlumbing rather than yield a
+// finding.
+func requireBlob(info gitrun.ObjectInfo) error {
+	if info.Type != gitrun.ObjectBlob {
+		return fmt.Errorf("base object %s is a %s, not a blob: %w", info.ID, info.Type, ErrGitPlumbing)
+	}
+	return nil
 }
 
 // blobMatchesDigest reports whether a git blob's content matches the
