@@ -44,9 +44,10 @@ var (
 	ErrWorkspaceMismatch = errors.New("materialized workspace does not match the head tree")
 	// ErrMalformedTree rejects a tree that cannot be safely materialized
 	// or read: an entry nested under another entry (a blob under a
-	// symlink) would escape the workspace on write, and a file read
-	// (blobAt) refuses a blob entry that names an object other than a
-	// blob of its listed size (a tag) before its bytes are used.
+	// symlink) would escape the workspace on write, and a blob or symlink
+	// entry that names an object other than a blob (a tag, a tree), or a
+	// blob other than the size its listing gives, is refused before its
+	// bytes are used.
 	ErrMalformedTree = errors.New("head tree is malformed")
 
 	// Verify invocation failures.

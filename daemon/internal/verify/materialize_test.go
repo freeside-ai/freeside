@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -430,6 +432,69 @@ func TestMaterializeRejectsMalformedTree(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(escape, "b")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Error("materialize wrote through the symlink prefix, escaping the workspace")
+	}
+}
+
+// TestMaterializeStartsOneCatFile pins the batch read: every blob in a
+// many-file tree comes through one cat-file process, where one process per
+// blob ran before.
+func TestMaterializeStartsOneCatFile(t *testing.T) {
+	files := make(map[string]string, 250)
+	for i := range 250 {
+		files[fmt.Sprintf("dir%d/file%d", i%10, i)] = fmt.Sprintf("content %d\n", i)
+	}
+	dir, head := initRepo(t, files)
+	git, calls := loggedGit(t)
+	dest := filepath.Join(t.TempDir(), "ws")
+	if err := MaterializeExact(t.Context(), git, dir, head, dest); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	catFiles := 0
+	for _, line := range calls() {
+		if strings.Contains(line, "cat-file") {
+			catFiles++
+		}
+	}
+	if catFiles != 1 {
+		t.Fatalf("cat-file ran %d times, want 1", catFiles)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "dir7", "file117")) //nolint:gosec // G304: test-owned workspace
+	if err != nil || string(got) != "content 117\n" {
+		t.Fatalf("dir7/file117 = %q, %v", got, err)
+	}
+}
+
+// TestMaterializeRefusesEntryNamingANonBlob pins the type check on each
+// entry's object. A crafted tree may give a blob or symlink mode to a tag
+// or a tree. `cat-file blob` followed a tag, so the tagged blob was written
+// and only verifyMaterialized's hash comparison caught it, after the write;
+// a tree failed as a plumbing fault. The batch read does not peel, so each
+// is refused as a malformed tree before anything is written at its path.
+func TestMaterializeRefusesEntryNamingANonBlob(t *testing.T) {
+	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
+	escape := filepath.Join(t.TempDir(), "escape-target")
+	content := runGitStdin(t, dir, []byte("pwned\n"), "hash-object", "-w", "--stdin")
+	target := runGitStdin(t, dir, []byte(escape), "hash-object", "-w", "--stdin")
+	subtree := runGitStdin(t, dir, treeRecord("100644", "b", content), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+	for _, tc := range []struct {
+		name, mode, object string
+	}{
+		{"blob mode naming a tag", "100644", tagOver(t, dir, content, "blob")},
+		{"blob mode naming a tree", "100644", subtree},
+		{"symlink mode naming a tag", "120000", tagOver(t, dir, target, "blob")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := runGitStdin(t, dir, treeRecord(tc.mode, "entry", tc.object), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+			head := runGit(t, dir, "commit-tree", tree, "-p", base, "-m", tc.name)
+			dest := filepath.Join(t.TempDir(), "ws")
+			err := newTestRunner(t, dir).materialize(t.Context(), head, dest)
+			if !errors.Is(err, ErrMalformedTree) {
+				t.Fatalf("materialize = %v, want ErrMalformedTree", err)
+			}
+			if _, statErr := os.Lstat(filepath.Join(dest, "entry")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("entry was written before the refusal: %v", statErr)
+			}
+		})
 	}
 }
 
