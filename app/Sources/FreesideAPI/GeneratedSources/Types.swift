@@ -12361,7 +12361,59 @@ public enum Components {
                 ])
             }
         }
-        /// The evaluation behind a ready item's verdict (plan §6; mirrors domain.ReadinessDetail): the evaluation-set digest, the exact candidate head and base the proofs bind, and every requirement of the evaluated set in key order with its state, proof recipe, or waiver. Built by the daemon from the same evaluation that produced readiness, so its digest equals readiness.evaluation_set_digest and its candidate_head equals pr_head_sha. Clients compare only these daemon-supplied coordinates against readiness_invalidation to render a stale verdict as stale.
+        /// A merge the daemon built locally and never pushed (mirrors domain.ProspectiveMergeIdentity): merge_sha is a merge commit whose parents are base_sha then head_sha. head_sha stays the head the forge and its reviewers see. The three commits are distinct.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProspectiveMergeIdentity`.
+        public struct ProspectiveMergeIdentity: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeIdentity/base_sha`.
+            public var base_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeIdentity/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeIdentity/merge_sha`.
+            public var merge_sha: Swift.String
+            /// Creates a new `ProspectiveMergeIdentity`.
+            ///
+            /// - Parameters:
+            ///   - base_sha:
+            ///   - head_sha:
+            ///   - merge_sha:
+            public init(
+                base_sha: Swift.String,
+                head_sha: Swift.String,
+                merge_sha: Swift.String
+            ) {
+                self.base_sha = base_sha
+                self.head_sha = head_sha
+                self.merge_sha = merge_sha
+            }
+            public enum CodingKeys: String, CodingKey {
+                case base_sha
+                case head_sha
+                case merge_sha
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.base_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .base_sha
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                self.merge_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .merge_sha
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "base_sha",
+                    "head_sha",
+                    "merge_sha"
+                ])
+            }
+        }
+        /// The evaluation behind a ready item's verdict (plan §6; mirrors domain.ReadinessDetail): the evaluation-set digest, the exact candidate head and base the proofs bind, the target tip the handoff check resolved (plan §7) and, when that tip had moved past base, the verified merge of the head into it, and every requirement of the evaluated set in key order with its state, proof recipe, or waiver. Built by the daemon from the same evaluation that produced readiness, so its digest equals readiness.evaluation_set_digest and its candidate_head equals pr_head_sha. Clients compare only these daemon-supplied coordinates against readiness_invalidation to render a stale verdict as stale.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReadinessDetail`.
@@ -12372,6 +12424,13 @@ public enum Components {
             public var candidate_head: Swift.String
             /// - Remark: Generated from `#/components/schemas/ReadinessDetail/base`.
             public var base: Components.Schemas.ReadinessBoundBase
+            /// The target tip the handoff check resolved. It equals base.base_sha when the tip had not moved. Omitted, never null, on a detail recorded before the field existed, which names no tip. handoff_merge, the verified merge of candidate_head into this tip that verification ran on, is present exactly when the tip differs from base.base_sha, with base_sha this tip and head_sha candidate_head; it is omitted, never null, otherwise.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReadinessDetail/handoff_tip`.
+            public var handoff_tip: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ReadinessDetail/handoff_merge`.
+            public var handoff_merge: Components.Schemas.ProspectiveMergeIdentity?
             /// - Remark: Generated from `#/components/schemas/ReadinessDetail/requirements`.
             public var requirements: [Components.Schemas.ReadinessRequirement]
             /// Creates a new `ReadinessDetail`.
@@ -12380,22 +12439,30 @@ public enum Components {
             ///   - evaluation_set_digest:
             ///   - candidate_head:
             ///   - base:
+            ///   - handoff_tip: The target tip the handoff check resolved. It equals base.base_sha when the tip had not moved. Omitted, never null, on a detail recorded before the field existed, which names no tip. handoff_merge, the verified merge of candidate_head into this tip that verification ran on, is present exactly when the tip differs from base.base_sha, with base_sha this tip and head_sha candidate_head; it is omitted, never null, otherwise.
+            ///   - handoff_merge:
             ///   - requirements:
             public init(
                 evaluation_set_digest: Components.Schemas.Digest,
                 candidate_head: Swift.String,
                 base: Components.Schemas.ReadinessBoundBase,
+                handoff_tip: Swift.String? = nil,
+                handoff_merge: Components.Schemas.ProspectiveMergeIdentity? = nil,
                 requirements: [Components.Schemas.ReadinessRequirement]
             ) {
                 self.evaluation_set_digest = evaluation_set_digest
                 self.candidate_head = candidate_head
                 self.base = base
+                self.handoff_tip = handoff_tip
+                self.handoff_merge = handoff_merge
                 self.requirements = requirements
             }
             public enum CodingKeys: String, CodingKey {
                 case evaluation_set_digest
                 case candidate_head
                 case base
+                case handoff_tip
+                case handoff_merge
                 case requirements
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -12412,6 +12479,14 @@ public enum Components {
                     Components.Schemas.ReadinessBoundBase.self,
                     forKey: .base
                 )
+                self.handoff_tip = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .handoff_tip
+                )
+                self.handoff_merge = try container.decodeIfPresent(
+                    Components.Schemas.ProspectiveMergeIdentity.self,
+                    forKey: .handoff_merge
+                )
                 self.requirements = try container.decode(
                     [Components.Schemas.ReadinessRequirement].self,
                     forKey: .requirements
@@ -12420,6 +12495,8 @@ public enum Components {
                     "evaluation_set_digest",
                     "candidate_head",
                     "base",
+                    "handoff_tip",
+                    "handoff_merge",
                     "requirements"
                 ])
             }
