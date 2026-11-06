@@ -115,7 +115,6 @@ linters:
           |internal/strictjson\
           |internal/topicstore\
           |internal/verify\
-          |internal/ward\
           |internal/wardstore\
           )/[^/]+_test[.]go$"
         linters:
