@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 func TestComposeCodexReviewInstructionsCanonicalizesSourcesAndPrecedence(t *testing.T) {
@@ -177,14 +179,14 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 			r.RunID = "run-2"
 			r.Admission = testReviewAdmission("run-2")
 		}},
-		"Round":        {func(r *ReviewRequest) { r.Round = 2 }},
-		"Repo":         {func(r *ReviewRequest) { r.Repo = "other/repo" }},
-		"RepositoryID": {func(r *ReviewRequest) { r.RepositoryID = 43 }},
-		"BaseRef":      {func(r *ReviewRequest) { r.BaseRef = "release" }},
-		"BaseSHA":      {func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) }},
-		"HeadSHA":      {func(r *ReviewRequest) { r.HeadSHA = strings.Repeat("8", 40) }},
-		"EvaluatedSHA": {func(r *ReviewRequest) { r.EvaluatedSHA = strings.Repeat("9", 40) }},
-		"Workspace":    {func(r *ReviewRequest) { r.Workspace = "/other-candidate" }},
+		"Round":              {func(r *ReviewRequest) { r.Round = 2 }},
+		"Repo":               {func(r *ReviewRequest) { r.Repo = "other/repo" }},
+		"RepositoryID":       {func(r *ReviewRequest) { r.RepositoryID = 43 }},
+		"BaseRef":            {func(r *ReviewRequest) { r.BaseRef = "release" }},
+		"BaseSHA":            {func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) }},
+		"HeadSHA":            {func(r *ReviewRequest) { r.HeadSHA = strings.Repeat("8", 40) }},
+		"LegacyEvaluatedSHA": {func(r *ReviewRequest) { r.LegacyEvaluatedSHA = strings.Repeat("9", 40) }},
+		"Workspace":          {func(r *ReviewRequest) { r.Workspace = "/other-candidate" }},
 		"Verification": {
 			func(r *ReviewRequest) { r.Verification.RecipeDigest = digest("3") },
 			func(r *ReviewRequest) { r.Verification.EvidenceSnapshotDigest = digest("4") },
@@ -412,7 +414,10 @@ func testReviewAdmission(runID domain.RunID) domain.ReviewAdmission {
 	}
 }
 
-func TestReviewRequestEvaluatedCommit(t *testing.T) {
+// TestReviewRequestLegacyEvaluatedCommit pins the validation a retained
+// request naming a prospective merge still gets: no source runs one, but its
+// identity check and authority digest are unchanged.
+func TestReviewRequestLegacyEvaluatedCommit(t *testing.T) {
 	_, instructions, err := ComposeCodexReviewInstructions(ReviewHostInstructionInput{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -430,21 +435,15 @@ func TestReviewRequestEvaluatedCommit(t *testing.T) {
 		},
 		RequestedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
 	}
-	if got := request.WorkspaceSHA(); got != head {
-		t.Fatalf("WorkspaceSHA without an evaluated commit = %q, want the head", got)
-	}
-	request.EvaluatedSHA = merge
+	request.LegacyEvaluatedSHA = merge
 	if err := request.Validate(); err != nil {
 		t.Fatalf("request naming a distinct evaluated commit: %v", err)
-	}
-	if got := request.WorkspaceSHA(); got != merge {
-		t.Fatalf("WorkspaceSHA with an evaluated commit = %q, want it", got)
 	}
 	// An evaluated commit equal to either parent is not their merge, so the
 	// request and its authority digest both fail closed.
 	for name, evaluated := range map[string]string{"head": head, "base": base} {
 		refused := request
-		refused.EvaluatedSHA = evaluated
+		refused.LegacyEvaluatedSHA = evaluated
 		if err := refused.Validate(); !errors.Is(err, domain.ErrProspectiveMergeIdentityInconsistent) {
 			t.Fatalf("evaluated commit equal to the %s: %v, want ErrProspectiveMergeIdentityInconsistent", name, err)
 		}
@@ -518,4 +517,34 @@ func testBacktickFenceRun(line string) int {
 		return 0
 	}
 	return len(line)
+}
+
+// TestRetainedLegacyReviewRequestReads pins that a request a daemon stored
+// before #2660, naming a prospective merge, still decodes strictly, still
+// validates as retained, and keeps the authority digest it was recorded under
+// (captured before the field was renamed LegacyEvaluatedSHA).
+func TestRetainedLegacyReviewRequestReads(t *testing.T) {
+	t.Parallel()
+	body, err := os.ReadFile("testdata/review_request_prospective_merge.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request ReviewRequest
+	if err := strictjson.Decode(body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatalf("strict decode of a retained legacy request: %v", err)
+	}
+	if request.LegacyEvaluatedSHA != "merge-sha-1" {
+		t.Fatalf("LegacyEvaluatedSHA = %q, want the stored evaluated_sha", request.LegacyEvaluatedSHA)
+	}
+	if err := ValidateRetainedReviewRequest(body, request); err != nil {
+		t.Fatalf("ValidateRetainedReviewRequest: %v", err)
+	}
+	digest, err := request.AuthorityDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const recorded = domain.Digest("sha256:66d11f8107b5c31782fee83d3ad9ebedeebb4a753cfdb8fe68cb2cd191fdbd5b")
+	if digest != recorded {
+		t.Fatalf("AuthorityDigest = %s, want the recorded %s", digest, recorded)
+	}
 }

@@ -316,7 +316,7 @@ func TestReadinessReentersAfterHeadChange(t *testing.T) {
 	}
 	p.assertReentered(t, superseded, 2, p.baseSHA, head)
 	// A head change reviews the pushed head itself against the prior base.
-	if len(reviews.requests) != 1 || reviews.requests[0].EvaluatedSHA != "" ||
+	if len(reviews.requests) != 1 || reviews.requests[0].LegacyEvaluatedSHA != "" ||
 		reviews.requests[0].BaseSHA != p.baseSHA || reviews.requests[0].HeadSHA != head ||
 		reviews.files[0]["FOLLOWUP.md"] != "pushed after readiness\n" {
 		t.Fatalf("review request = %#v, tree %#v", reviews.requests, reviews.files)

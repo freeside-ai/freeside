@@ -426,3 +426,55 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 		}
 	}
 }
+
+// TestCodexReviewJournalReadsRetainedEvaluatedRequest pins that a request a
+// daemon stored before #2660, naming the prospective merge a re-entry had
+// reviewed under evaluated_sha, still reads from the journal: history readers
+// decode strictly, so dropping the field would make the row unreadable.
+func TestCodexReviewJournalReadsRetainedEvaluatedRequest(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st := storetest.Open(t, path, store.Options{})
+	adapters, err := New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := exec.ReviewRequest{
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		LegacyEvaluatedSHA: strings.Repeat("e", 40),
+		Workspace:          "/seed/candidate", Verification: exec.ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		}, Instructions: instructions, RequestedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+	}
+	if err := adapters.Journal.PutCodexReviewRequest(ctx, "review-run-1", request); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var body string
+	if err := db.QueryRowContext(ctx,
+		`SELECT body FROM codex_review_requests WHERE invocation_id = ?`, "review-run-1").Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"evaluated_sha":"`+request.LegacyEvaluatedSHA+`"`) {
+		t.Fatalf("stored request does not carry evaluated_sha: %s", body)
+	}
+	got, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1")
+	if err != nil {
+		t.Fatalf("retained evaluated request = %v, want it to read", err)
+	}
+	if got.LegacyEvaluatedSHA != request.LegacyEvaluatedSHA || got.HeadSHA != request.HeadSHA {
+		t.Fatalf("retained evaluated request read as %+v", got)
+	}
+}

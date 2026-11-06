@@ -62,7 +62,7 @@ func (claudeReviewProvider) configurationVersion() string      { return "claude-
 func (claudeReviewProvider) promptProtocol() string { return "claude-production-review-prompt-v4" }
 
 func (claudeReviewProvider) reviewCommand(
-	workspaceTarget, model, reasoningEffort, prompt, _, _, _ string,
+	workspaceTarget, model, reasoningEffort, prompt, _, _ string,
 ) []string {
 	return claudeReviewCommand(workspaceTarget, model, reasoningEffort, prompt)
 }

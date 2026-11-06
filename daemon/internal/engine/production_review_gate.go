@@ -67,8 +67,7 @@ func (w *productionPublicationWorkflow) productionReviewRequest(
 		Repo: binding.admission.Base.Repo, RepositoryID: binding.admission.Base.RepositoryID,
 		BaseRef: binding.admission.Base.BaseRef,
 		BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
-		EvaluatedSHA: binding.evaluatedSHA,
-		Workspace:    reviewWorkspace, Verification: verification,
+		Workspace: reviewWorkspace, Verification: verification,
 		Instructions: instructions, Admission: admission, RequestedAt: w.now().UTC(),
 	}
 	authority, err := request.AuthorityDigest()
@@ -451,7 +450,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			// reaches adjudication there too.
 			if latestRecord.Outcome == domain.ReviewFindings || adjudicatesExternal {
 				candidateWorkspace, err := w.ensureReviewWorkspace(
-					ctx, latestRecord.InvocationID, workspace, reentryWorkspaceSHA(task, binding))
+					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
 				if err != nil {
 					return productionReviewPending, err
 				}
@@ -702,7 +701,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// container can reference this invocation's retained path, and the
 		// launch below will seed its replacement. Keep that answer in this
 		// control flow instead of querying the review source again.
-		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(ctx, id, workspace, req.WorkspaceSHA())
+		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(ctx, id, workspace, req.HeadSHA)
 		if workspaceErr != nil {
 			if errors.Is(workspaceErr, publish.ErrMaterializationRefused) {
 				return w.recordReviewSourceFailure(ctx, task, id, round,
@@ -847,10 +846,8 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	// or parse our own trusted diff is an engine fault, not a reviewer
 	// contradiction, so it takes the retry/pending path instead.
 	if len(result.Findings) > 0 {
-		// The reviewer read the workspace commit, which for a base-advance
-		// re-entry is the prospective merge, not the head.
 		scope, err := reviewedDiffScope(
-			ctx, w.workDir, reviewWorkspace, binding.admission.Base.BaseSHA, req.WorkspaceSHA())
+			ctx, w.workDir, reviewWorkspace, binding.admission.Base.BaseSHA, req.HeadSHA)
 		if err != nil {
 			return productionReviewPending, err
 		}

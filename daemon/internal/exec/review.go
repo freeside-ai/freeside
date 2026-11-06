@@ -104,11 +104,16 @@ type ReviewRequestSupersessionVerifier interface {
 
 // ReviewRequest is what a review source needs to review one exact candidate.
 //
-// HeadSHA is always the head the forge shows, and the review record binds it.
-// EvaluatedSHA is set only on a base-advance re-entry: it names the unpushed
-// merge of HeadSHA into BaseSHA, and the source then reviews that commit. The
-// workspace holds it, and the reviewed diff runs from BaseSHA to it. Empty
-// means the workspace holds HeadSHA itself.
+// HeadSHA is always the head the forge shows, and the review record binds it;
+// the workspace holds it, and review covers it (plan revision 110).
+//
+// LegacyEvaluatedSHA is set only on a request a daemon wrote before #2660,
+// when a base-advance re-entry had the unpushed merge of HeadSHA into BaseSHA
+// reviewed in place of the head. It stays, under its stored JSON name, so a
+// retained request still decodes under the strict history readers and its
+// authority digest still recomputes
+// (devlog/2026-11-05-2315-retire-review-merge-path.md).
+// Nothing builds a request that sets it, and every source refuses to run one.
 //
 // Admission is the snapshot the engine admitted the invocation under before
 // it asked the source (plan §5.4): the agent the lineup selected, the identity
@@ -116,19 +121,19 @@ type ReviewRequestSupersessionVerifier interface {
 // the ReviewResult. A persisted request with no snapshot predates review
 // admission and is a legacy request.
 type ReviewRequest struct {
-	RunID        domain.RunID               `json:"run_id"`
-	Round        int                        `json:"round"`
-	Repo         string                     `json:"repo"`
-	RepositoryID int64                      `json:"repository_id"`
-	BaseRef      string                     `json:"base_ref"`
-	BaseSHA      string                     `json:"base_sha"`
-	HeadSHA      string                     `json:"head_sha"`
-	EvaluatedSHA string                     `json:"evaluated_sha,omitempty"`
-	Workspace    string                     `json:"workspace"`
-	Verification ReviewVerificationEvidence `json:"verification"`
-	Instructions ReviewInstructionBinding   `json:"instructions"`
-	Admission    domain.ReviewAdmission     `json:"admission"`
-	RequestedAt  time.Time                  `json:"requested_at"`
+	RunID              domain.RunID               `json:"run_id"`
+	Round              int                        `json:"round"`
+	Repo               string                     `json:"repo"`
+	RepositoryID       int64                      `json:"repository_id"`
+	BaseRef            string                     `json:"base_ref"`
+	BaseSHA            string                     `json:"base_sha"`
+	HeadSHA            string                     `json:"head_sha"`
+	LegacyEvaluatedSHA string                     `json:"evaluated_sha,omitempty"`
+	Workspace          string                     `json:"workspace"`
+	Verification       ReviewVerificationEvidence `json:"verification"`
+	Instructions       ReviewInstructionBinding   `json:"instructions"`
+	Admission          domain.ReviewAdmission     `json:"admission"`
+	RequestedAt        time.Time                  `json:"requested_at"`
 }
 
 // ReviewVerificationEvidence is the compact, content-addressed account of
@@ -237,24 +242,15 @@ func (r ReviewRequest) ValidateBeforeAdmission() error {
 	case r.RequestedAt.Location() != time.UTC:
 		return fmt.Errorf("review request requested_at: %w", domain.ErrTimestampNotUTC)
 	}
-	if r.EvaluatedSHA != "" {
+	if r.LegacyEvaluatedSHA != "" {
 		merge := domain.ProspectiveMergeIdentity{
-			BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, MergeSHA: r.EvaluatedSHA,
+			BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, MergeSHA: r.LegacyEvaluatedSHA,
 		}
 		if err := merge.Validate(); err != nil {
 			return fmt.Errorf("review request evaluated_sha: %w", err)
 		}
 	}
 	return errors.Join(r.Verification.Validate(), r.Instructions.Validate())
-}
-
-// WorkspaceSHA is the commit the review workspace must hold: the evaluated
-// commit when the request names one, the head otherwise.
-func (r ReviewRequest) WorkspaceSHA() string {
-	if r.EvaluatedSHA != "" {
-		return r.EvaluatedSHA
-	}
-	return r.HeadSHA
 }
 
 // AuthorityDigest binds the reviewer to every request field that can change
@@ -282,7 +278,7 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 	}{
 		Version: "review-request-authority-v4", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
-		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.EvaluatedSHA,
+		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.LegacyEvaluatedSHA,
 		Workspace:    r.Workspace,
 		Verification: r.Verification, Instructions: r.Instructions,
 		Admission: r.Admission,
