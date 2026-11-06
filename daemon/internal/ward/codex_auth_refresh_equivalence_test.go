@@ -25,6 +25,7 @@ const (
 // relevant decisions and committed bytes with the shared implementation over
 // a deterministic adversarial token corpus.
 func TestCodexAuthRefreshExtractionMatchesLegacyDecisionCorpus(t *testing.T) {
+	t.Parallel()
 	for i := range 96 {
 		validatedAt := codexReviewEpoch.Add(time.Duration(i) * time.Second)
 		predecessorAccess := codexReviewJWT(t, validatedAt.Add(30*time.Minute))

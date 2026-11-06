@@ -17,6 +17,8 @@ import (
 // FREESIDE_CODEX_ENROLLMENT_LIVE_TEST=1 deliberately spends the refresh token
 // in INPUT_FILE and leaves the rotated credential at AUTH_STORE_PATH. It is
 // CI-blind and must be invoked only with an operator-prepared disposable login.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexAuthEnrollmentSpendsAndReplaces(t *testing.T) {
 	const requirements = "set FREESIDE_CODEX_ENROLLMENT_LIVE_TEST=1, FREESIDE_CODEX_ENROLLMENT_INPUT_ROOT, FREESIDE_CODEX_ENROLLMENT_INPUT_FILE, FREESIDE_CODEX_ENROLLMENT_AUTH_STORE_ROOT, and FREESIDE_CODEX_ENROLLMENT_AUTH_STORE_PATH (the test deliberately spends the input refresh token and leaves the rotated credential at the output path)"
 	if os.Getenv("FREESIDE_CODEX_ENROLLMENT_LIVE_TEST") != "1" {

@@ -38,6 +38,7 @@ func codexAuthRenewalFixture(t *testing.T) (CodexAuthRenewalConfig, *fakeLeaser,
 }
 
 func TestCodexAuthRenewalRotatesExpiredStoreForLegacyDisabledIdentity(t *testing.T) {
+	t.Parallel()
 	cfg, leaser, state, refresher, before := codexAuthRenewalFixture(t)
 	result, err := RenewCodexAuth(t.Context(), cfg)
 	if err != nil {
@@ -63,6 +64,7 @@ func TestCodexAuthRenewalRotatesExpiredStoreForLegacyDisabledIdentity(t *testing
 }
 
 func TestCodexAuthRenewalReadySkipsProvider(t *testing.T) {
+	t.Parallel()
 	cfg, leaser, state, refresher, _ := codexAuthRenewalFixture(t)
 	body := codexHostAuthBody(t, "operator-refresh", codexReviewEpoch.Add(2*time.Hour), codexReviewEpoch)
 	if err := os.WriteFile(cfg.AuthStorePath, body, 0o600); err != nil {
@@ -78,6 +80,7 @@ func TestCodexAuthRenewalReadySkipsProvider(t *testing.T) {
 }
 
 func TestCodexAuthRenewalRefusesHoldAndIdentityMismatch(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"hold", "provider", "lease", "path", "identity", "snapshot", "strategy"} {
 		t.Run(name, func(t *testing.T) {
 			cfg, leaser, state, refresher, _ := codexAuthRenewalFixture(t)
@@ -109,6 +112,7 @@ func TestCodexAuthRenewalRefusesHoldAndIdentityMismatch(t *testing.T) {
 }
 
 func TestCodexAuthRenewalRevokedDoesNotRetryOrLeak(t *testing.T) {
+	t.Parallel()
 	cfg, leaser, state, refresher, before := codexAuthRenewalFixture(t)
 	refresher.err = &CodexAuthRefreshError{Revoked: true, Code: "operator-refresh"}
 	for range 2 {
@@ -127,6 +131,7 @@ func TestCodexAuthRenewalRevokedDoesNotRetryOrLeak(t *testing.T) {
 }
 
 func TestCodexAuthRenewalRecoversPendingRotation(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "pending", true: "committed"}[committed], func(t *testing.T) {
 			cfg, leaser, state, refresher, before := codexAuthRenewalFixture(t)
@@ -149,6 +154,7 @@ func TestCodexAuthRenewalRecoversPendingRotation(t *testing.T) {
 }
 
 func TestCodexAuthRenewalLeaseLossPreservesStore(t *testing.T) {
+	t.Parallel()
 	cfg, leaser, _, refresher, before := codexAuthRenewalFixture(t)
 	leaser.onGet = func(current domain.AuthStoreMutationLease) (domain.AuthStoreMutationLease, error) {
 		if refresher.calls != 0 {

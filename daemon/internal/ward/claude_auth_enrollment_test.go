@@ -172,6 +172,7 @@ func (fx *claudeEnrollmentFixture) isTokenRead(name string) bool {
 }
 
 func TestEnrollClaudeSetupTokenAuthorsTheVolumeAndRecordsGenerationOne(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	result, err := enrollClaudeInBubble(t, fx.cfg)
 	if err != nil {
@@ -241,6 +242,7 @@ func TestEnrollClaudeSetupTokenAuthorsTheVolumeAndRecordsGenerationOne(t *testin
 // or mount, no runtime call, result, recorded identity, or probe output
 // carries it.
 func TestEnrollClaudeSetupTokenKeepsTheTokenOutOfEveryRuntimeSurface(t *testing.T) {
+	t.Parallel()
 	for _, refused := range []bool{false, true} {
 		t.Run(fmt.Sprintf("refused=%t", refused), func(t *testing.T) {
 			fx := newClaudeEnrollmentFixture(t)
@@ -291,6 +293,7 @@ func TestEnrollClaudeSetupTokenKeepsTheTokenOutOfEveryRuntimeSurface(t *testing.
 }
 
 func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTheManifestProofFails(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.rt.observerProof = func(_ string, proof []byte) []byte {
 		return append(proof, "cred_manifest=invalid\n"...)
@@ -304,6 +307,7 @@ func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTheManifestProofFails(t *test
 }
 
 func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTheSeederFails(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.rt.onCopyIntoContainer = func(string, string, string) error {
 		return errors.New("copy refused")
@@ -317,6 +321,7 @@ func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTheSeederFails(t *testing.T) 
 }
 
 func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTheGenerationAppendFails(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.store.appendErr = errors.New("lease fence moved")
 	_, err := enrollClaudeInBubble(t, fx.cfg)
@@ -330,6 +335,7 @@ func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTheGenerationAppendFails(t *t
 // probe failure refuses the enrollment the same way, deleting the volume and
 // recording no generation, and that errors.Is tells the classes apart.
 func TestEnrollClaudeSetupTokenRefusesATokenTheProbeDoesNotPass(t *testing.T) {
+	t.Parallel()
 	refused := func(result string, reached bool) LineupProbeOutput {
 		return LineupProbeOutput{
 			Stdout:     []byte(`{"type":"result","is_error":true,"result":` + strconv.Quote(result) + `}`),
@@ -385,6 +391,7 @@ func TestEnrollClaudeSetupTokenRefusesATokenTheProbeDoesNotPass(t *testing.T) {
 // TestEnrollClaudeSetupTokenRefusesAVolumeHoldingAnotherToken proves the
 // token read back must be the one entered before anything is probed.
 func TestEnrollClaudeSetupTokenRefusesAVolumeHoldingAnotherToken(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.readBack = []byte("sk-ant-oat01-another-fixture-token-0123456789")
 	_, err := enrollClaudeInBubble(t, fx.cfg)
@@ -399,6 +406,7 @@ func TestEnrollClaudeSetupTokenRefusesAVolumeHoldingAnotherToken(t *testing.T) {
 }
 
 func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTokenReadFails(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.readBack = []byte("not a setup token")
 	_, err := enrollClaudeInBubble(t, fx.cfg)
@@ -415,6 +423,7 @@ func TestEnrollClaudeSetupTokenDeletesTheVolumeWhenTokenReadFails(t *testing.T) 
 // authors over, or deletes, a volume it did not create: it may hold another
 // identity's live credential.
 func TestEnrollClaudeSetupTokenRefusesAnExistingVolume(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.rt.vols[fx.cfg.Volume] = &fakeVol{created: "prior"}
 	_, err := enrollClaudeInBubble(t, fx.cfg)
@@ -435,6 +444,7 @@ func TestEnrollClaudeSetupTokenRefusesAnExistingVolume(t *testing.T) {
 // image without a digest pin, is rejected before Begin records the volume as the
 // identity's fixed binding, so a rerun with valid input stays possible.
 func TestEnrollClaudeSetupTokenRefusesInvalidRuntimeInputsBeforeRecording(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*ClaudeAuthEnrollmentConfig){
 		"volume over the runtime limit": func(cfg *ClaudeAuthEnrollmentConfig) {
 			cfg.Volume = strings.Repeat("v", appleContainerIDLimit+1)
@@ -466,6 +476,7 @@ func TestEnrollClaudeSetupTokenRefusesInvalidRuntimeInputsBeforeRecording(t *tes
 // volume this run created is removed even when its first inspection fails,
 // so a retry with the same name is not refused as an existing volume.
 func TestEnrollClaudeSetupTokenDeletesAVolumeThatFailsInspection(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.rt.onInspectVolume = func(string, VolumeSummary) (VolumeSummary, error) {
 		return VolumeSummary{}, errors.New("inspect failed")
@@ -477,6 +488,7 @@ func TestEnrollClaudeSetupTokenDeletesAVolumeThatFailsInspection(t *testing.T) {
 }
 
 func TestEnrollClaudeSetupTokenStopsBeforeTheRuntimeWhenBeginFails(t *testing.T) {
+	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
 	fx.store.beginErr = domain.ErrAccountBindingTaken
 	_, err := enrollClaudeInBubble(t, fx.cfg)
@@ -490,6 +502,7 @@ func TestEnrollClaudeSetupTokenStopsBeforeTheRuntimeWhenBeginFails(t *testing.T)
 }
 
 func TestSetupTokenNeverRendersItsValue(t *testing.T) {
+	t.Parallel()
 	token, err := NewSetupToken([]byte(claudeEnrollmentTestToken))
 	if err != nil {
 		t.Fatal(err)
@@ -512,6 +525,7 @@ func TestSetupTokenNeverRendersItsValue(t *testing.T) {
 }
 
 func TestNewSetupTokenRefusesMalformedInputWithoutEchoingIt(t *testing.T) {
+	t.Parallel()
 	long := "sk-ant-oat01-" + strings.Repeat("a", MaxSetupTokenBytes)
 	cases := map[string]string{
 		"empty":       "",

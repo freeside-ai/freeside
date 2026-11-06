@@ -50,6 +50,7 @@ func newTestBackend(t *testing.T) *Backend {
 // accounted for as either declared or refused, so registering a sixth
 // capability forces this test to place it.
 func TestCapabilitySnapshot(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 
 	adm, err := exec.CheckCapabilities(b, declaredCapabilities)
@@ -74,6 +75,7 @@ func TestCapabilitySnapshot(t *testing.T) {
 }
 
 func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	if b.Capabilities().Has(exec.CapNetworklessExport) {
 		t.Fatal("new backend declared supports_networkless_export before conformance")
@@ -88,6 +90,7 @@ func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
 }
 
 func TestRestoreConformancePublishesDurableCapabilitiesOnce(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
@@ -340,6 +343,7 @@ func TestConfigurationDigestTracksRuntimeExecutableBytes(t *testing.T) {
 }
 
 func TestConformanceProofRejectsStaleGeneration(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	older, _ := b.beginConformanceProof(nil)
 	newer, _ := b.beginConformanceProof(nil)
@@ -482,6 +486,7 @@ func TestRepointSupersedesARunningProof(t *testing.T) {
 // while an earlier pass's conclude is still inside its record step, so the
 // durable append order can never invert the supersession order.
 func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	gen, _ := b.beginConformanceProof(nil)
 
@@ -534,6 +539,7 @@ func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
 // flight, or a concurrent admission could be enabled by the fresh
 // declaration while gated against the previous pass's stale row.
 func TestConcludePersistsBeforePublishing(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	gen, _ := b.beginConformanceProof(nil)
 	var observed []bool
@@ -557,6 +563,7 @@ func TestConcludePersistsBeforePublishing(t *testing.T) {
 // everything provable is required, so a capability added to either
 // registration point without the other is a drift this test catches.
 func TestUnattendedFloorMatchesTheClassCeiling(t *testing.T) {
+	t.Parallel()
 	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	if !ok {
 		t.Fatal("fresh-vm class has no registered ceiling")
@@ -571,6 +578,7 @@ func TestUnattendedFloorMatchesTheClassCeiling(t *testing.T) {
 // to the domain's registered ceiling for its class: a capability added on one
 // side without the other is a drift this test catches, in both directions.
 func TestProvenCapabilitiesMatchTheClassCeiling(t *testing.T) {
+	t.Parallel()
 	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	if !ok {
 		t.Fatal("fresh-vm class has no registered ceiling")
@@ -587,6 +595,7 @@ func TestProvenCapabilitiesMatchTheClassCeiling(t *testing.T) {
 // TestRefusedCapabilitiesRefuse proves policy asking for a refuted
 // capability gets a typed refusal, never a silent downgrade.
 func TestRefusedCapabilitiesRefuse(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	for _, c := range refusedCapabilities {
 		_, err := exec.CheckCapabilities(b, []exec.Capability{c})
@@ -599,6 +608,7 @@ func TestRefusedCapabilitiesRefuse(t *testing.T) {
 // TestCapabilitiesImmutable proves mutating a returned set does not change
 // the backend's declaration (fixed at spawn, §5.3).
 func TestCapabilitiesImmutable(t *testing.T) {
+	t.Parallel()
 	b := newTestBackend(t)
 	got := b.Capabilities()
 	delete(got, exec.CapDetachableWorkspace)
@@ -616,6 +626,7 @@ func TestCapabilitiesImmutable(t *testing.T) {
 // TestUninitializedBackendDeclaresNothing pins the zero-value contract: only
 // New can construct a backend that advertises the strong handoff class.
 func TestUninitializedBackendDeclaresNothing(t *testing.T) {
+	t.Parallel()
 	for name, b := range map[string]*Backend{
 		"typed nil":  nil,
 		"zero value": {},
@@ -632,6 +643,7 @@ func TestUninitializedBackendDeclaresNothing(t *testing.T) {
 }
 
 func TestNewFreezesConfigSlices(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	b, err := New(stubRuntime{}, cfg)
 	if err != nil {
@@ -650,6 +662,7 @@ func TestNewFreezesConfigSlices(t *testing.T) {
 }
 
 func TestNewValidation(t *testing.T) {
+	t.Parallel()
 	if _, err := New(nil, testConfig()); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("New(nil runtime) = %v, want ErrInvalidConfig", err)
 	}
@@ -661,6 +674,7 @@ func TestNewValidation(t *testing.T) {
 }
 
 func TestBackendName(t *testing.T) {
+	t.Parallel()
 	if got := newTestBackend(t).Name(); got != "fresh_vm_read_only_volume_handoff" {
 		t.Errorf("Name() = %q, want the spike's isolation class name", got)
 	}

@@ -3,6 +3,7 @@ package ward
 import "testing"
 
 func TestMountTypeValid(t *testing.T) {
+	t.Parallel()
 	for _, m := range AllMountTypes {
 		if !m.valid() {
 			t.Errorf("MountType %q: valid() = false, want true", m)
@@ -18,6 +19,7 @@ func TestMountTypeValid(t *testing.T) {
 }
 
 func TestContainerStateValid(t *testing.T) {
+	t.Parallel()
 	for _, s := range AllContainerStates {
 		if !s.valid() {
 			t.Errorf("ContainerState %q: valid() = false, want true", s)
@@ -31,6 +33,7 @@ func TestContainerStateValid(t *testing.T) {
 }
 
 func TestNetworkModeValid(t *testing.T) {
+	t.Parallel()
 	for _, m := range AllNetworkModes {
 		if !m.valid() {
 			t.Errorf("NetworkMode %q: valid() = false, want true", m)

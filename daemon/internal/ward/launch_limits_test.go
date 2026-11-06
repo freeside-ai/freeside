@@ -37,6 +37,7 @@ func markerWriterSpec(fx *handoffFixture, status string) HandoffSpec {
 }
 
 func TestHandoffCreatesEveryContainerAtTheDeclaredSize(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testHandoffSpec()
 	hs.Size = ContainerSize{CPUs: 6, MemoryMiB: 3072}
@@ -59,6 +60,7 @@ func TestHandoffCreatesEveryContainerAtTheDeclaredSize(t *testing.T) {
 }
 
 func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	var logs bytes.Buffer
@@ -99,6 +101,7 @@ func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 }
 
 func TestHandoffDoesNotNameAnOrdinaryWriterFailure(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs := markerWriterSpec(fx, "137")
@@ -117,6 +120,7 @@ func TestHandoffDoesNotNameAnOrdinaryWriterFailure(t *testing.T) {
 }
 
 func TestHandoffRecordsAKillTheWriterSurvived(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	var logs bytes.Buffer
 	fx.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
@@ -136,6 +140,7 @@ func TestHandoffRecordsAKillTheWriterSurvived(t *testing.T) {
 }
 
 func TestHandoffRecordsAnUnreadableBootLog(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	var logs bytes.Buffer
 	fx.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
@@ -149,6 +154,7 @@ func TestHandoffRecordsAnUnreadableBootLog(t *testing.T) {
 }
 
 func TestHandoffRecordsAnUnreadBootLogWhenTheWriterNeverStops(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	var logs bytes.Buffer
 	fx.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
@@ -170,6 +176,7 @@ func TestHandoffRecordsAnUnreadBootLogWhenTheWriterNeverStops(t *testing.T) {
 }
 
 func TestHandoffRecordsALaunchThatFailsBeforeTheAgent(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	var logs bytes.Buffer
 	fx.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
@@ -191,6 +198,7 @@ func TestHandoffRecordsALaunchThatFailsBeforeTheAgent(t *testing.T) {
 }
 
 func TestHandoffRefusesAnUnsizedSpec(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testHandoffSpec()
 	hs.Size = ContainerSize{}
@@ -218,6 +226,7 @@ func TestUnsizedSpecDigestsInThePreSizeFormat(t *testing.T) {
 }
 
 func TestRecoverAdoptsARecordJournaledBeforeSizes(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	presize := hs
@@ -235,6 +244,7 @@ func TestRecoverAdoptsARecordJournaledBeforeSizes(t *testing.T) {
 }
 
 func TestRecoverRefusesARecordJournaledAtAnotherSize(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	other := hs
@@ -248,6 +258,7 @@ func TestRecoverRefusesARecordJournaledAtAnotherSize(t *testing.T) {
 }
 
 func TestCodexReviewKilledAtItsMemoryLimitFailsAsConfiguration(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, status, events string
 		wantEvidence         bool
@@ -330,6 +341,7 @@ func TestCodexReviewKilledAtItsMemoryLimitFailsAsConfiguration(t *testing.T) {
 }
 
 func TestProjectImageRoomDeclaresItsSizeAndNamesAMemoryLimitKill(t *testing.T) {
+	t.Parallel()
 	size := ContainerSize{CPUs: 6, MemoryMiB: 4096}
 	for _, tc := range []struct {
 		name     string
@@ -387,6 +399,7 @@ func TestProjectImageRoomDeclaresItsSizeAndNamesAMemoryLimitKill(t *testing.T) {
 // wrapping: a recipe command whose container the guest kernel killed at the
 // limit reaches the caller as the kill, not as a failed step (#1617).
 func TestVerifyReturnsTheRoomsMemoryLimitKill(t *testing.T) {
+	t.Parallel()
 	size := DefaultLaunchSize(LaunchVerification)
 	runtime := newFakeRuntime(t)
 	var calls [][]string
@@ -452,6 +465,7 @@ func verificationCandidateRepo(t *testing.T) (dir, base, head string) {
 // A production room is always bound to verification ownership, whose finish
 // cancels the command context before the boot log is read.
 func TestBoundProjectImageRoomNamesAMemoryLimitKill(t *testing.T) {
+	t.Parallel()
 	size := DefaultLaunchSize(LaunchVerification)
 	runtime := newFakeRuntime(t)
 	var calls [][]string
@@ -478,6 +492,7 @@ func TestBoundProjectImageRoomNamesAMemoryLimitKill(t *testing.T) {
 // A helper runs no child whose kill its launch could survive, so a kill fails
 // the launch as that failure even though the fake's helpers exit cleanly.
 func TestHandoffFailsWhenAHelperIsKilledAtItsMemoryLimit(t *testing.T) {
+	t.Parallel()
 	for _, helper := range []string{"instruction seeder", "exporter"} {
 		t.Run(helper, func(t *testing.T) {
 			fx := newHandoffFixture(t)
@@ -520,6 +535,7 @@ func TestReviewHelperKillClassifiesAsConfiguration(t *testing.T) {
 }
 
 func TestReviewLaunchFailsWhenAHelperIsKilledAtItsMemoryLimit(t *testing.T) {
+	t.Parallel()
 	id := domain.InvocationID("review-memory-limit")
 	// The workspace seed's observer, a review observer, and the snapshot
 	// seeder stop at three distinct helper sites.
@@ -565,6 +581,7 @@ func TestReviewLaunchFailsWhenAHelperIsKilledAtItsMemoryLimit(t *testing.T) {
 // A runner that cannot prove its process gone still ran a container the
 // runtime identified, so that launch is recorded and a kill is still named.
 func TestProjectImageRoomRecordsALaunchWhoseRunnerFailed(t *testing.T) {
+	t.Parallel()
 	for _, killed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("killed=%t", killed), func(t *testing.T) {
 			runtime := newFakeRuntime(t)

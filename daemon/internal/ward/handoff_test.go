@@ -114,6 +114,7 @@ func (fx *handoffFixture) runSeeded(t *testing.T) (*HandoffResult, error) {
 }
 
 func TestHandoffChecksCanonicalSeedSnapshotBeforeLaunchingAContainer(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := fx.seed(t)
 	fx.cfg.checkSeedWorkspace = func(_ context.Context, dir string, _ int) error {
@@ -140,6 +141,7 @@ func TestHandoffChecksCanonicalSeedSnapshotBeforeLaunchingAContainer(t *testing.
 }
 
 func TestHandoffRejectsSourceGitConfigBeforeWorkspaceCheck(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := fx.seed(t)
 	configPath := filepath.Join(hs.Seed.SourceDir, ".git", "config")
@@ -200,6 +202,7 @@ func wantCheckFailure(t *testing.T, err error, want Check) {
 	}
 }
 
+//nolint:paralleltest // Serial: fx.isolateScratch redirects the host temp dir with t.Setenv("TMPDIR")
 func TestHandoffSuccess(t *testing.T) {
 	fx := newHandoffFixture(t)
 	fx.isolateScratch(t)
@@ -268,6 +271,7 @@ func (fx *handoffFixture) assertOnlyExportSurvives(t *testing.T, res *HandoffRes
 // The egress observation is read from the run's own proxy: provider_only
 // reports the provider endpoints and no registry set.
 func TestHandoffRecordsProviderOnlyAllowlist(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	res, err := fx.run(t)
 	if err != nil {
@@ -281,6 +285,7 @@ func TestHandoffRecordsProviderOnlyAllowlist(t *testing.T) {
 }
 
 func TestHandoffRecordsProviderRegistryAllowlist(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testRegistryHandoffSpec()
 	res, err := fx.backend(t).Handoff(context.Background(), hs)
@@ -309,6 +314,7 @@ func TestHandoffRecordsProviderRegistryAllowlist(t *testing.T) {
 // admitted, resolved through the configured lookup, and dialed at the address
 // that lookup returned, while an undeclared authority is refused unresolved.
 func TestHandoffProxyResolvesDeclaredRegistries(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testRegistryHandoffSpec()
 	var (
@@ -386,6 +392,7 @@ func TestHandoffProxyResolvesDeclaredRegistries(t *testing.T) {
 // A spec whose profile and registry set disagree is refused before the gate
 // creates any runtime object.
 func TestHandoffRefusesMismatchedRegistrySetBeforeAnyObject(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*HandoffSpec){
 		"provider_only with a registry set": func(hs *HandoffSpec) {
 			hs.RegistryHosts = []string{"registry.npmjs.org"}
@@ -412,6 +419,7 @@ func TestHandoffRefusesMismatchedRegistrySetBeforeAnyObject(t *testing.T) {
 // configured with: any difference from the requested profile's allowlist
 // fails closed before the writer exists.
 func TestHandoffRejectsRealizedAllowlistMismatch(t *testing.T) {
+	t.Parallel()
 	const provider, registry = "provider.example:443", "registry.npmjs.org:443"
 	registrySpec := func() HandoffSpec {
 		hs := testHandoffSpec()
@@ -453,6 +461,7 @@ func TestHandoffRejectsRealizedAllowlistMismatch(t *testing.T) {
 }
 
 func TestHandoffVendorInstructionTopology(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testHandoffSpec()
 	body := []byte("# Host working principles\nOnly the admitted bytes.\n")
@@ -525,6 +534,7 @@ func TestHandoffVendorInstructionTopology(t *testing.T) {
 }
 
 func TestHandoffRejectsUnenforcedEgress(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.rt.onInspectNetwork = func(_ string, report NetworkReport) (NetworkReport, error) {
 		report.Mode = NetworkNAT
@@ -536,6 +546,7 @@ func TestHandoffRejectsUnenforcedEgress(t *testing.T) {
 }
 
 func TestHandoffRejectsUndeclaredAgentAttachment(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onInspect = func(id string, report InspectReport) (InspectReport, error) {
@@ -551,6 +562,7 @@ func TestHandoffRejectsUndeclaredAgentAttachment(t *testing.T) {
 }
 
 func TestHandoffRejectsNetworkReplacementBeforeWriterStart(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	var inspections int
 	fx.rt.onInspectNetwork = func(_ string, report NetworkReport) (NetworkReport, error) {
@@ -570,6 +582,7 @@ func TestHandoffRejectsNetworkReplacementBeforeWriterStart(t *testing.T) {
 }
 
 func TestHandoffNetworkCleanupFailureFailsClosed(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.rt.onDeleteNetwork = func(string) (bool, error) { return true, nil }
 	res, err := fx.run(t)
@@ -580,6 +593,7 @@ func TestHandoffNetworkCleanupFailureFailsClosed(t *testing.T) {
 }
 
 func TestHandoffReapsAmbiguousNetworkCreate(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.rt.createNetworkThenFail = true
 	_, err := fx.run(t)
@@ -588,6 +602,7 @@ func TestHandoffReapsAmbiguousNetworkCreate(t *testing.T) {
 }
 
 func TestHandoffRequiresNetworkAbsenceProofAfterListFailure(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	var lists int
 	fx.rt.onListNetworks = func(list []NetworkSummary) ([]NetworkSummary, error) {
@@ -605,6 +620,7 @@ func TestHandoffRequiresNetworkAbsenceProofAfterListFailure(t *testing.T) {
 }
 
 func TestArchiveCapWriterBoundary(t *testing.T) {
+	t.Parallel()
 	t.Run("exact fit", func(t *testing.T) {
 		var dest bytes.Buffer
 		w := &archiveCapWriter{dest: &dest, remaining: 8}
@@ -627,6 +643,7 @@ func TestArchiveCapWriterBoundary(t *testing.T) {
 }
 
 func TestHandoffRootFSArchiveCap(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.cfg.MaxArchiveBytes = 2048
 	_, err := fx.run(t)
@@ -640,6 +657,7 @@ func TestHandoffRootFSArchiveCap(t *testing.T) {
 // before the stopped observation, and the exporter is inspected before it
 // is started (check 4 is pre-execution).
 func TestHandoffOrderObservedState(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = 3
@@ -698,6 +716,7 @@ func TestHandoffOrderObservedState(t *testing.T) {
 // started. The final inequality (seeder absent < agent start) is the
 // acceptance criterion itself, not an implementation detail.
 func TestHandoffSeedsBeforeTheWriterStarts(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 
@@ -789,6 +808,7 @@ func TestHandoffSeedsBeforeTheWriterStarts(t *testing.T) {
 // the conformance suite runs it on every Full pass, so it must not create,
 // start, or copy into anything.
 func TestHandoffBlankSeedTouchesNoSeeder(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 
@@ -827,6 +847,7 @@ func TestHandoffBlankSeedTouchesNoSeeder(t *testing.T) {
 // against an empty workspace while reporting the declared base. Here the gate
 // must refuse, and it must refuse on the attestation, not on the copy.
 func TestHandoffSeedingFailsClosed(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name    string
@@ -1011,6 +1032,7 @@ func setProofValue(proof []byte, key, value string) []byte {
 // inspections pass. A runtime that reports either container running before
 // StartContainer is non-conformant, and the gate must not start that payload.
 func TestHandoffRejectsEagerStart(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name      string
@@ -1045,6 +1067,7 @@ func TestHandoffRejectsEagerStart(t *testing.T) {
 // stays running exhausts the observation budget and fails the gate; no
 // exporter is ever created, and teardown still reaps everything.
 func TestHandoffWriterNeverStops(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
@@ -1061,6 +1084,7 @@ func TestHandoffWriterNeverStops(t *testing.T) {
 // exporter timeouts are hard ceilings around runtime observation itself, not
 // merely poll-count budgets that a wedged Inspect call can defeat.
 func TestHandoffObservationTimeoutBoundsInspect(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name      string
@@ -1103,6 +1127,7 @@ func TestHandoffObservationTimeoutBoundsInspect(t *testing.T) {
 // an untrusted call boundary: mutating a received spec may change realized
 // state, but must not rewrite the gate's expected command or mount allowlist.
 func TestHandoffRuntimeCannotRewriteExpectedSpec(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name      string
@@ -1131,6 +1156,7 @@ func TestHandoffRuntimeCannotRewriteExpectedSpec(t *testing.T) {
 }
 
 func TestHandoffAgentDeleteFails(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onDeleteContainer = func(id string) (bool, error) {
@@ -1146,6 +1172,7 @@ func TestHandoffAgentDeleteFails(t *testing.T) {
 // TestHandoffAgentStillListed: a successful delete call is not enough; the
 // ID must be absent from the full listing.
 func TestHandoffAgentStillListed(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
@@ -1159,6 +1186,7 @@ func TestHandoffAgentStillListed(t *testing.T) {
 // exporter create is recovered by inspecting the per-invocation ownership
 // label, then reaped despite the create call reporting failure.
 func TestHandoffAmbiguousContainerCreateReaped(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	for _, id := range []string{names.Agent, names.Exporter} {
 		t.Run(id, func(t *testing.T) {
@@ -1178,6 +1206,7 @@ func TestHandoffAmbiguousContainerCreateReaped(t *testing.T) {
 // is canceled after the runtime inserts the object but before create returns;
 // both agent and exporter must still be discovered by their ownership label.
 func TestHandoffAmbiguousContainerCreateReapedAfterCancellation(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	for _, id := range []string{names.Agent, names.Exporter} {
 		t.Run(id, func(t *testing.T) {
@@ -1198,6 +1227,7 @@ func TestHandoffAmbiguousContainerCreateReapedAfterCancellation(t *testing.T) {
 // makes the workspace and then errors is cleaned up by its unpredictable
 // ownership label, even though no other runtime object was owned.
 func TestHandoffAmbiguousVolumeCreateReaped(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.createVolumeThenFail = true
@@ -1219,6 +1249,7 @@ func TestHandoffAmbiguousVolumeCreateReaped(t *testing.T) {
 // inspect when the runtime's list shape omits container labels, while still
 // failing closed if neither runtime view exposes the invocation token.
 func TestHandoffAmbiguousCreateOwnershipEvidence(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	t.Run("container list falls back to inspect", func(t *testing.T) {
 		fx := newHandoffFixture(t)
@@ -1413,6 +1444,7 @@ func TestHandoffAmbiguousCreateOwnershipEvidence(t *testing.T) {
 // the invocation token was observed. No candidate is deleted, and the
 // incomplete cleanup is returned as a teardown failure.
 func TestHandoffAmbiguousCreateDuplicateContainerIDFailsTeardown(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.createThenFail = names.Agent
@@ -1442,6 +1474,7 @@ func TestHandoffAmbiguousCreateDuplicateContainerIDFailsTeardown(t *testing.T) {
 // sibling: deletion is by name, so a labeled row cannot authorize deletion
 // while a contradictory row presents the same identity.
 func TestHandoffAmbiguousCreateDuplicateVolumeNameFailsTeardown(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.createVolumeThenFail = true
@@ -1470,6 +1503,7 @@ func TestHandoffAmbiguousCreateDuplicateVolumeNameFailsTeardown(t *testing.T) {
 // contradictions are scoped to the object being classified. A malformed
 // unrelated pair cannot suppress cleanup of the run's owned objects.
 func TestHandoffUnrelatedDuplicateSummariesDoNotBlockTeardown(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
 		duplicate := ContainerSummary{ID: "unrelated", State: StateStopped}
@@ -1489,6 +1523,7 @@ func TestHandoffUnrelatedDuplicateSummariesDoNotBlockTeardown(t *testing.T) {
 // TestHandoffListContainersError: check 3's absence proof fails closed when
 // the runtime cannot be listed, rather than trusting the delete call.
 func TestHandoffListContainersError(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	listCalls := 0
 	fx.rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) {
@@ -1508,6 +1543,7 @@ func TestHandoffListContainersError(t *testing.T) {
 // liveness flag stays set until absence is proven, so teardown re-attempts
 // to reap it rather than trusting the delete.
 func TestHandoffAgentLingersTeardownReaps(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onDeleteContainer = func(id string) (bool, error) {
@@ -1538,6 +1574,7 @@ func TestHandoffAgentLingersTeardownReaps(t *testing.T) {
 // different creation identity mid-wait (a delete-and-recreate while the gate
 // polls) can never satisfy the wait, even when it reports stopped.
 func TestHandoffWriterReplacedMidRunFailsCheck3(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	inspects := 0
@@ -1567,6 +1604,7 @@ func TestHandoffWriterReplacedMidRunFailsCheck3(t *testing.T) {
 // run fails before the credential-bearing agent is ever created; the owned
 // name is still reaped from fresh teardown evidence.
 func TestHandoffWorkspaceObservationFailure(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name string
@@ -1615,6 +1653,7 @@ func TestHandoffWorkspaceObservationFailure(t *testing.T) {
 // the full lifecycle: the runtime reports an extra mount on the exporter,
 // and the gate fails before the exporter ever executes.
 func TestHandoffExporterAllowlistViolation(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
@@ -1637,6 +1676,7 @@ func TestHandoffExporterAllowlistViolation(t *testing.T) {
 // runtime-observed image and argv, not only the mounts around the helper the
 // gate requested. A substituted helper never starts.
 func TestHandoffExporterPayloadMismatch(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name   string
@@ -1670,6 +1710,7 @@ func TestHandoffExporterPayloadMismatch(t *testing.T) {
 // TestHandoffExporterNeverStops: an exporter that hangs exhausts its budget
 // and fails the export check.
 func TestHandoffExporterNeverStops(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Exporter] = math.MaxInt - 1
@@ -1685,6 +1726,7 @@ func TestHandoffExporterNeverStops(t *testing.T) {
 // probe (TestSuiteInExporterProbe*) instead. Check 4's inspect-before-execute
 // still covers the mount topology on every handoff.
 func TestHandoffIgnoresMissingProof(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	entries := fixtureArchive(t)
 	fx.rt.exportTarPath = buildTar(t, append(entries[:3:3], entries[4:]...))
@@ -1701,6 +1743,7 @@ func TestHandoffIgnoresMissingProof(t *testing.T) {
 // TestHandoffScannerRefusal is acceptance 2 for check 7 through the full
 // lifecycle.
 func TestHandoffScannerRefusal(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
 		return errors.New("marker found")
@@ -1717,6 +1760,8 @@ func TestHandoffScannerRefusal(t *testing.T) {
 // (for example a typed-nil scanner that panics when called) still removes the
 // unscanned output on unwind: the deferred cleanup keys off an explicit success
 // flag, not the named err, which is still nil during a panic.
+//
+//nolint:paralleltest // Serial: fx.isolateScratch redirects the host temp dir with t.Setenv("TMPDIR")
 func TestHandoffPanicRemovesOutput(t *testing.T) {
 	fx := newHandoffFixture(t)
 	runID := testHandoffSpec().RunID
@@ -1741,6 +1786,8 @@ func TestHandoffPanicRemovesOutput(t *testing.T) {
 // TestHandoffTeardownFailure: everything passes but the workspace volume
 // cannot be deleted; the gate still fails, no result is released, and the
 // verified output dir is cleaned (the caller gets nil and cannot own it).
+//
+//nolint:paralleltest // Serial: fx.isolateScratch redirects the host temp dir with t.Setenv("TMPDIR")
 func TestHandoffTeardownFailure(t *testing.T) {
 	fx := newHandoffFixture(t)
 	runID := testHandoffSpec().RunID
@@ -1761,6 +1808,7 @@ func TestHandoffTeardownFailure(t *testing.T) {
 // TestHandoffVolumeSurvives: a delete call that silently does nothing is
 // caught by the labeled-volume sweep.
 func TestHandoffVolumeSurvives(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.rt.onDeleteVolume = func(string) (bool, error) {
 		return true, nil // pretend success, leave the volume
@@ -1776,6 +1824,7 @@ func TestHandoffVolumeSurvives(t *testing.T) {
 // leaves the container is caught by teardown's re-listing sweep, mirroring
 // the volume case. Teardown proves absence, never trusting the delete call.
 func TestHandoffContainerSurvives(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	// The exporter delete lies: it reports success but leaves the container.
@@ -1793,6 +1842,7 @@ func TestHandoffContainerSurvives(t *testing.T) {
 // survives teardown with its label dropped is still flagged by name, so an
 // unlabeled survivor holding agent-written data cannot pass as reaped.
 func TestHandoffWorkspaceVolumeSurvivesUnlabeled(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onDeleteVolume = func(string) (bool, error) {
@@ -1814,6 +1864,7 @@ func TestHandoffWorkspaceVolumeSurvivesUnlabeled(t *testing.T) {
 // including caller-owned credential volumes; teardown must still delete only
 // the workspace volume the gate created.
 func TestHandoffPreservesCredentialVolumeWithRunLabel(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -1842,6 +1893,7 @@ func TestHandoffPreservesCredentialVolumeWithRunLabel(t *testing.T) {
 // TestHandoffTeardownListVolumesError: teardown fails closed when it cannot
 // list volumes to prove nothing was left behind.
 func TestHandoffTeardownListVolumesError(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.rt.onListVolumes = func([]VolumeSummary) ([]VolumeSummary, error) {
 		return nil, errors.New("apiserver down")
@@ -1857,6 +1909,8 @@ func TestHandoffTeardownListVolumesError(t *testing.T) {
 // the host temp dir. The scratch dir holds the raw exporter rootfs archive
 // and extracted output, plausibly the very credential a refused scan
 // withheld; it must not persist.
+//
+//nolint:paralleltest // Serial: fx.isolateScratch redirects the host temp dir with t.Setenv("TMPDIR")
 func TestHandoffScratchDirCleaned(t *testing.T) {
 	fx := newHandoffFixture(t)
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
@@ -1897,6 +1951,7 @@ func (fx *handoffFixture) scratchDirs(t *testing.T, runID string) []string {
 // TestHandoffPrimaryErrorRetainedWithTeardownFailure proves incomplete
 // cleanup is surfaced without masking the primary check failure.
 func TestHandoffPrimaryErrorRetainedWithTeardownFailure(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
@@ -1915,6 +1970,7 @@ func TestHandoffPrimaryErrorRetainedWithTeardownFailure(t *testing.T) {
 // (as a teardown failure) rather than hanging, even though teardown is
 // detached from the caller's cancellation.
 func TestHandoffTeardownBounded(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.cfg.TeardownTimeout = 50 * time.Millisecond
 	// The exporter delete (reached only in teardown) blocks until its own
@@ -1939,6 +1995,7 @@ func TestHandoffTeardownBounded(t *testing.T) {
 // teardown reap by name, since this invocation created nothing and the names
 // could belong to another live run sharing the RunID.
 func TestHandoffNoReapBeforeClaim(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	// Simulate another live run already owning these names.
@@ -1977,6 +2034,7 @@ func TestHandoffNoReapBeforeClaim(t *testing.T) {
 // lack this invocation's unpredictable workspace ownership label and all
 // belong to another live run.
 func TestHandoffVolumeCollisionDoesNotClaimNames(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -2011,6 +2069,7 @@ func TestHandoffVolumeCollisionDoesNotClaimNames(t *testing.T) {
 // colliding agent or exporter name. A fresh listing without this invocation's
 // ownership label leaves the foreign container untouched.
 func TestHandoffContainerCollisionsDoNotClaimNames(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	for _, id := range []string{names.Agent, names.Exporter} {
 		t.Run(id, func(t *testing.T) {
@@ -2047,6 +2106,7 @@ func TestHandoffContainerCollisionsDoNotClaimNames(t *testing.T) {
 // foreign same-name container appearing later must not inherit teardown
 // authority from the completed create.
 func TestHandoffAgentProvenAbsentIsNotReapedAgain(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onCreateContainer = func(spec ContainerSpec) error {
@@ -2085,6 +2145,7 @@ func TestHandoffAgentProvenAbsentIsNotReapedAgain(t *testing.T) {
 // restartable. The list error still fails teardown, but exact owned cleanup
 // falls back to inspect, stop, and delete before the absence re-list.
 func TestHandoffOwnedContainerReapedWhenListFails(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name               string
@@ -2157,6 +2218,7 @@ func TestHandoffOwnedContainerReapedWhenListFails(t *testing.T) {
 // invocation's ownership label. Without it, a broken sibling row could leave
 // the credential-mounted writer restartable.
 func TestHandoffAmbiguousContainerReapedWhenListFails(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		id           string
@@ -2206,6 +2268,7 @@ func TestHandoffAmbiguousContainerReapedWhenListFails(t *testing.T) {
 // direct inspect does not carry this invocation's ownership label is a possible
 // foreign same-name object and is left untouched, never deleted by name alone.
 func TestHandoffAmbiguousContainerLeftWhenListFailsAndUnowned(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.createThenFail = names.Agent
@@ -2254,6 +2317,7 @@ func TestHandoffAmbiguousContainerLeftWhenListFailsAndUnowned(t *testing.T) {
 // agent name before teardown, teardown must not reap that same-name stranger by
 // identity alone. Without the downgrade, teardown reaps it label-free.
 func TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	// A recycled object under the deterministic name, lacking this invocation's
@@ -2291,6 +2355,7 @@ func TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty(t *testing.T) {
 // (detached from the budget) still reaps the agent, so the VM cannot stay live
 // indefinitely.
 func TestHandoffBoundsWedgedWriterStart(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	// Leave enough room for the fake's deterministic preparation even on a
@@ -2310,6 +2375,7 @@ func TestHandoffBoundsWedgedWriterStart(t *testing.T) {
 }
 
 func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
@@ -2343,6 +2409,7 @@ func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
 // instant; otherwise the unpredictable ownership label decides; an
 // observation that can show neither proves nothing.
 func TestClassifyEvidence(t *testing.T) {
+	t.Parallel()
 	owner := Label{Key: ownershipLabelKey, Value: "token"}
 	ours := []Label{{Key: labelKey, Value: "run-1"}, owner}
 	foreign := []Label{{Key: labelKey, Value: "run-1"}}
@@ -2396,6 +2463,7 @@ func TestClassifyEvidence(t *testing.T) {
 // delete-and-recreate) before deferred teardown observes it; teardown must
 // leave the replacement untouched and not report it as a survivor.
 func TestHandoffTeardownSparesReplacedObjects(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 
 	t.Run("agent", func(t *testing.T) {
@@ -2536,6 +2604,7 @@ func TestHandoffTeardownSparesReplacedObjects(t *testing.T) {
 // observed mid-wait cannot satisfy check 3 even when it reports stopped, and
 // teardown leaves it untouched.
 func TestHandoffFingerprintlessRuntimeStillGatesByToken(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	replaced := false
@@ -2577,6 +2646,7 @@ func TestHandoffFingerprintlessRuntimeStillGatesByToken(t *testing.T) {
 // replacement now counts as absent, the run proceeds, and the claim is
 // cleared so teardown never touches the name again.
 func TestHandoffDeleteWindowReplacementCountsAbsent(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.onDeleteContainer = func(id string) (bool, error) {
@@ -2621,6 +2691,7 @@ func TestHandoffDeleteWindowReplacementCountsAbsent(t *testing.T) {
 // delete; an inspect that can prove nothing withholds it too and fails
 // teardown.
 func TestHandoffReplacementSparedWhenListFails(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 
 	t.Run("agent foreign", func(t *testing.T) {
@@ -2718,6 +2789,7 @@ func TestHandoffReplacementSparedWhenListFails(t *testing.T) {
 }
 
 func TestHandoffInvalidSpec(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	spec := testHandoffSpec()
 	spec.RunID = "NOT-VALID"
@@ -2736,6 +2808,7 @@ func TestHandoffInvalidSpec(t *testing.T) {
 // and teardown still reaps everything (it runs detached from the caller's
 // cancellation).
 func TestHandoffCancelled(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
@@ -2754,6 +2827,7 @@ func TestHandoffCancelled(t *testing.T) {
 // TestHandoffRuntimeErrorsFailClosed: representative runtime failures at
 // each lifecycle step yield an error, never a partial result.
 func TestHandoffRuntimeErrorsFailClosed(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	cases := []struct {
 		name string
@@ -2807,6 +2881,7 @@ func TestHandoffRuntimeErrorsFailClosed(t *testing.T) {
 // three running polls, so three sleeps before the stopped observation.
 // Exporter: one running poll (the fake default), so one sleep.
 func TestHandoffSleepBudget(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = 3
@@ -2824,6 +2899,7 @@ func TestHandoffSleepBudget(t *testing.T) {
 // attempts instead of 10), giving up one poll early; the agent stops on the
 // tenth observation, so the run succeeds only when the attempt count rounds up.
 func TestHandoffWaitStoppedCeilingBudget(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	fx.cfg.WriterStopTimeout = 950 * time.Millisecond
 	names := namesFor(testHandoffSpec().RunID)

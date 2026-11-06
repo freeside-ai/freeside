@@ -288,6 +288,7 @@ func (fx *handoffFixture) runSpec(t *testing.T, hs HandoffSpec) (*HandoffResult,
 // last pre-start inspection, and released only after the writer is provably
 // gone.
 func TestHandoffLeasedLifecycle(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -319,6 +320,7 @@ func TestHandoffLeasedLifecycle(t *testing.T) {
 // TestHandoffLeasedNilLeaserFailsClosed: a leased spec under a backend with
 // no leaser refuses before any runtime object exists.
 func TestHandoffLeasedNilLeaserFailsClosed(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, _ := fx.leased(t)
 	fx.cfg.AuthStoreLeaser = nil
@@ -334,6 +336,7 @@ func TestHandoffLeasedNilLeaserFailsClosed(t *testing.T) {
 // lease held elsewhere) stops the run before any runtime object and keeps
 // its typed cause reachable.
 func TestHandoffLeasedAcquireRefusalStopsRun(t *testing.T) {
+	t.Parallel()
 	errHeld := errors.New("fixture: lease held by another holder")
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
@@ -359,6 +362,7 @@ func TestHandoffLeasedAcquireRefusalStopsRun(t *testing.T) {
 // TestHandoffLeasedWrongBoundVolumeRefused proves the writable mount is gated
 // by trusted identity state, not by agreement between two caller fields.
 func TestHandoffLeasedWrongBoundVolumeRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	l.volume = "other-provider-cred"
@@ -384,6 +388,7 @@ func TestHandoffLeasedWrongBoundVolumeRefused(t *testing.T) {
 // existing window without extending it, so this is the reused-holder case as
 // well as a misbehaving adapter.
 func TestHandoffLeasedShortWindowRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -411,6 +416,7 @@ func TestHandoffLeasedShortWindowRefused(t *testing.T) {
 // concurrent run under a reused holder ID). The gate refuses to ride it:
 // recovery or expiry ends the old window first.
 func TestHandoffLeasedConvergedWindowRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -433,6 +439,7 @@ func TestHandoffLeasedConvergedWindowRefused(t *testing.T) {
 // a reused holder ID would make the store converge them: the backend's
 // per-identity slot refuses the second and frees when the run ends.
 func TestHandoffLeasedInProcessSlotSerializesIdentity(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
 	_ = l
@@ -459,6 +466,7 @@ func TestHandoffLeasedInProcessSlotSerializesIdentity(t *testing.T) {
 // identity's lease is store output, not gate state; it is refused rather
 // than trusted.
 func TestHandoffLeasedWrongIdentityRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	l.onAcquire = func(_ domain.AuthIdentityID, holder domain.InvocationID, now, expiresAt time.Time) (domain.AuthStoreMutationLease, error) {
@@ -475,6 +483,7 @@ func TestHandoffLeasedWrongIdentityRefused(t *testing.T) {
 // pre-start re-verification means another holder owns the window; the
 // credential-bearing writer must never start.
 func TestHandoffLeasedTakeoverRefusesWriterStart(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -497,6 +506,7 @@ func TestHandoffLeasedTakeoverRefusesWriterStart(t *testing.T) {
 // holder-and-fence check but is malformed, names another identity, or
 // carries a moved window must refuse the writer start.
 func TestHandoffLeasedReVerifyRowRegated(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(domain.AuthStoreMutationLease) domain.AuthStoreMutationLease{
 		"malformed": func(cur domain.AuthStoreMutationLease) domain.AuthStoreMutationLease {
 			cur.AcquiredAt = time.Time{}
@@ -535,6 +545,7 @@ func TestHandoffLeasedReVerifyRowRegated(t *testing.T) {
 // still match (an incoherent store row, not an expected lapse — the window
 // was sized past the budget).
 func TestHandoffLeasedExpiredBeforeStartRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -557,6 +568,7 @@ func TestHandoffLeasedExpiredBeforeStartRefused(t *testing.T) {
 // already cancelled — a window outliving the run blocks the identity until
 // expiry.
 func TestReleaseAuthStoreLeaseDetachesFromCancelledContext(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
 	b := fx.backend(t)
@@ -584,6 +596,7 @@ func TestReleaseAuthStoreLeaseDetachesFromCancelledContext(t *testing.T) {
 // teardown problem — the identity stays serialized until expiry, and the gate
 // must say so rather than deliver a result that looks fully cleaned up.
 func TestHandoffLeasedReleaseFailureFailsGate(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	l.onRelease = func(domain.AuthIdentityID, domain.InvocationID, int64, time.Time) error {
@@ -601,6 +614,7 @@ func TestHandoffLeasedReleaseFailureFailsGate(t *testing.T) {
 // TestHandoffLeasedPreflightRefusalOpensNoWindow: caller-controlled shape
 // refusals run before the mutation window, so no lease needs cleanup.
 func TestHandoffLeasedPreflightRefusalOpensNoWindow(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	// An extra read-only mount colliding with the workspace target fails
@@ -624,6 +638,7 @@ func TestHandoffLeasedPreflightRefusalOpensNoWindow(t *testing.T) {
 // window, and the result attests it — digests differ, Mutated is true, and
 // the record carries the lease's identity, holder, fence, and window.
 func TestHandoffLeasedMutationAttested(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, _ := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -659,6 +674,7 @@ func TestHandoffLeasedMutationAttested(t *testing.T) {
 // never touches its store yields equal digests and Mutated false — the
 // observation reports what happened, not what the lease allowed.
 func TestHandoffLeasedUnchangedStoreAttestedUnmutated(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, _ := fx.leased(t)
 
@@ -679,6 +695,7 @@ func TestHandoffLeasedUnchangedStoreAttestedUnmutated(t *testing.T) {
 // TestHandoffNonLeasedZeroAuthStoreObservation: a run with no lease claim
 // reports the zero observation, distinguishable by Leased.
 func TestHandoffNonLeasedZeroAuthStoreObservation(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	res, err := fx.run(t)
 	if err != nil {
@@ -698,6 +715,7 @@ func TestHandoffNonLeasedZeroAuthStoreObservation(t *testing.T) {
 // TestHandoffLeasedTamperedCredProofRefused: a proof carrying a wrong nonce
 // is a file anyone could have left; the observation is refused, categorically.
 func TestHandoffLeasedTamperedCredProofRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, _ := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -717,6 +735,7 @@ func TestHandoffLeasedTamperedCredProofRefused(t *testing.T) {
 // the leased mount read-only would deliver a writer that cannot refresh; the
 // mount-topology comparison catches the divergence before the writer starts.
 func TestHandoffLeasedRuntimeReadOnlyLeasedMountRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, _ := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -744,6 +763,7 @@ func TestHandoffLeasedRuntimeReadOnlyLeasedMountRefused(t *testing.T) {
 // writer absent, releasing the window would invite a second holder to mutate
 // beside a possibly-live writer. The lease stays held and the gate says so.
 func TestHandoffLeasedWriterSurvivalKeepsLease(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
 	names := namesFor(hs.RunID)
@@ -799,6 +819,7 @@ func TestHandoffLeasedWriterSurvivalKeepsLease(t *testing.T) {
 // directory the observer's file redirect can never land on. Both are
 // refused up front, before the lease or any object.
 func TestHandoffLeasedTargetCoveringProofPathRefused(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"/handoff-cred.txt", "/handoff-cred.txt/store", "/handoff-cred.txt/nested-under-proof"} {
 		t.Run(target, func(t *testing.T) {
 			fx := newHandoffFixture(t)

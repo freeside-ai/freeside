@@ -70,6 +70,7 @@ func testOwnershipLabel() Label {
 }
 
 func TestHandoffSpecValidate(t *testing.T) {
+	t.Parallel()
 	if err := testHandoffSpec().validate(); err != nil {
 		t.Fatalf("valid fixture: validate() = %v, want nil", err)
 	}
@@ -214,12 +215,14 @@ func testRegistryHandoffSpec() HandoffSpec {
 }
 
 func TestHandoffSpecValidateProviderRegistry(t *testing.T) {
+	t.Parallel()
 	if err := testRegistryHandoffSpec().validate(); err != nil {
 		t.Fatalf("provider_registry fixture: validate() = %v, want nil", err)
 	}
 }
 
 func TestLaunchStatePolicyEnum(t *testing.T) {
+	t.Parallel()
 	for _, policy := range AllLaunchStatePolicies {
 		if !policy.valid() {
 			t.Errorf("registered launch-state policy %q reports invalid", policy)
@@ -231,6 +234,7 @@ func TestLaunchStatePolicyEnum(t *testing.T) {
 }
 
 func TestRepositoryInstructionBasePinsEveryInvocationBoundary(t *testing.T) {
+	t.Parallel()
 	spec := testHandoffSpec()
 	spec.Seed = WorkspaceSeed{
 		Mode:      SeedBaseCheckout,
@@ -261,6 +265,7 @@ func TestRepositoryInstructionBasePinsEveryInvocationBoundary(t *testing.T) {
 }
 
 func TestVerifyInstructionProofFailsClosed(t *testing.T) {
+	t.Parallel()
 	const nonce = "00000000000000000000000000000000"
 	body := []byte("host instructions\n")
 	sum := sha256.Sum256(body)
@@ -305,6 +310,7 @@ func TestVerifyInstructionProofFailsClosed(t *testing.T) {
 // volume mounted at /root/.claude is unreadable by UID 1001 even with /root
 // at 0711.
 func TestInstructionSeederPublishesAWriterReadableBundle(t *testing.T) {
+	t.Parallel()
 	script := strings.Join(instructionSeederCommand(Config{}.withDefaults()), " ")
 	root := shellQuote(instructionVolumeTarget)
 	quoted := shellQuote(instructionVolumeTarget + "/" + instructionFileName)
@@ -327,6 +333,7 @@ func TestInstructionSeederPublishesAWriterReadableBundle(t *testing.T) {
 }
 
 func TestNamesFor(t *testing.T) {
+	t.Parallel()
 	n := namesFor("run-1")
 	want := handoffNames{
 		Prompt:              "freeside-handoff-run-1-prompt",
@@ -364,6 +371,7 @@ func TestNamesFor(t *testing.T) {
 }
 
 func TestPreJobResourceNamesForInvocation(t *testing.T) {
+	t.Parallel()
 	invocationID := domain.InvocationID("inv-implement")
 	if got, want := PreJobRunIDForInvocation(invocationID), "5f800d2395e91a5e"; got != want {
 		t.Fatalf("PreJobRunIDForInvocation() = %q, want %q", got, want)
@@ -380,6 +388,7 @@ func TestPreJobResourceNamesForInvocation(t *testing.T) {
 // exactly this reason. Every role is enumerated so a longer suffix cannot
 // silently exceed the bound.
 func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
+	t.Parallel()
 	longest := "a" + strings.Repeat("b", 31) // the max runIDPattern admits
 	if !runIDPattern.MatchString(longest) {
 		t.Fatalf("fixture run ID %q is not a valid run ID", longest)
@@ -410,6 +419,7 @@ func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
 // spec is the security contract the pre-execution inspection verifies
 // against, so a drift in its shape must be a reviewed diff.
 func TestExporterSpecGolden(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	spec := buildExporterSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel())
@@ -426,6 +436,7 @@ func TestExporterSpecGolden(t *testing.T) {
 // its command is the only gate-authored payload that writes the workspace. A
 // drift in either must be a reviewed diff.
 func TestSeederSpecGolden(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	spec := buildSeederSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel())
@@ -440,6 +451,7 @@ func TestSeederSpecGolden(t *testing.T) {
 // observer is where the unit's evidence comes from, so its topology and its
 // proof-writing command must not drift unreviewed.
 func TestObserverSpecGolden(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	spec := buildObserverSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel())
@@ -454,6 +466,7 @@ func TestObserverSpecGolden(t *testing.T) {
 // it cannot write what it attests. A read-write observer would be the writer
 // vouching for its own write.
 func TestObserverSpecReadsOnly(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -485,6 +498,7 @@ func TestObserverSpecReadsOnly(t *testing.T) {
 // sit below a directory the pinned image does not carry, and without a mkdir
 // the redirect fails and no proof is exported at all.
 func TestObserverScriptCreatesProofParent(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	cfg.BaseProofPath = "/proof/nested/base.txt"
 	script := observerScript(cfg, testOwnershipLabel().Value)
@@ -499,6 +513,7 @@ func TestObserverScriptCreatesProofParent(t *testing.T) {
 }
 
 func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
+	t.Parallel()
 	runWith := func(t *testing.T, checkout string, env []string) (string, string, string) {
 		t.Helper()
 		scratch := t.TempDir()
@@ -676,6 +691,7 @@ func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
 // silently if someone regenerated it: the seeder is credential-free,
 // network-free, and holds the workspace read-write at the configured target.
 func TestSeederSpecShape(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -729,6 +745,7 @@ func TestSeederSpecShape(t *testing.T) {
 // would give up after about a second while the two host copies may
 // legitimately take 1.2s — reinstating the race the budget exists to prevent.
 func TestSeederScriptBudgetSurvivesSubsecondTimeouts(t *testing.T) {
+	t.Parallel()
 	for _, seedTimeout := range []time.Duration{
 		100 * time.Millisecond, 600 * time.Millisecond, 1500 * time.Millisecond,
 		time.Second, 5 * time.Minute,
@@ -747,6 +764,7 @@ func TestSeederScriptBudgetSurvivesSubsecondTimeouts(t *testing.T) {
 }
 
 func TestBuildAgentSpec(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -796,6 +814,7 @@ func testLeasedHandoffSpec() HandoffSpec {
 // ReadOnly, and the generated spec still passes its own gate with the
 // writable target declared.
 func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts,
@@ -836,6 +855,7 @@ func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
 // attestation rests on, so neither its topology nor its script may drift
 // unreviewed.
 func TestCredObserverSpecGolden(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -851,6 +871,7 @@ func TestCredObserverSpecGolden(t *testing.T) {
 // in one assertion: it holds the leased volume read-only, so it cannot write
 // the store whose digest it attests.
 func TestCredObserverSpecReadsOnly(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -876,6 +897,7 @@ func TestCredObserverSpecReadsOnly(t *testing.T) {
 // mutate, so a symlink created, removed, or retargeted is store content; each
 // transition must move the tree digest, and an unchanged store must not.
 func TestCredObserverScriptAttestsSymlinks(t *testing.T) {
+	t.Parallel()
 	shell := "sh"
 	if dash, err := osexec.LookPath("dash"); err == nil {
 		// macOS sh accepts extensions that Ubuntu's dash rejects. Prefer
@@ -1031,6 +1053,7 @@ func TestCredObserverScriptAttestsSymlinks(t *testing.T) {
 // credential mount is the §5.4 residual surface, so its generated shape must
 // be a reviewed diff.
 func TestAgentSpecLeasedGolden(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	spec := buildAgentSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel(), "http://127.0.0.1:12345")

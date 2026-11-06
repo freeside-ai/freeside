@@ -117,6 +117,7 @@ func (j *fakeCodexAuthEnrollmentJournal) ProjectVerified(
 }
 
 func TestEnrollCodexAuthSpendsInputAndProjectsVerifiedRotation(t *testing.T) {
+	t.Parallel()
 	cfg, journal, leaser, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 
 	result, err := EnrollCodexAuth(context.Background(), cfg)
@@ -161,6 +162,7 @@ func TestEnrollCodexAuthSpendsInputAndProjectsVerifiedRotation(t *testing.T) {
 }
 
 func TestEnrollCodexAuthDoesNotReplaceStoreAfterLeaseLoss(t *testing.T) {
+	t.Parallel()
 	cfg, journal, leaser, refresher, _, storePath := codexAuthEnrollmentFixture(t)
 	successorBody := codexHostAuthBody(
 		t, "successor-refresh", codexReviewEpoch.Add(5*time.Hour), codexReviewEpoch,
@@ -191,6 +193,7 @@ func TestEnrollCodexAuthDoesNotReplaceStoreAfterLeaseLoss(t *testing.T) {
 }
 
 func TestCodexAuthEnrollmentFailureRegistrationIsValid(t *testing.T) {
+	t.Parallel()
 	for _, failure := range AllCodexAuthEnrollmentFailures {
 		if !failure.valid() {
 			t.Fatalf("registered enrollment failure %q is invalid", failure)
@@ -202,6 +205,7 @@ func TestCodexAuthEnrollmentFailureRegistrationIsValid(t *testing.T) {
 }
 
 func TestEnrollCodexAuthRecoversVerifiedProjectionWithoutInput(t *testing.T) {
+	t.Parallel()
 	cfg, journal, _, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	if err := os.Remove(inputPath); err != nil {
 		t.Fatal(err)
@@ -246,6 +250,7 @@ func TestEnrollCodexAuthRecoversVerifiedProjectionWithoutInput(t *testing.T) {
 // finishes an earlier verified replacement, and points the operator at auth
 // list, since an earlier auth add may already have committed the enrollment.
 func TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex(t *testing.T) {
+	t.Parallel()
 	cfg, journal, _, refresher, _, _ := codexAuthEnrollmentFixture(t)
 	cfg.Enrollment = &CodexClientEnrollmentRequest{
 		EnrollmentID: "codex-primary/codex_cli", Route: "openai-subscription", CostOwner: "operator",
@@ -263,6 +268,7 @@ func TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex(t *testing.T) {
 }
 
 func TestEnrollCodexAuthRotatesAgedVerifiedStoreWithoutInput(t *testing.T) {
+	t.Parallel()
 	cfg, journal, _, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	predecessor := codexHostAuthBody(
 		t, "still-refreshable", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch,
@@ -291,6 +297,7 @@ func TestEnrollCodexAuthRotatesAgedVerifiedStoreWithoutInput(t *testing.T) {
 }
 
 func TestEnrollCodexAuthRecoversRefreshCrashWithoutRespendingInput(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		name := "pending-before-commit"
 		if committed {
@@ -336,6 +343,7 @@ func TestEnrollCodexAuthRecoversRefreshCrashWithoutRespendingInput(t *testing.T)
 }
 
 func TestEnrollCodexAuthReplacesUnboundTerminalRefreshIntent(t *testing.T) {
+	t.Parallel()
 	cfg, journal, _, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	predecessor, err := os.ReadFile(inputPath) //nolint:gosec // test path is under t.TempDir
 	if err != nil {
@@ -369,6 +377,7 @@ func TestEnrollCodexAuthReplacesUnboundTerminalRefreshIntent(t *testing.T) {
 }
 
 func TestEnrollCodexAuthKeepsUnboundIntentAfterLeaseLoss(t *testing.T) {
+	t.Parallel()
 	cfg, journal, leaser, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	predecessor, err := os.ReadFile(inputPath) //nolint:gosec // test path is under t.TempDir
 	if err != nil {
@@ -411,6 +420,7 @@ func TestEnrollCodexAuthKeepsUnboundIntentAfterLeaseLoss(t *testing.T) {
 }
 
 func TestEnrollCodexAuthRecoveryRefusesCommitAfterLeaseLoss(t *testing.T) {
+	t.Parallel()
 	cfg, journal, leaser, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	predecessor, err := os.ReadFile(inputPath) //nolint:gosec // test path is under t.TempDir
 	if err != nil {
@@ -452,6 +462,7 @@ func TestEnrollCodexAuthRecoveryRefusesCommitAfterLeaseLoss(t *testing.T) {
 }
 
 func TestCodexAuthRecoveryDoesNotDeleteSuccessorIntentAfterDiscard(t *testing.T) {
+	t.Parallel()
 	cfg, _, _, _, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	predecessor, err := os.ReadFile(inputPath) //nolint:gosec // test path is under t.TempDir
 	if err != nil {
@@ -501,6 +512,7 @@ func TestCodexAuthRecoveryDoesNotDeleteSuccessorIntentAfterDiscard(t *testing.T)
 }
 
 func TestEnrollCodexAuthRecordsCredentialFreeVerificationFailure(t *testing.T) {
+	t.Parallel()
 	cfg, journal, leaser, refresher, _, _ := codexAuthEnrollmentFixture(t)
 	refresher.err = errors.New("provider unavailable")
 
@@ -517,6 +529,7 @@ func TestEnrollCodexAuthRecordsCredentialFreeVerificationFailure(t *testing.T) {
 }
 
 func TestEnrollCodexAuthRejectsMismatchedProjectedItem(t *testing.T) {
+	t.Parallel()
 	tests := map[string]func(*domain.AttentionItem){
 		"not open": func(item *domain.AttentionItem) {
 			item.Status = domain.StatusResolved
@@ -556,6 +569,7 @@ func TestEnrollCodexAuthRejectsMismatchedProjectedItem(t *testing.T) {
 }
 
 func TestEnrollCodexAuthRejectsOverlappingOrEscapedRoots(t *testing.T) {
+	t.Parallel()
 	cfg, _, _, _, _, _ := codexAuthEnrollmentFixture(t)
 	cfg.AuthStoreRoot = cfg.InputRoot
 	cfg.AuthStorePath = filepath.Join(cfg.InputRoot, "live.json")
@@ -577,6 +591,7 @@ func TestEnrollCodexAuthRejectsOverlappingOrEscapedRoots(t *testing.T) {
 }
 
 func TestEnrollCodexAuthDoesNotProjectChangedVerifiedStore(t *testing.T) {
+	t.Parallel()
 	cfg, journal, _, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
 	if err := os.Remove(inputPath); err != nil {
 		t.Fatal(err)

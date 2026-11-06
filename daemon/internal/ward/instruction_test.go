@@ -106,6 +106,7 @@ func TestComposeClaudeInstructionsBindsTrustedBaseScopes(t *testing.T) {
 }
 
 func TestComposeClaudeInstructionsUsesRootedPaths(t *testing.T) {
+	t.Parallel()
 	snapshot := t.TempDir()
 	root, err := os.OpenRoot(snapshot)
 	if err != nil {

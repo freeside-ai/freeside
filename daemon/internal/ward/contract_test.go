@@ -155,6 +155,7 @@ func (h *reviewSourceContractHarness) Restart(t *testing.T) exec.ReviewSource {
 }
 
 func TestCodexReviewSourceContract(t *testing.T) {
+	t.Parallel()
 	contract.RunReviewSourceContract(t, contract.ReviewSourceFactory{
 		New:              newCodexReviewContractHarness,
 		KnownDivergences: reviewSourceKnownDivergences(),
@@ -162,6 +163,7 @@ func TestCodexReviewSourceContract(t *testing.T) {
 }
 
 func TestClaudeReviewSourceContract(t *testing.T) {
+	t.Parallel()
 	contract.RunReviewSourceContract(t, contract.ReviewSourceFactory{
 		New:              newClaudeReviewContractHarness,
 		KnownDivergences: reviewSourceKnownDivergences(),
@@ -184,6 +186,7 @@ var _ contract.ReviewSourceHarness = (*reviewSourceContractHarness)(nil)
 // and the request's identity, and the host stage holding the plaintext is
 // wiped once the launch starts.
 func TestClaudeReviewLaunchesUnderAReadCredential(t *testing.T) {
+	t.Parallel()
 	read := []byte("sk-ant-oat01-" + "readFromTheEnrollmentVolume0123456789")
 	h := newClaudeReviewContractHarness(t).(*reviewSourceContractHarness)
 	var admitted []domain.ReviewAdmission

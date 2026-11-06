@@ -102,6 +102,7 @@ func restoreInto(rt *fakeRuntime, s *killSnapshot) *fakeJournal {
 }
 
 func TestRecoverKillBoundaries(t *testing.T) {
+	t.Parallel()
 	type killPoint struct {
 		name string
 		// arm installs the hook that captures the snapshot at this boundary.
@@ -291,6 +292,7 @@ func TestRecoverKillBoundaries(t *testing.T) {
 // foreign same-name objects (another operator's run, no token); recovery
 // commits its loss around them and leaves them standing.
 func TestRecoverKillBoundaryForeignSurvivors(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs, _ := fx.leased(t)

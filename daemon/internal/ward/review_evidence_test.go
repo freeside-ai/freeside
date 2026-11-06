@@ -14,6 +14,7 @@ import (
 )
 
 func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
+	t.Parallel()
 	events := []byte{'e', 0xff, 0x00}
 	outcome := codexGoldenReviewOutcome(string(events))
 	request := exec.ReviewRequest{
@@ -41,6 +42,7 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 }
 
 func TestDecodeRetainedCodexReview(t *testing.T) {
+	t.Parallel()
 	for _, corruption := range []string{"none", "request before admission", "result before admission", "request admission", "request legacy", "request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation", "collection", "provider", "returned admission", "state"} {
 		t.Run(corruption, func(t *testing.T) {
 			outcome := codexGoldenReviewOutcome("{}")

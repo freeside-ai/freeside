@@ -17,6 +17,7 @@ func (d stoppedJudgmentDriver) Complete(ctx context.Context, _ inference.Request
 }
 
 func TestTaskCancellationJudgmentReturnIsNotNativeProof(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		entered, done := make(chan struct{}), make(chan struct{})
 		root := filepath.Join(t.TempDir(), "judgments")
@@ -44,6 +45,7 @@ func TestTaskCancellationJudgmentReturnIsNotNativeProof(t *testing.T) {
 }
 
 func TestTaskCancellationJudgmentQueuedBeforeProviderEntry(t *testing.T) {
+	t.Parallel()
 	owned, err := NewTaskJudgments(filepath.Join(t.TempDir(), "judgments"), stoppedJudgmentDriver{complete: func(context.Context) error { t.Fatal("cancelled task entered provider"); return nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +65,7 @@ func TestTaskCancellationJudgmentQueuedBeforeProviderEntry(t *testing.T) {
 // process with judgments on left under the same root, so a restart with the
 // flags absent cannot invent proof for a judgment that process left unproven.
 func TestTaskJudgmentsWithoutADriverRefuseCallsAndStillConfirm(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "judgments")
 	off, err := NewTaskJudgments(root, nil)
 	if err != nil {
@@ -103,6 +106,7 @@ func (d provenJudgmentDriver) CompleteAndConfirm(context.Context, inference.Requ
 }
 
 func TestTaskCancellationJudgmentPersistsConcreteProofAcrossRestart(t *testing.T) {
+	t.Parallel()
 	for _, quiescent := range []bool{false, true} {
 		root := filepath.Join(t.TempDir(), "judgments")
 		driver := provenJudgmentDriver{quiescent: quiescent}

@@ -9,6 +9,7 @@ import (
 )
 
 func TestCodexAccountObservedFixtures(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"fresh", "near_expiry", "control"} {
 		t.Run(mode, func(t *testing.T) {
 			body, err := os.ReadFile("testdata/codex_account_observed_" + mode + ".jsonl") //nolint:gosec // mode is one of three literal fixture names

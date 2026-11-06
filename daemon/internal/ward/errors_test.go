@@ -11,6 +11,7 @@ import (
 )
 
 func TestCheckValid(t *testing.T) {
+	t.Parallel()
 	for _, c := range AllChecks {
 		if !c.valid() {
 			t.Errorf("Check %q: valid() = false, want true", c)
@@ -24,6 +25,7 @@ func TestCheckValid(t *testing.T) {
 }
 
 func TestAllChecksDistinct(t *testing.T) {
+	t.Parallel()
 	seen := make(map[Check]bool, len(AllChecks))
 	for _, c := range AllChecks {
 		if seen[c] {
@@ -34,6 +36,7 @@ func TestAllChecksDistinct(t *testing.T) {
 }
 
 func TestConformanceFailureClassAndDetails(t *testing.T) {
+	t.Parallel()
 	var err error = &ConformanceFailure{
 		Backend: "some_backend",
 		Check:   CheckWriterTermination,
@@ -58,6 +61,7 @@ func TestConformanceFailureClassAndDetails(t *testing.T) {
 }
 
 func TestFailwReachesCauseOnlyThroughErr(t *testing.T) {
+	t.Parallel()
 	pathErr := &fs.PathError{Op: "open", Path: "/run/ward/x", Err: syscall.EACCES}
 	cause := fmt.Errorf("read manifest: %w", pathErr)
 	err := failw(CheckExportVerification, cause, "read manifest: %v", cause)
@@ -79,6 +83,7 @@ func TestFailwReachesCauseOnlyThroughErr(t *testing.T) {
 }
 
 func TestFailwTextMatchesFailf(t *testing.T) {
+	t.Parallel()
 	cause := errors.New("disk full")
 	format, args := "write %s: %v", []any{"journal", cause}
 	withCause := failw(CheckRecovery, cause, format, args...)
@@ -98,6 +103,7 @@ func TestFailwTextMatchesFailf(t *testing.T) {
 // carrying a classifier's sentinel or *fs.PathError must leave every
 // chain-walking classifier's answer where a cause-free failure puts it.
 func TestFailwCauseDoesNotReclassify(t *testing.T) {
+	t.Parallel()
 	causes := map[string]error{
 		"operational":        fmt.Errorf("%w: journal", ErrCodexReviewOperational),
 		"content evidence":   evidencef(CheckExportVerification, "digest mismatch"),

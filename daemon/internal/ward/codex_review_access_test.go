@@ -12,6 +12,7 @@ import (
 // it. This runs it against a real checkout outside the sandbox wrapper: a head
 // written on a base, and another commit on that base.
 func TestCodexReviewAccessProbeBindsTheWorkspaceCommit(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

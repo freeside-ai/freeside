@@ -43,6 +43,8 @@ func codexAccountSynthetic(t *testing.T, lifetime time.Duration) []byte {
 
 // All cases use made-up token claims: account/read answers from the snapshot,
 // so a real credential adds no evidence about this invocation's refresh behavior.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexAccountProbe(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1; see Codex Account Probe Spike in daemon/README.md")

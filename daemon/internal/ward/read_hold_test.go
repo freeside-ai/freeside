@@ -26,6 +26,7 @@ func testReadHeldHandoffSpec(runID string, holder domain.InvocationID) HandoffSp
 // exclusive lease. The second handoff runs to completion inside the first
 // one's pre-start re-verify, so both windows are provably live at once.
 func TestHandoffReadHeldConcurrentHoldersShareIdentity(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	_, l := fx.leased(t)
@@ -92,6 +93,7 @@ func TestHandoffReadHeldConcurrentHoldersShareIdentity(t *testing.T) {
 // the same holder cannot open two, and the exclusive slot excludes readers
 // in both directions.
 func TestHandoffReadHeldSlotModes(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
 	b := fx.backend(t)
@@ -131,6 +133,7 @@ func TestHandoffReadHeldSlotModes(t *testing.T) {
 // TestHandoffReadHeldRefusalStopsRun: a store refusal (a live mutation
 // lease) stops the run before any runtime object, with its cause reachable.
 func TestHandoffReadHeldRefusalStopsRun(t *testing.T) {
+	t.Parallel()
 	errMutating := errors.New("fixture: mutation lease is live")
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
@@ -151,6 +154,7 @@ func TestHandoffReadHeldRefusalStopsRun(t *testing.T) {
 // TestHandoffReadHeldChangedBeforeStartRefused: a read window released or
 // replaced before the writer starts is refused, like a lease takeover.
 func TestHandoffReadHeldChangedBeforeStartRefused(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
 	l.onGetRead = func(current domain.AuthStoreReadHold) (domain.AuthStoreReadHold, error) {
@@ -175,6 +179,7 @@ type exclusiveOnlyLeaser struct{ AuthStoreLeaser }
 // TestHandoffReadHeldWithoutSeamFailsClosed: a read-only claim never runs
 // with no window at all when the leaser cannot take read holds.
 func TestHandoffReadHeldWithoutSeamFailsClosed(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
 	fx.cfg.AuthStoreLeaser = exclusiveOnlyLeaser{l}
@@ -185,6 +190,7 @@ func TestHandoffReadHeldWithoutSeamFailsClosed(t *testing.T) {
 // TestHandoffReadHeldReleaseFailureFailsGate: a release refusal other than
 // an ended window is a teardown problem, as for the lease.
 func TestHandoffReadHeldReleaseFailureFailsGate(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	_, l := fx.leased(t)
 	l.onReleaseRead = func(domain.AuthIdentityID, domain.InvocationID, time.Time, time.Time) error {
@@ -198,6 +204,7 @@ func TestHandoffReadHeldReleaseFailureFailsGate(t *testing.T) {
 // recovers through the read-hold re-gate and releases its exact window after
 // the audit.
 func TestRecoverReadHeldRecordReleasesItsWindow(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	fx.j.leaser = fx.l
 	hs := testReadHeldHandoffSpec("run-read-recover", "inv-a")
@@ -235,6 +242,7 @@ func TestRecoverReadHeldRecordReleasesItsWindow(t *testing.T) {
 // reports the recorded window's bounds, as a live handoff does, so a
 // recovered run keeps its audit window.
 func TestRecoverReadHeldWriterCompleteReportsWindow(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	fx.j.leaser = fx.l
 	hs := testReadHeldHandoffSpec("run-read-adopt", "inv-a")
@@ -270,6 +278,7 @@ func TestRecoverReadHeldWriterCompleteReportsWindow(t *testing.T) {
 // #1585 holds the exclusive lease for a read-only mount. Recovery must still
 // finish it on the lease path, or the run could never recover.
 func TestRecoverPreUpgradeLeasedReadOnlyRecord(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testReadHeldHandoffSpec("run-read-legacy", "holder-fixture")
 	rec := fx.openRecord(t, hs)
@@ -295,6 +304,7 @@ func TestRecoverPreUpgradeLeasedReadOnlyRecord(t *testing.T) {
 // been taken for a read-only mount; a record pairing one with a writable
 // spec is damaged.
 func TestRecoverReadHoldForWritableMountRefused(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testLeasedHandoffSpec()
 	digest, err := specDigest(hs)
@@ -337,6 +347,7 @@ func (fx *recoveryFixture) putReadHeldRecord(t *testing.T, hs HandoffSpec, recor
 // a later live window than the record's. It is not this run's window, so
 // recovery commits its loss without releasing it.
 func TestRecoverReadHeldLaterWindowNeverReleased(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testReadHeldHandoffSpec("run-read-later", "inv-a")
 	opened := time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC)
@@ -368,6 +379,7 @@ func TestRecoverReadHeldLaterWindowNeverReleased(t *testing.T) {
 // holder is an incoherent store, so recovery errors retryably and leaves the
 // record open.
 func TestRecoverReadHeldIncoherentRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testReadHeldHandoffSpec("run-read-incoherent", "inv-a")
 	opened := time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC)

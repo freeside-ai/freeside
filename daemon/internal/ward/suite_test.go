@@ -194,6 +194,7 @@ func writeProofArchive(dest io.Writer, name, content string) error {
 }
 
 func TestProbeSpecMatchesEnvironmentExactlyByKey(t *testing.T) {
+	t.Parallel()
 	spec := ContainerSpec{
 		Name:            "probe",
 		Image:           testConfig().ExporterImage,
@@ -221,6 +222,7 @@ func TestProbeSpecMatchesEnvironmentExactlyByKey(t *testing.T) {
 }
 
 func TestProviderEgressProbeCoversEveryAllowedEndpoint(t *testing.T) {
+	t.Parallel()
 	script := providerEgressProbeScript([]string{
 		"api.provider-one.example:443",
 		"api.provider-two.example:8443",
@@ -241,6 +243,7 @@ func TestProviderEgressProbeCoversEveryAllowedEndpoint(t *testing.T) {
 }
 
 func TestHostServiceIsolationProbeUsesWardGateway(t *testing.T) {
+	t.Parallel()
 	script := hostServiceIsolationProbeScript(43123)
 	if !strings.Contains(script, `proxy_host=${proxy%:*}`) ||
 		!strings.Contains(script, `nc -w 3 "$proxy_host" 43123`) ||
@@ -285,6 +288,7 @@ func (s *Suite) assertReaped(t *testing.T, rt *fakeRuntime) {
 // and still probes every refusal, and the provider_only writer must not reach
 // for the witness at all.
 func TestSuiteFullRegistryWriterProbesTheWitness(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	commands := map[string]string{}
@@ -315,6 +319,7 @@ func TestSuiteFullRegistryWriterProbesTheWitness(t *testing.T) {
 }
 
 func TestSuiteFullSuccess(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	if err := s.Full(context.Background()); err != nil {
@@ -372,6 +377,7 @@ func TestSuiteFullSuccess(t *testing.T) {
 }
 
 func TestSuiteFullFailsWhenWorkspaceSeedingFails(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onCopyIntoContainer = func(id, _, _ string) error {
 		if id == namesFor(s.fx.RunID).Seeder {
@@ -384,6 +390,7 @@ func TestSuiteFullFailsWhenWorkspaceSeedingFails(t *testing.T) {
 }
 
 func TestConformanceObjectNamesFitReferenceRuntime(t *testing.T) {
+	t.Parallel()
 	runID := strings.Repeat("a", 32) // longest valid SuiteFixture.RunID
 	roles := []string{
 		"cred", "liveness", "liveness-ws", "seed", "audit", "prejob",
@@ -404,6 +411,7 @@ func TestConformanceObjectNamesFitReferenceRuntime(t *testing.T) {
 // check). The per-check induced-failure coverage for checks 1-5 and 7 lives
 // in the gate's own tests; here Full is the pass-through.
 func TestSuiteFullPropagatesCheckFailure(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	exporter := namesFor("conf-run").Exporter
 	// A runtime that realizes an extra bind on the exporter defeats check 4
@@ -423,6 +431,7 @@ func TestSuiteFullPropagatesCheckFailure(t *testing.T) {
 }
 
 func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	baseExport := rt.onExport
@@ -441,6 +450,7 @@ func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
 }
 
 func TestNetworklessProbeRejectsToolUsageFailure(t *testing.T) {
+	t.Parallel()
 	validNSLookup := `#!/bin/sh
 if [ "$1" = "--help" ]; then
 	printf '%s\n' 'Usage: nslookup [-type=QUERY_TYPE] [-debug] HOST [DNS_SERVER]'
@@ -504,6 +514,7 @@ exit 1
 }
 
 func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	baseExport := rt.onExport
@@ -527,6 +538,7 @@ func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {
 // or syntax bugs; the ro-mount / host-home observations are runtime-specific and
 // exercised in the live suite.
 func TestInExporterProbeScriptWritesProof(t *testing.T) {
+	t.Parallel()
 	proofPath := filepath.Join(t.TempDir(), "proof.txt")
 	script := inExporterProbeScript(t.TempDir(), filepath.Join(t.TempDir(), "no-such-credentials"), proofPath)
 	if out, err := osexec.Command("sh", "-c", script).CombinedOutput(); err != nil { //nolint:gosec // fixed shell, test-owned script
@@ -547,6 +559,7 @@ func TestInExporterProbeScriptWritesProof(t *testing.T) {
 // still gates: an in-exporter probe reporting a writable workspace fails the
 // suite through the real verifyProof gate.
 func TestSuiteFullInExporterProbeRejectsBadProof(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	baseExport := rt.onExport
@@ -565,6 +578,7 @@ func TestSuiteFullInExporterProbeRejectsBadProof(t *testing.T) {
 // TestSuiteFullInExporterProbeRejectsMissingProof proves an in-exporter probe
 // that wrote no proof file fails the suite rather than passing vacuously.
 func TestSuiteFullInExporterProbeRejectsMissingProof(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	baseExport := rt.onExport
@@ -580,6 +594,7 @@ func TestSuiteFullInExporterProbeRejectsMissingProof(t *testing.T) {
 }
 
 func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	probe := s.conformanceName(networklessProbeSuffix)
@@ -607,6 +622,7 @@ func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
 }
 
 func TestSuiteFullNetworklessProbeUsesExporterTopology(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	probe := s.conformanceName(networklessProbeSuffix)
@@ -633,6 +649,7 @@ func TestSuiteFullNetworklessProbeUsesExporterTopology(t *testing.T) {
 // finish and self-mask as stopped; its preceding nonterminating probe must stay
 // running and expose that create-contract violation.
 func TestSuiteFullNetworklessProbeRejectsEagerCreate(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	liveness := s.conformanceName(networklessLivenessProbeSuffix)
@@ -666,6 +683,7 @@ func TestSuiteFullNetworklessProbeRejectsEagerCreate(t *testing.T) {
 }
 
 func TestSuiteFullCleanupFailureWithholdsNetworklessCapability(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	probe := s.conformanceName(networklessProbeSuffix)
@@ -680,6 +698,7 @@ func TestSuiteFullCleanupFailureWithholdsNetworklessCapability(t *testing.T) {
 }
 
 func TestSuiteFullPanicWithholdsNetworklessCapability(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	baseExport := rt.onExport
@@ -704,6 +723,7 @@ func TestSuiteFullPanicWithholdsNetworklessCapability(t *testing.T) {
 }
 
 func TestSuiteFullCleanupPanicWithholdsNetworklessCapability(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	livenessVolume := s.conformanceName("liveness-ws")
@@ -729,6 +749,7 @@ func TestSuiteFullCleanupPanicWithholdsNetworklessCapability(t *testing.T) {
 }
 
 func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	seed := suiteSeed(t, fx)
 	scannerEntered := make(chan struct{})
@@ -801,6 +822,7 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 }
 
 func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	s.b.networkless.Store(false)
 	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
@@ -810,6 +832,7 @@ func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {
 }
 
 func TestSuitePreJobRequiresEgressProof(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	s.b.providerEgress.Store(false)
 	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
@@ -821,6 +844,7 @@ func TestSuitePreJobRequiresEgressProof(t *testing.T) {
 // TestSuiteFullExportContainmentBreach: the released output carries the
 // credential marker, so containment fails at the export half.
 func TestSuiteFullExportContainmentBreach(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// The writer ran (sentinel present) and leaked the marker into the export.
 	rt.exportTarPath = buildTar(t, leakArchive(t, s.fx.RunID, suiteMarker))
@@ -839,6 +863,7 @@ func TestSuiteFullExportContainmentBreach(t *testing.T) {
 // either, so the detached-volume half fails (a credential that did not
 // survive detachment would be deletion, not omission).
 func TestSuiteFullContainmentProbeFailure(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// No marker scripted into any export: the default fixture archive carries
 	// none, so the audit cannot read it back.
@@ -856,6 +881,7 @@ func TestSuiteFullContainmentProbeFailure(t *testing.T) {
 // second VM attaches the workspace volume the writer holds read-write, so the
 // exclusion probe fails.
 func TestSuiteFullExclusionProbeFailure(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// Marker present for the audit (containment passes) but no refusal scripted
 	// for the second attach, so the exclusion does not hold.
@@ -869,6 +895,7 @@ func TestSuiteFullExclusionProbeFailure(t *testing.T) {
 // credential volume and then returns an error (ambiguous create) must not
 // leak it — the reap is registered before the create.
 func TestSuiteFullAmbiguousCredVolumeCreateReaped(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.createVolumeThenFail = true
 	if err := s.Full(context.Background()); err == nil {
@@ -881,6 +908,7 @@ func TestSuiteFullAmbiguousCredVolumeCreateReaped(t *testing.T) {
 // no-ops so a suite object survives; the fail-closed suite must report it
 // rather than returning nil.
 func TestSuiteFullFailsClosedOnCleanupLeak(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	rt.onDeleteVolume = func(name string) (bool, error) {
@@ -902,6 +930,7 @@ func TestSuiteFullFailsClosedOnCleanupLeak(t *testing.T) {
 // reap leaves an object behind, Full surfaces both, never suppressing the
 // leak under the probe error.
 func TestSuiteFullJoinsCleanupFailureWithProbeError(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// No audit marker scripted, so the containment probe fails; and the
 	// credential-volume delete silently no-ops, so it also leaks.
@@ -930,6 +959,7 @@ func TestSuiteFullJoinsCleanupFailureWithProbeError(t *testing.T) {
 // host-side at MaxArchiveBytes and fails the containment probe closed, rather
 // than draining unbounded until the suite budget.
 func TestSuiteFullAuditExportCapped(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	seed := suiteSeed(t, fx)
 	fx.cfg.MaxArchiveBytes = 1 << 20 // above the fixture archive, below the flood
@@ -962,6 +992,7 @@ func TestSuiteFullAuditExportCapped(t *testing.T) {
 // cap but returns nil (swallowing the cap error) must still fail closed via
 // the overflow check.
 func TestSuiteFullAuditExportOverflowSwallowed(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	seed := suiteSeed(t, fx)
 	fx.cfg.MaxArchiveBytes = 1 << 20
@@ -994,6 +1025,7 @@ func TestSuiteFullAuditExportOverflowSwallowed(t *testing.T) {
 // does not match the requested read-write workspace mount, the exclusion
 // probe fails closed rather than trusting a refusal it never exercised.
 func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
@@ -1017,6 +1049,7 @@ func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
 // contradictory post-create identity must fail closed without starting what
 // could be a foreign same-name replacement.
 func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	writer := s.conformanceName("excl-writer")
@@ -1047,6 +1080,7 @@ func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
 // container running (the volume was not actually excluded) must fail closed,
 // not pass on the error string alone.
 func TestSuiteFullExclusionSecondRunsDespiteError(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
@@ -1071,6 +1105,7 @@ func TestSuiteFullExclusionSecondRunsDespiteError(t *testing.T) {
 // TestSuiteFullEmptyWorkspaceContainment: a handoff that exports an empty
 // workspace makes "marker absent" vacuous, so containment must fail closed.
 func TestSuiteFullEmptyWorkspaceContainment(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.exportTarPath = buildTar(t, []tarEntry{
 		{name: "handoff-proof.txt", body: validProof()},
@@ -1094,6 +1129,7 @@ func TestSuiteFullEmptyWorkspaceContainment(t *testing.T) {
 // non-empty content. The writer exited 0, and the reason keeps what the
 // export held, since the export itself is deleted.
 func TestSuiteFullStaleWorkspaceNoSentinel(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// Non-empty, but the blob is unrelated to this run: no writer sentinel.
 	rt.exportTarPath = buildTar(t, markerArchive(t, "stale-prepopulated-content"))
@@ -1114,6 +1150,7 @@ func TestSuiteFullStaleWorkspaceNoSentinel(t *testing.T) {
 // fails before exporting and the reason names the step, not only the
 // missing sentinel. Writer-side failures stay credential_containment.
 func TestSuiteFullNamesAnAbortedWriter(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		status int
 		step   string
@@ -1145,6 +1182,7 @@ func TestSuiteFullNamesAnAbortedWriter(t *testing.T) {
 // memory limit keeps the MemoryLimitError the launch record names, rather
 // than becoming a containment failure.
 func TestSuiteFullKeepsAWriterMemoryLimitKill(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.writerStatus = 137
 	agent := namesFor(s.fx.RunID).Agent
@@ -1162,6 +1200,7 @@ func TestSuiteFullKeepsAWriterMemoryLimitKill(t *testing.T) {
 // must not replace the teardown error joined onto the writer failure, or a
 // leaked object would hide behind the containment reason.
 func TestSuiteFullAbortedWriterKeepsTeardownErrors(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.writerStatus = writerExitSeededMarker
 	workspace := namesFor(s.fx.RunID).Workspace
@@ -1218,6 +1257,7 @@ func TestExportSummaryBoundsAndRedacts(t *testing.T) {
 // (with this run's sentinel) but drops the nested directory-tree fixture must
 // fail closed, proving the deterministic workspace tree survived the export.
 func TestSuiteFullDroppedNestedFixture(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// Only result.txt survives; nested/state.txt was dropped.
 	rt.exportTarPath = buildTar(t, markerArchive(t, writerSentinel(s.fx.RunID)))
@@ -1237,6 +1277,7 @@ func TestSuiteFullDroppedNestedFixture(t *testing.T) {
 // the expected content at the expected path via the manifest digest, not any
 // occurrence of the string in the export tree.
 func TestSuiteFullSentinelFilenameNotContent(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// Bytewise order: the decoy path ("freeside-ward-writer-...") precedes
 	// "result.txt". result.txt carries content that is not the sentinel.
@@ -1264,6 +1305,7 @@ func TestSuiteFullSentinelFilenameNotContent(t *testing.T) {
 // blob, must fail closed — verifyExport does not re-hash omitted blobs, so the
 // digest is unproven and cannot stand in for the writer's output.
 func TestSuiteFullSentinelBlobOmitted(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	sentinel := writerSentinel(s.fx.RunID) + "\n"
 	sum := sha256.Sum256([]byte(sentinel))
@@ -1297,6 +1339,7 @@ func TestSuiteFullSentinelBlobOmitted(t *testing.T) {
 // a different same-marker volume), the detached-volume audit fails closed
 // rather than trusting a token read from an unverified mount.
 func TestSuiteFullAuditMountUnrealized(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt) // the audit would otherwise pass
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
@@ -1320,6 +1363,7 @@ func TestSuiteFullAuditMountUnrealized(t *testing.T) {
 // mount check, because the create got a clone and the comparison baseline is
 // the suite's immutable original spec.
 func TestSuiteFullAuditSpecMountMutationDefeated(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	impostor := Mount{Type: MountVolume, Source: "impostor-volume", Target: s.fx.CredentialTarget, ReadOnly: true}
@@ -1350,6 +1394,7 @@ func TestSuiteFullAuditSpecMountMutationDefeated(t *testing.T) {
 // the credential; Full must fail closed rather than pass containment over
 // content the export omitted (the omitted file could be the leak).
 func TestSuiteFullOmittedBlobMarkerUnprovable(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	sentinel := writerSentinel(s.fx.RunID) + "\n"
 	sSum := sha256.Sum256([]byte(sentinel))
@@ -1393,6 +1438,7 @@ func TestSuiteFullOmittedBlobMarkerUnprovable(t *testing.T) {
 // create), which would otherwise run the writer before the gate's pre-start
 // isolation inspect.
 func TestSuiteFullRejectsEagerStart(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == namesFor(s.fx.RunID).Agent {
@@ -1415,6 +1461,7 @@ func TestSuiteFullRejectsEagerStart(t *testing.T) {
 // mounted creates synchronously. The mounted nonterminating liveness probe must
 // still be observed running and fail before the credential is seeded.
 func TestSuiteFullRejectsMountedEagerStart(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("liveness") {
@@ -1431,6 +1478,7 @@ func TestSuiteFullRejectsMountedEagerStart(t *testing.T) {
 }
 
 func TestSuiteFullLivenessProbeUsesWriterMountTopology(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	var got []Mount
@@ -1457,6 +1505,7 @@ func TestSuiteFullLivenessProbeUsesWriterMountTopology(t *testing.T) {
 // credential leaks the marker as a manifest path, invisible to the content-only
 // blob scan; the manifest-shape check rejects the unexpected entry.
 func TestSuiteFullRejectsSmuggledFilename(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// result.txt is the sentinel (sentinel check passes). A second regular file
 	// is NAMED after the marker but its content is inert, so only the shape
@@ -1483,6 +1532,7 @@ func TestSuiteFullRejectsSmuggledFilename(t *testing.T) {
 }
 
 func TestSuiteFullRejectsChangedFixtureMode(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	mode := "0755"
 	// Rebuild the manifest fixture with executable normalized modes while
@@ -1518,6 +1568,7 @@ func TestSuiteFullRejectsChangedFixtureMode(t *testing.T) {
 // this run's sentinel, so a realized-but-wrong credential aborts the writer and
 // the export can be tied to this run.
 func TestDefaultWriterGatesOnMarkerAndEmitsSentinel(t *testing.T) {
+	t.Parallel()
 	s, _ := newSuiteTest(t)
 	cmd := strings.Join(s.agentCommand, " ")
 	if !strings.Contains(cmd, `test "$(cat `) || !strings.Contains(cmd, "= "+suiteMarker) {
@@ -1533,6 +1584,7 @@ func TestDefaultWriterGatesOnMarkerAndEmitsSentinel(t *testing.T) {
 // evidence directory the export walk skips, and can exit with every step's
 // own code, so a failure reason's step name always has a source.
 func TestSuiteWriterReportsEachStepThroughTheOutcomeMarker(t *testing.T) {
+	t.Parallel()
 	s, _ := newSuiteTest(t)
 	marker := suiteWriterOutcomePath(s.b.cfg)
 	if path.Dir(marker) != path.Join(s.b.cfg.WorkspaceTarget, export.EvidenceWorkspaceDir, ".control") {
@@ -1561,6 +1613,7 @@ func TestSuiteWriterReportsEachStepThroughTheOutcomeMarker(t *testing.T) {
 // proven to come from its own step and the marker to record it, which the
 // fake runtime cannot show because it never executes the command.
 func TestSuiteWriterScriptExitsWithTheFailingStepsCode(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	for name, body := range map[string]string{
 		"nslookup": `case "$1" in --help) echo 'Usage: nslookup [-debug] HOST [DNS_SERVER]'; exit 1;; esac
@@ -1617,6 +1670,7 @@ case "$(head -c 200)" in *undeclared*) printf '%s\r\n' "$UNDECLARED";; *) printf
 // a base-image path or file) but not this run's audit sentinel, so the
 // detached-volume audit fails closed instead of passing on a whole-rootfs match.
 func TestSuiteFullAuditCoincidentalMarkerNoSentinel(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	// Workspace export carries the writer sentinel (export half passes); the
 	// audit export carries the marker but not the run-unique audit sentinel.
@@ -1641,6 +1695,7 @@ func TestSuiteFullAuditCoincidentalMarkerNoSentinel(t *testing.T) {
 // be a valid rootfs tar with the sentinel at its exact path. Bare bytes carrying
 // the public run sentinel are not evidence that the audit command ran.
 func TestSuiteFullAuditRejectsBareSentinel(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = func(id string, dest io.Writer) error {
 		if id == s.conformanceName("audit") {
@@ -1660,6 +1715,7 @@ func TestSuiteFullAuditRejectsBareSentinel(t *testing.T) {
 // TestSuiteFullAuditRejectsChangedCommand proves a realized credential mount
 // cannot stand in for the marker-gated audit payload itself.
 func TestSuiteFullAuditRejectsChangedCommand(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("audit") {
@@ -1679,6 +1735,7 @@ func TestSuiteFullAuditRejectsChangedCommand(t *testing.T) {
 // exercises the real handoff conflict: exporter RO while the writer holds RW,
 // not the weaker and different RW/RW conflict.
 func TestSuiteFullExclusionUsesReadOnlyExporter(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
 	var got ContainerSpec
@@ -1704,6 +1761,7 @@ func TestSuiteFullExclusionUsesReadOnlyExporter(t *testing.T) {
 // of the second container fails, the probe cannot confirm the second is not
 // running and must fail closed rather than pass on the error string alone.
 func TestSuiteFullExclusionSecondInspectInconclusive(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
@@ -1737,6 +1795,7 @@ func TestSuiteFullExclusionSecondInspectInconclusive(t *testing.T) {
 // by evicting the holder (writer observed no longer running after the refusal)
 // must fail closed, even though the second attach was refused and stopped.
 func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
@@ -1774,6 +1833,7 @@ func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
 // leaves the exclusion unproven, so the probe fails closed rather than passing
 // on "not running".
 func TestSuiteFullExclusionSecondNotStoppedAfterError(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
@@ -1803,6 +1863,7 @@ func TestSuiteFullExclusionSecondNotStoppedAfterError(t *testing.T) {
 }
 
 func TestSuitePreJobSuccess(t *testing.T) {
+	t.Parallel()
 	s, _ := newSuiteTest(t)
 	if err := s.PreJob(context.Background()); err != nil {
 		t.Fatalf("PreJob = %v, want nil", err)
@@ -1810,6 +1871,7 @@ func TestSuitePreJobSuccess(t *testing.T) {
 }
 
 func TestBackendPreJobUsesConfiguredAgentImage(t *testing.T) {
+	t.Parallel()
 	s, _ := newSuiteTest(t)
 	s.b.agentImage = s.fx.AgentImage
 	if err := s.b.PreJob(context.Background(), "job-1"); err != nil {
@@ -1822,6 +1884,7 @@ func TestBackendPreJobUsesConfiguredAgentImage(t *testing.T) {
 // TestBackendPreJobProbesTheRepointedImage pins that PreJob follows the
 // image the backend currently proves, not the one it was configured with.
 func TestBackendPreJobProbesTheRepointedImage(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	s.b.agentImage = s.fx.AgentImage
 	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
@@ -1849,6 +1912,7 @@ func TestBackendPreJobProbesTheRepointedImage(t *testing.T) {
 // can only prove the image the backend currently names, so a pass never
 // records one image's outcome under another image's configuration digest.
 func TestNewSuiteRefusesAFixtureForAnyButTheCurrentImage(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	cfg := fx.cfg
 	initial := "example.test/agent@sha256:" + strings.Repeat("1", 64)
@@ -1882,6 +1946,7 @@ func TestNewSuiteRefusesAFixtureForAnyButTheCurrentImage(t *testing.T) {
 }
 
 func TestSuitePreJobFailures(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		script func(*fakeRuntime)
@@ -1950,6 +2015,7 @@ func TestSuitePreJobFailures(t *testing.T) {
 // delete as successful but leaves the container behind; PreJob must prove
 // absence and fail closed rather than trusting the delete call.
 func TestSuitePreJobFailsClosedOnLyingDelete(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onDeleteContainer = func(string) (bool, error) {
 		return true, nil // report success, skip removal
@@ -1966,6 +2032,7 @@ func TestSuitePreJobFailsClosedOnLyingDelete(t *testing.T) {
 // TestSuitePreJobCatchesListingThatOmitsSurvivor ensures the cleanup proof does
 // not trust one filtered list when direct inspection still sees the object.
 func TestSuitePreJobCatchesListingThatOmitsSurvivor(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onDeleteContainer = func(string) (bool, error) { return true, nil }
 	rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) {
@@ -1982,6 +2049,7 @@ func TestSuitePreJobCatchesListingThatOmitsSurvivor(t *testing.T) {
 // before create is safe even when the deterministic name already belongs to a
 // foreign object.
 func TestSuitePreJobDoesNotDeleteForeignCollision(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	name := s.conformanceName("prejob")
 	rt.ctrs[name] = &fakeCtr{
@@ -1999,6 +2067,7 @@ func TestSuitePreJobDoesNotDeleteForeignCollision(t *testing.T) {
 // the container collision: an already-existing credential-volume name is not
 // authority to delete it after CreateVolume fails.
 func TestSuiteFullDoesNotDeleteForeignVolumeCollision(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	name := s.conformanceName("cred")
 	rt.vols[name] = &fakeVol{
@@ -2014,6 +2083,7 @@ func TestSuiteFullDoesNotDeleteForeignVolumeCollision(t *testing.T) {
 }
 
 func TestNewSuiteValidation(t *testing.T) {
+	t.Parallel()
 	handoff := newHandoffFixture(t)
 	seed := suiteSeed(t, handoff)
 	b := handoff.backend(t)
@@ -2075,6 +2145,7 @@ func TestNewSuiteValidation(t *testing.T) {
 }
 
 func TestIsAttachmentExclusion(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		err  error
@@ -2112,6 +2183,7 @@ func TestIsAttachmentExclusion(t *testing.T) {
 // not with the storage-attachment exclusion, so the probe must fail closed
 // rather than pass on an unrelated error.
 func TestSuiteFullExclusionUnrelatedStartFailure(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
@@ -2131,6 +2203,7 @@ func TestSuiteFullExclusionUnrelatedStartFailure(t *testing.T) {
 }
 
 func TestMarkerScanWriter(t *testing.T) {
+	t.Parallel()
 	marker := []byte("SECRET")
 
 	t.Run("split across writes", func(t *testing.T) {
@@ -2161,6 +2234,7 @@ func TestMarkerScanWriter(t *testing.T) {
 }
 
 func TestDirMetadataContainsMarker(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "blobs", "sha256"), 0o750); err != nil {
 		t.Fatal(err)
@@ -2184,6 +2258,7 @@ func TestDirMetadataContainsMarker(t *testing.T) {
 }
 
 func TestArchiveHasRegularFile(t *testing.T) {
+	t.Parallel()
 	wantPath := auditMarkerPath("conf-run")
 	wantBody := auditSentinel("conf-run") + "\n"
 	cases := []struct {
@@ -2245,6 +2320,7 @@ func mustWrite(t *testing.T, w io.Writer, s string) {
 }
 
 func TestDirContainsMarker(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, dir, "clean.txt", "nothing here")
 	found, err := dirContainsMarker(dir, suiteMarker)

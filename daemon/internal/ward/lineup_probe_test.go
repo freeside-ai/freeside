@@ -75,6 +75,7 @@ func codexModelListProbe() LineupProbe {
 // prompt as a positional argument, and the initialize probe's fixed request
 // on stdin.
 func TestLineupProbeCommandGolden(t *testing.T) {
+	t.Parallel()
 	claude := claudeWriterProbe(t)
 	codex := codexReviewerProbe()
 	commands := map[string][]string{
@@ -116,6 +117,7 @@ const (
 )
 
 func TestJudgeLineupProbe(t *testing.T) {
+	t.Parallel()
 	claudePass := `{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"OK",` +
 		`"total_cost_usd":0.0213,"usage":{"input_tokens":9,"output_tokens":4},` +
 		`"modelUsage":{"claude-fable-5-1[1m]":{"outputTokens":4}}}`
@@ -204,6 +206,7 @@ func TestJudgeLineupProbe(t *testing.T) {
 }
 
 func TestJudgeLineupProbeReportsUsage(t *testing.T) {
+	t.Parallel()
 	got := JudgeLineupProbe(domain.HarnessClientClaudeCode, "m", LineupProbeOutput{Stdout: []byte(
 		`{"type":"result","is_error":false,"total_cost_usd":0.0213,"usage":{"input_tokens":9,"output_tokens":4},"modelUsage":{"m":{}}}`,
 	)})
@@ -220,6 +223,7 @@ func TestJudgeLineupProbeReportsUsage(t *testing.T) {
 }
 
 func TestJudgeLineupProbeBoundsRefusalText(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("é", lineupProbeRefusalCap)
 	got := JudgeLineupProbe(domain.HarnessClientCodexCLI, "m", LineupProbeOutput{Stderr: []byte(long), ExitStatus: 1})
 	if len(got.Refusal) > lineupProbeRefusalCap || !strings.HasPrefix(got.Refusal, "é") || strings.ContainsRune(got.Refusal, '�') {
@@ -267,6 +271,7 @@ func lineupProbeOutputFiles(version, stdout, stderr, status string) []tarFile {
 }
 
 func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) {
+	t.Parallel()
 	for _, p := range []LineupProbe{claudeWriterProbe(t), codexReviewerProbe()} {
 		t.Run(string(p.Harness), func(t *testing.T) {
 			rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("2.1.282 (Claude Code)\n", `{"type":"result"}`, "warn\n", "1\n")...)
@@ -337,6 +342,7 @@ func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) 
 // once the provider sends a byte back, and false when the client only reached
 // the proxy.
 func TestProbeLineupImageReportsWhetherTheProviderAnswered(t *testing.T) {
+	t.Parallel()
 	provider := httptest.NewTLSServer(strayrequest.Ignore(http.NotFoundHandler()))
 	t.Cleanup(provider.Close)
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -412,6 +418,7 @@ func probeClientThroughProxy(env []string, handshake bool) error {
 // The probe's names must pass the production rig manifest's namespace check,
 // or every probe under a held lease fails before it creates anything.
 func TestProbeLineupImageNamesBindUnderAHeldRigLease(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -451,6 +458,7 @@ func TestProbeLineupImageNamesBindUnderAHeldRigLease(t *testing.T) {
 }
 
 func TestProbeLineupImageRefusesAnExportStillHoldingTheCredential(t *testing.T) {
+	t.Parallel()
 	for name, held := range map[string]tarFile{
 		"staged credential": {lineupProbeStageDir + "/" + lineupProbeCredName, []byte("token")},
 		"codex auth":        {CodexAuthFileTarget, []byte(`{"tokens":{}}`)},
@@ -472,6 +480,7 @@ func TestProbeLineupImageRefusesAnExportStillHoldingTheCredential(t *testing.T) 
 }
 
 func TestProbeLineupImageRefusesAnExportWithoutAStatus(t *testing.T) {
+	t.Parallel()
 	rt := newLineupProbeFakeRuntime(t, tarFile{lineupProbeStdout, []byte("x")})
 	if _, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil); err == nil ||
 		!strings.Contains(err.Error(), "no exit status") {
@@ -480,6 +489,7 @@ func TestProbeLineupImageRefusesAnExportWithoutAStatus(t *testing.T) {
 }
 
 func TestProbeLineupImageRefusesBeforeCreatingAnything(t *testing.T) {
+	t.Parallel()
 	for name, change := range map[string]func(*LineupProbe){
 		"tag-only image":          func(p *LineupProbe) { p.Image = "registry.example/agent:latest" },
 		"option-shaped model":     func(p *LineupProbe) { p.Model = "--dangerously-skip-permissions" },
@@ -514,6 +524,7 @@ func TestProbeLineupImageRefusesBeforeCreatingAnything(t *testing.T) {
 }
 
 func TestReviewSnapshotProbeCredential(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // fixture is a private directory

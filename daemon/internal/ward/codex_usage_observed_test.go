@@ -20,6 +20,7 @@ var codexUsageObserved = map[string]string{
 const codexUsageObservedOverall = "pass"
 
 func TestCodexUsageObservedFixtures(t *testing.T) {
+	t.Parallel()
 	verdicts := map[string]string{}
 	for name, want := range codexUsageObserved {
 		t.Run(name, func(t *testing.T) {

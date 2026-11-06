@@ -14,6 +14,7 @@ import (
 )
 
 func TestTaskCancellationVerificationJoinsAndFencesEveryCommand(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		runtime := newFakeRuntime(t)
 		owned, err := NewVerificationOwnership(filepath.Join(t.TempDir(), "owned"), runtime)
@@ -48,6 +49,7 @@ func TestTaskCancellationVerificationJoinsAndFencesEveryCommand(t *testing.T) {
 }
 
 func TestTaskCancellationVerificationRestartRetainsUncertainty(t *testing.T) {
+	t.Parallel()
 	for _, joined := range []bool{false, true} {
 		t.Run(map[bool]string{false: "interrupted-before-cid", true: "joined-before-cleanup"}[joined], func(t *testing.T) {
 			runtime := newFakeRuntime(t)
@@ -85,6 +87,7 @@ func TestTaskCancellationVerificationRestartRetainsUncertainty(t *testing.T) {
 }
 
 func TestTaskCancellationVerificationRejectsLyingDeleteAndDamagedBinding(t *testing.T) {
+	t.Parallel()
 	for _, omit := range []bool{false, true} {
 		t.Run(map[bool]string{false: "listed", true: "omitted"}[omit], func(t *testing.T) {
 			runtime := newFakeRuntime(t)
@@ -122,6 +125,7 @@ func TestTaskCancellationVerificationRejectsLyingDeleteAndDamagedBinding(t *test
 }
 
 func TestTaskCancellationCoverageSurvivesRestartAndEpochChange(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "coverage.json")
 	coverage, err := OpenCancellationCoverage(path, "epoch", []domain.TaskID{"old"})
 	if err != nil {

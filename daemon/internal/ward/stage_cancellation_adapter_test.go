@@ -155,6 +155,7 @@ func cancellationInputs(t *testing.T, spec *exec.StartSpec) exec.StageInputs {
 }
 
 func TestTaskCancellationRealStageAndJournaledWard(t *testing.T) {
+	t.Parallel()
 	fixture := ward.NewStageCancellationTestFixture(t)
 	records := &cancellationRecords{}
 	dir := filepath.Join(t.TempDir(), "driver")

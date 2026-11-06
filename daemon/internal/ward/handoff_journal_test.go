@@ -8,6 +8,7 @@ import (
 )
 
 func TestHandoffJournalsCancellationBeforeStoppingWriter(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs := testHandoffSpec()
@@ -63,6 +64,7 @@ func TestHandoffJournalsCancellationBeforeStoppingWriter(t *testing.T) {
 }
 
 func TestHandoffQuiescentRequiresFreshOwnedAbsence(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs := testHandoffSpec()
@@ -105,6 +107,7 @@ func TestHandoffQuiescentRequiresFreshOwnedAbsence(t *testing.T) {
 }
 
 func TestCancellationJournalFailureStillReapsWriter(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	inject := errors.New("fixture: cancellation journal unavailable")
@@ -164,6 +167,7 @@ func (fx *handoffFixture) journalled() *fakeJournal {
 // two pre-writer proofs and writer-complete amended as they are earned, and
 // the record closed completed only when the caller receives the export.
 func TestHandoffJournalledSuccess(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs, _ := fx.leased(t)
@@ -228,6 +232,7 @@ func TestHandoffJournalledSuccess(t *testing.T) {
 // the journal row is visible there; the first post-commit runtime boundary
 // therefore sees both, which is the state Recover can reconcile.
 func TestHandoffLeasedJournalOpenIsAtomicAtTheKillBoundary(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs, l := fx.leased(t)
@@ -259,6 +264,7 @@ func TestHandoffLeasedJournalOpenIsAtomicAtTheKillBoundary(t *testing.T) {
 // TestHandoffJournalledFailureClosesLoss: a failed run whose teardown proved
 // every object absent commits loss — the durable rerun-safe signal.
 func TestHandoffJournalledFailureClosesLoss(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs := testHandoffSpec()
@@ -288,6 +294,7 @@ func TestHandoffJournalledFailureClosesLoss(t *testing.T) {
 // not success: ward authenticates the launcher's nonce marker, persists the
 // nonzero status before cleanup, refuses export, and closes failed.
 func TestHandoffJournalledWriterFailureClosesFailed(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs := testHandoffSpec()
@@ -327,6 +334,7 @@ func TestHandoffJournalledWriterFailureClosesFailed(t *testing.T) {
 // absence, the record stays open — loss is a proven claim, not a default,
 // and recovery owns the record from here.
 func TestHandoffJournalledTeardownFailureLeavesOpen(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	hs := testHandoffSpec()
@@ -370,6 +378,7 @@ func TestHandoffJournalledTeardownFailureLeavesOpen(t *testing.T) {
 // TestHandoffJournalBeginFailureRefusesRun: a run that cannot be journalled
 // is refused before any runtime object exists.
 func TestHandoffJournalBeginFailureRefusesRun(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	inject := errors.New("fixture: journal unavailable")
@@ -388,6 +397,7 @@ func TestHandoffJournalBeginFailureRefusesRun(t *testing.T) {
 // TestHandoffJournalMarkFailureFailsRun: an amendment that could not be made
 // durable fails the run — an unpersisted proof is not a proof.
 func TestHandoffJournalMarkFailureFailsRun(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 	inject := errors.New("fixture: journal write failed")
@@ -409,6 +419,8 @@ func TestHandoffJournalMarkFailureFailsRun(t *testing.T) {
 // TestHandoffJournalCloseFailureVoidsDelivery: release follows the durable
 // append; a completed-close that could not be written voids the delivery and
 // removes the output.
+//
+//nolint:paralleltest // Serial: fx.isolateScratch redirects the host temp dir with t.Setenv("TMPDIR")
 func TestHandoffJournalCloseFailureVoidsDelivery(t *testing.T) {
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
@@ -433,6 +445,7 @@ func TestHandoffJournalCloseFailureVoidsDelivery(t *testing.T) {
 // records neither pre-writer proof — the record reflects what was earned,
 // not the schema's ambitions.
 func TestHandoffJournalledBlankSeedNonLeasedMarks(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	j := fx.journalled()
 
@@ -460,6 +473,7 @@ func TestHandoffJournalledBlankSeedNonLeasedMarks(t *testing.T) {
 // TestHandoffJournallessUnchanged: a nil journal preserves the one-shot
 // semantics byte for byte — no journal calls anywhere in the run.
 func TestHandoffJournallessUnchanged(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	if _, err := fx.run(t); err != nil {
 		t.Fatalf("Handoff = %v, want success", err)

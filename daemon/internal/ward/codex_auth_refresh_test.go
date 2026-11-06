@@ -78,6 +78,7 @@ func (s *fakeCodexAuthState) MarkCodexAuthNeedsReenrollment(
 }
 
 func TestCodexAuthHTTPRefresherMatchesPinnedCodexRequest(t *testing.T) {
+	t.Parallel()
 	const oldRefresh = "old-family-token"
 	client := &http.Client{Transport: codexAuthRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodPost || req.URL.String() != codexAuthRefreshEndpoint {
@@ -126,6 +127,7 @@ func TestCodexAuthHTTPRefresherMatchesPinnedCodexRequest(t *testing.T) {
 }
 
 func TestNewCodexAuthHTTPRefresherIsDirectAndRejectsRedirects(t *testing.T) {
+	t.Parallel()
 	refresher, ok := NewCodexAuthHTTPRefresher().(*codexAuthHTTPRefresher)
 	if !ok {
 		t.Fatal("production refresher has an unexpected implementation")
@@ -144,6 +146,7 @@ func TestNewCodexAuthHTTPRefresherIsDirectAndRejectsRedirects(t *testing.T) {
 }
 
 func TestCodexAuthHTTPRefresherRedactsRevokedResponse(t *testing.T) {
+	t.Parallel()
 	const secret = "spent-refresh-secret"
 	client := &http.Client{Transport: codexAuthRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -171,6 +174,7 @@ func TestCodexAuthHTTPRefresherRedactsRevokedResponse(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthRotatesUnderLease(t *testing.T) {
+	t.Parallel()
 	lifecycle, rt, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch)
 	leaser := &fakeLeaser{rt: rt, volume: launch.AuthSnapshot}
@@ -236,6 +240,7 @@ func TestPrepareCodexReviewAuthRotatesUnderLease(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthHealthyTokenStillSerializesWithRefresh(t *testing.T) {
+	t.Parallel()
 	lifecycle, rt, cfg, launch, _ := testCodexReviewLifecycle(t)
 	leaser := &fakeLeaser{rt: rt, volume: launch.AuthSnapshot}
 	refresher := &fakeCodexAuthRefresher{}
@@ -266,6 +271,7 @@ func TestPrepareCodexReviewAuthHealthyTokenStillSerializesWithRefresh(t *testing
 }
 
 func TestAcquireCodexReviewAuthExcludesConcurrentSameIdentity(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	leaser := &fakeLeaser{volume: launch.AuthSnapshot}
 	cfg.AuthStoreLeaser = leaser
@@ -301,6 +307,7 @@ func TestAcquireCodexReviewAuthExcludesConcurrentSameIdentity(t *testing.T) {
 }
 
 func TestCodexReviewHoldsAuthLeaseThroughContainerStart(t *testing.T) {
+	t.Parallel()
 	lifecycle, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
 	leaser, ok := cfg.AuthStoreLeaser.(*fakeLeaser)
 	if !ok {
@@ -327,6 +334,7 @@ func TestCodexReviewHoldsAuthLeaseThroughContainerStart(t *testing.T) {
 }
 
 func TestCodexReviewReleaseFailureAfterStartReapsBeforeHandoff(t *testing.T) {
+	t.Parallel()
 	lifecycle, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	leaser, ok := cfg.AuthStoreLeaser.(*fakeLeaser)
 	if !ok {
@@ -363,6 +371,7 @@ func TestCodexReviewReleaseFailureAfterStartReapsBeforeHandoff(t *testing.T) {
 }
 
 func TestCodexAuthStartReservationRejectsExpiryDuringLeaseRead(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	now := codexReviewEpoch
 	cfg.Now = func() time.Time { return now }
@@ -395,6 +404,7 @@ func TestCodexAuthStartReservationRejectsExpiryDuringLeaseRead(t *testing.T) {
 }
 
 func TestCodexAuthStartReservationBindsDeadlineBeforeFinalClockRead(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	now := codexReviewEpoch
 	clockReads := 0
@@ -432,6 +442,7 @@ func TestCodexAuthStartReservationBindsDeadlineBeforeFinalClockRead(t *testing.T
 }
 
 func TestPrepareCodexReviewAuthKeepsPrecallIntentFailureRetryable(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{tokens: CodexAuthRefreshTokens{
@@ -474,6 +485,7 @@ func TestPrepareCodexReviewAuthKeepsPrecallIntentFailureRetryable(t *testing.T) 
 }
 
 func TestPrepareCodexReviewAuthRecoversPendingRotationWithoutProvider(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch)
 	pendingBody := codexHostAuthBody(
@@ -525,6 +537,7 @@ func TestPrepareCodexReviewAuthRecoversPendingRotationWithoutProvider(t *testing
 }
 
 func TestRecoverCodexAuthRefreshTransactionRevalidatesPendingRotation(t *testing.T) {
+	t.Parallel()
 	predecessorAccess := codexReviewJWT(t, codexReviewEpoch.Add(90*time.Minute))
 	for _, tc := range []struct {
 		name               string
@@ -620,6 +633,7 @@ func TestRecoverCodexAuthRefreshTransactionRevalidatesPendingRotation(t *testing
 }
 
 func TestRecoverCodexAuthRefreshTransactionPreservesChangedPredecessor(t *testing.T) {
+	t.Parallel()
 	_, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "predecessor-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch)
 	_, predecessorBody, predecessorMetadata, err := readCodexReviewInputWithMetadata(
@@ -679,6 +693,7 @@ func TestRecoverCodexAuthRefreshTransactionPreservesChangedPredecessor(t *testin
 }
 
 func TestRecoverCodexAuthRefreshTransactionRefusesAmbiguousCall(t *testing.T) {
+	t.Parallel()
 	_, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "predecessor-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch)
 	_, predecessorBody, predecessorMetadata, err := readCodexReviewInputWithMetadata(
@@ -703,6 +718,7 @@ func TestRecoverCodexAuthRefreshTransactionRefusesAmbiguousCall(t *testing.T) {
 }
 
 func TestRecoverCodexAuthRefreshTransactionDiscardsPartialPendingAfterReenrollment(t *testing.T) {
+	t.Parallel()
 	_, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "predecessor-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch)
 	_, predecessorBody, predecessorMetadata, err := readCodexReviewInputWithMetadata(
@@ -745,6 +761,7 @@ func TestRecoverCodexAuthRefreshTransactionDiscardsPartialPendingAfterReenrollme
 }
 
 func TestRecoverCodexAuthRefreshTransactionIgnoresPartialIntentStage(t *testing.T) {
+	t.Parallel()
 	_, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	_, body, metadata, err := readCodexReviewInputWithMetadata(
 		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
@@ -773,6 +790,7 @@ func TestRecoverCodexAuthRefreshTransactionIgnoresPartialIntentStage(t *testing.
 }
 
 func TestWriteCodexAuthRefreshIntentDoesNotReplaceExistingIntent(t *testing.T) {
+	t.Parallel()
 	_, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	_, body, metadata, err := readCodexReviewInputWithMetadata(
 		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
@@ -807,6 +825,7 @@ func TestWriteCodexAuthRefreshIntentDoesNotReplaceExistingIntent(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthRevocationMarksAndRefusesFast(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "spent-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{err: &CodexAuthRefreshError{
@@ -843,6 +862,7 @@ func TestPrepareCodexReviewAuthRevocationMarksAndRefusesFast(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthPersistsReenrollmentAfterCancellation(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "spent-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	cfg.AuthStoreLeaser = &fakeLeaser{volume: launch.AuthSnapshot}
@@ -864,6 +884,7 @@ func TestPrepareCodexReviewAuthPersistsReenrollmentAfterCancellation(t *testing.
 }
 
 func TestCodexReviewReenrollmentMarkerRefusesBeforeInputReads(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	cfg.AuthState = &fakeCodexAuthState{needs: true}
 	if err := os.Remove(launch.AuthSnapshot); err != nil {
@@ -877,6 +898,7 @@ func TestCodexReviewReenrollmentMarkerRefusesBeforeInputReads(t *testing.T) {
 }
 
 func TestCodexReviewOutcomeFencePrecedesAuthRefresh(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{tokens: CodexAuthRefreshTokens{
@@ -900,6 +922,7 @@ func TestCodexReviewOutcomeFencePrecedesAuthRefresh(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthLeaseRefusalDoesNotCallProvider(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{}
@@ -921,6 +944,7 @@ func TestPrepareCodexReviewAuthLeaseRefusalDoesNotCallProvider(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthRejectsNonOpenAIIdentity(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{}
@@ -943,6 +967,7 @@ func TestPrepareCodexReviewAuthRejectsNonOpenAIIdentity(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthRejectsIdentityBoundToAnotherStore(t *testing.T) {
+	t.Parallel()
 	lifecycle, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch)
 	refresher := &fakeCodexAuthRefresher{}
@@ -960,6 +985,7 @@ func TestPrepareCodexReviewAuthRejectsIdentityBoundToAnotherStore(t *testing.T) 
 }
 
 func TestCodexReviewSubscriptionRequiresHostRefreshDependencies(t *testing.T) {
+	t.Parallel()
 	_, _, cfg, launch, _ := testCodexReviewLifecycle(t)
 	for _, tc := range []struct {
 		name   string
@@ -980,6 +1006,7 @@ func TestCodexReviewSubscriptionRequiresHostRefreshDependencies(t *testing.T) {
 }
 
 func TestPrepareCodexReviewAuthRejectsInvalidReturnedTokensBeforeMutation(t *testing.T) {
+	t.Parallel()
 	aliasedNew := codexReviewJWT(t, codexReviewEpoch.Add(4*time.Hour))
 	aliasedOld := codexReviewJWT(t, codexReviewEpoch.Add(5*time.Hour))
 	predecessorAccess := codexReviewJWT(t, codexReviewEpoch.Add(30*time.Minute))

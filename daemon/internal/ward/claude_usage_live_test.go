@@ -19,6 +19,8 @@ import (
 
 // CI deliberately skips the experiment. Missing inputs in an opted-in run
 // fail, so a skipped or broken run cannot become an unsupported verdict.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveClaudeUsage(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1; requires pinned Claude image and setup token; see daemon/README.md")

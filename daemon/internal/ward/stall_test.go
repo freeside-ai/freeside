@@ -39,6 +39,7 @@ func (c *stallCalls) got() []bool {
 // after the interval, recovery on a fresh provider byte, a second stall
 // after another quiet stretch, and a conclusion when the wait ends.
 func TestStallWatchReportsTransitionsOnce(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	now, lastByte := start, time.Time{}
 	var rec stallCalls
@@ -76,6 +77,7 @@ func TestStallWatchReportsTransitionsOnce(t *testing.T) {
 // A failed report is retried on the next poll, and a failed stall never
 // reported is not concluded.
 func TestStallWatchRetriesFailedReport(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	now := start
 	rec := stallCalls{err: errors.New("store unavailable")}
@@ -100,6 +102,7 @@ func TestStallWatchRetriesFailedReport(t *testing.T) {
 // A slow report blocks neither the poll that started it nor later polls,
 // and finish waits for it before concluding.
 func TestStallWatchSlowReportStaysOffThePollPath(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	now := start
 	release := make(chan struct{})
@@ -132,6 +135,7 @@ func TestStallWatchSlowReportStaysOffThePollPath(t *testing.T) {
 // with the same error after the same number of polls as without a watch,
 // and a failing report changes nothing either.
 func TestHandoffStallWatchLeavesWriterBudget(t *testing.T) {
+	t.Parallel()
 	names := namesFor(testHandoffSpec().RunID)
 	type outcome struct {
 		err      string
@@ -210,6 +214,7 @@ func TestHandoffStallWatchLeavesWriterBudget(t *testing.T) {
 // The hook is a runtime observer: the journaled spec bytes and digest are
 // the same with and without it.
 func TestHandoffSpecStallHookLeavesJournalDigest(t *testing.T) {
+	t.Parallel()
 	without := testHandoffSpec()
 	with := testHandoffSpec()
 	with.Stall = func(context.Context, bool) error { return nil }
@@ -272,6 +277,7 @@ func newStallHandoffFixture(t *testing.T) *handoffFixture {
 }
 
 func TestHandoffStallDeadlineDoesNotDelayWriterStop(t *testing.T) {
+	t.Parallel()
 	for _, cancelled := range []bool{false, true} {
 		name := "budget"
 		if cancelled {
@@ -341,6 +347,7 @@ func TestHandoffStallDeadlineDoesNotDelayWriterStop(t *testing.T) {
 }
 
 func TestHandoffStallClearFollowsRaiseAfterWriterStop(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		fx := newStallHandoffFixture(t)
 		hs := testHandoffSpec()
@@ -382,6 +389,7 @@ func TestHandoffStallClearFollowsRaiseAfterWriterStop(t *testing.T) {
 }
 
 func TestHandoffStallRecoveryStillSucceeds(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		fx := newStallHandoffFixture(t)
 		fx.cfg.WriterStopTimeout = 10 * time.Second

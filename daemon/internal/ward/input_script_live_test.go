@@ -23,6 +23,8 @@ import (
 // meet the BusyBox tar, stat, find, and sha256sum they run with in
 // production, on a case-sensitive filesystem. Register its single container
 // with the caller's held rig; never acquire a second rig.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestExporterInputScriptsLive(t *testing.T) {
 	if os.Getenv("FREESIDE_INPUT_SCRIPT_LIVE") != "1" {
 		t.Skip("set FREESIDE_INPUT_SCRIPT_LIVE=1, FREESIDE_WARD_EXPORTER_IMAGE, FREESIDE_RIG_ACQUISITION and FREESIDE_STATE_DIR; requires a held rig and the cached exporter image")

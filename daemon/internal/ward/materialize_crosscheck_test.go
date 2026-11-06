@@ -25,6 +25,7 @@ func (unusedMaterializationTokenSource) Token(
 // test composes the publish materializer with Ward's actual raw-byte observer
 // and strict proof verifier instead of sharing their tree-walking logic.
 func TestPublishMaterializationPassesWardBaseProof(t *testing.T) {
+	t.Parallel()
 	checkout := initLiveSeedCheckout(t, t.TempDir())
 	if err := os.WriteFile(
 		filepath.Join(checkout, ".gitattributes"),

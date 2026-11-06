@@ -32,6 +32,7 @@ func (r *recordingConformance) RecordBackendConformance(
 // suite-earned capabilities and hands the recorder one passed record carrying
 // the explicit proven set, unpersisted (generation zero, store-assigned).
 func TestSuiteFullRecordsPassedConformance(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rec := &recordingConformance{}
 	WithConformanceRecorder(rec)(s)
@@ -70,6 +71,7 @@ func TestSuiteFullRecordsPassedConformance(t *testing.T) {
 // all-or-nothing, so any check failure withdraws every suite-earned
 // capability, the egress declaration included.
 func TestSuiteFullRecordsFailedConformance(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rec := &recordingConformance{}
 	WithConformanceRecorder(rec)(s)
@@ -102,6 +104,7 @@ func TestSuiteFullRecordsFailedConformance(t *testing.T) {
 // the in-memory declaration is withdrawn, so the backend cannot declare a
 // capability the store could not gate an admission against.
 func TestSuiteFullRecorderFailureFailsThePass(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rec := &recordingConformance{err: errors.New("store unavailable")}
 	WithConformanceRecorder(rec)(s)
@@ -122,6 +125,7 @@ func TestSuiteFullRecorderFailureFailsThePass(t *testing.T) {
 // A provider_registry handoff whose proxy does not realize the declared
 // registry fails the pass, so no capability is declared or recorded.
 func TestSuiteFullRegistryHandoffFailureWithholdsCapabilities(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rec := &recordingConformance{}
 	WithConformanceRecorder(rec)(s)
@@ -152,6 +156,7 @@ func TestSuiteFullRegistryHandoffFailureWithholdsCapabilities(t *testing.T) {
 // TestSuiteFullPanicRecordsFailure: the publish defer's panic path records
 // the failure (best-effort) and still re-raises.
 func TestSuiteFullPanicRecordsFailure(t *testing.T) {
+	t.Parallel()
 	s, rt := newSuiteTest(t)
 	rec := &recordingConformance{}
 	WithConformanceRecorder(rec)(s)

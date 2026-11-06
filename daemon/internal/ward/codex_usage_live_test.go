@@ -37,6 +37,8 @@ func codexUsageSyntheticUpstream(*http.Request) (*http.Response, error) {
 // CI deliberately skips the experiment. The synthetic cases measure refresh
 // behavior only; the real cases need the operator's auth store and consent to
 // one inference turn, and without them the overall result is never pass.
+//
+//nolint:paralleltest // Serial: live suite on the shared Apple container runtime; not run in parallel
 func TestLiveCodexUsage(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1; see Codex Usage Spike in daemon/README.md")

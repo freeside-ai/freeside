@@ -118,6 +118,7 @@ func runVerifyExport(t *testing.T, b *Backend, entries []tarEntry) (*exportOutpu
 }
 
 func TestVerifyExportValid(t *testing.T) {
+	t.Parallel()
 	out, err := runVerifyExport(t, newTestBackend(t), fixtureArchive(t))
 	if err != nil {
 		t.Fatalf("verifyExport = %v, want nil", err)
@@ -176,6 +177,7 @@ func evidenceArchive(t *testing.T) []tarEntry {
 // TestVerifyExportEvidenceValid proves a valid evidence channel is accepted,
 // verified, and surfaced on the export output.
 func TestVerifyExportEvidenceValid(t *testing.T) {
+	t.Parallel()
 	out, err := runVerifyExport(t, newTestBackend(t), evidenceArchive(t))
 	if err != nil {
 		t.Fatalf("verifyExport = %v, want nil", err)
@@ -195,6 +197,7 @@ func TestVerifyExportEvidenceValid(t *testing.T) {
 // TestVerifyExportNoEvidence proves an absent evidence channel is the
 // pre-evidence shape, not an error.
 func TestVerifyExportNoEvidence(t *testing.T) {
+	t.Parallel()
 	out, err := runVerifyExport(t, newTestBackend(t), fixtureArchive(t))
 	if err != nil {
 		t.Fatalf("verifyExport = %v, want nil", err)
@@ -205,6 +208,7 @@ func TestVerifyExportNoEvidence(t *testing.T) {
 }
 
 func TestVerifyExportCommitPlanDeclaredMemberAndScan(t *testing.T) {
+	t.Parallel()
 	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[]}`)
 	entries := append(fixtureArchive(t), tarEntry{name: "handoff/" + export.CommitPlanFilename, body: plan})
 	var scanned []byte
@@ -267,6 +271,7 @@ func TestVerifyExportCommitPlanDeclaredMemberAndScan(t *testing.T) {
 // TestVerifyExportEvidenceViolations induces evidence-channel check-7
 // violations and asserts each fails closed as export_verification.
 func TestVerifyExportEvidenceViolations(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(t *testing.T) []tarEntry
@@ -328,6 +333,7 @@ func TestVerifyExportEvidenceViolations(t *testing.T) {
 // never emitted one — so it carries the evidence mark and recovery can
 // commit loss instead of retrying forever.
 func TestVerifyManifestMissingIsContentEvidence(t *testing.T) {
+	t.Parallel()
 	b := &Backend{cfg: testConfig()}
 	_, _, err := b.verifyManifest(t.TempDir())
 	if err == nil || !errors.Is(err, errContentEvidence) {
@@ -336,6 +342,7 @@ func TestVerifyManifestMissingIsContentEvidence(t *testing.T) {
 }
 
 func TestVerifyBlobClassifiesMismatchVsIO(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	blob := filepath.Join(dir, "b")
 	if err := os.WriteFile(blob, []byte("data"), 0o600); err != nil {
@@ -373,6 +380,7 @@ func TestVerifyBlobClassifiesMismatchVsIO(t *testing.T) {
 }
 
 func TestVerifyExportViolations(t *testing.T) {
+	t.Parallel()
 	_, wantHex := fixtureManifest(t, fixtureBlob)
 
 	cases := []struct {
@@ -540,6 +548,7 @@ func TestVerifyExportViolations(t *testing.T) {
 // quote the matched secret (ConformanceFailure reasons never carry
 // credential material).
 func TestVerifyExportScannerRefusal(t *testing.T) {
+	t.Parallel()
 	const secret = "FREESIDE_FAKE_PROVIDER_CREDENTIAL_DO_NOT_EXPORT" //nolint:gosec // inert test marker, not a credential
 	cfg := testConfig()
 	cfg.Scanner = scannerFunc(func(context.Context, string) error {
@@ -566,6 +575,7 @@ func TestVerifyExportScannerRefusal(t *testing.T) {
 // extracted output directory (the live test greps it for the credential
 // marker).
 func TestVerifyExportScannerSeesOutput(t *testing.T) {
+	t.Parallel()
 	var scanned string
 	cfg := testConfig()
 	cfg.Scanner = scannerFunc(func(_ context.Context, dir string) error {
@@ -589,6 +599,7 @@ func TestVerifyExportScannerSeesOutput(t *testing.T) {
 // workspace content and could itself embed a credential) never appears in a
 // conformance failure reason.
 func TestVerifyExportRedactsPaths(t *testing.T) {
+	t.Parallel()
 	const secretName = "AKIAFREESIDEFAKESECRET"
 	entries := append(fixtureArchive(t), tarEntry{
 		name: "handoff/" + secretName + ".txt",
@@ -624,6 +635,7 @@ func TestVerifyExportRedactsPaths(t *testing.T) {
 
 // TestVerifyExportCap proves the tar-bomb budget fails closed.
 func TestVerifyExportCap(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	cfg.MaxExportBytes = 8
 	b, err := New(stubRuntime{}, cfg)
@@ -684,6 +696,7 @@ func dupEntryArchive(t *testing.T, secondSize *int64) []tarEntry {
 // re-hash), while a second entry claiming a different size for that digest
 // still fails closed rather than being skipped by a per-digest shortcut.
 func TestVerifyExportSharedDigest(t *testing.T) {
+	t.Parallel()
 	t.Run("identical files share one blob", func(t *testing.T) {
 		out, err := runVerifyExport(t, newTestBackend(t), dupEntryArchive(t, nil))
 		if err != nil {
@@ -709,6 +722,7 @@ func TestVerifyExportSharedDigest(t *testing.T) {
 // archive-derived and could encode a credential, so it must not reach the
 // conformance reason (or logs).
 func TestVerifyExportRedactsBlobDigest(t *testing.T) {
+	t.Parallel()
 	secretHex := strings.Repeat("dead", 16) // 64 hex chars, credential-shaped
 	mode := "0644"
 	size := int64(1)
@@ -747,6 +761,7 @@ func TestVerifyExportRedactsBlobDigest(t *testing.T) {
 // bytes are the artifact released to the gauntlet, so the validated view must
 // not be allowed to diverge from them.
 func TestVerifyExportRejectsDuplicateManifestKeys(t *testing.T) {
+	t.Parallel()
 	sum := sha256.Sum256(fixtureBlob)
 	hexDigest := hex.EncodeToString(sum[:])
 	mode := "0644"
@@ -789,6 +804,7 @@ func TestVerifyExportRejectsDuplicateManifestKeys(t *testing.T) {
 // TestVerifyExportManifestCap proves a manifest larger than MaxManifestBytes
 // fails closed instead of being read whole into the daemon heap.
 func TestVerifyExportManifestCap(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	cfg.MaxManifestBytes = 8 // any real manifest exceeds this
 	b, err := New(stubRuntime{}, cfg)
@@ -808,6 +824,7 @@ func TestVerifyExportManifestCap(t *testing.T) {
 // TestExtractHandoffMetadataBudgets proves zero-byte directory floods and
 // pathological names fail before the corresponding host objects are created.
 func TestExtractHandoffMetadataBudgets(t *testing.T) {
+	t.Parallel()
 	t.Run("entry count", func(t *testing.T) {
 		cfg := testConfig()
 		cfg.MaxExportEntries = 1
@@ -869,6 +886,7 @@ func TestExtractHandoffMetadataBudgets(t *testing.T) {
 // TestExtractFileCapBoundary distinguishes an exact fit from a one-byte
 // overflow, including an empty file after the byte budget is fully consumed.
 func TestExtractFileCapBoundary(t *testing.T) {
+	t.Parallel()
 	t.Run("exact fit", func(t *testing.T) {
 		data := []byte("12345678")
 		dest := filepath.Join(t.TempDir(), "exact")

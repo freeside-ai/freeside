@@ -11,6 +11,7 @@ import (
 // vocabulary can express and asserts each fails closed with the right typed
 // check (acceptance 2 for checks 1 and 2).
 func TestValidateAgentSpecViolations(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -173,6 +174,7 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 // reserved for the one gate-authored instruction mount and remains covered by
 // the duplicate-target check.
 func TestValidateAgentSpecInstructionPathOverlaps(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		config func(*Config)
@@ -221,6 +223,7 @@ func TestValidateAgentSpecInstructionPathOverlaps(t *testing.T) {
 // remain separated from the workspace, and be the only writable credential
 // mount when a legacy mutable-store caller requests one.
 func TestValidateAgentSpecLeasedViolations(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -275,6 +278,7 @@ func TestValidateAgentSpecLeasedViolations(t *testing.T) {
 // proof comes out of an unscanned archive, so every malformed, incomplete,
 // duplicated, or forged shape is refused and nothing from it is echoed.
 func TestVerifyCredProof(t *testing.T) {
+	t.Parallel()
 	const nonce = "00000000000000000000000000000000"
 	digest := strings.Repeat("ab", 32)
 	valid := "nonce=" + nonce + "\ncred_tree=" + digest + "\n"
@@ -367,6 +371,7 @@ func TestVerifyCredProof(t *testing.T) {
 // caller input and may itself be a credential copied into the list without
 // a variable name.
 func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -410,6 +415,7 @@ func agentReport(spec ContainerSpec) InspectReport {
 }
 
 func TestVerifyAgentAllowlistViolations(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -526,6 +532,7 @@ func seedRoleReport(cfg Config, spec ContainerSpec) InspectReport {
 // can write the workspace, so its access must match what was approved in both
 // directions.
 func TestVerifySeedRoleAllowlistViolations(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -586,6 +593,7 @@ func TestVerifySeedRoleAllowlistViolations(t *testing.T) {
 // 4's rule: an observed environment can carry a caller's credential, so a
 // refusal names the violation and never echoes the value.
 func TestVerifySeedRoleAllowlistRedactsValues(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
@@ -607,6 +615,7 @@ func TestVerifySeedRoleAllowlistRedactsValues(t *testing.T) {
 // asserts each fails closed with the exporter_allowlist check (acceptance 2
 // for check 4).
 func TestVerifyExporterAllowlistViolations(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	const exporter = "freeside-handoff-run-exporter"
 	const ws = "freeside-handoff-run-ws"
@@ -676,6 +685,7 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 // reports no runtime-derived key or value: either could itself be a
 // credential the gate exists to contain.
 func TestVerifyExporterAllowlistRedactsValues(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	const exporter = "freeside-handoff-run-exporter"
 	const ws = "freeside-handoff-run-ws"
@@ -696,6 +706,7 @@ func TestVerifyExporterAllowlistRedactsValues(t *testing.T) {
 // TestConformanceReasonsRedactUntrustedFields pins the same invariant for
 // caller-built agent mounts and runtime-observed exporter fields.
 func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
+	t.Parallel()
 	const secret = "secret-field-fixture-value"
 	cfg := testConfig()
 	hs := testHandoffSpec()
@@ -721,6 +732,7 @@ func validProof() []byte {
 // TestVerifyProof exercises check 5's strict proof contract (acceptance 2
 // for check 5): every deviation from the exact required observations fails.
 func TestVerifyProof(t *testing.T) {
+	t.Parallel()
 	if err := verifyProof(validProof()); err != nil {
 		t.Fatalf("valid proof: %v, want nil", err)
 	}
@@ -757,6 +769,7 @@ func TestVerifyProof(t *testing.T) {
 // TestVerifyProofRedactsArchiveContent proves every parser category keeps
 // unscanned proof bytes out of the returned conformance reason.
 func TestVerifyProofRedactsArchiveContent(t *testing.T) {
+	t.Parallel()
 	const secret = "secret-proof-fixture-value"
 	cases := map[string]string{
 		"malformed line": secret + "\n",
@@ -777,6 +790,7 @@ func TestVerifyProofRedactsArchiveContent(t *testing.T) {
 }
 
 func TestValidateAgentSpecNoCredentials(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	hs.Agent.CredentialMounts = nil

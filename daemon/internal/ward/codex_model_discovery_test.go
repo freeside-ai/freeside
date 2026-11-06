@@ -60,6 +60,7 @@ func wantCodexModels() []domain.DiscoveredModel {
 }
 
 func TestDecodeCodexModelReport(t *testing.T) {
+	t.Parallel()
 	report, err := DecodeCodexModelReport(codexModelListOutput(codexModelListTranscript, 0), codexModelListCredential())
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +77,7 @@ func TestDecodeCodexModelReport(t *testing.T) {
 }
 
 func TestDecodeCodexModelReportRefusals(t *testing.T) {
+	t.Parallel()
 	const initialize = `{"id":1,"result":{}}`
 	page := func(id, models, cursor string) string {
 		return `{"id":` + id + `,"result":{"data":[` + models + `],"nextCursor":` + cursor + `}}`
@@ -156,6 +158,7 @@ func TestDecodeCodexModelReportRefusals(t *testing.T) {
 }
 
 func TestDecodeCodexModelReportRefusesACredentialWithoutASecret(t *testing.T) {
+	t.Parallel()
 	credential := LineupProbeCredential{mode: CodexAuthSubscription, body: []byte(`{"tokens":{}}`)}
 	if _, err := DecodeCodexModelReport(codexModelListOutput(codexModelListTranscript, 0), credential); err == nil {
 		t.Fatal("decoded under a credential with no access token to scan for")
@@ -166,6 +169,7 @@ func TestDecodeCodexModelReportRefusesACredentialWithoutASecret(t *testing.T) {
 // fake runtime: the container receives the access-only credential, runs the
 // app-server, and leaves nothing behind.
 func TestDiscoverCodexModelsRunsOneContainedCall(t *testing.T) {
+	t.Parallel()
 	rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("codex-cli 0.162.1\n", codexModelListTranscript, "", "0\n")...)
 	credential := codexModelListCredential()
 	var staged []byte
@@ -203,6 +207,7 @@ func TestDiscoverCodexModelsRunsOneContainedCall(t *testing.T) {
 }
 
 func TestDiscoverCodexModelsRefusesAnExportStillHoldingTheCredential(t *testing.T) {
+	t.Parallel()
 	for name, leftover := range map[string]tarFile{
 		"staged credential": {lineupProbeStageDir + "/" + lineupProbeCredName, []byte("token")},
 		"CODEX_HOME":        {CodexAuthFileTarget, []byte("token")},

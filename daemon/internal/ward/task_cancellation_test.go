@@ -12,6 +12,7 @@ import (
 )
 
 func TestTaskCancellationStopsReviewAndRecoversPartialCleanup(t *testing.T) {
+	t.Parallel()
 	for _, restart := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live", true: "restart"}[restart], func(t *testing.T) {
 			ctx := t.Context()
@@ -85,6 +86,7 @@ func TestTaskCancellationStopsReviewAndRecoversPartialCleanup(t *testing.T) {
 }
 
 func TestTaskCancellationDoesNotInventUnknownReview(t *testing.T) {
+	t.Parallel()
 	fx := newHandoffFixture(t)
 	cfg, spec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
