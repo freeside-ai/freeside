@@ -89,6 +89,7 @@ func (f notifyTestFixture) assertNoTopic(t *testing.T, ntfyURL string, shown ...
 // notice on that device's own topic with the inbox link, nothing for a
 // revoked device, and no delivery row.
 func TestNotifyTestSendsToEachActiveDevice(t *testing.T) {
+	t.Parallel()
 	sink := newNtfySink(t, http.StatusOK)
 	f := startNotifyTestFixture(t, sink.URL)
 	f.pair(t, "phone", "Ben's iPhone")
@@ -136,6 +137,7 @@ func TestNotifyTestSendsToEachActiveDevice(t *testing.T) {
 // TestNotifyTestOneDevice: -device narrows the test to that device, and a
 // device that is revoked or unknown is an error that publishes nothing.
 func TestNotifyTestOneDevice(t *testing.T) {
+	t.Parallel()
 	sink := newNtfySink(t, http.StatusOK)
 	f := startNotifyTestFixture(t, sink.URL)
 	f.pair(t, "phone", "Phone")
@@ -203,6 +205,7 @@ func TestNotifyTestReportsAFailureWithoutTheTopic(t *testing.T) {
 // a state directory that advertises another daemon's socket all fail without
 // publishing.
 func TestNotifyTestRefusals(t *testing.T) {
+	t.Parallel()
 	sink := newNtfySink(t, http.StatusOK)
 	f := startNotifyTestFixture(t, sink.URL)
 

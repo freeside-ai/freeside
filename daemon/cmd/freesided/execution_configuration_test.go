@@ -15,6 +15,7 @@ import (
 )
 
 func TestDefaultExecutionDisabled(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
@@ -67,6 +68,7 @@ func TestDefaultExecutionDisabled(t *testing.T) {
 }
 
 func TestSeedRequiresExplicitFakeDriver(t *testing.T) {
+	t.Parallel()
 	_, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      filepath.Join(t.TempDir(), "freeside.db"), SeedWalkingSkeleton: true,
@@ -77,6 +79,7 @@ func TestSeedRequiresExplicitFakeDriver(t *testing.T) {
 }
 
 func TestExecutionConfigurationNoticeConverges(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	for _, enabled := range []bool{false, false, true} {

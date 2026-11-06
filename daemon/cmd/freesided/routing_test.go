@@ -241,6 +241,7 @@ func TestRoutingCommandRefusals(t *testing.T) {
 }
 
 func TestRoutingUsesRunningDaemonStore(t *testing.T) {
+	t.Parallel()
 	checkout, commit, _, agent := routingTreeCheckout(t)
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)

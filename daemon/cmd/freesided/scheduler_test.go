@@ -98,6 +98,7 @@ func readScheduleRow(t *testing.T, st *store.Store, id domain.ScheduleID) domain
 // added without a consumer registration fails here instead of sitting
 // silently undriven.
 func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	wiring := &claudeComposition{
 		janitor: &janitorSession{janitor: &stubJanitorRunner{}},
@@ -124,6 +125,7 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 // Image upkeep runs as a trusted-config schedule at the doctor's cadence. A
 // restart arms it again without resetting its clock.
 func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	cfg := config{
 		Claude:         &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev},
@@ -158,6 +160,7 @@ func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
 // starts usage collection (plan §10), and a collection that cannot start
 // fails nothing, because a failed doctor consumption stops the daemon.
 func TestScheduledDoctorPassStartsUsageCollection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	wiring := &claudeComposition{
@@ -202,6 +205,7 @@ func TestScheduledDoctorPassStartsUsageCollection(t *testing.T) {
 // time is never postponed, and the re-armed generation fires and terminates
 // on the very next pass.
 func TestDeadlineReArmsOnStaleSubjectVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := schedTestItem(t, st)
@@ -281,6 +285,7 @@ func TestDeadlineReArmsOnStaleSubjectVersion(t *testing.T) {
 // fires with its item still open terminates fired-and-handled with
 // deadline_elapsed on the synced aggregate.
 func TestDeadlineRegistrationTerminatesFired(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := schedTestItem(t, st)

@@ -25,6 +25,7 @@ import (
 // fields changes inspectIndexVersion; a read added to the list is content and
 // changes only the bytes.
 func TestInspectIndexGolden(t *testing.T) {
+	t.Parallel()
 	latest := domain.RunID("run-freeside-656")
 	got, err := json.MarshalIndent(inspectIndex{
 		Version: inspectIndexVersion, AsOfRevision: 22, Reads: inspectReads(),
@@ -45,6 +46,7 @@ func TestInspectIndexGolden(t *testing.T) {
 // TestInspectIndexNamesItsReads holds the index to the versions the reads
 // print, so the list cannot name a shape the command no longer writes.
 func TestInspectIndexNamesItsReads(t *testing.T) {
+	t.Parallel()
 	versions := map[string]string{}
 	for _, read := range inspectReads() {
 		if read.Name == "" || read.Command == "" || read.IDs == nil {
@@ -178,6 +180,7 @@ func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
 // the other task's refused item out, and says on stderr what the read
 // needs. With the daemon's digest the record equals the served one.
 func TestInspectReadsStoppedRootWithRecipeEvidence(t *testing.T) {
+	t.Parallel()
 	recipe := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{
@@ -318,6 +321,7 @@ func comparableRecord(t *testing.T, record taskRecord) []byte {
 }
 
 func TestInspectUsageErrors(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	for name, args := range map[string][]string{
 		"no database":            {},

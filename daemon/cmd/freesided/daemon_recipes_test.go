@@ -19,6 +19,7 @@ import (
 // pass; a recipe adopted for another repository, or adopted by no one, does
 // not.
 func TestRunningDaemonApprovesAdoptedRecipes(t *testing.T) {
+	t.Parallel()
 	const repositoryID int64 = 42
 	ctx := t.Context()
 	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)

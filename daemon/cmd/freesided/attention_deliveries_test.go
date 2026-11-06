@@ -19,6 +19,7 @@ import (
 )
 
 func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(t.Context(), nil, config{

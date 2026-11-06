@@ -169,6 +169,7 @@ func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 }
 
 func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	seedTemplateStore(t, dbPath)
@@ -352,6 +353,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 }
 
 func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	lock, err := daemonlock.Acquire(dbPath)
@@ -445,6 +447,7 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 }
 
 func TestControlReattemptUsesRunningDaemonStore(t *testing.T) {
+	t.Parallel()
 	dbPath, st, parent := reattemptTaskFixture(t)
 	terminal := domain.ObservedStatusFailed
 	invocation := domain.InvocationID("inv-implement-" + string(parent.ID))
@@ -483,6 +486,7 @@ func TestControlReattemptUsesRunningDaemonStore(t *testing.T) {
 }
 
 func TestControlFindsDatabaseBehindDanglingSymlink(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	target := filepath.Join(root, "target.db")
 	alias := filepath.Join(root, "alias.db")
@@ -514,6 +518,7 @@ func TestControlFindsDatabaseBehindDanglingSymlink(t *testing.T) {
 }
 
 func TestControlRejectsAnotherDatabaseAtSocket(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "daemon.db")
 	seedTemplateStore(t, dbPath)
@@ -552,6 +557,7 @@ func TestControlRejectsAnotherDatabaseAtSocket(t *testing.T) {
 }
 
 func TestControlArgumentNormalizationPreservesValues(t *testing.T) {
+	t.Parallel()
 	args := []string{"record-defect", "-db", "relative.db", "-reason", "-db=notes", "--"}
 	got := canonicalControlArgs(args, "/canonical/db")
 	if got[len(got)-2] != "-db" || got[len(got)-1] != "/canonical/db" || got[4] != "-db=notes" || args[2] != "relative.db" {
@@ -564,6 +570,7 @@ type controlRoundTrip func(*http.Request) (*http.Response, error)
 func (f controlRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestControlClientUsesCallerDeadline(t *testing.T) {
+	t.Parallel()
 	for _, deadline := range []time.Duration{0, 10 * time.Second} {
 		t.Run(deadline.String(), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -604,6 +611,7 @@ func TestControlClientUsesCallerDeadline(t *testing.T) {
 }
 
 func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	recipeA := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	recipeB := domain.Digest("sha256:" + strings.Repeat("b", 64))
@@ -720,6 +728,7 @@ func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
 }
 
 func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	target := filepath.Join(root, "target.db")
 	alias := filepath.Join(root, "alias.db")
@@ -806,6 +815,7 @@ func TestControlServesExecutionMode(t *testing.T) {
 // reads as "not running": an advertisement whose socket is gone, or a daemon
 // that does not serve the read, is an error the composition check fails on.
 func TestProdExecutionProbeFailsClosed(t *testing.T) {
+	t.Parallel()
 	host := newProductionRigHost()
 	t.Run("no advertisement", func(t *testing.T) {
 		mode, running, err := host.ProdExecution(t.Context(), filepath.Join(t.TempDir(), "freeside.db"))

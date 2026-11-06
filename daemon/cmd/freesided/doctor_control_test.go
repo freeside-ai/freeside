@@ -19,6 +19,7 @@ import (
 )
 
 func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	target := filepath.Join(root, "target.db")
 	dbPath := filepath.Join(root, "alias.db")

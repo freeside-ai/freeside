@@ -217,6 +217,7 @@ func TestEnvironmentPorts(t *testing.T) {
 }
 
 func TestUnderRootAcceptsAPFSFirmlinkAlias(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("APFS firmlinks are macOS-specific")
 	}
@@ -301,6 +302,7 @@ func TestEnvironmentSupervised(t *testing.T) {
 }
 
 func TestEnvironmentAccountHomeIgnoresHOME(t *testing.T) {
+	t.Parallel()
 	accountHome, err := currentAccountHome()
 	if err != nil {
 		t.Fatal(err)
@@ -321,6 +323,7 @@ func TestEnvironmentAccountHomeIgnoresHOME(t *testing.T) {
 }
 
 func TestEnvironmentAccountHomeIgnoresHOMEProcess(t *testing.T) {
+	t.Parallel()
 	accountHome := os.Getenv("FREESIDE_TEST_ACCOUNT_HOME")
 	if accountHome == "" {
 		return

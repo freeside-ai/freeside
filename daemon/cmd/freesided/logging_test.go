@@ -13,6 +13,7 @@ import (
 )
 
 func TestNewLoggerAcceptsTheDocumentedLevels(t *testing.T) {
+	t.Parallel()
 	for _, level := range []string{"debug", "info", "warn", "error", "DEBUG", "Info"} {
 		if _, err := newLogger(&bytes.Buffer{}, level); err != nil {
 			t.Errorf("newLogger(%q): %v", level, err)
@@ -27,6 +28,7 @@ func TestNewLoggerAcceptsTheDocumentedLevels(t *testing.T) {
 }
 
 func TestLogEffectiveReviewConfigurationEmitsTheRecoveryPinOnce(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	logger, err := newLogger(&out, defaultLogLevel)
 	if err != nil {
@@ -50,6 +52,7 @@ func TestLogEffectiveReviewConfigurationEmitsTheRecoveryPinOnce(t *testing.T) {
 // a recurring GitHub failure in the quarter-hour loop has to arrive with a
 // severity an operator can filter on, not as a bare stderr line.
 func TestReconcilerLogsAPassFailureAtError(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	logger, err := newLogger(&out, defaultLogLevel)
 	if err != nil {
@@ -81,6 +84,7 @@ func TestReconcilerLogsAPassFailureAtError(t *testing.T) {
 // rather than around them. Both shapes are checked, since slog treats an
 // error value and an attribute value by different paths.
 func TestNoCredentialReachesALogRecord(t *testing.T) {
+	t.Parallel()
 	const token = "ghs_liveinstallationtokenvalue"
 	secret := publish.Secret(token)
 

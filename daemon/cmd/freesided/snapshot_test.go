@@ -66,6 +66,7 @@ func TestSnapshotRejectsBadArguments(t *testing.T) {
 // second handle on its own file, and the snapshot it writes opens while the
 // live file refuses every other handle.
 func TestSnapshotThroughExclusiveDaemon(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
 	seedTemplateStore(t, dbPath)

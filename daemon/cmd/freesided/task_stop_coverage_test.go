@@ -21,6 +21,7 @@ import (
 )
 
 func TestUnprovableTaskStopFollowsTheCoverageRecord(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	storetest.Copy(t, path)
@@ -186,6 +187,7 @@ func TestDeputyTaskCoverageRefusesAHeldLock(t *testing.T) {
 // source: the record opens after the stale manifest is removed and before
 // the self-check writes this start's manifest.
 func TestRunDeputyOpensCoverageBeforeTheSelfCheck(t *testing.T) {
+	t.Parallel()
 	file, err := parser.ParseFile(token.NewFileSet(), "deputy.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)

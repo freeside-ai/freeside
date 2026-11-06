@@ -95,6 +95,7 @@ func (b *lockedBuffer) String() string {
 }
 
 func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	var logs lockedBuffer
 	logger, err := newLogger(&logs, defaultLogLevel)
@@ -216,6 +217,7 @@ func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 }
 
 func TestRunServesSignetAndStops(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
@@ -252,6 +254,7 @@ func TestRunServesSignetAndStops(t *testing.T) {
 }
 
 func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	cfg := config{
@@ -304,6 +307,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 // upgraded in place (#430). Every attempt starts, and backup health carries
 // the refusal that holds unattended work.
 func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	seedTemplateStore(t, dbPath)
@@ -429,6 +433,7 @@ func TestScheduledDoctorPassRefreshesConformanceBeforeReporting(t *testing.T) {
 }
 
 func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
@@ -671,6 +676,7 @@ func TestStartupSessionCleanupTransfersOnlyAfterSuccess(t *testing.T) {
 }
 
 func TestRunPairsFreshDevice(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
@@ -739,6 +745,7 @@ func TestRunPairsFreshDevice(t *testing.T) {
 }
 
 func TestTopicKeyPersistsAndRejectsUntrustedFiles(t *testing.T) {
+	t.Parallel()
 	t.Run("persists privately", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		first, err := loadOrCreateTopicKey(dbPath, false)
@@ -1077,6 +1084,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 // walking-skeleton seed gate: an explicitly selected fake driver seeds no demo
 // work without the seed flag. The default disabled mode is tested separately.
 func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
@@ -1128,6 +1136,7 @@ func waitForItem(t *testing.T, attention *signet.Service, id domain.ItemID) sign
 }
 
 func TestListenPrivileged(t *testing.T) {
+	t.Parallel()
 	listener, err := listenPrivileged("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listenPrivileged(loopback): %v", err)
@@ -1147,6 +1156,7 @@ func TestListenPrivileged(t *testing.T) {
 }
 
 func TestListenPrivilegedRejectsBeforeBind(t *testing.T) {
+	t.Parallel()
 	bindCalled := false
 	_, err := listenPrivilegedWith(
 		"0.0.0.0:0",
@@ -1171,6 +1181,7 @@ func TestListenPrivilegedRejectsBeforeBind(t *testing.T) {
 // the two address classes listenPrivilegedWith admits, and refuses anything
 // else rather than inventing a mode.
 func TestConnectionModeOfBoundListener(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		addr string
 		want domain.ConnectionMode
@@ -1274,6 +1285,7 @@ func TestSameHostReadinessFile(t *testing.T) {
 }
 
 func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
+	t.Parallel()
 	for _, addr := range []string{"100.64.0.7:8443", "[fd7a:115c:a1e0::7]:8443"} {
 		t.Run(addr, func(t *testing.T) {
 			resolved, err := net.ResolveTCPAddr("tcp", addr)
@@ -1333,6 +1345,7 @@ func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
 }
 
 func TestLoopbackTwinAddr(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		in   *net.TCPAddr
@@ -1365,6 +1378,7 @@ func TestLoopbackTwinAddr(t *testing.T) {
 }
 
 func TestListenLoopbackTwin(t *testing.T) {
+	t.Parallel()
 	// A loopback primary needs no twin, and the binder is never called.
 	twin, err := listenLoopbackTwin(
 		&listenerStub{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8443}},
@@ -1445,6 +1459,7 @@ func TestListenLoopbackTwin(t *testing.T) {
 // TestServeTwoLoopbackListenersFromOneServer pins the property the twin relies
 // on: one http.Server serves both listeners and Shutdown closes them both.
 func TestServeTwoLoopbackListenersFromOneServer(t *testing.T) {
+	t.Parallel()
 	first, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1497,6 +1512,7 @@ func TestServeTwoLoopbackListenersFromOneServer(t *testing.T) {
 }
 
 func TestParseTailscaleIPs(t *testing.T) {
+	t.Parallel()
 	got, err := parseTailscaleIPs("100.64.0.7\nfd7a:115c:a1e0::7\n")
 	if err != nil {
 		t.Fatalf("parseTailscaleIPs: %v", err)
@@ -1525,6 +1541,7 @@ func TestParseTailscaleIPs(t *testing.T) {
 }
 
 func TestRunRefusesNonLoopbackBeforeCreatingState(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	driverDir := filepath.Join(t.TempDir(), "driver")
 	h, err := run(context.Background(), nil, config{
@@ -1673,6 +1690,7 @@ func (j *stubJanitorRunner) PendingReady(publish.PendingInstallationEnvelope) (i
 }
 
 func TestJanitorSessionPrimesCoverageSynchronously(t *testing.T) {
+	t.Parallel()
 	janitor := &stubJanitorRunner{}
 	session, err := startJanitorSession(t.Context(), janitor, []int64{4385298})
 	if err != nil {
@@ -1700,6 +1718,7 @@ func TestJanitorSessionPrimesCoverageSynchronously(t *testing.T) {
 }
 
 func TestJanitorSessionReturnsStartupFailure(t *testing.T) {
+	t.Parallel()
 	want := errors.New("janitor failed")
 	_, err := startJanitorSession(
 		t.Context(), &stubJanitorRunner{runErr: want}, []int64{4385298},
@@ -1710,6 +1729,7 @@ func TestJanitorSessionReturnsStartupFailure(t *testing.T) {
 }
 
 func TestJanitorSessionReportsMissingCoverageWithFaults(t *testing.T) {
+	t.Parallel()
 	fault := errors.New("registration denied")
 	janitor := &stubJanitorRunner{
 		faults: []publish.JanitorRegistrationFault{{RegistrationID: 4385298, Err: fault}},
@@ -1724,6 +1744,7 @@ func TestJanitorSessionReportsMissingCoverageWithFaults(t *testing.T) {
 }
 
 func TestJanitorSessionReportsEveryMissingCoverageCause(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		janitor *stubJanitorRunner

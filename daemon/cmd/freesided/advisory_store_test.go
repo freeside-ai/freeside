@@ -16,6 +16,7 @@ import (
 // site's whole output, and nothing larger (#2482). It is opened through the
 // helper main uses, over the sites main registers.
 func TestAdvisoryStoreAdmitsEverySiteWholeOutput(t *testing.T) {
+	t.Parallel()
 	sites := judgmentTestSites()
 	store, err := openAdvisoryStore(t.TempDir(), sites)
 	if err != nil {
