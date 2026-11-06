@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -367,6 +368,66 @@ func (tx *WriteTx) AdmitTaskStart(ctx context.Context, runID domain.RunID, recor
 		return ErrTaskAdmissionRequired
 	}
 	return tx.recordTaskStart(ctx, runID, recordedAt, true, wipCap)
+}
+
+// RecordTaskStartAfterRelease records a fresh start for a run whose own newest
+// start was released by its bound abandonment before the run launched (#1770):
+// label intake releases an admitted start whose proposal was never decided,
+// and the card can still be started later. RecordTaskStart refuses such a task
+// and AdmitTaskStart refuses a second admission of the run, so this is the
+// only way that run takes a slot again. The caller vouches that the run never
+// launched. The bound abandonment is the same fact `freesided abandon`
+// records before it closes the episode, so a decided start an operator
+// abandoned whose closure has not committed also restarts here (#2696).
+// A closed workflow episode, a cancellation fence, or any other
+// lifecycle state still refuses. A task that holds its slot records nothing,
+// so replay converges. The source id names the abandonment it follows, so it
+// never collides with the run's first start or an earlier restart.
+func (tx *WriteTx) RecordTaskStartAfterRelease(ctx context.Context, runID domain.RunID, recordedAt time.Time) error {
+	run, err := tx.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.TaskID == "" {
+		return nil
+	}
+	task, err := tx.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return err
+	}
+	if task.Cancellation != nil {
+		return ErrTaskCancellationFenced
+	}
+	if err := tx.RequireRunWorkflowOpen(ctx, runID); err != nil {
+		return err
+	}
+	if domain.TaskWIP(task) {
+		return nil
+	}
+	start := task.CurrentStart()
+	if start == nil || start.RunID != runID {
+		return ErrTaskAdmissionRequired
+	}
+	var release *domain.TaskLifecycleFact
+	for _, fact := range task.LifecycleFacts {
+		if fact.Ordinal > start.Ordinal && fact.Kind == domain.TaskLifecycleAbandoned &&
+			fact.RunID == runID && fact.SourceID == abandonSourceID(*start) {
+			release = &fact
+		}
+	}
+	if release == nil {
+		return ErrTaskAdmissionRequired
+	}
+	var campaign *domain.CampaignID
+	if run.CampaignID != "" {
+		c := run.CampaignID
+		campaign = &c
+	}
+	return tx.RecordTaskLifecycleFact(ctx, run.TaskID, domain.TaskLifecycleFact{
+		Kind: domain.TaskLifecycleStarted, RunID: run.ID, CampaignID: campaign,
+		SourceID:   "start:" + string(run.ID) + ":after:" + strconv.Itoa(release.Ordinal),
+		RecordedAt: recordedAt.UTC(),
+	})
 }
 
 func (tx *WriteTx) recordTaskStart(ctx context.Context, runID domain.RunID, recordedAt time.Time, admission bool, wipCap int) error {
