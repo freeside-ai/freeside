@@ -275,6 +275,7 @@ func (g *draftFakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) 
 // all) leaves the draft state untouched (nil), so a default-policy PR opens
 // mergeable (plan revision 68, issue #1419).
 func TestDesiredDraftStateFromClosure(t *testing.T) {
+	t.Parallel()
 	draft := closureResolution{managed: true, outcome: domain.ClosureOutcome{Hold: domain.ClosureHoldDraft}}
 	if got := desiredDraftState(draft); got == nil || !*got {
 		t.Errorf("managed draft hold: desiredDraftState = %v, want *true", got)
@@ -294,6 +295,7 @@ func TestDesiredDraftStateFromClosure(t *testing.T) {
 }
 
 func TestForgeCreatePRDraftFlag(t *testing.T) {
+	t.Parallel()
 	for _, draft := range []bool{true, false} {
 		f, g, repo := newDraftFake(t)
 		g.refs["feat/x"] = draftTestHeadSHA
@@ -319,6 +321,7 @@ func TestForgeCreatePRDraftFlag(t *testing.T) {
 // convergence report the hold released without evidence. The pointer guard at
 // each site must fail closed instead.
 func TestForgePRDraftFieldFailsClosedWhenAbsent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("create", func(t *testing.T) {
@@ -358,6 +361,7 @@ func TestForgePRDraftFieldFailsClosedWhenAbsent(t *testing.T) {
 }
 
 func TestForgeSetPRDraftTogglesState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f, g, repo := newDraftFake(t)
 	g.refs["feat/x"] = draftTestHeadSHA
@@ -386,6 +390,7 @@ func TestForgeSetPRDraftTogglesState(t *testing.T) {
 }
 
 func TestForgeSetPRDraftReturnedObjectFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := map[string]func(*draftFakeGitHub){
 		"graphql errors":      func(g *draftFakeGitHub) { g.graphErrors = true },
@@ -429,6 +434,7 @@ func TestForgeSetPRDraftReturnedObjectFailsClosed(t *testing.T) {
 func managedDraft(b bool) *bool { return &b }
 
 func TestConvergePRDraftHold(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	id, err := DeriveIdentity(IdentityInput{
 		Repo:            "owner/name",

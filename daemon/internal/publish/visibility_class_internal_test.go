@@ -10,6 +10,7 @@ import (
 // closed on an untrusted returned object: a partial or empty body, or a
 // contradictory pair, is an error rather than the least restrictive class.
 func TestClassForRepositoryVisibility(t *testing.T) {
+	t.Parallel()
 	boolp := func(b bool) *bool { return &b }
 	valid := map[string]struct {
 		resp repoVisibilityResponse

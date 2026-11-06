@@ -112,6 +112,7 @@ func (h *replyHarness) recordReplyHistory(i externalReplyIntent, code string) {
 }
 
 func TestExternalReviewReplierHistoryCollectionBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name           string
 		current, prior string
@@ -165,6 +166,7 @@ func TestExternalReviewReplierHistoryCollectionBoundaries(t *testing.T) {
 }
 
 func TestExternalReviewReplierPriorAmbiguityAllowsProvenCreate(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarnessThreads(t, "review/42", "review/43", domain.ReviewDispositionDeclined, "Already checked.")
 	h.status = http.StatusInternalServerError
 	h.pass()
@@ -184,6 +186,7 @@ func TestExternalReviewReplierPriorAmbiguityAllowsProvenCreate(t *testing.T) {
 }
 
 func TestExternalReviewReplierSerializesRenamedRepository(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	prior := seedReplyBindingIn(t, h.f.st, replyBindingSeed{"earlier-run", "former-owner/former-repo", 424242, 450}, "feat/earlier-reply", h.f.binding.HeadSHA, h.f.binding.HeadSHA)
 	i := historyReplyIntent(prior.binding, "review/99", h.now)
@@ -224,6 +227,7 @@ func (h *replyHarness) damageReplyHistory(query string, args ...any) {
 }
 
 func TestExternalReviewReplierDamagedHistoryNeverAdopts(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []string{"missing intent", "missing binding", "invalid binding", "run", "repository", "pull request", "head", "thread", "finding key", "round key", "intent kind", "malformed outcome", "outcome key", "unreadable row"} {
 		t.Run(tc, func(t *testing.T) {
 			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
@@ -306,6 +310,7 @@ func TestExternalReviewReplierDamagedHistoryNeverAdopts(t *testing.T) {
 }
 
 func TestExternalReviewReplierHistoryReadFailure(t *testing.T) {
+	t.Parallel()
 	h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
 	h.pass()
 	i := h.intent()
@@ -318,6 +323,7 @@ func TestExternalReviewReplierHistoryReadFailure(t *testing.T) {
 }
 
 func TestExternalReviewReplierDoesNotAdoptPriorAmbiguousReply(t *testing.T) {
+	t.Parallel()
 	for _, threads := range [][2]string{{"review/42", "review/43"}, {"review_comment/43", "review_comment/43"}} {
 		for _, restart := range []bool{false, true} {
 			name := threads[0] + "/live"

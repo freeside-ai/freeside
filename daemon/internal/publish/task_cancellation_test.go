@@ -33,10 +33,12 @@ func stopPublicationTask(t *testing.T, st *store.Store, runID domain.RunID) {
 }
 
 func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
+	t.Parallel()
 	testTaskPublicationBoundaryOrder(t, false)
 }
 
 func TestTaskWorkflowClosurePublicationBoundaryOrder(t *testing.T) {
+	t.Parallel()
 	testTaskPublicationBoundaryOrder(t, true)
 }
 
@@ -166,10 +168,12 @@ func testTaskPublicationBoundaryOrder(t *testing.T, workflowClosure bool) {
 // mutation must re-check the durable fence and fail closed, never releasing the
 // hold on a cancelled task's PR after the batch's first fence check.
 func TestTaskCancellationFencesDraftMutationAfterContentPatch(t *testing.T) {
+	t.Parallel()
 	testTaskFenceDraftMutationAfterContentPatch(t, false)
 }
 
 func TestTaskWorkflowClosureFencesDraftMutationAfterContentPatch(t *testing.T) {
+	t.Parallel()
 	testTaskFenceDraftMutationAfterContentPatch(t, true)
 }
 
@@ -240,10 +244,12 @@ func testTaskFenceDraftMutationAfterContentPatch(t *testing.T, workflowClosure b
 }
 
 func TestTaskCancellationObservesUnrecordedPublishedPR(t *testing.T) {
+	t.Parallel()
 	testTaskFenceObservesUnrecordedPublishedPR(t, false)
 }
 
 func TestTaskWorkflowClosureObservesUnrecordedPublishedPR(t *testing.T) {
+	t.Parallel()
 	testTaskFenceObservesUnrecordedPublishedPR(t, true)
 }
 
@@ -253,6 +259,7 @@ func TestTaskWorkflowClosureObservesUnrecordedPublishedPR(t *testing.T) {
 // engine paces attempts, so one GitHub request per attempt is what bounds the
 // calls, and the sentinel is what the engine counts toward a durable hold.
 func TestTaskWorkflowClosureUnsettledByForeignPR(t *testing.T) {
+	t.Parallel()
 	head := testHeadSHA
 	st := newExecutionBoundStore(t, executionChainOptions{})
 	seedDecisionRecords(t, st)

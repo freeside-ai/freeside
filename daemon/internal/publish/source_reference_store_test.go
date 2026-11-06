@@ -182,6 +182,7 @@ func seedForeignRunPolicy(t *testing.T, s *store.Store, runID domain.RunID) {
 // candidate's own merge. This closes the reconstruction/exported-struct gap where
 // a spoofed ClosureInstanceID would emit Closes for the other run's issue.
 func TestResolveClosureForeignInstanceFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureFixture(t, "run-owner", "")
 	// Record a policy approval for the owner run's instance against the merge the
@@ -208,6 +209,7 @@ func TestResolveClosureForeignInstanceFailsClosed(t *testing.T) {
 // pins the default-policy invariant that the pull request is never managed as a
 // draft.
 func TestResolveClosureDefaultPolicyWritesClosesFromRecordedApproval(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureFixture(t, "run-closes", "")
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -241,6 +243,7 @@ func TestResolveClosureDefaultPolicyWritesClosesFromRecordedApproval(t *testing.
 // TestResolveClosureWithoutApprovalWritesRefs proves the publisher never reads a
 // close from the candidate: with no recorded approval the matrix yields Refs.
 func TestResolveClosureWithoutApprovalWritesRefs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureFixture(t, "run-refs", "")
 	res, err := f.publisher.resolveClosure(ctx, f.candidate, f.identity)
@@ -256,6 +259,7 @@ func TestResolveClosureWithoutApprovalWritesRefs(t *testing.T) {
 // earlier approval: an approval bound to a different base SHA does not authorize
 // a close for the merge the publisher observes now.
 func TestResolveClosureStaleApprovalWritesRefs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureFixture(t, "run-stale", "")
 	stale := f.merge
@@ -281,6 +285,7 @@ func TestResolveClosureStaleApprovalWritesRefs(t *testing.T) {
 // current merge, the publisher manages the draft state and holds the pull
 // request draft, referencing the issue while it is undecided.
 func TestResolveClosureHumanGateHoldsDraftUntilDecided(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := seedClosureFixture(t, "run-gate", "true")
 	blobs, err := signet.NewBlobStore(t.TempDir())

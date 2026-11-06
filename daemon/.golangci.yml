@@ -102,7 +102,6 @@ linters:
           |internal/pathfold\
           |internal/procbound\
           |internal/publicationtext\
-          |internal/publish\
           |internal/repotemplate\
           |internal/scheduler\
           |internal/seedfixture\

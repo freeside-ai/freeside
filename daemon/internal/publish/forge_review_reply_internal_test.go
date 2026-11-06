@@ -13,6 +13,7 @@ import (
 )
 
 func TestReviewReplyForgeCalls(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		repo repoRef
@@ -62,6 +63,7 @@ func TestReviewReplyForgeCalls(t *testing.T) {
 }
 
 func TestReviewReplyRejectsIncompleteCommentIdentities(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{`{}`, `{"id":1}`, `{"id":1,"user":{"id":2,"type":"Bot"}}`, `{"id":1,"user":{"id":2,"type":"Bot"},"created_at":"invalid"}`} {
 		t.Run(body, func(t *testing.T) {
 			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +93,7 @@ func TestReviewReplyRejectsIncompleteCommentIdentities(t *testing.T) {
 }
 
 func TestReviewReplyRejectsPaginationOntoAnotherPullRequest(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/repos/owner/repo/issues/7/comments" {
 			w.Header().Set("Link", fmt.Sprintf(`<http://%s/repos/owner/repo/issues/8/comments>; rel="next"`, r.Host))
@@ -113,6 +116,7 @@ func TestReviewReplyRejectsPaginationOntoAnotherPullRequest(t *testing.T) {
 // Compare the extracted classifier against the old status table over every
 // HTTP status, body presence, transport outcome, and rate-limit header form.
 func TestSharedCreateClassifierPreservesFilingDecisions(t *testing.T) {
+	t.Parallel()
 	for status := 100; status < 600; status++ {
 		for _, decoded := range []bool{false, true} {
 			for _, header := range []http.Header{nil, {"X-Ratelimit-Remaining": {"0"}}, {"Retry-After": {"1"}}, {"X-Ratelimit-Remaining": {"1"}}} {

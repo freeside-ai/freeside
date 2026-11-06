@@ -234,6 +234,7 @@ func assertHeldAfterRestart(t *testing.T, h *holdFixture) {
 // mint: whatever the first daemon saw, a restarted daemon refuses to mint
 // until the deadline and holds no token.
 func TestJanitorMintHoldSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		mintStatus, revokeStatus int
 		dropMint                 bool
@@ -276,6 +277,7 @@ func TestJanitorMintHoldSurvivesRestart(t *testing.T) {
 // crash after the hold write and before the request leaves, or after a
 // proven revoke and before the release, would leave it.
 func TestJanitorSeededMintHoldIsHonored(t *testing.T) {
+	t.Parallel()
 	f := &heldTokenForge{now: fixedNow()}
 	h := newHoldFixture(t, f)
 	h.seed(t, fixedNow().Add(69*time.Minute))
@@ -283,6 +285,7 @@ func TestJanitorSeededMintHoldIsHonored(t *testing.T) {
 }
 
 func TestJanitorExpiredMintHoldIsReleased(t *testing.T) {
+	t.Parallel()
 	f := &heldTokenForge{now: fixedNow()}
 	h := newHoldFixture(t, f)
 	h.seed(t, fixedNow().Add(-time.Nanosecond))
@@ -304,6 +307,7 @@ func TestJanitorExpiredMintHoldIsReleased(t *testing.T) {
 // TestJanitorMintRefusalReleasesHold: a 4xx proves no token was created, so
 // the registration is not held for the token lifetime.
 func TestJanitorMintRefusalReleasesHold(t *testing.T) {
+	t.Parallel()
 	f := &heldTokenForge{now: fixedNow(), mintStatus: http.StatusForbidden}
 	h := newHoldFixture(t, f)
 	j, _ := h.start(t)
@@ -347,6 +351,7 @@ func memoryHoldJanitor(t *testing.T, f *heldTokenForge, holds *memoryMintHolds) 
 // or read stops the pass as the daemon's own safety failure before any mint
 // request, and a hold that cannot be released stays held.
 func TestJanitorMintHoldStoreFailuresFailClosed(t *testing.T) {
+	t.Parallel()
 	storeErr := errors.New("disk full")
 	for _, failure := range []string{"record", "read"} {
 		t.Run(failure, func(t *testing.T) {
@@ -386,6 +391,7 @@ func TestJanitorMintHoldStoreFailuresFailClosed(t *testing.T) {
 // TestJanitorCanceledBeforeMintReleasesHold: a pass canceled after the hold
 // write sends no request, so it must not leave the installation held.
 func TestJanitorCanceledBeforeMintReleasesHold(t *testing.T) {
+	t.Parallel()
 	f := &heldTokenForge{now: fixedNow()}
 	ctx, cancel := context.WithCancel(t.Context())
 	holds := &cancelOnRecordHolds{memoryMintHolds: newMemoryMintHolds(), cancel: cancel}
@@ -426,6 +432,7 @@ func (c *cancelOnRecordHolds) RecordInstallationMintHold(hold publish.Installati
 // installation across the restart with no token in existence. The request
 // finishes, the token is revoked, and the hold is released.
 func TestJanitorCanceledAtMintDispatchFinishesRequest(t *testing.T) {
+	t.Parallel()
 	f := &heldTokenForge{now: fixedNow()}
 	ctx, cancel := context.WithCancel(t.Context())
 	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) })))
@@ -465,6 +472,7 @@ func (c cancelAtMintTransport) RoundTrip(r *http.Request) (*http.Response, error
 }
 
 func TestJanitorMintHoldExpiresAndResolutionRecovers(t *testing.T) {
+	t.Parallel()
 	f := &heldTokenForge{now: fixedNow(), mintStatus: http.StatusInternalServerError}
 	j, resolver := holdTestJanitor(t, f)
 	err := j.RunScheduledPass(t.Context())
@@ -511,6 +519,7 @@ func TestJanitorMintHoldExpiresAndResolutionRecovers(t *testing.T) {
 }
 
 func TestJanitorRevokeHoldRetriesBeforeMintAndExpires(t *testing.T) {
+	t.Parallel()
 	for _, recoverRevoke := range []bool{true, false} {
 		t.Run(fmt.Sprintf("revoke-recovers-%t", recoverRevoke), func(t *testing.T) {
 			f := &heldTokenForge{now: fixedNow(), revokeStatus: http.StatusInternalServerError}

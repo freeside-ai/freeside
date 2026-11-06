@@ -12,6 +12,7 @@ import (
 // or defer prints the entry's rationale without the disposition reason's
 // adjudication digest; a person's prints neither (#2349).
 func TestExternalReviewReplyTextGolden(t *testing.T) {
+	t.Parallel()
 	const rationale = "The <input> is already checked by `Validate`."
 	// "human-" is a decision made before reasons existed, whose rationale is
 	// the placeholder; "human-reason-" carries the person's own reason.
@@ -54,6 +55,7 @@ func TestExternalReviewReplyTextGolden(t *testing.T) {
 }
 
 func TestExternalReviewReplyTextRefusesUnsafeReasonsAndThreads(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"@codex review", "Closes #42", "/run deploy", "<!-- freeside:test -->", strings.Repeat("x", externalReplyReasonLimit+1)} {
 		_, err := externalReviewReplyText(domain.ExternalFindingDisposition{Disposition: domain.ReviewDispositionDeclined, Reason: reason}, nil, externalReplyThread{root: 42}, domain.ReadyItemPRBinding{}, domain.IssueTextRulesetGitHubIssue1)
 		if err == nil || strings.Contains(err.Error(), reason) {

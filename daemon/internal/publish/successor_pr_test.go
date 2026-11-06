@@ -9,6 +9,7 @@ import (
 )
 
 func TestSuccessorPRRecoveryCoordinates(t *testing.T) {
+	t.Parallel()
 	old := Identity{digest: domain.Digest("sha256:" + strings.Repeat("a", 64))}
 	current := Identity{digest: domain.Digest("sha256:" + strings.Repeat("b", 64))}
 	foreign := Identity{digest: domain.Digest("sha256:" + strings.Repeat("c", 64))}

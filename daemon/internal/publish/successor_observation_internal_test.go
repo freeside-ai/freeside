@@ -16,6 +16,7 @@ import (
 // after a push (#1544). The two lagging shapes are pending, not conflicts;
 // every other disagreement stays the immediate refusal it was.
 func TestSuccessorPRObservationPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	old := Identity{digest: domain.Digest("sha256:" + strings.Repeat("a", 64))}
 	current := Identity{digest: domain.Digest("sha256:" + strings.Repeat("b", 64))}
