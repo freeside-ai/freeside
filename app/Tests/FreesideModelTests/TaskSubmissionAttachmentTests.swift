@@ -101,6 +101,45 @@ import Testing
         #expect(restored.pendingTaskSubmissions.isEmpty)
     }
 
+    @Test func aFolderUploadsEveryFileAndRetryResendsTheSavedCommand() async throws {
+        var draft = TaskAttachmentDraft()
+        _ = draft.add(name: "design", claimedMediaType: "text/plain", bytes: Self.notes)
+        _ = draft.addFolder(
+            name: "design",
+            files: [
+                FolderFile(path: "brief.md", claimedMediaType: "text/markdown", bytes: Data("brief".utf8)),
+                FolderFile(path: "screens/home.png", claimedMediaType: "image/png", bytes: Self.png),
+            ])
+        let names = ["design", "design 2/brief.md", "design 2/screens/home.png"]
+        #expect(draft.items.map(\.name) == names)
+
+        let f = fixture()
+        let operations = OperationLog()
+        let down = InjectedFailures(times: 1)
+        await f.server.setBeforeRespond { operation in
+            await operations.append(operation)
+            if operation == "uploadAttachment" { try await down.consume() }
+        }
+        #expect(await f.model.submit(projectID: "project-1", source: "Match the handoff.", attachments: draft) == nil)
+        let saved = try #require(f.coordinator.pendingTaskSubmissions.values.first)
+        guard case .submit_task(let payload) = saved.payload else {
+            Issue.record("expected a submit_task command")
+            return
+        }
+        #expect(payload.attachments?.map(\.name) == names)
+
+        let taskID = try #require(await f.model.retry())
+        let issued = await operations.ids
+        // One failed upload, then all three on Retry, then the command.
+        #expect(issued.filter { $0 == "uploadAttachment" }.count == 4)
+        #expect(issued.filter { $0 == "submitCommand" }.count == 1)
+        let task = try #require(f.coordinator.tasks.first { $0.task.id == taskID }).task
+        #expect(task.attachments.map(\.name) == names)
+        #expect(task.attachments.map(\.digest) == draft.items.map(\.digest))
+        #expect(f.coordinator.pendingTaskSubmissions.isEmpty)
+        #expect(f.saved.storedDigests().isEmpty)
+    }
+
     @Test func aRetryAfterALostResponseReuploadsStoredDigestsAsANoOp() async throws {
         let f = fixture()
         let lost = InjectedFailures(times: 1)

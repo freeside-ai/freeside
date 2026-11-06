@@ -65,4 +65,24 @@ import Testing
         #expect(payload.name == nil)
         #expect(payload.task_lines == AgentChoiceDisplay.taskLines(choices: choices))
     }
+
+    @Test func aRepositoryPathGoesAtTheEndAfterASpace() {
+        #expect(NewTaskSheet.appendingPath("docs/design/", to: "") == "docs/design/")
+        #expect(NewTaskSheet.appendingPath("docs/design/", to: "Match") == "Match docs/design/")
+        #expect(NewTaskSheet.appendingPath("docs/design/", to: "Match ") == "Match docs/design/")
+        #expect(NewTaskSheet.appendingPath("docs/design/", to: "Match\n") == "Match\ndocs/design/")
+    }
+
+    @Test func aFolderRowSummarizesItsFiles() {
+        let files: [Components.Schemas.TaskAttachment] = [
+            .init(
+                digest: "sha256:" + String(repeating: "a", count: 64), name: "design/a.txt",
+                media_type: .application_sol_octet_hyphen_stream, claimed_media_type: "text/plain", size_bytes: 1000),
+            .init(
+                digest: "sha256:" + String(repeating: "b", count: 64), name: "design/b.txt",
+                media_type: .application_sol_octet_hyphen_stream, claimed_media_type: "text/plain", size_bytes: 1000),
+        ]
+        #expect(TaskPageView.folderSummary(files) == "2 files · \(ComposerAttachmentChip.size(2000))")
+        #expect(TaskPageView.folderSummary(Array(files.prefix(1))).hasPrefix("1 file · "))
+    }
 }

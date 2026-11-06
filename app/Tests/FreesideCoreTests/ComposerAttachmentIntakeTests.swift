@@ -36,14 +36,35 @@ import UniformTypeIdentifiers
         return output as Data
     }
 
-    @Test func aFolderIsRefusedByName() throws {
+    private func file(at url: URL) -> ComposerAttachmentIntake.Item {
+        ComposerAttachmentIntake.file(at: url, repository: nil, held: TaskAttachmentDraft().usage)
+    }
+
+    @Test func aPackageIsRefusedByName() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let folder = root.appendingPathComponent("screens", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let package = root.appendingPathComponent("Tool.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
         #expect(
-            ComposerAttachmentIntake.file(at: folder) == .refused("screens is a folder. Folders aren't supported yet."))
+            file(at: package)
+                == .refused("Tool.app is a package, such as an app or a document bundle, and can't be attached."))
     }
+
+    #if os(macOS)
+        @Test func aFolderIsWalkedOnTheMac() throws {
+            let root = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let folder = root.appendingPathComponent("screens", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data("a".utf8).write(to: folder.appendingPathComponent("a.txt"))
+            #expect(
+                file(at: folder)
+                    == .folder(
+                        name: "screens",
+                        files: [FolderFile(path: "a.txt", claimedMediaType: "text/plain", bytes: Data("a".utf8))],
+                        skippedLinks: []))
+        }
+    #endif
 
     @Test func aFileOverTheFileLimitIsRefusedFromItsSize() throws {
         let root = try temporaryDirectory()
@@ -55,7 +76,7 @@ import UniformTypeIdentifiers
         try handle.truncate(atOffset: UInt64(TaskAttachmentLimits.maxFileBytes + 1))
         try handle.close()
         #expect(
-            ComposerAttachmentIntake.file(at: url) == .refused("dump.bin is 32.1 MiB; a file can be at most 32 MiB."))
+            file(at: url) == .refused("dump.bin is 32.1 MiB; a file can be at most 32 MiB."))
     }
 
     @Test func aFileKeepsItsNameAndClaimsItsType() throws {
@@ -64,7 +85,7 @@ import UniformTypeIdentifiers
         let url = root.appendingPathComponent("crash.log")
         let bytes = Data("panic".utf8)
         try bytes.write(to: url)
-        guard case .attachment(let name, let claim, let read) = ComposerAttachmentIntake.file(at: url) else {
+        guard case .attachment(let name, let claim, let read) = file(at: url) else {
             Issue.record("crash.log wasn't read")
             return
         }

@@ -89,6 +89,9 @@ struct TaskPageView: View {
     /// The specification the documents line opened, presented outside the
     /// lazy stack for the same reason.
     @State private var documentRequest: TaskDocumentRequest?
+    /// The attached folders the operator opened, by name; each starts
+    /// folded.
+    @State private var openAttachmentFolders: Set<String> = []
     /// Keeps the reader's place for a page mounting again for this task,
     /// and counts the cards the operator opens. Nil in a screenshot and in
     /// tests that don't exercise it.
@@ -837,28 +840,65 @@ struct TaskPageView: View {
     /// The files and images the operator attached when submitting (#2590),
     /// in submitted order; absent when there are none. Images render inline
     /// through the attachment loader. The daemon never deletes task
-    /// attachment bytes, so each reference is available.
+    /// attachment bytes, so each reference is available. A folder's files
+    /// (#2591) fold under one row with its file count and total size, so a
+    /// large folder loads nothing until opened.
     @ViewBuilder private var attachmentsSection: some View {
         let attachments = snapshot.task.attachments
         if !attachments.isEmpty {
             VStack(alignment: .leading, spacing: 11) {
                 KeywordLabel(text: "Attachments")
-                ForEach(attachments, id: \.name) { attachment in
-                    DecisionDetailView.AttachmentRow(
-                        label: attachment.name,
-                        digest: attachment.digest,
-                        reference: AttachmentReference(
-                            mediaType: attachment.media_type.rawValue,
-                            sizeBytes: Int(clamping: attachment.size_bytes),
-                            availability: .available),
-                        attachments: coordinator.store.attachments,
-                        loadsAttachments: screenshotTimeline == nil,
-                        rendersInteractiveControls: screenshotTimeline == nil,
-                        boxed: true)
+                ForEach(AttachmentGroup.grouped(attachments, name: \.name)) { group in
+                    switch group {
+                    case .file(let name, let attachment):
+                        attachmentRow(attachment, label: name)
+                    case .folder(let name, let files):
+                        SentenceDisclosure(
+                            label: name,
+                            summary: Self.folderSummary(files),
+                            spokenLabel: "Folder \(name), \(Self.folderSummary(files))",
+                            isExpanded: attachmentFolderFold(name)
+                        ) {
+                            VStack(alignment: .leading, spacing: 11) {
+                                ForEach(files, id: \.name) { file in
+                                    attachmentRow(file, label: String(file.name.dropFirst(name.count + 1)))
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// A folder's file count and total size, as its composer chip reads.
+    static func folderSummary(_ files: [Components.Schemas.TaskAttachment]) -> String {
+        let bytes = files.reduce(0) { $0 + Int(clamping: $1.size_bytes) }
+        return "\(files.count.formatted()) \(files.count == 1 ? "file" : "files") · "
+            + ComposerAttachmentChip.size(bytes)
+    }
+
+    private func attachmentFolderFold(_ name: String) -> Binding<Bool> {
+        Binding(
+            get: { openAttachmentFolders.contains(name) },
+            set: { open in
+                if open { openAttachmentFolders.insert(name) } else { openAttachmentFolders.remove(name) }
+            })
+    }
+
+    private func attachmentRow(_ attachment: Components.Schemas.TaskAttachment, label: String) -> some View {
+        DecisionDetailView.AttachmentRow(
+            label: label,
+            digest: attachment.digest,
+            reference: AttachmentReference(
+                mediaType: attachment.media_type.rawValue,
+                sizeBytes: Int(clamping: attachment.size_bytes),
+                availability: .available),
+            attachments: coordinator.store.attachments,
+            loadsAttachments: screenshotTimeline == nil,
+            rendersInteractiveControls: screenshotTimeline == nil,
+            boxed: true)
     }
 
     /// The Timeline is the task's events, always open: the rail that says

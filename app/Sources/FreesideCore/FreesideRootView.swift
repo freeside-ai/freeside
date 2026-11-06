@@ -390,6 +390,7 @@ public struct FreesideRootView: View {
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
                 NewTaskSheet(
                     projects: TaskDisplay.knownProjects(in: coordinator.tasks),
+                    projectRepositories: TaskDisplay.projectRepositories(in: coordinator.tasks),
                     model: TaskSubmissionModel(coordinator: coordinator),
                     onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
                 )
@@ -527,6 +528,7 @@ public struct FreesideRootView: View {
                         .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
                             NewTaskSheet(
                                 projects: TaskDisplay.knownProjects(in: coordinator.tasks),
+                                projectRepositories: TaskDisplay.projectRepositories(in: coordinator.tasks),
                                 model: TaskSubmissionModel(coordinator: coordinator),
                                 onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
                             )

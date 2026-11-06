@@ -145,6 +145,19 @@ package enum TaskDisplay {
         Array(Set(tasks.map(\.task.project_id))).sorted()
     }
 
+    /// Each project's repository (`owner/repo`), from a synced task whose
+    /// project display name is the daemon's name for it rather than the id
+    /// fallback. The composer uses it to tell a folder inside the project's
+    /// repository (#2591); a project with no such task is absent.
+    package static func projectRepositories(in tasks: [Components.Schemas.TaskSnapshot]) -> [String: String] {
+        tasks.reduce(into: [:]) { repositories, snapshot in
+            let project = snapshot.task.display_names.project
+            if project.source == .name, repositories[snapshot.task.project_id] == nil {
+                repositories[snapshot.task.project_id] = project.text
+            }
+        }
+    }
+
     /// Newest activity first, the id as the tie-breaker. A task always
     /// carries its last activity, so unlike the run list no row is undated.
     package static func sortedTasks(

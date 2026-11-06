@@ -825,8 +825,10 @@
             }
 
             // Attachments in the composer (#2590): an image chip with its
-            // thumbnail, a numbered repeat, and a file chip; one surface also
-            // shows the refusal notice for an image over its limit.
+            // thumbnail, a numbered repeat, a file chip, and a folder chip
+            // (#2591); one surface also shows the refusal notice for an image
+            // over its limit, another the sentence for a folder's left-out
+            // links.
             var composerAttachments = TaskAttachmentDraft()
             for (name, claim, bytes) in [
                 ("Layout bug.png", "image/png", AttentionFixtures.fixtureImagePNG),
@@ -835,10 +837,18 @@
             ] {
                 _ = composerAttachments.add(name: name, claimedMediaType: claim, bytes: bytes)
             }
+            _ = composerAttachments.addFolder(
+                name: "design handoff",
+                files: (0..<14).map { index in
+                    FolderFile(
+                        path: "screens/screen-\(index).png", claimedMediaType: "image/png",
+                        bytes: AttentionFixtures.fixtureImagePNG + Data(repeating: UInt8(index), count: 180_000))
+                })
             let imageRefusal = "Screen recording.png is 12.4 MiB; an image can be at most 10 MiB."
+            let linksSentence = "design handoff: 2 symbolic links weren't attached, such as assets/logo.svg."
             for (name, width, scheme, refusals) in [
                 ("new-task-sheet-attachments", CGFloat(380), ColorScheme.light, [imageRefusal]),
-                ("new-task-sheet-attachments-dark", CGFloat(380), ColorScheme.dark, []),
+                ("new-task-sheet-attachments-dark", CGFloat(380), ColorScheme.dark, [linksSentence]),
                 ("new-task-sheet-phone-attachments", CGFloat(390), ColorScheme.light, []),
                 ("new-task-sheet-phone-attachments-dark", CGFloat(390), ColorScheme.dark, [imageRefusal]),
             ] as [(String, CGFloat, ColorScheme, [String])] {
@@ -2629,7 +2639,8 @@
                                 disclosures: TaskHistoryFixtures.identifiersOpen(retryTimeline))
                     )))
             // The task's attachments (#2590): an image renders inline and a
-            // file shows its type and size, each in its own box. A separate
+            // file shows its type and size, each in its own box; a folder
+            // (#2591) is one folded row. A separate
             // coordinator holds the preloaded image, so no other surface's
             // loader changes.
             var attachedTask = retryTask
@@ -2653,6 +2664,16 @@
             guard case .image = attachedCoordinator.store.attachments.phase(for: "sha256:img-spec_approval") else {
                 throw ScreenshotError.missingSeededImage
             }
+            // A folder's files (#2591) fold under one row, closed, so they
+            // load nothing.
+            attachedTask.task.attachments += ["brief.md", "screens/home.png", "screens/settings.png"].enumerated()
+                .map { index, path in
+                    .init(
+                        digest: "sha256:" + String(repeating: "\(index)", count: 64), name: "design handoff/\(path)",
+                        media_type: path.hasSuffix(".png") ? .image_sol_png : .application_sol_octet_hyphen_stream,
+                        claimed_media_type: path.hasSuffix(".png") ? "image/png" : "text/markdown",
+                        size_bytes: 412_000)
+                }
             for (name, width) in [("task-page-attachments", CGFloat?.none), ("task-page-attachments-390", 390)] {
                 surfaces.append(
                     Surface(

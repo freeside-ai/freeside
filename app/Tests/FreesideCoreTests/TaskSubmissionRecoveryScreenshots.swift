@@ -8,14 +8,21 @@
     @MainActor enum TaskSubmissionRecoveryScreenshots {
         static func model(client: any APIProtocol) throws -> TaskSubmissionModel {
             let coordinator = SyncCoordinator(client: client, cache: InMemoryCacheStore())
-            // The first request attached files, so its item lists their
-            // names; the second chose agents, so its item shows its lines.
+            // The first request attached files and a folder (#2591), so its
+            // item lists the files' names and the folder as one line; the
+            // second chose agents, so its item shows its lines.
             let attachments: [Components.Schemas.TaskAttachmentInput] = [
                 .init(
                     digest: "sha256:" + String(repeating: "a", count: 64), name: "Layout bug.png",
                     media_type: "image/png"),
                 .init(
                     digest: "sha256:" + String(repeating: "b", count: 64), name: "crash.log", media_type: "text/plain"),
+                .init(
+                    digest: "sha256:" + String(repeating: "c", count: 64), name: "design handoff/brief.md",
+                    media_type: "text/markdown"),
+                .init(
+                    digest: "sha256:" + String(repeating: "d", count: 64), name: "design handoff/screens/home.png",
+                    media_type: "image/png"),
             ]
             let requests: [(String, [Components.Schemas.TaskLineInput]?, [Components.Schemas.TaskAttachmentInput]?)] = [
                 ("saved-first", nil, attachments),

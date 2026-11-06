@@ -10,13 +10,21 @@ import UniformTypeIdentifiers
 /// base name; an image with no name gets one from its kind and format
 /// (`Pasted image.png`, `Photo.jpg`). Image bytes the daemon wouldn't call
 /// an image (HEIC, TIFF) are re-encoded first, so the daemon sees an image
-/// and the task page can show it. A folder is refused, not expanded (#2591
-/// owns folders).
+/// and the task page can show it. On the Mac a folder goes to
+/// `ComposerFolderIntake` (#2591); on iPhone it is refused. A package (an
+/// app, a Keynote document) is refused on both.
 enum ComposerAttachmentIntake {
-    /// Named bytes ready for `TaskAttachmentDraft.add`, or a sentence saying
-    /// why the operator's item can't be attached.
+    /// Named bytes ready for `TaskAttachmentDraft.add`, a folder's files
+    /// ready for `addFolder`, a repository path to insert into the task
+    /// text, or a sentence saying why the operator's item can't be attached.
     enum Item: Equatable, Sendable {
         case attachment(name: String, claimedMediaType: String?, bytes: Data)
+        /// A folder's regular files, with the paths of the symlinks the walk
+        /// left out.
+        case folder(name: String, files: [FolderFile], skippedLinks: [String])
+        /// A folder inside the project's repository, by its path there with
+        /// a trailing `/`: the agent already has it, so nothing uploads.
+        case repositoryPath(String)
         case refused(String)
     }
 
@@ -40,16 +48,27 @@ enum ComposerAttachmentIntake {
         }
     }
 
-    /// Reads a file the operator dropped, pasted, or picked. A folder is
-    /// refused, and so is a file over the larger (file) limit, before its
-    /// bytes are read.
-    static func file(at url: URL) -> Item {
+    /// Reads a file or folder the operator dropped, pasted, or picked. A
+    /// file over the larger (file) limit is refused before its bytes are
+    /// read. `repository` (the project's `owner/repo`) and `held` (what the
+    /// composer and the batch so far take) decide a folder; a file ignores
+    /// them.
+    static func file(at url: URL, repository: String?, held: TaskAttachmentDraft.Usage) -> Item {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let name = url.lastPathComponent
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentTypeKey])
+        let values = try? url.resourceValues(forKeys: [
+            .isDirectoryKey, .isPackageKey, .fileSizeKey, .contentTypeKey,
+        ])
+        if values?.isPackage == true {
+            return .refused("\(name) is a package, such as an app or a document bundle, and can't be attached.")
+        }
         if values?.isDirectory == true {
-            return .refused("\(name) is a folder. Folders aren't supported yet.")
+            #if os(macOS)
+                return ComposerFolderIntake.item(at: url, repository: repository, held: held)
+            #else
+                return .refused("\(name) is a folder. Folders attach on the Mac.")
+            #endif
         }
         if let size = values?.fileSize,
             let refusal = TaskAttachmentDraft.oversizedFileRefusal(name: name, sizeBytes: size)
@@ -62,9 +81,42 @@ enum ComposerAttachmentIntake {
         return .attachment(name: name, claimedMediaType: claim(for: url, values?.contentType), bytes: bytes)
     }
 
+    /// Reads `urls` in order, counting each item read against the limits
+    /// of the next, so a batch of folders can't together read past the
+    /// task's count or total before the draft refuses them.
+    static func files(at urls: [URL], repository: String?, held: TaskAttachmentDraft.Usage) -> [Item] {
+        var held = held
+        return urls.map { url in
+            let item = file(at: url, repository: repository, held: held)
+            held = taking(item, held)
+            return item
+        }
+    }
+
+    /// `held` plus what `item` would add to the draft.
+    static func taking(_ item: Item, _ held: TaskAttachmentDraft.Usage) -> TaskAttachmentDraft.Usage {
+        switch item {
+        case .attachment(_, _, let bytes):
+            TaskAttachmentDraft.Usage(count: held.count + 1, bytes: held.bytes + bytes.count)
+        case .folder(_, let files, _):
+            TaskAttachmentDraft.Usage(
+                count: held.count + files.count, bytes: held.bytes + files.reduce(0) { $0 + $1.bytes.count })
+        case .repositoryPath, .refused:
+            held
+        }
+    }
+
+    /// The sentence under the composer for a folder attached without its
+    /// symlinks; nil when it had none.
+    static func skippedLinksSentence(folder: String, links: [String]) -> String? {
+        guard let first = links.first else { return nil }
+        let count = links.count == 1 ? "1 symbolic link wasn't" : "\(links.count) symbolic links weren't"
+        return "\(folder): \(count) attached, such as \(first)."
+    }
+
     /// The file type's MIME type; a text type with none of its own (a
     /// `.log`) claims `text/plain`.
-    private static func claim(for url: URL, _ contentType: UTType?) -> String? {
+    static func claim(for url: URL, _ contentType: UTType?) -> String? {
         guard let type = contentType ?? UTType(filenameExtension: url.pathExtension) else { return nil }
         return type.preferredMIMEType ?? (type.conforms(to: .text) ? "text/plain" : nil)
     }
@@ -117,15 +169,21 @@ enum ComposerAttachmentIntake {
     /// Reads dropped or pasted item providers in order: a file URL as a
     /// file, otherwise image data as an unnamed image. A file URL this app
     /// can't read (another app's file pasted on iPhone) falls back to the
-    /// provider's image when it offers one.
-    static func items(from providers: [NSItemProvider], origin: ImageOrigin) async -> [Item] {
+    /// provider's image when it offers one. `repository` and `held` decide
+    /// a folder, as `files(at:repository:held:)` says.
+    static func items(
+        from providers: [NSItemProvider], origin: ImageOrigin, repository: String?, held: TaskAttachmentDraft.Usage
+    ) async -> [Item] {
         var items: [Item] = []
+        var held = held
         for provider in providers {
             let hasImage = provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
                 let url = await fileURL(from: provider), !hasImage || isReadable(url)
             {
-                items.append(file(at: url))
+                let item = file(at: url, repository: repository, held: held)
+                held = taking(item, held)
+                items.append(item)
             } else if hasImage {
                 if let data = await data(from: provider, type: .image) {
                     items.append(image(data, origin: origin))
