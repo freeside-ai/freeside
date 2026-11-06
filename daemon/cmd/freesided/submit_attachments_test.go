@@ -77,6 +77,7 @@ func TestSubmitCommandRecordsAttachments(t *testing.T) {
 		writeAttachment(t, filepath.Join(root, "inputs", "screenshot.png"), screenshot),
 		writeAttachment(t, filepath.Join(root, "inputs", "nested", "notes.json"), notes),
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)

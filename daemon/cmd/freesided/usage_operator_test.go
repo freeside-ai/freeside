@@ -164,8 +164,10 @@ func TestClientUsageCommandsDriveCollection(t *testing.T) {
 	collector := &scriptedUsageCollector{
 		called: make(chan domain.ClientEnrollmentID, 8), answers: make(chan domain.AvailabilityAnswer),
 	}
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{
-		Environment: environmentEphemeral, DBPath: filepath.Join(t.TempDir(), "freeside.db"), ListenAddr: "127.0.0.1:0",
+		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0",
 		usageCollectors: map[domain.HarnessClientKind]ward.UsageCollector{domain.HarnessClientCodexCLI: collector},
 	})
 	if err != nil {

@@ -323,6 +323,7 @@ func TestRetainedSourceSubmissionDoesNotCreateWork(t *testing.T) {
 	for _, tc := range refusedSourceCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, req := retainHistoricalSource(t, tc)
+			seedTemplateStore(t, cfg.DBPath)
 			_, err := runSubmitCommand(t.Context(), submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID})
 			checkSourceRefusal(t, err)
 			assertNoSubmittedWork(t, storetest.Open(t, cfg.DBPath, store.Options{}), req)

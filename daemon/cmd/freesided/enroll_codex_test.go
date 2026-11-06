@@ -47,6 +47,7 @@ func TestEnrollCodexCommandRunsVerifiedEnrollment(t *testing.T) {
 	if err := os.WriteFile(inputPath, commandCodexAuth("operator-refresh"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	refresher := &commandCodexAuthRefresher{}
 	var stdout, stderr bytes.Buffer
 	err := runEnrollCodexCommandWithRefresher(context.Background(), []string{

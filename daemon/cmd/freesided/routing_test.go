@@ -243,6 +243,7 @@ func TestRoutingCommandRefusals(t *testing.T) {
 func TestRoutingUsesRunningDaemonStore(t *testing.T) {
 	checkout, commit, _, agent := routingTreeCheckout(t)
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0",
 	})

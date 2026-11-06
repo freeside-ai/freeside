@@ -141,6 +141,7 @@ func TestRetainedUndeclaredSubmissionDoesNotCreateWork(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, req := retainHistoricalSource(t, undeclaredSubmission)
+			seedTemplateStore(t, cfg.DBPath)
 			_, err := runSubmitCommand(t.Context(), retry(cfg))
 			checkWorkUnitRefusal(t, err)
 			assertNoSubmittedWork(t, storetest.Open(t, cfg.DBPath, store.Options{}), req)

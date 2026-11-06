@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -75,11 +76,7 @@ func TestAdapterConformanceRecoveryRetainsInputsUntilQuiescent(t *testing.T) {
 			t.Fatalf("lost recovery input %s: %v", file, err)
 		}
 	}
-	st, err := store.Open(t.Context(), filepath.Join(root, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{})
 	if err := recordTestClaudeAdapterConformance(t.Context(), st, time.Now()); err != nil {
 		t.Fatal(err)
 	}

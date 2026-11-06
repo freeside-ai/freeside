@@ -114,6 +114,7 @@ func TestModelCatalogRefreshDiscoversEachEnabledClaudeEnrollment(t *testing.T) {
 // which auth list then prints; a failed discovery only warns.
 func TestDiscoverAfterEnrollment(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
 	// A failed add leaves the identity and enrollment recorded.
 	_ = runAuthAddCommand(context.Background(), claudeAuthAddArgs(dbPath),
 		strings.NewReader(authAddTestToken+"\n"), &bytes.Buffer{}, &bytes.Buffer{}, authAddTestDeps())

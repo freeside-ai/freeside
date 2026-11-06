@@ -177,6 +177,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "manual.json")
 	dbPath := filepath.Join(root, "daemon.db")
+	seedTemplateStore(t, dbPath)
 	cfg := manualConfigFixture(t)
 	writeManualConfig(t, path, cfg)
 	var h *daemon

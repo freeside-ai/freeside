@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 const (
@@ -50,11 +51,7 @@ func selectorImage(t *testing.T, commit, manifest, fill string) domain.ProjectIm
 // selectorStore records images in order and seeds the pointer at the first.
 func selectorStore(t *testing.T, images ...domain.ProjectImage) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
 		for _, image := range images {
 			if err := tx.RecordProjectImage(t.Context(), image); err != nil {

@@ -147,6 +147,7 @@ func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
 func TestAbandonRetiresAttentionItems(t *testing.T) {
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
 	h, err := run(ctx, nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +311,7 @@ func TestAbandonKeepsReleaseWhenRetirementFails(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	recipe := domain.Digest("sha256:abandon-recipe")
 	approved := map[domain.Digest]bool{recipe: true}
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{ApprovedRecipes: approved})
 	if err != nil {
 		t.Fatal(err)

@@ -37,6 +37,7 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      filepath.Join(root, "freeside.db"), StateDir: stateDir,

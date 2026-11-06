@@ -134,6 +134,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 		},
 	}
 
+	seedTemplateStore(t, cfg.DBPath)
 	h, err := run(t.Context(), func() {
 		if _, err := fmt.Fprintln(&logs, signalRestoredLog); err != nil {
 			t.Errorf("record signal restoration: %v", err)
@@ -178,6 +179,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 
 func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 	root := t.TempDir()
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	startupErr := errors.New("injected post-background-start failure")
 	result := make(chan struct {
 		h   *daemon
@@ -215,6 +217,7 @@ func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 func TestRunServesSignetAndStops(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),
@@ -257,6 +260,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 		ListenAddr:        "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
 	}
 	cleanCtx, stopClean := context.WithCancel(context.Background())
+	seedTemplateStore(t, dbPath)
 	clean, err := run(cleanCtx, nil, cfg)
 	if err != nil {
 		stopClean()
@@ -301,6 +305,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
+	seedTemplateStore(t, dbPath)
 	cfg := config{
 		Environment:   environmentEphemeral,
 		DBPath:        dbPath,
@@ -667,6 +672,7 @@ func TestStartupSessionCleanupTransfersOnlyAfterSuccess(t *testing.T) {
 func TestRunPairsFreshDevice(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",
@@ -909,6 +915,7 @@ func TestConfigStoreOptionsCarryDoctorRecipePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	options.BackupHealthSource = healthSource
+	storetest.Copy(t, path)
 	st, err := store.Open(ctx, path, options)
 	if err != nil {
 		t.Fatal(err)
@@ -977,6 +984,7 @@ func TestRepositoryIDFlag(t *testing.T) {
 func TestRunDrivesFakeWorkflow(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),
@@ -1069,6 +1077,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment:       environmentEphemeral,
 		FakeDriverEnabled: true,

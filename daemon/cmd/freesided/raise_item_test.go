@@ -15,15 +15,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestRaisedHeldWorkItemLegacyOwnershipUsesActualProducer(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, domain.Run{

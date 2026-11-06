@@ -19,6 +19,7 @@ func TestSubmissionIdentityNewWorkAndSavedManualRetry(t *testing.T) {
 		DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
 		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +29,7 @@ func TestSubmissionIdentityNewWorkAndSavedManualRetry(t *testing.T) {
 	// new submission goes to its own store.
 	other := cfg
 	other.DBPath = filepath.Join(root, "other.db")
+	seedTemplateStore(t, other.DBPath)
 	second, err := runSubmitCommand(t.Context(), other)
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +199,7 @@ func TestSubmissionIdentityReplaysAcceptedInvalidUTF8(t *testing.T) {
 		DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
 		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "accepted-utf8",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

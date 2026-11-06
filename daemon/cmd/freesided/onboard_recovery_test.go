@@ -64,6 +64,7 @@ func TestOnboardRecoveryReturnsFreshNativeInstallationRequest(t *testing.T) {
 		"-review-config-digest", "sha256:review", "-recipe", recipe, "-recover-installation", "777",
 	}
 	var output bytes.Buffer
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	if err := runOnboardCommand(t.Context(), args, &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}

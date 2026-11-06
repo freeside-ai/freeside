@@ -20,6 +20,7 @@ import (
 
 func TestRenewCodexRecoveryWithExecutionDisabled(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, db)
 	_, output, _, err := runEnrollCodexAgainst(t, db)
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +91,7 @@ func renewalCommandFixture(t *testing.T, dbPath string, approved map[domain.Dige
 	if err := os.WriteFile(path, commandCodexAuth("operator-refresh"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{ApprovedRecipes: approved})
 	if err != nil {
 		t.Fatal(err)

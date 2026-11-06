@@ -124,6 +124,7 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{BackupHealthSource: backupHealth})
 	if err != nil {
 		t.Fatal(err)

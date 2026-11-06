@@ -29,6 +29,7 @@ func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
+	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +171,7 @@ func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
+	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      dbPath, ListenAddr: "127.0.0.1:0",
@@ -514,6 +516,7 @@ func TestControlFindsDatabaseBehindDanglingSymlink(t *testing.T) {
 func TestControlRejectsAnotherDatabaseAtSocket(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "daemon.db")
+	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
@@ -605,6 +608,7 @@ func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
 	recipeA := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	recipeB := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	approved := map[domain.Digest]bool{recipeA: true, recipeB: true}
+	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      dbPath, ListenAddr: "127.0.0.1:0", ApprovedRecipes: approved,

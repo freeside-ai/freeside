@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
@@ -240,6 +241,7 @@ func TestSystemHealthAgreesWithTheGate(t *testing.T) {
 	recipe := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	waived := int64(7)
+	storetest.Copy(t, dbPath)
 	st, err := store.Open(ctx, dbPath, store.Options{
 		BackupEncryptionWaiverRepositoryID: &waived, ApprovedRecipes: map[domain.Digest]bool{recipe: true},
 	})

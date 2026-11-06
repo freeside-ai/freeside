@@ -99,6 +99,7 @@ func TestSubmitCommandRecordsTaskLines(t *testing.T) {
 		ProjectID: "proj-submit",
 		TaskLines: []domain.TaskLineChoice{reviewer, implementer},
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -192,6 +193,7 @@ func TestSubmitFingerprintWithoutLinesIsUnchanged(t *testing.T) {
 		TaskPath:     taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	result, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -322,6 +324,7 @@ func TestSubmitCommandTaskLinesHoldAtAdmission(t *testing.T) {
 			{Role: domain.RoleSpecifier, Agent: "claude-b"}, {Role: domain.RoleReviewer, Agent: "codex"},
 		},
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	result, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
