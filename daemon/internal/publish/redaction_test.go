@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,8 +35,11 @@ func TestNoCredentialValueRenders(t *testing.T) {
 		"private exponent":   key.D.String(),
 		"prime factor":       key.Primes[0].String(),
 		"installation token": fixtureTokenValue,
-		"webhook secret":     "whsec_WEBHOOKWEBHOOK",
-		"client secret":      "cs_CLIENTSECRETCLIENTSECRET",
+		// %x hex-encodes the strings it reaches, so a token leaked under
+		// %x appears only in this form.
+		"hex installation token": hex.EncodeToString([]byte(fixtureTokenValue)),
+		"webhook secret":         "whsec_WEBHOOKWEBHOOK",
+		"client secret":          "cs_CLIENTSECRETCLIENTSECRET",
 	}
 
 	creds := publish.AppCredentials{
@@ -65,33 +69,69 @@ func TestNoCredentialValueRenders(t *testing.T) {
 		ExpiresAt:      fixtureTime.Add(time.Hour),
 	}
 
-	// The issue-read source renders with a populated cache, so its cached
-	// token goes through the sweep along with the source's own fields.
-	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeFilingTokenResponse(t, w, issueReadGrant)
-	})
-	defer srv.Close()
-	issueRead := publish.NewIssueReadTokenSource(
-		newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow),
-		fixedNow,
-	)
-	issueReadToken, err := issueRead.Token(context.Background(), testTrustRepo)
-	if err != nil {
+	// Each caching token source renders with a populated cache, so its
+	// cached token goes through the sweep along with the source's own
+	// fields. Each mint server answers with the grant its source validates.
+	coveredMinter := func(scopes map[string]string) *publish.Minter {
+		srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeFilingTokenResponse(t, w, scopes)
+		})
+		t.Cleanup(srv.Close)
+		return newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
+	}
+	publication := publish.NewCachedTokenSource(coveredMinter(map[string]string{
+		"actions": "read", "administration": "read", "contents": "write",
+		"environments": "read", "metadata": "read", "pull_requests": "write",
+	}), fixedNow)
+	filing := publish.NewFollowUpFilingTokenSource(
+		coveredMinter(map[string]string{"issues": "write", "metadata": "read"}), fixedNow)
+	issueRead := publish.NewIssueReadTokenSource(coveredMinter(issueReadGrant), fixedNow)
+
+	onboardingKeystore := newTestKeystore(t)
+	if err := onboardingKeystore.SaveApp(publicFixtureCredentials(t)); err != nil {
 		t.Fatal(err)
 	}
-	if issueReadToken.Token.Reveal() != fixtureTokenValue {
-		t.Fatal("needle self-check failed: the issue-read source did not cache the fixture token")
+	onboardingServer := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeFilingTokenResponse(t, w, map[string]string{
+			"actions": "read", "administration": "read", "contents": "read",
+			"environments": "read", "metadata": "read",
+		})
+	})
+	t.Cleanup(onboardingServer.Close)
+	onboarding := newOnboardingSource(t, onboardingKeystore, onboardingServer, &captureRecorder{})
+
+	sources := map[string]publish.TokenSource{
+		"CachedTokenSource":         publication,
+		"FollowUpFilingTokenSource": filing,
+		"IssueReadTokenSource":      issueRead,
+		"OnboardingTokenSource":     onboarding,
+	}
+	var issueReadToken publish.InstallationToken
+	for name, source := range sources {
+		cached, err := source.Token(context.Background(), testTrustRepo)
+		if err != nil {
+			t.Fatalf("%s.Token: %v", name, err)
+		}
+		if cached.Token.Reveal() != fixtureTokenValue {
+			t.Fatalf("needle self-check failed: %s did not cache the fixture token", name)
+		}
+		if name == "IssueReadTokenSource" {
+			issueReadToken = cached
+		}
 	}
 
 	renderings := map[string]string{}
-	for name, v := range map[string]any{
-		"AppCredentials":       creds,
-		"InstallationToken":    token,
-		"MintRecord":           record,
-		"Secret":               creds.WebhookSecret,
-		"IssueReadTokenSource": issueRead,
-		"IssueReadToken":       issueReadToken,
-	} {
+	values := map[string]any{
+		"AppCredentials":    creds,
+		"InstallationToken": token,
+		"MintRecord":        record,
+		"Secret":            creds.WebhookSecret,
+		"IssueReadToken":    issueReadToken,
+	}
+	for name, source := range sources {
+		values[name] = source
+	}
+	for name, v := range values {
 		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
 			renderings[name+" "+verb] = fmt.Sprintf(verb, v)
 		}
