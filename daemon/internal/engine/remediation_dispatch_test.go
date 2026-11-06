@@ -13,6 +13,7 @@ import (
 // fact that the round's intent was committed; re-preparing it re-put the
 // input artifact and stopped the daemon on the first live remediation.
 func TestRemediationDispatchedReflectsQueuedInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, st := newQuarantineEngine(t, ctx)
 	w := &productionPublicationWorkflow{store: st}

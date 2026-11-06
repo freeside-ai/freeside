@@ -63,6 +63,7 @@ var holdClassifiedSentinels = []error{
 // every produced code is a registered member. An unclassified error maps to
 // nothing, which is the loud-failure path, not a hold.
 func TestDispatchHoldReasonCoversEveryHoldClass(t *testing.T) {
+	t.Parallel()
 	for _, sentinel := range holdClassifiedSentinels {
 		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", sentinel)
 		reason, ok := dispatchHoldReason(wrapped)
@@ -125,6 +126,7 @@ var admissionRefusalChecks = []admissionCheckCase{
 // or launch, every hold-classified sentinel of that reason is in the table,
 // and an error of any other reason has no detail.
 func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
+	t.Parallel()
 	seen := map[domain.AdmissionCheck]bool{}
 	for _, tc := range admissionRefusalChecks {
 		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", tc.sentinel)
@@ -193,6 +195,7 @@ func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
 // any wrapping, and a changed kind or reference is a changed pace state, so
 // it is written at once.
 func TestImageUpkeepHoldDetail(t *testing.T) {
+	t.Parallel()
 	refusal := domain.Digest("sha256:" + strings.Repeat("1", 64))
 	other := domain.Digest("sha256:" + strings.Repeat("2", 64))
 	item, task := domain.ItemID("card-1"), domain.TaskID("task-1")
@@ -231,6 +234,7 @@ func TestImageUpkeepHoldDetail(t *testing.T) {
 // invocation under the pool hold, and a different pool is a different hold, so
 // the pacer does not hold back the new name.
 func TestUsagePoolRefusalHoldsNamingItsPool(t *testing.T) {
+	t.Parallel()
 	refusal := func(pool domain.UsagePoolID) error {
 		return fmt.Errorf("admit invocation %q: %w", "inv-1",
 			&domain.UsagePoolExhaustedError{Pool: pool, Active: 2, Limit: 2})
@@ -256,6 +260,7 @@ func TestUsagePoolRefusalHoldsNamingItsPool(t *testing.T) {
 // holds its own invocation under machine_capacity with the figures it waits
 // on, and changed figures are a changed hold the pacer records at once.
 func TestMachineCapacityRefusalHoldsNamingItsMemory(t *testing.T) {
+	t.Parallel()
 	refusal := func(ahead int) error {
 		return fmt.Errorf("admit invocation %q: %w", "inv-1", &domain.MachineCapacityError{
 			Hold: domain.MachineCapacityHold{ReservationMiB: 2304, ReservedMiB: 2304, BudgetMiB: 4096, Ahead: ahead},
@@ -287,6 +292,7 @@ func TestMachineCapacityRefusalHoldsNamingItsMemory(t *testing.T) {
 // joins the memory order; once the memory ahead of it is released it is
 // admitted and leaves both.
 func TestDispatchWaitsForMachineMemory(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.launchBound = ward.LaunchBound{BudgetMiB: 3072, RuntimeVersion: ward.RuntimeNone}
@@ -354,6 +360,7 @@ func TestDispatchWaitsForMachineMemory(t *testing.T) {
 // budget is no wait. Its run gets the execution_failure notice naming the
 // three numbers, no hold and no place in the order, and the pass goes on.
 func TestDispatchReportsALaunchThatCanNeverFit(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.launchBound = ward.LaunchBound{BudgetMiB: 1024, RuntimeVersion: ward.RuntimeNone}
@@ -416,6 +423,7 @@ func TestDispatchReportsALaunchThatCanNeverFit(t *testing.T) {
 // refresh interval is a new wait and must be recorded, or the run shows pending
 // work with no explanation.
 func TestDispatchResetsThePaceOfTheHoldItClears(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
@@ -471,6 +479,7 @@ func storedRunHold(t *testing.T, st *store.Store, runID domain.RunID) *domain.Ru
 // block strings are a closed set and each maps to its code; anything else
 // maps to nothing, matching recovery's fail-closed reason gate.
 func TestProductionBlockReasonIsTotalOverDefinitiveReasons(t *testing.T) {
+	t.Parallel()
 	want := map[string]domain.RunHoldReason{
 		productionBlockRecipeRevoked: domain.HoldRecipeRevoked,
 		productionBlockVerification:  domain.HoldVerificationFindings,
@@ -492,6 +501,7 @@ func TestProductionBlockReasonIsTotalOverDefinitiveReasons(t *testing.T) {
 // TestObservedStatusCoversDriverVocabulary: the observation mirror is total
 // over the driver status vocabulary and rejects the zero value.
 func TestObservedStatusCoversDriverVocabulary(t *testing.T) {
+	t.Parallel()
 	for _, status := range exec.AllStatuses {
 		observed, ok := observedStatus(status)
 		if !ok {
@@ -512,6 +522,7 @@ func TestObservedStatusCoversDriverVocabulary(t *testing.T) {
 // persisted observation (which readers derive as a gap) is replaced instead
 // of standing until wall time catches up.
 func TestObservationPaceClockRollbackIsDue(t *testing.T) {
+	t.Parallel()
 	var p observationPace
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	if !p.due("k", "s", ts) {
@@ -534,6 +545,7 @@ func TestObservationPaceClockRollbackIsDue(t *testing.T) {
 // not, so a long-lived hold logs once per reason change rather than once every
 // observationRefreshInterval.
 func TestObservationPaceReportsChangeSeparatelyFromRefresh(t *testing.T) {
+	t.Parallel()
 	var p observationPace
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	if due, changed := p.dueChanged("k", "a", ts); !due || !changed {
@@ -558,6 +570,7 @@ func TestObservationPaceReportsChangeSeparatelyFromRefresh(t *testing.T) {
 // vocabulary is a closed enum with no free-text carrier, so the leak is
 // unrepresentable; this test pins that against a future detail field.
 func TestHoldObservationsPassTheLeakAxisEnumeration(t *testing.T) {
+	t.Parallel()
 	axes := map[string]string{ //nolint:gosec // G101: deliberately fake leak payloads, not credentials
 		"credential":      "ghs_SECRETINSTALLATIONTOKEN2026",
 		"provider_output": "PROVIDER-STDERR: panic at /agent/workspace/main.go",

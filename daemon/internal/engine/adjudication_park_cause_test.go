@@ -14,6 +14,7 @@ import (
 )
 
 func TestAdjudicationParkCauses(t *testing.T) {
+	t.Parallel()
 	const marker = "UNTRUSTED-MODEL-ERROR-AND-RATIONALE"
 	covered := map[adjudicationParkCause]bool{}
 	for _, tc := range []struct {
@@ -102,6 +103,7 @@ func TestAdjudicationParkCauses(t *testing.T) {
 }
 
 func TestAdjudicationErrorCauseRejectsUntrustedCauseText(t *testing.T) {
+	t.Parallel()
 	for _, err := range []error{
 		&inference.AdjudicationUnavailable{Cause: inference.AdjudicationRefusal("untrusted")},
 		&inference.AdjudicationUnavailable{Cause: inference.AdjudicationJudgmentFallback, Fallback: inference.FallbackReason("untrusted")},

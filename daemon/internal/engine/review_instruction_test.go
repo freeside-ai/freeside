@@ -12,6 +12,7 @@ import (
 )
 
 func TestDiscoverCodexReviewInstructionsUsesExactTreeAndOverrides(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	write := func(rel, body string) {
 		t.Helper()
@@ -52,6 +53,7 @@ func TestDiscoverCodexReviewInstructionsUsesExactTreeAndOverrides(t *testing.T) 
 }
 
 func TestDiscoverCodexReviewInstructionsRejectsSymlinkSource(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	target := filepath.Join(root, "rules.md")
 	if err := os.WriteFile(target, []byte("outside selection\n"), 0o600); err != nil {
@@ -66,6 +68,7 @@ func TestDiscoverCodexReviewInstructionsRejectsSymlinkSource(t *testing.T) {
 }
 
 func TestDiscoverCodexReviewInstructionsBoundsAggregateSources(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, rel := range []string{"AGENTS.md", "nested/AGENTS.md"} {
 		path := filepath.Join(root, rel)

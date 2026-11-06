@@ -18,6 +18,7 @@ import (
 // Each registry member needs a real supported producer shape. The review and
 // proposal readers below also reconstruct their private authority after expiry.
 func TestWorkflowClosureAttentionRegistry(t *testing.T) {
+	t.Parallel()
 	for _, kind := range domain.AllAttentionTypes {
 		t.Run(string(kind), func(t *testing.T) {
 			st, runID, item := closureMatrixItem(t, kind)

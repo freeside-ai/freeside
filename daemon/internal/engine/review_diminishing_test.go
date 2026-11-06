@@ -14,6 +14,7 @@ import (
 )
 
 func TestPreviousRemediationSummaryClaimsUsesLatestProducer(t *testing.T) {
+	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	runID := domain.RunID("run-summary")
 	producerID := remediationInvocationID(runID, 2)

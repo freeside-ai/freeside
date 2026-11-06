@@ -55,6 +55,7 @@ func parkedDisputeRow(
 // threshold, a ceiling-held answer shows its accepted lean, and a batch with
 // no adjudication shows none.
 func TestReviewDisputeCarriesAdjudicatorLean(t *testing.T) {
+	t.Parallel()
 	inScope := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	outOfScope := &domain.FindingLocation{Path: "app/a.go", StartLine: 1, EndLine: 1}
 
@@ -141,6 +142,7 @@ func TestReviewDisputeCarriesAdjudicatorLean(t *testing.T) {
 // a human revision still checks that row's stored columns, so a corrupt one
 // fails closed instead of exposing the model revision before it.
 func TestLatestModelAdjudicationChecksSkippedHumanRow(t *testing.T) {
+	t.Parallel()
 	for name, tamper := range map[string]string{
 		"predecessor column": `UPDATE finding_adjudications SET predecessor_digest = 'forged' WHERE revision = 2`,
 		"spec column":        `UPDATE finding_adjudications SET approved_spec_digest = 'forged' WHERE revision = 2`,
@@ -190,6 +192,7 @@ func TestLatestModelAdjudicationChecksSkippedHumanRow(t *testing.T) {
 // only an offered route: the row's lean names a route the row does not
 // offer, and choosing it is refused.
 func TestReviewDisputeLeanNeverWidensChoices(t *testing.T) {
+	t.Parallel()
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2,
 		&domain.FindingLocation{Path: "app/a.go", StartLine: 1, EndLine: 1}, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -232,6 +235,7 @@ func TestReviewDisputeLeanNeverWidensChoices(t *testing.T) {
 // each stored block on write and on reconstruction: any change to it fails
 // closed, and only a row with no block at all passes, as a pre-#2059 row.
 func TestReviewDisputeGateRederivesAdjudication(t *testing.T) {
+	t.Parallel()
 	put := func(f *findingAdjudicationFixture, itemID domain.ItemID, mutate func(*domain.DisputedFinding)) error {
 		return f.store.Write(f.ctx, func(tx *store.WriteTx) error {
 			item, err := tx.GetAttentionItem(f.ctx, itemID)

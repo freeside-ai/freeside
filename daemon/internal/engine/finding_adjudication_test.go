@@ -385,6 +385,7 @@ func assertFindingAdjudicationRecommendationAbsent(
 }
 
 func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -438,6 +439,7 @@ func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T)
 // adjudicator input carries the round's stored metrics row, read from the
 // store and not from the request; the test above covers the gap.
 func TestProductionFindingAdjudicatorSendsStoredDiffMetrics(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -473,6 +475,7 @@ func TestProductionFindingAdjudicatorSendsStoredDiffMetrics(t *testing.T) {
 }
 
 func TestProductionFindingAdjudicatorRetainsEngineAllowedRemediation(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -507,6 +510,7 @@ func TestProductionFindingAdjudicatorRetainsEngineAllowedRemediation(t *testing.
 }
 
 func TestFindingAdjudicationProducesAuthenticatedRecommendation(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -562,6 +566,7 @@ func TestFindingAdjudicationProducesAuthenticatedRecommendation(t *testing.T) {
 }
 
 func TestFindingAdjudicationRejectsInapplicableRecommendationSources(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	for _, tc := range []struct {
 		name         string
@@ -641,6 +646,7 @@ func TestFindingAdjudicationRejectsInapplicableRecommendationSources(t *testing.
 }
 
 func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -883,6 +889,7 @@ func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
 }
 
 func TestFindingAdjudicationDiscussRecoversAcceptedCompletion(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -988,6 +995,7 @@ func TestFindingAdjudicationDiscussRecoversAcceptedCompletion(t *testing.T) {
 // revision as the round head, and persists no successor, whether the batch is
 // fresh or comes from a completion accepted before a restart.
 func TestFindingAdjudicationDiscussOversizedSuccessorEndsUnavailable(t *testing.T) {
+	t.Parallel()
 	const commandID = "oversized-adjudication"
 	paddedEntry := func(t *testing.T, id domain.FindingID, rationale int) domain.FindingAdjudicationEntry {
 		t.Helper()
@@ -1159,6 +1167,7 @@ func TestFindingAdjudicationDiscussOversizedSuccessorEndsUnavailable(t *testing.
 }
 
 func TestFindingAdjudicationDiscussReconsidersEngineEntries(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
 	f.writePath(t, f.headRoot)
@@ -1189,6 +1198,7 @@ func TestFindingAdjudicationDiscussReconsidersEngineEntries(t *testing.T) {
 }
 
 func TestFindingAdjudicationCompletionResultRevalidatesTrustBoundary(t *testing.T) {
+	t.Parallel()
 	allowed := domain.CompatibilityAllowed
 	engineEntry, err := domain.NewEngineAdjudicationEntry(
 		"finding-engine", domain.GoalRequired, &allowed, domain.RouteRemediate,
@@ -1358,6 +1368,7 @@ func modelRouteEntry(
 }
 
 func TestResolvedFindingThresholdDefaultsFailClosed(t *testing.T) {
+	t.Parallel()
 	if got := resolvedFindingThreshold(domain.ResolvedPolicy{}, findingConfidenceThresholdKey); got != domain.DispatchThresholdHigh {
 		t.Fatalf("absent threshold = %q, want high", got)
 	}
@@ -1376,6 +1387,7 @@ func TestResolvedFindingThresholdDefaultsFailClosed(t *testing.T) {
 }
 
 func TestFindingAdjudicationRoutesEveryTableRow(t *testing.T) {
+	t.Parallel()
 	for _, route := range []domain.AdjudicationRoute{
 		domain.RouteParkRevision, domain.RouteParkSeparateWork,
 		domain.RouteAttentionHumanDecision, domain.RouteParkUnknown,
@@ -1424,6 +1436,7 @@ func TestFindingAdjudicationRoutesEveryTableRow(t *testing.T) {
 }
 
 func TestFindingAdjudicationFastPathResolvesEitherTreeSide(t *testing.T) {
+	t.Parallel()
 	for _, side := range []string{"candidate-added", "candidate-deleted"} {
 		t.Run(side, func(t *testing.T) {
 			location := &domain.FindingLocation{Path: "daemon/a.go"}
@@ -1461,6 +1474,7 @@ func TestFindingAdjudicationFastPathResolvesEitherTreeSide(t *testing.T) {
 }
 
 func TestFindingAdjudicationFastPathRequiresRevalidatedClassification(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		note          string
@@ -1502,6 +1516,7 @@ func TestFindingAdjudicationFastPathRequiresRevalidatedClassification(t *testing
 }
 
 func TestFindingAdjudicationFastPathDoesNotFollowIntermediateSymlink(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go"}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
 	outside := t.TempDir()
@@ -1537,6 +1552,7 @@ func TestFindingAdjudicationFastPathDoesNotFollowIntermediateSymlink(t *testing.
 }
 
 func TestFindingAdjudicationRestartsAcrossArtifactBoundary(t *testing.T) {
+	t.Parallel()
 	for _, side := range AllDurableTransitionSides {
 		t.Run(string(side), func(t *testing.T) {
 			location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
@@ -1582,6 +1598,7 @@ func TestFindingAdjudicationRestartsAcrossArtifactBoundary(t *testing.T) {
 }
 
 func TestFindingAdjudicationOutsideDeclaredPathsRequiresModelJudgment(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "app/a.swift", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
 	f.writePath(t, f.headRoot)
@@ -1607,6 +1624,7 @@ func TestFindingAdjudicationOutsideDeclaredPathsRequiresModelJudgment(t *testing
 }
 
 func TestFindingAdjudicationFailClosedAndNotAcceptedParkWithoutArtifact(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		location    *domain.FindingLocation
@@ -1669,6 +1687,7 @@ func TestFindingAdjudicationFailClosedAndNotAcceptedParkWithoutArtifact(t *testi
 }
 
 func TestFindingAdjudicationFailSafeParkingStopsInferenceRetry(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -1687,6 +1706,7 @@ func TestFindingAdjudicationFailSafeParkingStopsInferenceRetry(t *testing.T) {
 }
 
 func TestFindingAdjudicationAttachmentMaterializationRejectsUntrustedBytes(t *testing.T) {
+	t.Parallel()
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, nil, "low", "high")
 	body := []byte("trusted attachment")
 	digest := domain.Digest(contentaddr.Sum(body))
@@ -1709,6 +1729,7 @@ func TestFindingAdjudicationAttachmentMaterializationRejectsUntrustedBytes(t *te
 }
 
 func TestFindingAdjudicationCriticalFinalDispositionRequiresAttention(t *testing.T) {
+	t.Parallel()
 	for _, severity := range []domain.FindingSeverity{domain.FindingSeverityP0, domain.FindingSeverityP1} {
 		for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer} {
 			t.Run(string(severity)+"/"+string(route), func(t *testing.T) {
@@ -1757,6 +1778,7 @@ func TestFindingAdjudicationCriticalFinalDispositionRequiresAttention(t *testing
 }
 
 func TestFindingAdjudicationDisputeAttentionRemainsParkedOnReplay(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP0, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -1772,6 +1794,7 @@ func TestFindingAdjudicationDisputeAttentionRemainsParkedOnReplay(t *testing.T) 
 }
 
 func TestFindingAdjudicationDispositionWriteConvergesAfterCrash(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -1805,6 +1828,7 @@ func TestFindingAdjudicationDispositionWriteConvergesAfterCrash(t *testing.T) {
 }
 
 func TestDispositionAwareReviewSatisfiesReadinessWithoutRereview(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -1880,6 +1904,7 @@ func TestDispositionAwareReviewSatisfiesReadinessWithoutRereview(t *testing.T) {
 // unchanged head (#2055). Before the fix the Wave 8 exit run durably stopped
 // at this load, after authoring the pull request body.
 func TestDeclineOnlyFinalRoundLoadsPublicationDispositionHistory(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -1948,6 +1973,7 @@ func TestDeclineOnlyFinalRoundLoadsPublicationDispositionHistory(t *testing.T) {
 }
 
 func TestFindingAdjudicationStructuredDissentValidation(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []findingAdjudicationDissentKind{
 		findingDissentImportPathRejected, findingDissentRemediatorPushback,
 	} {
@@ -1965,6 +1991,7 @@ func TestFindingAdjudicationStructuredDissentValidation(t *testing.T) {
 }
 
 func TestFindingAdjudicationStructuredDissentForcesModelReentry(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
 	f.writePath(t, f.headRoot)
@@ -1996,6 +2023,7 @@ func TestFindingAdjudicationStructuredDissentForcesModelReentry(t *testing.T) {
 }
 
 func TestFindingAdjudicationProjectsAuthenticatedFindingContext(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 3, EndLine: 5}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -2084,6 +2112,7 @@ func decideFindingAdjudicationItem(
 }
 
 func TestFindingAdjudicationStageConsumesAuthenticatedCommand(t *testing.T) {
+	t.Parallel()
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
 	f.writePath(t, f.headRoot)
@@ -2115,6 +2144,7 @@ func TestFindingAdjudicationStageConsumesAuthenticatedCommand(t *testing.T) {
 }
 
 func TestFindingAdjudicationRoutesDiminishingReviewActions(t *testing.T) {
+	t.Parallel()
 	for _, action := range []domain.Action{
 		domain.ActionFinishNow, domain.ActionApplyThenFinish, domain.ActionContinueUnderPolicy,
 	} {
@@ -2364,6 +2394,7 @@ func seedDiminishingReviewRound(
 }
 
 func TestFindingAdjudicationDecisionRejectsPayloadOnlyRouteAuthority(t *testing.T) {
+	t.Parallel()
 	entry := modelRouteEntry(t, "finding-a", domain.RouteDefer, domain.ConfidenceHigh)
 	artifact, err := domain.NewFindingAdjudication(
 		"run-a", 1, adjudicationDigest("1"), adjudicationDigest("2"),
@@ -2401,6 +2432,7 @@ func TestFindingAdjudicationDecisionRejectsPayloadOnlyRouteAuthority(t *testing.
 // replays through the recorded escalation without re-diffing, dispatching a
 // marker, or duplicating the item.
 func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
+	t.Parallel()
 	f, candidateRoot := newOversizedRemediationFixture(t)
 	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
 
@@ -2465,6 +2497,7 @@ func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
 // on system_health records the decision without a status transition), and the
 // run stays parked on the next reconcile.
 func TestRemediationUndeliverableNoticeAcceptsAcknowledge(t *testing.T) {
+	t.Parallel()
 	f, candidateRoot := newOversizedRemediationFixture(t)
 	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
 
@@ -2514,6 +2547,7 @@ func TestRemediationUndeliverableNoticeAcceptsAcknowledge(t *testing.T) {
 // same deterministic ID must keep parking the run rather than fail every
 // reconcile with ErrParentKeyMismatch and stop the publication lane.
 func TestRemediationLegacyExecutionFailureNoticeStillParksRun(t *testing.T) {
+	t.Parallel()
 	f, candidateRoot := newOversizedRemediationFixture(t)
 	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
 	runID := f.task.RunID
@@ -2559,6 +2593,7 @@ func TestRemediationLegacyExecutionFailureNoticeStillParksRun(t *testing.T) {
 // system_health advisory and the legacy execution_failure shape, and nothing
 // that disagrees with the run's project, subject, or advisory posture.
 func TestVerifyRemediationUndeliverableItemFailsClosed(t *testing.T) {
+	t.Parallel()
 	task := productionPublicationTask{RunID: "run-1", ProjectID: "project-1"}
 	itemID := productionRemediationUndeliverableItemID(task.RunID, 1)
 	advisory := domain.HealthPostureAdvisory
@@ -2702,6 +2737,7 @@ func assertNoRemediationMarker(t *testing.T, f *findingAdjudicationFixture) {
 // remediation. Parking must suppress that queue on every reconciliation while
 // still recording a deferred finding on the same card.
 func TestAcceptingMixedParkingRoutesNeverDispatchesRemediation(t *testing.T) {
+	t.Parallel()
 	for _, route := range []domain.AdjudicationRoute{
 		domain.RouteParkRevision, domain.RouteParkSeparateWork,
 		domain.RouteAttentionHumanDecision, domain.RouteParkUnknown, domain.RouteAttentionUnclear,
@@ -2870,6 +2906,7 @@ func TestAcceptingMixedParkingRoutesNeverDispatchesRemediation(t *testing.T) {
 // the run can't publish. An accepted separate-work route also proposes a
 // follow-up filing, which follow_up_filing_test.go covers.
 func TestAcceptingParkingRouteRecordsNoDisposition(t *testing.T) {
+	t.Parallel()
 	for _, route := range []domain.AdjudicationRoute{
 		domain.RouteParkRevision, domain.RouteParkSeparateWork,
 	} {
@@ -2933,6 +2970,7 @@ func adjudicationRouteEntry(
 }
 
 func TestFindingAdjudicationTextSaysWhatAcceptingDoes(t *testing.T) {
+	t.Parallel()
 	const id = domain.FindingID("review-finding-17")
 	findings := map[domain.FindingID]domain.Finding{id: {
 		ID: id, Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 3, EndLine: 7},
@@ -2973,6 +3011,7 @@ func TestFindingAdjudicationTextSaysWhatAcceptingDoes(t *testing.T) {
 }
 
 func TestFindingAdjudicationMixedCardTextFollowsTheEngine(t *testing.T) {
+	t.Parallel()
 	findings := map[domain.FindingID]domain.Finding{
 		"finding-a": {ID: "finding-a"}, "finding-b": {ID: "finding-b"},
 	}
@@ -3026,6 +3065,7 @@ func TestFindingAdjudicationMixedCardTextFollowsTheEngine(t *testing.T) {
 }
 
 func TestFindingAdjudicationTextCapsAllowedPaths(t *testing.T) {
+	t.Parallel()
 	paths := []string{"a/**", "b/**", "c/**", "d/**", "e/**", "f/**", "g/**"}
 	if got, want := summarizeAllowedPaths(paths), "a/**, b/**, c/**, d/**, e/**, and 2 more"; got != want {
 		t.Fatalf("allowed paths = %q, want %q", got, want)
@@ -3033,6 +3073,7 @@ func TestFindingAdjudicationTextCapsAllowedPaths(t *testing.T) {
 }
 
 func TestFindingAdjudicationRevisionSaysWhichRoutesChanged(t *testing.T) {
+	t.Parallel()
 	const id = domain.FindingID("review-finding-17")
 	findings := map[domain.FindingID]domain.Finding{id: {ID: id}}
 	prior := domain.FindingAdjudication{Revision: 1, Entries: []domain.FindingAdjudicationEntry{
@@ -3071,6 +3112,7 @@ func TestFindingAdjudicationRevisionSaysWhichRoutesChanged(t *testing.T) {
 // the card (#1551). It checks the identifier-shaped values; single-word values
 // such as "defer" or "allowed" are ordinary English the text may use.
 func TestFindingAdjudicationTextCarriesNoEnumValues(t *testing.T) {
+	t.Parallel()
 	var raw []string
 	for _, route := range domain.AllAdjudicationRoutes {
 		raw = append(raw, string(route))

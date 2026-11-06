@@ -128,6 +128,7 @@ var unclassifiedPauseExits = map[string]string{
 // a bare nil check followed by continue, is invisible to it. The
 // behavioural tests beside each recorder cover the branches.
 func TestEveryPauseExitRecordsAHold(t *testing.T) {
+	t.Parallel()
 	names, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)

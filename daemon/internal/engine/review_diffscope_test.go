@@ -23,6 +23,7 @@ import (
 // file all resolve for a whole-file finding, while a concrete line on them
 // still fails closed.
 func TestReviewedDiffScopeResolvesReviewedChange(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runRemediationGit(t, repo, nil, "init", "-q", "-b", "main", "--object-format=sha1")
 	writeReviewedFile(t, repo, "mod.txt", "keep-1\nold-2\nkeep-3\n")
@@ -96,6 +97,7 @@ func TestReviewedDiffScopeResolvesReviewedChange(t *testing.T) {
 // failure surfaces as an error (the engine-fault / retry path in the gate),
 // never as a silently empty scope that would wave every finding through.
 func TestReviewedDiffScopeFailsOnNonRepositoryCheckout(t *testing.T) {
+	t.Parallel()
 	if _, err := reviewedDiffScope(
 		t.Context(), t.TempDir(), t.TempDir(),
 		strings.Repeat("a", 40), strings.Repeat("b", 40),
@@ -107,6 +109,7 @@ func TestReviewedDiffScopeFailsOnNonRepositoryCheckout(t *testing.T) {
 // The batch parameter introduces a defect in the unchanged body. Its finding
 // must anchor on the causal signature change, not the unchanged return line.
 func TestReviewedDiffScopeSignatureChangeRequiresChangedLocation(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, "src"), 0o750); err != nil {
 		t.Fatal(err)
@@ -137,6 +140,7 @@ func TestReviewedDiffScopeSignatureChangeRequiresChangedLocation(t *testing.T) {
 // Removing the guard leaves no changed candidate-side line. The existing
 // file-level location represents the removed code without citing unchanged code.
 func TestReviewedDiffScopePureDeletionUsesWholeFileLocation(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runRemediationGit(t, repo, nil, "init", "-q", "-b", "main", "--object-format=sha1")
 	writeReviewedFile(t, repo, "capacity.js", "export function reserve(used, capacity, count) {\n  if (used + count > capacity) throw new Error('full');\n  return used + count;\n}\n")
@@ -169,6 +173,7 @@ func TestReviewedDiffScopePureDeletionUsesWholeFileLocation(t *testing.T) {
 // change under the new path, the deleted path vanishes, and a valid deleted-file
 // finding would be rejected in the wrong direction.
 func TestReviewedDiffScopeRendersRenameAsDeleteAndAdd(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runRemediationGit(t, repo, nil, "init", "-q", "-b", "main", "--object-format=sha1")
 	// Shared content makes git's default rename heuristic pair the removed and
