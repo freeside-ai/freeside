@@ -4102,7 +4102,7 @@
                             StateChip(label: "Stopping", cut: .ink)
                             StateChip(label: "Superseded Run · Historical", cut: .faint)
                             StateChip(
-                                label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",
+                                label: "Stop Unconfirmed · No New Work · Inspect the Recorded Outcome",
                                 cut: .ink)
                             SentenceDisclosure(
                                 label: "Campaign", summary: "current · 2 attempts · from Sep 11",

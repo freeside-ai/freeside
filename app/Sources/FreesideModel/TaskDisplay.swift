@@ -335,7 +335,7 @@ package enum TaskDisplay {
         if let cancellation = task.cancellation?.value1 {
             switch cancellation.state {
             case .requested: return ("Stopping", false)
-            case .failed_to_stop: return ("Failed to Stop · Execution May Continue", false)
+            case .failed_to_stop: return ("Stop Unconfirmed · No New Work", false)
             case .confirmed: break
             }
         }

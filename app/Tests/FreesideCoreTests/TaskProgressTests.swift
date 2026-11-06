@@ -57,7 +57,7 @@ import Testing
             "Approval required": "Specification Approval Required", "Implementation": "In Progress",
             "Review": "In Progress", "Verification": "On Hold",
             "Stop pending": "Stopping",
-            "Stop failed": "Failed to Stop · Execution May Continue", "Stopped": "Stopped",
+            "Stop failed": "Stop Unconfirmed · No New Work", "Stopped": "Stopped",
             "Failed": "Execution Failed", "Ready": "Ready for Final Review",
             "Ready degraded": "Ready for Final Review (Degraded)",
             "Finished": "Finished · See Recorded Outcome", "Superseded record": "Superseded Run · Historical",

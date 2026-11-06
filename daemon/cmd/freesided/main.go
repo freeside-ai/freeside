@@ -1363,23 +1363,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
-		var existingTasks []domain.TaskID
-		var coverageEpoch string
-		if err := st.Read(ctx, func(tx *store.ReadTx) error {
-			state, err := tx.ServerState(ctx)
-			if err != nil {
-				return err
-			}
-			coverageEpoch = state.SyncEpoch
-			tasks, err := tx.ListTasks(ctx)
-			for _, task := range tasks {
-				existingTasks = append(existingTasks, task.Value.ID)
-			}
-			return err
-		}); err != nil {
-			return nil, err
-		}
-		coverage, err := ward.OpenCancellationCoverage(filepath.Join(cfg.StateDir, "task-runtime-coverage.json"), coverageEpoch, existingTasks)
+		coverage, err := openTaskRuntimeCoverage(ctx, st, cfg.StateDir)
 		if err != nil {
 			return nil, err
 		}
@@ -1910,6 +1894,36 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	success = true
 	lockTransferred = true
 	return d, nil
+}
+
+// taskRuntimeCoverageFile is the coverage record's name under a daemon's
+// state directory.
+const taskRuntimeCoverageFile = "task-runtime-coverage.json"
+
+// openTaskRuntimeCoverage opens stateDir's task runtime coverage record. On
+// a root's first open it writes the record, listing the tasks then in st as
+// uncovered; later opens read it unchanged. The caller holds the database
+// daemon lock, so no task is saved between the listing and the write. run()
+// and a deputy start both open the record here, so they read one file with
+// the same inputs.
+func openTaskRuntimeCoverage(ctx context.Context, st *store.Store, stateDir string) (ward.CancellationCoverage, error) {
+	var existingTasks []domain.TaskID
+	var epoch string
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		epoch = state.SyncEpoch
+		tasks, err := tx.ListTasks(ctx)
+		for _, task := range tasks {
+			existingTasks = append(existingTasks, task.Value.ID)
+		}
+		return err
+	}); err != nil {
+		return ward.CancellationCoverage{}, err
+	}
+	return ward.OpenCancellationCoverage(filepath.Join(stateDir, taskRuntimeCoverageFile), epoch, existingTasks)
 }
 
 // unprovableTaskStop reports why no stop attempt can prove that task's

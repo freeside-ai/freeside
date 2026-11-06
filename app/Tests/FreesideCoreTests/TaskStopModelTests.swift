@@ -656,7 +656,7 @@ import Testing
             #expect(coordinator.taskStop.prepare(taskID: taskID) == nil)
             #expect(coordinator.taskStop.unavailableReason != nil)
         }
-        #expect(TaskStopView.cancellationText(.failed_to_stop).contains("Execution may continue"))
+        #expect(TaskStopView.cancellationText(.failed_to_stop).contains("starts no new work"))
         #expect(TaskStopView.cancellationText(.confirmed).contains("confirmed by the daemon"))
     }
 }

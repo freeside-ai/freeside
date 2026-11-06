@@ -142,7 +142,7 @@ struct TaskStopView: View {
         let (tone, keyword): (Notice.Tone, String) =
             switch state {
             case .requested: (.neutral, "Requested")
-            case .failed_to_stop: (.wax, "Failed")
+            case .failed_to_stop: (.wax, "Unconfirmed")
             case .confirmed: (.neutral, "Recorded")
             }
         return Notice(tone: tone, keyword: keyword, sentence: cancellationText(state))
@@ -152,7 +152,8 @@ struct TaskStopView: View {
     static func cancellationText(_ state: Components.Schemas.TaskCancellationState) -> String {
         switch state {
         case .requested: "Stop sent; waiting for the daemon to confirm."
-        case .failed_to_stop: "The task did not stop. Execution may continue."
+        case .failed_to_stop:
+            "Freeside starts no new work for this task but hasn't confirmed that work already running has ended."
         case .confirmed: "Stop confirmed by the daemon. Existing history and PRs remain available."
         }
     }

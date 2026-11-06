@@ -678,8 +678,14 @@ reconnecting never sends it automatically. A stale rejection requires fresh
 confirmation. A failed disk save sends nothing. Requests belong to the paired
 device and daemon, independently of the existing submission and decision ledgers.
 
-An accepted Stop awaits the runtime's bound quiescence evidence. **Failed to
-stop** means execution may continue; **Refresh Task Status** only reads state.
+An accepted Stop awaits the runtime's bound quiescence evidence. A
+`failed_to_stop` state shows the notice keyword **Unconfirmed** and the status
+**Stop Unconfirmed · No New Work**: Freeside starts no new work for the task,
+but hasn't confirmed that work already running has ended. A task with a run
+saved before its root's first daemon or deputy start always ends there, since
+the daemon can't prove what ran for it (`daemon/README.md`, Task Cancellation
+Contract).
+**Refresh Task Status** only reads state.
 Repeating Stop does not restart provider cancellation. A late receipt cannot
 replace newer synced failure or confirmation. New Stop requests require fresh,
 authenticated task state; offline and unvalidated views explain the restriction.

@@ -21,8 +21,12 @@ exercise. Leave the production harness lifecycle instructions unchanged.
 
 Record the daemon commit, task/project IDs, database sync epoch, start ordinal,
 captured run IDs, reconcile interval, and Stop command ID. Create the task after
-the daemon initialized `task-runtime-coverage.json`. Tasks already present at
-that checkpoint cannot acquire missing runtime evidence retrospectively.
+the daemon initialized `task-runtime-coverage.json`. A daemon writes it on its
+root's first start, and `freesided deputy` writes it before its composition
+check, so any task submitted for a deputy run is covered. Tasks already present
+at that checkpoint, such as one `freesided submit` saved before the root's
+first daemon or deputy start, cannot acquire missing runtime evidence
+retrospectively: once such a task has a run, its Stop stays unprovable.
 Keep the state directory and database together across the restart case.
 
 Use an existing specification question or approval card's Stop action on the
