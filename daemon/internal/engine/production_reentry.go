@@ -589,20 +589,28 @@ func quotedWithin(text string, limit int) string {
 func reentryUnverifiableTreeReason(
 	task productionPublicationTask, baseSHA string, err error,
 ) (string, bool) {
-	var cause string
-	switch {
-	case errors.Is(err, verify.ErrSymlinkEntrypoint):
-		cause = "a verification command's entrypoint is a symbolic link in its tree"
-	case errors.Is(err, verify.ErrMalformedTree):
-		cause = "its tree holds paths that cannot be materialized safely"
-	case errors.Is(err, verify.ErrWorkspaceMismatch):
-		cause = "its tree did not materialize faithfully on this host"
-	default:
+	cause, ok := unverifiableTreeCause(err)
+	if !ok {
 		return "", false
 	}
 	return fmt.Sprintf(
 		"Readiness re-entry stopped because pull request head %s cannot be verified against base %s: %s (%s). Change the pull request so its tree can be verified.",
 		task.HeadSHA, baseSHA, cause, reentryQuoted(err.Error())), true
+}
+
+// unverifiableTreeCause names a verification refusal the evaluated tree
+// itself causes, as a person reads it. Any other refusal is not one.
+func unverifiableTreeCause(err error) (string, bool) {
+	switch {
+	case errors.Is(err, verify.ErrSymlinkEntrypoint):
+		return "a verification command's entrypoint is a symbolic link in its tree", true
+	case errors.Is(err, verify.ErrMalformedTree):
+		return "its tree holds paths that cannot be materialized safely", true
+	case errors.Is(err, verify.ErrWorkspaceMismatch):
+		return "its tree did not materialize faithfully on this host", true
+	default:
+		return "", false
+	}
 }
 
 // reentryUnservedBaseReason reports the stop for a cycle whose base neither

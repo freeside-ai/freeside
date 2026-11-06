@@ -3619,7 +3619,14 @@ depends on the cycle:
   The item's reason text is the shared verification-failure reason, because a
   per-clause reason is a contract change this lane does not make.
 - **Handoff at a moved tip:** The run blocks on `publish_blocked` with the
-  shared base-advanced reason. The clause is not yet named on the item.
+  handoff-verification reason, the one a failed verification of the merge
+  gets. Its one evidence artifact begins
+  `Project image rebuild refused: <clause>.`, says what failed the clause,
+  and names the head, the tip, and the merge. The handoff's other stops
+  that the tip decides, a merged tree the room cannot materialize and a tip
+  no image the run may verify with serves while upkeep has nothing
+  pending, block the same way, their evidence naming the cause and the
+  tip.
 - **Re-entered cycle:** The cycle stops, and the stop item's reason names the
   clause and the commit.
 

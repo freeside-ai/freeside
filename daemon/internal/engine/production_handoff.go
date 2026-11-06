@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 // Handoff is every publication: the run's first and each successor (a
@@ -24,7 +27,30 @@ import (
 // publishes the unchanged head. Review is not rerun: the head did not change.
 //
 // A textual conflict or a verification failure on the merge ends the run on
-// the ordinary publish_blocked item, its reason naming the cause.
+// the ordinary publish_blocked item, its reason naming the cause. So does a
+// merge the tip keeps from being verified at all: a rebuild trust refuses, a
+// merged tree the image cannot materialize, or an image that cannot serve the
+// tip. Those block on the handoff-verification reason, and their one
+// daemon-written evidence artifact names the cause, the head, and the tip,
+// recorded on a write-once stop row recovery reads it back from.
+
+const (
+	productionHandoffStopKind    = "production_handoff_stop"
+	productionHandoffStopVersion = "freeside.production-handoff-stop/v1"
+)
+
+// productionHandoffStop is the evidence of a handoff the tip stopped before
+// any verifier report existed. The handoff's re-entry checkpoint cannot hold
+// it: loadReentryCheckpoint reads the verifier's own report, and a stop has
+// none.
+type productionHandoffStop struct {
+	Version   string            `json:"version"`
+	TaskKey   string            `json:"task_key"`
+	HeadSHA   string            `json:"head_sha"`
+	TipSHA    string            `json:"tip_sha"`
+	MergeSHA  string            `json:"merge_sha"`
+	Artifacts []domain.Artifact `json:"artifacts"`
+}
 
 // handoffCheckpointKey names the verification checkpoint of a publication's
 // handoff merge. The tip is sealed per publication, so the publication names
@@ -32,6 +58,13 @@ import (
 func handoffCheckpointKey(task productionPublicationTask) string {
 	return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") +
 		"/handoff/" + string(task.PublicationID)
+}
+
+// handoffStopKey names a publication's handoff stop row, beside its
+// checkpoint. A handoff has a checkpoint or a stop, never both.
+func handoffStopKey(task productionPublicationTask) string {
+	return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") +
+		"/handoff-stop/" + string(task.PublicationID)
 }
 
 // handoffVerificationInvocationID is the verification invocation of a
@@ -134,6 +167,20 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 	cycle.evaluatedSHA = merge
 	cycle.remediation = nil
 	cycle.reentry = &reentryCycle{createdAt: createdAt, admittedBaseSHA: binding.admission.Base.BaseSHA}
+	// A stop an earlier pass recorded is the handoff's result: the merge is
+	// not verified again, and the evidence shown is the one first recorded.
+	stop, stopped, err := w.loadHandoffStop(ctx, task, check)
+	if err != nil {
+		return domain.HandoffCheck{}, nil, err
+	}
+	if stopped {
+		if stop.MergeSHA != merge {
+			return domain.HandoffCheck{}, nil, fmt.Errorf(
+				"handoff stop of %s names merge %s, the tip and head now merge to %s: %w",
+				task.PublicationID, stop.MergeSHA, merge, domain.ErrParentKeyMismatch)
+		}
+		return block(productionBlockHandoffVerification, stop.Artifacts)
+	}
 	if err := w.resolveVerificationImage(ctx, &cycle, merge); err != nil {
 		return domain.HandoffCheck{}, nil, err
 	}
@@ -151,11 +198,16 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 		}
 		// The tip itself decides these: a merged tree the image cannot
 		// verify, a rebuild trust refuses, or an image that cannot serve the
-		// tip with nothing pending in image upkeep (plan §5.7). While upkeep
-		// has a resolution pending, verifyReentry returns a retryable error
-		// the lane holds the task under instead.
-		if handoffVerifyStop(task, check.TipSHA, err) {
-			return block(productionBlockBaseAdvanced, checkpoint.Artifacts)
+		// tip with nothing pending in image upkeep (plan §5.7). Each blocks
+		// as a failed verification of the merge does, its evidence naming the
+		// cause. While upkeep has a resolution pending, verifyReentry returns
+		// a retryable error the lane holds the task under instead.
+		if account, stop := handoffStopAccount(task, check.TipSHA, merge, binding.image.ImageRef, err); stop {
+			artifacts, err := w.recordHandoffStop(ctx, task, binding, check, merge, account, createdAt)
+			if err != nil {
+				return domain.HandoffCheck{}, nil, err
+			}
+			return block(productionBlockHandoffVerification, artifacts)
 		}
 		if err != nil {
 			return domain.HandoffCheck{}, nil, err
@@ -307,18 +359,152 @@ func (w *productionPublicationWorkflow) blockHandoff(
 		reason, productionShadowStopBlockActions, facts)
 }
 
-// handoffVerifyStop reports whether verifying the merge into the tip failed
-// on a cause the tip itself decides: a tree the image cannot verify, a
-// rebuild trust refuses, or an image that does not serve the tip.
-func handoffVerifyStop(task productionPublicationTask, tipSHA string, err error) bool {
-	if _, stop := reentryUnverifiableTreeReason(task, tipSHA, err); stop {
-		return true
+// handoffStopAccount reports whether verifying merge, the head merged into
+// the tip, failed on a cause the tip itself decides, with the evidence text
+// that names it: a rebuild trust refuses, a tree the image cannot verify, or
+// an image that does not serve the tip. imageRef is the image the run was
+// admitted with. Candidate-written text reaches the account only as the
+// rebuild gate already bounded and quoted it, or through reentryQuoted.
+//
+// Each first line is fixed, so a reader finds the cause in one place. A
+// rebuild refusal's is the one a first publication's refusal shows.
+func handoffStopAccount(
+	task productionPublicationTask, tipSHA, mergeSHA string, imageRef domain.ImageRef, err error,
+) (string, bool) {
+	subject := fmt.Sprintf("candidate %s merged into target tip %s (merge %s)", task.HeadSHA, tipSHA, mergeSHA)
+	var refused *reentryRebuildRefusal
+	if errors.As(err, &refused) {
+		return fmt.Sprintf(
+			"%s\n\n"+
+				"Freeside did not verify %s. The merge's dependency manifests differ from the ones project image %s was built with, and Freeside rebuilds an image without a person only for a change inside the project's policy. No verification command ran, and nothing was published.\n\n"+
+				"Rerun the work against the current base once the change is within the project's policy, or rebuild the project image.\n",
+			rebuildRefusedLine(refused.refusal), subject, imageRef), true
 	}
-	if _, stop := reentryRebuildRefusedReason(task, tipSHA, err); stop {
-		return true
+	if cause, ok := unverifiableTreeCause(err); ok {
+		return fmt.Sprintf(
+			"Handoff merge cannot be verified: %s (%s).\n\n"+
+				"Freeside could not verify %s, and nothing was published.\n\n"+
+				"Change the pull request so the merged tree can be verified, then rerun the work against the current base.\n",
+			cause, reentryQuoted(err.Error()), subject), true
 	}
-	_, stop := reentryUnservedBaseReason(task, tipSHA, err)
-	return stop
+	if errors.Is(err, domain.ErrProjectImageIncompatible) {
+		return fmt.Sprintf(
+			"Project image cannot serve target tip %s (%s).\n\n"+
+				"Freeside did not verify %s, because no project image this run may verify with serves the tip (the run was admitted with project image %s). No verification command ran, and nothing was published.\n\n"+
+				"Rerun the work with a project image that serves the tip.\n",
+			tipSHA, reentryQuoted(err.Error()), subject, imageRef), true
+	}
+	return "", false
+}
+
+// recordHandoffStop writes the stop's evidence and its stop row, write-once,
+// and returns the artifacts the block shows. The row is in place before the
+// item, so a pass that restarts between them blocks on the same evidence,
+// unless the base branch was rewritten in between: that pass blocks as a
+// rewritten tip before it reads the row.
+func (w *productionPublicationWorkflow) recordHandoffStop(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	check domain.HandoffCheck,
+	mergeSHA, account string,
+	createdAt time.Time,
+) ([]domain.Artifact, error) {
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	evidence, err := daemonVerificationEvidence(handoffVerificationInvocationID(task), task.HeadSHA,
+		binding.image.RecipeDigest, account, createdAt, recipes)
+	if err != nil {
+		return nil, err
+	}
+	artifacts, err := w.storeVerificationEvidence([]verify.Evidence{evidence})
+	if err != nil {
+		return nil, err
+	}
+	stop := productionHandoffStop{
+		Version: productionHandoffStopVersion, TaskKey: task.intentKey(),
+		HeadSHA: task.HeadSHA, TipSHA: check.TipSHA, MergeSHA: mergeSHA,
+		Artifacts: artifacts,
+	}
+	payload, err := json.Marshal(stop)
+	if err != nil {
+		return nil, err
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
+		return nil, err
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		for _, artifact := range artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
+				return err
+			}
+		}
+		entry, _, err := tx.RecordInbox(ctx, handoffStopKey(task), productionHandoffStopKind, payload)
+		if err != nil {
+			return err
+		}
+		if entry.Kind != productionHandoffStopKind || !bytes.Equal(entry.Payload, payload) {
+			return fmt.Errorf("handoff stop of %s disagrees with stored row: %w",
+				task.PublicationID, domain.ErrImmutableTransition)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionVerificationEvidence, DurableTransitionAfter); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
+// loadHandoffStop reads the publication's handoff stop row and binds it to
+// the task and its sealed check. A row that names another task, head, or tip
+// contradicts the daemon's own state; its evidence must still be in the
+// artifact store, as a checkpoint's must. The caller compares the merge with
+// the one it built.
+func (w *productionPublicationWorkflow) loadHandoffStop(
+	ctx context.Context, task productionPublicationTask, check domain.HandoffCheck,
+) (productionHandoffStop, bool, error) {
+	var entry store.QueueEntry
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetInbox(ctx, handoffStopKey(task))
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return productionHandoffStop{}, false, nil
+	}
+	if err != nil {
+		return productionHandoffStop{}, false, err
+	}
+	if entry.Kind != productionHandoffStopKind {
+		return productionHandoffStop{}, false, fmt.Errorf("handoff stop of %s has kind %q: %w",
+			task.PublicationID, entry.Kind, domain.ErrParentKeyMismatch)
+	}
+	var stop productionHandoffStop
+	if err := strictjson.Decode(
+		entry.Payload, &stop, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return productionHandoffStop{}, false, fmt.Errorf("decode handoff stop of %s: %w",
+			task.PublicationID, errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if stop.Version != productionHandoffStopVersion || stop.TaskKey != task.intentKey() ||
+		stop.HeadSHA != task.HeadSHA || stop.TipSHA != check.TipSHA ||
+		!validCommitSHA(stop.MergeSHA) || len(stop.Artifacts) != 1 {
+		return productionHandoffStop{}, false, fmt.Errorf("handoff stop of %s disagrees with task: %w",
+			task.PublicationID, domain.ErrParentKeyMismatch)
+	}
+	for _, artifact := range stop.Artifacts {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
+			return productionHandoffStop{}, false, fmt.Errorf("verify handoff stop artifact: %w",
+				retryableOrTerminal(ctx, err, domain.ErrParentKeyMismatch))
+		}
+	}
+	return stop, true, nil
 }
 
 // applySealedHandoffCheck binds a recovered candidate to its publication's
@@ -338,7 +524,8 @@ func (w *productionPublicationWorkflow) applySealedHandoffCheck(
 }
 
 // handoffBlockArtifacts is the evidence a recovered handoff-verification block
-// shows: the stored verification of the merge that failed.
+// shows: the stop row's, when the tip kept the merge from being verified, or
+// else the stored verification of the merge that failed.
 func (w *productionPublicationWorkflow) handoffBlockArtifacts(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
 ) ([]domain.Artifact, error) {
@@ -349,6 +536,13 @@ func (w *productionPublicationWorkflow) handoffBlockArtifacts(
 	if !found || !check.Moved() || check.Merge != nil {
 		return nil, fmt.Errorf("handoff verification block of %s has no failed merge: %w",
 			task.PublicationID, domain.ErrParentKeyMismatch)
+	}
+	stop, stopped, err := w.loadHandoffStop(ctx, task, check)
+	if err != nil {
+		return nil, err
+	}
+	if stopped {
+		return stop.Artifacts, nil
 	}
 	merge, err := w.loadHandoffCheckpointMerge(ctx, task)
 	if err != nil {
