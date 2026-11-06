@@ -204,6 +204,23 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 		{"unknown source", func(b *domain.AdmissionAgentBinding) {
 			b.SelectionSource = "intake"
 		}, domain.ErrInvalidAgentSelectionSource},
+		// The valid case above carries no selection either: a binding
+		// admitted before the selection existed must keep validating.
+		{"a whole selection", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = manifestDigest, "gpt-5.6-sol", "xhigh"
+		}, nil},
+		{"a selection digest alone", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionDigest = manifestDigest
+		}, domain.ErrAgentSelectionInconsistent},
+		{"a selection with no effort", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionDigest, b.SelectionModelID = manifestDigest, "gpt-5.6-sol"
+		}, domain.ErrAgentSelectionInconsistent},
+		{"a selection model and effort with no digest", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionModelID, b.SelectionEffort = "gpt-5.6-sol", "xhigh"
+		}, domain.ErrAgentSelectionInconsistent},
+		{"a selection digest that is a name", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = "sol-xhigh", "gpt-5.6-sol", "xhigh"
+		}, domain.ErrInvalidDigest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -372,6 +389,10 @@ func derivationClosureFor(t *testing.T, resolution domain.AgentResolutionInput, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	reduced, err := domain.ReduceAgentSelection(agent, resolution.Adapter, resolution.Offer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	in := vendorInstructionInput(t, vendor)
 	identity := domain.AuthIdentityID(resolution.Enrollment.AuthIdentityID)
 	in.AuthIdentityID = &identity
@@ -389,6 +410,9 @@ func derivationClosureFor(t *testing.T, resolution domain.AgentResolutionInput, 
 		RouteModelID:         selection.RouteModelID,
 		RequestedEffort:      selection.RequestedEffort,
 		NativeEffort:         selection.NativeEffort,
+		SelectionDigest:      reduced.Digest,
+		SelectionModelID:     reduced.ModelID,
+		SelectionEffort:      reduced.Effort,
 		HarnessClient:        resolution.Adapter.ClientKind,
 		LineageGroup:         resolution.Offer.LineageGroup,
 		CostOwner:            resolution.Identity.CostOwner,
@@ -689,7 +713,9 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 		nativeDefault.Source.Effort = domain.EffortHarnessDefault
 		if err := validate(t, nativeDefault, domain.AgentVendorClaude,
 			func(b *domain.AdmissionAgentBinding) {
-				if b.RouteModelID != "" || b.RequestedEffort != "" || b.NativeEffort != "" {
+				if b.RouteModelID != "" || b.RequestedEffort != "" || b.NativeEffort != "" ||
+					b.SelectionModelID != domain.ClaudeCodeNativeDefaultRouteModelID ||
+					b.SelectionEffort != string(domain.EffortHarnessDefault) {
 					t.Fatalf("native default binding records %+v", b)
 				}
 			}); err != nil {
@@ -700,7 +726,8 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 	t.Run("coherent codex closure", func(t *testing.T) {
 		if err := validate(t, agentResolution(t), domain.AgentVendorCodex,
 			func(b *domain.AdmissionAgentBinding) {
-				if b.RouteModelID != "gpt-5.6-sol" || b.RequestedEffort != domain.EffortMax || b.NativeEffort != "xhigh" {
+				if b.RouteModelID != "gpt-5.6-sol" || b.RequestedEffort != domain.EffortMax || b.NativeEffort != "xhigh" ||
+					b.SelectionModelID != "gpt-5.6-sol" || b.SelectionEffort != "xhigh" {
 					t.Fatalf("codex binding records %+v", b)
 				}
 			}); err != nil {
@@ -746,6 +773,26 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 			// What a codex binding held while codex derived nothing.
 			"codex binding omits the selection", agentResolution, domain.AgentVendorCodex,
 			func(b *domain.AdmissionAgentBinding) { b.RouteModelID, b.RequestedEffort, b.NativeEffort = "", "", "" },
+		},
+		// The recorded selection (#2596): its digest, model, and effort must
+		// be the ones the agent reduces to, and a fresh admission records one.
+		{
+			"codex selection digest disagrees", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.SelectionDigest = manifestDigest },
+		},
+		{
+			"codex selection model disagrees", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.SelectionModelID = "gpt-5.6-luna" },
+		},
+		{
+			"codex selection effort recorded unclamped", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.SelectionEffort = "max" },
+		},
+		{
+			"claude binding omits the recorded selection", claudeAgentResolution, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) {
+				b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = "", "", ""
+			},
 		},
 	}
 	for _, tc := range cases {

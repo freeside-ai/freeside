@@ -868,10 +868,11 @@ func resolveAgentAdmission(
 	var (
 		agent       RoleAgent
 		conformance domain.AdapterConformance
+		catalog     *domain.DiscoveredModelCatalog
 	)
 	// One read transaction, so the task's line, the enrollment, its identity,
-	// its current generation, and the conformance record are one consistent
-	// view.
+	// its current generation, the conformance record, and the enrollment's
+	// catalog are one consistent view.
 	err = st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		// Steps 1 and 2, resolve and selected, and the credential's store.
@@ -889,7 +890,8 @@ func resolveAgentAdmission(
 		} else if !found {
 			return fmt.Errorf("adapter %s has no conformance record", agent.Resolved.Adapter.Digest)
 		}
-		return nil
+		catalog, err = readCatalog(ctx, tx, agent.Enrollment.ID)
+		return err
 	})
 	if err != nil {
 		// Wrapped, not flattened like the other refusals: a marked
@@ -913,6 +915,13 @@ func resolveAgentAdmission(
 	// Step 3, proved: the adapter's latest conformance covers the launch.
 	if err := domain.ValidateAdapterLaunchCoverage(conformance, resolved.Adapter.Digest, launch); err != nil {
 		return refuse(domain.AdmissionCheckAgentLaunchCoverage, "%v", err)
+	}
+	// Step 1 again, by selection: the agent must stand for the selection its
+	// enrollment, catalog, and launch shape resolve. It runs after the prompt
+	// and coverage checks so their refusals keep their own check.
+	agentSelection, err := admitSelection(selection.Tree, agent, catalog, launch)
+	if err != nil {
+		return refuse(domain.AdmissionCheckAgentResolution, "%v", err)
 	}
 	// Step 4, credentialed: a credential that outlives the attempt and an
 	// offer still on sale at its deadline. Resolution already refused a
@@ -955,10 +964,60 @@ func resolveAgentAdmission(
 			RouteModelID:        passes.RouteModelID, RequestedEffort: passes.RequestedEffort,
 			NativeEffort:    passes.NativeEffort,
 			SelectionSource: source, SelectionRecordID: record,
-			HarnessClient: resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
+			SelectionDigest: agentSelection.Digest, SelectionModelID: agentSelection.ModelID,
+			SelectionEffort: agentSelection.Effort,
+			HarnessClient:   resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
 			CostOwner: agent.Identity.CostOwner,
 		},
 		resolved: resolved, launch: launch, stage: stage,
 		enrollment: enrollment, generation: generation, identity: agent.Identity,
 	}, nil
+}
+
+// readCatalog reads the enrollment's discovered model catalog, nil when none
+// was ever recorded.
+func readCatalog(
+	ctx context.Context, tx *store.ReadTx, id domain.ClientEnrollmentID,
+) (*domain.DiscoveredModelCatalog, error) {
+	catalog, err := tx.GetDiscoveredModelCatalog(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &catalog, nil
+}
+
+// admitSelection resolves the selection a ward role's agent stands for
+// against the enrollment's catalog (nil runs the bridge,
+// domain.ResolveAgentSelection), with the adapter the tree picks for the
+// enrollment's client kind, the selection's effort, and the stage launch,
+// less the waived capabilities. It refuses unless the result is the agent's own reduction,
+// digest for digest, so the agent document and the selection can never name
+// different launches.
+func admitSelection(
+	tree agenttree.Tree, agent RoleAgent, catalog *domain.DiscoveredModelCatalog,
+	launch domain.LaunchSpec, waived ...domain.LaunchCapability,
+) (domain.AgentSelection, error) {
+	reduced := agent.Resolved.Selection
+	adapter, err := tree.AdapterForLaunch(agent.Enrollment.HarnessClient, launch, reduced.Effort, waived...)
+	if err != nil {
+		return domain.AgentSelection{}, err
+	}
+	selection, err := domain.ResolveAgentSelection(domain.AgentSelectionInput{
+		Names: domain.AgentSelectionNames{
+			Enrollment: string(reduced.EnrollmentID), Model: reduced.ModelID, Effort: reduced.Effort,
+		},
+		Identity: agent.Identity, Enrollment: agent.Enrollment, Adapter: adapter, Catalog: catalog,
+	})
+	if err != nil {
+		return domain.AgentSelection{}, err
+	}
+	if selection.Digest != reduced.Digest {
+		return domain.AgentSelection{}, fmt.Errorf(
+			"agent %s reduces to selection %s, its enrollment and launch resolve %s: %w",
+			agent.Line.AgentName, reduced.Digest, selection.Digest, domain.ErrAgentJoinInvalid)
+	}
+	return selection, nil
 }

@@ -19,7 +19,10 @@
     "route_model_id": "gpt-5.2-codex",
     "requested_effort": "high",
     "native_effort": "high",
-    "selection_source": "lineup"
+    "selection_source": "lineup",
+    "selection_digest": "sha256:cfdb5efcff0bf3134dd83d208db0d4ca5ba21354b7e2f5b078c9d7a41c05bba5",
+    "selection_model_id": "gpt-5.2-codex",
+    "selection_effort": "high"
   },
   "admitted_at": "2026-01-02T03:04:05Z"
 }

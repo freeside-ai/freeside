@@ -279,6 +279,15 @@ type AdmissionAgentBinding struct {
 	// its bytes and id and reads as carrying no recorded source.
 	SelectionSource   AgentSelectionSource `json:"selection_source,omitempty"`
 	SelectionRecordID Digest               `json:"selection_record_id,omitempty"`
+	// SelectionDigest, SelectionModelID, and SelectionEffort are the
+	// AgentSelection admission resolved (issue #2596): its digest, its
+	// catalog model id, and its harness effort string. They are present
+	// together on every binding admitted since and absent together on one
+	// admitted before, each omitted when empty so that binding keeps its
+	// bytes and id.
+	SelectionDigest  Digest `json:"selection_digest,omitempty"`
+	SelectionModelID string `json:"selection_model_id,omitempty"`
+	SelectionEffort  string `json:"selection_effort,omitempty"`
 	// HarnessClient, LineageGroup, and CostOwner are the adapter's client,
 	// the offer's lineage group, and the identity's cost owner at admission
 	// (§5.4, §7), recorded so a run's facts are read from the admission and
@@ -339,7 +348,29 @@ func (b AdmissionAgentBinding) Validate() error {
 		return fmt.Errorf("admission agent binding harness_client %q: %w",
 			b.HarnessClient, ErrInvalidHarnessClientKind)
 	}
+	if err := b.validateSelectionTuple(); err != nil {
+		return err
+	}
 	return b.validateSelection()
+}
+
+// validateSelectionTuple reports whether the recorded selection is whole or
+// wholly absent. Whether it is the selection the closure derives is
+// validateBindingClosure's question.
+func (b AdmissionAgentBinding) validateSelectionTuple() error {
+	present := []bool{b.SelectionDigest != "", b.SelectionModelID != "", b.SelectionEffort != ""}
+	if !slices.Contains(present, true) {
+		return nil
+	}
+	if slices.Contains(present, false) {
+		return fmt.Errorf("admission agent binding selection_digest %q, selection_model_id %q, selection_effort %q "+
+			"are not present together: %w", b.SelectionDigest, b.SelectionModelID, b.SelectionEffort,
+			ErrAgentSelectionInconsistent)
+	}
+	if !contentaddr.Valid(string(b.SelectionDigest)) {
+		return fmt.Errorf("admission agent binding selection_digest %q: %w", b.SelectionDigest, ErrInvalidDigest)
+	}
+	return nil
 }
 
 // validateSelection reports whether the selection source and its record id
@@ -1208,7 +1239,9 @@ func ValidateAdmissionAgentDerivations(
 // well-formed and authentic, the agent pins them, the launch is the one the
 // binding names and is for the role's stage, the effort is one the offer
 // allows and the adapter sends, the model and effort are the ones the closure
-// derives, the enrollment and generation are the ones the binding names, and
+// derives, the recorded selection is the one the agent reduces to and agrees
+// with the model and effort the launch passes (checkBindingSelection), the
+// enrollment and generation are the ones the binding names, and
 // the recorded harness, lineage group, and cost owner are the adapter's, the
 // offer's, and the enrollment identity's. What only one of the two records holds (launch capabilities, the egress
 // join, the credential mode, instruction delivery) stays with its caller.
@@ -1281,6 +1314,9 @@ func validateBindingClosure(
 			binding.RouteModelID, binding.RequestedEffort, binding.NativeEffort,
 			selection.RouteModelID, selection.RequestedEffort, selection.NativeEffort)
 	}
+	if err := checkBindingSelection(fail, binding, agent, adapter, offer); err != nil {
+		return err
+	}
 	if agent.EnrollmentID != binding.EnrollmentID || enrollment.ID != binding.EnrollmentID {
 		return fail("enrollment %s disagrees with binding %s", enrollment.ID, binding.EnrollmentID)
 	}
@@ -1304,6 +1340,37 @@ func validateBindingClosure(
 	}
 	if binding.CostOwner != identity.CostOwner {
 		return fail("binding records cost owner %q, the identity carries %q", binding.CostOwner, identity.CostOwner)
+	}
+	return nil
+}
+
+// checkBindingSelection holds the recorded selection to the closure: the
+// selection the agent reduces to must be the one recorded, by model, effort,
+// and digest, and the model and effort the launch passes must be the
+// selection's. A fresh admission always records a selection, so an absent
+// one is a resolver that forgot it.
+func checkBindingSelection(
+	fail func(format string, args ...any) error, binding AdmissionAgentBinding,
+	agent AgentDefinition, adapter AdapterFragment, offer OfferFragment,
+) error {
+	if binding.SelectionDigest == "" {
+		return fail("binding records no selection")
+	}
+	selection, err := ReduceAgentSelection(agent, adapter, offer)
+	if err != nil {
+		return fail("selection: %v", err)
+	}
+	if binding.SelectionModelID != selection.ModelID || binding.SelectionEffort != selection.Effort {
+		return fail("binding records selection model %q effort %q, closure reduces to %q %q",
+			binding.SelectionModelID, binding.SelectionEffort, selection.ModelID, selection.Effort)
+	}
+	if binding.SelectionDigest != selection.Digest {
+		return fail("binding records selection %s, closure reduces to %s", binding.SelectionDigest, selection.Digest)
+	}
+	model, nativeEffort := selection.LaunchValues(adapter.ClientKind)
+	if binding.RouteModelID != model || binding.NativeEffort != nativeEffort {
+		return fail("binding passes model %q effort %q, the selection passes %q %q",
+			binding.RouteModelID, binding.NativeEffort, model, nativeEffort)
 	}
 	return nil
 }

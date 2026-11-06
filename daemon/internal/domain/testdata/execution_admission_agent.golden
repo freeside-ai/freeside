@@ -1,5 +1,5 @@
 {
-  "id": "sha256:c374dcfe0e8b64bab30eec5427ef35bc0c7ccb0fab0aa6eab4ce80262e691c66",
+  "id": "sha256:dff4d64e0bf59dae259097a5a18c6a5701864cb07d0f5e126a2252f5140212a0",
   "invocation_id": "inv-3",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -58,7 +58,10 @@
     "effective_egress": [
       "chatgpt.com"
     ],
-    "selection_source": "lineup"
+    "selection_source": "lineup",
+    "selection_digest": "sha256:9e51a0466655d03f5b0fab46b5ef0778d26237ee3dec99fc7bf91f45038f97e9",
+    "selection_model_id": "gpt-5.6-sol",
+    "selection_effort": "xhigh"
   },
   "admitted_at": "2026-01-02T03:04:05Z"
 }
