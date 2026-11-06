@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -105,14 +104,15 @@ func TestOpenCodedDigestDetection(t *testing.T) {
 // Test fixtures remain independent so their expected values can catch helper
 // regressions instead of computing expectations through the code under test.
 func TestDigestFormattingIsCentralized(t *testing.T) {
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate ratchet test source")
+	// go test runs a package with its directory as the working directory;
+	// under -trimpath, runtime.Caller returns import paths, not file paths.
+	contentaddrDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	daemonRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
-	contentaddrDir := filepath.Dir(sourceFile)
+	daemonRoot := filepath.Clean(filepath.Join(contentaddrDir, "..", ".."))
 
-	err := filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

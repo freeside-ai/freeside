@@ -244,11 +244,11 @@ class Coverage(unittest.TestCase):
         self.assertIn("    if: github.event_name == 'push'\n", main)
         self.assertIn('runs-on: macos-26', main)
         self.assertIn('fetch-depth: 2', main)
-        self.assertLess(main.index("go test -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
+        self.assertLess(main.index("go test -trimpath -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
         # The cache this job saves is the one the PR darwin shard and the
         # convergence job restore, so it runs their build too.
         self.assertLess(main.index('run: bash scripts/check.sh daemon build\n'),
-                        main.index("go test -count=1 -run '^$' ./..."))
+                        main.index("go test -trimpath -count=1 -run '^$' ./..."))
         shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: (\w+)\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
                                  r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
                                  r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/([\w-]+)\n'

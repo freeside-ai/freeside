@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -36,15 +35,17 @@ var requiredLayouts = []string{
 // build context so build-tagged files (_darwin.go, _linux.go) count on every
 // platform.
 func TestLayoutSectionsMatchFiles(t *testing.T) {
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate layout test source")
+	// go test runs a package with its directory as the working directory;
+	// under -trimpath, runtime.Caller returns import paths, not file paths.
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	internalDir := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), ".."))
+	internalDir := filepath.Dir(packageDir)
 	daemonRoot := filepath.Dir(internalDir)
 
 	checked := map[string]bool{}
-	err := filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

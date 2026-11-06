@@ -497,13 +497,21 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	}
 }
 
+// phase1APromptDir resolves the repository's phase-1a prompt package from
+// the package directory, which go test uses as the working directory;
+// under -trimpath, runtime.Caller returns import paths, not file paths.
+func phase1APromptDir(t *testing.T) string {
+	t.Helper()
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(packageDir, "../../../../prompts/phase-1a")
+}
+
 func TestPhase1ASpecifierPromptLeavesEnvelopeHeadroom(t *testing.T) {
 	t.Parallel()
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate test source")
-	}
-	promptPath := filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a/specifier.md")
+	promptPath := filepath.Join(phase1APromptDir(t), "specifier.md")
 	prompt, err := os.ReadFile(promptPath) //nolint:gosec // fixed repository test fixture
 	if err != nil {
 		t.Fatal(err)
@@ -523,11 +531,7 @@ func TestPhase1ASpecifierPromptLeavesEnvelopeHeadroom(t *testing.T) {
 
 func TestPhase1ASummaryPromptContracts(t *testing.T) {
 	t.Parallel()
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate test source")
-	}
-	promptDir := filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a")
+	promptDir := phase1APromptDir(t)
 	implementer, err := os.ReadFile(filepath.Join(promptDir, "implementer.md")) //nolint:gosec // fixed repository fixture
 	if err != nil {
 		t.Fatal(err)
@@ -1098,12 +1102,9 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 	if !strings.Contains(script, guard) || !strings.Contains(script, fragment) {
 		t.Fatal("launcher lost fixed public provenance or optional safe-file guard")
 	}
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate source")
-	}
+	promptDir := phase1APromptDir(t)
 	for _, name := range []string{"implementer.md", "remediator.md"} {
-		body, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a", name)) //nolint:gosec // fixed prompt fixtures
+		body, err := os.ReadFile(filepath.Join(promptDir, name)) //nolint:gosec // fixed prompt fixtures
 		if err != nil {
 			t.Fatal(err)
 		}
