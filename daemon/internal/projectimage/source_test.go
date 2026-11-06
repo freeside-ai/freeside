@@ -49,6 +49,7 @@ func TestExecRunnerReplacesAmbientEnvironmentAtTrustBoundary(t *testing.T) {
 }
 
 func TestExecRunnerSeparatesHostExitStatusFromCommandOutput(t *testing.T) {
+	t.Parallel()
 	output, err := (execRunner{}).Run(t.Context(), commandSpec{
 		Path: "/bin/sh",
 		Args: []string{
@@ -63,6 +64,7 @@ func TestExecRunnerSeparatesHostExitStatusFromCommandOutput(t *testing.T) {
 }
 
 func TestGitFetchScrubsAmbientConfigurationAndAllowsOnlyHTTPS(t *testing.T) {
+	t.Parallel()
 	runner := &recordingRunner{}
 	source := gitSource{gitPath: "/usr/bin/git", runner: runner}
 	destination := t.TempDir() + "/repository.git"
@@ -98,6 +100,7 @@ func TestGitFetchScrubsAmbientConfigurationAndAllowsOnlyHTTPS(t *testing.T) {
 }
 
 func TestGitFetchUsesExactReadOnlyTokenWithoutLeakingFailures(t *testing.T) {
+	t.Parallel()
 	tokens := &projectImageTokenSource{token: testProjectImageToken()}
 	runner := &recordingRunner{
 		run: func(commandSpec) (commandOutput, error) {
@@ -134,6 +137,7 @@ func TestGitFetchUsesExactReadOnlyTokenWithoutLeakingFailures(t *testing.T) {
 }
 
 func TestGitFetchRejectsMismatchedOrWriteTokenBeforeClone(t *testing.T) {
+	t.Parallel()
 	for _, mutate := range []func(*publish.InstallationToken){
 		func(token *publish.InstallationToken) { token.RepositoryID++ },
 		func(token *publish.InstallationToken) { token.Permissions = publish.PublishPermissions },

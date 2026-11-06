@@ -13,6 +13,7 @@ import (
 // image's build commit: the tip's recipe digest when it changed, and only the
 // hosts outside the repository's effective registry set.
 func TestDeriveUpkeepAdoptionNamesTheExactDigestAndHosts(t *testing.T) {
+	t.Parallel()
 	const (
 		declared    = `["registry.npmjs.org"]`
 		otherRecipe = `{"commands":[["true"]],"capture":"none"}`
@@ -106,6 +107,7 @@ func TestDeriveUpkeepAdoptionNamesTheExactDigestAndHosts(t *testing.T) {
 // refusal the proxy host answers: the derivation names it, and once it is
 // adopted the gate admits the change.
 func TestDeriveUpkeepAdoptionNamesTheGoModuleProxy(t *testing.T) {
+	t.Parallel()
 	const goMod = "module example.test/app\n\ngo 1.22\n"
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{

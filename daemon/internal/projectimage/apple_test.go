@@ -135,6 +135,7 @@ func taggedRef(specs []commandSpec, localRef string) string {
 }
 
 func TestAppleRunPreservesRecipeArgvWithRuntimeWorkingDirectory(t *testing.T) {
+	t.Parallel()
 	for _, masked := range []string{"", NPMCachePath, GoModuleCachePath} {
 		for _, argv := range [][]string{
 			{PreparationPath},
@@ -191,6 +192,7 @@ func testAppleRunVerificationEnvironment(t *testing.T, masked string, argv []str
 // verification room's default fails here until the recipe bound documented
 // in daemon/README.md is revisited.
 func TestAppleRunBoundsAWorkspacelessProofAtTheVerificationRoomSize(t *testing.T) {
+	t.Parallel()
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		if len(spec.Args) == 0 || spec.Args[0] != "run" {
 			return commandOutput{}, nil
@@ -230,6 +232,7 @@ func defaultBuildNetwork() ward.NetworkReport {
 }
 
 func TestAppleBuildPrefersAnOperatorProxyOverTheManagedOne(t *testing.T) {
+	t.Parallel()
 	runner := &recordingRunner{}
 	backend := appleBackend{
 		containerPath: "container", runner: runner,
@@ -250,6 +253,7 @@ func TestAppleBuildPrefersAnOperatorProxyOverTheManagedOne(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: it probes whether the proxy's freed ephemeral port still listens; a parallel test's listener can take that port and fail the probe.
 func TestAppleBuildRunsBehindAManagedProxyForExactlyTheBuild(t *testing.T) {
 	listening := func(port string) bool {
 		conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port)) //nolint:noctx // test dial to a local listener
@@ -292,6 +296,7 @@ func TestAppleBuildRunsBehindAManagedProxyForExactlyTheBuild(t *testing.T) {
 }
 
 func TestAppleBuildFailsClosedWithoutATrustworthyBuildNetwork(t *testing.T) {
+	t.Parallel()
 	for name, inspect := range map[string]func(context.Context, string) (ward.NetworkReport, error){
 		"inspection fails": func(context.Context, string) (ward.NetworkReport, error) {
 			return ward.NetworkReport{}, errors.New("runtime unavailable")
@@ -362,6 +367,7 @@ func listedContainer(id string) containerInspect {
 }
 
 func TestAppleCheckAllowlistRecoversLostProbeIdentity(t *testing.T) {
+	t.Parallel()
 	var token string
 	var deleted []string
 	runner := &recordingRunner{}
@@ -403,6 +409,7 @@ func TestAppleCheckAllowlistRecoversLostProbeIdentity(t *testing.T) {
 }
 
 func TestAppleRunRecoversOrphanOnInterruptedCreate(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	var token string
 	var deleted []string
@@ -446,6 +453,7 @@ func compliantImageAllowlistReport(id string) ward.InspectReport {
 }
 
 func TestImageAllowlistRejectsRuntimeDrift(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*ward.InspectReport)
@@ -474,6 +482,7 @@ func TestImageAllowlistRejectsRuntimeDrift(t *testing.T) {
 }
 
 func TestAppleCheckAllowlistCleansProbeAfterInspectionFailure(t *testing.T) {
+	t.Parallel()
 	runner := &managedRunner{}
 	backend := appleBackend{
 		containerPath: "container", runner: runner,
@@ -496,6 +505,7 @@ func TestAppleCheckAllowlistCleansProbeAfterInspectionFailure(t *testing.T) {
 // A probe the runtime ran and reported is a result: its drift is a failed
 // proof, not a fault, so the builder records it as a verdict.
 func TestAppleCheckAllowlistDriftIsNotARuntimeFault(t *testing.T) {
+	t.Parallel()
 	runner := &managedRunner{}
 	backend := appleBackend{
 		containerPath: "container", runner: runner,
@@ -512,6 +522,7 @@ func TestAppleCheckAllowlistDriftIsNotARuntimeFault(t *testing.T) {
 }
 
 func TestAppleBuildClassesCandidateInstallFailures(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		fixture string
@@ -549,6 +560,7 @@ func TestAppleBuildClassesCandidateInstallFailures(t *testing.T) {
 }
 
 func TestAppleCheckAllowlistFailsWhenIdentityFileCleanupFails(t *testing.T) {
+	t.Parallel()
 	runner := &managedRunner{}
 	backend := appleBackend{
 		containerPath: "container", runner: runner,
@@ -582,6 +594,7 @@ func TestAppleCheckAllowlistFailsWhenIdentityFileCleanupFails(t *testing.T) {
 }
 
 func TestRunErrorMarksARuntimeFaultWithoutChangingItsText(t *testing.T) {
+	t.Parallel()
 	err := runError("save image as OCI archive", commandOutput{bytes: []byte("disk full\n")}, errors.New("exit status 1"))
 	if !isRuntimeFault(err) {
 		t.Fatalf("runError = %v, want a runtime fault", err)
@@ -598,6 +611,7 @@ func TestRunErrorMarksARuntimeFaultWithoutChangingItsText(t *testing.T) {
 }
 
 func TestAppleCheckAllowlistRefusesCleanupOnAmbiguousOwnershipJSON(t *testing.T) {
+	t.Parallel()
 	deleted := false
 	var runner *recordingRunner
 	runner = &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
@@ -637,6 +651,7 @@ func TestAppleCheckAllowlistRefusesCleanupOnAmbiguousOwnershipJSON(t *testing.T)
 }
 
 func TestAppleImageDigestRequiresFullLowercaseDigest(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		output commandOutput
@@ -666,6 +681,7 @@ func TestAppleImageDigestRequiresFullLowercaseDigest(t *testing.T) {
 }
 
 func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
+	t.Parallel()
 	recipeDigest := verify.RecipeDigest([]byte(testRecipe))
 	nodeArchive := []byte("pinned Node archive")
 	nodeArchiveDigest := fmt.Sprintf("%x", sha256.Sum256(nodeArchive))
@@ -1020,6 +1036,7 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 }
 
 func TestRootImageUser(t *testing.T) {
+	t.Parallel()
 	valid := []string{"", "root", "0", "root:root", "root:0", "0:root", "0:0"}
 	for _, user := range valid {
 		if !rootImageUser(user) {
@@ -1039,6 +1056,7 @@ func TestRootImageUser(t *testing.T) {
 }
 
 func TestAppleRunTakesExitStatusOnlyFromHostProcessResult(t *testing.T) {
+	t.Parallel()
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		if spec.Args[0] != "run" {
 			return commandOutput{}, nil
@@ -1068,6 +1086,7 @@ func TestAppleRunTakesExitStatusOnlyFromHostProcessResult(t *testing.T) {
 }
 
 func TestAppleRunMapsShellSignalStatusToSignalExit(t *testing.T) {
+	t.Parallel()
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		if spec.Args[0] == "run" {
 			return commandOutput{exited: true, exitCode: 143}, errors.New("exit status 143")
@@ -1082,6 +1101,7 @@ func TestAppleRunMapsShellSignalStatusToSignalExit(t *testing.T) {
 }
 
 func TestAppleRunReportsContextKillAsSignalExit(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	runner := &managedRunner{next: func(ctx context.Context, spec commandSpec) (commandOutput, error) {
 		if spec.Args[0] == "run" {
@@ -1102,6 +1122,7 @@ func TestAppleRunReportsContextKillAsSignalExit(t *testing.T) {
 }
 
 func TestApplePublishRetainsLocalRegistryBackingBeforeReturning(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		switch {
@@ -1170,6 +1191,7 @@ func TestApplePublishRetainsLocalRegistryBackingBeforeReturning(t *testing.T) {
 }
 
 func TestLocalRegistryLeaseSerializesSamePort(t *testing.T) {
+	t.Parallel()
 	lockDir := t.TempDir()
 	first, err := acquireLocalRegistryLease(t.Context(), lockDir, 5101)
 	if err != nil {
@@ -1204,6 +1226,7 @@ func TestLocalRegistryLeaseSerializesSamePort(t *testing.T) {
 }
 
 func TestApplePublishReusesRetainedLocalRegistry(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	const id = "runtime-registry-id"
 	const token = "retained-token"
@@ -1282,6 +1305,7 @@ func TestApplePublishReusesRetainedLocalRegistry(t *testing.T) {
 }
 
 func TestApplePublishRestartsStoppedRetainedLocalRegistry(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	const stoppedID = "stopped-registry-id"
 	const token = "retained-token"
@@ -1341,6 +1365,7 @@ func TestApplePublishRestartsStoppedRetainedLocalRegistry(t *testing.T) {
 }
 
 func TestApplePublishPreservesStoppedRegistryWhenRestartFails(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	const id = "stopped-registry-id"
 	stopped := registryContainer(id, "retained-token", port)
@@ -1379,6 +1404,7 @@ func TestApplePublishPreservesStoppedRegistryWhenRestartFails(t *testing.T) {
 }
 
 func TestApplePublishRejectsForeignLocalRegistry(t *testing.T) {
+	t.Parallel()
 	runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
 		if slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}) {
 			return commandOutput{bytes: []byte("[]")}, nil
@@ -1404,6 +1430,7 @@ func TestApplePublishRejectsForeignLocalRegistry(t *testing.T) {
 }
 
 func TestApplePublishCleansRegistryWhenPushFails(t *testing.T) {
+	t.Parallel()
 	const port = 5102
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		switch {
@@ -1445,6 +1472,7 @@ func TestApplePublishCleansRegistryWhenPushFails(t *testing.T) {
 }
 
 func TestApplePublishRemovesSeededImageWhenDigestProofFails(t *testing.T) {
+	t.Parallel()
 	const port = 5103
 	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
 	wrongDigest := "sha256:" + strings.Repeat("c", 64)
@@ -1503,6 +1531,7 @@ func TestApplePublishRemovesSeededImageWhenDigestProofFails(t *testing.T) {
 }
 
 func TestApplePublishDeletesReusedRegistryManifestOnAmbiguousPushFailure(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	const id = "runtime-registry-id"
 	retained := registryContainer(id, "retained-token", port)
@@ -1556,6 +1585,7 @@ func TestApplePublishDeletesReusedRegistryManifestOnAmbiguousPushFailure(t *test
 }
 
 func TestApplePublishSkipsManifestDeleteWhenTagFails(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	const id = "runtime-registry-id"
 	retained := registryContainer(id, "retained-token", port)
@@ -1605,6 +1635,7 @@ func TestApplePublishSkipsManifestDeleteWhenTagFails(t *testing.T) {
 }
 
 func TestApplePublishDeletesReusedRegistryManifestOnPostPushFailure(t *testing.T) {
+	t.Parallel()
 	const port = 5101
 	const id = "runtime-registry-id"
 	retained := registryContainer(id, "retained-token", port)
@@ -1658,6 +1689,7 @@ func TestApplePublishDeletesReusedRegistryManifestOnPostPushFailure(t *testing.T
 }
 
 func TestApplePublishRetainsResidueWhenReferenceRecordedOrLookupFails(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		recorded    bool
@@ -1733,6 +1765,7 @@ func TestApplePublishRetainsResidueWhenReferenceRecordedOrLookupFails(t *testing
 }
 
 func TestApplePublishTransfersSeededImageDiscardBeforeReturning(t *testing.T) {
+	t.Parallel()
 	const port = 5104
 	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
@@ -1789,6 +1822,7 @@ func TestApplePublishTransfersSeededImageDiscardBeforeReturning(t *testing.T) {
 }
 
 func TestDeleteRegistryManifestAcceptsDisabledDeleteAsRetention(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		status  int
 		wantErr bool
@@ -1815,6 +1849,7 @@ func TestDeleteRegistryManifestAcceptsDisabledDeleteAsRetention(t *testing.T) {
 }
 
 func TestTemporaryPublicationTagIsBuildUniqueAndBounded(t *testing.T) {
+	t.Parallel()
 	prefix := strings.Repeat("a", 128)
 	first := temporaryPublicationTag(prefix, strings.Repeat("1", 32))
 	second := temporaryPublicationTag(prefix, strings.Repeat("2", 32))
@@ -1825,6 +1860,7 @@ func TestTemporaryPublicationTagIsBuildUniqueAndBounded(t *testing.T) {
 }
 
 func TestDeleteOwnedContainerRefusesForeignRuntimeInstance(t *testing.T) {
+	t.Parallel()
 	deleted := false
 	runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
 		switch {
@@ -1848,6 +1884,7 @@ func TestDeleteOwnedContainerRefusesForeignRuntimeInstance(t *testing.T) {
 }
 
 func TestDeleteOwnedContainerAcceptsAutoRemovalAfterOwnershipCheck(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		output  string

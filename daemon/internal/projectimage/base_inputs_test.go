@@ -25,6 +25,7 @@ import (
 // Update the pin when that is the intended cost of the edit, and say so in the
 // change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
+	t.Parallel()
 	const want = "sha256:6d7281a0896fb13f447c44dbcd36ef08f92f29d63a8570858794b8a45ccb8b02"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
@@ -127,6 +128,7 @@ func (r baseInputsRepo) commit(changes map[string]string) string {
 }
 
 func TestObserveBaseInputsReadsEachInputAtTheExactCommit(t *testing.T) {
+	t.Parallel()
 	const (
 		packageJSON = `{"scripts":{}}`
 		packageLock = `{"lockfileVersion":3}`
@@ -267,6 +269,7 @@ func TestObserveBaseInputsReadsEachInputAtTheExactCommit(t *testing.T) {
 // builder would refuse to build from that commit. The observation fails
 // instead of reporting an empty hash as if the file were merely absent.
 func TestObserveBaseInputsRefusesANonRegularManifest(t *testing.T) {
+	t.Parallel()
 	repo := newBaseInputsRepo(t)
 	repo.commit(map[string]string{"real.json": `{"scripts":{}}`, "package-lock.json": `{"lockfileVersion":3}`})
 	if err := os.Symlink("real.json", filepath.Join(repo.dir, "package.json")); err != nil {

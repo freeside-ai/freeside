@@ -101,7 +101,6 @@ linters:
           |internal/operations\
           |internal/pathfold\
           |internal/procbound\
-          |internal/projectimage\
           |internal/publicationtext\
           |internal/publish\
           |internal/repotemplate\

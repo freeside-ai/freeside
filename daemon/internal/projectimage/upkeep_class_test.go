@@ -9,6 +9,7 @@ import (
 )
 
 func TestClassifyUpkeepFindingsPrefersAClassThatOpensNoTask(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		clauses []RebuildRefusal
 		want    domain.ImageUpkeepRefusalClass
@@ -34,6 +35,7 @@ func TestClassifyUpkeepFindingsPrefersAClassThatOpensNoTask(t *testing.T) {
 }
 
 func TestClassifyUpkeepFindingsClassifiesEveryClause(t *testing.T) {
+	t.Parallel()
 	for _, clause := range AllRebuildRefusals {
 		if _, err := ClassifyUpkeepFindings([]domain.ImageUpkeepClauseFinding{{Clause: clause}}); err != nil {
 			t.Errorf("%s: %v", clause, err)
@@ -47,6 +49,7 @@ func TestClassifyUpkeepFindingsClassifiesEveryClause(t *testing.T) {
 }
 
 func TestClassifyUpkeepBuildFailureNamesARepairOnlyOnPositiveEvidence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		err  error
 		want domain.ImageUpkeepRefusalClass
