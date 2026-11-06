@@ -1354,7 +1354,8 @@ Reading the record:
   entry starts as the driver's last observation, which can lag the
   invocation's end indefinitely. Once an export, an outcome, or a terminal
   is recorded for the invocation and authenticates, the entry shows that
-  status with `live` false, the same status the app's run views show;
+  status with `live` false, the same status the app's run views and
+  `freesided follow` show;
   `observed_at` is still the daemon's last look. An invocation with no
   recorded terminal shows the status last seen.
 - **`publication` is a run's proof of work.** It names the last published
@@ -3005,9 +3006,14 @@ resumes with everything already observed; `-once` prints one snapshot instead
 of following. Liveness distinguishes an observed live invocation from an
 `observation_gap`: a stopped daemon leaves its last observation behind, and
 the reader's `-freshness-window` (30s by default) is what turns that stale
-observation into a gap rather than a claim. Holds and definitive blocks
-display the contract's closed reason codes; no free-text reason exists to
-show, and there is no percentage complete anywhere.
+observation into a gap rather than a claim. A finished invocation shows its
+recorded terminal: once an export, an outcome, or a terminal is recorded for
+it and authenticates, the block shows that status with liveness `terminal`
+and the daemon's last-look instant, as `freesided inspect task` does. An
+invocation with no recorded terminal shows the status last seen, and a
+recorded terminal that fails authentication fails the read. Holds and
+definitive blocks display the contract's closed reason codes; no free-text
+reason exists to show, and there is no percentage complete anywhere.
 
 The follow exits when the run's outcome is decided: `published`, `blocked`
 (with the block's reason code), `failed`, or `lost`. A completed execution is

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,10 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
+	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -645,6 +649,145 @@ func TestFollowCommandKeepsTheClockRunningUntilTheOutcomeIsFinal(t *testing.T) {
 	// reports far more than the run's 40 seconds of execution.
 	if !strings.Contains(output, "elapsed=") || strings.Contains(output, "elapsed=unknown") {
 		t.Errorf("pending run shows no elapsed clock:\n%s", output)
+	}
+}
+
+// openSeededFollowStore opens a store at a temporary path holding the
+// representative fixture, with the attended_dev floor its admissions were
+// recorded under, and returns its running retry attempt: one invocation whose
+// row is running and live.
+func openSeededFollowStore(t *testing.T) (
+	*store.Store, string, domain.ExecutionAdmission, domain.InvocationObservation,
+) {
+	t.Helper()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st, _, err := topicstore.Open(ctx, path, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: seedfixture.AdmissionCapabilities,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+	if _, err := seedfixture.Seed(ctx, st, seedfixture.Representative); err != nil {
+		t.Fatal(err)
+	}
+	var admission domain.ExecutionAdmission
+	var observation domain.RunObservation
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		parent, err := tx.GetRun(ctx, "run-freeside-656")
+		if err != nil {
+			return err
+		}
+		runID, err := engine.ProductionAttemptRunID(parent.CampaignID, 2)
+		if err != nil {
+			return err
+		}
+		if observation, err = tx.ObserveRun(ctx, runID); err != nil {
+			return err
+		}
+		if len(observation.Invocations) != 1 {
+			return fmt.Errorf("run %s invocations = %+v, want one", runID, observation.Invocations)
+		}
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, observation.Invocations[0].InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if row := observation.Invocations[0]; row.Status != domain.ObservedStatusRunning || !row.Live {
+		t.Fatalf("seeded invocation = %+v, want running and live", row)
+	}
+	return st, path, admission, observation.Invocations[0]
+}
+
+// TestFollowCommandShowsARecordedTerminal pins #2355: the engine records an
+// invocation's terminal without rewriting its observation row, so the row
+// still says running. The status block shows the recorded terminal instead,
+// with the row's last-look instant.
+func TestFollowCommandShowsARecordedTerminal(t *testing.T) {
+	for _, terminal := range []domain.ObservedInvocationStatus{
+		domain.ObservedStatusCompleted, domain.ObservedStatusFailed,
+	} {
+		t.Run(string(terminal), func(t *testing.T) {
+			ctx := context.Background()
+			st, path, admission, row := openSeededFollowStore(t)
+			at := row.ObservedAt.Add(time.Minute)
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if terminal == domain.ObservedStatusCompleted {
+					record, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+						InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+						ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+						ManifestDigest: domain.Digest(contentaddr.Sum([]byte("manifest"))), RecordedAt: at,
+					})
+					if err != nil {
+						return err
+					}
+					if err := tx.RecordExecutionExportRecord(ctx, record); err != nil {
+						return err
+					}
+				} else if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+					InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+					Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+					Cause: domain.FailureCauseUnknown, RecordedAt: at,
+				}); err != nil {
+					return err
+				}
+				return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+					RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+					InvocationID: &admission.InvocationID, Terminal: &terminal, RecordedAt: at,
+				})
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			output, err := runFollowCLI(t, "-db", path, "-run", string(admission.RunID), "-once")
+			if err != nil {
+				t.Fatalf("follow: %v", err)
+			}
+			invocation := "  invocation  " + identifier(string(admission.InvocationID)) + "  "
+			assertFollowContains(t, output, fmt.Sprintf("%sstatus=%s  liveness=terminal  observed-at=%s",
+				invocation, terminal, stamp(row.ObservedAt)))
+			for line := range strings.Lines(output) {
+				if strings.HasPrefix(line, invocation) &&
+					(strings.Contains(line, "status=running") || !strings.Contains(line, "liveness=terminal")) {
+					t.Errorf("follow printed the stale row %q:\n%s", line, output)
+				}
+			}
+		})
+	}
+}
+
+// TestFollowCommandRefusesAnUnbackedTerminal appends a terminal milestone no
+// outcome or export backs. The command fails as an observation failure and
+// prints neither the forged status nor the row's.
+func TestFollowCommandRefusesAnUnbackedTerminal(t *testing.T) {
+	ctx := context.Background()
+	st, path, admission, row := openSeededFollowStore(t)
+	failed := domain.ObservedStatusFailed
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &admission.InvocationID, Terminal: &failed,
+			RecordedAt: row.ObservedAt.Add(time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runFollowCLI(t, "-db", path, "-run", string(admission.RunID), "-once")
+	if !errors.Is(err, signet.ErrRunObservationIntegrity) {
+		t.Fatalf("follow err = %v, want %v", err, signet.ErrRunObservationIntegrity)
+	}
+	if got := ExitCode(err); got != 1 {
+		t.Errorf("ExitCode = %d, want 1", got)
+	}
+	if strings.Contains(output, "status=") {
+		t.Errorf("refused follow printed an invocation status:\n%s", output)
 	}
 }
 
