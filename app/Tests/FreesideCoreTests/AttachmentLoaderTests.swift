@@ -138,6 +138,23 @@ private actor ManualSleeps {
     }
 }
 
+/// A loader `sleep` that never fires, for tests that hold a `getAttachment`
+/// request at a gate before its first chunk. Under the real 15-second stall
+/// timeout, a loaded full run can let the timer win while the test holds the
+/// request, so the load ends `.timedOut` instead of with the result the test
+/// set up (#2694). It returns only by throwing once its task is cancelled,
+/// which `firstResult(for:)` does when the load settles, so no timer task
+/// outlives its load. Unlike `ManualGate`, it allows concurrent sleepers.
+private let neverFiringSleep: AttachmentLoader.Sleep = { _ in
+    let (stream, continuation) = AsyncStream<Never>.makeStream()
+    // Iteration ends only when the task is cancelled. Finishing the stream
+    // afterward also keeps the continuation alive until then, so the stream
+    // can't end early.
+    for await _ in stream {}
+    continuation.finish()
+    throw CancellationError()
+}
+
 private final class ChunkStream: @unchecked Sendable {
     let stream: AsyncStream<HTTPBody.ByteChunk>
     private let continuation: AsyncStream<HTTPBody.ByteChunk>.Continuation
@@ -281,7 +298,8 @@ private struct StreamingAttachmentTransport: ClientTransport {
         let loader = AttachmentLoader(
             client: APIClientFactory.mock(server: server),
             maxImagePixels: 2,
-            maxRetainedImagePixels: 1)
+            maxRetainedImagePixels: 1,
+            sleep: neverFiringSleep)
 
         loader.beginDisplaying(firstDigest)
         loader.beginDisplaying(secondDigest)
@@ -442,7 +460,8 @@ private struct StreamingAttachmentTransport: ClientTransport {
         let loader = AttachmentLoader(
             client: APIClientFactory.mock(server: server),
             maxImagePixels: 1,
-            maxRetainedImagePixels: 1)
+            maxRetainedImagePixels: 1,
+            sleep: neverFiringSleep)
         loader.shouldFailImageDecodingForTesting = { digest in
             guard digest == failingDigest else { return false }
             try? await decodeGate.wait()
@@ -491,7 +510,8 @@ private struct StreamingAttachmentTransport: ClientTransport {
         let loader = AttachmentLoader(
             client: APIClientFactory.mock(server: server),
             maxImagePixels: 1,
-            maxRetainedImagePixels: 1)
+            maxRetainedImagePixels: 1,
+            sleep: neverFiringSleep)
 
         loader.beginDisplaying(retainedDigest)
         loader.beginDisplaying(deniedDigest)
@@ -534,7 +554,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
             default: break
             }
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
 
         loader.beginDisplaying(digest)
         let firstLoad = Task { await loader.load(digest) }
@@ -567,7 +587,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
             guard operationID == "getAttachment" else { return }
             if await counter.record() == 2 { try await recoveryGate.wait() }
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
         loader.afterApplyingDownloadForTesting = { await appliedProbe.enter($0) }
 
         loader.beginDisplaying(digest)
@@ -608,7 +628,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
             guard operationID == "getAttachment" else { return }
             if await counter.record() == 2 { try await recoveryGate.wait() }
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
         loader.beforeApplyingDownloadForTesting = { await beforeApplyProbe.enter($0) }
         loader.afterApplyingDownloadForTesting = { await afterApplyProbe.enter($0) }
 
@@ -886,7 +906,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
             guard operationID == "getAttachment" else { return }
             try await gate.wait()
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
 
         async let first: Void = loader.load(
             digest,
@@ -921,7 +941,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
                 throw MockServer.ForcedStatus(500)
             }
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
         let available = reference(
             mediaType: "image/png", sizeBytes: bytes.count, availability: .available)
 
@@ -1233,7 +1253,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
         await server.setBeforeRespond { operationID in
             if operationID == "getAttachment" { try await requestGate.wait() }
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
         let first = Task { await loader.load("sha256:img-spec_approval") }
         await requestGate.waitUntilSuspended()
 
@@ -1280,7 +1300,7 @@ private struct StreamingAttachmentTransport: ClientTransport {
         await server.setBeforeRespond { operationID in
             if operationID == "getAttachment" { try await requestGate.wait() }
         }
-        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        let loader = AttachmentLoader(client: APIClientFactory.mock(server: server), sleep: neverFiringSleep)
         let digest = "sha256:img-spec_approval"
         loader.beginDisplaying(digest)
         let load = Task { await loader.load(digest) }
