@@ -304,3 +304,166 @@ func TestReconcilePullReviewActivityMultiPageDropsValidator(t *testing.T) {
 		t.Errorf("conditional requests = %d, want the reactions list only", conditional)
 	}
 }
+
+// reactionsReadConditional reports whether any logged reactions read for the
+// fake's PR 7 rode If-None-Match, counting from the log entry at index from.
+func reactionsReadConditional(gh *fakeGitHub, from int) bool {
+	for _, request := range gh.requestLog()[from:] {
+		if strings.Contains(request, "/issues/7/reactions") && strings.HasSuffix(request, " if-none-match") {
+			return true
+		}
+	}
+	return false
+}
+
+// seedReviewActivity gives PR 7 one review and one inline comment.
+func seedReviewActivity(gh *fakeGitHub) {
+	gh.reviews[7] = []fakeReview{{
+		ID: 900100, Login: "chatgpt-codex-connector", State: "COMMENTED",
+		Body: "findings", CommitID: "cafebabe", SubmittedAt: "2026-01-02T05:04:05Z",
+	}}
+	gh.reviewComments[7] = []fakeReviewComment{{
+		ID: 800200, ReviewID: 900100, Login: "chatgpt-codex-connector",
+		Path: "daemon/main.go", Line: intptr(42), Body: "P2: unchecked error",
+		CommitID: "cafebabe", CreatedAt: "2026-01-02T05:04:05Z",
+	}}
+}
+
+// TestReconcilePullReviewActivityReactionsRefused proves a reactions read
+// GitHub refuses with a plain 403 still returns the reviews and comments,
+// marks the reactions unavailable rather than empty, rides NotModified once
+// the refusal repeats over unchanged activity, and reads the reactions
+// unconditionally once the refusal lifts (#2717).
+func TestReconcilePullReviewActivityReactionsRefused(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	seedReviewActivity(gh)
+	gh.reactions[7] = []fakeReaction{{
+		ID: 700400, Login: "chatgpt-codex-connector", Content: "+1", CreatedAt: "2026-01-02T06:00:00Z",
+	}}
+	gh.reactionsRefusal[7] = fakeRefusal{Status: 403}
+	r := newTestReconciler(t, gh)
+	ctx := context.Background()
+
+	first, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7)
+	if err != nil {
+		t.Fatalf("refused pass: %v", err)
+	}
+	if len(first.Reviews) != 1 || first.Reviews[0].ID != 900100 ||
+		len(first.Comments) != 1 || first.Comments[0].ID != 800200 {
+		t.Fatalf("refused pass lost the reviews or comments: %+v", first)
+	}
+	if !first.ReactionsUnavailable || first.Reactions != nil {
+		t.Fatalf("refused reactions = %+v (unavailable %v), want nil and unavailable",
+			first.Reactions, first.ReactionsUnavailable)
+	}
+	if first.NotModified {
+		t.Fatal("first refused pass reported NotModified")
+	}
+
+	// Still refused, reviews and comments unchanged: the whole activity is
+	// unchanged, so the caller doesn't rebuild it every pass.
+	second, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7)
+	if err != nil {
+		t.Fatalf("second refused pass: %v", err)
+	}
+	if !second.NotModified || !second.ReactionsUnavailable || second.Reactions != nil {
+		t.Fatalf("second refused pass = NotModified %v, unavailable %v, reactions %+v; want true, true, nil",
+			second.NotModified, second.ReactionsUnavailable, second.Reactions)
+	}
+
+	// The refusal lifts: the reactions are read without a validator and the
+	// observation is a change.
+	delete(gh.reactionsRefusal, 7)
+	logged := len(gh.requestLog())
+	third, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7)
+	if err != nil {
+		t.Fatalf("recovered pass: %v", err)
+	}
+	if reactionsReadConditional(gh, logged) {
+		t.Fatalf("recovered reactions read rode If-None-Match: %v", gh.requestLog()[logged:])
+	}
+	if third.ReactionsUnavailable || third.NotModified ||
+		len(third.Reactions) != 1 || third.Reactions[0].ID != 700400 {
+		t.Fatalf("recovered pass = %+v, want the reaction, available, and modified", third)
+	}
+	if len(third.Reviews) != 1 || len(third.Comments) != 1 {
+		t.Fatalf("recovered pass lost the cached reviews or comments: %+v", third)
+	}
+}
+
+// TestReconcilePullReviewActivityRefusalAfterReactionsIsChange proves a
+// refusal that follows a successful reactions read drops the cached
+// reactions and reports a change, even with the reviews and comments on 304:
+// the reactions the caller last saw are no longer known.
+func TestReconcilePullReviewActivityRefusalAfterReactionsIsChange(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	seedReviewActivity(gh)
+	gh.reactions[7] = []fakeReaction{{
+		ID: 700400, Login: "chatgpt-codex-connector", Content: "+1", CreatedAt: "2026-01-02T06:00:00Z",
+	}}
+	r := newTestReconciler(t, gh)
+	ctx := context.Background()
+
+	if first, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7); err != nil || len(first.Reactions) != 1 {
+		t.Fatalf("first pass = %+v, %v", first, err)
+	}
+	gh.reactionsRefusal[7] = fakeRefusal{Status: 403}
+	second, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7)
+	if err != nil {
+		t.Fatalf("refused pass: %v", err)
+	}
+	if second.NotModified || !second.ReactionsUnavailable || second.Reactions != nil {
+		t.Fatalf("refusal after reactions = NotModified %v, unavailable %v, reactions %+v; want false, true, nil",
+			second.NotModified, second.ReactionsUnavailable, second.Reactions)
+	}
+	if len(second.Reviews) != 1 || len(second.Comments) != 1 {
+		t.Fatalf("refused pass lost the cached reviews or comments: %+v", second)
+	}
+}
+
+// TestReconcilePullReviewActivityReactionsFailuresStillFatal proves only a
+// plain 403 counts as a refusal: a rate-limited 403 (either signal) and a
+// 5xx fail the whole observation as before, and leave the cache alone so the
+// next pass retries from the last good state.
+func TestReconcilePullReviewActivityReactionsFailuresStillFatal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		refusal fakeRefusal
+	}{
+		{"retry-after 403", fakeRefusal{Status: 403, Header: map[string]string{"Retry-After": "60"}}},
+		{"exhausted 403", fakeRefusal{Status: 403, Header: map[string]string{"X-RateLimit-Remaining": "0"}}},
+		{"500", fakeRefusal{Status: 500}},
+		{"404", fakeRefusal{Status: 404}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gh := newFakeGitHub(t)
+			seedReviewActivity(gh)
+			r := newTestReconciler(t, gh)
+			ctx := context.Background()
+			if _, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7); err != nil {
+				t.Fatalf("first pass: %v", err)
+			}
+
+			gh.reactionsRefusal[7] = tc.refusal
+			if obs, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7); err == nil {
+				t.Fatalf("%s returned %+v, want the whole observation to fail", tc.name, obs)
+			}
+
+			// The failed pass wrote no cache entry: once the error clears, the
+			// unchanged activity still rides its validators.
+			delete(gh.reactionsRefusal, 7)
+			obs, err := r.ReconcilePullReviewActivity(ctx, testRepo, 7)
+			if err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			if !obs.NotModified || obs.ReactionsUnavailable {
+				t.Fatalf("retry = NotModified %v, unavailable %v; want true, false",
+					obs.NotModified, obs.ReactionsUnavailable)
+			}
+		})
+	}
+}

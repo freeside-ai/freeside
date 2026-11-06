@@ -198,7 +198,10 @@ func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number 
 }
 
 // getIssueReactions observes the reactions on a pull request's description
-// conditionally (the reactions surface is served under the issues path).
+// conditionally (the reactions surface is served under the issues path). Its
+// error wraps the list reader's *APIError, so ReconcilePullReviewActivity can
+// recognize a refused read (refusedRead) and report the reactions as
+// unavailable instead of failing the whole observation (#2717).
 func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullDescriptionReaction], error) {
 	path := fmt.Sprintf("/repos/%s/issues/%d/reactions?per_page=100", repo.path(), number)
 	// Reactions are best-effort native review evidence and start nothing: a
@@ -276,8 +279,9 @@ func fetchConditionalListScoped[E any](
 			return nil, etag, true, false, nil
 		}
 		if resp.StatusCode != http.StatusOK {
+			refused := resp.StatusCode == http.StatusForbidden && !forbiddenByRateLimit(resp.Header)
 			drainAndClose(resp.Body)
-			return nil, "", false, false, &APIError{Status: resp.StatusCode, RequestPath: path}
+			return nil, "", false, false, &APIError{Status: resp.StatusCode, RequestPath: path, refused: refused}
 		}
 		var batch []E
 		decodeErr := decodeResponse(resp.Body, &batch)

@@ -48,6 +48,13 @@ type activeResourceReconciler struct {
 	evictConcluded      func(domain.ReadyItemPRBinding, *int)
 	evictedConcluded    map[domain.ItemID]bool
 	observationFailures map[domain.ItemID]int
+	// reactionsRefusalReported records the open ready items whose refused
+	// reactions read (publish.PullReviewObservation.ReactionsUnavailable) a
+	// pass already reported, so the refusal is reported once per item rather
+	// than every pass (#2717). An item leaves it when a pass reads its
+	// reactions again or when it leaves the open state. Process-local: a
+	// restart reports a standing refusal once more.
+	reactionsRefusalReported map[domain.ItemID]bool
 	// tipWatch names the branch whose tip each pass reads whether or not a
 	// bound PR moved it, so a merge made outside Freeside still reaches
 	// project-image upkeep (plan §5.7, Project-image upkeep, Triggers).
@@ -96,6 +103,11 @@ type activeResourceObservation struct {
 	// retries.
 	nativeObservations []domain.NativeReviewObservation
 	nativeErr          error
+	// reviewRead reports that this pass read the review activity without
+	// error; reactionsUnavailable then reports whether GitHub refused its
+	// reactions read. Both hold on an unchanged (NotModified) read too.
+	reviewRead           bool
+	reactionsUnavailable bool
 	// externalFindings are the same fetch's review activity as external
 	// findings, one per counted review body and inline comment whoever wrote
 	// it (plan §5.19; issue #524). externalSkipped names the activity that
@@ -136,6 +148,10 @@ type activeResourceReconcileResult struct {
 	// skipped names review activity a pass read and could not store as an
 	// external finding. Nothing retries it: the activity itself is unusable.
 	skipped []error
+	// reactionsRefused names each ready item whose reactions read GitHub
+	// refused, once per item until the reactions read again. The reviews and
+	// comments were still observed, so it is a warning, not a failure.
+	reactionsRefused []error
 }
 
 func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) error {
@@ -296,6 +312,12 @@ func (r activeResourceReconciler) Run(
 	operatorActive := false
 	reconcile := func() (time.Duration, error) {
 		result, err := r.Reconcile(ctx)
+		// Logged before the pass error is handled: noteReactionsRefusal has
+		// already marked these items reported, so dropping them with a failed
+		// pass would silence a standing refusal until the reactions read again.
+		for _, refused := range result.reactionsRefused {
+			logger.Warn("native review reactions unavailable", "error", refused)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				// Cancellation mid-pass is shutdown, not a failure: the same
@@ -375,6 +397,34 @@ func activeResourceInterval(
 	return defaultInterval
 }
 
+// noteReactionsRefusal reports a ready item's refused reactions read once:
+// the first pass that sees the refusal adds it to result, later refused
+// passes stay quiet, and a pass that reads the reactions again re-arms the
+// report. A pass whose review read failed or didn't run changes nothing.
+func (r *activeResourceReconciler) noteReactionsRefusal(
+	itemID domain.ItemID, observation activeResourceObservation, result *activeResourceReconcileResult,
+) {
+	if !observation.reviewRead {
+		return
+	}
+	if !observation.reactionsUnavailable {
+		delete(r.reactionsRefusalReported, itemID)
+		return
+	}
+	if r.reactionsRefusalReported[itemID] {
+		return
+	}
+	if r.reactionsRefusalReported == nil {
+		r.reactionsRefusalReported = make(map[domain.ItemID]bool)
+	}
+	r.reactionsRefusalReported[itemID] = true
+	binding := observation.binding
+	result.reactionsRefused = append(result.reactionsRefused, fmt.Errorf(
+		"ready resource %s: github refused the reactions read on %s#%d (status 403); "+
+			"reviews and review comments are still observed, the clean-pass reaction is unknown",
+		itemID, binding.Repo, binding.PRNumber))
+}
+
 // Reconcile makes one independent pass over every active ready item, and over
 // every open publication hold that carries a pull request for a run with no
 // ready item.
@@ -432,6 +482,7 @@ func (r *activeResourceReconciler) Reconcile(
 		}
 		if item.Status != domain.StatusOpen {
 			delete(r.observationFailures, item.ID)
+			delete(r.reactionsRefusalReported, item.ID)
 			if err := r.convergeObservationHealth(ctx, snapshots, item, true); err != nil {
 				return result, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
 			}
@@ -487,6 +538,7 @@ func (r *activeResourceReconciler) Reconcile(
 			result.failures = append(result.failures,
 				fmt.Errorf("reconcile ready resource %s: %w", item.ID, observation.nativeErr))
 		}
+		r.noteReactionsRefusal(item.ID, observation, &result)
 		if observation.material || observation.conclude ||
 			observation.completion != nil || observation.invalidation != nil {
 			if err := r.commit(ctx, observation); err != nil {
@@ -1150,6 +1202,10 @@ func (r activeResourceReconciler) observeReadyResource(
 	observation.boundOpen = !completionOnly && exact && pullFact.State == domain.PullRequestOpen
 	if observation.boundOpen && r.review != nil {
 		reviewObs, err := r.review(ctx, binding.Repo, binding.PRNumber)
+		if err == nil {
+			observation.reviewRead = true
+			observation.reactionsUnavailable = reviewObs.ReactionsUnavailable
+		}
 		switch {
 		case err != nil:
 			observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, err)
