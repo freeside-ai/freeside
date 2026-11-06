@@ -177,6 +177,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 	}
 }
 
+//nolint:paralleltest // Serial: its 30s budget covers a startup drain that takes up to 16s alone under -race; parallel load overruns it.
 func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 	root := t.TempDir()
 	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
@@ -981,6 +982,7 @@ func TestRepositoryIDFlag(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: waitForItem and the fake-result poll give the live daemon 2s, which parallel load overruns.
 func TestRunDrivesFakeWorkflow(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())

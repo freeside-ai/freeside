@@ -207,6 +207,8 @@ func eventually(t *testing.T, what string, ok func() bool) {
 //
 // A later pass is proved, not waited for: a device paired afterwards is
 // notified only by a pass that also saw the phone's settled row.
+//
+//nolint:paralleltest // Serial: waitForItem gives the live daemon 2s, which parallel load can overrun.
 func TestDaemonNotifiesAPhoneOncePerItem(t *testing.T) {
 	root := t.TempDir()
 	sink := newNtfySink(t, http.StatusOK)
@@ -449,6 +451,8 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 // the sender never notifies. That keeps every other whole-daemon test from
 // publishing to the default hosted server, and it is how the freesided
 // command runs until #1924 starts the sender there.
+//
+//nolint:paralleltest // Serial: waitForItem gives the live daemon 2s, which parallel load can overrun.
 func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 	sink := newNtfySink(t, http.StatusOK)
 	root := t.TempDir()

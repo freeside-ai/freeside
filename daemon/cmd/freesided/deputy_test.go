@@ -53,6 +53,7 @@ func deputyLeaseFixture(t *testing.T) (deputyHost, deputyPaths, loadedDeputySett
 	return host, newDeputyPaths(stateRoot), settings
 }
 
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAcquireDeputyLeaseRefusesLiveHolder(t *testing.T) {
 	host, paths, settings := deputyLeaseFixture(t)
 	holder, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -72,6 +73,8 @@ func TestAcquireDeputyLeaseRefusesLiveHolder(t *testing.T) {
 
 // TestAcquireDeputyLeaseLeavesProdFreeToStart pins #2080: the deputy holds
 // no lock of prod's, so prod can start, driverless, while the lease is held.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAcquireDeputyLeaseLeavesProdFreeToStart(t *testing.T) {
 	host, paths, settings := deputyLeaseFixture(t)
 	lease, _, err := acquireDeputyLease(context.Background(), host, paths, settings, io.Discard)
@@ -96,6 +99,7 @@ func TestAcquireDeputyLeaseLeavesProdFreeToStart(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAcquireDeputyLeaseRecoversItsOwnStaleLease(t *testing.T) {
 	host, paths, settings := deputyLeaseFixture(t)
 	prior, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -126,6 +130,8 @@ func TestAcquireDeputyLeaseRecoversItsOwnStaleLease(t *testing.T) {
 // TestAcquireDeputyLeaseMigratesItsOwnRootsReviewJournal pins #2201: the
 // deputy recovers its own root's review journal through the migrated schema,
 // because its start migrates that database anyway.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAcquireDeputyLeaseMigratesItsOwnRootsReviewJournal(t *testing.T) {
 	host, paths, settings := deputyLeaseFixture(t)
 	prior, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -161,6 +167,7 @@ func TestAcquireDeputyLeaseMigratesItsOwnRootsReviewJournal(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAcquireDeputyLeaseRefusesAnotherRootsStaleLease(t *testing.T) {
 	host, paths, settings := deputyLeaseFixture(t)
 	otherState := filepath.Join(filepath.Dir(filepath.Dir(paths.StateRoot)), "other", "daemon")
@@ -185,6 +192,7 @@ func TestAcquireDeputyLeaseRefusesAnotherRootsStaleLease(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAcquireDeputyLeaseRefusesBusyListenerAndReleases(t *testing.T) {
 	host, paths, settings := deputyLeaseFixture(t)
 	host.rig = &fakeRigHost{live: true, description: "freesided version=test"}
@@ -334,6 +342,8 @@ func secondWriterDeputySettings(t *testing.T) loadedDeputySettings {
 // usage pools over volumes the start only observes, auth adopt enrolls
 // both, the committed patch matches, and auth list shows both enrollments
 // at generation 1.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestDeputyStartAdoptsASecondWriterOverItsExistingVolume(t *testing.T) {
 	ctx := t.Context()
 	host, paths, _ := deputyLeaseFixture(t)
@@ -412,6 +422,8 @@ func TestDeputyStartAdoptsASecondWriterOverItsExistingVolume(t *testing.T) {
 // The deputy passes the second writer's identity and volume to preflight,
 // so a deputy start runs second_claude_credentials; without one it passes
 // neither.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestDeputyPreflightConfigCarriesTheSecondWriter(t *testing.T) {
 	host, paths, leaseSettings := deputyLeaseFixture(t)
 	settings := secondWriterDeputySettings(t)
@@ -777,6 +789,7 @@ func (h *deputyForbiddenLeaseHost) ProbeDaemon(context.Context, string) (string,
 	return "", false, errors.New("unexpected lease probe")
 }
 
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestRunDeputyRefusesBeforeTheLease(t *testing.T) {
 	host, paths, _ := deputyLeaseFixture(t)
 	host.rig = &deputyForbiddenLeaseHost{t: t}
@@ -811,6 +824,8 @@ func TestRunDeputyRefusesBeforeTheLease(t *testing.T) {
 // TestAdoptDeputyAgentTreeNamesAMissingExporter pins #2309: an exporter
 // image the local container store no longer holds fails exporter_image,
 // naming the reference and the reseed, before auth adopt runs against it.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestAdoptDeputyAgentTreeNamesAMissingExporter(t *testing.T) {
 	host, paths, _ := deputyLeaseFixture(t)
 	settings := deputyDaemonSettingsFixture(t)
@@ -872,6 +887,8 @@ func TestPublishCompositionEvidenceIsNoClobber(t *testing.T) {
 // TestReleaseDeputyLeaseProvesTheRigClear binds runtime
 // resources the way the in-process driver does, then ends the lease three
 // ways: clean with the resources gone, clean with one left, and unclean.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestReleaseDeputyLeaseProvesTheRigClear(t *testing.T) {
 	cases := map[string]struct {
 		clean      bool

@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
+//nolint:paralleltest // Serial: sets the package global version.
 func TestBuildVersionPrefersStampedValue(t *testing.T) {
 	previous := version
 	version = "v1.2.3-test"
