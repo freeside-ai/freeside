@@ -19,6 +19,7 @@ import (
 // once; the logged usage is the per-role cost the README cites. CI skips it.
 // Missing inputs in an opted-in run fail, so a skipped shape cannot pass.
 func TestLiveProbeLineup(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1; requires Apple container, pinned images, and provider credentials; see daemon/README.md")
 	}

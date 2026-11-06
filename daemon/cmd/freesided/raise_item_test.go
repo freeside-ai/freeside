@@ -19,6 +19,7 @@ import (
 )
 
 func TestRaisedHeldWorkItemLegacyOwnershipUsesActualProducer(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
@@ -74,6 +75,7 @@ const (
 )
 
 func TestRaiseAlertsAreRegistered(t *testing.T) {
+	t.Parallel()
 	for _, alert := range AllRaiseAlerts {
 		if !alert.valid() {
 			t.Errorf("registered alert %q is not valid", alert)
@@ -96,6 +98,7 @@ func TestRaiseAlertsAreRegistered(t *testing.T) {
 }
 
 func TestRaiseItemCommandLine(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -164,6 +167,7 @@ func TestRaiseItemRefusedOutsideEphemeral(t *testing.T) {
 }
 
 func TestRaiseItemRefusedWithoutDaemon(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	cfg := config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", Environment: environmentEphemeral}
 	h := startDaemon(t, cfg)
@@ -187,6 +191,7 @@ func TestRaiseItemRefusedWithoutDaemon(t *testing.T) {
 // Each alert's item is raised through the control socket of a running daemon
 // and read back from the list that daemon serves to clients.
 func TestRaiseItemReachesClients(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{
 		DBPath: dbPath, ListenAddr: "127.0.0.1:0",
@@ -306,6 +311,7 @@ func TestRaiseItemReachesClients(t *testing.T) {
 // and reach a paired device. The fixture daemon runs no engine, so the
 // sweep's per-task body runs here directly.
 func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{
 		DBPath: dbPath, ListenAddr: "127.0.0.1:0",
@@ -387,6 +393,7 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 // form and whose run has no matching hold. A raised notice has no hold, so it
 // stays open only because its ID has another form.
 func TestRaisedHeldWorkItemSurvivesTheSweep(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{
 		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0",
@@ -411,6 +418,7 @@ func TestRaisedHeldWorkItemSurvivesTheSweep(t *testing.T) {
 // Nothing but a restart closes a raised held-work notice: it has no hold to
 // clear and offers no action that resolves it.
 func TestRaisedHeldWorkItemResolvesAtRestart(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	cfg := config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", Environment: environmentEphemeral}
 	seeded := cfg
@@ -453,6 +461,7 @@ func TestRaisedHeldWorkItemResolvesAtRestart(t *testing.T) {
 // has concluded too, and is still refused: an external review cycle can give
 // it another round.
 func TestRaiseItemReviewGrowthNeedsACompletedRun(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{
 		DBPath: dbPath, ListenAddr: "127.0.0.1:0",

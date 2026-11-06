@@ -21,6 +21,7 @@ import (
 const scenarioWaitBound = 60 * time.Second
 
 func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
+	t.Parallel()
 	clean := cleanScenario()
 	for _, tc := range []struct {
 		name string
@@ -50,6 +51,7 @@ func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
 }
 
 func TestListScenarios(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	if err := listScenarios(&out); err != nil {
 		t.Fatal(err)
@@ -68,6 +70,7 @@ func TestListScenarios(t *testing.T) {
 // after git init but before the base commit: the next start rebuilds the
 // repository instead of failing on the missing ref forever.
 func TestSeedScenarioRepositoryRebuildsAPartialStart(t *testing.T) {
+	t.Parallel()
 	files := cleanScenario().BaseFiles
 	fresh, err := seedScenarioRepository(filepath.Join(t.TempDir(), "repository"), files)
 	if err != nil {
@@ -92,6 +95,7 @@ func TestSeedScenarioRepositoryRebuildsAPartialStart(t *testing.T) {
 }
 
 func TestScenarioFromFlags(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		execution executionMode

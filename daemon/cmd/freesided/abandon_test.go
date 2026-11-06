@@ -145,6 +145,7 @@ func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
 }
 
 func TestAbandonRetiresAttentionItems(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
@@ -307,6 +308,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 }
 
 func TestAbandonKeepsReleaseWhenRetirementFails(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	recipe := domain.Digest("sha256:abandon-recipe")

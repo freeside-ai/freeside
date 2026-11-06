@@ -62,6 +62,7 @@ func findingsReviewActivity() publish.PullReviewObservation {
 }
 
 func TestActiveResourceRecordsNativeFindingsAndCleanPass(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -113,6 +114,7 @@ func TestActiveResourceRecordsNativeFindingsAndCleanPass(t *testing.T) {
 // on an already-ready item) is recorded while activity from a non-reviewer
 // login is filtered out.
 func TestActiveResourceRecordsLateAndForeignFiltered(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -150,6 +152,7 @@ func TestActiveResourceRecordsLateAndForeignFiltered(t *testing.T) {
 // comment, and clean-pass reaction observed and recorded under the canonical
 // login. Without normalization the exact-login filter drops everything.
 func TestActiveResourceNormalizesBotLogin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -183,6 +186,7 @@ func TestActiveResourceNormalizesBotLogin(t *testing.T) {
 // head) is not re-recorded as a clean pass for the current head; only the
 // findings review, which binds by commit_id, is recorded.
 func TestActiveResourceRejectsStaleCleanPassReaction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -212,6 +216,7 @@ func TestActiveResourceRejectsStaleCleanPassReaction(t *testing.T) {
 // other than the item's live binding head is recorded with the divergence
 // visible rather than dropped.
 func TestActiveResourceRecordsStaleHeadReview(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -242,6 +247,7 @@ func TestActiveResourceRecordsStaleHeadReview(t *testing.T) {
 // is reported but never blocks the pull fact, and the next tick retries and
 // records without churning the pull timeline.
 func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -287,6 +293,7 @@ func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
 // TestActiveResourceNativeObservationConverges proves a repeated observation of
 // unchanged native activity appends no new rows.
 func TestActiveResourceNativeObservationConverges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -311,6 +318,7 @@ func TestActiveResourceNativeObservationConverges(t *testing.T) {
 // sanitized to a byte-stable form, so repeated observation coalesces instead of
 // churning the append timeline forever (the issue #180 round-trip trap).
 func TestActiveResourceNativeConvergesWithInvalidUTF8(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -345,6 +353,7 @@ func TestActiveResourceNativeConvergesWithInvalidUTF8(t *testing.T) {
 // TestActiveResourceNativeNotModifiedRecordsNothing proves a fully-unchanged
 // (304) native observation yields no store write.
 func TestActiveResourceNativeNotModifiedRecordsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -369,6 +378,7 @@ func TestActiveResourceNativeNotModifiedRecordsNothing(t *testing.T) {
 // observer cache (so the next tick re-fetches unconditionally instead of riding
 // a 304) and the failure stays isolated from the pull fact (issue #497).
 func TestActiveResourceNativeCommitFailureEvictsCache(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	st := storetest.Open(t, dbPath, store.Options{

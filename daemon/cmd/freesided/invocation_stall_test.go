@@ -16,6 +16,7 @@ import (
 // resolves it, a new stall files a new one, another invocation's notice is
 // left alone, and the startup sweep resolves whatever a restart left open.
 func TestInvocationStallNoticeLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := func() time.Time { return time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC) }

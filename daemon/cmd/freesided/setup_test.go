@@ -29,6 +29,7 @@ import (
 )
 
 func TestSetupCommandCreatesCorrectedFakeDriverDirectory(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	root := filepath.Join(t.TempDir(), "freeside")
 	if err := runSetup(
@@ -54,6 +55,7 @@ func TestSetupCommandCreatesCorrectedFakeDriverDirectory(t *testing.T) {
 }
 
 func TestSetupResultGoldens(t *testing.T) {
+	t.Parallel()
 	layout := operations.Layout{
 		ConfigDir:      "/home/operator/.freeside",
 		DBPath:         "/home/operator/.freeside/state/freeside.db",
@@ -100,6 +102,7 @@ func TestSetupResultGoldens(t *testing.T) {
 }
 
 func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
+	t.Parallel()
 	key := setupTestKey(t)
 	keyPEM := pem.EncodeToMemory(&pem.Block{
 		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key),
@@ -272,6 +275,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 }
 
 func TestSetupCommandDoesNotCreateAuthorityForExistingCredentials(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "freeside")
 	layout, err := operations.Setup(context.Background(), root)
 	if err != nil {
@@ -347,6 +351,7 @@ func TestSetupCommandDoesNotCreateAuthorityForExistingCredentials(t *testing.T) 
 }
 
 func TestSetupCommandSelectsOperatorRegistrationFromMultipleApps(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "freeside")
 	layout, err := operations.Setup(context.Background(), root)
 	if err != nil {
@@ -410,6 +415,7 @@ func TestSetupCommandSelectsOperatorRegistrationFromMultipleApps(t *testing.T) {
 }
 
 func TestSetupCommandNeverOverwritesMalformedAuthority(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "freeside")
 	args := []string{
 		"-config-dir", root,
@@ -448,6 +454,7 @@ func TestSetupCommandNeverOverwritesMalformedAuthority(t *testing.T) {
 }
 
 func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("FREESIDE_SETUP_PROCESS_HELPER") == "1" {
 		err := runSetupCommand(
 			context.Background(),
@@ -552,6 +559,7 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 }
 
 func TestSetupCommandRejectsArgvCodesWithoutRenderingThem(t *testing.T) {
+	t.Parallel()
 	const manifestCode = "FREESIDE_LEGACY_ARGV_MANIFEST_CODE"
 	tests := []struct {
 		name string
@@ -587,6 +595,7 @@ func TestSetupCommandRejectsArgvCodesWithoutRenderingThem(t *testing.T) {
 }
 
 func TestReadRegistrationCodeValidatesBoundedSingleLine(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		stdin   io.Reader
@@ -615,6 +624,7 @@ func TestReadRegistrationCodeValidatesBoundedSingleLine(t *testing.T) {
 }
 
 func TestReadRegistrationCodeRedactsReaderErrors(t *testing.T) {
+	t.Parallel()
 	const manifestCode = "FREESIDE_READER_ERROR_MANIFEST_CODE"
 	_, err := readRegistrationCode(errorReader{err: errors.New(manifestCode)})
 	if err == nil {

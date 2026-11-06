@@ -37,6 +37,7 @@ func (v conformanceVolumes) AuthStoreVolume(context.Context, domain.AuthIdentity
 }
 
 func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
+	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapter, err := agentbaseline.ClaudeWardAdapter()
 	if err != nil {
@@ -113,6 +114,7 @@ func recordTestClaudeAdapterConformance(ctx context.Context, st *store.Store, at
 }
 
 func TestRecordObservedAdapterConformance(t *testing.T) {
+	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	provedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	observed := slices.DeleteFunc(testObservedClaudeCapabilities(), func(c domain.LaunchCapability) bool { return c == domain.LaunchCapMutationTools })
@@ -169,6 +171,7 @@ func TestRecordObservedAdapterConformance(t *testing.T) {
 }
 
 func TestObservedAdapterCoverageHoldsWriterAdmission(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
 	if err != nil {

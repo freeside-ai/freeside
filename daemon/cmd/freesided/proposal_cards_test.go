@@ -22,6 +22,7 @@ import (
 // change to proposalCardsVersion, and to taskRecordVersion, which embeds the
 // card.
 func TestProposalCardsGolden(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	effect, task := domain.AttentionEffectProposal, domain.AttentionTaskProposal
 	project, open := domain.ProjectID("gh-imgup"), domain.StatusOpen
@@ -175,6 +176,7 @@ func TestInspectProposalsServedEqualsDirect(t *testing.T) {
 // publication, open or closed, with the decision that closed one. The run's
 // task-proposal card is not a closure card and stays out.
 func TestTaskRecordListsRunClosureCards(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	seed := seedProposalCards(t, st, "record")
 	closureCards := func() []proposalCard {
@@ -220,6 +222,7 @@ func TestTaskRecordListsRunClosureCards(t *testing.T) {
 // refuses keeps its place in both reads, with the item's fields, its error,
 // and null for everything the binding would have said.
 func TestProposalCardReportsUnreadBinding(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	ctx := t.Context()
 	seed := seedProposalCards(t, st, "unread")

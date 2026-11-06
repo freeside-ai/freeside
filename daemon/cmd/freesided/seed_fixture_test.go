@@ -12,6 +12,7 @@ import (
 )
 
 func TestSeedFixtureRefusedBeforeStoreOpens(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		cfg  config
@@ -42,6 +43,7 @@ func TestSeedFixtureRefusedBeforeStoreOpens(t *testing.T) {
 }
 
 func TestSeedFixtureServesRepresentativeState(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	cfg := config{
 		DBPath: dbPath, ListenAddr: "127.0.0.1:0",
@@ -110,6 +112,7 @@ func assertFixtureServed(t *testing.T, h *daemon) {
 }
 
 func TestStoreOptionsEphemeralDriverlessFloor(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		cfg  config

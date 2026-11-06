@@ -37,6 +37,7 @@ func codexDiscoveredReport(ids ...string) ward.ModelReport {
 // credential, discovers it in the review image after the Claude
 // enrollments, and records the catalog; a failed read keeps the last one.
 func TestModelCatalogRefreshDiscoversCodexEnrollmentsForACodexReviewer(t *testing.T) {
+	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	at := time.Now().UTC().Add(-time.Hour)
 	seedUsageEnrollment(t, st, "auth-claude", "enroll-claude", "pool-claude", domain.HarnessClientClaudeCode, at)
@@ -100,6 +101,7 @@ func TestModelCatalogRefreshDiscoversCodexEnrollmentsForACodexReviewer(t *testin
 // an API-key Codex reviewer, whose input root holds no OAuth store, or an
 // attended daemon reads no Codex credential and logs one line.
 func TestModelCatalogRefreshSkipsCodexWithoutACodexReviewer(t *testing.T) {
+	t.Parallel()
 	codexReviewer := claudeDriverConfig{
 		OperatingMode: domain.ModeUnattended, ReviewImage: codexModelDiscoveryTestImage,
 		ReviewInputRoot: "/private/review", ReviewAuthMode: ward.CodexAuthSubscription,
@@ -197,6 +199,7 @@ func (f *fakeCodexDiscovery) discoverer(ward.Runtime) codexModelDiscoverer {
 // failed discovery only warns, and without the flag the command says when
 // discovery will run.
 func TestAuthAddCodexDiscoversWithAnAgentImage(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		image     bool
@@ -240,6 +243,7 @@ func TestAuthAddCodexDiscoversWithAnAgentImage(t *testing.T) {
 }
 
 func TestAuthAddRefusesATagOnlyCodexAgentImage(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	args, _, _ := codexAuthAddArgs(t, dbPath)
 	err := runAuthAddCommand(t.Context(), append(args, "-agent-image", "example.test/agent-codex:latest"),
@@ -253,6 +257,7 @@ func TestAuthAddRefusesATagOnlyCodexAgentImage(t *testing.T) {
 // renew-codex rediscovers the identity's Codex enrollment from the renewed
 // store; a failed discovery still exits 0 and keeps the last catalog.
 func TestRenewCodexDiscoversTheIdentitysEnrollment(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	args := renewalCommandFixture(t, dbPath, nil)
 	st, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{})

@@ -24,6 +24,7 @@ import (
 // nobody audited, and the record must be re-earned, not regenerated. Each
 // record is held to its own adapter, so the v2 audit never stands in for v1.
 func TestJudgmentCallAuditsNameTheCallAdapters(t *testing.T) {
+	t.Parallel()
 	v1, err := agentbaseline.ClaudeCallAdapterV1()
 	if err != nil {
 		t.Fatal(err)
@@ -737,6 +738,7 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 // one process a changed reason is not rewritten, because some reasons name
 // the call's own deadline.
 func TestJudgmentRoleItemSaysTheCurrentReasonAfterARestart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
 	const noLine, marked = "the lineup has no line for it", "its generation is marked"
@@ -866,6 +868,7 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 // whatever the state of the writer's enrollment, and unknown only when the
 // lineup does not name an agent the tree holds.
 func TestWriterLineageReadsTheTreeAlone(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
 	if err != nil {
@@ -909,6 +912,7 @@ func TestWriterLineageReadsTheTreeAlone(t *testing.T) {
 // resolves it; an exhausted budget, which is the ledger working, opens
 // none; and a start that cannot write the item stops.
 func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
 	// A key-shaped epoch sits where validation looks and the record id

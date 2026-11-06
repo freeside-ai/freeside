@@ -71,6 +71,7 @@ func storeRevision(t *testing.T, st *store.Store) int64 {
 // instant on start-up; a store already carrying it is a no-op that bumps no
 // sync revision.
 func TestReconcileWorkUnitCompletionMilestones(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -134,6 +135,7 @@ func TestReconcileWorkUnitCompletionMilestones(t *testing.T) {
 // mirrored, because the sync boundary would refuse the milestone and an
 // append-only milestone it refuses would exclude the run for good.
 func TestReconcileWorkUnitCompletionMilestonesSkipsWithoutStandingReady(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -193,6 +195,7 @@ func TestReconcileWorkUnitCompletionMilestonesSkipsWithoutStandingReady(t *testi
 }
 
 func TestReconcileWorkUnitCompletionMilestonesIsolatesForeignCycle(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := schedTestStore(t)
 	for _, runID := range []domain.RunID{"bad-cycle", "healthy-cycle"} {

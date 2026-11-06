@@ -44,6 +44,7 @@ func readModelCatalog(t *testing.T, st *store.Store, id domain.ClientEnrollmentI
 // a disabled identity and a Codex enrollment are skipped, and a failure
 // keeps the last catalog and logs.
 func TestModelCatalogRefreshDiscoversEachEnabledClaudeEnrollment(t *testing.T) {
+	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	at := time.Now().UTC().Add(-time.Hour)
 	seedUsageEnrollment(t, st, "auth-claude", "enroll-claude", "pool-claude", domain.HarnessClientClaudeCode, at)
@@ -113,6 +114,7 @@ func TestModelCatalogRefreshDiscoversEachEnabledClaudeEnrollment(t *testing.T) {
 // TestDiscoverAfterEnrollment: auth add records the new enrollment's catalog,
 // which auth list then prints; a failed discovery only warns.
 func TestDiscoverAfterEnrollment(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
 	// A failed add leaves the identity and enrollment recorded.

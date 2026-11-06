@@ -106,6 +106,7 @@ func TestResumeTargetsExactLiveRunAndRefusesTerminal(t *testing.T) {
 }
 
 func TestResumeReportsAuthenticatedPublishedOutcome(t *testing.T) {
+	t.Parallel()
 	err := terminalResumeError("run-published-after-rerun", domain.RunConclusion{
 		Outcome: domain.RunOutcomePublished, Final: true,
 	})

@@ -19,6 +19,7 @@ import (
 // TestSystemHealthGolden pins the read's shape. A change to these bytes is a
 // change to systemHealthVersion.
 func TestSystemHealthGolden(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 	command := "command-stop"
 	blocking, advisory := domain.HealthPostureBlocking, domain.HealthPostureAdvisory
@@ -76,6 +77,7 @@ func TestSystemHealthGolden(t *testing.T) {
 // TestClassifySystemHealthItem walks the gate's exemptions in the order the
 // classifier reads them.
 func TestClassifySystemHealthItem(t *testing.T) {
+	t.Parallel()
 	blocking, advisory := domain.HealthPostureBlocking, domain.HealthPostureAdvisory
 	item := func(id domain.ItemID, posture domain.HealthPosture, supersession *domain.BlockingSupersession) domain.AttentionItem {
 		return domain.AttentionItem{ID: id, Type: domain.AttentionSystemHealth, Posture: &posture, BlockingSupersession: supersession}
@@ -237,6 +239,7 @@ func TestInspectHealthReadsStoppedRootWithRecipeEvidence(t *testing.T) {
 // refuses fails the gate, so the read lists the refused row and leaves every
 // item's admission null instead of guessing.
 func TestSystemHealthAgreesWithTheGate(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	recipe := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")

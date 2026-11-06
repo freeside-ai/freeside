@@ -68,6 +68,7 @@ func runIdlePasses(t *testing.T, level string) []map[string]string {
 // daemon race a spurious failure into the channel it treats as fatal, so a
 // plain SIGTERM could exit non-zero and read to a supervisor as a crash.
 func TestCancellationStopsTheReconcilerCleanly(t *testing.T) {
+	t.Parallel()
 	// runIdlePasses fails the test if Run reports an error; a store read
 	// interrupted mid-pass is exactly what it cancels into.
 	records := runIdlePasses(t, defaultLogLevel)
@@ -82,6 +83,7 @@ func TestCancellationStopsTheReconcilerCleanly(t *testing.T) {
 // levels, so what it asserts is this loop's behaviour rather than slog's
 // filtering.
 func TestDefaultLevelEmitsNoPerPassRecords(t *testing.T) {
+	t.Parallel()
 	quiet := runIdlePasses(t, defaultLogLevel)
 	for _, record := range quiet {
 		if strings.Contains(record["msg"], "pass complete") {
@@ -102,6 +104,7 @@ func TestDefaultLevelEmitsNoPerPassRecords(t *testing.T) {
 }
 
 func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := schedTestStore(t)
 		item := capturedRunWithCriterion(
@@ -236,6 +239,7 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 }
 
 func TestActiveResourceRunWakesForNewReadyItem(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	observed := make(chan struct{}, 1)
 	reconciler := activeResourceReconciler{

@@ -161,6 +161,7 @@ func reassignPayload(pool, enrollment string) map[string]string {
 // coordinator, and the result reaches the client through the bootstrap and
 // the revision heartbeat.
 func TestClientUsageCommandsDriveCollection(t *testing.T) {
+	t.Parallel()
 	collector := &scriptedUsageCollector{
 		called: make(chan domain.ClientEnrollmentID, 8), answers: make(chan domain.AvailabilityAnswer),
 	}

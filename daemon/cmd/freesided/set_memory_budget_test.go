@@ -112,6 +112,7 @@ func TestSetMemoryBudgetRecordsOnlyTheBudget(t *testing.T) {
 }
 
 func TestSetMemoryBudgetUsesRunningDaemonStore(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{

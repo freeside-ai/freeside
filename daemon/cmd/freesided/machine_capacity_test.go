@@ -163,6 +163,7 @@ func TestStartupLaunchBoundPrefersTheRecordedBudget(t *testing.T) {
 // TestRunRefusesARecordedBudgetNoLaunchFits: the daemon's start reads the
 // recorded budget from its store, so a restart keeps it over the flag.
 func TestRunRefusesARecordedBudgetNoLaunchFits(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
 	first, err := run(t.Context(), nil, config{

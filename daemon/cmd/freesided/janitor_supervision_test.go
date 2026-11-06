@@ -160,6 +160,7 @@ func TestScheduledJanitorCredentialFailures(t *testing.T) {
 }
 
 func TestJanitorMixedHoldsDoNotHideFailures(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{500, 401} {
 		tracker := newScheduledFailureTracker(time.Now, nil)
 		failure := janitorRegistrationFailures([]publish.JanitorRegistrationFault{

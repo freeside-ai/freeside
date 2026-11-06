@@ -131,6 +131,7 @@ func rigHoldArgs(stateRoot, seedRoot, databasePath string) []string {
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldRefusesListeningDaemonsBeforeReturningLease(t *testing.T) {
 	tests := []struct {
 		name string
@@ -160,6 +161,8 @@ func TestRigHoldRefusesListeningDaemonsBeforeReturningLease(t *testing.T) {
 // TestRigHoldLeavesALoadedProdAlone pins #2080: prod serves its own database
 // and listener, so a loaded prod, even one with a driver, is no conflict for
 // the lease. The deputy's composition preflight checks prod's driver.
+//
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldLeavesALoadedProdAlone(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	host := &fakeRigHost{prodRunning: true, prodMode: executionClaude}
@@ -181,6 +184,7 @@ func TestRigHoldLeavesALoadedProdAlone(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldProbesCanonicalListener(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	host := &fakeRigHost{live: true, description: "listener"}
@@ -199,6 +203,7 @@ func TestRigHoldProbesCanonicalListener(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldProbesLoopbackTwinForTailscaleListener(t *testing.T) {
 	tailscaleArgs := func(stateRoot, seedRoot, databasePath string) []string {
 		return []string{
@@ -290,6 +295,7 @@ func TestRigHoldProbesLoopbackTwinForTailscaleListener(t *testing.T) {
 	})
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldWritesAcquisitionBeforeWaitingAndPreservesManifestOnInterrupt(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	t.Cleanup(func() {
@@ -326,6 +332,7 @@ func TestRigHoldWritesAcquisitionBeforeWaitingAndPreservesManifestOnInterrupt(t 
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldCleanReleaseRemovesManifest(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -342,6 +349,7 @@ func TestRigHoldCleanReleaseRemovesManifest(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigHoldRefusesAProcessHoldingTheDatabase(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
@@ -405,6 +413,7 @@ func acquireBoundRig(
 	return stateRoot, lease, tokenFile, names
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRunRigBindRecordsPreJobContainer(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -443,6 +452,7 @@ func TestRunRigBindRecordsPreJobContainer(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestBindRigInvocationResourcesAddsLaterIteration(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -496,6 +506,7 @@ func TestBindRigInvocationResourcesAddsLaterIteration(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -637,6 +648,7 @@ func assertVolumeResiduePreservesGlobalGate(
 	}
 }
 
+//nolint:paralleltest // Serial: assertVolumeResiduePreservesGlobalGate sets HOME with t.Setenv through rigCommandRoots.
 func TestCodexReviewResiduePreservesGlobalGateAcrossCrash(t *testing.T) {
 	reviewID := "review-" + strings.Repeat("d", 24)
 	assertVolumeResiduePreservesGlobalGate(
@@ -646,6 +658,7 @@ func TestCodexReviewResiduePreservesGlobalGateAcrossCrash(t *testing.T) {
 	)
 }
 
+//nolint:paralleltest // Serial: assertVolumeResiduePreservesGlobalGate sets HOME with t.Setenv through rigCommandRoots.
 func TestFullConformanceResiduePreservesGlobalGateAcrossCrash(t *testing.T) {
 	runID := "conf-" + strings.Repeat("e", 16)
 	assertVolumeResiduePreservesGlobalGate(
@@ -655,6 +668,7 @@ func TestFullConformanceResiduePreservesGlobalGateAcrossCrash(t *testing.T) {
 	)
 }
 
+//nolint:paralleltest // Serial: acquireBoundRig sets HOME with t.Setenv through rigCommandRoots.
 func TestRigCleanupTouchesOnlyManifestContainers(t *testing.T) {
 	stateRoot, lease, tokenFile, names := acquireBoundRig(t, "inv-specify", "inv-implement")
 	t.Cleanup(func() { _ = lease.Close() })
@@ -701,6 +715,8 @@ func TestRigCleanupTouchesOnlyManifestContainers(t *testing.T) {
 // rig cleanup enumerates and deletes it and the absence proof reports it while
 // present, so a preflight interrupted after creating the observer strands
 // nothing rig cleanup cannot see.
+//
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigCleanupReapsPreflightCredentialObserver(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -752,6 +768,8 @@ func TestRigCleanupReapsPreflightCredentialObserver(t *testing.T) {
 // authorizer the preflight credential check builds records the observer name in
 // the held rig manifest, closing the wiring from InspectCredentialVolumeManifest
 // to rig cleanup.
+//
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestProductionRigRuntimeAuthorizerBindsCredentialObserver(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -792,6 +810,7 @@ func TestProductionRigRuntimeAuthorizerBindsCredentialObserver(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: acquireBoundRig sets HOME with t.Setenv through rigCommandRoots.
 func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	stateRoot, lease, _, names := acquireBoundRig(t, "inv-implement")
 	if err := lease.Abandon(); err != nil {
@@ -890,6 +909,8 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 // the loopback twin, even for a Tailscale lease: a live daemon always holds the
 // recorded address, so a stray process on the loopback port must not block
 // recovery (#1449).
+//
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
 func TestRigRecoverProbesOnlyTheRecordedListener(t *testing.T) {
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
@@ -919,6 +940,7 @@ func TestRigRecoverProbesOnlyTheRecordedListener(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: acquireBoundRig sets HOME with t.Setenv through rigCommandRoots.
 func TestRigRecoverJournalsAfterContainersAndBeforeRelease(t *testing.T) {
 	stateRoot, lease, _, names := acquireBoundRig(t, "review-interrupted")
 	manifest, err := daemonlock.ReadRigManifest(stateRoot)
@@ -973,6 +995,7 @@ func TestRigRecoverJournalsAfterContainersAndBeforeRelease(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Serial: acquireBoundRig sets HOME with t.Setenv through rigCommandRoots.
 func TestRigRecoverPassesMigrateOnlyWhenAsked(t *testing.T) {
 	for name, tc := range map[string]struct {
 		args []string
@@ -1008,6 +1031,7 @@ func TestRigRecoverPassesMigrateOnlyWhenAsked(t *testing.T) {
 }
 
 func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
+	t.Parallel()
 	for _, migrate := range []bool{false, true} {
 		root := t.TempDir()
 		path := filepath.Join(root, "missing.db")
@@ -1027,6 +1051,7 @@ func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
 // a lease an older build left, with recorded review volumes, refuses with
 // both schemas and the ways out, and recovers through -migrate.
 func TestRigReviewJournalMigratesAnOlderBuildsDatabaseOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
 	head, err := store.CurrentSchemaVersion()
 	if err != nil {
 		t.Fatal(err)
@@ -1093,6 +1118,7 @@ func droppedDial(context.Context, string, string) (net.Conn, error) {
 }
 
 func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener
 	if err != nil {
 		t.Fatal(err)
@@ -1114,6 +1140,7 @@ func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
 }
 
 func TestProbeDaemonStillFailsClosedWhenItCannotAnswer(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		dial    func(context.Context, string, string) (net.Conn, error)
 		address string

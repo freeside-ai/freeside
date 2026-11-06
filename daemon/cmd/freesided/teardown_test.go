@@ -93,6 +93,7 @@ func TestCloseWaitsOutTheCredentialBearingTeardown(t *testing.T) {
 // it exists to surface: a refused lease release is the daemon's problem to
 // report, not to absorb into a clean exit.
 func TestClosePropagatesATeardownFailure(t *testing.T) {
+	t.Parallel()
 	sentinel := errors.New("lease release refused")
 	d := newTeardownDaemon(t, closerFunc(func(context.Context) error { return sentinel }))
 	if err := d.Close(); !errors.Is(err, sentinel) {
@@ -119,6 +120,7 @@ const (
 // serve sequence against a teardown that never finishes; moving stop()
 // back after Close makes the second signal a no-op and hangs this test.
 func TestASecondSignalTerminatesAWedgedTeardown(t *testing.T) {
+	t.Parallel()
 	if os.Getenv(wedgedTeardownEnv) == "1" {
 		runWedgedTeardownHelper(t)
 		return

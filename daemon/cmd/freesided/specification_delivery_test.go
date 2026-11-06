@@ -17,6 +17,7 @@ import (
 )
 
 func TestProductionSpecificationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
+	t.Parallel()
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	priorBody := []byte(strings.Repeat("r", 1<<20))
 	putDeliveryArtifact(t, st, blobs, "research-prompt-overflow", priorBody)
@@ -35,6 +36,7 @@ func TestProductionSpecificationDeliveryValidatorRejectsPromptOverflow(t *testin
 }
 
 func TestProductionSpecificationDeliveryValidatorRejectsAggregateOverflow(t *testing.T) {
+	t.Parallel()
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	body := bytes.Repeat([]byte("r"), int(exec.ProductionMaxInputBytes))
 	prior := make([]domain.Digest, 9)
@@ -56,6 +58,7 @@ func TestProductionSpecificationDeliveryValidatorRejectsAggregateOverflow(t *tes
 }
 
 func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
+	t.Parallel()
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	priorBody := []byte(strings.Repeat("r", 1<<20))
 	putDeliveryArtifact(t, st, blobs, "remediation-prompt-overflow", priorBody)
@@ -74,6 +77,7 @@ func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.
 }
 
 func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t *testing.T) {
+	t.Parallel()
 	_, blobs, run, promptDigest := deliveryValidatorFixture(t, false)
 	largeSpec := []byte(strings.Repeat("s", 1<<20))
 	run.SpecDigest = domain.Digest(contentaddr.Sum(largeSpec))
@@ -93,6 +97,7 @@ func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t
 }
 
 func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testing.T) {
+	t.Parallel()
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	body := bytes.Repeat([]byte("r"), int(exec.ProductionMaxInputBytes))
 	prior := make([]domain.Digest, 9)
@@ -114,6 +119,7 @@ func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testi
 }
 
 func TestStoreAdmissionAuthorityRejectsMissingSpecificationMarker(t *testing.T) {
+	t.Parallel()
 	st, _, _, _ := deliveryValidatorFixture(t, true)
 	authority := storeAdmissionAuthority{store: st}
 	specification, err := authority.authenticateSpecificationInvocation(

@@ -332,6 +332,7 @@ func TestSelectPreflightWriterImage(t *testing.T) {
 // Startup has no checkout, so it observes the base from an exact-base fetch:
 // a repository with the commit's objects and an empty worktree.
 func TestObserveCompositionBaseInputs(t *testing.T) {
+	t.Parallel()
 	fixture := newCompositionImageFixture(t)
 	base := compositionCommit(t, fixture.root, map[string]string{"README.md": "docs\n"})
 	cfg := claudeDriverConfig{RepositoryID: 42, BaseSHA: base}

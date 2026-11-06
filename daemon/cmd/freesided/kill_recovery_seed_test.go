@@ -14,6 +14,7 @@ import (
 // once with daemonlock.ErrAlreadyRunning, before any store open, rather than
 // contend for SQLite's write lock and time out with SQLITE_BUSY.
 func TestKillRecoverySeedRefusesHeldDatabase(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	resolution, waiver, event := killRecoveryReadinessFixture(t)
 

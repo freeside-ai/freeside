@@ -21,6 +21,7 @@ import (
 )
 
 func TestUnprovableTaskStopFollowsTheCoverageRecord(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	storetest.Copy(t, path)
@@ -93,6 +94,8 @@ func saveCoverageTestTask(t *testing.T, dbPath string, issue int, run domain.Run
 // afterwards, even one whose run has no stage attempt, while a task saved
 // before it stays uncovered. A later open, as run() makes under the
 // deputy's state directory, reads the same record without rewriting it.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestDeputyTaskCoverageCoversTasksSavedAfterIt(t *testing.T) {
 	ctx := t.Context()
 	for _, savedBefore := range []bool{false, true} {
@@ -161,6 +164,8 @@ func TestDeputyTaskCoverageCoversTasksSavedAfterIt(t *testing.T) {
 
 // TestDeputyTaskCoverageRefusesAHeldLock: a daemon holding the database
 // fails the deputy start before it writes a record.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
 func TestDeputyTaskCoverageRefusesAHeldLock(t *testing.T) {
 	_, paths, settings := deputyLeaseFixture(t)
 	lock, err := daemonlock.Acquire(paths.DB)
@@ -182,6 +187,7 @@ func TestDeputyTaskCoverageRefusesAHeldLock(t *testing.T) {
 // source: the record opens after the stale manifest is removed and before
 // the self-check writes this start's manifest.
 func TestRunDeputyOpensCoverageBeforeTheSelfCheck(t *testing.T) {
+	t.Parallel()
 	file, err := parser.ParseFile(token.NewFileSet(), "deputy.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)

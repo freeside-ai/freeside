@@ -34,6 +34,7 @@ func (f *commandCodexAuthRefresher) RefreshCodexAuth(
 }
 
 func TestEnrollCodexCommandRunsVerifiedEnrollment(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	inputRoot := filepath.Join(root, "input")
 	storeRoot := filepath.Join(root, "store")
@@ -182,6 +183,7 @@ func runEnrollCodexAgainst(
 }
 
 func TestEnrollCodexCommandFailsClosedWithoutApprovedRecipe(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedRecipeGatedEvidence(t, dbPath)
 
@@ -198,6 +200,7 @@ func TestEnrollCodexCommandFailsClosedWithoutApprovedRecipe(t *testing.T) {
 }
 
 func TestEnrollCodexCommandEnrollsWithApprovedRecipe(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	recipe := seedRecipeGatedEvidence(t, dbPath)
 
@@ -219,6 +222,7 @@ func TestEnrollCodexCommandEnrollsWithApprovedRecipe(t *testing.T) {
 }
 
 func TestEnrollCodexCommandRequiresEveryBinding(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	err := runEnrollCodexCommandWithRefresher(
 		context.Background(), nil, &stdout, &stderr, &commandCodexAuthRefresher{},

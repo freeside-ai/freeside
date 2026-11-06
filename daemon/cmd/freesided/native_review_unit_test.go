@@ -11,6 +11,7 @@ import (
 )
 
 func TestNativeReviewBadge(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		body string
 		want string
@@ -46,6 +47,7 @@ func TestNativeReviewBadge(t *testing.T) {
 }
 
 func TestNativeFindingLocationMapping(t *testing.T) {
+	t.Parallel()
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	// A line-bearing inline comment maps to the single-line range [line, line].
 	lined := nativeFinding(publish.PullReviewComment{
@@ -86,6 +88,7 @@ func TestNativeFindingLocationMapping(t *testing.T) {
 }
 
 func TestBoundedNativeText(t *testing.T) {
+	t.Parallel()
 	// Invalid UTF-8 is sanitized so the stored body round-trips stably.
 	got := boundedNativeText("ok\xffbad")
 	if !utf8.ValidString(got) {

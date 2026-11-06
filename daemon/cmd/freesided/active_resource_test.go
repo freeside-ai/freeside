@@ -189,6 +189,7 @@ func assertNoActiveCompletion(t *testing.T, st *store.Store, item domain.Attenti
 }
 
 func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -248,6 +249,7 @@ func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
 }
 
 func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -331,6 +333,7 @@ func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 }
 
 func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	first := capturedRunNamed(t, st, "run-shared-first", "item-shared-first")
@@ -381,6 +384,7 @@ func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 }
 
 func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	boundIssue := 443
@@ -430,6 +434,7 @@ func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
 }
 
 func TestActiveResourceHonorsHistoricalCompletionAfterIssueReopens(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -496,6 +501,7 @@ func TestActiveResourceHonorsHistoricalCompletionAfterIssueReopens(t *testing.T)
 }
 
 func TestActiveResourceReconcileUnmergedCloseConcludesUndeclaredItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -527,6 +533,7 @@ func TestActiveResourceReconcileUnmergedCloseConcludesUndeclaredItem(t *testing.
 }
 
 func TestActiveResourceReconcileRequiresExactReturnedResource(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name            string
 		mutate          func(*publish.PullObservation)
@@ -584,6 +591,7 @@ func TestActiveResourceReconcileRequiresExactReturnedResource(t *testing.T) {
 }
 
 func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*publish.PullObservation)
@@ -642,6 +650,7 @@ func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
 }
 
 func TestActiveResourceReconcileSameIdentityRenameStaysReady(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -669,6 +678,7 @@ func TestActiveResourceReconcileSameIdentityRenameStaysReady(t *testing.T) {
 // the ready claim, records the precise readiness-invalidation reason, and
 // concludes the publication schedules so a stale pass cannot remain actionable.
 func TestActiveResourceReconcileInvalidatesReadyOnBindingDivergence(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name            string
 		mutate          func(*publish.PullObservation)
@@ -750,6 +760,7 @@ func TestActiveResourceReconcileInvalidatesReadyOnBindingDivergence(t *testing.T
 }
 
 func TestActiveResourceIdentityInvalidationAfterRestart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	options := store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
@@ -782,6 +793,7 @@ func TestActiveResourceIdentityInvalidationAfterRestart(t *testing.T) {
 }
 
 func TestActiveResourceIdentityInvalidationRejectsChangedBindingAtCommit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -814,6 +826,7 @@ func TestActiveResourceIdentityInvalidationRejectsChangedBindingAtCommit(t *test
 }
 
 func TestActiveResourceIdentityInvalidationYieldsToConcurrentSupersession(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -856,6 +869,7 @@ func TestActiveResourceIdentityInvalidationYieldsToConcurrentSupersession(t *tes
 }
 
 func TestActiveResourceIdentityDivergenceAtCompletionRecheck(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -902,6 +916,7 @@ func TestActiveResourceIdentityDivergenceAtCompletionRecheck(t *testing.T) {
 }
 
 func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*publish.PullObservation)
@@ -973,6 +988,7 @@ func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t
 // still-open one. The pull observer concludes the item as a side effect,
 // standing in for the concurrent writer.
 func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -1008,6 +1024,7 @@ func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *test
 }
 
 func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -1059,6 +1076,7 @@ func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T
 }
 
 func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -1143,6 +1161,7 @@ func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.
 }
 
 func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t *testing.T) {
+	t.Parallel()
 	for _, status := range []domain.ItemStatus{domain.StatusResolved, domain.StatusDismissed} {
 		t.Run(string(status), func(t *testing.T) {
 			ctx := context.Background()
@@ -1186,6 +1205,7 @@ func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t
 }
 
 func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -1243,6 +1263,7 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 // binding is refused before anything is recorded through it, so a corrupt
 // row never settles the unit.
 func TestActiveResourceReconcileRequiresWorkUnitBindingAnchor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	st := storetest.Open(t, dbPath, store.Options{
@@ -1303,6 +1324,7 @@ func TestActiveResourceReconcileRequiresWorkUnitBindingAnchor(t *testing.T) {
 // store's re-gate, so the completion pass observes and records nothing
 // through the unanchored binding.
 func TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -1338,6 +1360,7 @@ func TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead(t *testing.T) 
 }
 
 func TestActiveResourceReconcileForeclosesDivergedMergedCompletion(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		mutate   func(*publish.PullObservation)
@@ -1448,6 +1471,7 @@ func TestActiveResourceReconcileForeclosesDivergedMergedCompletion(t *testing.T)
 }
 
 func TestActiveResourceReconcileKeepsExactMergedCompletionPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -1500,6 +1524,7 @@ func TestActiveResourceReconcileKeepsExactMergedCompletionPending(t *testing.T) 
 }
 
 func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	runID := domain.RunID("run-binding-recovery")
@@ -1597,6 +1622,7 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 }
 
 func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -1671,6 +1697,7 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 // verdict. A proven rebase completes the unit; a refusal, or a cycle that
 // retired with none, forecloses it as any diverged merge does.
 func TestActiveResourceReconcileWaitsOnARebaseProof(t *testing.T) {
+	t.Parallel()
 	published, rebased := reentryTestHead, reentryTestNewHead
 	for _, tc := range []struct {
 		name     string

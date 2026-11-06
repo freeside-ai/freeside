@@ -332,6 +332,7 @@ func judgmentLines() []string {
 // adoptions, the interim facts the flag path still reads, and the round trip
 // of the emitted patch through the loader.
 func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	before := f.snapshot(t)
 	report, patch, err := f.run(t, f.args())
@@ -434,6 +435,7 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 // TestAuthAdoptTwiceChangesNothing reruns adoption: each identity keeps its
 // enrollment, no generation is appended, and no volume is observed again.
 func TestAuthAdoptTwiceChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	if _, _, err := f.run(t, f.args()); err != nil {
 		t.Fatalf("first adopt: %v", err)
@@ -460,6 +462,7 @@ func TestAuthAdoptTwiceChangesNothing(t *testing.T) {
 
 // TestAuthAdoptOneIdentityIsOneAdoption names one identity under both flags.
 func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	args := []string{
 		"-db", f.dbPath, "-auth-identity", "claude-main", "-review-auth-identity", "claude-main",
@@ -499,6 +502,7 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 // reused as it stands, and the report says so, because the emitted tree
 // refuses to resolve it.
 func TestAuthAdoptKeepsAnEnrolledIdentityDisabled(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	if _, _, err := f.run(t, f.args()); err != nil {
@@ -546,6 +550,7 @@ func setIdentityEnabled(t *testing.T, st *store.Store, id domain.AuthIdentityID,
 // arm is on, and refuses a shadow cost owner that is not the implementation
 // identity's.
 func TestAuthAdoptShadowArm(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	if _, _, err := f.run(t, f.args("-shadow-review-cost-owner", "someone-else")); err == nil ||
 		!strings.Contains(err.Error(), "-shadow-review-cost-owner must equal -cost-owner") {
@@ -588,6 +593,7 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 // the Claude enrollment and ward adapter, its pinned offer, and the
 // escalated line right after the specifier's.
 func TestAuthAdoptEscalatedSpecifier(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args(
 		"-specifier-escalated-model", "claude-specifier-escalated", "-specifier-escalated-effort", "max"))
@@ -619,6 +625,7 @@ func TestAuthAdoptEscalatedSpecifier(t *testing.T) {
 // An escalated pair with one flag, or equal to the specifier's own pair, is
 // refused before anything is recorded.
 func TestAuthAdoptRefusesAnEscalatedSpecifierItCannotWrite(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	for name, tc := range map[string]struct {
 		extra []string
@@ -666,6 +673,7 @@ func TestAuthAdoptRefusesAnEscalatedSpecifierItCannotWrite(t *testing.T) {
 // the model and the effort, so every writer role names both. Each is
 // refused before anything is recorded.
 func TestAuthAdoptRefusesAWriterSelectionItCannotWrite(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	for name, tc := range map[string]struct {
 		extra []string
@@ -709,6 +717,7 @@ func TestAuthAdoptRefusesAWriterSelectionItCannotWrite(t *testing.T) {
 // launch: a review launch always passes a model and an effort. Each is
 // refused before anything is recorded.
 func TestAuthAdoptRefusesAReviewSelectionItCannotWrite(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	shadow := func(extra ...string) []string { return f.shadowArgs(extra...) }
 	for name, tc := range map[string]struct {
@@ -780,6 +789,7 @@ func TestAuthAdoptRefusesAReviewSelectionItCannotWrite(t *testing.T) {
 // The call agent is on its own offer, which names the model adoption was
 // given, and the ward agents stay on the writer offers.
 func TestAuthAdoptJudgmentLines(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	if _, _, err := f.run(t, f.args("-judgment-publication-author-prompt",
 		filepath.Join(f.promptDir, "absent"))); err == nil ||
@@ -844,6 +854,7 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 // with no -judgment-model: the tree has no call agent, no call offer, and no
 // judgment line, so nothing in it could launch a call with no model.
 func TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args("-judgment-model", "", "-judgment-effort", ""))
 	if err != nil {
@@ -869,6 +880,7 @@ func TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines(t *testing.T) {
 // would launch at an effort the call agent never asked. Each is refused
 // before anything is recorded.
 func TestAuthAdoptRefusesAJudgmentModelItCannotWrite(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	authorPrompt := filepath.Join(f.promptDir, "author")
 	if err := os.WriteFile(authorPrompt, []byte("write the pull request\n"), 0o600); err != nil {
@@ -914,6 +926,7 @@ func TestAuthAdoptRefusesAJudgmentModelItCannotWrite(t *testing.T) {
 // identity a stored cost owner the flags disagree with: nothing is recorded
 // for either identity.
 func TestAuthAdoptRefusesACostOwnerMismatchBeforeRecording(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	f.withStore(t, func(st *store.Store) {
 		ctx := context.Background()
@@ -991,6 +1004,7 @@ func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
 // account unattested: the identity is reported, nothing is recorded for it,
 // and no tree is emitted because every writer role runs the Claude agent.
 func TestAuthAdoptUnadoptableClaudeIdentityEmitsNoPatch(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	before := f.snapshot(t).identity(t, "claude-main")
 	var stdout, stderr bytes.Buffer
@@ -1014,6 +1028,7 @@ func TestAuthAdoptUnadoptableClaudeIdentityEmitsNoPatch(t *testing.T) {
 
 // TestAuthAdoptWritesThePatchToAFileOutsideAnyCheckout covers -patch.
 func TestAuthAdoptWritesThePatchToAFileOutsideAnyCheckout(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	checkout := t.TempDir()
 	gitForAdoptTest(t, checkout, nil, "init", "-q")
@@ -1055,6 +1070,7 @@ func treeRevision(tree agenttree.Tree) (domain.Digest, error) {
 }
 
 func TestAuthAdoptRefusesAMissingIdentity(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	_, _, err := f.run(t, f.args("-auth-identity", "absent"))
 	if !errors.Is(err, store.ErrNotFound) {
@@ -1066,6 +1082,7 @@ func TestAuthAdoptRefusesAMissingIdentity(t *testing.T) {
 // store: the Claude adoption is already recorded, so the report says so
 // beside the error, and a rerun reuses it.
 func TestAuthAdoptReportsTheFirstAdoptionWhenTheSecondFails(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	if err := os.Remove(f.storePath); err != nil {
 		t.Fatal(err)
@@ -1088,6 +1105,7 @@ func TestAuthAdoptReportsTheFirstAdoptionWhenTheSecondFails(t *testing.T) {
 // hand-off: the tree flags read the committed patch, cite the revision adopt
 // reported, and ignore the checkout's working tree.
 func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	report, patch, err := f.run(t, f.args())
 	if err != nil {
@@ -1267,6 +1285,7 @@ func (f *authAdoptFixture) enrollClaudeReviewIdentity(t *testing.T) {
 // enrollment and the tree's reviewer line names a Claude review agent on it,
 // which the routed review resolution admits under setup_token only.
 func TestAuthAdoptClaudeReviewer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	f.recordClaudeReviewIdentity(t)
@@ -1353,6 +1372,7 @@ func TestAuthAdoptClaudeReviewer(t *testing.T) {
 // TestAuthAdoptOneIdentityClaudeReviewer names the writer identity as a
 // Claude reviewer: one adoption, and the reviewer agent on its enrollment.
 func TestAuthAdoptOneIdentityClaudeReviewer(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	report, patch, err := f.run(t, f.claudeReviewArgs(
 		"-review-auth-identity", "claude-main", "-review-cost-owner", "operator",
@@ -1375,6 +1395,7 @@ func TestAuthAdoptOneIdentityClaudeReviewer(t *testing.T) {
 }
 
 func TestAuthAdoptRefusesAClaudeReviewSelectionItCannotWrite(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	for name, tc := range map[string]struct {
 		args []string
@@ -1442,6 +1463,7 @@ func (f *authAdoptFixture) secondWriterArgs(extra ...string) []string {
 // enrollments, and the routing policy accepts an order across both
 // identities' implementers.
 func TestAuthAdoptSecondWriter(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newAuthAdoptFixture(t)
 	f.recordSecondWriter(t, adoptSecondVolume)
@@ -1515,6 +1537,7 @@ func TestAuthAdoptSecondWriter(t *testing.T) {
 // Second writer flags that are not a second subscription are refused before
 // anything is recorded.
 func TestAuthAdoptRefusesASecondWriterThatIsNotASecondSubscription(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		volume string
 		extra  []string
@@ -1563,6 +1586,7 @@ func TestAuthAdoptRefusesASecondWriterThatIsNotASecondSubscription(t *testing.T)
 // A second writer that cannot be adopted, here because its account is the
 // reviewer's, is reported third and emits no patch, as the first does.
 func TestAuthAdoptUnadoptableSecondWriterEmitsNoPatch(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	f.recordSecondWriter(t, adoptSecondVolume)
 	report, patch, err := f.run(t, f.secondWriterArgs("-second-claude-account", adoptCodexAccount))

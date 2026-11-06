@@ -103,6 +103,7 @@ func (f *activeResourceCacheForge) conditionalCount() int {
 }
 
 func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)

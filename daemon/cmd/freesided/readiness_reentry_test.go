@@ -141,6 +141,7 @@ func assertNoReentry(t *testing.T, st *store.Store, runID domain.RunID) {
 // starts a cycle for a pushed head, reviewed against the prior review's base,
 // and starts none for an invalidation no cycle can answer (issue #502).
 func TestActiveResourceReconcileStartsReadinessReentry(t *testing.T) {
+	t.Parallel()
 	reconcile := func(t *testing.T, st *store.Store, mutate func(*publish.PullObservation)) {
 		t.Helper()
 		reconciler := activeResourceReconciler{

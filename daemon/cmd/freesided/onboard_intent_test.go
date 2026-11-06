@@ -116,6 +116,7 @@ func TestOnboardRefusesSilentIntentReplacement(t *testing.T) {
 // shows the stored binding's list. next must say so instead of leaving the
 // operator to read [44] as the grant not having landed.
 func TestOnboardReportsStoredRepositoriesAfterGrant(t *testing.T) {
+	t.Parallel()
 	fixture := newOnboardIntentFixture(t)
 	fixture.trustInstallation(t, 777, 44)
 	run := func(extra ...string) (publish.PendingEnvelopeRecord, string) {
@@ -166,6 +167,7 @@ func TestOnboardReportsStoredRepositoriesAfterGrant(t *testing.T) {
 // must keep passing, which the command test can't reach offline: -resume
 // against a live intent goes on to poll GitHub.
 func TestPendingIntentGateLetsResumeContinueALiveIntent(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 	live := &publish.PendingInstallationEnvelope{
 		DurableIntentRevision: 2, ExpectedRepositoryIDs: []int64{55}, ExpiresAt: now.Add(time.Minute),

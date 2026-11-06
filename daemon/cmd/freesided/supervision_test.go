@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
+//nolint:paralleltest // Serial: sets the package global version.
 func TestBuildVersionPrefersStampedValue(t *testing.T) {
 	previous := version
 	version = "v1.2.3-test"
@@ -36,6 +37,7 @@ func TestBuildVersionPrefersStampedValue(t *testing.T) {
 }
 
 func TestExitClassificationIsComplete(t *testing.T) {
+	t.Parallel()
 	want := map[componentKind]exitDisposition{
 		componentHTTP:                  exitRestartSafe,
 		componentPairingControl:        exitRestartSafe,
@@ -69,6 +71,7 @@ func TestExitClassificationIsComplete(t *testing.T) {
 }
 
 func TestScheduledExternalFailureThresholdRecordsTheRun(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 10, 1, 2, 3, 0, time.UTC)
 	tracker := newScheduledFailureTracker(func() time.Time {
 		observed := now
@@ -103,6 +106,7 @@ func TestScheduledExternalFailureThresholdRecordsTheRun(t *testing.T) {
 }
 
 func TestScheduledFailureClassificationFailsClosed(t *testing.T) {
+	t.Parallel()
 	for name, failure := range map[string]error{
 		"unclassified": errors.New("operational source unreadable"),
 		"revoked authority": &publish.APIError{
@@ -399,6 +403,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 }
 
 func TestDurableStopReasonExplainsRecovery(t *testing.T) {
+	t.Parallel()
 	want := "The daemon stopped unattended operation after a health failure requiring a durable stop: janitor failed. " +
 		"Acknowledge and Run Doctor leave unattended admission closed. " +
 		"Restart the daemon, then choose Resume Unattended on each durable-stop item to reopen admission. " +
