@@ -95,9 +95,9 @@ type claudeReportedModel struct {
 }
 
 // DecodeClaudeModelReport reads an initialize probe's output, run under
-// token. It refuses output that carries a run of the token, as the enrollment
-// probe withholds such a refusal, because the CLI holds the token and what it
-// prints is stored and shown. It takes the one successful control_response to
+// token. It refuses output that carries a run of the token, in the raw bytes
+// or a decoded string, as the enrollment probe withholds such a refusal,
+// because the CLI holds the token and what it prints is stored and shown. It takes the one successful control_response to
 // the probe's request, drops the default pointer, and gives a model without
 // effort support no levels; a CLI that omits supportsEffort reports none. Ids
 // and effort levels must be values a launch can pass as an option, and the
@@ -160,10 +160,34 @@ func DecodeClaudeModelReport(out LineupProbeOutput, token SetupToken) (ModelRepo
 		}
 		report.Models = append(report.Models, model)
 	}
+	if reportCarriesSecret(report, [][]byte{bytes.TrimPrefix(token.value, []byte(setupTokenPrefix))}) {
+		return ModelReport{}, ErrModelReportCarriesCredential
+	}
 	if err := domain.ValidateDiscoveredModels(report.Models); err != nil {
 		return ModelReport{}, err
 	}
 	return report, nil
+}
+
+// reportCarriesSecret reports whether a string the report records carries a
+// run of any of secrets. The scan of the raw output misses a secret the CLI
+// spelled with JSON escapes, which decoding restores, so the decoded strings
+// are scanned as well.
+func reportCarriesSecret(report ModelReport, secrets [][]byte) bool {
+	fields := []string{report.CLIBuild}
+	for _, model := range report.Models {
+		fields = append(fields, model.ID, model.DisplayName)
+		if model.ResolvedModel != nil {
+			fields = append(fields, *model.ResolvedModel)
+		}
+		fields = append(fields, model.EffortLevels...)
+	}
+	for _, field := range fields {
+		if carriesAnySecretRun([]byte(field), secrets) {
+			return true
+		}
+	}
+	return false
 }
 
 // launchableModelReport reports whether a model's strings are safe to record
