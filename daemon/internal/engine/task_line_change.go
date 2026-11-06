@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -17,12 +18,14 @@ import (
 var errTaskLineUnchanged = errors.New("the role already has the requested line")
 
 // ChangeTaskLineRequest is one operator change to a task's line for a role:
-// an agent to move the role to, or a clear that returns it to the lineup.
+// a selection to move the role to, or a clear that returns it to the lineup.
 type ChangeTaskLineRequest struct {
 	TaskID domain.TaskID
 	Role   domain.RoleName
-	Agent  string
-	Clear  bool
+	// Selection is the enrollment, model, and effort the role moves to, nil
+	// exactly when Clear.
+	Selection *domain.TaskLineSelection
+	Clear     bool
 	// Source is the path that made the change: cli_line_change or
 	// client_line_change.
 	Source domain.TaskLineSource
@@ -33,25 +36,29 @@ func (r ChangeTaskLineRequest) validate() error {
 		return fmt.Errorf("task line change source %q: %w", r.Source, domain.ErrInvalidTaskLineSource)
 	}
 	if !r.Clear {
-		return domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: r.Role, Agent: r.Agent}})
+		if r.Selection == nil {
+			return fmt.Errorf("task line %s: a change selects or clears: %w", r.Role, domain.ErrInvalidTaskLineSelection)
+		}
+		return domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: r.Role, Selection: r.Selection}})
 	}
 	if !r.Role.TaskLineEligible() {
 		return fmt.Errorf("task line role: %w", domain.ErrTaskLineRoleIneligible)
 	}
-	if r.Agent != "" {
+	if r.Selection != nil {
 		return fmt.Errorf("task line %s: a clear names no agent: %w", r.Role, domain.ErrTaskLineInconsistent)
 	}
 	return nil
 }
 
-// sameLine reports whether the role's newest version already names the
-// request.
+// sameLine reports whether the role's newest version already holds the
+// request. A v1 head names an agent, never a selection, so a request for a
+// selection always supersedes it.
 // head is nil when the role has no line.
 func (r ChangeTaskLineRequest) sameLine(head *domain.TaskLine) bool {
 	if r.Clear {
 		return head == nil || head.Cleared
 	}
-	return head != nil && !head.Cleared && head.Agent == r.Agent
+	return head != nil && !head.Cleared && head.Selection != nil && *head.Selection == *r.Selection
 }
 
 // TaskLineChangeResult reports a change. Recorded is false when the role
@@ -68,9 +75,9 @@ type TaskLineChangeResult struct {
 // domain.ErrTaskLineRoleRunning and records nothing: that attempt holds the
 // line that authorized it, and a change must not read as applying to it.
 //
-// The agent isn't resolved here. Admission resolves it at the admitting
-// revision, as it does a line set at submission, and refuses without falling
-// back to the lineup.
+// The selection isn't resolved here, and no tree is read. Admission resolves
+// it at the admitting revision, as it does a line set at submission, and
+// refuses without falling back to the lineup.
 //
 // The change applies to attempts admitted after it commits. This write
 // serializes with other writes but not with an admission's earlier read, so
@@ -129,7 +136,10 @@ func ChangeTaskLineTx(
 	// clear first would let the lineup's credential run in between. Any
 	// failure to hold counts, since a request for another agent would
 	// supersede this head unchecked too, and admission reports the fault.
-	if req.sameLine(current) && (replaces == nil || anchorTaskLine(ctx, &tx.ReadTx, *current) == nil) {
+	// With no tree, a router or move head that selects cannot be held to its
+	// policy (anchorLinePolicy), so asking for its selection records a change
+	// that backs it.
+	if req.sameLine(current) && (replaces == nil || anchorTaskLine(ctx, &tx.ReadTx, agenttree.Tree{}, *current) == nil) {
 		return TaskLineChangeResult{Line: current}, nil
 	}
 	running, err := taskRoleAttemptRunning(ctx, &tx.ReadTx, req.TaskID, req.Role)
@@ -139,7 +149,7 @@ func ChangeTaskLineTx(
 	if running {
 		return TaskLineChangeResult{}, fmt.Errorf("task %s role %s: %w", req.TaskID, req.Role, domain.ErrTaskLineRoleRunning)
 	}
-	change, err := domain.NewTaskLineChange(req.TaskID, req.Role, req.Agent, req.Clear, replaces, now)
+	change, err := domain.NewTaskLineChange(req.TaskID, req.Role, req.Selection, replaces, now)
 	if err != nil {
 		return TaskLineChangeResult{}, err
 	}

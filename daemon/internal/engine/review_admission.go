@@ -108,7 +108,7 @@ func CheckReviewRole(
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		if runID != "" && role.TaskLineEligible() {
-			if line, found, err = RunTaskLine(ctx, tx, runID, role); err != nil {
+			if line, found, err = RunTaskLine(ctx, tx, tree, runID, role); err != nil {
 				return err
 			}
 		}

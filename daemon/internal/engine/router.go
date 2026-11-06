@@ -176,17 +176,20 @@ func (s AgentSelection) planRoute(
 	}
 	provenance := &choice.provenance
 	lined[role] = true
-	inputs := []domain.TaskLineInput{{
-		TaskID: run.TaskID, Role: role, Agent: choice.agent.agent,
-		Source: domain.TaskLineSourceRouter, SetBy: routerSetBy(run.TaskID), Provenance: provenance,
-	}}
 	pools := make(map[string]domain.UsagePoolID, len(candidates))
 	for name, candidate := range candidates {
 		pools[name] = candidate.pool
 	}
-	for _, line := range routerLinesForPool(policy, choice.agent.pool, pools, lined) {
+	choices := append([]domain.TaskLineChoice{{Role: role, Agent: choice.agent.agent}},
+		routerLinesForPool(policy, choice.agent.pool, pools, lined)...)
+	inputs := make([]domain.TaskLineInput, 0, len(choices))
+	for _, line := range choices {
+		selection, err := s.Tree.LineSelection(line.Role, line.Agent)
+		if err != nil {
+			return nil, err
+		}
 		inputs = append(inputs, domain.TaskLineInput{
-			TaskID: run.TaskID, Role: line.Role, Agent: line.Agent,
+			TaskID: run.TaskID, Role: line.Role, Selection: &selection,
 			Source: domain.TaskLineSourceRouter, SetBy: routerSetBy(run.TaskID), Provenance: provenance,
 		})
 	}
@@ -631,12 +634,16 @@ func (s AgentSelection) requireRoutedPoolOpen(
 		return nil
 	}
 	return st.Read(ctx, func(tx *store.ReadTx) error {
-		line, found, err := RunTaskLine(ctx, tx, runID, role)
+		line, found, err := RunTaskLine(ctx, tx, s.Tree, runID, role)
 		if err != nil || !found || !line.Source.CarriesProvenance() {
 			// An unreadable or unanchored line is admission's to refuse.
 			return nil
 		}
-		candidate, ok, err := s.routeCandidate(ctx, tx, line.Agent)
+		agent, err := s.Tree.LineAgent(line)
+		if err != nil {
+			return nil
+		}
+		candidate, ok, err := s.routeCandidate(ctx, tx, agent)
 		if err != nil || !ok {
 			return err
 		}

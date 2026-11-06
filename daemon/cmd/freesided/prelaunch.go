@@ -268,7 +268,7 @@ func parsePrelaunchConfig(args []string, stderr io.Writer) (prelaunchConfig, err
 	flags.StringVar(&cfg.PolicyPath, "policy", "", "the resolved policy file the run will submit (required)")
 	flags.StringVar(&cfg.PublicationPath, "publication", "", "the publication file the run will submit (required)")
 	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "the work-unit declaration the run will submit")
-	flags.Var(&cfg.TaskLines, "task-line", "a task line the run will submit, as role=agent (repeatable)")
+	flags.Var(&cfg.TaskLines, "task-line", "a task line the run will submit, as role=enrollment/model/effort (repeatable)")
 	flags.BoolVar(&cfg.NoLive, "no-live", false, "skip the live checks: the target-issue read and the lineup probe")
 	if err := flags.Parse(args); err != nil {
 		return prelaunchConfig{}, fmt.Errorf("%w: %w", errPrelaunchUsage, err)
@@ -462,7 +462,7 @@ func checkPrelaunchInputs(
 ) *prelaunchInputs {
 	fix := "correct the task, policy, publication, or work-unit file before submission"
 	if _, err := domain.CanonicalTaskLineChoices(cfg.TaskLines); err != nil {
-		record.fail(prelaunchGroupInputs, "submission", "--task-line: "+err.Error(), "name each role once, as role=agent")
+		record.fail(prelaunchGroupInputs, "submission", "--task-line: "+err.Error(), "name each role once, as role=enrollment/model/effort")
 		return nil
 	}
 	identity, err := inspectCompositionIdentity(ctx, preflightConfig{
@@ -587,8 +587,9 @@ func checkPrelaunchAgentTree(
 	return tree, false, nil
 }
 
-// checkPrelaunchTaskLines checks that each task line names an agent the
-// tree holds; admission resolves the line against that tree.
+// checkPrelaunchTaskLines checks that exactly one agent of the tree reduces
+// to each task line's selection; admission resolves the line against that
+// tree the same way (agenttree.Tree.LineAgent).
 func checkPrelaunchTaskLines(record *prelaunchRecord, lines []domain.TaskLineChoice, tree agenttree.Tree, treeErr error) {
 	switch {
 	case len(lines) == 0:
@@ -600,16 +601,17 @@ func checkPrelaunchTaskLines(record *prelaunchRecord, lines []domain.TaskLineCho
 	}
 	var unknown []string
 	for _, line := range lines {
-		if !slices.ContainsFunc(tree.Agents, func(agent domain.AgentSource) bool { return agent.Name == line.Agent }) {
-			unknown = append(unknown, string(line.Role)+"="+line.Agent)
+		if _, err := tree.AgentForSelection(line.Role, *line.Selection); err != nil {
+			unknown = append(unknown, string(line.Role)+"="+string(line.Selection.EnrollmentID)+"/"+
+				line.Selection.ModelID+"/"+line.Selection.Effort)
 		}
 	}
 	if len(unknown) != 0 {
-		record.fail(prelaunchGroupInputs, "task_lines", "the agent tree has no agent for "+strings.Join(unknown, ", "),
-			"name an agent the tree at agent_tree.commit holds, or adopt and commit one that does")
+		record.fail(prelaunchGroupInputs, "task_lines", "the agent tree has no one agent for "+strings.Join(unknown, ", "),
+			"select what exactly one agent of the tree at agent_tree.commit runs, or adopt and commit one that does")
 		return
 	}
-	record.pass(prelaunchGroupInputs, "task_lines", fmt.Sprintf("the tree holds the agent of each of %d task lines", len(lines)))
+	record.pass(prelaunchGroupInputs, "task_lines", fmt.Sprintf("the tree selects one agent for each of %d task lines", len(lines)))
 }
 
 // checkPrelaunchState reads the root's database read-only, never migrating

@@ -372,7 +372,11 @@ func TestParkedTaskMovesToTheChosenAgent(t *testing.T) {
 			return err
 		}
 		moved = heads[domain.RoleImplementer]
-		if moved.Agent != alternateRetryAgent || moved.Source != domain.TaskLineSourceAlternateAgentMove ||
+		movedAgent, err := selection.Tree.LineAgent(moved)
+		if err != nil {
+			return err
+		}
+		if movedAgent != alternateRetryAgent || moved.Source != domain.TaskLineSourceAlternateAgentMove ||
 			moved.Provenance == nil || moved.Provenance.Pool != second.identity.EffectiveUsagePool() ||
 			moved.Provenance.PassedOver == nil ||
 			moved.Provenance.PassedOver.Agent != agentbaseline.WriterAgentName(domain.RoleImplementer) {

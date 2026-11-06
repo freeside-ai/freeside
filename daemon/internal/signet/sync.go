@@ -438,7 +438,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			if err := validateSnapshot(state, task.Snapshot); err != nil {
 				return err
 			}
-			snapshot, err := projectTaskSnapshot(ctx, tx, state, task.Value, projectedRuns)
+			snapshot, err := projectTaskSnapshot(ctx, tx, state, task.Value, projectedRuns, s.TaskLineAgents())
 			if errors.Is(err, ErrRunObservationIntegrity) {
 				s.logger.Warn("task projection integrity failure; excluding task from bootstrap", "task_id", task.Value.ID, "error", err)
 				continue

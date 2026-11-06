@@ -97,13 +97,16 @@ func scanAlternateAgentRetry(row scanner) (domain.AlternateAgentRetry, error) {
 // in the caller's transaction, and returns them. The record must already be
 // stored in this transaction and be a parked move; every input must be an
 // alternate_agent_move line of the record's task that cites it, and one must
-// set the record's role to its agent. Unlike a router line, a moved line
-// supersedes the role's current version, whatever set it.
+// set the record's role to moved, the selection its agent reduces to. The
+// store has no tree to translate the agent, so the caller does; admission
+// holds the line to the record's agent again (anchorAlternateAgentMoveLine).
+// Unlike a router line, a moved line supersedes the role's current version,
+// whatever set it.
 //
 // Like RecordTaskLineChange, this advances the task's own version, so sync
 // serves the new task_lines.
 func (tx *WriteTx) RecordAlternateAgentMoveLines(
-	ctx context.Context, record domain.AlternateAgentRetry, inputs []domain.TaskLineInput,
+	ctx context.Context, record domain.AlternateAgentRetry, moved domain.TaskLineSelection, inputs []domain.TaskLineInput,
 ) ([]domain.TaskLine, error) {
 	stored, err := tx.GetAlternateAgentRetry(ctx, record.ID)
 	if err != nil {
@@ -114,7 +117,7 @@ func (tx *WriteTx) RecordAlternateAgentMoveLines(
 			record.ID, domain.ErrTaskLineInconsistent)
 	}
 	if !slices.ContainsFunc(inputs, func(in domain.TaskLineInput) bool {
-		return in.Role == record.Role && in.Agent == record.Agent && !in.Cleared
+		return in.Role == record.Role && in.Selection != nil && *in.Selection == moved && !in.Cleared
 	}) {
 		return nil, fmt.Errorf("record alternate agent move lines %s: no line moves %s to %s: %w",
 			record.ID, record.Role, record.Agent, domain.ErrTaskLineInconsistent)

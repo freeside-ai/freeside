@@ -407,7 +407,7 @@ func readTaskRecord(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asO
 	default:
 		record.TaskError = newTaskRecordError(err)
 	}
-	if timeline, err := signet.ReadTaskTimeline(ctx, tx, id, asOf); err != nil {
+	if timeline, err := signet.ReadTaskTimeline(ctx, tx, daemonTaskLineAgents(ctx), id, asOf); err != nil {
 		record.TimelineError = newTaskRecordError(err)
 	} else {
 		record.Timeline = &timeline

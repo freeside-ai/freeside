@@ -1306,26 +1306,62 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A line change and the line that cites it, and the clear that follows:
-	// a cleared line names no agent.
-	taskLineChange, err := domain.NewTaskLineChange("task-1", domain.RoleImplementer, "claude-b", false, &taskLine.ID, ts)
-	if err != nil {
-		t.Fatal(err)
+	// A v1 line change and its clear, as stored before v2: no writer builds
+	// one now, so the fixture computes the id itself. Their goldens keep the
+	// v1 bytes and ids.
+	v1Change := func(agent string, cleared bool, replaces *domain.Digest) domain.TaskLineChange {
+		t.Helper()
+		change := domain.TaskLineChange{
+			Encoding: domain.TaskLineChangeEncodingV1, TaskID: "task-1", Role: domain.RoleImplementer,
+			Agent: agent, Cleared: cleared, ReplacesID: replaces, RecordedAt: ts,
+		}
+		if change.ID, err = change.ComputeID(); err != nil {
+			t.Fatal(err)
+		}
+		if err := change.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		return change
 	}
-	changedTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+	taskLineChange := v1Change("claude-b", false, &taskLine.ID)
+	v1ChangedTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceCLILineChange, SetBy: string(taskLineChange.ID),
 	}, 2, &taskLine.ID, ts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskLineClear, err := domain.NewTaskLineChange("task-1", domain.RoleImplementer, "", true, &changedTaskLine.ID, ts)
+	taskLineClear := v1Change("", true, &v1ChangedTaskLine.ID)
+	// The selections v2 lines carry: an enrollment, a model, and an effort.
+	selectionA := &domain.TaskLineSelection{EnrollmentID: "claude-max-a", ModelID: "claude-opus-4-5", Effort: "high"}
+	selectionB := &domain.TaskLineSelection{EnrollmentID: "claude-max-b", ModelID: "claude-sonnet-4-5", Effort: "medium"}
+	taskLineV2, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionA,
+		Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+	}, 1, nil, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A v2 line change and the line that cites it, and the clear that
+	// follows: a cleared line names no agent and selects nothing.
+	taskLineChangeV2, err := domain.NewTaskLineChange("task-1", domain.RoleImplementer, selectionB, &taskLineV2.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionB,
+		Source: domain.TaskLineSourceCLILineChange, SetBy: string(taskLineChangeV2.ID),
+	}, 2, &taskLineV2.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskLineClearV2, err := domain.NewTaskLineChange("task-1", domain.RoleImplementer, nil, &changedTaskLine.ID, ts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clearedTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Cleared: true,
-		Source: domain.TaskLineSourceCLILineChange, SetBy: string(taskLineClear.ID),
+		Source: domain.TaskLineSourceCLILineChange, SetBy: string(taskLineClearV2.ID),
 	}, 3, &changedTaskLine.ID, ts)
 	if err != nil {
 		t.Fatal(err)
@@ -1338,7 +1374,7 @@ func TestGolden(t *testing.T) {
 	}
 	// The drain-first account takes the task whatever the resets.
 	routerDrainFirstTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-a",
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionA,
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 2, Tier: domain.TaskLineSelectionDrainFirstAccount, Pool: "claude-max-a", RankedBy: rankedBy,
@@ -1349,7 +1385,7 @@ func TestGolden(t *testing.T) {
 	}
 	// With no account, the pool that resets soonest takes it.
 	routerSoonestResetTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionB,
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionSoonestReset, Pool: "claude-max-b", RankedBy: rankedBy,
@@ -1386,7 +1422,7 @@ func TestGolden(t *testing.T) {
 	// No reset is known and the policy's first agent's window is marked, so
 	// the router passes over claude-a and takes the next pool in the order.
 	routerPolicyOrderTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionB,
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
@@ -1404,7 +1440,7 @@ func TestGolden(t *testing.T) {
 	// implementer's router line gains a second version on claude-b's pool,
 	// citing the move's record.
 	alternateAgentMoveTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionB,
 		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(parkedMoveRetry.ID),
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
@@ -1418,6 +1454,27 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each line above as stored before v2, naming its agent: no writer
+	// builds one now, so the fixture computes the id itself. Their goldens
+	// keep the v1 bytes and ids that migration 0130 copies unchanged.
+	asV1 := func(line domain.TaskLine, agent string, predecessor *domain.Digest, setBy string) domain.TaskLine {
+		t.Helper()
+		line.Encoding, line.Agent, line.Selection = domain.TaskLineEncodingV1, agent, nil
+		line.PredecessorID, line.SetBy = predecessor, setBy
+		if line.ID, err = line.ComputeID(); err != nil {
+			t.Fatal(err)
+		}
+		if err := line.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+	v1ClearedTaskLine := asV1(clearedTaskLine, "", &v1ChangedTaskLine.ID, string(taskLineClear.ID))
+	v1RouterDrainFirstTaskLine := asV1(routerDrainFirstTaskLine, "claude-a", nil, routerDrainFirstTaskLine.SetBy)
+	v1RouterSoonestResetTaskLine := asV1(routerSoonestResetTaskLine, "claude-b", nil, routerSoonestResetTaskLine.SetBy)
+	v1RouterPolicyOrderTaskLine := asV1(routerPolicyOrderTaskLine, "claude-b", nil, routerPolicyOrderTaskLine.SetBy)
+	v1AlternateAgentMoveTaskLine := asV1(alternateAgentMoveTaskLine, "claude-b",
+		&v1RouterPolicyOrderTaskLine.ID, alternateAgentMoveTaskLine.SetBy)
 
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
 	// beside the existing fields, and its presence selects the new encoding
@@ -2436,6 +2493,21 @@ func TestGolden(t *testing.T) {
 				{Role: domain.RoleReviewer, Agent: "codex"},
 			},
 		}},
+		{"task_submission_lines_v2", domain.TaskSubmission{
+			CommandID: "cmd-5", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "proj-1",
+			SourceDigest:       "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			TaskID:             "task-4",
+			SpecificationRunID: "run-4",
+			Name:               domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceOperator},
+			TaskLines: []domain.TaskLineChoice{
+				{Role: domain.RoleImplementer, Selection: &domain.TaskLineSelection{
+					EnrollmentID: "claude-max-b", ModelID: "claude-sonnet-4-5", Effort: "medium",
+				}},
+				{Role: domain.RoleReviewer, Selection: &domain.TaskLineSelection{
+					EnrollmentID: "codex-pro", ModelID: "gpt-5.1-codex", Effort: "xhigh",
+				}},
+			},
+		}},
 		{"task_submission_daemon", domain.TaskSubmission{
 			CommandID: "cmd-3", Origin: domain.TaskSubmissionOriginDaemon, ProjectID: "proj-1",
 			SourceDigest:       upkeepRefusal.ID,
@@ -2477,12 +2549,21 @@ func TestGolden(t *testing.T) {
 		{"task_line_superseding", supersedingTaskLine},
 		{"task_line_change", taskLineChange},
 		{"task_line_change_clear", taskLineClear},
+		{"task_line_v2", taskLineV2},
+		{"task_line_change_v2", taskLineChangeV2},
+		{"task_line_change_v2_clear", taskLineClearV2},
 		{"task_line_changed", changedTaskLine},
 		{"task_line_cleared", clearedTaskLine},
 		{"task_line_router_drain_first", routerDrainFirstTaskLine},
 		{"task_line_router_soonest_reset", routerSoonestResetTaskLine},
 		{"task_line_router_policy_order", routerPolicyOrderTaskLine},
 		{"task_line_alternate_agent_move", alternateAgentMoveTaskLine},
+		{"task_line_changed_v1", v1ChangedTaskLine},
+		{"task_line_cleared_v1", v1ClearedTaskLine},
+		{"task_line_router_drain_first_v1", v1RouterDrainFirstTaskLine},
+		{"task_line_router_soonest_reset_v1", v1RouterSoonestResetTaskLine},
+		{"task_line_router_policy_order_v1", v1RouterPolicyOrderTaskLine},
+		{"task_line_alternate_agent_move_v1", v1AlternateAgentMoveTaskLine},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
 		{"production_attempt_revision", productionRevisionAttempt},

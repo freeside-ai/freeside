@@ -98,7 +98,7 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 					t.Fatal(err)
 				}
 				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
-					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
+					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(),
 					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), signet.WithParkedTaskMover(fakeParkedTaskMover))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {

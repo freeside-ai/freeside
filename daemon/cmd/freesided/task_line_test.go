@@ -41,16 +41,16 @@ func TestTaskLineCommandChangesAndClears(t *testing.T) {
 	}
 	task := string(run.TaskID)
 
-	changed, err := runTaskLine(t, t.Context(), "-db", dbPath, "-task", task, "-role", "reviewer", "-agent", "codex")
+	changed, err := runTaskLine(t, t.Context(), "-db", dbPath, "-task", task, "-role", "reviewer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high")
 	if err != nil {
 		t.Fatal(err)
 	}
 	line := changed.Line
 	if !changed.Recorded || changed.TaskID != run.TaskID || changed.Role != domain.RoleReviewer || line == nil ||
-		line.Agent != "codex" || line.Version != 2 || *line.PredecessorID != first.ID {
+		line.Selection == nil || *line.Selection != codexSelection || line.Version != 2 || *line.PredecessorID != first.ID {
 		t.Fatalf("change = %+v, line %+v", changed, line)
 	}
-	repeat, err := runTaskLine(t, t.Context(), "-db", dbPath, "-task", task, "-role", "reviewer", "-agent", "codex")
+	repeat, err := runTaskLine(t, t.Context(), "-db", dbPath, "-task", task, "-role", "reviewer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestTaskLineCommandChangesAndClears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cleared.Recorded || cleared.Line == nil || !cleared.Line.Cleared || cleared.Line.Agent != "" {
+	if !cleared.Recorded || cleared.Line == nil || !cleared.Line.Cleared || cleared.Line.Selection != nil {
 		t.Fatalf("clear = %+v, line %+v", cleared, cleared.Line)
 	}
 	// A role with no line has none to report.
@@ -85,17 +85,18 @@ func TestTaskLineCommandRefusals(t *testing.T) {
 	// Fails the agent grammar and reads like a pasted credential.
 	const pasted = "sk-ant-oat01 fixture not a token"
 	for name, args := range map[string][]string{
-		"no db":             {"-task", task, "-role", "reviewer", "-clear"},
-		"no task":           {"-db", dbPath, "-role", "reviewer", "-clear"},
-		"no role":           {"-db", dbPath, "-task", task, "-clear"},
-		"neither":           {"-db", dbPath, "-task", task, "-role", "reviewer"},
-		"both":              {"-db", dbPath, "-task", task, "-role", "reviewer", "-agent", "codex", "-clear"},
-		"positional":        {"-db", dbPath, "-task", task, "-role", "reviewer", "-clear", pasted},
-		"ineligible role":   {"-db", dbPath, "-task", task, "-role", "shadow_reviewer", "-agent", "codex"},
-		"unknown role":      {"-db", dbPath, "-task", task, "-role", pasted, "-agent", "codex"},
-		"malformed agent":   {"-db", dbPath, "-task", task, "-role", "reviewer", "-agent", pasted},
-		"unknown task":      {"-db", dbPath, "-task", "task-missing", "-role", "reviewer", "-agent", "codex"},
-		"a missing db file": {"-db", dbPath + ".missing", "-task", task, "-role", "reviewer", "-clear"},
+		"no db":               {"-task", task, "-role", "reviewer", "-clear"},
+		"no task":             {"-db", dbPath, "-role", "reviewer", "-clear"},
+		"no role":             {"-db", dbPath, "-task", task, "-clear"},
+		"neither":             {"-db", dbPath, "-task", task, "-role", "reviewer"},
+		"both":                {"-db", dbPath, "-task", task, "-role", "reviewer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high", "-clear"},
+		"positional":          {"-db", dbPath, "-task", task, "-role", "reviewer", "-clear", pasted},
+		"ineligible role":     {"-db", dbPath, "-task", task, "-role", "shadow_reviewer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high"},
+		"unknown role":        {"-db", dbPath, "-task", task, "-role", pasted, "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high"},
+		"malformed selection": {"-db", dbPath, "-task", task, "-role", "reviewer", "-enrollment", pasted, "-model", "m", "-effort", "high"},
+		"partial selection":   {"-db", dbPath, "-task", task, "-role", "reviewer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex"},
+		"unknown task":        {"-db", dbPath, "-task", "task-missing", "-role", "reviewer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high"},
+		"a missing db file":   {"-db", dbPath + ".missing", "-task", task, "-role", "reviewer", "-clear"},
 	} {
 		_, err := runTaskLine(t, t.Context(), args...)
 		if err == nil {
@@ -127,15 +128,15 @@ func TestTaskLineUsesRunningDaemonStore(t *testing.T) {
 			return nil, errors.New("unexpected direct store open")
 		}))
 
-	result, err := runTaskLine(t, ctx, "-db", dbPath, "-task", string(task), "-role", "implementer", "-agent", "codex")
+	result, err := runTaskLine(t, ctx, "-db", dbPath, "-task", string(task), "-role", "implementer", "-enrollment", "enroll-codex", "-model", "gpt-5.1-codex", "-effort", "high")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Recorded || result.Line == nil || result.Line.Agent != "codex" {
+	if !result.Recorded || result.Line == nil || result.Line.Selection == nil || *result.Line.Selection != codexSelection {
 		t.Fatalf("result = %+v", result)
 	}
 	const pasted = "sk-ant-oat01 fixture not a token"
-	_, err = runTaskLine(t, ctx, "-db", dbPath, "-task", string(task), "-role", "implementer", "-agent", pasted)
+	_, err = runTaskLine(t, ctx, "-db", dbPath, "-task", string(task), "-role", "implementer", "-enrollment", pasted, "-model", "m", "-effort", "high")
 	if err == nil || strings.Contains(err.Error(), pasted) {
 		t.Fatalf("forwarded refusal = %v", err)
 	}
@@ -149,3 +150,6 @@ func TestTaskLineUsesRunningDaemonStore(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// codexSelection is the selection the task-line tests choose by flag.
+var codexSelection = domain.TaskLineSelection{EnrollmentID: "enroll-codex", ModelID: "gpt-5.1-codex", Effort: "high"}

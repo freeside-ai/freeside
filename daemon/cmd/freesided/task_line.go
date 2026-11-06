@@ -72,19 +72,23 @@ func runTaskLineCommand(ctx context.Context, args []string, stdout, stderr io.Wr
 }
 
 // parseTaskLineConfig checks only that the flags form one request. The role
-// and agent are refused by the engine, whose errors never repeat them.
+// and selection are refused by the engine, whose errors never repeat them.
 func parseTaskLineConfig(args []string, output io.Writer) (taskLineConfig, error) {
 	var (
-		cfg        taskLineConfig
-		task, role string
+		cfg                       taskLineConfig
+		task, role                string
+		enrollment, model, effort string
 	)
 	flags := flag.NewFlagSet("freesided task-line", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&cfg.DBPath, "db", "", "existing SQLite database path (required)")
 	flags.StringVar(&task, "task", "", "task id (required)")
 	flags.StringVar(&role, "role", "", "specifier, implementer, remediator, or reviewer (required)")
-	flags.StringVar(&cfg.Request.Agent, "agent", "", "agent to move the role to; exactly one of -agent and -clear")
-	flags.BoolVar(&cfg.Request.Clear, "clear", false, "return the role to the lineup; exactly one of -agent and -clear")
+	flags.StringVar(&enrollment, "enrollment", "", "enrollment to move the role to; with -model and -effort, or -clear")
+	flags.StringVar(&model, "model", "", "model id from the enrollment's catalog; with -enrollment and -effort")
+	flags.StringVar(&effort, "effort", "", "the harness's effort for the model; with -enrollment and -model")
+	flags.BoolVar(&cfg.Request.Clear, "clear", false,
+		"return the role to the lineup; exactly one of -clear and the -enrollment, -model, -effort selection")
 	if err := flags.Parse(args); err != nil {
 		return taskLineConfig{}, err
 	}
@@ -98,8 +102,17 @@ func parseTaskLineConfig(args []string, output io.Writer) (taskLineConfig, error
 		return taskLineConfig{}, errors.New("-task is required")
 	case role == "":
 		return taskLineConfig{}, errors.New("-role is required")
-	case (cfg.Request.Agent != "") == cfg.Request.Clear:
-		return taskLineConfig{}, errors.New("exactly one of -agent and -clear is required")
+	}
+	selecting := enrollment != "" || model != "" || effort != ""
+	switch {
+	case selecting == cfg.Request.Clear:
+		return taskLineConfig{}, errors.New("exactly one of -clear and a selection (-enrollment, -model, -effort) is required")
+	case selecting && (enrollment == "" || model == "" || effort == ""):
+		return taskLineConfig{}, errors.New("a selection needs all of -enrollment, -model, and -effort")
+	case selecting:
+		cfg.Request.Selection = &domain.TaskLineSelection{
+			EnrollmentID: domain.ClientEnrollmentID(enrollment), ModelID: model, Effort: effort,
+		}
 	}
 	cfg.Request.TaskID, cfg.Request.Role = domain.TaskID(task), domain.RoleName(role)
 	cfg.Request.Source = domain.TaskLineSourceCLILineChange

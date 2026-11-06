@@ -38,7 +38,7 @@ type Task struct {
 	// TaskLines is each role's current line in domain.TaskLineRoles order:
 	// the lines the task's next admission of that role reads. A role with
 	// no line stays on the lineup and is absent; no lines is an empty array.
-	TaskLines []domain.TaskLine `json:"task_lines"`
+	TaskLines []TaskLine `json:"task_lines"`
 	// Attachments are the files the task's submission carried, in submitted
 	// order; none is an empty array.
 	Attachments []domain.TaskAttachment `json:"attachments"`
@@ -90,7 +90,10 @@ func projectTaskSource(source *domain.SpecificationSource) *TaskSource {
 	return out
 }
 
-func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.ServerState, task domain.Task, runs map[domain.RunID]Run) (TaskSnapshot, error) {
+func projectTaskSnapshot(
+	ctx context.Context, tx *store.ReadTx, state store.ServerState, task domain.Task, runs map[domain.RunID]Run,
+	agents TaskLineAgents,
+) (TaskSnapshot, error) {
 	ids, err := tx.TaskRunIDs(ctx, task.ID)
 	if err != nil {
 		return TaskSnapshot{}, err
@@ -124,10 +127,10 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 		}
 		return TaskSnapshot{}, err
 	}
-	value.TaskLines = make([]domain.TaskLine, 0, len(current))
+	value.TaskLines = make([]TaskLine, 0, len(current))
 	for _, role := range domain.TaskLineRoles {
 		if line, ok := current[role]; ok {
-			value.TaskLines = append(value.TaskLines, line)
+			value.TaskLines = append(value.TaskLines, wireTaskLine(agents, line))
 		}
 	}
 	attachments, err := tx.TaskAttachments(ctx, task.ID)

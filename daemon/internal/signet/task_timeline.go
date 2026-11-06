@@ -68,7 +68,7 @@ func (s *Service) GetTaskTimeline(ctx context.Context, id domain.TaskID) (TaskTi
 	var out TaskTimeline
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		out, err = ReadTaskTimeline(ctx, tx, id, time.Now().UTC())
+		out, err = ReadTaskTimeline(ctx, tx, s.TaskLineAgents(), id, time.Now().UTC())
 		return err
 	})
 	if err != nil {
@@ -79,8 +79,12 @@ func (s *Service) GetTaskTimeline(ctx context.Context, id domain.TaskID) (TaskTi
 
 // ReadTaskTimeline is GetTaskTimeline's read in the caller's transaction, so
 // a caller can read the timeline and other facts under one store revision,
-// and can read it with no Service. asOf stamps the result.
-func ReadTaskTimeline(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asOf time.Time) (TaskTimeline, error) {
+// and can read it with no Service. asOf stamps the result. agents names the
+// agent a v2 line selects (TaskLineAgents); with none, such a line shows
+// its enrollment/model/effort (choiceAgent).
+func ReadTaskTimeline(
+	ctx context.Context, tx *store.ReadTx, agents TaskLineAgents, id domain.TaskID, asOf time.Time,
+) (TaskTimeline, error) {
 	state, err := tx.ServerState(ctx)
 	if err != nil {
 		return TaskTimeline{}, err
@@ -92,7 +96,7 @@ func ReadTaskTimeline(ctx context.Context, tx *store.ReadTx, id domain.TaskID, a
 	if err != nil {
 		return TaskTimeline{}, err
 	}
-	out, err := loadedTaskTimeline(ctx, tx, state, snapshot, asOf)
+	out, err := loadedTaskTimeline(ctx, tx, agents, state, snapshot, asOf)
 	if err != nil {
 		// After reconstructing the task, missing required history is corrupt
 		// state rather than an absent requested resource.
@@ -105,7 +109,7 @@ func ReadTaskTimeline(ctx context.Context, tx *store.ReadTx, id domain.TaskID, a
 }
 
 func loadedTaskTimeline(
-	ctx context.Context, tx *store.ReadTx, state store.ServerState,
+	ctx context.Context, tx *store.ReadTx, agents TaskLineAgents, state store.ServerState,
 	snapshot store.Snapshotted[domain.Task], asOf time.Time,
 ) (TaskTimeline, error) {
 	id := snapshot.Value.ID
@@ -124,6 +128,7 @@ func loadedTaskTimeline(
 	if err != nil {
 		return TaskTimeline{}, asRunObservationIntegrityError(err)
 	}
+	lineAgents := selectionAgentNames(agents, lines)
 	// The store validates the record, so a bad row fails this read too.
 	var triage *domain.TaskTriage
 	if record, found, err := tx.GetTaskTriage(ctx, id); err != nil {
@@ -225,7 +230,7 @@ func loadedTaskTimeline(
 		}
 		inputs = append(inputs, input)
 	}
-	return taskTimeline(task, lines, triage, inputs, state.Revision, asOf)
+	return taskTimeline(task, lines, lineAgents, triage, inputs, state.Revision, asOf)
 }
 
 func taskTimelineReadinessBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID, itemID domain.ItemID) (bool, error) {
@@ -342,7 +347,10 @@ func taskTimelinePRBinding(ctx context.Context, tx *store.ReadTx, runID domain.R
 	return &binding, nil
 }
 
-func taskTimeline(task domain.Task, lines []domain.TaskLine, triage *domain.TaskTriage, inputs []taskTimelineInput, revision int64, asOf time.Time) (TaskTimeline, error) {
+func taskTimeline(
+	task domain.Task, lines []domain.TaskLine, names map[domain.Digest]string, triage *domain.TaskTriage,
+	inputs []taskTimelineInput, revision int64, asOf time.Time,
+) (TaskTimeline, error) {
 	out := TaskTimeline{
 		AsOfRevision: revision, AsOf: asOf, TaskID: task.ID, ProjectID: task.ProjectID, Name: task.Name,
 		Events:   []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}},
@@ -452,7 +460,7 @@ func taskTimeline(task domain.Task, lines []domain.TaskLine, triage *domain.Task
 		}
 		return cmp.Or(allocated[bID].Compare(allocated[aID]), cmp.Compare(bID, aID))
 	})
-	events, err := taskHistoryEvents(task, lines, triage, inputs, out.Sections)
+	events, err := taskHistoryEvents(task, lines, names, triage, inputs, out.Sections)
 	if err != nil {
 		return TaskTimeline{}, err
 	}

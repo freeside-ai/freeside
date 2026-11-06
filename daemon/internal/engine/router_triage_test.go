@@ -116,7 +116,7 @@ func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
 		}
 		heads := f.heads(t)
 		specifier := heads[domain.RoleSpecifier]
-		if specifier.Source != domain.TaskLineSourceRouter || specifier.Agent != agentTestSecondEscalatedAgent ||
+		if specifier.Source != domain.TaskLineSourceRouter || f.lineAgent(specifier) != agentTestSecondEscalatedAgent ||
 			specifier.Version != 2 || specifier.PredecessorID == nil || *specifier.PredecessorID != triage.ID {
 			t.Fatalf("specifier head = %+v, want the second counterpart over %s", specifier, triage.ID)
 		}
@@ -126,7 +126,7 @@ func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
 			t.Fatalf("provenance = %+v, want the main counterpart passed over", provenance)
 		}
 		for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleRemediator} {
-			if line := heads[role]; line.Source != domain.TaskLineSourceRouter || line.Agent != agentTestSecondAgent {
+			if line := heads[role]; line.Source != domain.TaskLineSourceRouter || f.lineAgent(line) != agentTestSecondAgent {
 				t.Errorf("%s head = %+v, want the second agent", role, line)
 			}
 		}
@@ -148,7 +148,7 @@ func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
 			t.Fatal(err)
 		}
 		specifier := f.heads(t)[domain.RoleSpecifier]
-		if specifier.Agent != agentTestEscalatedAgent || specifier.Provenance.Pool != routerMainPool ||
+		if f.lineAgent(specifier) != agentTestEscalatedAgent || specifier.Provenance.Pool != routerMainPool ||
 			specifier.Provenance.PassedOver != nil {
 			t.Fatalf("specifier head = %+v (provenance %+v), want the main counterpart", specifier, specifier.Provenance)
 		}
@@ -202,7 +202,7 @@ func TestRouterLeavesAnEscalatedSpecifierWithNoCounterpartOnTriage(t *testing.T)
 		t.Fatal(err)
 	}
 	heads := f.heads(t)
-	if heads[domain.RoleSpecifier].ID != triage.ID || heads[domain.RoleImplementer].Agent != agentTestSecondAgent {
+	if heads[domain.RoleSpecifier].ID != triage.ID || f.lineAgent(heads[domain.RoleImplementer]) != agentTestSecondAgent {
 		t.Fatalf("heads = %+v, want the triage specifier and a routed implementer", heads)
 	}
 }

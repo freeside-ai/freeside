@@ -120,7 +120,8 @@ type TaskEventExternalReview struct {
 }
 
 // TaskEventTaskLine names one task line version as the timeline shows it.
-// Agent is nil on a cleared version. SupersededAgent is the agent of the
+// Agent is nil on a cleared version, and a selection's AgentText when no one
+// agent runs it (#2597). SupersededAgent is the agent of the
 // version this one supersedes, nil for version 1 and after a cleared version,
 // which names none. Provenance is the router's citation, nil for an operator
 // line; its passed-over mark names the agent a first admission passed over.
@@ -146,10 +147,10 @@ func (l TaskEventTaskLine) validate() error {
 		if !l.Source.IsLineChange() || l.Version == 1 {
 			return ErrTaskEventDetailMismatch
 		}
-	} else if !validAgentName(*l.Agent) {
+	} else if !validLineAgentText(*l.Agent) {
 		return ErrTaskEventDetailMismatch
 	}
-	if l.SupersededAgent != nil && !validAgentName(*l.SupersededAgent) {
+	if l.SupersededAgent != nil && !validLineAgentText(*l.SupersededAgent) {
 		return ErrTaskEventDetailMismatch
 	}
 	if l.Provenance != nil {
