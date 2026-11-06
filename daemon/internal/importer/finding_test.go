@@ -3,6 +3,7 @@ package importer
 import "testing"
 
 func TestFindingKindValid(t *testing.T) {
+	t.Parallel()
 	for _, k := range AllFindingKinds {
 		if !k.valid() {
 			t.Errorf("registered kind %q reported invalid", k)
@@ -20,6 +21,7 @@ func TestFindingKindValid(t *testing.T) {
 // every policy-only kind leaves it available for the §5.5 control-plane
 // route. A new kind must be added here deliberately.
 func TestFindingKindBlocking(t *testing.T) {
+	t.Parallel()
 	want := map[FindingKind]bool{
 		FindingNonRegularChange:        true,
 		FindingInvalidPathEntry:        true,
@@ -57,6 +59,7 @@ func TestFindingKindBlocking(t *testing.T) {
 }
 
 func TestFindingProfileValid(t *testing.T) {
+	t.Parallel()
 	// Every named member is nonempty and the zero value "" is invalid, per the
 	// daemon enum convention; the default is a nil *FindingProfile, not a ""
 	// member.
@@ -79,6 +82,7 @@ func TestFindingProfileValid(t *testing.T) {
 // nothing is tolerated — except the advisory reviewer-instruction kind,
 // which publishes surfaced (plan §5.8, revision 42; TestFindingAdvisoryStance).
 func TestFindingFatalPublishStrict(t *testing.T) {
+	t.Parallel()
 	strict := FindingProfilePublishStrict
 	for _, k := range AllFindingKinds {
 		want := k != FindingReviewerInstructionPath
@@ -100,6 +104,7 @@ func TestFindingFatalPublishStrict(t *testing.T) {
 // profile: an exhaustive per-kind decision so a new FindingKind is forced to
 // choose its class rather than defaulting silently either way.
 func TestFindingFatalSpecification(t *testing.T) {
+	t.Parallel()
 	want := map[FindingKind]bool{
 		FindingNonRegularChange:        true,
 		FindingInvalidPathEntry:        true,

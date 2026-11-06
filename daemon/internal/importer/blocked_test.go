@@ -14,6 +14,7 @@ const blockedOutcomeJSON = `{"version":"freeside.blocked-outcome/v1","kind":"own
 // and builds no commit; any repo-channel change or a commit plan is a
 // definitive ErrUnexpectedChanges.
 func TestImportExpectNoChanges(t *testing.T) {
+	t.Parallel()
 	blocked := evidenceEntry(export.BlockedEvidenceLabel, "application/json", blockedOutcomeJSON)
 	body, err := evidenceManifest(blocked).Encode()
 	if err != nil {
@@ -82,6 +83,7 @@ func TestImportExpectNoChanges(t *testing.T) {
 // TestImportEvidenceJSONMediaType: application/json evidence must hold
 // exactly one valid UTF-8 JSON value.
 func TestImportEvidenceJSONMediaType(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		content string

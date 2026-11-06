@@ -8,6 +8,7 @@ import (
 )
 
 func TestDetectCollisions(t *testing.T) {
+	t.Parallel()
 	base := map[string]treeEntry{
 		"README.md":  {mode: "100644", oid: "aaa"},
 		"keep/x.txt": {mode: "100644", oid: "bbb"},
@@ -102,6 +103,7 @@ func TestDetectCollisions(t *testing.T) {
 // a file and a directory whose folded names coincide cannot coexist on
 // APFS even though their full folded paths differ.
 func TestDetectCollisionsFileDirectory(t *testing.T) {
+	t.Parallel()
 	t.Run("added dir collides with base file", func(t *testing.T) {
 		base := map[string]treeEntry{"README": {mode: "100644", oid: "a"}}
 		f := detectCollisions([]plannedChange{{path: "readme/config.yml", kind: ChangeAdded, mode: "100644"}}, base)
@@ -139,6 +141,7 @@ func TestDetectCollisionsFileDirectory(t *testing.T) {
 // misses), while İ (U+0130) stays distinct from i (which ToLower wrongly
 // merges).
 func TestFoldedComponentsFullCaseFold(t *testing.T) {
+	t.Parallel()
 	same := func(a, b string) bool {
 		return pathfold.FoldPath(a) == pathfold.FoldPath(b)
 	}
@@ -159,6 +162,7 @@ func TestFoldedComponentsFullCaseFold(t *testing.T) {
 // TestDetectCollisionsFullFold exercises the fold through the collision
 // path: distinct-content adds that fold together on APFS are flagged.
 func TestDetectCollisionsFullFold(t *testing.T) {
+	t.Parallel()
 	f := detectCollisions([]plannedChange{
 		{path: "straße", kind: ChangeAdded, mode: "100644"},
 		{path: "STRASSE", kind: ChangeAdded, mode: "100644"},
@@ -181,6 +185,7 @@ func TestDetectCollisionsFullFold(t *testing.T) {
 // collision pre-existed in the (case-sensitive) base, so a content
 // modify or a fromBase chmod does not introduce it.
 func TestDetectCollisionsIgnoresModifies(t *testing.T) {
+	t.Parallel()
 	base := map[string]treeEntry{
 		"README.md": {mode: "100644", oid: "aaa"},
 		"readme.md": {mode: "100644", oid: "bbb"}, // pre-existing fold-collision
@@ -204,6 +209,7 @@ func TestDetectCollisionsIgnoresModifies(t *testing.T) {
 // two base paths and one add can share a fold, but the evidence detail
 // must not depend on randomized map iteration.
 func TestDetectCollisionsDeterministicPartner(t *testing.T) {
+	t.Parallel()
 	base := map[string]treeEntry{
 		"README": {mode: "100644", oid: "aaa"},
 		"readme": {mode: "100644", oid: "bbb"},
@@ -219,6 +225,7 @@ func TestDetectCollisionsDeterministicPartner(t *testing.T) {
 }
 
 func TestImportCaseCollisionBlocksNothingButFlags(t *testing.T) {
+	t.Parallel()
 	// Two case-distinct paths a case-insensitive checkout cannot keep
 	// apart: the tree can hold both (git is case-sensitive), so the
 	// commit exists, but the ambiguity is flagged for the human gate.

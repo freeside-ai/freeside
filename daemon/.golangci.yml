@@ -91,7 +91,6 @@ linters:
           |internal/fakepublication\
           |internal/gitrun\
           |internal/golden\
-          |internal/importer\
           |internal/inference\
           |internal/inference/fake\
           |internal/intake\

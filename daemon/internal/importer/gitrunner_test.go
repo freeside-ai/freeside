@@ -100,6 +100,7 @@ func newTestRunner(t *testing.T, checkout string, opts Options) *gitRunner {
 }
 
 func TestVerifyBase(t *testing.T) {
+	t.Parallel()
 	dir, first := initBaseRepo(t, map[string]string{"a.txt": "one\n"})
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("two\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -129,6 +130,7 @@ func TestVerifyBase(t *testing.T) {
 // cleanup behavior. commit-tree does no comment cleanup, so a `#` line must
 // survive into the commit object.
 func TestCommitTreeStdinMatchesPriorMessageSemantics(t *testing.T) {
+	t.Parallel()
 	dir, base := initBaseRepo(t, map[string]string{"a.txt": "base\n"})
 	g := newTestRunner(t, dir, testImportOptions(base))
 	tree := rungit(t, dir, "log", "-1", "--format=%T", base)
@@ -160,6 +162,7 @@ func TestCommitTreeStdinMatchesPriorMessageSemantics(t *testing.T) {
 }
 
 func TestNewGitRunnerRejectsSHA256Repos(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	rungit(t, dir, "init", "-q", "--object-format=sha256")
 	_, err := newGitRunner(t.Context(), Options{BaseSHA: testBaseSHA}.withDefaults(), dir, t.TempDir())
@@ -176,6 +179,7 @@ func TestNewGitRunnerRejectsSHA256Repos(t *testing.T) {
 // outright (no signing key), so a clean commit here proves it is pinned
 // off too.
 func TestCommitIgnoresLocalConfig(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "x\n"})
 	rungit(t, checkout, "config", "i18n.commitEncoding", "ISO-8859-1")
 	rungit(t, checkout, "config", "commit.gpgsign", "true")
@@ -195,6 +199,7 @@ func TestCommitIgnoresLocalConfig(t *testing.T) {
 // GIT_NO_REPLACE_OBJECTS the runner would read the replacement tree
 // while verifyBase (rev-parse) still saw the real base SHA.
 func TestIgnoresReplaceObjects(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "real\n"})
 	// A second commit with different content, then replace the base
 	// commit's object with it.
@@ -227,6 +232,7 @@ func TestIgnoresReplaceObjects(t *testing.T) {
 // unit-tested without a real SHA-1 collision; the helper's correctness is
 // what the derivation relies on.)
 func TestBlobMatchesDigest(t *testing.T) {
+	t.Parallel()
 	checkout, _ := initBaseRepo(t, map[string]string{"a.txt": "hello\n"})
 	base := rungit(t, checkout, "rev-parse", "HEAD")
 	g := newTestRunner(t, checkout, testImportOptions(base))
@@ -251,6 +257,7 @@ func TestBlobMatchesDigest(t *testing.T) {
 }
 
 func TestVerifyIngestedBlobsRejectsSHA1Collision(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "other\n"})
 	g := newTestRunner(t, checkout, testImportOptions(base))
 	tree, err := g.baseTree(t.Context(), base)
@@ -270,6 +277,7 @@ func TestVerifyIngestedBlobsRejectsSHA1Collision(t *testing.T) {
 }
 
 func TestBaseTreeModes(t *testing.T) {
+	t.Parallel()
 	dir, _ := initBaseRepo(t, map[string]string{"a.txt": "text\n", "d/b.txt": "b\n"})
 	if err := os.Symlink("a.txt", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)

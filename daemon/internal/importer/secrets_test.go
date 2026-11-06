@@ -27,6 +27,7 @@ var fakeSecrets = []struct {
 }
 
 func TestScanTextRules(t *testing.T) {
+	t.Parallel()
 	for _, fixture := range fakeSecrets {
 		t.Run(fixture.name, func(t *testing.T) {
 			content := []byte("prefix line\nvalue = " + fixture.token + "\ntrailer\n")
@@ -43,6 +44,7 @@ func TestScanTextRules(t *testing.T) {
 }
 
 func TestScanTextAnthropicTokenWithoutWordBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -64,6 +66,7 @@ func TestScanTextAnthropicTokenWithoutWordBoundaries(t *testing.T) {
 // far longer than any scanner buffer must still be found, not silently
 // dropped at ErrTooLong.
 func TestScanTextLongLine(t *testing.T) {
+	t.Parallel()
 	token := "ghp_" + strings.Repeat("A", 36)
 	// A single line well over a megabyte with the token at its end,
 	// separated by a non-word byte as it would be in a real env or
@@ -78,6 +81,7 @@ func TestScanTextLongLine(t *testing.T) {
 // TestSplitLinesNoLimit sanity-checks the newline splitter's line
 // numbering and CRLF handling with no length cap.
 func TestSplitLinesNoLimit(t *testing.T) {
+	t.Parallel()
 	lines := splitLines([]byte("a\r\nb\nc"))
 	got := make([]string, len(lines))
 	for i, l := range lines {
@@ -89,6 +93,7 @@ func TestSplitLinesNoLimit(t *testing.T) {
 }
 
 func TestScanTextNoFalsePositive(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -109,6 +114,7 @@ func TestScanTextNoFalsePositive(t *testing.T) {
 }
 
 func TestImportSecretScan(t *testing.T) {
+	t.Parallel()
 	token := "ghp_" + strings.Repeat("Z", 36)
 	fileContent := "aws := \"AKIA" + strings.Repeat("Q", 16) + "\"\ntoken := \"" + token + "\"\n"
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
@@ -153,6 +159,7 @@ func TestImportSecretScan(t *testing.T) {
 // invalid byte must not turn an otherwise textual credential file into
 // a silent scan skip.
 func TestImportSecretScanInvalidUTF8(t *testing.T) {
+	t.Parallel()
 	token := "ghp_" + strings.Repeat("V", 36)
 	content := string([]byte{0xff}) + "TOKEN=" + token + "\n"
 	checkout, base := initBaseRepo(t, nil)
@@ -169,6 +176,7 @@ func TestImportSecretScanInvalidUTF8(t *testing.T) {
 }
 
 func TestImportSecretScanReplaysDeduplicatedBlobFindings(t *testing.T) {
+	t.Parallel()
 	token := "ghp_" + strings.Repeat("D", 36)
 	content := "TOKEN=" + token + "\n"
 	checkout, base := initBaseRepo(t, nil)
@@ -191,6 +199,7 @@ func TestImportSecretScanReplaysDeduplicatedBlobFindings(t *testing.T) {
 // finding without withholding commit construction, so a clean import never
 // hides an unscanned file.
 func TestImportSecretScanOverCapSurfaced(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	big := strings.Repeat("x", 4096) + "\n"
 	handoff := handoffFromEntries(t, []export.Entry{
@@ -218,6 +227,7 @@ func TestImportSecretScanOverCapSurfaced(t *testing.T) {
 }
 
 func TestImportSecretScanSkipsUnchanged(t *testing.T) {
+	t.Parallel()
 	token := "ghp_" + strings.Repeat("C", 36)
 	// The secret sits in an unchanged base file; the candidate leaves
 	// it byte-identical, so it is not the candidate's doing and is not

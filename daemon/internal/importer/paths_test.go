@@ -23,6 +23,7 @@ func testEntry(kind export.EntryKind, path string) export.Entry {
 }
 
 func TestGatePathsInjection(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		path string
@@ -68,6 +69,7 @@ func TestGatePathsInjection(t *testing.T) {
 }
 
 func TestGatePathsExemptsRecordedGitDir(t *testing.T) {
+	t.Parallel()
 	m := export.Manifest{
 		Version: export.ManifestVersion,
 		Entries: []export.Entry{testEntry(export.EntryGitDir, ".git")},
@@ -78,6 +80,7 @@ func TestGatePathsExemptsRecordedGitDir(t *testing.T) {
 }
 
 func TestGatePathsRejectsCommitPlanNamespace(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		path string
 		want error
@@ -103,6 +106,7 @@ func TestGatePathsRejectsCommitPlanNamespace(t *testing.T) {
 }
 
 func TestGatePathsPrefixConflict(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		entries []export.Entry

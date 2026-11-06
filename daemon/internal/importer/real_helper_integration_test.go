@@ -71,6 +71,7 @@ func realHandoff(t *testing.T, workspace string, opts export.Options) string {
 // emits from a .freeside-evidence descriptor imports into the expected labeled
 // agent claims, with a clean repo change committing normally.
 func TestImportRealHelperEvidenceToClaims(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"keep.txt": "keep\n"})
 
 	pngBytes := append(append([]byte{}, pngMagic...), []byte("after image bytes")...)
@@ -125,6 +126,7 @@ func TestImportRealHelperEvidenceToClaims(t *testing.T) {
 // (which would silently remove the user's tracked files when the agent stages
 // evidence).
 func TestImportReservedEvidenceBaseNeverDeleted(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{
 		"keep.txt":                      "keep\n",
 		".freeside-evidence/tracked.md": "base notes\n",
@@ -156,6 +158,7 @@ func TestImportReservedEvidenceBaseNeverDeleted(t *testing.T) {
 // still yields its claims. It proves the two channels are independent and both
 // flow through the real helper output.
 func TestImportRealHelperBothChannelsWithOmittedBlob(t *testing.T) {
+	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"big.bin": "small base\n"})
 
 	pngBytes := append(append([]byte{}, pngMagic...), []byte("evidence")...)

@@ -6,6 +6,7 @@ import "testing"
 // base path's own ancestors (O(depth)), and a prefix collision (opaque
 // "a" vs base "ab/x") does not falsely suppress.
 func TestUnderAnyOpaque(t *testing.T) {
+	t.Parallel()
 	opaque := map[string]struct{}{"sub": {}, "a/b": {}}
 	cases := []struct {
 		path string

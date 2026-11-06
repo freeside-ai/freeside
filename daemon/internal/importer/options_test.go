@@ -12,6 +12,7 @@ import (
 const testBaseSHA = "0123456789abcdef0123456789abcdef01234567"
 
 func TestOptionsDefaults(t *testing.T) {
+	t.Parallel()
 	o := Options{BaseSHA: testBaseSHA}.withDefaults()
 	if o.CommitMessage != DefaultCommitMessage || o.AuthorName != DefaultAuthorName ||
 		o.AuthorEmail != DefaultAuthorEmail || o.GitPath != "git" {
@@ -31,6 +32,7 @@ func TestOptionsDefaults(t *testing.T) {
 func profilePtr(p FindingProfile) *FindingProfile { return &p }
 
 func TestOptionsValidate(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		opts Options

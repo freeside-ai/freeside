@@ -86,6 +86,7 @@ func verifyBlobsForTest(t *testing.T, dir string, m export.Manifest, pol Policy)
 }
 
 func TestVerifyBlobsClean(t *testing.T) {
+	t.Parallel()
 	dir := buildHandoff(t, []blobSpec{
 		{path: "a.txt", content: "hello\n"},
 		{path: "b/copy.txt", content: "hello\n"}, // dedup: one blob, two entries
@@ -115,6 +116,7 @@ const smallDirBatch = 8
 // enumeration across more than one ReadDir batch, so the multi-batch
 // path is covered and a large legitimate store still audits clean.
 func TestVerifyBlobsManyBatches(t *testing.T) {
+	t.Parallel()
 	specs := make([]blobSpec, 0, 60)
 	for i := range 60 {
 		specs = append(specs, blobSpec{path: fmt.Sprintf("f%05d.txt", i), content: fmt.Sprintf("content-%d\n", i)})
@@ -132,6 +134,7 @@ func TestVerifyBlobsManyBatches(t *testing.T) {
 // TestVerifyBlobsRejectsOrphanAmongMany confirms a single orphan is
 // still caught when the store spans multiple batches.
 func TestVerifyBlobsRejectsOrphanAmongMany(t *testing.T) {
+	t.Parallel()
 	specs := make([]blobSpec, 0, 60)
 	for i := range 60 {
 		specs = append(specs, blobSpec{path: fmt.Sprintf("f%05d.txt", i), content: fmt.Sprintf("c-%d\n", i)})
@@ -151,6 +154,7 @@ func TestVerifyBlobsRejectsOrphanAmongMany(t *testing.T) {
 // rejected before it is opened or hashed, so the importer never streams
 // an over-cap forged blob at the untrusted boundary.
 func TestVerifyBlobsRejectsOverCap(t *testing.T) {
+	t.Parallel()
 	t.Run("per-file cap", func(t *testing.T) {
 		dir := buildHandoff(t, []blobSpec{{path: "a.txt", content: "hello\n"}})
 		m := loadFixtureManifest(t, dir)
@@ -186,6 +190,7 @@ func TestVerifyBlobsRejectsOverCap(t *testing.T) {
 }
 
 func TestVerifyBlobsEmptyStore(t *testing.T) {
+	t.Parallel()
 	dir := buildHandoff(t, nil)
 	blobs, err := verifyBlobsForTest(t, dir, loadFixtureManifest(t, dir), Policy{}.withDefaults())
 	if err != nil || len(blobs) != 0 {
@@ -194,6 +199,7 @@ func TestVerifyBlobsEmptyStore(t *testing.T) {
 }
 
 func TestVerifyBlobsRejects(t *testing.T) {
+	t.Parallel()
 	digestOf := sha256Digest
 	cases := []struct {
 		name   string
@@ -307,6 +313,7 @@ func TestVerifyBlobsRejects(t *testing.T) {
 }
 
 func TestVerifyBlobsRejectsOmittedBlobPresent(t *testing.T) {
+	t.Parallel()
 	dir := buildHandoff(t, []blobSpec{{path: "big.bin", content: "oversized", omitted: true}})
 	// The exporter never writes a blob for an omitted entry; plant one.
 	name := filepath.Join(dir, "blobs", "sha256", string(sha256Digest("oversized"))[len("sha256:"):])
@@ -320,6 +327,7 @@ func TestVerifyBlobsRejectsOmittedBlobPresent(t *testing.T) {
 }
 
 func TestOpenDirectoryRejectsSpecialDirectory(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		plant func(t *testing.T, path string)
@@ -375,6 +383,7 @@ func TestOpenDirectoryRejectsSpecialDirectory(t *testing.T) {
 }
 
 func TestOpenDirectoryAtPinsAndRejectsChildren(t *testing.T) {
+	t.Parallel()
 	rootPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(rootPath, "blobs", "sha256"), 0o700); err != nil {
 		t.Fatal(err)
@@ -410,6 +419,7 @@ func TestOpenDirectoryAtPinsAndRejectsChildren(t *testing.T) {
 }
 
 func TestVerifyBlobsRejectsConflictingSizes(t *testing.T) {
+	t.Parallel()
 	// Two entries claim the same digest at different sizes: one lies.
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "blobs", "sha256"), 0o750); err != nil {
