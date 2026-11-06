@@ -89,6 +89,7 @@ func submitRepairRun(refusal domain.ImageUpkeepRefusal, daemonTask bool) func(sp
 // Every invocation of a maintenance task is admitted at its refusal's tip
 // with no hydration, and its selection is told the refusal.
 func TestRepairTaskAdmitsAtTheRefusalTipWithoutHydration(t *testing.T) {
+	t.Parallel()
 	tip := strings.Repeat("c", 40)
 	// The fixture's static base is repository 1.
 	refusal := repairTestRefusal(t, domain.ImageUpkeepRefusalRepair, 1, tip)
@@ -130,6 +131,7 @@ func TestRepairTaskAdmitsAtTheRefusalTipWithoutHydration(t *testing.T) {
 // A task whose source bytes equal a refusal's preimage, but that is not the
 // task the daemon submitted for it, is admitted like any other.
 func TestDeviceTaskWithARefusalSourceGetsTheOrdinaryAdmission(t *testing.T) {
+	t.Parallel()
 	refusal := repairTestRefusal(t, domain.ImageUpkeepRefusalRepair, 1, strings.Repeat("c", 40))
 	h := newSelectionHoldFixtureSubmitting(t, submitRepairRun(refusal, false))
 	h.selected = selectionTestImage

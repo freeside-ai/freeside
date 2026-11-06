@@ -88,6 +88,7 @@ func requireRetryRefused(t *testing.T, f specificationFixture, reason string, wa
 }
 
 func TestSpecificationRetryDispatchesToApproval(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 3)
 	driver := f.newDriver(t)
 	e := f.newEngine(t, driver)
@@ -155,6 +156,7 @@ func TestSpecificationRetryDispatchesToApproval(t *testing.T) {
 }
 
 func TestSpecificationRetryAcceptsCanceledAndLostTerminals(t *testing.T) {
+	t.Parallel()
 	for _, status := range []exec.Status{exec.StatusCanceled, exec.StatusGone} {
 		t.Run(string(status), func(t *testing.T) {
 			f := newSpecificationFixture(t, true, 2)
@@ -186,6 +188,7 @@ func TestSpecificationRetryAcceptsCanceledAndLostTerminals(t *testing.T) {
 }
 
 func TestSpecificationRetryRefusals(t *testing.T) {
+	t.Parallel()
 	recordTerminal := func(t *testing.T, f specificationFixture, status exec.Status) {
 		t.Helper()
 		run, err := f.run("specification-run")
@@ -282,6 +285,7 @@ func stopSpecificationTask(t *testing.T, f specificationFixture) {
 // its own iteration: request_changes after a retried specification builds an
 // iteration the chain check accepts.
 func TestSpecificationRetryKeepsLaterTransitions(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 3)
 	driver := f.newDriver(t)
 	e := f.newEngine(t, driver)
@@ -329,6 +333,7 @@ func TestSpecificationRetryKeepsLaterTransitions(t *testing.T) {
 // TestLoadSpecificationBindingRejectsForgedRetry checks the chain refuses a
 // retry row the retry write could not have produced.
 func TestLoadSpecificationBindingRejectsForgedRetry(t *testing.T) {
+	t.Parallel()
 	failed := specificationInvocationID("specification-run", 1)
 	for _, tc := range []struct {
 		name      string
@@ -443,6 +448,7 @@ func TestLoadSpecificationBindingRejectsForgedRetry(t *testing.T) {
 }
 
 func TestSpecificationRequestRefusesRetryReasonOnFirstIteration(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 2)
 	f.submit(t)
 	first := f.request(t, 1)

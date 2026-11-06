@@ -104,6 +104,7 @@ func scriptedSpecificationRefusal(t *testing.T) (specificationFixture, *execfake
 // unexplained open run, and the pass that gets through after the policy
 // recovers clears it and accepts the specification.
 func TestSpecificationAdmissionRefusalRecordsAndRecoveryClearsHold(t *testing.T) {
+	t.Parallel()
 	f, driver := scriptedSpecificationRefusal(t)
 
 	f = f.reopen(t)
@@ -122,6 +123,7 @@ func TestSpecificationAdmissionRefusalRecordsAndRecoveryClearsHold(t *testing.T)
 // scoped to the refusal class, so a hold with another cause keeps its row
 // and its span.
 func TestSpecificationRefusalRecoveryPreservesOtherHold(t *testing.T) {
+	t.Parallel()
 	f, driver := scriptedSpecificationRefusal(t)
 	otherFirst := f.now.Add(2 * time.Minute).UTC()
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
@@ -148,6 +150,7 @@ func TestSpecificationRefusalRecoveryPreservesOtherHold(t *testing.T) {
 // attempt still running, with the collect gate passing, clears a refusal
 // hold an earlier collect recorded.
 func TestSpecificationStillRunningRecoveryClearsHold(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 2)
 	base := f.newDriver(t)
 	id := specificationInvocationID("specification-run", 1)
@@ -177,6 +180,7 @@ func TestSpecificationStillRunningRecoveryClearsHold(t *testing.T) {
 // it; calling each write directly on the raised floor drives the same exit
 // without the race.
 func TestSpecificationWriteRefusalRecordsHold(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		accept func(*Engine, domain.Run, specificationRequest, specify.Policy) (bool, error)
@@ -316,6 +320,7 @@ func refuseCollect(t *testing.T, f specificationFixture, driver exec.StageDriver
 // discussion collect records the hold, and a later pass that finds the reply
 // still running clears it.
 func TestSpecificationDiscussionRefusalRecordsAndRecoveryClearsHold(t *testing.T) {
+	t.Parallel()
 	f, driver, discussionID := discussionAwaitingReply(t, 1)
 	refuseCollect(t, f, driver, discussionID)
 
@@ -330,6 +335,7 @@ func TestSpecificationDiscussionRefusalRecordsAndRecoveryClearsHold(t *testing.T
 // TestSpecificationDiscussionReplyClearsHold: when the first pass after a
 // refused collect finds the reply complete, accepting it clears the hold.
 func TestSpecificationDiscussionReplyClearsHold(t *testing.T) {
+	t.Parallel()
 	f, driver, discussionID := discussionAwaitingReply(t, 0)
 	refuseCollect(t, f, driver, discussionID)
 
@@ -346,6 +352,7 @@ func TestSpecificationDiscussionReplyClearsHold(t *testing.T) {
 // explains goes with it. The failure's terminal milestone clears it, as it
 // clears every hold, so the lost path needs no refusal clear of its own.
 func TestSpecificationLostInvocationClearsHold(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 2)
 	driver := f.newDriver(t)
 	id := specificationInvocationID("specification-run", 1)

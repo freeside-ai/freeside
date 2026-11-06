@@ -22,6 +22,7 @@ import (
 )
 
 func TestOperatorFeedbackRequestRejectsUntrustedIdentityChanges(t *testing.T) {
+	t.Parallel()
 	request := operatorFeedbackRequest{
 		Version:      operatorFeedbackRequestVersion,
 		InvocationID: operatorFeedbackInvocationID("command-1"),
@@ -75,6 +76,7 @@ func TestOperatorFeedbackRequestRejectsUntrustedIdentityChanges(t *testing.T) {
 }
 
 func TestFeedbackSourceInvocationUsesAuthenticatedQuestionFacts(t *testing.T) {
+	t.Parallel()
 	facts := specificationQuestionFacts("inv-question")
 	extra := questionClaimFixture("inv-other")
 	extra.Label = "context"
@@ -99,6 +101,7 @@ func TestFeedbackSourceInvocationUsesAuthenticatedQuestionFacts(t *testing.T) {
 }
 
 func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
+	t.Parallel()
 	returned := domain.Command{
 		CommandID: "return-work", Action: domain.ActionReturnToAgent,
 		Message: "Keep the parser change and add the malformed-input regression.",
@@ -199,6 +202,7 @@ func TestOperatorFeedbackInputAuthenticatesAcceptedCommand(t *testing.T) {
 }
 
 func TestAnswerAndRetryRecordsSpecificationInputAndEnqueuesNextIteration(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
 	driver := f.newDriver(t)
@@ -276,6 +280,7 @@ func TestAnswerAndRetryRecordsSpecificationInputAndEnqueuesNextIteration(t *test
 }
 
 func TestAnswerThenRevisionKeepsCanonicalSpecificationInputOrder(t *testing.T) {
+	t.Parallel()
 	prior := domain.ArtifactID("prior-spec-1")
 	request := specificationRequest{
 		SpecificationRunID: "run-answer-revision", Iteration: 2,
@@ -294,6 +299,7 @@ func TestAnswerThenRevisionKeepsCanonicalSpecificationInputOrder(t *testing.T) {
 }
 
 func TestOperatorFeedbackInputIDsPreserveAuthenticatedRetryChain(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-feedback-chain")
 	rootID := productionInvocationID(runID)
@@ -484,6 +490,7 @@ func openRunClosureCard(
 }
 
 func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-return-to-agent")
 	sourceID := productionInvocationID(runID)
@@ -714,6 +721,7 @@ func renameRunTask(t *testing.T, st *store.Store, runID domain.RunID) {
 // or command that no longer matches its stored record is still refused with
 // ErrParentKeyMismatch and enqueues nothing.
 func TestSpecificationAnswerAfterRenameFailsClosedOnDrift(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
 	engine := f.newEngine(t, f.newDriver(t))
@@ -812,6 +820,7 @@ func TestSpecificationAnswerAfterRenameFailsClosedOnDrift(t *testing.T) {
 // must not unbind the answer, whose command expects the item at exactly its
 // own version plus one (#1946).
 func TestSpecificationAnswerSurvivesLateDeliveryReceipt(t *testing.T) {
+	t.Parallel()
 	answer := func(t *testing.T) (
 		specificationFixture, *Engine, domain.Run, domain.AttentionItem, domain.Command, *deliveryNotifier, domain.AttentionDelivery,
 	) {
@@ -891,6 +900,7 @@ func TestSpecificationAnswerSurvivesLateDeliveryReceipt(t *testing.T) {
 }
 
 func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 1)
 	f.submit(t)
 	engine := f.newEngine(t, f.newDriver(t))
@@ -931,6 +941,7 @@ func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 }
 
 func TestUndeliverableSpecificationAnswerRecordsFailure(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
 	engine := f.newEngine(t, f.newDriver(t))
@@ -1081,6 +1092,7 @@ func newOversizedFeedbackScenario(t *testing.T) oversizedFeedbackScenario {
 // offered acknowledge the signet policy accepts, and the notice parks the route
 // so a second reconcile creates nothing.
 func TestUndeliverableOperatorFeedbackNoticeAcceptsAcknowledge(t *testing.T) {
+	t.Parallel()
 	t.Run("delivery-failure", func(t *testing.T) {
 		s := newOversizedFeedbackScenario(t)
 		created, err := s.engine.recordOperatorFeedbackDeliveryFailure(t.Context(), s.concluded, s.command)
@@ -1169,6 +1181,7 @@ func TestUndeliverableOperatorFeedbackNoticeAcceptsAcknowledge(t *testing.T) {
 // tolerates it so the retry route parks instead of erroring. Migration 0075
 // rewrites the row to system_health and drops the tolerance (#1358).
 func TestUndeliverableNoticeToleratesLegacyExecutionFailureRow(t *testing.T) {
+	t.Parallel()
 	s := newOversizedFeedbackScenario(t)
 	seedLegacyExecutionFailureNotice(t, s)
 	if parked, err := s.engine.operatorFeedbackUndeliverableRecorded(
@@ -1236,6 +1249,7 @@ func acknowledgeUndeliverableNotice(t *testing.T, attention *signet.Service, com
 }
 
 func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
+	t.Parallel()
 	s := newOversizedFeedbackScenario(t)
 	patch := bytes.Repeat([]byte("x"), int(exec.ProductionMaxInputBytes))
 	created, err := s.engine.persistImplementationFeedback(
@@ -1288,6 +1302,7 @@ func TestOversizedOperatorFeedbackInputParksOnlyItsRun(t *testing.T) {
 }
 
 func TestProductionPublicationContinuesAfterReturnedFeedbackFailure(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-return-isolation")
 	sourceID := productionInvocationID(runID)
@@ -1365,6 +1380,7 @@ func TestProductionPublicationContinuesAfterReturnedFeedbackFailure(t *testing.T
 }
 
 func TestOperatorFeedbackRestartsAcrossDurableBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, transition := range []DurableTransition{
 		DurableTransitionSpecificationAnswer,
 		DurableTransitionOperatorFeedback,

@@ -20,6 +20,7 @@ import (
 )
 
 func TestHeldWorkNoticeLegacyOwnershipUsesActualProducer(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
@@ -239,6 +240,7 @@ func getHeldWorkNotice(t *testing.T, st *store.Store, id domain.ItemID) domain.A
 // notice across further passes on fresh engines, and resolves it on the pass
 // after the hold clears.
 func TestHeldWorkNoticeRaisesOnceAndClears(t *testing.T) {
+	t.Parallel()
 	paths := []struct {
 		name  string
 		setup func(*testing.T) heldWorkScenario
@@ -318,6 +320,7 @@ func TestHeldWorkNoticeRaisesOnceAndClears(t *testing.T) {
 // admission nor appears in the run-scoped open-item list run supervision
 // reads, and it carries none of the refusal's error text.
 func TestHeldWorkNoticeHasNoSideEffects(t *testing.T) {
+	t.Parallel()
 	s := heldWorkProductionCollectScenario(t)
 	backdateRunHold(t, s.store(), s.runID, heldWorkNoticeAfter+time.Minute)
 	s.refuse(t)
@@ -360,6 +363,7 @@ func TestHeldWorkNoticeHasNoSideEffects(t *testing.T) {
 // different refusal reason resolves the notice raised for the old span, and
 // raises nothing for the new one until that span passes the threshold itself.
 func TestHeldWorkNoticeNewCauseResolvesAndRestarts(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	driver := &switchableInspectDriver{
 		StageDriver: f.driver, err: fmt.Errorf("inspect: %w", store.ErrBackendNotConformant),
@@ -401,6 +405,7 @@ func TestHeldWorkNoticeNewCauseResolvesAndRestarts(t *testing.T) {
 // revision 97 dropped it, so agent admission takes no operating mode and the
 // attempt is admitted on that agent from its first launch.
 func TestCrossRoleSpecifierLineIsAdmitted(t *testing.T) {
+	t.Parallel()
 	agents := newAgentAdmissionFixture(t)
 	agents.addSecondAgent(t)
 	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
@@ -426,6 +431,7 @@ func TestCrossRoleSpecifierLineIsAdmitted(t *testing.T) {
 // names the check, the agent, and the launch, a changed detail is written at
 // once, and the held-work notice names them too.
 func TestAgentRefusalNamesTheAgent(t *testing.T) {
+	t.Parallel()
 	agents := newAgentAdmissionFixture(t)
 	agents.addSecondAgent(t)
 	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
@@ -483,6 +489,7 @@ func TestAgentRefusalNamesTheAgent(t *testing.T) {
 // TestHeldWorkNoticeIgnoresHoldsOutsideTheRefusalClass: a long hold whose
 // reason is not an admission refusal raises nothing.
 func TestHeldWorkNoticeIgnoresHoldsOutsideTheRefusalClass(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	engine := f.newEngine(t, f.driver)
 	if err := engine.observeRunHold(
@@ -505,6 +512,7 @@ func TestHeldWorkNoticeIgnoresHoldsOutsideTheRefusalClass(t *testing.T) {
 }
 
 func TestHeldWorkNoticeIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	runID, holdStart, ok := parseHeldWorkNoticeID(heldWorkNoticeID("run-with-hyphens-7", start))
 	if !ok || runID != "run-with-hyphens-7" || holdStart != start.Unix() {
@@ -546,6 +554,7 @@ func stopRunTask(t *testing.T, st *store.Store, runID domain.RunID) {
 // fences its run, so the engine stops retrying it. The notice resolves, and
 // further passes over the leftover hold row raise nothing for that span.
 func TestHeldWorkNoticeResolvesWhenTheTaskIsStopped(t *testing.T) {
+	t.Parallel()
 	s := heldWorkDispatchScenario(t)
 	backdateRunHold(t, s.store(), s.runID, heldWorkNoticeAfter+time.Minute)
 	s.refuse(t)
@@ -570,6 +579,7 @@ func TestHeldWorkNoticeResolvesWhenTheTaskIsStopped(t *testing.T) {
 // TestHeldWorkNoticeSkipsAStoppedTask: a hold that crosses the threshold
 // after its task was stopped raises nothing, in the raise path itself.
 func TestHeldWorkNoticeSkipsAStoppedTask(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stopRunTask(t, f.store, f.run.ID)
 	now := time.Now().UTC()

@@ -75,6 +75,7 @@ func (f specificationFixture) answerQuestion(t *testing.T, itemID domain.ItemID,
 }
 
 func TestSpecificationNeedsDecisionCreatesOneQuestionUnderEitherGate(t *testing.T) {
+	t.Parallel()
 	for _, specApproval := range []bool{true, false} {
 		t.Run(fmt.Sprintf("spec_approval=%t", specApproval), func(t *testing.T) {
 			f := newSpecificationFixture(t, specApproval, 4)
@@ -148,6 +149,7 @@ func TestSpecificationNeedsDecisionCreatesOneQuestionUnderEitherGate(t *testing.
 }
 
 func TestSpecificationNeedsDecisionRejectsDecodedCredentialText(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
 	firstID := specificationInvocationID("specification-run", 1)
@@ -180,6 +182,7 @@ func TestSpecificationNeedsDecisionRejectsDecodedCredentialText(t *testing.T) {
 }
 
 func TestSpecificationNeedsDecisionAnswerReinvokesSpecifierWithHumanFeedback(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
 	materializer, err := exec.NewMaterializer(f.blobs, exec.MaterializerOptions{
@@ -248,6 +251,7 @@ func TestSpecificationNeedsDecisionAnswerReinvokesSpecifierWithHumanFeedback(t *
 }
 
 func TestSpecificationNeedsDecisionAtIterationLimitRecordsFailure(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, false, 1)
 	driver := f.newDriver(t)
 	firstID := specificationInvocationID("specification-run", 1)
@@ -273,6 +277,7 @@ func TestSpecificationNeedsDecisionAtIterationLimitRecordsFailure(t *testing.T) 
 }
 
 func TestSpecificationNeedsDecisionStopResolvesWithoutEnqueueing(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 4)
 	driver := f.newDriver(t)
 	firstID := specificationInvocationID("specification-run", 1)
@@ -329,6 +334,7 @@ func TestSpecificationNeedsDecisionStopResolvesWithoutEnqueueing(t *testing.T) {
 // assumption inside a returned specification, while a product question
 // comes back as needs_decision and stops the run on a question item.
 func TestSpecifierFixtureDistinguishesAssumptionFromOwnerDecision(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		output   specify.Output
@@ -446,6 +452,7 @@ func sketchDecisionsFixture() []domain.Decision {
 // prompt-driven exit is pinned by the "with no answering `human_feedback`"
 // required phrase in exec/claude's TestPhase1ASummaryPromptContracts.
 func TestSpecificationSketchRoundAsksThenSpecifiesUnderBudgetOfTwo(t *testing.T) {
+	t.Parallel()
 	t.Run("answer_and_retry", func(t *testing.T) {
 		f := newSpecificationFixture(t, true, 2)
 		driver := f.newDriver(t)
@@ -638,6 +645,7 @@ func answerRounds(t *testing.T, f specificationFixture, engine *Engine, answers 
 // consumed answers instead of rejecting them with ErrParentKeyMismatch,
 // which escaped Reconcile as a durable stop.
 func TestSpecificationAnswerReplaySurvivesTaskRename(t *testing.T) {
+	t.Parallel()
 	const title = "Import the sketch"
 	for _, tc := range []struct {
 		name         string
@@ -703,6 +711,7 @@ func TestSpecificationAnswerReplaySurvivesTaskRename(t *testing.T) {
 // (#1556), replaying reconcile after each step; the approval renames the task
 // again from the approved heading.
 func TestSpecificationAnswerReplaySurvivesApprovalRevision(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixture(t, true, 4)
 	driver := f.newDriver(t)
 	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0,
