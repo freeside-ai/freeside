@@ -1108,9 +1108,18 @@ func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
 	}
 }
 
+// daemonWaitBound bounds a whole-daemon test's wait for the daemon's own
+// work, so it catches a hang, not a slow run. That work is CPU-bound in the
+// engine and the pure-Go SQLite store, which the race detector slows several
+// times: the discuss reply in
+// TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight takes about
+// 0.1s without -race, 0.9-2.2s with it, and up to 5.3s with it on a heavily
+// loaded host.
+const daemonWaitBound = 60 * time.Second
+
 func waitForItem(t *testing.T, attention *signet.Service, id domain.ItemID) signet.AttentionItemSnapshot {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(daemonWaitBound)
 	for time.Now().Before(deadline) {
 		item, err := attention.GetAttentionItem(context.Background(), id)
 		if err == nil {
@@ -1121,7 +1130,7 @@ func waitForItem(t *testing.T, attention *signet.Service, id domain.ItemID) sign
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("item %q did not appear within 2s", id)
+	t.Fatalf("item %q did not appear within %s", id, daemonWaitBound)
 	return signet.AttentionItemSnapshot{}
 }
 
