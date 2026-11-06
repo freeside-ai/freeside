@@ -21,6 +21,7 @@ func claudeInstructions(path string) VendorInstructionConfig {
 }
 
 func TestSnapshotVendorInstructionsRecordsExactBytesOrExplicitAbsence(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "missing-CLAUDE.md")
 	absent, body, err := snapshotVendorInstructions(
 		t.Context(), claudeInstructions(missing),
@@ -59,6 +60,7 @@ func TestSnapshotVendorInstructionsRecordsExactBytesOrExplicitAbsence(t *testing
 }
 
 func TestSnapshotVendorInstructionsUsesPositionedReadsFromUnlinkedDescriptor(t *testing.T) {
+	t.Parallel()
 	want := []byte("# Immutable host instructions\n")
 	path := filepath.Join(t.TempDir(), "CLAUDE.md")
 	if err := os.WriteFile(path, want, 0o400); err != nil {
@@ -90,6 +92,7 @@ func TestSnapshotVendorInstructionsUsesPositionedReadsFromUnlinkedDescriptor(t *
 }
 
 func TestSnapshotVendorInstructionsCarriesCodexAppendFileBinding(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing-AGENTS.md")
 	snapshot, body, err := snapshotVendorInstructions(t.Context(), VendorInstructionConfig{
 		Vendor:   domain.AgentVendorCodex,
@@ -107,6 +110,7 @@ func TestSnapshotVendorInstructionsCarriesCodexAppendFileBinding(t *testing.T) {
 }
 
 func TestSnapshotVendorInstructionsRejectsForbiddenHostInputAlias(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	auth := filepath.Join(dir, "auth.json")
 	instructions := filepath.Join(dir, "AGENTS.md")
@@ -126,6 +130,7 @@ func TestSnapshotVendorInstructionsRejectsForbiddenHostInputAlias(t *testing.T) 
 }
 
 func TestPinnedForbiddenHostInputsRejectPathReplacement(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	auth := filepath.Join(dir, "auth.json")
 	replacement := filepath.Join(dir, "auth.replacement.json")
@@ -149,6 +154,7 @@ func TestPinnedForbiddenHostInputsRejectPathReplacement(t *testing.T) {
 }
 
 func TestSnapshotVendorInstructionsDereferencesOnce(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "first.md")
 	secondPath := filepath.Join(dir, "second.md")
@@ -183,6 +189,7 @@ func TestSnapshotVendorInstructionsDereferencesOnce(t *testing.T) {
 }
 
 func TestSnapshotVendorInstructionsRejectsInvalidSourceStates(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dangling := filepath.Join(dir, "dangling")
 	if err := os.Symlink(filepath.Join(dir, "absent"), dangling); err != nil {
@@ -225,6 +232,7 @@ func TestSnapshotVendorInstructionsRejectsInvalidSourceStates(t *testing.T) {
 }
 
 func TestSnapshotVendorInstructionsHonorsCancellation(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, _, err := snapshotVendorInstructions(

@@ -301,6 +301,7 @@ func wantCites(t *testing.T, admission domain.ExecutionAdmission, line domain.Ta
 // task's version moves. A later admission reads its line and routes nothing,
 // even under a newer policy.
 func TestRouterPinsEveryRoleToOnePool(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
@@ -340,6 +341,7 @@ func TestRouterPinsEveryRoleToOnePool(t *testing.T) {
 // routed task stays on its pool after the mark clears, and new tasks return
 // to the first agent once the reset passes or a contrary reading clears it.
 func TestRouterPassesOverAMarkedPool(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	_, second := f.addSecondAgent(t)
@@ -405,6 +407,7 @@ func TestRouterPassesOverAMarkedPool(t *testing.T) {
 // keep their role off the router, a role whose order holds no agent on the
 // picked pool keeps the lineup, and a line change supersedes a router line.
 func TestRouterLeavesOperatorLinesAlone(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	_, second := f.addSecondAgent(t)
 	operator := f.submitLine(t, domain.RoleReviewer, agentTestSecondAgent)
@@ -446,6 +449,7 @@ func TestRouterLeavesOperatorLinesAlone(t *testing.T) {
 // doesn't order the role, or for a task the lineup admitted before a policy
 // existed, admission behaves as it did before routing and writes no line.
 func TestRouterLeavesALineupTaskOnTheLineup(t *testing.T) {
+	t.Parallel()
 	for name, setup := range map[string]func(t *testing.T, f *agentAdmissionFixture){
 		"no policy": func(*testing.T, *agentAdmissionFixture) {},
 		"the policy doesn't order the role": func(t *testing.T, f *agentAdmissionFixture) {
@@ -484,6 +488,7 @@ func TestRouterLeavesALineupTaskOnTheLineup(t *testing.T) {
 // task holds until the earliest reset and is then routed. With no reset on
 // any mark, nothing could resume a hold, so the first agent takes it.
 func TestRouterHoldsWhenEveryPoolIsMarked(t *testing.T) {
+	t.Parallel()
 	t.Run("until the earliest reset", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, second := f.addSecondAgent(t)
@@ -567,6 +572,7 @@ func TestRouterHoldsWhenEveryPoolIsMarked(t *testing.T) {
 // clears, then admits on the same line; it is never rerouted. This holds for
 // a writer role and for the reviewer.
 func TestRoutedLaterRoleHoldsOnItsPool(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T) (*agentAdmissionFixture, ReviewRole) {
 		t.Helper()
 		f := newAgentAdmissionFixture(t)
@@ -648,6 +654,7 @@ func TestRoutedLaterRoleHoldsOnItsPool(t *testing.T) {
 // or holds, moves no sync revision, so a held role's retries stay quiet; one
 // it routes records its lines in one write.
 func TestRouterWritesOnlyWhenItRoutes(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	ctx := context.Background()
@@ -685,6 +692,7 @@ func TestRouterWritesOnlyWhenItRoutes(t *testing.T) {
 // read, is not cited; the line cites the revision in effect then, which its
 // anchor accepts. With none in effect, the task stays on the lineup.
 func TestRouterCitesThePolicyInEffect(t *testing.T) {
+	t.Parallel()
 	t.Run("an earlier revision", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		f.addSecondAgent(t)
@@ -717,6 +725,7 @@ func TestRouterCitesThePolicyInEffect(t *testing.T) {
 // account when the role's order holds an agent on it, then the soonest known
 // weekly reset, then the policy's order, each passing over a marked pool.
 func TestRouterRanksPoolsByTier(t *testing.T) {
+	t.Parallel()
 	const weekly, fiveHour = "seven_day", "five_hour"
 	week := 7 * 24 * time.Hour
 	observed := agentTestAt.Add(-time.Minute)

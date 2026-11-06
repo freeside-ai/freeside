@@ -89,6 +89,7 @@ func newProposalAdmissionEngine(t *testing.T, st *store.Store) *Engine {
 }
 
 func TestProposalAdmissionRetryAndDeliberateRepeat(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	engine := newProposalAdmissionEngine(t, st)
@@ -133,6 +134,7 @@ func TestProposalAdmissionRetryAndDeliberateRepeat(t *testing.T) {
 }
 
 func TestProposalAdmissionCrashRecovery(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
 	request := proposalAdmissionFixture(t, "command-crash")
@@ -158,6 +160,7 @@ func TestProposalAdmissionCrashRecovery(t *testing.T) {
 }
 
 func TestProposalAdmissionGateUsesResolvedPolicyNotRein(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-1")
@@ -174,6 +177,7 @@ func TestProposalAdmissionGateUsesResolvedPolicyNotRein(t *testing.T) {
 }
 
 func TestProposalAdmissionRejectsUnregisteredOrForeignWorkUnit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-unregistered")
@@ -189,6 +193,7 @@ func TestProposalAdmissionRejectsUnregisteredOrForeignWorkUnit(t *testing.T) {
 }
 
 func TestProposalAdmissionRejectsScopeOutsideDurableDeclaration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-scope-mismatch")
@@ -217,6 +222,7 @@ func TestProposalAdmissionRejectsScopeOutsideDurableDeclaration(t *testing.T) {
 // can never verify; the unchanged revision shows the whole transaction rolled
 // back.
 func TestProposalAdmissionWithoutArtifactStoreFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	request := proposalAdmissionFixture(t, "command-no-artifacts")
@@ -241,6 +247,7 @@ func TestProposalAdmissionWithoutArtifactStoreFailsClosed(t *testing.T) {
 // An admitted task proposal's evidence carrier verifies in a real local
 // checkpoint's artifact closure, and stops verifying once its body is damaged.
 func TestProposalAdmissionEvidenceBackupClosure(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	blobs, err := signet.NewBlobStore(path + ".blobs")

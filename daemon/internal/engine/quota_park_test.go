@@ -233,6 +233,7 @@ func dispatchParked(t *testing.T, f failedImplementationFixture, run domain.Run)
 // under a quota_window_exhausted hold. The parked attempt stays held until
 // the reset, then starts, and its start clears the hold.
 func TestQuotaRefusalParksUntilReset(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		resetsAt := time.Now().UTC().Add(time.Hour)
 		f := newFailedImplementationCampaignFixtureScript(t, quotaRefusalScript(domain.FailureCauseQuota,
@@ -300,6 +301,7 @@ func TestQuotaRefusalParksUntilReset(t *testing.T) {
 // the reset the window's reading gives, and an allowed reading observed after
 // the mark lets the parked attempt start before that reset.
 func TestQuotaRefusalTakesReadingReset(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFailedImplementationCampaignFixtureScript(t, quotaRefusalScript(domain.FailureCauseQuota,
 			&domain.QuotaRefusal{Window: quotaTestWindow}))
@@ -332,6 +334,7 @@ func TestQuotaRefusalTakesReadingReset(t *testing.T) {
 // TestQuotaRefusalWithoutParkRaisesCard: a failure nothing can resume keeps
 // today's execution_failure card and parks nothing.
 func TestQuotaRefusalWithoutParkRaisesCard(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		script func(resetsAt time.Time) execfake.StageScript
@@ -382,6 +385,7 @@ func TestQuotaRefusalWithoutParkRaisesCard(t *testing.T) {
 // the park's reason after a failure with no refusal starts, rather than
 // stopping dispatch: the gate holds only on a refused window it can read.
 func TestQuotaParkGatePassesWithoutARefusal(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFailedImplementationCampaignFixtureScript(t, quotaRefusalScript(domain.FailureCauseServiceCapacity, nil))
 		enrollQuotaPool(t, f)
@@ -405,6 +409,7 @@ func TestQuotaParkGatePassesWithoutARefusal(t *testing.T) {
 // but the run's root implementation, such as a remediation round or operator
 // feedback, parks nothing and marks nothing, so it keeps the failure card.
 func TestQuotaParkOnlyFromTheRootInvocation(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFailedImplementationCampaignFixtureScript(t, quotaRefusalScript(domain.FailureCauseQuota, nil))
 		pool := enrollQuotaPool(t, f)
@@ -433,6 +438,7 @@ func TestQuotaParkOnlyFromTheRootInvocation(t *testing.T) {
 // TestDecodeProductionTerminalRegatesQuotaRefusal: a stored refusal beside
 // another cause, or naming no window, fails closed when read back.
 func TestDecodeProductionTerminalRegatesQuotaRefusal(t *testing.T) {
+	t.Parallel()
 	f := newFailedImplementationCampaignFixtureScript(t, quotaRefusalScript(domain.FailureCauseQuota, nil))
 	stage, ok := findProductionStage(f.run)
 	if !ok {

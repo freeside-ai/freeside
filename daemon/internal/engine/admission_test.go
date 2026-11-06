@@ -52,6 +52,7 @@ func (stageInputBackend) Capabilities() exec.CapabilitySet {
 }
 
 func TestWaivedPostureItemIsExplicitlyBlocking(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Date(2026, 8, 14, 1, 2, 3, 0, time.UTC)
 	item, err := waivedPostureItem(
 		domain.Run{ID: "run-1", ProjectID: "proj-1"},
@@ -71,6 +72,7 @@ func TestWaivedPostureItemIsExplicitlyBlocking(t *testing.T) {
 }
 
 func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
+	t.Parallel()
 	option := WithAdmission(
 		stageInputBackend{}, nil,
 		AdmissionEnvironment{
@@ -89,6 +91,7 @@ func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
 }
 
 func TestWithAdmissionRejectsUnconformedVendorInstructionBinding(t *testing.T) {
+	t.Parallel()
 	digest := domain.Digest("sha256:" + strings.Repeat("1", 64))
 	for _, tc := range []struct {
 		name     string
@@ -137,6 +140,7 @@ func TestWithAdmissionRejectsUnconformedVendorInstructionBinding(t *testing.T) {
 }
 
 func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) {
+	t.Parallel()
 	option := WithAdmission(
 		stageInputBackend{}, nil,
 		AdmissionEnvironment{
@@ -156,6 +160,7 @@ func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) 
 }
 
 func TestProductionReplayDeliveryDefersToKnownDriverInvocation(t *testing.T) {
+	t.Parallel()
 	for _, feedback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "remediation", true: "operator feedback"}[feedback], func(t *testing.T) {
 			runID := domain.RunID("run-replay-delivery")
@@ -241,6 +246,7 @@ func seedRunPolicy(t *testing.T, st *store.Store, run domain.Run, values map[str
 // until the proxy enforces the registry set (#1628) a policy that opts in to
 // provider_registry admits nothing.
 func TestWriterAdmissionTakesTheEgressProfileFromPolicy(t *testing.T) {
+	t.Parallel()
 	const registrySet = `["proxy.golang.org","sum.golang.org"]`
 	optIn := map[string]string{
 		domain.EgressProfilePolicyKey: string(domain.EgressProviderRegistry),
@@ -331,6 +337,7 @@ func TestWriterAdmissionTakesTheEgressProfileFromPolicy(t *testing.T) {
 // not the one the run names, has no request to read: admission refuses it
 // instead of assuming the default.
 func TestWriterAdmissionRefusesAnUnreadablePolicy(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	admit := func(run domain.Run) error {
 		t.Helper()
@@ -375,6 +382,7 @@ func TestWriterAdmissionRefusesAnUnreadablePolicy(t *testing.T) {
 // stage that is not the writer's runs under the composition's profile and
 // never reads the key.
 func TestEgressPolicyGovernsEveryWriterStageAndNoOther(t *testing.T) {
+	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.engine.productionPublication = &productionPublicationWorkflow{
 		remediationPromptPackage: agentTestDigest("8"),
@@ -428,6 +436,7 @@ func TestEgressPolicyGovernsEveryWriterStageAndNoOther(t *testing.T) {
 // provider_registry under a policy without a valid declared set is refused
 // like the policy opt-in.
 func TestWriterEgressRefusalRequiresADeclaredSetForTheRegistryProfile(t *testing.T) {
+	t.Parallel()
 	policy := func(values map[string]string) domain.ResolvedPolicy {
 		t.Helper()
 		provenance := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:test-policy"}
@@ -534,6 +543,7 @@ func TestWriterAdmissionRequiresDeclaredRegistriesEvenAfterAdoption(t *testing.T
 }
 
 func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	blobs, err := signet.NewBlobStore(filepath.Join(t.TempDir(), "blobs"))

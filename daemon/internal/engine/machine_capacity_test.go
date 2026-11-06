@@ -26,6 +26,7 @@ func memoryRefusal(ahead int) error {
 // counting it without each pass moving the revision, and a refusal for
 // anything else leaves the order.
 func TestLaunchOrderRefreshesAWaitOnlyWhenDue(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
@@ -85,6 +86,7 @@ func TestLaunchOrderRefreshesAWaitOnlyWhenDue(t *testing.T) {
 // TestLaunchMemoryNoticeClearsAMachineCapacityHold: a run an earlier start
 // held for memory shows the notice alone once a launch is refused for good.
 func TestLaunchMemoryNoticeClearsAMachineCapacityHold(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	f.submit(t)
@@ -123,6 +125,7 @@ func TestLaunchMemoryNoticeClearsAMachineCapacityHold(t *testing.T) {
 // identity starts no ward writer, so it reserves nothing and draws no notice
 // even under a runtime with no recorded overhead.
 func TestExecutionMemoryReservesOnlyAnIdentity(t *testing.T) {
+	t.Parallel()
 	e := &Engine{launchBound: ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: "9.9.9"}}
 	memory, err := e.executionMemory(t.Context(), nil, domain.Run{ID: "run-1"},
 		domain.ExecutionAdmission{InvocationID: "inv-1", RunID: "run-1"})
@@ -136,6 +139,7 @@ func TestExecutionMemoryReservesOnlyAnIdentity(t *testing.T) {
 // the callers report under the notice, not a wait or a source failure, and it
 // admits nothing.
 func TestReviewUnderAnUnrecordedRuntimeIsRefusedForGood(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	runID := domain.RunID("run-review-runtime")
@@ -162,6 +166,7 @@ func TestReviewUnderAnUnrecordedRuntimeIsRefusedForGood(t *testing.T) {
 // TestLaunchMemoryNoticeNamesTheRefusal: the notice names the numbers of a
 // launch that can never fit, or the runtime version with no recorded overhead.
 func TestLaunchMemoryNoticeNamesTheRefusal(t *testing.T) {
+	t.Parallel()
 	never := launchMemoryRefusalReason(&domain.LaunchNeverFitsError{SizeMiB: 8192, OverheadMiB: 256, BudgetMiB: 4096})
 	if !strings.Contains(never, "8192 MiB declared plus 256 MiB per-VM overhead exceeds the 4096 MiB budget") {
 		t.Fatalf("never-fits reason = %q", never)

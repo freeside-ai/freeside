@@ -21,6 +21,7 @@ import (
 // narrowed to make that profile unenforceable. The refusal is the one a
 // provider_registry opt-in draws from the production composition.
 func TestUnenforceableEgressHoldsOneRunAndThePassContinues(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)

@@ -149,6 +149,7 @@ func (f *agentAdmissionFixture) agentDigest(t *testing.T, name string) domain.Di
 // A standard answer records the tier, writes no line, and leaves the
 // specifier on its lineup agent; a reattempt never calls again.
 func TestTriageStandardKeepsTheLineupSpecifier(t *testing.T) {
+	t.Parallel()
 	f, driver := triageFixture(t, `{"tier":"standard","reason":"A small fix."}`)
 	admission, err := f.admitSpecifier(t, "inv-specification-1")
 	if err != nil {
@@ -179,6 +180,7 @@ func TestTriageStandardKeepsTheLineupSpecifier(t *testing.T) {
 // An escalated answer writes the specifier's triage line at the record's
 // instant, and admission runs the escalated counterpart under that line.
 func TestTriageEscalatedAdmitsTheCounterpart(t *testing.T) {
+	t.Parallel()
 	f, driver := triageFixture(t, `{"tier":"escalated","reason":"Changes the API schema."}`)
 	admission, err := f.admitSpecifier(t, "inv-specification-1")
 	if err != nil {
@@ -211,6 +213,7 @@ func TestTriageEscalatedAdmitsTheCounterpart(t *testing.T) {
 // A run whose project was never registered still triages: the call names no
 // project, and the answer decides as for any other task.
 func TestTriageUnregisteredProject(t *testing.T) {
+	t.Parallel()
 	f, driver := unregisteredTriageFixture(t, `{"tier":"escalated","reason":"Changes the API schema."}`)
 	admission, err := f.admitSpecifier(t, "inv-specification-1")
 	if err != nil {
@@ -229,6 +232,7 @@ func TestTriageUnregisteredProject(t *testing.T) {
 // Every way the triager fails to answer escalates, with its own outcome, so
 // an unavailable triager never puts a task on the smaller model.
 func TestTriageFailuresEscalate(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		setup   func(*testing.T, *agentAdmissionFixture, *inferencefake.Driver)
@@ -309,6 +313,7 @@ func TestTriageFailuresEscalate(t *testing.T) {
 // neither an operator's line nor an admitted attempt: otherwise there is no
 // call and no record.
 func TestTriageSkips(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		setup func(*testing.T, *agentAdmissionFixture)
@@ -358,6 +363,7 @@ func TestTriageSkips(t *testing.T) {
 // An operator's change after triage supersedes the triage line: admission
 // runs the agent the change names.
 func TestTaskLineChangeSupersedesTriage(t *testing.T) {
+	t.Parallel()
 	f, _ := triageFixture(t, `{"tier":"escalated","reason":"Changes the API schema."}`)
 	if _, err := f.admitSpecifier(t, "inv-specification-1"); err != nil {
 		t.Fatal(err)

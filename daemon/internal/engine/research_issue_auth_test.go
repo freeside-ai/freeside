@@ -98,6 +98,7 @@ func (tr *privateIssueTransport) requests() []privateIssueRequest {
 // source issue: the namer fetches the issue by repository ID, authenticated
 // to the run's registered project.
 func TestTaskNamerReadsAPrivateIssue(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label  string
 		tokens publish.TokenSource
@@ -160,6 +161,7 @@ func TestTaskNamerReadsAPrivateIssue(t *testing.T) {
 // The fetch goes to the project's repository-ID endpoint with the token,
 // while the writer's other request goes without one.
 func TestSpecificationResearchReadsAPrivateProjectIssue(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixtureAllowing(t, true, 3, "https://api.github.com,https://docs.example")
 	tokens := &fakeResearchTokens{repositoryID: 1}
 	transport := &privateIssueTransport{repositoryID: "1"}
@@ -244,6 +246,7 @@ func TestSpecificationResearchReadsAPrivateProjectIssue(t *testing.T) {
 // reading an earlier pull request of the project for its settled contract
 // (#2311): the owner/name request goes to the ID endpoint with the token.
 func TestSpecificationResearchReadsAPrivateProjectPullRequest(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixtureAllowing(t, true, 3, "https://api.github.com")
 	tokens := &fakeResearchTokens{repositoryID: 1}
 	transport := &privateIssueTransport{repositoryID: "1"}
@@ -300,6 +303,7 @@ func TestSpecificationResearchReadsAPrivateProjectPullRequest(t *testing.T) {
 // the token can't make (#2311): the run goes on, and the next iteration sees
 // a research envelope naming the cause, never the token or the server's body.
 func TestSpecificationResearchHandsBackWhyAPrivateIssueFailed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label  string
 		tokens publish.TokenSource
@@ -359,6 +363,7 @@ func TestSpecificationResearchHandsBackWhyAPrivateIssueFailed(t *testing.T) {
 // specifier that keeps asking for research that fails: max_iterations still
 // ends the run.
 func TestSpecificationResearchFailuresStayWithinTheIterationBudget(t *testing.T) {
+	t.Parallel()
 	f := newSpecificationFixtureAllowing(t, true, 2, "https://api.github.com")
 	f.researchTransport, f.issueTokens = &privateIssueTransport{repositoryID: "1"}, &fakeResearchTokens{repositoryID: 1}
 	driver := f.newDriver(t)
