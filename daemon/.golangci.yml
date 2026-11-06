@@ -73,7 +73,6 @@ linters:
           |cmd/freeside-image-build\
           |cmd/freeside-project-image\
           |cmd/freeside-signet-dev\
-          |cmd/freesided\
           |internal/advisory\
           |internal/agentbaseline\
           |internal/agenttree\
