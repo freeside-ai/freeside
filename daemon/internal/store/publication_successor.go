@@ -90,6 +90,8 @@ func closureRetirementReason(origin domain.PublicationSuccessorOrigin) (string, 
 		return "Superseded because the pull request's head or base moved after it was ready.", true
 	case domain.PublicationSuccessorExternalReview:
 		return "", false
+	case domain.PublicationSuccessorHandoffConflict:
+		return "Superseded because the pull request's head conflicted with the target tip at handoff; a remediated head replaces it.", true
 	}
 	return "Superseded because a successor cycle replaced the publication.", true
 }
@@ -169,6 +171,8 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 		return tx.validateUnpublishedReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorBaseAdvance:
 		return tx.validateSuccessorReentrySuccessor(ctx, successor)
+	case domain.PublicationSuccessorHandoffConflict:
+		return tx.validateHandoffConflictSuccessor(ctx, successor)
 	case domain.PublicationSuccessorRemediation:
 		if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
 			return err
@@ -344,6 +348,69 @@ func (tx *ReadTx) validateSuccessorReentrySuccessor(ctx context.Context, success
 		return record.Audit.AuditedCommitSHA == reentry.BaseSHA
 	}) {
 		return fmt.Errorf("re-entry base %s is no recorded audit tip: %w", reentry.BaseSHA, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// validateHandoffConflictSuccessor is the every-read gate of an authority
+// that remediates a conflict the predecessor's handoff found (issue #2646).
+// The tip it admits a remediation at is the one the handoff sealed, never a
+// value the engine or a task row supplied, and never a fresh audit tip:
+//
+//   - The predecessor's publication has a sealed handoff check for this head
+//     whose tip moved past the evidence base and whose merge was never
+//     proved, so the predecessor never published, and the authority's base
+//     is that check's tip.
+//   - The head is the one the round before the cycle reviewed, at the
+//     check's evidence base, and the cycle's round follows it.
+//   - The head is one a Freeside invocation produced. A head_changed
+//     re-entry's head is someone else's and admits no remediation; an
+//     in-place cycle never reaches the handoff, so no other predecessor
+//     carries a foreign head there.
+//   - FirstPublication says whether no ancestor published, so the cycle
+//     opens the pull request, or one did, so it updates that one.
+func (tx *ReadTx) validateHandoffConflictSuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
+	reentry := successor.Reentry
+	publication := domain.ProductionPublicationInvocationID(successor.RunID)
+	if successor.PredecessorItemID != domain.ProductionReadyItemID(successor.RunID) {
+		parent, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID)
+		if err != nil {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		if parent.CarriesForeignHead() {
+			return fmt.Errorf("handoff conflict on the foreign head of %s: %w",
+				parent.PublicationID(), domain.ErrParentKeyMismatch)
+		}
+		publication = parent.PublicationID()
+	}
+	check, err := tx.GetHandoffCheck(ctx, successor.RunID, publication)
+	if err != nil || check.TipSHA != reentry.BaseSHA || check.HeadSHA != reentry.HeadSHA ||
+		!check.Moved() || check.Merge != nil {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound ||
+		prior.HeadSHA != reentry.HeadSHA || prior.BaseSHA != check.EvidenceBaseSHA {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	var published bool
+	if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
+		successor.PredecessorItemID).Scan(&published); err != nil {
+		return err
+	}
+	if published {
+		return domain.ErrParentKeyMismatch
+	}
+	_, err = tx.publishedReadyAtOrBefore(ctx, successor.RunID, successor.PredecessorItemID)
+	switch {
+	case errors.Is(err, ErrNoPublishedContinuationTarget):
+		if !successor.FirstPublication {
+			return domain.ErrParentKeyMismatch
+		}
+	case err != nil:
+		return err
+	case successor.FirstPublication:
+		return domain.ErrParentKeyMismatch
 	}
 	return nil
 }
@@ -940,8 +1007,19 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	}
 	review, err := tx.GetReviewRecord(ctx, request.ReviewInvocationID)
 	if err != nil || review.RunID != successor.RunID || review.Round != request.Round ||
-		review.HeadSHA != request.HeadSHA || review.BaseSHA != request.BaseSHA {
+		review.HeadSHA != request.HeadSHA {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if successor.AdmitsHandoffConflictRemediation(request) {
+		// A handoff conflict's first remediation answers the conflict, not a
+		// review: it has no findings or adjudication, and its review is the
+		// prior one, at the evidence base, while the request is at the tip.
+		// The authority's gate above proved that review and that tip against
+		// the sealed handoff check.
+		return nil
+	}
+	if review.BaseSHA != request.BaseSHA {
+		return domain.ErrParentKeyMismatch
 	}
 	adjudication, err := tx.GetFindingAdjudication(ctx, request.AdjudicationDigest)
 	if err != nil || adjudication.RunID != successor.RunID || adjudication.Round != request.Round || len(request.FindingIDs) == 0 {
@@ -1030,9 +1108,10 @@ func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.R
 		ItemID: ready.ItemID, Identity: ready.PublicationIdentity, HeadSHA: ready.HeadSHA,
 		PRNumber: ready.PRNumber, Branch: outcome.Branch,
 	}
-	// A successor re-entry (v6) names the head it will push, not the one on
-	// the pull request, which is still the published ancestor's.
-	if successor.Reentry != nil && !successor.ReentersUnpublishedHead() {
+	// An in-place re-entry's head is the one on the pull request, which may
+	// not be the published ancestor's. A handoff conflict's head never
+	// published, so the pull request still carries the ancestor's.
+	if successor.Reentry != nil && !successor.ReentersUnpublishedHead() && !successor.RemediatesHandoffConflict() {
 		target.HeadSHA = successor.Reentry.HeadSHA
 	}
 	return target, target.Validate(ready.BaseRef)
