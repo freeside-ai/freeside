@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -46,6 +47,9 @@ func ReadCommit(ctx context.Context, checkoutDir, scratch, commit string) (Files
 	if err != nil {
 		return nil, fmt.Errorf("list agent tree at %s: %w", commit, err)
 	}
+	// One batch process reads every file, instead of one git per file.
+	objects := runner.Objects(ctx)
+	defer func() { _ = objects.Close() }()
 	files := Files{}
 	for _, entry := range bytes.Split(bytes.TrimSuffix(listing, []byte{0}), []byte{0}) {
 		if len(entry) == 0 {
@@ -70,7 +74,18 @@ func ReadCommit(ctx context.Context, checkoutDir, scratch, commit string) (Files
 		if len(files) == maxTreeFiles {
 			return nil, fmt.Errorf("more than %d files: %w", maxTreeFiles, ErrMalformed)
 		}
-		body, err := runner.Run(ctx, nil, "cat-file", "blob", fields[2])
+		info, content, err := objects.Open(ctx, fields[2])
+		if err != nil {
+			return nil, fmt.Errorf("read %s at %s: %w", path, commit, err)
+		}
+		// The listing names the entry's object; the read must find a blob of
+		// the listed size there. Unlike `cat-file blob`, the batch read does
+		// not peel, so a tag named by a blob entry is refused, not followed.
+		if info.Type != gitrun.ObjectBlob || info.Size != int64(size) {
+			return nil, fmt.Errorf("%s is a %s of %d bytes, listed as a blob of %d: %w",
+				path, info.Type, info.Size, size, ErrMalformed)
+		}
+		body, err := io.ReadAll(content)
 		if err != nil {
 			return nil, fmt.Errorf("read %s at %s: %w", path, commit, err)
 		}
