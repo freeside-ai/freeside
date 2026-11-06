@@ -146,6 +146,19 @@ func TestGolden(t *testing.T) {
 	// encoding, which retained rows carry, did not move.
 	mergeRequest := request
 	mergeRequest.LegacyEvaluatedSHA = "merge-sha-1"
+	// A task's attachments reach the reviewer as task/<name> in submitted
+	// order; a request without them keeps the review_request shape.
+	inputsRequest := request
+	inputsRequest.Inputs = []domain.StageInputAttachment{
+		{
+			Digest: domain.Digest("sha256:" + strings.Repeat("1a", 32)), Name: "task/reference.png",
+			MediaType: domain.TaskAttachmentMediaPNG, SizeBytes: 2048,
+		},
+		{
+			Digest: domain.Digest("sha256:" + strings.Repeat("2b", 32)), Name: "task/handoff/notes.md",
+			MediaType: domain.TaskAttachmentMediaOctetStream, SizeBytes: 512,
+		},
+	}
 	cases := []struct {
 		name  string
 		value any
@@ -183,6 +196,7 @@ func TestGolden(t *testing.T) {
 		{"review_result", review},
 		{"review_request", request},
 		{"review_request_prospective_merge", mergeRequest},
+		{"review_request_inputs", inputsRequest},
 		{"start_spec", exec.StartSpecFromAdmission(admission)},
 	}
 	for _, tc := range cases {
