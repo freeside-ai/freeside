@@ -96,6 +96,7 @@ func newTestRunner(t *testing.T, checkout string, opts Options) *gitRunner {
 	if err != nil {
 		t.Fatalf("newGitRunner: %v", err)
 	}
+	t.Cleanup(g.close)
 	return g
 }
 
