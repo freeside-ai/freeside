@@ -127,7 +127,7 @@ func TestInputScriptsDeliverManifestTreeAndRejectChanges(t *testing.T) {
 				t.Fatal(err)
 			}
 			proof := filepath.Join(t.TempDir(), "proof")
-			seed := buildInputSeederSpec(cfg, hs, namesFor(hs.RunID), owner).Command[2]
+			seed := buildInputSeederSpec(cfg, handoffInputRoles(cfg, hs, namesFor(hs.RunID)), owner).Command[2]
 			if out, err := osexec.CommandContext(t.Context(), "sh", "-c", adapt(seed, root, input, ready, proof)).CombinedOutput(); err != nil { //nolint:gosec // generated script, test-owned paths
 				t.Fatalf("seed: %v: %s", err, out)
 			}
@@ -176,7 +176,7 @@ func TestInputScriptsDeliverManifestTreeAndRejectChanges(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			observer := buildInputObserverSpec(cfg, hs, namesFor(hs.RunID), owner).Command[2]
+			observer := buildInputObserverSpec(handoffInputRoles(cfg, hs, namesFor(hs.RunID)), owner).Command[2]
 			if out, err := osexec.CommandContext(t.Context(), "sh", "-c", adapt(observer, root, input, ready, proof)).CombinedOutput(); err != nil { //nolint:gosec // generated script, test-owned paths
 				t.Fatalf("observe: %v: %s", err, out)
 			}
@@ -522,7 +522,7 @@ func TestInputRecoveryReapsInterruptedPreparation(t *testing.T) {
 	fx.worldVolume(t, names.Workspace, fx.runLabels(hs.RunID))
 	fx.worldVolume(t, names.Prompt, fx.runLabels(hs.RunID))
 	fx.worldVolume(t, names.Inputs, fx.runLabels(hs.RunID))
-	seeder := buildInputSeederSpec(fx.cfg, hs, names, Label{Key: ownershipLabelKey, Value: testRecoveryToken})
+	seeder := buildInputSeederSpec(fx.cfg, handoffInputRoles(fx.cfg, hs, names), Label{Key: ownershipLabelKey, Value: testRecoveryToken})
 	fx.worldContainer(t, seeder, true)
 	result, err := fx.recover(t, hs.RunID, hs)
 	if err != nil || result == nil || result.Outcome != RecoveryLoss {

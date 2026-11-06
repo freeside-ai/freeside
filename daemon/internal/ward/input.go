@@ -130,9 +130,9 @@ func (b *Backend) prepareInputs(ctx context.Context, hs HandoffSpec, names hando
 		label:  "inputs",
 		volume: names.Inputs, volumeTarget: inputVolumeTarget, sizeMB: inputVolumeSizeMB(files),
 		volumeClaim:   &st.inputs,
-		seeder:        buildInputSeederSpec(b.cfg, hs, names, st.ownershipLabel),
+		seeder:        buildInputSeederSpec(b.cfg, handoffInputRoles(b.cfg, hs, names), st.ownershipLabel),
 		seederClaim:   &st.inputsSeeder,
-		observer:      buildInputObserverSpec(b.cfg, hs, names, st.ownershipLabel),
+		observer:      buildInputObserverSpec(handoffInputRoles(b.cfg, hs, names), st.ownershipLabel),
 		observerClaim: &st.inputsObserver,
 		stageDir:      inputStageDir, readyDir: inputReadyDir,
 		stage: func(dir string) error {
@@ -201,11 +201,26 @@ func copyInputBlob(ctx context.Context, w io.Writer, f InputFile, blobs InputBlo
 	return nil
 }
 
+// inputVolumeRoles names one input volume and the seeder and observer that
+// fill and prove it, so the writer handoff and the review lifecycle run the
+// same scripts and check the same proof.
+type inputVolumeRoles struct {
+	runID, volume, seeder, observer, image string
+	size                                   ContainerSize
+}
+
+func handoffInputRoles(cfg Config, hs HandoffSpec, names handoffNames) inputVolumeRoles {
+	return inputVolumeRoles{
+		runID: hs.RunID, volume: names.Inputs, seeder: names.InputsSeeder, observer: names.InputsObserver,
+		image: cfg.ExporterImage, size: hs.Size,
+	}
+}
+
 // buildInputSeederSpec extracts the staged archive onto the fresh volume and
 // leaves everything root-owned: directories 0755 and files 0444, readable but
 // not writable by the agent's user. The observer, not this script's exit
 // status, decides whether the result is accepted.
-func buildInputSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, ownership Label) ContainerSpec {
+func buildInputSeederSpec(cfg Config, roles inputVolumeRoles, ownership Label) ContainerSpec {
 	root := shellQuote(inputVolumeTarget)
 	script := stateSeederScript(inputVolumeTarget, stateManifestEmpty) + "; n=0; while [ ! -f " + shellQuote(inputReadyDir+"/"+seedReadyFile) +
 		" ]; do n=$((n+1)); [ \"$n\" -le " + strconv.Itoa(seederScriptTicks(cfg)) + " ] || exit 1; sleep 1; done; " +
@@ -213,11 +228,11 @@ func buildInputSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, owners
 		"chown -R 0:0 " + root + "; find " + root + " -type d -exec chmod 0755 {} +; " +
 		"find " + root + " -type f -exec chmod 0444 {} +; sync"
 	return ContainerSpec{
-		Size: hs.Size,
-		Name: names.InputsSeeder, Image: cfg.ExporterImage, Command: []string{"sh", "-c", script},
+		Size: roles.size,
+		Name: roles.seeder, Image: roles.image, Command: []string{"sh", "-c", script},
 		NetworkDisabled: true,
-		Mounts:          []Mount{{Type: MountVolume, Source: names.Inputs, Target: inputVolumeTarget}},
-		Labels:          append(runLabels(hs.RunID), ownership),
+		Mounts:          []Mount{{Type: MountVolume, Source: roles.volume, Target: inputVolumeTarget}},
+		Labels:          append(runLabels(roles.runID), ownership),
 	}
 }
 
@@ -236,13 +251,13 @@ func inputObserverScript(nonce string) string {
 		"printf '%s %s\\n' " + shellQuote(nonce) + " \"${listing%% *}\" > " + shellQuote(stateProofPath) + "; sync"
 }
 
-func buildInputObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, ownership Label) ContainerSpec {
+func buildInputObserverSpec(roles inputVolumeRoles, ownership Label) ContainerSpec {
 	return ContainerSpec{
-		Size: hs.Size,
-		Name: names.InputsObserver, Image: cfg.ExporterImage, Command: []string{"sh", "-c", inputObserverScript(ownership.Value)},
+		Size: roles.size,
+		Name: roles.observer, Image: roles.image, Command: []string{"sh", "-c", inputObserverScript(ownership.Value)},
 		NetworkDisabled: true,
-		Mounts:          []Mount{{Type: MountVolume, Source: names.Inputs, Target: inputVolumeTarget, ReadOnly: true}},
-		Labels:          append(runLabels(hs.RunID), ownership),
+		Mounts:          []Mount{{Type: MountVolume, Source: roles.volume, Target: inputVolumeTarget, ReadOnly: true}},
+		Labels:          append(runLabels(roles.runID), ownership),
 	}
 }
 
