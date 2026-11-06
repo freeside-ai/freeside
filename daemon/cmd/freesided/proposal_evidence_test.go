@@ -14,6 +14,7 @@ import (
 // a carrier row with no body. Startup rebuilds that body, so the daemon's
 // first backup pass can verify it.
 func TestStartupRestoresMissingProposalEvidence(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	cfg := config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", Environment: environmentEphemeral}
 	// A first start creates the store and the state an existing store needs.

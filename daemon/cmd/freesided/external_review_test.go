@@ -264,6 +264,7 @@ func readRevision(t *testing.T, st *store.Store) int64 {
 // profile lists either reviewer here, so the ready item stays open, no
 // authority is sealed, and no attention item appears.
 func TestActiveResourceStoresExternalFindings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -322,6 +323,7 @@ func TestActiveResourceStoresExternalFindings(t *testing.T) {
 // revision alone, and that the reviewer's identical text re-read with another
 // timestamp is a duplicate of the stored finding, not an error.
 func TestActiveResourceExternalFindingsConverge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -383,6 +385,7 @@ func TestActiveResourceExternalFindingsConverge(t *testing.T) {
 // cannot be a valid finding is reported and stored nowhere, while the rest of
 // the same pass is stored and nothing fails.
 func TestActiveResourceExternalIntakeSkipsUnusableActivity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
@@ -432,6 +435,7 @@ func externalIntakeStore(t *testing.T) (*store.Store, string, domain.AttentionIt
 // review cache is evicted so the next pass fetches the activity again and
 // stores the findings instead of riding a 304 past them.
 func TestActiveResourceExternalIntakeFailureIsolated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, dbPath, item := externalIntakeStore(t)
 	// The pre-read succeeds and the write fails, which is the failure the
@@ -499,6 +503,7 @@ func TestActiveResourceExternalIntakeFailureIsolated(t *testing.T) {
 // cache: the fetch advanced the observer's validators, so the next pass would
 // otherwise be answered "not modified" and never store what this one read.
 func TestActiveResourceDiscardedObservationEvictsReviewCache(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, dbPath, _ := externalIntakeStore(t)
 	evicted := 0
@@ -531,6 +536,7 @@ func TestActiveResourceDiscardedObservationEvictsReviewCache(t *testing.T) {
 // finding names no pull request, so activity read for any other state of it
 // is never fetched.
 func TestActiveResourceExternalIntakeNeedsTheBoundOpenPull(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*publish.PullObservation){
 		"closed":       func(p *publish.PullObservation) { p.State = "closed" },
 		"head changed": func(p *publish.PullObservation) { p.HeadSHA = "feedface" },
@@ -578,6 +584,7 @@ func TestActiveResourceExternalIntakeNeedsTheBoundOpenPull(t *testing.T) {
 // one binding are never stored once the item's binding reads differently: the
 // run is a finding's only tie to a pull request.
 func TestCommitExternalFindingsRefusesChangedBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)

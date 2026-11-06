@@ -103,6 +103,7 @@ func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 // writer roles' one credential volume and the review identities, read from
 // the lineup the daemon will start with.
 func TestPreflightResolvesTheAdoptedLineup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
@@ -854,6 +855,7 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 // the gate, raises one system_health item naming the role, raises no second
 // item on the next start, and the item resolves once the role admits.
 func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
@@ -1169,6 +1171,7 @@ func TestReviewSelectionOnAMarkedGeneration(t *testing.T) {
 // nothing more, and the gate opens and the item resolves once the
 // cancellation is confirmed.
 func TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, taskID := legacyAdmittedTask(t, "flag-era-auth")
 	now := time.Now().UTC()
@@ -1280,6 +1283,7 @@ var removedReviewFlags = []string{
 
 // The daemon's review flags bind as before and name no model and no effort.
 func TestReviewFlags(t *testing.T) {
+	t.Parallel()
 	args := []string{
 		"-review-image", "image", "-review-input-root", "/root", "-review-auth-mode", "subscription",
 		"-review-auth-snapshot", "auth.json", "-review-instructions", "AGENTS.md",
@@ -1320,6 +1324,7 @@ func TestReviewFlags(t *testing.T) {
 // to the same four removals: the fixture's command line parses, and adding
 // any one of them does not.
 func TestPreflightRefusesTheRemovedReviewFlags(t *testing.T) {
+	t.Parallel()
 	args, _ := preflightFixture(t)
 	if _, err := parsePreflightConfig(args, &bytes.Buffer{}); err != nil {
 		t.Fatalf("fixture command line: %v", err)

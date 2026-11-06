@@ -104,6 +104,7 @@ func TestFixtureGitIgnoresAmbientGitDir(t *testing.T) {
 }
 
 func TestPreflightAuthorInputsUseExactBase(t *testing.T) {
+	t.Parallel()
 	root, base := authorPreflightRepository(t, map[string]string{
 		"AGENTS.md": "repository rules\n", "nested/AGENTS.md": "nested rules\n",
 		"nested/AGENTS.override.md":        "nested override\n",
@@ -131,6 +132,7 @@ func TestPreflightAuthorInputsUseExactBase(t *testing.T) {
 }
 
 func TestPreflightAuthorInputBounds(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		files      map[string]string
@@ -150,6 +152,7 @@ func TestPreflightAuthorInputBounds(t *testing.T) {
 }
 
 func TestPreflightAuthorInputsAcceptLargeSupportedTree(t *testing.T) {
+	t.Parallel()
 	root, base := authorPreflightRepository(t, map[string]string{"AGENTS.md": "repository rules\n"})
 	blob := authorPreflightGit(t, root, "rev-parse", base+":AGENTS.md")
 	var entries strings.Builder
@@ -171,6 +174,7 @@ func TestPreflightAuthorInputsAcceptLargeSupportedTree(t *testing.T) {
 }
 
 func TestPreflightAuthorInputsIgnoreReplacementRefs(t *testing.T) {
+	t.Parallel()
 	root, base := authorPreflightRepository(t, map[string]string{
 		"AGENTS.md": strings.Repeat("a", 256<<10),
 	})
@@ -188,6 +192,7 @@ func TestPreflightAuthorInputsIgnoreReplacementRefs(t *testing.T) {
 }
 
 func TestPreflightAuthorAcceptsTrackedTemplateSymlink(t *testing.T) {
+	t.Parallel()
 	root, _ := authorPreflightRepository(t, map[string]string{"AGENTS.md": "repository rules\n"})
 	path := filepath.Join(root, ".github", "PULL_REQUEST_TEMPLATE.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -205,6 +210,7 @@ func TestPreflightAuthorAcceptsTrackedTemplateSymlink(t *testing.T) {
 }
 
 func TestPreflightAuthorAcceptsDistinct84401ByteBundle(t *testing.T) {
+	t.Parallel()
 	repository := strings.Repeat("r", 41695)
 	hostBody := []byte(strings.Repeat("h", 41695))
 	bundle, _, err := exec.ComposeCodexReviewInstructions(

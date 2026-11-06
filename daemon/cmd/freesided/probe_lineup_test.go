@@ -360,6 +360,7 @@ func TestLineupProbeEnumsRegisterEveryMember(t *testing.T) {
 // record is evidence beside the composition manifest, never an input to it:
 // a launch preflight composes the same bytes with or without it (#2208).
 func TestLineupProbeRecordLeavesTheManifestUnchanged(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	stateRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

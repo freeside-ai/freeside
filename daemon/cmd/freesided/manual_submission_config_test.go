@@ -174,6 +174,7 @@ func TestManualSubmissionConfigRejectsInvalidInputBeforeStartup(t *testing.T) {
 }
 
 func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "manual.json")
 	dbPath := filepath.Join(root, "daemon.db")

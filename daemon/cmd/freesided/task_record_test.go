@@ -78,6 +78,7 @@ func recordItem(record taskRecord, id domain.ItemID) *taskRecordItem {
 }
 
 func TestTaskRecordConclusionDuringExternalReview(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	item := reentryReadyItem(t, st, "run-record-external-review")
 	runID := *item.Subject.RunID
@@ -113,6 +114,7 @@ func TestTaskRecordConclusionDuringExternalReview(t *testing.T) {
 // clock on every task, so the test replaces those two values before
 // comparing; everything else in the fixture is fixed.
 func TestTaskRecordGolden(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	ctx := t.Context()
 	id := taskOfRun(t, st, fixtureActiveRunID)
@@ -158,6 +160,7 @@ func TestTaskRecordGolden(t *testing.T) {
 // transaction reads every section is a property of readTaskRecord's
 // signature: it and its callees hold a *store.ReadTx and no *store.Store.
 func TestTaskRecordStampsMatchTimeline(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	record := readRecord(t, st, taskOfRun(t, st, fixtureActiveRunID))
 	if record.Timeline == nil || record.TimelineError != nil {
@@ -233,6 +236,7 @@ func equalPointers[T comparable](a, b *T) bool {
 // integrity check refuses and the task's own read accepts, and expects the
 // rest of the record.
 func TestTaskRecordReadsBrokenTimeline(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	execStoreSQL(t, dbPath,
@@ -256,6 +260,7 @@ func TestTaskRecordReadsBrokenTimeline(t *testing.T) {
 // needs the row is named in the run's errors, the reads that do not need it
 // stay, and the task's other runs are untouched.
 func TestTaskRecordReportsUnreadableRun(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	// The task's newest run: no other run's rows depend on it.
@@ -456,6 +461,7 @@ func quotedRunIDs(runs []taskRecordRun) string {
 // invocation's status is authenticated against its run), and the reads that
 // do not need them stay.
 func TestTaskRecordReportsUnreadableTask(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	execStoreSQL(t, dbPath, `UPDATE tasks SET body = json_set(body, '$.project_id', 'project-elsewhere') WHERE id = '`+string(id)+`'`)
@@ -481,6 +487,7 @@ func TestTaskRecordReportsUnreadableTask(t *testing.T) {
 // error with nothing else, the list itself reads, and the counts, which
 // count read items only, are zero; the runs still read.
 func TestTaskRecordReportsUnreadableItems(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	want := readRecord(t, st, id).Items
@@ -531,6 +538,7 @@ func TestTaskRecordCountsUnattributedRefusedRows(t *testing.T) {
 // TestTaskRecordReportsFailedItemEnumeration: when the enumeration itself
 // fails, the items and their counts are null with items_error.
 func TestTaskRecordReportsFailedItemEnumeration(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	execStoreSQL(t, dbPath, `DROP TABLE attention_deliveries`)
@@ -550,6 +558,7 @@ func TestTaskRecordReportsFailedItemEnumeration(t *testing.T) {
 // not checked: the record states the specification's digest, which an item's
 // evidence can also cite.
 func TestTaskRecordLeavesOutContent(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	ctx := t.Context()
 	id := taskOfRun(t, st, fixtureActiveRunID)
@@ -638,6 +647,7 @@ func TestTaskRecordLeavesOutContent(t *testing.T) {
 }
 
 func TestTaskRecordJoinsStallNotices(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	ctx := t.Context()
 	id := taskOfRun(t, st, fixtureActiveRunID)
@@ -681,6 +691,7 @@ func TestTaskRecordJoinsStallNotices(t *testing.T) {
 }
 
 func TestTaskRecordCounts(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	record := readRecord(t, st, taskOfRun(t, st, fixtureActiveRunID))
 	counted := 0
@@ -703,6 +714,7 @@ func TestTaskRecordCounts(t *testing.T) {
 }
 
 func TestTaskRecordProjectsCancellation(t *testing.T) {
+	t.Parallel()
 	requested := taskRecordAsOf.Add(time.Minute)
 	recorded := taskRecordAsOf.Add(2 * time.Minute)
 	for _, state := range domain.AllTaskCancellationStates {
@@ -730,6 +742,7 @@ func TestTaskRecordProjectsCancellation(t *testing.T) {
 }
 
 func TestTaskRecordUnknownTask(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	err := st.Read(t.Context(), func(tx *store.ReadTx) error {
 		_, err := readTaskRecord(t.Context(), tx, "task-unknown", taskRecordAsOf)
@@ -741,6 +754,7 @@ func TestTaskRecordUnknownTask(t *testing.T) {
 }
 
 func TestTaskRecordErrorKinds(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		err  error
 		want taskRecordErrorKind
@@ -775,6 +789,7 @@ func TestTaskRecordErrorKinds(t *testing.T) {
 // real-run verifier checks it, then stores a completion its evidence does
 // not support and expects only the completion section to fail.
 func TestTaskRecordReportsPublication(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	ctx := t.Context()
 	runID := domain.RunID("run-published")
@@ -884,6 +899,7 @@ func closureCheckpointJSON(runID domain.RunID, publication domain.InvocationID, 
 }
 
 func TestTaskRecordReportsClosure(t *testing.T) {
+	t.Parallel()
 	const kind = "production_closure_checkpoint"
 	for _, tc := range []struct {
 		label, kind, proposal string
@@ -952,6 +968,7 @@ func TestTaskRecordReportsClosure(t *testing.T) {
 // successor that has not published yet leaves the first publication's answer
 // in place, even once the successor records its own.
 func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	ctx := t.Context()
 	item := reentryReadyItem(t, st, "run-record-closure-cycle")

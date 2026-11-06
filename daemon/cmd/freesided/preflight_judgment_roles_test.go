@@ -24,6 +24,7 @@ import (
 // fails naming the ones the lineup cannot fill; a role left off passes. The
 // check waits for the judgment configuration and for the lineup.
 func TestPreflightReportsJudgmentRoles(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
 	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256)
@@ -104,6 +105,7 @@ func TestPreflightReportsJudgmentRoles(t *testing.T) {
 // and a real store it admits every role, names a role whose line is gone, and
 // reports the publication author off when no prompt file is configured.
 func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	authorBody := []byte("write the pull request for a reviewer\n")
@@ -204,6 +206,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 }
 
 func TestJudgmentRoleStatusRegistration(t *testing.T) {
+	t.Parallel()
 	want := []judgmentRoleStatus{judgmentRoleAdmitted, judgmentRoleOff, judgmentRoleUnbound}
 	if !slices.Equal(AllJudgmentRoleStatuses, want) {
 		t.Fatalf("statuses = %v, want %v", AllJudgmentRoleStatuses, want)

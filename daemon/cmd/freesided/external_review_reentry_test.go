@@ -196,6 +196,7 @@ func assertNoExternalReview(t *testing.T, st *store.Store, item domain.Attention
 // and concludes the item's watches. Two findings on one head start one cycle,
 // and a later pass starts no second one (issue #524, decision 5).
 func TestActiveResourceStartsExternalReviewCycle(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	item := reentryReadyItem(t, st, "run-external-start")
 	armActiveTestSchedules(t, st, item)
@@ -219,6 +220,7 @@ func TestActiveResourceStartsExternalReviewCycle(t *testing.T) {
 // watches armed, seals nothing, queues nothing, and costs no write: a second
 // pass over the same state leaves the client-visible revision alone.
 func TestActiveResourceExternalReviewStartsNothing(t *testing.T) {
+	t.Parallel()
 	before := activeResourceTestTime.Add(-time.Hour)
 	otherHead := strings.Repeat("e", 40)
 	for _, tc := range []struct {
@@ -324,6 +326,7 @@ func TestActiveResourceExternalReviewStartsNothing(t *testing.T) {
 // was unlisted starts a cycle on the first pass after the owner lists them,
 // though the forge then answers "not modified".
 func TestActiveResourceExternalReviewStartsAfterListing(t *testing.T) {
+	t.Parallel()
 	st := schedTestStore(t)
 	item := reentryReadyItem(t, st, "run-external-listed")
 	armActiveTestSchedules(t, st, item)
@@ -352,6 +355,7 @@ func TestActiveResourceExternalReviewStartsAfterListing(t *testing.T) {
 // is still open and its watches armed, so only the pull request's own state
 // keeps a cycle from starting on a head that already merged.
 func TestActiveResourceExternalReviewNeedsAnOpenPull(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := reentryReadyItem(t, st, "run-external-merged")
@@ -404,6 +408,7 @@ func TestActiveResourceExternalReviewNeedsAnOpenPull(t *testing.T) {
 // rolls back with the authority, the pass's pull fact is committed, the
 // failure is collected, and the next pass starts the cycle.
 func TestActiveResourceExternalReviewStartFailureIsolated(t *testing.T) {
+	t.Parallel()
 	// A store at a path the test can also reach through a second connection.
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	st := storetest.Open(t, dbPath, store.Options{
@@ -451,6 +456,7 @@ func TestActiveResourceExternalReviewStartFailureIsolated(t *testing.T) {
 // the writer agree and the ready item is left as it was. The control case
 // proves the same fixture starts a cycle when neither holds.
 func TestExternalReviewReentryRefusesEndedWork(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		arrange func(t *testing.T, st *store.Store, runID domain.RunID)
@@ -571,6 +577,7 @@ func TestExternalReviewReentryRefusesEndedWork(t *testing.T) {
 // the reviewer off the trust profile afterward neither hides nor breaks it
 // (#2350).
 func TestTaskTimelineShowsExternalReviewReentry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
 	st := storetest.Open(t, path, store.Options{

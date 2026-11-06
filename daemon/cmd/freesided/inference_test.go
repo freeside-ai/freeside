@@ -51,6 +51,7 @@ func pinAnotherJudgmentCLI(t *testing.T, cfg *judgmentConfig, root string) {
 }
 
 func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
+	t.Parallel()
 	// With no prompt file the publication author is off: the role source says
 	// so before it reads a line, both sites return their fail-safe with
 	// nothing blocking, and the runtime carries no driver.
@@ -134,6 +135,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 // The receipt commits to the configuration and to no credential: nothing the
 // judgment flags compose reads one.
 func TestJudgmentBindingAndReceipt(t *testing.T) {
+	t.Parallel()
 	cfg, root := judgmentFixture(t)
 	b, digest, err := composeJudgments(cfg)
 	if err != nil || b.Driver == nil || digest == "" {
@@ -151,6 +153,7 @@ func TestJudgmentBindingAndReceipt(t *testing.T) {
 }
 
 func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"unchanged", "changed CLI", "missing digest", "invalid digest"} {
 		t.Run(change, func(t *testing.T) {
 			cfg, root := judgmentFixture(t)
@@ -190,6 +193,7 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 // flags set the driver is wrapped in the journal, still held to the
 // preflight digest (#1945).
 func TestProductionJudgmentsComposeWithTheFlagsAbsent(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	ownership := filepath.Join(stateDir, "task-judgments")
 	off, owned, err := composeProductionJudgments(stateDir, judgmentConfig{})
@@ -226,6 +230,7 @@ func TestProductionJudgmentsComposeWithTheFlagsAbsent(t *testing.T) {
 }
 
 func TestJudgmentConfigRefusesAPartialPin(t *testing.T) {
+	t.Parallel()
 	cfg, _ := judgmentFixture(t)
 	cfg.CLI.SHA256 = ""
 	if _, _, err := composeJudgments(cfg); err == nil {
@@ -242,6 +247,7 @@ func TestJudgmentConfigRefusesAPartialPin(t *testing.T) {
 // with the fallback it fed (#1964): a command line that still passes either
 // is refused, not silently ignored.
 func TestJudgmentFlags(t *testing.T) {
+	t.Parallel()
 	cfg, _ := judgmentFixture(t)
 	args := []string{"-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256}
 	parse := func(args []string) (judgmentConfig, error) {
@@ -273,6 +279,7 @@ func TestJudgmentFlags(t *testing.T) {
 // does not hold. It reads no host token file and names no model: the removed
 // flags are unknown to it too.
 func TestJudgmentPreflightBindsAndRejectsConfiguration(t *testing.T) {
+	t.Parallel()
 	base, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
 	run := func(extra ...string) (compositionManifest, error) {

@@ -223,6 +223,7 @@ func (e *fakePreflightEnvironment) ProbeDaemon(
 }
 
 func TestEvaluateDaemonConflictProbesLoopbackTwin(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		listen       string
@@ -283,6 +284,7 @@ func TestEvaluateDaemonConflictProbesLoopbackTwin(t *testing.T) {
 }
 
 func TestEvaluateProdExecution(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		env             fakePreflightEnvironment
@@ -344,6 +346,7 @@ func TestEvaluateProdExecution(t *testing.T) {
 }
 
 func TestPreflightManifestGolden(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	var stdout, stderr bytes.Buffer
 	if err := runPreflightCommandWithEnvironment(
@@ -363,6 +366,7 @@ func TestPreflightManifestGolden(t *testing.T) {
 // run: no submission identity, the settings revision, and the App bot
 // identity the registration resolved, recorded rather than compared.
 func TestPreflightLaunchManifestGolden(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	cfg, err := parsePreflightConfig(args, io.Discard)
 	if err != nil {
@@ -515,6 +519,7 @@ func TestProductionPreflightReadsWriterImageRecords(t *testing.T) {
 }
 
 func TestPreflightCoversEnabledShadowReviewConfiguration(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	setupToken := enableShadowReviewFixture(t, &args)
 	var stdout, stderr bytes.Buffer
@@ -539,6 +544,7 @@ func TestPreflightCoversEnabledShadowReviewConfiguration(t *testing.T) {
 }
 
 func TestPreflightRejectsMalformedShadowReviewCredential(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	setupToken := enableShadowReviewFixture(t, &args)
 	if err := os.WriteFile(setupToken, []byte("invalid\ntoken"), 0o600); err != nil {
@@ -562,6 +568,7 @@ func TestPreflightRejectsMalformedShadowReviewCredential(t *testing.T) {
 }
 
 func TestPreflightShadowApprovalPrecedesProtectedAccess(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	enableShadowReviewFixture(t, &args)
 	judgments, _ := judgmentFixture(t)
@@ -699,6 +706,7 @@ func assertNoPostShadowApprovalDatabaseProbes(t *testing.T, inspection databaseI
 }
 
 func TestPreflightRejectsShadowCredentialAsReviewInstructions(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	setupToken := enableShadowReviewFixture(t, &args)
 	for i := range args {
@@ -725,6 +733,7 @@ func TestPreflightRejectsShadowCredentialAsReviewInstructions(t *testing.T) {
 }
 
 func TestPreflightRejectsOversizedComposedAuthorInstructions(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	repo, base := authorPreflightRepository(t, map[string]string{"AGENTS.md": "trusted repository rules\n"})
 	for i := range args {
@@ -795,6 +804,7 @@ func enableShadowReviewFixture(t *testing.T, args *[]string) string {
 // the held manifest before creation. The authorizer's binding behavior is
 // proven in TestProductionRigRuntimeAuthorizerBindsCredentialObserver.
 func TestPreflightCredentialCheckReceivesRigAuthorizer(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	var stdout, stderr bytes.Buffer
 	if err := runPreflightCommandWithEnvironment(
@@ -812,6 +822,7 @@ func TestPreflightCredentialCheckReceivesRigAuthorizer(t *testing.T) {
 }
 
 func TestPreflightFailureFixtures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*[]string, *fakePreflightEnvironment)
@@ -1067,6 +1078,7 @@ func TestProbeImageToolsReturnsTheVersionLine(t *testing.T) {
 }
 
 func TestReportedHarnessBuild(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		cli, line, want string
 		ok              bool
@@ -1106,6 +1118,7 @@ func TestReportedHarnessBuild(t *testing.T) {
 }
 
 func TestPreflightRejectsDirtyDaemonBuildIdentity(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	var stdout bytes.Buffer
 	err := runPreflightCommandWithEnvironment(
@@ -1125,6 +1138,7 @@ func TestPreflightRejectsDirtyDaemonBuildIdentity(t *testing.T) {
 }
 
 func TestPreflightRejectsInvalidBaseBeforeAuthenticatedObservation(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	for i := range args {
 		if args[i] == "-base-sha" {
@@ -1154,6 +1168,7 @@ func TestPreflightRejectsInvalidBaseBeforeAuthenticatedObservation(t *testing.T)
 }
 
 func TestCompositionStatusRegistration(t *testing.T) {
+	t.Parallel()
 	want := []compositionStatus{compositionPassed, compositionFailed, compositionNotRun}
 	if len(AllCompositionStatuses) != len(want) {
 		t.Fatalf("statuses = %v, want %v", AllCompositionStatuses, want)
@@ -1169,6 +1184,7 @@ func TestCompositionStatusRegistration(t *testing.T) {
 }
 
 func TestGitHubRemoteMatchesRepository(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		remote string
 		want   bool
@@ -1197,6 +1213,7 @@ func TestGitHubRemoteMatchesRepository(t *testing.T) {
 // identity, or the identity's agents mount another volume. Without one the
 // check is absent.
 func TestPreflightChecksTheSecondWriterVolume(t *testing.T) {
+	t.Parallel()
 	const second = "claude-auth-second"
 	run := func(t *testing.T, mutate func(*fakePreflightEnvironment), extra ...string) (compositionManifest, *fakePreflightEnvironment, error) {
 		t.Helper()
@@ -1296,6 +1313,7 @@ func TestPreflightChecksTheSecondWriterVolume(t *testing.T) {
 // agent in the tree is refused, and the database inspection fails when the
 // resolved volume is not the configured one or the identity is unknown.
 func TestProductionPreflightResolvesTheAdoptedSecondWriter(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newAuthAdoptFixture(t)
 	f.recordSecondWriter(t, adoptSecondVolume)
@@ -1343,6 +1361,7 @@ func TestProductionPreflightResolvesTheAdoptedSecondWriter(t *testing.T) {
 }
 
 func TestPreflightManifestExcludesCredentialAndProxySecrets(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	args = append(args, "-build-proxy", "http://operator:do-not-print@proxy.example.test")
 	environment.codexError = errors.New("access_token=do-not-print")
@@ -1357,6 +1376,7 @@ func TestPreflightManifestExcludesCredentialAndProxySecrets(t *testing.T) {
 }
 
 func TestPreflightDatabaseFailureDoesNotPassDependentChecks(t *testing.T) {
+	t.Parallel()
 	args, environment := preflightFixture(t)
 	environment.database.OpenError = errors.New("unreadable")
 	var stdout bytes.Buffer
@@ -1475,6 +1495,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 // cannot inspect, which a reseed fixes, from an image that inspects but is
 // stale, which a rebuild fixes (#2309).
 func TestPreflightImageFailureNamesTheFix(t *testing.T) {
+	t.Parallel()
 	const ref = "127.0.0.1:5005/freeside-exporter@sha256:" +
 		"ce4eeb61a8b204a4faf3bdd34ed4c96680846ca64aec2842e4855af6a240b7cc"
 	tests := map[string]struct {

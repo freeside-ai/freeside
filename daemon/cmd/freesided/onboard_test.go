@@ -22,6 +22,7 @@ import (
 )
 
 func TestParseOnboardConfigRefusesLoopbackRegistry(t *testing.T) {
+	t.Parallel()
 	baseArgs := []string{
 		"example/repo",
 		"-db", "/tmp/freeside.db",
@@ -52,6 +53,7 @@ func TestParseOnboardConfigRefusesLoopbackRegistry(t *testing.T) {
 }
 
 func TestParseOnboardConfigBuildEgress(t *testing.T) {
+	t.Parallel()
 	baseArgs := []string{
 		"example/repo",
 		"-db", "/tmp/freeside.db",
@@ -122,6 +124,7 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 }
 
 func TestParseOnboardConfigInstallWait(t *testing.T) {
+	t.Parallel()
 	baseArgs := []string{
 		"example/repo",
 		"-db", "/tmp/freeside.db",
@@ -156,6 +159,7 @@ func TestParseOnboardConfigInstallWait(t *testing.T) {
 }
 
 func TestParseOnboardConfigExternalReviewers(t *testing.T) {
+	t.Parallel()
 	baseArgs := []string{
 		"example/repo",
 		"-db", "/tmp/freeside.db",
@@ -219,6 +223,7 @@ func TestParseOnboardConfigExternalReviewers(t *testing.T) {
 }
 
 func TestParseOnboardConfigProtectedPaths(t *testing.T) {
+	t.Parallel()
 	baseArgs := []string{
 		"example/repo",
 		"-db", "/tmp/freeside.db",
@@ -296,6 +301,7 @@ func TestParseOnboardConfigProtectedPaths(t *testing.T) {
 // the store: the -db parent does not exist, so any store work would fail
 // with a different error.
 func TestOnboardRejectsNonCanonicalProtectedPathsBeforeStoreWork(t *testing.T) {
+	t.Parallel()
 	recipePath := filepath.Join(t.TempDir(), "verify.json")
 	if err := os.WriteFile(
 		recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
@@ -339,6 +345,7 @@ func TestOnboardRejectsNonCanonicalProtectedPathsBeforeStoreWork(t *testing.T) {
 }
 
 func TestOnboardUsage(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"-h"}, {"example/repo", "-h"}, {"-db", "/tmp/freeside.db", "-h"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var output bytes.Buffer
@@ -356,6 +363,7 @@ func TestOnboardUsage(t *testing.T) {
 }
 
 func TestParseOnboardConfigRepositoryPosition(t *testing.T) {
+	t.Parallel()
 	flagArgs := []string{
 		"-db", "/tmp/freeside.db",
 		"-state-dir", "/tmp/freeside-state",
@@ -405,6 +413,7 @@ func TestParseOnboardConfigRepositoryPosition(t *testing.T) {
 }
 
 func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	recipePath := filepath.Join(root, "verify.json")
@@ -451,6 +460,7 @@ func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
 }
 
 func TestOnboardRejectsInvalidCommitPlanBeforeStoreWork(t *testing.T) {
+	t.Parallel()
 	recipePath := filepath.Join(t.TempDir(), "verify.json")
 	if err := os.WriteFile(
 		recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
@@ -490,6 +500,7 @@ func (f installationAuthorityFixtures) InstallationAuthority(
 }
 
 func TestTrustedInstallationChecksEveryLocalRegistration(t *testing.T) {
+	t.Parallel()
 	const repositoryID int64 = 44
 	trusted := func(registrationID, installationID int64) publish.InstallationAuthority {
 		return publish.InstallationAuthority{
@@ -568,6 +579,7 @@ func TestTrustedInstallationChecksEveryLocalRegistration(t *testing.T) {
 }
 
 func TestAttendedImportUsesCurrentActiveTrustProfile(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{

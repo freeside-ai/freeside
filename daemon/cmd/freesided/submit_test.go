@@ -540,6 +540,7 @@ func TestSubmitRequiresTheDefaultManifestToExist(t *testing.T) {
 }
 
 func TestSubmitCommandRejectsCompositionRunOverride(t *testing.T) {
+	t.Parallel()
 	_, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		CompositionPath: "previously-attested.json", RunID: "override",
 	})
@@ -1718,6 +1719,7 @@ func TestSubmitCommandEmptyDependencyDeclarationConverges(t *testing.T) {
 }
 
 func TestValidateWriterStopBudget(t *testing.T) {
+	t.Parallel()
 	// The guard is the run-creation gate for the writer budget: a value at or
 	// above the harness supervision deadline is stopped by supervision before it
 	// elapses, so the run this submission creates would be doomed. flag.Duration

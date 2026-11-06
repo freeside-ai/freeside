@@ -19,6 +19,7 @@ import (
 // it. Naming an identity this run adopts is refused and leaves it enabled,
 // so a forgotten argument cannot retire an adoptable identity.
 func TestAuthAdoptRetiresOnlyTheNamedUnadoptableIdentity(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	f.writeCodexStore(t, "")
 	before := f.snapshot(t).identity(t, "codex-review")
@@ -70,6 +71,7 @@ func TestAuthAdoptRetiresOnlyTheNamedUnadoptableIdentity(t *testing.T) {
 // refused inside the first-enrollment transaction, the one that enables an
 // adopted identity, so it stays disabled and is reported retired.
 func TestAuthAdoptRetiresAnUnadoptableIdentityStoredDisabled(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	f.recordIdentity(t, domain.AuthIdentity{
 		ID: "codex-other", Provider: "openai", AccountBinding: adoptCodexAccount,
@@ -94,6 +96,7 @@ func TestAuthAdoptRetiresAnUnadoptableIdentityStoredDisabled(t *testing.T) {
 // TestRetiredOwnershipFollowsTheNewestAdmission: a task whose newest
 // admission names another identity is no longer the retired identity's.
 func TestRetiredOwnershipFollowsTheNewestAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, taskID := legacyAdmittedTask(t, "flag-era-auth")
 	if owned := legacyOwners(t, st); len(owned) != 1 || len(owned["flag-era-auth"]) != 1 {
@@ -174,6 +177,7 @@ func TestRetiredOwnershipFollowsTheNewestAdmission(t *testing.T) {
 // the identity owns, a rerun records nothing more, and an identity that owns
 // nothing stops nothing.
 func TestStopRetiredTasksRecordsOneStopPerTask(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, taskID := legacyAdmittedTask(t, "flag-era-auth")
 	now := time.Now().UTC()

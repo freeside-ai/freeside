@@ -18,6 +18,7 @@ import (
 )
 
 func TestFakePublicationTerminalReadableWaitsForJanitorCoverage(t *testing.T) {
+	t.Parallel()
 	fatal := errors.New("reconcile failed")
 	tests := []struct {
 		name         string
@@ -44,6 +45,7 @@ func TestFakePublicationTerminalReadableWaitsForJanitorCoverage(t *testing.T) {
 }
 
 func TestFakePublicationCommandConfigDefaults(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o750); err != nil {
@@ -70,6 +72,7 @@ func TestFakePublicationCommandConfigDefaults(t *testing.T) {
 }
 
 func TestFakePublicationCommandConfigRejectsWorkspaceStateOverlap(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	newConfig := func(t *testing.T) fakePublicationCommandConfig {
 		t.Helper()
@@ -128,6 +131,7 @@ func TestFakePublicationCommandConfigRejectsWorkspaceStateOverlap(t *testing.T) 
 }
 
 func TestFakePublicationCommandConfigResolvesSymlinksBeforeContainment(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o750); err != nil {
@@ -151,6 +155,7 @@ func TestFakePublicationCommandConfigResolvesSymlinksBeforeContainment(t *testin
 }
 
 func TestPrepareFakePublicationConfigUsesDurablePathsBeforeResolvingAliases(t *testing.T) {
+	t.Parallel()
 	for _, dispatched := range []bool{false, true} {
 		t.Run(map[bool]string{false: "pending", true: "completed"}[dispatched], func(t *testing.T) {
 			root := t.TempDir()
@@ -234,6 +239,7 @@ func TestPrepareFakePublicationConfigUsesDurablePathsBeforeResolvingAliases(t *t
 }
 
 func TestPrepareFakePublicationConfigValidatesAmbientRecipeForNewRun(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o750); err != nil {
@@ -268,6 +274,7 @@ func TestPrepareFakePublicationConfigValidatesAmbientRecipeForNewRun(t *testing.
 }
 
 func TestExistingFakePublicationResultReturnsDurableTerminalItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	attention := signet.NewService(st)
@@ -308,6 +315,7 @@ func TestExistingFakePublicationResultReturnsDurableTerminalItem(t *testing.T) {
 }
 
 func TestFakePublicationCommandConfigRequiresAttendedInputs(t *testing.T) {
+	t.Parallel()
 	var cfg fakePublicationCommandConfig
 	if err := cfg.withDefaultsAndValidate(); err == nil {
 		t.Fatal("empty config succeeded")

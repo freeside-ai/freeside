@@ -14,6 +14,7 @@ import (
 )
 
 func TestOnboardRecoveryReturnsFreshNativeInstallationRequest(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	stateDir, credentialsDir := filepath.Join(root, "state"), filepath.Join(root, "credentials")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
