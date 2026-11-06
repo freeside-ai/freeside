@@ -1752,39 +1752,60 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(await runCalls.count == 1)
     }
 
-    // The heartbeat loop's long poll. Each test sets an hour-long wait bound
-    // and refresh interval, so a step that wrongly waited on either hits the
-    // time limit instead of passing slowly.
+    // The heartbeat loop's long poll. Each test drives the loop's waits with
+    // a manual clock and awaits every wait the loop asks for, asserting its
+    // deadline before moving the clock. A step that waited on the wrong bound
+    // fails an assertion, and a loaded main actor slows these tests without
+    // timing them out (#2564). The clock starts at zero, so a deadline is the
+    // wait's length from the long poll's start. A test that holds a poll
+    // sets the mock's own long-poll bound to an hour of real time, so only
+    // the loop's wait limit ends it.
+    //
+    // They carry no time limit. Every wait is asserted rather than timed,
+    // and a full app run starves the main actor long enough that a
+    // one-minute limit failed tests that were still making progress. A
+    // true deadlock here hangs the run until its job timeout instead.
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopLongPollsFromTheHighestObservedRevision() async throws {
+    @Test func heartbeatLoopLongPollsFromTheHighestObservedRevision() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
+        let clock = ManualClock()
 
-        let loop = Task { await coordinator.heartbeatLoop(every: .seconds(3600)) }
+        let loop = Task { await coordinator.heartbeatLoop(every: .seconds(3600), clock: clock) }
+        defer { loop.cancel() }
         await server.waitForHeldRevisionRequests(1)
         let cursors = try #require(coordinator.cursors)
-        // The opening round's immediate heartbeat, then the long poll.
+        // The opening round's immediate heartbeat, then the long poll, whose
+        // only wait is its limit.
         #expect(await server.receivedRevisionAfters == [nil, cursors.highestObservedServerRevision])
+        #expect(await clock.sleepRequest(1) == .init(offset: .seconds(35)))
         loop.cancel()
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopBootstrapsOnceWhenTheLongPollReportsAChange() async throws {
+    @Test func heartbeatLoopBootstrapsOnceWhenTheLongPollReportsAChange() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
+        let clock = ManualClock()
         let bootstrapCalls = Counter()
         await server.setAfterRespond { operationID in
             if operationID == "getSyncBootstrap" { await bootstrapCalls.increment() }
         }
 
-        let loop = Task { await coordinator.heartbeatLoop(every: .seconds(3600), changeFloor: .zero) }
+        let loop = Task {
+            await coordinator.heartbeatLoop(every: .seconds(3600), changeFloor: .zero, clock: clock)
+        }
+        defer { loop.cancel() }
         await server.waitForHeldRevisionRequests(1)
         let start = try #require(coordinator.cursors).lastFullSnapshotRevision
         #expect(await bootstrapCalls.count == 1)
+        #expect(await clock.sleepRequest(1) == .init(offset: .seconds(35)))
 
         await server.advance(itemID: "item-spec_approval")
+        // The change ends the poll, and the zero floor is already due.
+        try #require(await clock.sleepRequest(2) == .init(offset: .zero))
         await server.waitForHeldRevisionRequests(1)
 
         // The gap took the ordinary path: one immediate heartbeat saw it and
@@ -1797,12 +1818,14 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func manualRefreshDuringALongPollDoesNotJoinIt() async throws {
+    @Test func manualRefreshDuringALongPollDoesNotJoinIt() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
+        let clock = ManualClock()
 
-        let loop = Task { await coordinator.heartbeatLoop(every: .seconds(3600)) }
+        let loop = Task { await coordinator.heartbeatLoop(every: .seconds(3600), clock: clock) }
+        defer { loop.cancel() }
         await server.waitForHeldRevisionRequests(1)
         await coordinator.refresh()
 
@@ -1812,36 +1835,47 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await loop.value
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopHoldsAChangeToTheFloor() async throws {
+    @Test func heartbeatLoopHoldsAChangeToTheFloor() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
-        let arrivals = InstantLog()
+        let clock = ManualClock()
+        let calls = Counter()
         let nextRound = AsyncGate()
         await server.setBeforeRespond { operationID in
             guard operationID == "getSyncRevision" else { return }
-            if await arrivals.record() == 3 { await nextRound.open() }
+            if await calls.incrementAndGet() == 3 { await nextRound.open() }
         }
 
-        let floor = Duration.milliseconds(300)
-        let loop = Task { await coordinator.heartbeatLoop(every: .seconds(3600), changeFloor: floor) }
+        let floor = Duration.seconds(1)
+        let loop = Task {
+            await coordinator.heartbeatLoop(every: .seconds(3600), changeFloor: floor, clock: clock)
+        }
+        defer { loop.cancel() }
         await server.waitForHeldRevisionRequests(1)
+        #expect(await clock.sleepRequest(1) == .init(offset: .seconds(35)))
+        // The change lands partway into the floor, which runs from the long
+        // poll's start, not from the change.
+        clock.advance(by: .milliseconds(400))
         await server.advance(itemID: "item-spec_approval")
+        let held = await clock.sleepRequest(2)
+        try #require(held == .init(offset: floor))
+        // No round starts while the floor holds: the immediate heartbeat and
+        // the poll are still the only revision reads.
+        #expect(await calls.count == 2)
+
+        clock.advance(to: held)
+        // Arrival 3 is the round the change started.
         await nextRound.wait()
         loop.cancel()
         await loop.value
-
-        // Arrival 3 is the round the change started. The floor runs from the
-        // long poll's start, which follows arrival 1 (the previous round), so
-        // without the floor this gap would be milliseconds.
-        let instants = await arrivals.instants
-        #expect(instants[2] - instants[0] >= floor)
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopAbandonsALongPollPastItsLimit() async {
+    @Test func heartbeatLoopAbandonsALongPollPastItsLimit() async throws {
         let server = MockServer()
         await server.setRevisionWaitBound(.seconds(3600))
         let coordinator = makeCoordinator(server: server)
+        let clock = ManualClock()
         let calls = Counter()
         let secondLongPoll = AsyncGate()
         await server.setBeforeRespond { operationID in
@@ -1850,10 +1884,22 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         }
 
         // A daemon that never answers stands in for a dead connection: the
-        // loop gives up on the poll, runs a round, and polls again.
+        // loop gives up on the poll at its limit, waits out the interval from
+        // the poll's start as for any unchanged answer, runs a round, and
+        // polls again.
+        let interval = Duration.seconds(3600)
+        let waitLimit = Duration.seconds(35)
         let loop = Task {
-            await coordinator.heartbeatLoop(every: .milliseconds(10), waitLimit: .milliseconds(50))
+            await coordinator.heartbeatLoop(every: interval, waitLimit: waitLimit, clock: clock)
         }
+        defer { loop.cancel() }
+        await server.waitForHeldRevisionRequests(1)
+        let limit = await clock.sleepRequest(1)
+        try #require(limit == .init(offset: waitLimit))
+        clock.advance(to: limit)
+        let backoff = await clock.sleepRequest(2)
+        try #require(backoff == .init(offset: interval))
+        clock.advance(to: backoff)
         await secondLongPoll.wait()
         loop.cancel()
         await loop.value
@@ -1862,14 +1908,15 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(await server.receivedRevisionAfters.prefix(4) == [nil, after, nil, after])
     }
 
-    @Test(.timeLimit(.minutes(1))) func heartbeatLoopBacksOffAfterAFailedLongPoll() async {
+    @Test func heartbeatLoopBacksOffAfterAFailedLongPoll() async throws {
         let server = MockServer()
         let coordinator = makeCoordinator(server: server)
-        let arrivals = InstantLog()
+        let clock = ManualClock()
+        let calls = Counter()
         let nextRound = AsyncGate()
         await server.setBeforeRespond { operationID in
             guard operationID == "getSyncRevision" else { return }
-            switch await arrivals.record() {
+            switch await calls.incrementAndGet() {
             case 2:
                 // The first long poll fails in transport, as a dropped
                 // connection would.
@@ -1881,17 +1928,20 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
             }
         }
 
-        let interval = Duration.milliseconds(200)
-        let loop = Task { await coordinator.heartbeatLoop(every: interval) }
+        let interval = Duration.seconds(3600)
+        let loop = Task { await coordinator.heartbeatLoop(every: interval, clock: clock) }
+        defer { loop.cancel() }
+        // The failure ends the poll before its limit, so the loop backs off
+        // by the interval from the poll's start.
+        #expect(await clock.sleepRequest(1) == .init(offset: .seconds(35)))
+        let backoff = await clock.sleepRequest(2)
+        try #require(backoff == .init(offset: interval))
+        #expect(await calls.count == 2)
+
+        clock.advance(to: backoff)
         await nextRound.wait()
         loop.cancel()
         await loop.value
-
-        // The interval runs from the long poll's start, which follows arrival
-        // 1 (the previous round), so without the backoff this gap would be
-        // milliseconds.
-        let instants = await arrivals.instants
-        #expect(instants[2] - instants[0] >= interval)
     }
 
     @Test func refreshAfterCommitNeverJoinsARoundBegunBeforeTheCall() async throws {
@@ -2121,14 +2171,3 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
 }
 
 private struct MockOutage: Error {}
-
-/// The instants at which a hooked operation arrived, in order.
-private actor InstantLog {
-    private(set) var instants: [ContinuousClock.Instant] = []
-
-    /// Records now and returns the 1-based arrival number.
-    func record() -> Int {
-        instants.append(ContinuousClock.now)
-        return instants.count
-    }
-}

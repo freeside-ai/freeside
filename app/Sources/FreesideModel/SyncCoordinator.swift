@@ -494,8 +494,14 @@ public final class SyncCoordinator {
     /// URLSession's 60-second timeout. `changeFloor` is the least time from a
     /// long poll's start to the round its change starts, so a burst of
     /// daemon commits costs one round, not one per commit.
+    ///
+    /// `clock` times the interval, the wait limit, and the floor. It is a
+    /// test seam: the app's callers pass none and wait on `ContinuousClock`,
+    /// while a test drives a manual clock and asserts each wait it asks for,
+    /// so a loaded main actor slows those tests but cannot time them out.
     public func heartbeatLoop(
-        every interval: Duration, waitLimit: Duration = .seconds(35), changeFloor: Duration = .seconds(1)
+        every interval: Duration, waitLimit: Duration = .seconds(35), changeFloor: Duration = .seconds(1),
+        clock: some Clock<Duration> = ContinuousClock()
     ) async {
         while !Task.isCancelled {
             // Periodic, manual, foreground, and reachability refreshes share
@@ -506,9 +512,9 @@ public final class SyncCoordinator {
             if store.freshness == .fresh, let cursors {
                 await awaitRevisionChange(
                     after: cursors.highestObservedServerRevision, epoch: cursors.syncEpoch,
-                    limit: waitLimit, changeFloor: changeFloor, unchangedFloor: interval)
+                    limit: waitLimit, changeFloor: changeFloor, unchangedFloor: interval, clock: clock)
             } else {
-                try? await Task.sleep(for: interval)
+                try? await clock.sleep(for: interval)
             }
         }
     }
@@ -523,9 +529,9 @@ public final class SyncCoordinator {
     /// cut-off, or unchanged answer that came sooner (a transport failure, or
     /// a daemon too old to wait) is held to `unchangedFloor` so it cannot spin.
     private func awaitRevisionChange(
-        after: Int64, epoch: String, limit: Duration, changeFloor: Duration, unchangedFloor: Duration
+        after: Int64, epoch: String, limit: Duration, changeFloor: Duration, unchangedFloor: Duration,
+        clock: some Clock<Duration>
     ) async {
-        let clock = ContinuousClock()
         let start = clock.now
         let client = store.client
         let changed = await withTaskGroup(of: Bool.self) { group in
@@ -536,14 +542,14 @@ public final class SyncCoordinator {
                 return server.revision != after || server.sync_epoch != epoch
             }
             group.addTask {
-                try? await Task.sleep(for: limit)
+                try? await clock.sleep(for: limit)
                 return false
             }
             let first = await group.next() ?? false
             group.cancelAll()
             return first
         }
-        try? await Task.sleep(until: start + (changed ? changeFloor : unchangedFloor), clock: clock)
+        try? await Task.sleep(until: start.advanced(by: changed ? changeFloor : unchangedFloor), clock: clock)
     }
 
     func periodicRefresh() async {
