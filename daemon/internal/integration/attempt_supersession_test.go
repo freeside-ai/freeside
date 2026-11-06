@@ -73,6 +73,22 @@ func driveApprovedCampaign(t *testing.T, f *workflowFixture, additionalKeys ...d
 
 func driveCampaignToApproval(t *testing.T, f *workflowFixture, additionalKeys ...domain.PolicyKey) (domain.CampaignID, domain.RunID, signet.AttentionItemSnapshot) {
 	t.Helper()
+	campaignID, specificationRunID := submitCampaignSpecification(t, f, additionalKeys...)
+	reconcileCapabilityRetryPass(t, f, "specification")
+	approval, err := f.signet.GetAttentionItem(context.Background(),
+		domain.ItemID("spec-approval-"+string(attemptSweepRunID)+"-1"))
+	if err != nil {
+		t.Fatalf("get specification approval: %v", err)
+	}
+	return campaignID, specificationRunID, approval
+}
+
+// submitCampaignSpecification seeds the devices and inputs, scripts the
+// specification invocation to return an approvable specification, and
+// submits the specification run without reconciling it. A caller may
+// re-script that invocation before the first pass.
+func submitCampaignSpecification(t *testing.T, f *workflowFixture, additionalKeys ...domain.PolicyKey) (domain.CampaignID, domain.RunID) {
+	t.Helper()
 	ctx := context.Background()
 	f.seedDevices(t)
 	manifest := capabilityRetryManifest(t)
@@ -128,14 +144,7 @@ func driveCampaignToApproval(t *testing.T, f *workflowFixture, additionalKeys ..
 	}); err != nil {
 		t.Fatalf("submit specification run: %v", err)
 	}
-
-	reconcileCapabilityRetryPass(t, f, "specification")
-	approval, err := f.signet.GetAttentionItem(ctx,
-		domain.ItemID("spec-approval-"+string(attemptSweepRunID)+"-1"))
-	if err != nil {
-		t.Fatalf("get specification approval: %v", err)
-	}
-	return campaignID, specificationRunID, approval
+	return campaignID, specificationRunID
 }
 
 // driveRunToFailureCard scripts the run's implementation invocation to fail
