@@ -13,7 +13,9 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
-func countedCommitGit(t *testing.T) (string, func(int, int)) {
+// loggedGit returns a git wrapper that logs each invocation's arguments, and
+// a function returning one line per invocation so far.
+func loggedGit(t *testing.T) (string, func() []string) {
 	t.Helper()
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -25,14 +27,23 @@ func countedCommitGit(t *testing.T) (string, func(int, int)) {
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexec %s \"$@\"\n", quote(log), quote(realGit))
 	execfixture.Write(t, script, []byte(body), 0o700)
-	return script, func(trees, blobs int) {
+	return script, func() []string {
 		t.Helper()
 		data, err := os.ReadFile(log) //nolint:gosec // G304: test-owned invocation log in t.TempDir.
 		if err != nil {
 			t.Fatal(err)
 		}
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+}
+
+func countedCommitGit(t *testing.T) (string, func(int, int)) {
+	t.Helper()
+	script, calls := loggedGit(t)
+	return script, func(trees, blobs int) {
+		t.Helper()
 		counts := map[string]int{}
-		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		for _, line := range calls() {
 			args := strings.Fields(line)
 			command := ""
 			for i, arg := range args {
