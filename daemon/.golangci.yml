@@ -21,12 +21,19 @@ linters:
     - gosec # security static checks for a credential-broker daemon
     - misspell # free, deterministic spelling fixes in comments/strings
     - nolintlint # keep //nolint directives specific and explained
+    - paralleltest # top-level tests run in parallel unless they say why not
   settings:
     nolintlint:
       require-explanation: true
       require-specific: true
     exhaustive:
       default-signifies-exhaustive: true
+    # Only top-level tests are checked: their serial phase sets a package's
+    # wall time, while a serial subtest table inside a parallel test does
+    # not. tparallel stays off because it flags only mixed use, never a
+    # fully serial test. devlog/2026-11-05-2003-parallel-test-lint.md
+    paralleltest:
+      ignore-missing-subtests: true
     # A production store open has to load or create the topic key first
     # (cmd/freesided/topic_key.go), so store.Open is forbidden outside the
     # files listed under exclusions. analyze-types matches the
@@ -54,6 +61,67 @@ linters:
       - path: (^cmd/freeside-signet-dev/main\.go|^internal/store/storetest/storetest\.go|^internal/topicstore/topicstore\.go|^internal/store/[^/]+\.go|_test\.go)$
         linters:
           - forbidigo
+      # Packages whose top-level tests still lack t.Parallel(). This list
+      # only shrinks: deleting a package turns the paralleltest ratchet on
+      # for it, and a new package is never added. A test that must stay
+      # serial carries `//nolint:paralleltest // Serial: <reason>` on the
+      # line above its func; a test that calls t.Setenv is not flagged.
+      # Each line ends in an escaped line break, so YAML joins the lines
+      # with nothing between them.
+      - path: "^(?:\
+          cmd/freeside-export\
+          |cmd/freeside-image-build\
+          |cmd/freeside-project-image\
+          |cmd/freeside-signet-dev\
+          |cmd/freesided\
+          |internal/advisory\
+          |internal/agentbaseline\
+          |internal/agenttree\
+          |internal/atomicfile\
+          |internal/claudeinference\
+          |internal/contentaddr\
+          |internal/daemonlock\
+          |internal/diffscope\
+          |internal/doclayout\
+          |internal/domain\
+          |internal/engine\
+          |internal/exec\
+          |internal/exec/claude\
+          |internal/exec/fake\
+          |internal/exec/stage\
+          |internal/export\
+          |internal/fakepublication\
+          |internal/gitrun\
+          |internal/golden\
+          |internal/importer\
+          |internal/inference\
+          |internal/inference/fake\
+          |internal/intake\
+          |internal/integration\
+          |internal/observe\
+          |internal/observe/comprehension\
+          |internal/observe/observedb\
+          |internal/operations\
+          |internal/pathfold\
+          |internal/procbound\
+          |internal/projectimage\
+          |internal/publicationtext\
+          |internal/publish\
+          |internal/repotemplate\
+          |internal/scheduler\
+          |internal/seedfixture\
+          |internal/signet\
+          |internal/specify\
+          |internal/specify/fake\
+          |internal/store\
+          |internal/strictjson\
+          |internal/topicstore\
+          |internal/verify\
+          |internal/ward\
+          |internal/wardstore\
+          )/[^/]+_test[.]go$"
+        linters:
+          - paralleltest
 
 formatters:
   # Deterministic formatting as law removes an entire class of review
