@@ -884,7 +884,7 @@ func TestEvaluateRebuildPinsOnceAcrossBothCommitsAndClosesItsReader(t *testing.T
 	if err != nil || !decision.Needed || decision.Refusal != "" || decision.Delta.Changed != 1 {
 		t.Fatalf("decision = %+v, %v; want one admitted dependency", decision, err)
 	}
-	check(14, 10)
+	check(14, 1)
 	if _, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, strings.Repeat("0", 40), domain.ResolvedPolicy{}, nil); !errors.Is(err, verify.ErrGitPlumbing) {
 		t.Fatalf("missing commit = %v, want plumbing fault", err)
 	}

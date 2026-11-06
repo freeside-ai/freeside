@@ -56,6 +56,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	defer g.close()
 	// Enforce both bindings first: everything after this reads the
 	// candidate and the base by these exact SHAs, so an unheld head or
 	// a base that is not the named commit fails closed before any

@@ -20,6 +20,9 @@ type CommitReader struct {
 
 // OpenCommitReader resolves the checkout's git directory and requires SHA-1
 // once for the group. The caller owns proving the checkout's repository identity.
+// ctx bounds the reader's life as well as the open: the reader's one batch
+// object process runs under it, so every read must finish before ctx ends,
+// and Close stops the process.
 func OpenCommitReader(ctx context.Context, gitPath, checkoutDir string) (*CommitReader, error) {
 	scratch, err := os.MkdirTemp("", "freeside-commit-read-*")
 	if err != nil {
@@ -33,9 +36,10 @@ func OpenCommitReader(ctx context.Context, gitPath, checkoutDir string) (*Commit
 	return &CommitReader{runner: runner, scratch: scratch}, nil
 }
 
-// Close removes the group's private scratch directory, best effort. Reads after
-// Close fail because git's working directory no longer exists.
+// Close stops the group's object reader and removes its private scratch
+// directory, best effort. Reads after Close fail.
 func (r *CommitReader) Close() {
+	r.runner.close()
 	_ = os.RemoveAll(r.scratch) // Private scratch is best-effort after all handles close.
 }
 
@@ -94,7 +98,11 @@ func ReadFileAtCommit(
 
 // ReadFile has ReadFileAtCommit's content, presence, and error contract, using
 // the repository resolved at open even if the checkout path is later repointed.
-// After open it runs only ls-tree and cat-file, validating each commit name.
+// After open it runs one ls-tree per read and reads blobs through the group's
+// one batch object process, validating each commit name. A path whose entry
+// names an object other than a blob of its listed size fails with
+// ErrMalformedTree; the group's later reads may then fail, so a caller
+// stops at that error.
 func (r *CommitReader) ReadFile(ctx context.Context, commitSHA, path string, max int64) ([]byte, bool, error) {
 	if !pathfold.ValidSHA1Hex(commitSHA) {
 		return nil, false, fmt.Errorf("commit %q: %w", commitSHA, ErrInvalidOptions)
