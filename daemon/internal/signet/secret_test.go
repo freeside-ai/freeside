@@ -18,6 +18,7 @@ const secretValue = "tk_SECRETSECRETSECRETSECRET"
 // bypass Stringer), fmt.Stringer, fmt.GoStringer, JSON and text
 // marshalling — and asserts the value never appears.
 func TestSecretRendersRedactedEverywhere(t *testing.T) {
+	t.Parallel()
 	s := signet.Secret(secretValue)
 
 	for _, verb := range []string{"%s", "%q", "%v", "%+v", "%#v", "%x", "%X", "%d"} {
@@ -63,6 +64,7 @@ func TestSecretRendersRedactedEverywhere(t *testing.T) {
 // the redaction boundary: decoding a configuration value into a Secret
 // and revealing it at a use site.
 func TestSecretDecodesAndReveals(t *testing.T) {
+	t.Parallel()
 	var got struct {
 		Token signet.Secret `json:"token"`
 	}

@@ -11,6 +11,7 @@ import (
 // recognized here and nowhere wider: any other list must keep reading as a
 // different item.
 func TestPublicationHoldDecision(t *testing.T) {
+	t.Parallel()
 	reference := &domain.PRReference{Repo: "owner/repo", Number: 450}
 	for _, tc := range []struct {
 		name      string

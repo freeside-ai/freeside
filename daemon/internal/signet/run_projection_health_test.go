@@ -90,6 +90,7 @@ func (f corpusFixture) seedOpenRunProjectionHealthItem(t *testing.T, runID domai
 // gate a real observation does, and it rides out on the bootstrap snapshot the
 // operator sees.
 func TestRunProjectionHealthMintedOnExclusion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	damaged := domain.RunID("run-damaged")
@@ -150,6 +151,7 @@ func TestRunProjectionHealthMintedOnExclusion(t *testing.T) {
 // one item with no item_version churn: the open-item pre-check skips the mint
 // once the item exists.
 func TestRunProjectionHealthIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	damaged := domain.RunID("run-damaged")
@@ -178,6 +180,7 @@ func TestRunProjectionHealthIdempotent(t *testing.T) {
 // authority wins over the legitimately lagging observation row. Serving the
 // run also proves the item's binding passes authenticateRunObservation.
 func TestRunProjectionHealthResolvesOnRepair(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)
@@ -218,6 +221,7 @@ func TestRunProjectionHealthResolvesOnRepair(t *testing.T) {
 // transition, so PutAttentionItem rejects it, yet the read still serves the
 // healthy run and leaves the existing item untouched.
 func TestRunProjectionHealthWriteFailureDoesNotFailRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))

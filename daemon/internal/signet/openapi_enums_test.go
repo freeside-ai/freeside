@@ -15,6 +15,7 @@ import (
 // vocabulary change must update the wire contract and regenerated client in
 // the same unit.
 func TestOpenAPIEnumsMatchDomain(t *testing.T) {
+	t.Parallel()
 	body, err := os.ReadFile("../../../api/openapi.yaml")
 	if err != nil {
 		t.Fatal(err)

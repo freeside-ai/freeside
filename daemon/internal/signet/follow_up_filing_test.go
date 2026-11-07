@@ -151,6 +151,7 @@ func newFilingFixture(t *testing.T) filingFixture {
 // and supersedes null, matched to the item's version tuple, and carries no
 // subject handle or policy identity on the wire.
 func TestEffectProposalFactsServeTheFilingArm(t *testing.T) {
+	t.Parallel()
 	f := newFilingFixture(t)
 	snapshot, err := f.service.GetAttentionItem(context.Background(), f.item.ID)
 	if err != nil {
@@ -196,6 +197,7 @@ func TestEffectProposalFactsServeTheFilingArm(t *testing.T) {
 // refuses a filing instance: a filing binds no merge, so it must never take
 // the card whose approval binds one.
 func TestFilingInstanceOpensNoClosureCard(t *testing.T) {
+	t.Parallel()
 	f := newFilingFixture(t)
 	merge := domain.ProspectiveMerge{
 		PublicationIdentity: testDigest("b"), CandidateHeadSHA: "head-aaa", BaseRef: "main", BaseSHA: "base-000",
@@ -210,6 +212,7 @@ func TestFilingInstanceOpensNoClosureCard(t *testing.T) {
 // daemon text for its reason, the three decisions a filing takes, the
 // proposal's evidence carrier, and no head or prospective merge.
 func TestOpenFollowUpFilingItemOpensTheFilingCard(t *testing.T) {
+	t.Parallel()
 	f := newFilingFixture(t)
 	ctx := context.Background()
 	item := f.item
@@ -249,6 +252,7 @@ func TestOpenFollowUpFilingItemOpensTheFilingCard(t *testing.T) {
 // no second card: it returns the first item unchanged while that item is open,
 // and still returns it, decided, after the operator declines.
 func TestOpenFollowUpFilingItemReturnsTheItemItFinds(t *testing.T) {
+	t.Parallel()
 	f := newFilingFixture(t)
 	ctx := context.Background()
 	reopen := func() domain.AttentionItem {
@@ -297,6 +301,7 @@ func TestOpenFollowUpFilingItemReturnsTheItemItFinds(t *testing.T) {
 // TestOpenFollowUpFilingItemRefusesAClosureInstance pins the kind check: a
 // closure instance takes the card that binds a merge, never the filing card.
 func TestOpenFollowUpFilingItemRefusesAClosureInstance(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	ctx := context.Background()
 	err := f.store.Write(ctx, func(tx *store.WriteTx) error {

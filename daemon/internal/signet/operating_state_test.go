@@ -84,6 +84,7 @@ func openHealthItems(t *testing.T, s *store.Store) []domain.AttentionItem {
 // transition bound to the command, and the resume-offering notice; an
 // idempotent replay converges with no second effect.
 func TestSubmitStopUnattended(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	health := seedHealthItem(t, f, "health-1")
@@ -158,6 +159,7 @@ func TestSubmitStopUnattended(t *testing.T) {
 // the existing resume-offering notice instead of accumulating a duplicate
 // that would still block after a resume.
 func TestSubmitSecondStopConverges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	first := seedHealthItem(t, f, "health-1")
@@ -183,6 +185,7 @@ func TestSubmitSecondStopConverges(t *testing.T) {
 // resume_unattended on the stopped notice appends the resumed transition and
 // resolves the notice atomically, leaving no open resume-offering item.
 func TestSubmitResumeUnattended(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	health := seedHealthItem(t, f, "health-1")
@@ -229,6 +232,7 @@ func TestSubmitResumeUnattended(t *testing.T) {
 // the same accepting transaction as every command, so the active-device gate
 // (§5.14 test 15) covers them; this pins it for the new outcome kinds.
 func TestSubmitStopRejectsRevokedDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	health := seedHealthItem(t, f, "health-1")

@@ -79,6 +79,7 @@ func doctorScheduler(t *testing.T, f fixture, calls *int) *scheduler.Scheduler {
 }
 
 func TestHTTPRunDoctorSurvivesRestartAndReplayDoesNotRunAgain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := doctorFixture(t)
 	calls := 0
@@ -122,6 +123,7 @@ func TestHTTPRunDoctorSurvivesRestartAndReplayDoesNotRunAgain(t *testing.T) {
 }
 
 func TestRunDoctorWithoutAnArmedJobRejectsTheCommandAtomically(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := doctorFixture(t)
 	before := f.revision(t)
@@ -140,6 +142,7 @@ func TestRunDoctorWithoutAnArmedJobRejectsTheCommandAtomically(t *testing.T) {
 }
 
 func TestHTTPRunDoctorRejectsAnArmedJobWithoutARunningConsumer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := doctorFixture(t)
 	calls := 0

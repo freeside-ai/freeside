@@ -36,6 +36,7 @@ func reviseClosure(t *testing.T, f closureFixture, service *signet.Service) (dom
 // Every production path that writes a proposal evidence carrier also writes
 // the body its digest names, so a checkpoint's artifact closure verifies.
 func TestProposalEvidenceBodyPersistsOnEveryPath(t *testing.T) {
+	t.Parallel()
 	t.Run("closure card", func(t *testing.T) {
 		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 		f.open(t, f.merge)
@@ -83,6 +84,7 @@ func TestProposalEvidenceBodyPersistsOnEveryPath(t *testing.T) {
 // No proposal path silently skips the body: without a blob store the write
 // fails and its transaction leaves no carrier row behind.
 func TestProposalEvidenceWithoutBlobStoreFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("closure card", func(t *testing.T) {
 		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
@@ -127,6 +129,7 @@ func TestProposalEvidenceWithoutBlobStoreFailsClosed(t *testing.T) {
 // is idempotent, and never rewrites a present blob, so a corrupt one still
 // fails verification.
 func TestRestoreProposalEvidenceRebuildsMissingBodies(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 	revised, err := reviseClosure(t, f, f.service)
@@ -209,8 +212,10 @@ func backupClosure(t *testing.T, f fixture, blobs *signet.BlobStore) domain.Back
 // every carrier row's body is in the blob store; a truncated body or a store
 // that predates persisted bodies is unhealthy until the bytes are back.
 func TestProposalEvidenceBackupClosure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("closure card and approve_with_changes revision", func(t *testing.T) {
+		t.Parallel()
 		f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 		if _, err := reviseClosure(t, f, f.service); err != nil {
 			t.Fatal(err)
@@ -220,6 +225,7 @@ func TestProposalEvidenceBackupClosure(t *testing.T) {
 		}
 	})
 	t.Run("closure fallback notice", func(t *testing.T) {
+		t.Parallel()
 		f := newClosureFixture(t, false, domain.ClosureFlagOriginDaemonFallback)
 		f.openNotice(t, f.merge)
 		if got := backupClosure(t, f.fixture, f.blobs); got != domain.BackupHealthHealthy {
@@ -231,6 +237,7 @@ func TestProposalEvidenceBackupClosure(t *testing.T) {
 	// for an unrelated reason (#2012). TestProposalEvidenceBodyPersistsOnEveryPath
 	// covers its body.
 	t.Run("truncated body", func(t *testing.T) {
+		t.Parallel()
 		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 		f.open(t, f.merge)
 		dir := t.TempDir()
@@ -256,6 +263,7 @@ func TestProposalEvidenceBackupClosure(t *testing.T) {
 		}
 	})
 	t.Run("store from before persisted bodies", func(t *testing.T) {
+		t.Parallel()
 		f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 		if _, err := reviseClosure(t, f, f.service); err != nil {
 			t.Fatal(err)

@@ -12,6 +12,7 @@ import (
 )
 
 func TestSignetWireGoldens(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC)
 	acceptedAt := createdAt.Add(time.Minute)
 	expiresAt := createdAt.Add(24 * time.Hour)
@@ -445,6 +446,7 @@ func imagePolicyAdoptionFactsFixture() EffectProposalFactsSnapshot {
 // recommended provenance render distinct payloads, so a client can tell the two
 // trust levels apart (issue acceptance).
 func TestEffectProposalFactsProvenanceGoldensDiffer(t *testing.T) {
+	t.Parallel()
 	verified, err := json.Marshal(effectProposalFactsFixture(
 		domain.ClosureProvenanceVerified, domain.ClosureFlagOriginProposeSite, true, true))
 	if err != nil {

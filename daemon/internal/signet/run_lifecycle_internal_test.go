@@ -11,6 +11,7 @@ import (
 // (#1134): a superseded run is finished whatever its outcome and names its
 // successor; an unsuperseded run follows domain.LifecycleOf.
 func TestRunSnapshotLifecycleAndSupersession(t *testing.T) {
+	t.Parallel()
 	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	successor := domain.RunID("run-2")
 	for _, outcome := range domain.AllRunOutcomes {
@@ -33,6 +34,7 @@ func TestRunSnapshotLifecycleAndSupersession(t *testing.T) {
 // specification run whose production attempt is approved is superseded by that
 // attempt's implementation run, and nothing else is.
 func TestBoundImplementationRun(t *testing.T) {
+	t.Parallel()
 	const specRun, implRun = domain.RunID("run-spec"), domain.RunID("run-impl")
 	approved := domain.ProductionAttempt{
 		SpecificationRunID: specRun, ImplementationRunID: implRun, ApprovedSpecDigest: "sha256:spec",

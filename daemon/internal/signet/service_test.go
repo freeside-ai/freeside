@@ -128,6 +128,7 @@ func newServiceFixture(t *testing.T, seedItem bool) fixture {
 // must not offer that action. Rejection happens before the store Write, so it
 // neither persists the item nor consumes a server revision.
 func TestPutItemRejectsDisallowedAction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	before := f.revision(t)
@@ -159,6 +160,7 @@ func TestPutItemRejectsDisallowedAction(t *testing.T) {
 // already carries one — a trusted copy would forge the metric endpoint and
 // wedge an open item against ever concluding (refute-first finding).
 func TestPutItemRejectsCallerSetDecidedAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	before := f.revision(t)
@@ -184,6 +186,7 @@ func TestPutItemRejectsCallerSetDecidedAt(t *testing.T) {
 }
 
 func TestSubmitContinueUnderPolicyConcludesReviewDiminishingItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	history := domain.ReviewYieldHistory{
@@ -240,6 +243,7 @@ func TestSubmitContinueUnderPolicyConcludesReviewDiminishingItem(t *testing.T) {
 // rejected by signet policy before a Write begins — the cardinality rule
 // lives here, not in domain.
 func TestPutItemActionlessBlocked(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -286,6 +290,7 @@ func TestPutItemActionlessBlocked(t *testing.T) {
 // against the current per-type table before either a record-only or pending
 // action can be accepted/judged, and consume no revision.
 func TestSubmitRegatesDurableItemPolicy(t *testing.T) {
+	t.Parallel()
 	for _, action := range []domain.Action{domain.ActionOpenPR, domain.ActionSnooze} {
 		t.Run(string(action), func(t *testing.T) {
 			ctx := context.Background()
@@ -387,6 +392,7 @@ func marshal(t *testing.T, v any) string {
 // command and the item transition atomically at one revision (§4:
 // "resolutions are transactional and version-checked").
 func TestSubmitAcceptsAndResolves(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	before := f.revision(t)
@@ -428,6 +434,7 @@ func TestSubmitAcceptsAndResolves(t *testing.T) {
 // item; the first resolves it; the second device's conflicting submission is
 // rejected with the canonical outcome, not accepted and not judged stale.
 func TestSubmitCrossDeviceConflict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	f.seedDevice(t, "device-2")
@@ -460,6 +467,7 @@ func TestSubmitCrossDeviceConflict(t *testing.T) {
 // mismatch that binding equality cannot see, and the payload-binding
 // staleness the store detects (translated to the same service error).
 func TestSubmitSupersededVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	advance := func(t *testing.T, f fixture) domain.AttentionItem {
@@ -538,6 +546,7 @@ func TestSubmitSupersededVersion(t *testing.T) {
 // even after the item's lifecycle has concluded; a changed body under the
 // same command_id is a conflict, never a silent overwrite.
 func TestSubmitRetryIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -584,6 +593,7 @@ func TestSubmitRetryIdempotent(t *testing.T) {
 // concluded, with the canonical item, and closure outranks staleness for a
 // stale-bound command too.
 func TestSubmitClosedItemCurrentVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -624,6 +634,7 @@ func TestSubmitClosedItemCurrentVersion(t *testing.T) {
 // (open_pr is navigation) records the command without touching the item, so
 // the item stays open at its version and entity_version.
 func TestSubmitNonConcludingAction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	before := f.revision(t)
@@ -652,6 +663,7 @@ func TestSubmitNonConcludingAction(t *testing.T) {
 // action stays navigation there as on a ready item. Without the reference the
 // item boundary refuses the offer before anything is written.
 func TestHeldItemOffersOpenPROnlyWithItsPullRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	hold := publicationBlockedFixture(t, f.item)
@@ -687,6 +699,7 @@ func TestHeldItemOffersOpenPROnlyWithItsPullRequest(t *testing.T) {
 // transaction, an unknown item wraps the store's not-found, and an action the
 // item never offered passes the store's gate error through.
 func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -939,6 +952,7 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 // TestSubmitDismissingAction: dismiss concludes the item as dismissed, the
 // third outcome class next to resolve and leave-untouched.
 func TestSubmitDismissingAction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -1171,6 +1185,7 @@ func putTestItem(t *testing.T, f fixture, item domain.AttentionItem) error {
 // revise_specification is route-valid but additionally requires a
 // campaign-backed run (#1083), and no other command may carry a route.
 func TestSubmitAnswerRoutePolicy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	kind := domain.BlockedKindOwnerDecision

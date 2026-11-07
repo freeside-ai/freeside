@@ -19,6 +19,7 @@ import (
 // its default collector, the record's write raises the revision the heartbeat
 // reads and stamps the record with it, and the routing policy rides beside it.
 func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
@@ -118,6 +119,7 @@ func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
 // projected marks must not change: both stay, and the client lapses each by
 // its own resets_at.
 func TestBootstrapExhaustedMarksHoldBetweenRevisions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
@@ -192,6 +194,7 @@ func TestBootstrapExhaustedMarksHoldBetweenRevisions(t *testing.T) {
 // heartbeat revision, and the bootstrap at that revision shows the change. A
 // client holding the earlier revision therefore refreshes (plan §5.14).
 func TestHeartbeatRevisionCoversPoolAndEnrollmentWrites(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},

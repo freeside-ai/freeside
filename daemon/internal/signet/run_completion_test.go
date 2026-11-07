@@ -159,6 +159,7 @@ func (f corpusFixture) appendWorkUnitCompleted(t *testing.T, runID domain.RunID,
 // completed and finished, and the summary and timeline carry the completion
 // facts read from the re-gated record, not from the milestone.
 func TestRunObservationCompletedBaseline(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)
@@ -226,6 +227,7 @@ func TestRunObservationCompletedBaseline(t *testing.T) {
 // binding names a different pull request than the run published all fail the
 // read closed.
 func TestRunObservationCompletionForges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := []forgeCase{
 		{"work_unit_completed/missing_completion_record", func(t *testing.T, f corpusFixture) domain.RunID {
@@ -310,6 +312,7 @@ func TestRunObservationCompletionForges(t *testing.T) {
 // forged completion: the run is excluded from Bootstrap and ListRuns, never
 // shown as completed, while the healthy sibling is still served.
 func TestListingReadsExcludeForgedCompletion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -369,6 +372,7 @@ func TestListingReadsExcludeForgedCompletion(t *testing.T) {
 // authorities are checked there: the completion record and the run's own
 // publication invocation.
 func TestAuthenticatedRunConclusionRejectsUnsupportedCompletion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := []forgeCase{
 		{"no_completion_record", func(t *testing.T, f corpusFixture) domain.RunID {
@@ -423,6 +427,7 @@ func TestAuthenticatedRunConclusionRejectsUnsupportedCompletion(t *testing.T) {
 // damaged through a raw connection because the write boundary refuses to
 // produce it.
 func TestListingReadsExcludeUnreconstructableCompletion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))

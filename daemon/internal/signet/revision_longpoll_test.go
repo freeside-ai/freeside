@@ -73,6 +73,7 @@ func currentRevision(t *testing.T, service *signet.Service) signet.ServerRevisio
 }
 
 func TestRevisionAfterAnswersOnCommit(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		start := currentRevision(t, f.service)
@@ -96,6 +97,7 @@ func TestRevisionAfterAnswersOnCommit(t *testing.T) {
 }
 
 func TestRevisionAfterAnswersUnchangedStateAtTheBound(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		start := currentRevision(t, f.service)
@@ -117,6 +119,7 @@ func TestRevisionAfterAnswersUnchangedStateAtTheBound(t *testing.T) {
 // once: a restore can lower the revision, so a cursor above it is the
 // earlier-epoch case and must not be held.
 func TestRevisionAfterAnswersAtOnceWhenTheCursorDiffers(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		start := currentRevision(t, f.service)
@@ -133,6 +136,7 @@ func TestRevisionAfterAnswersAtOnceWhenTheCursorDiffers(t *testing.T) {
 }
 
 func TestRevisionAfterAnswersOnEpochChange(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		start := currentRevision(t, f.service)
@@ -151,6 +155,7 @@ func TestRevisionAfterAnswersOnEpochChange(t *testing.T) {
 }
 
 func TestRevisionAfterReleasesACancelledWaiter(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		start := currentRevision(t, f.service)
@@ -171,6 +176,7 @@ func TestRevisionAfterReleasesACancelledWaiter(t *testing.T) {
 }
 
 func TestRevisionAfterReleasesWaitersOnShutdown(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		start := currentRevision(t, f.service)
@@ -192,6 +198,7 @@ func TestRevisionAfterReleasesWaitersOnShutdown(t *testing.T) {
 // Backup health changes the unattended verdict without a transaction, so it
 // wakes no waiter; the bound's fresh read is what carries it to the client.
 func TestRevisionAfterCarriesAVerdictChangeAtTheBound(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		// The waiter reads health on its own goroutine at the bound.
 		var health atomic.Pointer[domain.BackupHealth]
@@ -220,6 +227,7 @@ func TestRevisionAfterCarriesAVerdictChangeAtTheBound(t *testing.T) {
 }
 
 func TestRevisionLongPollRejectsAMalformedAfter(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	for _, query := range []string{"after=abc", "after=-1", "after=1.5", "after=", "after=1&after=2"} {
@@ -235,6 +243,7 @@ func TestRevisionLongPollRejectsAMalformedAfter(t *testing.T) {
 }
 
 func TestRevisionLongPollAnswersOverHTTPAfterACommit(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		handler := signet.NewHTTPHandler(f.service, testAuthorizer)
@@ -263,6 +272,7 @@ func TestRevisionLongPollAnswersOverHTTPAfterACommit(t *testing.T) {
 // The authenticated wrapper checks the credential before a wait that can last
 // RevisionWaitBound; a device revoked meanwhile must get 401, not state.
 func TestRevisionLongPollRefusesADeviceRevokedDuringTheWait(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := newFixture(t)
 		handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))

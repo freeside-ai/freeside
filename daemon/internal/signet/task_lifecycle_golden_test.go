@@ -10,6 +10,7 @@ import (
 )
 
 func TestStoppedQueuedTaskWireGolden(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	target := domain.TaskCancellationTarget{TaskID: "task-queued", ProjectID: "project", Runs: []domain.TaskCancellationRun{}}
 	digest := target.Digest("epoch")

@@ -17,6 +17,7 @@ import (
 // inbox, and leaves no trace in the store. In particular it records no
 // delivery row, so it moves no item's timing or version.
 func TestSendTestNoticePublishesToTheDevicesTopicAndRecordsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	revision := f.revision(t)
@@ -53,6 +54,7 @@ func TestSendTestNoticePublishesToTheDevicesTopicAndRecordsNothing(t *testing.T)
 // TestSendTestNoticeRefusals: an unknown or revoked device, and a service with
 // no channel, publish nothing.
 func TestSendTestNoticeRefusals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("unknown device", func(t *testing.T) {
@@ -96,6 +98,7 @@ func TestSendTestNoticeRefusals(t *testing.T) {
 // failed test is this error, so it carries a status or a failure class and
 // never the topic, the publish URL, or the publisher token.
 func TestSendTestNoticeFailuresNeverNameTheTopic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	if err := f.service.SendTestNotice(ctx, f.device.ID); err != nil {

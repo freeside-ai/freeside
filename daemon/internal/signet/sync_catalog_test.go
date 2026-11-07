@@ -32,6 +32,7 @@ func catalogSync(t *testing.T, service *signet.Service) (*signet.AgentCatalog, *
 // bootstrap and its revision on the heartbeat, read at each call: the daemon
 // binds the catalog after the service is built, once the tree is loaded.
 func TestSyncServesComposedAgentCatalog(t *testing.T) {
+	t.Parallel()
 	var current *signet.AgentCatalog
 	service := signet.NewService(
 		storetest.Open(t, t.TempDir()+"/signet.db", store.Options{}),
@@ -61,6 +62,7 @@ func TestSyncServesComposedAgentCatalog(t *testing.T) {
 // TestSyncServesNullCatalogWithoutTree is the fake-driver and scenario
 // composition, which load no tree and supply no catalog.
 func TestSyncServesNullCatalogWithoutTree(t *testing.T) {
+	t.Parallel()
 	service := signet.NewService(storetest.Open(t, t.TempDir()+"/signet.db", store.Options{}))
 	if catalog, revision := catalogSync(t, service); catalog != nil || revision != nil {
 		t.Fatalf("catalog = %+v, lineup_revision = %v, want null both", catalog, revision)

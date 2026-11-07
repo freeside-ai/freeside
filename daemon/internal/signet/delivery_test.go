@@ -122,6 +122,7 @@ func seedSubmittedDelivery(t *testing.T, f fixture, deviceID domain.DeviceID, at
 // advances so cached clients invalidate. item_version stays put: timing is
 // not a change to what the operator decides on (#1946).
 func TestRecordDeliveryOpenedAdvancesTiming(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	submittedAt := *f.now
@@ -200,6 +201,7 @@ func assertTimingWrite(t *testing.T, f fixture, event string, wantVersion int, b
 // timing and raise its entity_version, and none of them moves item_version,
 // which engine, store, and signet records compare exactly.
 func TestDeliveryTimingKeepsItemVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("open item", func(t *testing.T) {
@@ -304,6 +306,7 @@ func TestDeliveryTimingKeepsItemVersion(t *testing.T) {
 // returns the recorded row and consumes no revision, mirroring the command
 // path's idempotent-replay posture.
 func TestRecordDeliveryOpenedReplayNoNewEffect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
@@ -332,6 +335,7 @@ func TestRecordDeliveryOpenedReplayNoNewEffect(t *testing.T) {
 // server effect (the §5.14 test 15 posture applied to receipts), and an
 // unknown delivery row is a loud not-found, never an implicit create.
 func TestRecordDeliveryOpenedGatesDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
@@ -358,6 +362,7 @@ func TestRecordDeliveryOpenedGatesDevice(t *testing.T) {
 // revision — the read after a rolled-back replay write sees exactly the
 // recorded state.
 func TestReportDeliveryOpenedSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
@@ -404,6 +409,7 @@ func TestReportDeliveryOpenedSnapshot(t *testing.T) {
 // The item is seeded and opened under an approving policy, then read back after
 // the recipe is unapproved (the store reopened with nothing approved).
 func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := t.TempDir() + "/signet.db"
 	recipe := domain.Digest("sha256:recipe-approved")
@@ -538,6 +544,7 @@ func mustMarshal(t *testing.T, value any) string {
 // instant) writes the delivery row but leaves the item untouched — no
 // entity_version churn, no staleness-invalidation of prepared commands.
 func TestTimingReputSkippedWhenUnchanged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	f.seedDevice(t, "device-2")
@@ -580,6 +587,7 @@ func TestTimingReputSkippedWhenUnchanged(t *testing.T) {
 // decidedAt, which proved computation rather than derivability from durable
 // records. The item field is stamped by the accepting transaction (#171).
 func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
@@ -638,6 +646,7 @@ func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 // read-only hint: topic derived from the device, the link that opens the
 // item in the app, and no item subject or reason text.
 func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	submittedAt := *f.now
@@ -709,6 +718,7 @@ func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 // one topic (the client must be able to subscribe once), and two devices
 // never share one (a topic is a capability URL).
 func TestSubmitDeliveryTopicIsDeterministicPerDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	f.seedDevice(t, "device-2")
@@ -734,6 +744,7 @@ func TestSubmitDeliveryTopicIsDeterministicPerDevice(t *testing.T) {
 // later publishes to for that device, not a duplicated client-facing
 // derivation that can drift.
 func TestPairingTopicMatchesDeliveryTopic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	code, _, err := f.service.MintPairingCode(ctx)
@@ -762,6 +773,7 @@ func TestPairingTopicMatchesDeliveryTopic(t *testing.T) {
 // HTTP client dropping the control route's connection) cannot strand the
 // committed attempt half-advanced or lose the real acceptance instant.
 func TestSubmitDeliverySurvivesCallerCancellation(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	f.ntfy.onPublish = cancel
@@ -789,6 +801,7 @@ func TestSubmitDeliverySurvivesCallerCancellation(t *testing.T) {
 // its transport errors, which is the case this pins: the error keeps the
 // failure's class and drops the rest.
 func TestSubmitDeliveryErrorsNeverNameTheTopic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); err != nil {
@@ -837,6 +850,7 @@ func TestSubmitDeliveryErrorsNeverNameTheTopic(t *testing.T) {
 // 302, and 303 the POST would become a GET whose 200 from a landing or
 // sign-in page reads as the provider accepting a notification it never got.
 func TestSubmitDeliveryFollowsNoRedirect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	var (
@@ -890,6 +904,7 @@ func TestSubmitDeliveryFollowsNoRedirect(t *testing.T) {
 // true), surfaces a typed error carrying the status and never the response
 // body, and the retry is the next attempt number.
 func TestSubmitDeliveryChannelFailureStaysSubmitted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	f.ntfy.status = http.StatusInternalServerError
@@ -937,6 +952,7 @@ func TestSubmitDeliveryChannelFailureStaysSubmitted(t *testing.T) {
 // a concluded item are each refused before any effect — no delivery row, no
 // revision movement, and nothing published.
 func TestSubmitDeliveryFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("unconfigured channel", func(t *testing.T) {

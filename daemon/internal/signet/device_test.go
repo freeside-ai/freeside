@@ -19,6 +19,7 @@ import (
 // recorded snapshot without bumping the server revision (the API's
 // "terminal and idempotent" contract).
 func TestRevokeDeviceTerminalIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	f.seedDevice(t, "device-admin")
@@ -59,6 +60,7 @@ func TestRevokeDeviceTerminalIdempotent(t *testing.T) {
 // violates the domain's revoked-after-paired ordering; it clamps to
 // PairedAt.
 func TestRevokeClampsBackwardsClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	f.seedDevice(t, "device-admin")
@@ -83,6 +85,7 @@ func TestRevokeClampsBackwardsClock(t *testing.T) {
 // device retaliating against the owner's remaining one). The caller's gate
 // runs inside the revoking transaction, like Submit's.
 func TestRevokeRejectsRevokedCaller(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	f.seedDevice(t, "device-2")
@@ -107,6 +110,7 @@ func TestRevokeRejectsRevokedCaller(t *testing.T) {
 }
 
 func TestRevokeUnknownDevice(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	if _, err := f.service.Revoke(context.Background(), f.device.ID, "device-ghost"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Revoke error = %v, want ErrNotFound", err)
@@ -117,6 +121,7 @@ func TestRevokeUnknownDevice(t *testing.T) {
 // prepared while the device was active, but not yet committed, is rejected
 // after revocation, leaving the item and the server revision untouched.
 func TestRevokedDeviceCannotSubmitPreparedCommand(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	prepared := f.command("cmd-prepared", domain.ActionStop)
@@ -141,6 +146,7 @@ func TestRevokedDeviceCannotSubmitPreparedCommand(t *testing.T) {
 // an identity that was never paired is rejected the same way (defense in
 // depth behind the HTTP authorizer).
 func TestSubmitRejectsUnknownDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	command := f.command("cmd-ghost", domain.ActionStop)
@@ -155,6 +161,7 @@ func TestSubmitRejectsUnknownDevice(t *testing.T) {
 // produces no new side effect — the replay branch never writes, so the item
 // and the server revision stay exactly where the original commit left them.
 func TestCommandRetryAfterRevocationNoNewEffect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -212,6 +219,7 @@ func authorize(f fixture, header string) (domain.DeviceID, bool) {
 // TestRequestAuthorizerVerifiesCredential: the granted token authenticates
 // as exactly the device it embeds; revocation stops it.
 func TestRequestAuthorizerVerifiesCredential(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	token, deviceID := pairedDevice(t, f, "Authorized device")
 
@@ -235,6 +243,7 @@ func TestRequestAuthorizerVerifiesCredential(t *testing.T) {
 // input space: every malformed, mismatched, or unverifiable credential is
 // the same bare denial.
 func TestRequestAuthorizerRejectsForgedTokens(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	token, _ := pairedDevice(t, f, "Victim device")
 	parts := strings.Split(token, ".")

@@ -101,7 +101,6 @@ linters:
           |internal/repotemplate\
           |internal/scheduler\
           |internal/seedfixture\
-          |internal/signet\
           |internal/specify\
           |internal/specify/fake\
           |internal/strictjson\

@@ -16,6 +16,7 @@ import (
 )
 
 func TestNewBlobStoreCreatesNestedDurableRoot(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "state", "attachments", "blobs")
 	blobs, err := signet.NewBlobStore(root)
 	if err != nil {
@@ -32,6 +33,7 @@ func TestNewBlobStoreCreatesNestedDurableRoot(t *testing.T) {
 }
 
 func TestBlobStoreOpenContextRejectsCanceledLookup(t *testing.T) {
+	t.Parallel()
 	blobs, err := signet.NewBlobStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +52,7 @@ func TestBlobStoreOpenContextRejectsCanceledLookup(t *testing.T) {
 // test; these cases cover #128's acceptance 1 (verbatim octet-stream behind the
 // device gate) and 2 (the contract 404 for an unknown digest).
 func TestGetAttachmentServesStoredBytes(t *testing.T) {
+	t.Parallel()
 	f := newConversationFixture(t)
 	handler := signet.NewHTTPHandler(f.service, headerDeviceAuthorizer)
 
@@ -104,6 +107,7 @@ func TestGetAttachmentServesStoredBytes(t *testing.T) {
 }
 
 func TestDescribeAttachmentSizesAndSniffsWithoutAStoreFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := newConversationFixture(t)
 	blob := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("p"), 4096)...)
 	digest := domain.Digest("sha256:" + hex.EncodeToString(sha256sum(blob)))

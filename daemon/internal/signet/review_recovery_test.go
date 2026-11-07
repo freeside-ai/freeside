@@ -62,6 +62,7 @@ func seedReviewRecoveryItem(t *testing.T, f fixture) domain.AttentionItem {
 }
 
 func TestSubmitReviewRecoveryIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedReviewRecoveryItem(t, f)

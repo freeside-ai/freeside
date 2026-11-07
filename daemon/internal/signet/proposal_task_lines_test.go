@@ -36,6 +36,7 @@ func (f proposalDecisionFixture) taskLines(t *testing.T) []domain.TaskLine {
 }
 
 func TestProposalStartTaskLines(t *testing.T) {
+	t.Parallel()
 	for _, action := range []domain.Action{domain.ActionStart, domain.ActionStartWithChanges} {
 		t.Run(string(action), func(t *testing.T) {
 			f := newProposalDecisionFixture(t)
@@ -104,6 +105,7 @@ func TestProposalStartTaskLines(t *testing.T) {
 }
 
 func TestProposalStartWithoutTaskLines(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	command := f.proposalCommand("start-no-lines", domain.ActionStart)
 	first, err := f.service.Submit(t.Context(), command)
@@ -146,6 +148,7 @@ func (f proposalDecisionFixture) assertUnwrittenDecision(t *testing.T, command s
 }
 
 func TestProposalTaskLinesStaleDecisionWritesNothing(t *testing.T) {
+	t.Parallel()
 	for _, staleBinding := range []bool{false, true} {
 		t.Run(map[bool]string{false: "entity version", true: "item version"}[staleBinding], func(t *testing.T) {
 			f := newProposalDecisionFixture(t)
@@ -174,6 +177,7 @@ func TestProposalTaskLinesStaleDecisionWritesNothing(t *testing.T) {
 }
 
 func TestDecisionTaskLinesRefusals(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		action domain.Action
@@ -204,6 +208,7 @@ func TestDecisionTaskLinesRefusals(t *testing.T) {
 }
 
 func TestDecisionHTTPTaskLines(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, action string
 		lines        []map[string]string

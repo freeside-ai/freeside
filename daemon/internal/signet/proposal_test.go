@@ -109,6 +109,7 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 }
 
 func TestPutItemRejectsUnboundTaskProposal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newProposalDecisionFixture(t)
 	before := f.revision(t)
@@ -140,6 +141,7 @@ func (f proposalDecisionFixture) proposalCommand(id string, action domain.Action
 }
 
 func TestTaskProposalStartAndDeclineConcludePerInstance(t *testing.T) {
+	t.Parallel()
 	for _, action := range []domain.Action{domain.ActionStart, domain.ActionDecline} {
 		t.Run(string(action), func(t *testing.T) {
 			f := newProposalDecisionFixture(t)
@@ -174,6 +176,7 @@ func TestTaskProposalStartAndDeclineConcludePerInstance(t *testing.T) {
 // already-started card likewise reports no second start (convergence-launch is
 // the reconciler's already-decided path, not a second decision here).
 func TestStartTaskProposalUnattendedReportsStart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	readItem := func(t *testing.T, f proposalDecisionFixture) domain.AttentionItem {
 		t.Helper()
@@ -246,6 +249,7 @@ func TestStartTaskProposalUnattendedReportsStart(t *testing.T) {
 }
 
 func TestTaskProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	command := f.proposalCommand("command-snooze", domain.ActionSnooze)
 	until := (*f.now).Add(time.Hour)
@@ -350,6 +354,7 @@ func TestTaskProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
 }
 
 func TestTaskProposalStartWithChangesBindsExactRevisedDigest(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	revision := signet.TaskProposalRevisionInput{
 		Intent:            domain.TaskProposalIntentImplement,
@@ -396,6 +401,7 @@ func TestTaskProposalStartWithChangesBindsExactRevisedDigest(t *testing.T) {
 }
 
 func TestTaskProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	until := (*f.now).Add(time.Hour)
 	snooze := f.proposalCommand("command-snooze-before-revision", domain.ActionSnooze)
@@ -439,6 +445,7 @@ func TestTaskProposalRevisionRemainsReadableAfterReleasedSnooze(t *testing.T) {
 }
 
 func TestTaskProposalStartWithChangesRejectsNoOpAsRequestError(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	before, err := f.store.ServerState(context.Background())
 	if err != nil {
@@ -477,6 +484,7 @@ func TestTaskProposalStartWithChangesRejectsNoOpAsRequestError(t *testing.T) {
 }
 
 func TestTaskProposalStartWithChangesRejectsDeclaredPathCountMismatch(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	before := f.revision(t)
 	revision := signet.TaskProposalRevisionInput{
@@ -502,6 +510,7 @@ func TestTaskProposalStartWithChangesRejectsDeclaredPathCountMismatch(t *testing
 }
 
 func TestTaskProposalRevisionFactsExposeExactAuthenticatedDiff(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	revision := signet.TaskProposalRevisionInput{
 		Intent: domain.TaskProposalIntentImplement, ExpectedCostUnits: 25,
@@ -528,6 +537,7 @@ func TestTaskProposalRevisionFactsExposeExactAuthenticatedDiff(t *testing.T) {
 }
 
 func TestTaskProposalDecisionUsesStoreResolvedSubject(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	service := signet.NewService(f.store, signet.WithBlobStore(f.blobs), signet.WithClock(func() time.Time { return *f.now }))
 	_, err := service.Submit(context.Background(), f.proposalCommand("command-start", domain.ActionStart))
@@ -537,6 +547,7 @@ func TestTaskProposalDecisionUsesStoreResolvedSubject(t *testing.T) {
 }
 
 func TestTaskProposalFactsAreDigestAndVersionBoundWithoutAuthorityFields(t *testing.T) {
+	t.Parallel()
 	f := newProposalDecisionFixture(t)
 	facts, err := f.service.GetTaskProposalFacts(context.Background(), f.item.ID)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 )
 
 func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
+	t.Parallel()
 	for name, readiness := range map[string]*domain.ReadinessSummary{
 		"degraded": {
 			Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation",
@@ -34,6 +35,7 @@ func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
 }
 
 func TestNormalizeAttentionItemCarriesReadinessDetailAndLegacyNull(t *testing.T) {
+	t.Parallel()
 	recipe := domain.Digest("sha256:recipe")
 	for name, detail := range map[string]*domain.ReadinessDetail{
 		"present": {
@@ -67,6 +69,7 @@ func TestNormalizeAttentionItemCarriesReadinessDetailAndLegacyNull(t *testing.T)
 }
 
 func TestAuthenticateSpecificationDiscussionArtifact(t *testing.T) {
+	t.Parallel()
 	id := domain.ArtifactID("spec-discussion-command-1")
 	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	producer := domain.InvocationID("inv-specify-run-1")
@@ -114,6 +117,7 @@ func TestAuthenticateSpecificationDiscussionArtifact(t *testing.T) {
 }
 
 func TestNormalizeAttentionItemCarriesYieldHistoryWithoutMutation(t *testing.T) {
+	t.Parallel()
 	history := &domain.ReviewYieldHistory{
 		Rounds:          []domain.ReviewYieldRound{{Round: 1, Outcome: domain.ReviewClean}},
 		TerminalOutcome: domain.ReviewClean,
@@ -138,6 +142,7 @@ func TestNormalizeAttentionItemCarriesYieldHistoryWithoutMutation(t *testing.T) 
 }
 
 func TestPublicationAuthorityExclusivityRejectsReadyAndBlocked(t *testing.T) {
+	t.Parallel()
 	err := validatePublicationAuthorityExclusivity("run-1", true, true, false, true)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("validatePublicationAuthorityExclusivity() = %v, want ErrParentKeyMismatch", err)
@@ -151,6 +156,7 @@ func TestPublicationAuthorityExclusivityRejectsReadyAndBlocked(t *testing.T) {
 }
 
 func TestAuthoritativeStatusOverridesLaggingObservation(t *testing.T) {
+	t.Parallel()
 	invocation := domain.InvocationID("invocation-1")
 	observedAt := time.Date(2026, 8, 15, 4, 0, 0, 0, time.UTC)
 	observation := domain.RunObservation{
@@ -178,6 +184,7 @@ func TestAuthoritativeStatusOverridesLaggingObservation(t *testing.T) {
 }
 
 func TestNormalizeAttentionItemNormalizesNestedAdjudicationArraysWithoutMutation(t *testing.T) {
+	t.Parallel()
 	item := domain.AttentionItem{
 		FindingAdjudication: &domain.FindingAdjudicationBinding{
 			Proposals: []domain.FindingAdjudicationProposal{{}},

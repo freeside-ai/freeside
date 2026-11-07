@@ -47,6 +47,7 @@ func (f deliveryFixture) pass(t *testing.T, service *signet.Service) []error {
 // neither does a daemon restarted over the same store, because the delivery
 // rows are the sender's only memory.
 func TestDeliverOwedNotifiesEachDeviceOnce(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 
 	if reported := f.pass(t, f.service); len(reported) != 0 {
@@ -77,6 +78,7 @@ func TestDeliverOwedNotifiesEachDeviceOnce(t *testing.T) {
 // where its tap leads: the generic title, the item's type and nothing of its
 // content, and the freeside:// link the iPhone app parses.
 func TestDeliverOwedPublishesTheGenericHint(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	f.pass(t, f.service)
 
@@ -100,6 +102,7 @@ func TestDeliverOwedPublishesTheGenericHint(t *testing.T) {
 // that is no longer open, to a revoked device, or for an item created before
 // the device paired, and none of those is reported as a failure.
 func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("resolved item", func(t *testing.T) {
@@ -189,6 +192,7 @@ func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
 // for nothing until the snooze ends, so it sends no notification and records
 // no attempt meanwhile.
 func TestDeliverOwedSkipsASnoozedProposal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newProposalDecisionFixture(t)
 	sink := newDeliveryFixture(t)
@@ -235,6 +239,7 @@ func TestDeliverOwedSkipsASnoozedProposal(t *testing.T) {
 // as the next attempt number after 1, 2, 4, 8, then 16 minutes. The sixth
 // failure is the last: nothing more is sent, even once the provider recovers.
 func TestDeliverOwedRetriesAFailedSend(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	f.ntfy.status = http.StatusServiceUnavailable
 
@@ -288,6 +293,7 @@ func TestDeliverOwedRetriesAFailedSend(t *testing.T) {
 // TestDeliverOwedStopsRetryingOnceAccepted: a retry the provider accepts ends
 // the attempts for that item and device.
 func TestDeliverOwedStopsRetryingOnceAccepted(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	f.ntfy.status = http.StatusBadGateway
 	if reported := f.pass(t, f.service); len(reported) != 1 {
@@ -312,6 +318,7 @@ func TestDeliverOwedStopsRetryingOnceAccepted(t *testing.T) {
 // TestDeliverOwedOneFailureDoesNotHoldBackAnother: a send that fails for one
 // device is reported and the pass goes on, so the next device is still told.
 func TestDeliverOwedOneFailureDoesNotHoldBackAnother(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	f.seedDevice(t, "device-2")
 	f.ntfy.status = http.StatusInternalServerError
@@ -347,6 +354,7 @@ func TestDeliverOwedOneFailureDoesNotHoldBackAnother(t *testing.T) {
 // on its second read, which is SubmitDelivery's, after the pass has decided
 // the notification is owed.
 func TestDeliverOwedEndsWithItsContext(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -377,6 +385,7 @@ func TestDeliverOwedEndsWithItsContext(t *testing.T) {
 // logs, so a provider that cannot be reached must be reported without the
 // device's topic or the publish URL (#1924).
 func TestDeliverOwedReportsNoTopic(t *testing.T) {
+	t.Parallel()
 	f := newDeliveryFixture(t)
 	// A rejected first send shows the fake the device's topic, and leaves the
 	// pair owed a retry.
@@ -403,6 +412,7 @@ func TestDeliverOwedReportsNoTopic(t *testing.T) {
 // TestRunDeliveriesWithoutAChannel: a composition with no usable channel has
 // nothing to send, and says so in a way the caller can tell from a failure.
 func TestRunDeliveriesWithoutAChannel(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	for name, service := range map[string]*signet.Service{
 		"no channel":            signet.NewService(f.store),
@@ -425,6 +435,7 @@ func TestRunDeliveriesWithoutAChannel(t *testing.T) {
 // and publishes nothing; the bubble's fake clock makes the ticker
 // deterministic (the timer-dependent-tests convention, daemon/README.md).
 func TestRunDeliveriesTickerCadence(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		st := storetest.Open(t, t.TempDir()+"/signet.db", store.Options{})
 		t.Cleanup(func() {

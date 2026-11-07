@@ -20,6 +20,7 @@ import (
 // bootstrap needs no notification cursor or event history; the canonical
 // store snapshot alone reconstructs every current inbox item.
 func TestBootstrapReconstructsInboxAfterMissedNotifications(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	second := f.item
@@ -84,6 +85,7 @@ func TestBootstrapReconstructsInboxAfterMissedNotifications(t *testing.T) {
 // isolation; this pins that signet reads ServerState and all four collections
 // through that one callback and preserves every row's stamped metadata.
 func TestBootstrapProjectsOneTransactionalSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedSyncResources(t, f)
@@ -322,6 +324,7 @@ func approveAndPersistImplementationRun(t *testing.T, ctx context.Context, f fix
 }
 
 func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRunFixture(t)
 	campaignID, _, run := seedSpecificationCampaign(t, ctx, f, "run-1")
@@ -441,6 +444,7 @@ func seedProductionSubmission(t *testing.T, ctx context.Context, f fixture, run 
 // unsuperseded, and the implementation run is never superseded by the
 // specification run.
 func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRunFixture(t)
 	campaignID, specificationRunID, run := seedSpecificationCampaign(t, ctx, f, "run-1")
@@ -508,6 +512,7 @@ func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
 // over several campaigns, each with an approved attempt and an active
 // implementation run, no run left on the active list is a specification run.
 func TestBoundSpecificationRunsLeaveActiveList(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRunFixture(t)
 	implRunIDs := []domain.RunID{"run-1", "run-2", "run-3"}
@@ -542,6 +547,7 @@ func TestBoundSpecificationRunsLeaveActiveList(t *testing.T) {
 }
 
 func TestRunSummaryAuthenticatesSubmittedReservationBeforeAnAttemptExists(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRunFixture(t)
 	run := domain.Run{
@@ -581,6 +587,7 @@ func TestRunSummaryAuthenticatesSubmittedReservationBeforeAnAttemptExists(t *tes
 // so the projection must report the unobserved outcome and synthesize no
 // milestones, distinct from the pending state a submitted run reports.
 func TestUnobservedLegacyRunProjectsWithoutBackfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRunFixture(t)
 	run := domain.Run{
@@ -624,6 +631,7 @@ func TestUnobservedLegacyRunProjectsWithoutBackfill(t *testing.T) {
 // this pins that the server exposes a fresh epoch over regressed state through
 // the real restore, not through store.NewEpoch.
 func TestRestoreForcesFreshBootstrap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 

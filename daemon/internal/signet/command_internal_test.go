@@ -9,6 +9,7 @@ import (
 )
 
 func TestDecisionMessageRejectsPresentEmptyAlternativeChoices(t *testing.T) {
+	t.Parallel()
 	snoozeUntil := time.Date(2026, 8, 22, 1, 0, 0, 0, time.UTC)
 	revision := &TaskProposalRevisionInput{
 		Intent:            domain.TaskProposalIntentImplement,

@@ -97,6 +97,7 @@ func wireLine(line domain.TaskLine) signet.TaskLine {
 // again. A name the tree cannot select both ways is refused without repeating
 // it, and with no tree bound the change fails closed.
 func TestChangeTaskLineTranslatesAgentNames(t *testing.T) {
+	t.Parallel()
 	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents())
 	result, err := svc.Submit(t.Context(), lineCommand("line-a", id, new("codex-primary")))
 	if err != nil {

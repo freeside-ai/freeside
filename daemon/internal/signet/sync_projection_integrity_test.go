@@ -64,6 +64,7 @@ func (f corpusFixture) seedObservationBindingFailureRun(t *testing.T, runID doma
 // ErrParentKeyMismatch so both remain matchable (#767). The single-run reads
 // return this differentiated failure rather than a false-empty.
 func TestRunObservationIntegrityRaisesTypedSentinel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	runID := domain.RunID("run-contradiction")
@@ -91,6 +92,7 @@ func TestRunObservationIntegrityRaisesTypedSentinel(t *testing.T) {
 // ListRuns instead of failing them, the healthy sibling is still served, and
 // the contradiction is logged durably naming the excluded run.
 func TestListingReadsIsolateDamagedRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -142,6 +144,7 @@ func TestListingReadsIsolateDamagedRun(t *testing.T) {
 // a damaged legacy run returns 200 with the healthy runs, not the
 // undifferentiated 500 that surfaced as a "daemon unreachable" banner.
 func TestHTTPBootstrapExcludesDamagedRunReturns200(t *testing.T) {
+	t.Parallel()
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)
 	f.seedTerminalRun(t, "run-healthy", "inv-healthy", domain.ObservedStatusCompleted, domain.ObservedStatusCompleted)

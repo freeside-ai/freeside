@@ -161,6 +161,7 @@ func (f adoptionFixture) adoptions(t *testing.T) (bool, map[domain.Digest]bool) 
 // daemon text and the three decisions a card takes, and a repeat call
 // returns it rather than opening a second.
 func TestOpenImagePolicyAdoptionItemOpensTheCard(t *testing.T) {
+	t.Parallel()
 	f := newAdoptionFixture(t)
 	item := f.item
 	wantActions := []domain.Action{domain.ActionApprove, domain.ActionDecline, domain.ActionSnooze}
@@ -192,6 +193,7 @@ func TestOpenImagePolicyAdoptionItemOpensTheCard(t *testing.T) {
 // the card's project repository, exact digest, and hosts on the adoption arm,
 // with every other arm null.
 func TestEffectProposalFactsServeTheAdoptionArm(t *testing.T) {
+	t.Parallel()
 	f := newAdoptionFixture(t)
 	facts, err := f.service.GetEffectProposalFacts(context.Background(), f.item.ID)
 	if err != nil {
@@ -234,6 +236,7 @@ func TestEffectProposalFactsServeTheAdoptionArm(t *testing.T) {
 // adoption in the accepting transaction, widens the repository's effective
 // recipe set to the card's digest, and wakes upkeep once after commit.
 func TestApprovingAnAdoptionCardRecordsTheAdoption(t *testing.T) {
+	t.Parallel()
 	f := newAdoptionFixture(t)
 	if found, recipes := f.adoptions(t); found || recipes[adoptionRecipe] {
 		t.Fatal("adoption recorded before the card was decided")
@@ -253,6 +256,7 @@ func TestApprovingAnAdoptionCardRecordsTheAdoption(t *testing.T) {
 // TestDecliningAnAdoptionCardRecordsNothing proves decline ends the card
 // with no adoption and no upkeep wake.
 func TestDecliningAnAdoptionCardRecordsNothing(t *testing.T) {
+	t.Parallel()
 	f := newAdoptionFixture(t)
 	if err := f.submit(domain.ActionDecline); err != nil {
 		t.Fatalf("decline: %v", err)
@@ -270,6 +274,7 @@ func TestDecliningAnAdoptionCardRecordsNothing(t *testing.T) {
 // moved or the admitted image changed: the whole decision rolls back, so the
 // card stays open, nothing is adopted, and upkeep is not woken.
 func TestApprovingAStaleAdoptionCardRecordsNothing(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		stale func(t *testing.T, f adoptionFixture, tx *store.InternalTx) error

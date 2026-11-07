@@ -16,6 +16,7 @@ import (
 )
 
 func TestTaskHistoryOmitsVerificationWithoutProductionBinding(t *testing.T) {
+	t.Parallel()
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)
 	runID := domain.RunID("history-unbound-readiness")
@@ -54,6 +55,7 @@ func TestTaskHistoryOmitsVerificationWithoutProductionBinding(t *testing.T) {
 }
 
 func TestTaskHistoryPublishedReviewAndVerificationResponse(t *testing.T) {
+	t.Parallel()
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)
 	ctx := t.Context()
@@ -146,6 +148,7 @@ func TestTaskHistoryPublishedReviewAndVerificationResponse(t *testing.T) {
 }
 
 func TestTaskHistoryQueuedStopResponse(t *testing.T) {
+	t.Parallel()
 	for _, state := range []domain.TaskCancellationState{domain.TaskCancellationConfirmed, domain.TaskCancellationFailed} {
 		t.Run(string(state), func(t *testing.T) {
 			service, s := newSubmitTaskService(t, nil, domain.DeviceActive)
@@ -182,6 +185,7 @@ func TestTaskHistoryQueuedStopResponse(t *testing.T) {
 }
 
 func TestTaskHistoryActiveStopKeepsLifecycleAndAcknowledgementDistinct(t *testing.T) {
+	t.Parallel()
 	service, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s, "implementation")
 	start := time.Now().UTC()

@@ -16,6 +16,7 @@ import (
 )
 
 func TestTaskTimelineSpecificationOnly(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	implementation := domain.RunID("task-timeline-implementation")
@@ -184,6 +185,7 @@ func TestTaskTimelineSpecificationOnly(t *testing.T) {
 }
 
 func TestTaskTimelineUnknownAndEmptyTask(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	if _, err := f.service.GetTaskTimeline(t.Context(), "missing"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing task error = %v", err)
@@ -213,6 +215,7 @@ func TestTaskTimelineUnknownAndEmptyTask(t *testing.T) {
 // TestTaskTimelineShowsStoredTaskLines: the timeline read reaches the
 // task's stored lines, so a router line shows with its provenance.
 func TestTaskTimelineShowsStoredTaskLines(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	var line domain.TaskLine
@@ -245,6 +248,7 @@ func TestTaskTimelineShowsStoredTaskLines(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsFutureTaskRevision(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	var task domain.Task
@@ -281,6 +285,7 @@ func TestTaskTimelineRejectsFutureTaskRevision(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsMissingRunIndex(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	var task domain.Task
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
@@ -325,6 +330,7 @@ func TestTaskTimelineRejectsMissingRunIndex(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsMissingHistoryRelation(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	campaign, specification, _ := seedSpecificationCampaign(t, ctx, f, "task-missing-history")
@@ -364,6 +370,7 @@ func TestTaskTimelineRejectsMissingHistoryRelation(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsMissingApprovedImplementation(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	campaign, _, run := seedSpecificationCampaign(t, ctx, f, "task-missing-implementation")
@@ -441,6 +448,7 @@ func TestTaskTimelineRejectsMissingApprovedImplementation(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsNonUTCTaskCreation(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	var task domain.Task
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
@@ -478,6 +486,7 @@ func TestTaskTimelineRejectsNonUTCTaskCreation(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsCorruptPRHistoryRows(t *testing.T) {
+	t.Parallel()
 	for name, statement := range map[string]string{
 		"unsupported declaration": `UPDATE work_unit_declarations SET body = json_set(body, '$.declared_paths', json('["different"]')) WHERE run_id = ?`,
 		"inconsistent PR binding": `UPDATE work_unit_pr_bindings SET pr_number = pr_number + 1 WHERE unit_id = (SELECT unit_id FROM work_unit_declarations WHERE run_id = ?)`,
@@ -518,6 +527,7 @@ func TestTaskTimelineRejectsCorruptPRHistoryRows(t *testing.T) {
 }
 
 func TestTaskTimelineAuthenticatesOpenedPRWithoutCompletionMilestone(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		prNumber  int
@@ -574,6 +584,7 @@ func TestTaskTimelineAuthenticatesOpenedPRWithoutCompletionMilestone(t *testing.
 // each role's current line in TaskLineRoles order, not the store's
 // alphabetical role order, and only the latest version of a changed role.
 func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	var want []signet.TaskLine

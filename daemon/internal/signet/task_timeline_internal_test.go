@@ -151,6 +151,7 @@ func taskTimelineFixtureInputs() (domain.Task, []taskTimelineInput) {
 }
 
 func TestTaskTimelineOrdersHistoryAndEmitsApprovalOnce(t *testing.T) {
+	t.Parallel()
 	timeline := taskTimelineFixture(t)
 	if len(timeline.Sections) != 2 || *timeline.Sections[0].CampaignID != "campaign-2" {
 		t.Fatalf("campaign order = %+v", timeline.Sections)
@@ -175,6 +176,7 @@ func TestTaskTimelineOrdersHistoryAndEmitsApprovalOnce(t *testing.T) {
 }
 
 func TestTaskTimelineRejectsContradictoryMembershipAndMissingAllocation(t *testing.T) {
+	t.Parallel()
 	for name, change := range map[string]func(*domain.Task, []taskTimelineInput){
 		"foreign task":       func(_ *domain.Task, inputs []taskTimelineInput) { inputs[0].run.TaskID = "other-task" },
 		"foreign project":    func(_ *domain.Task, inputs []taskTimelineInput) { inputs[0].run.ProjectID = "other-project" },
@@ -195,6 +197,7 @@ func TestTaskTimelineRejectsContradictoryMembershipAndMissingAllocation(t *testi
 }
 
 func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
+	t.Parallel()
 	task, _ := taskTimelineFixtureInputs()
 	task.CampaignIDs = []domain.CampaignID{}
 	empty, err := taskTimeline(task, nil, nil, nil, nil, 42, task.CreatedAt)
@@ -221,6 +224,7 @@ func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
 // superseded, and a router line carries its provenance. A switch is
 // readable from either: the agent superseded or the agent passed over.
 func TestTaskTimelineEmitsOneEventPerLineVersion(t *testing.T) {
+	t.Parallel()
 	task, _ := taskTimelineFixtureInputs()
 	task.CampaignIDs = []domain.CampaignID{}
 	fixture := taskTimelineFixtureLines(t, task)
@@ -266,6 +270,7 @@ func TestTaskTimelineEmitsOneEventPerLineVersion(t *testing.T) {
 // that names no agent, and the version after it supersedes none, so a role
 // cleared and set again still reads.
 func TestTaskTimelineShowsAClearAndTheLineAfterIt(t *testing.T) {
+	t.Parallel()
 	task, _ := taskTimelineFixtureInputs()
 	task.CampaignIDs = []domain.CampaignID{}
 	first := taskTimelineFixtureLines(t, task)[1]

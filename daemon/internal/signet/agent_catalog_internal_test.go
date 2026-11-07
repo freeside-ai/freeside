@@ -112,6 +112,7 @@ func fixtureDigest(t *testing.T) func(domain.Digest, error) domain.Digest {
 // whatever the tree's order, the lineup in TaskLineRole order with unbound
 // roles absent, and a null lineage group for an offer that declares none.
 func TestAgentCatalogOf(t *testing.T) {
+	t.Parallel()
 	got := agentCatalogFixture(t)
 	anthropic := "anthropic"
 	want := &AgentCatalog{
@@ -143,6 +144,7 @@ func TestAgentCatalogOf(t *testing.T) {
 // TestAgentCatalogOfEmptyLineup renders empty lists, never null, for a tree
 // with no agents and no lineup lines.
 func TestAgentCatalogOfEmptyLineup(t *testing.T) {
+	t.Parallel()
 	catalog, err := AgentCatalogOf(agenttree.Tree{}, catalogFixtureRevision)
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +157,7 @@ func TestAgentCatalogOfEmptyLineup(t *testing.T) {
 // TestAgentCatalogOfRefusesMissingOffer fails on an agent whose offer is under
 // another route: the lookup is by the agent's own route, as admission's is.
 func TestAgentCatalogOfRefusesMissingOffer(t *testing.T) {
+	t.Parallel()
 	tree := catalogFixtureTree(t)
 	tree.Offers[0].Route = "other-route"
 	if _, err := AgentCatalogOf(tree, catalogFixtureRevision); err == nil ||

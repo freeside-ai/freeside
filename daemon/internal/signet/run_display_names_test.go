@@ -9,6 +9,7 @@ import (
 )
 
 func TestGetRunProjectsStoredDisplayNames(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRunFixture(t)
 	project, err := domain.NewProject("proj-1", "owner/freeside", 724)

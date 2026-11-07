@@ -27,6 +27,7 @@ func filingDecision(f filingFixture, id string, action domain.Action) signet.Cli
 // TestApprovingAFilingWakesTheFiler pins the approve wake: one wake when a
 // new approve of a follow-up filing commits, and none for its replay.
 func TestApprovingAFilingWakesTheFiler(t *testing.T) {
+	t.Parallel()
 	f := newFilingFixture(t)
 	ctx := context.Background()
 	filer := &wakeCounter{}
@@ -57,6 +58,7 @@ func TestApprovingAFilingWakesTheFiler(t *testing.T) {
 // filing approval itself: a decline, a refused approve, and a closure approve
 // wake nothing.
 func TestOnlyACommittedFilingApproveWakesTheFiler(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("decline", func(t *testing.T) {
 		f := newFilingFixture(t)
@@ -106,6 +108,7 @@ func TestOnlyACommittedFilingApproveWakesTheFiler(t *testing.T) {
 // option, a nil func, and a func that returns no filer all leave the approval
 // recorded.
 func TestApprovingAFilingWithoutAFilerIsRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	hooks := map[string][]signet.Option{
 		"no option":    nil,

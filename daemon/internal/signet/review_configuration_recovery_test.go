@@ -105,6 +105,7 @@ func seedReviewConfigurationRecoveryItem(t *testing.T, f fixture) domain.Attenti
 }
 
 func TestSubmitReviewConfigurationRecoveryIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedReviewConfigurationRecoveryItem(t, f)
@@ -172,6 +173,7 @@ func TestSubmitReviewConfigurationRecoveryIsAtomicAndIdempotent(t *testing.T) {
 // binding blocks any corrected retry. Activating the matching revision and
 // resubmitting then succeeds.
 func TestSubmitReviewConfigurationRecoveryRejectsIneffectiveTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedReviewConfigurationRecoveryItem(t, f)
