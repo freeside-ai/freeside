@@ -114,3 +114,24 @@ func TestTerminalDigestIgnoresAttentionCreationTime(t *testing.T) {
 		t.Fatal("terminal digest ignored a derived publication fact")
 	}
 }
+
+// TestTerminalDigestBindsAPresentReviewGuide: the commitment omits a nil
+// guide, so earlier items keep their frozen digests
+// (TestTerminalDigestsMatchFrozenPreTaskEncodings), but a guide on a
+// terminal item still binds.
+func TestTerminalDigestBindsAPresentReviewGuide(t *testing.T) {
+	t.Parallel()
+	item := domain.AttentionItem{ID: "item-1", Type: domain.AttentionReadyForFinalReview, PRHeadSHA: "head"}
+	without, err := TerminalDigest(Task{}, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.ReviewGuide = &domain.ReviewGuide{HeadSHA: "head"}
+	with, err := TerminalDigest(Task{}, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if with == without {
+		t.Fatalf("terminal digest %s ignores the review guide", with)
+	}
+}

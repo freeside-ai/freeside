@@ -232,6 +232,10 @@ type terminalDigestItem struct {
 	Conclusion            *struct{} `json:"conclusion,omitempty"`
 	AlternateAgents       *struct{} `json:"alternate_agents,omitempty"`
 	ElapsedDeadlines      *struct{} `json:"elapsed_deadlines,omitempty"`
+	// ReviewGuide carries the item's own guide, so a guide binds when
+	// present and an item without one keeps the digest it had before the
+	// field existed.
+	ReviewGuide *domain.ReviewGuide `json:"review_guide,omitempty"`
 }
 
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
@@ -267,7 +271,7 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// would fail the stored binding on its next validation.
 	// The shadowing fields win over the embedded item's and are always
 	// omitted; every other key keeps its place.
-	itemBody, err := json.Marshal(terminalDigestItem{AttentionItem: item})
+	itemBody, err := json.Marshal(terminalDigestItem{AttentionItem: item, ReviewGuide: item.ReviewGuide})
 	if err != nil {
 		return "", fmt.Errorf("encode terminal binding: %w", err)
 	}

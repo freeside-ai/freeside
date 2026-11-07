@@ -1,0 +1,168 @@
+{
+  "id": "item-review-guide",
+  "project_id": "project-1",
+  "subject": {
+    "subject_type": "project",
+    "subject_id": "project-1",
+    "run_id": null,
+    "task_id": null
+  },
+  "type": "ready_for_final_review",
+  "priority": "normal",
+  "reason": "published with a waived policy failure",
+  "requested_decision": [
+    "open_pr",
+    "dismiss"
+  ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:714a2d036967ff4f018b3ed41ee2764adb53da10f5d4825c9d8ad22fbbbbf35f"
+  },
+  "evidence_snapshot": null,
+  "agent_claims": [
+    {
+      "label": "freeside.review-guide",
+      "artifact_id": "art-review-guide",
+      "digest": "sha256:review-guide",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-2",
+        "head_binding": "head_bound",
+        "source_head_sha": "head",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null,
+      "metadata": {
+        "media_type": "application/json",
+        "size_bytes": 1024,
+        "created_at": "2026-08-24T09:27:00Z",
+        "source": "claim",
+        "availability": "available"
+      }
+    }
+  ],
+  "artifact_digests": [
+    "sha256:review-guide"
+  ],
+  "pr_head_sha": "head",
+  "pr_reference": {
+    "repo": "owner/repo",
+    "number": 123
+  },
+  "readiness": {
+    "class": "ready_degraded",
+    "evaluation_set_digest": "sha256:evaluation"
+  },
+  "readiness_detail": {
+    "evaluation_set_digest": "sha256:evaluation",
+    "candidate_head": "head",
+    "base": {
+      "base_ref": "main",
+      "base_sha": "base"
+    },
+    "requirements": [
+      {
+        "requirement_key": "clean-verification",
+        "check_class": "clean_verification",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:recipe",
+        "waiver": null
+      },
+      {
+        "requirement_key": "repo-change-policy",
+        "check_class": "repo_change_policy",
+        "kind": "required",
+        "state": "failed",
+        "proof_recipe_digest": null,
+        "waiver": {
+          "id": "waiver-1",
+          "dimension": "repo_change_policy",
+          "authority": "explicit_human_approval",
+          "granted_at": "2026-08-24T09:27:00Z"
+        }
+      }
+    ]
+  },
+  "yield_history": null,
+  "commit_plan_notice": null,
+  "scope_decision": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "display_names": null,
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "interpretation_failure": null,
+  "publish_block": null,
+  "diff_stats": null,
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
+  "spec_revision": null,
+  "agent_question": null,
+  "review_diminishing": null,
+  "review_guide": {
+    "head_sha": "head",
+    "claim_digest": "sha256:review-guide",
+    "stops": [
+      {
+        "title": "Start with the guide's validation",
+        "summary": "Validate enforces the caps.",
+        "attention": "contract",
+        "excerpts": [
+          {
+            "path": "daemon/internal/domain/review_guide.go",
+            "side": "head",
+            "start_line": 10,
+            "end_line": 10,
+            "caption": "The entry point.",
+            "text": "func (g ReviewGuide) Validate() error {\n",
+            "unresolved_reason": null
+          }
+        ]
+      },
+      {
+        "title": "The removed helper",
+        "summary": "Nothing else called it.",
+        "attention": "risk",
+        "excerpts": [
+          {
+            "path": "daemon/internal/domain/old_helper.go",
+            "side": "base",
+            "start_line": 1,
+            "end_line": 20,
+            "caption": "Before its removal.",
+            "text": null,
+            "unresolved_reason": "path_missing"
+          }
+        ]
+      }
+    ],
+    "questions": [],
+    "notes": null
+  },
+  "alternate_agents": null,
+  "elapsed_deadlines": null,
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": null,
+  "expires_when": null,
+  "decided_at": null,
+  "conclusion": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

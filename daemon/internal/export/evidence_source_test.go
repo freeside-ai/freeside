@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -175,5 +176,15 @@ func TestDecodeEvidenceSourceManifest(t *testing.T) {
 				t.Fatalf("decode err = %v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestReviewGuideLabelMatchesDomain pins the reserved review-guide label to
+// the one domain.AttentionItem.Validate looks for: domain cannot import
+// export, so the string lives in both packages.
+func TestReviewGuideLabelMatchesDomain(t *testing.T) {
+	if export.ReviewGuideEvidenceLabel != domain.ReviewGuideClaimLabel {
+		t.Fatalf("export label %q, domain label %q",
+			export.ReviewGuideEvidenceLabel, domain.ReviewGuideClaimLabel)
 	}
 }

@@ -386,6 +386,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReadinessInvalidationReason"] = append(valids["ReadinessInvalidationReason"], v.valid)
 	}
 	invalids["ReadinessInvalidationReason"] = ReadinessInvalidationReason("").valid
+	for _, v := range AllReviewAttentions {
+		valids["ReviewAttention"] = append(valids["ReviewAttention"], v.valid)
+	}
+	invalids["ReviewAttention"] = ReviewAttention("").valid
+	for _, v := range AllReviewExcerptSides {
+		valids["ReviewExcerptSide"] = append(valids["ReviewExcerptSide"], v.valid)
+	}
+	invalids["ReviewExcerptSide"] = ReviewExcerptSide("").valid
+	for _, v := range AllReviewExcerptUnresolved {
+		valids["ReviewExcerptUnresolved"] = append(valids["ReviewExcerptUnresolved"], v.valid)
+	}
+	invalids["ReviewExcerptUnresolved"] = ReviewExcerptUnresolved("").valid
 	for _, v := range AllClaimMediaTypes {
 		valids["ClaimMediaType"] = append(valids["ClaimMediaType"], v.valid)
 	}

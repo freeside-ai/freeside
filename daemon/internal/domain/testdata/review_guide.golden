@@ -1,0 +1,42 @@
+{
+  "head_sha": "cafebabe",
+  "claim_digest": "sha256:review-guide",
+  "stops": [
+    {
+      "title": "Start with the guide's validation",
+      "summary": "Validate enforces every cap the schema cannot express.",
+      "attention": "contract",
+      "excerpts": [
+        {
+          "path": "daemon/internal/domain/review_guide.go",
+          "side": "head",
+          "start_line": 10,
+          "end_line": 11,
+          "caption": "The head check comes first.",
+          "text": "func (g ReviewGuide) Validate() error {\n\tif g.HeadSHA == \"\" {\n",
+          "unresolved_reason": null
+        }
+      ]
+    },
+    {
+      "title": "The removed helper",
+      "summary": "The old helper is gone; nothing else called it.",
+      "attention": "risk",
+      "excerpts": [
+        {
+          "path": "daemon/internal/domain/old_helper.go",
+          "side": "base",
+          "start_line": 1,
+          "end_line": 20,
+          "caption": "The helper before its removal.",
+          "text": null,
+          "unresolved_reason": "path_missing"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    "Should the span cap be per stop instead of per excerpt?"
+  ],
+  "notes": "The schema change is the contract; the rest follows it."
+}

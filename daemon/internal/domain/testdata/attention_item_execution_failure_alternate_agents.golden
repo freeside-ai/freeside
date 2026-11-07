@@ -52,6 +52,7 @@
   "spec_revision": null,
   "agent_question": null,
   "review_diminishing": null,
+  "review_guide": null,
   "alternate_agents": [
     {
       "agent": "claude-b",

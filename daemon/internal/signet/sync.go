@@ -2493,6 +2493,15 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 		facts.ClaimedAddressals = nonNilSlice(slices.Clone(facts.ClaimedAddressals))
 		item.SpecRevision = &facts
 	}
+	if item.ReviewGuide != nil {
+		guide := *item.ReviewGuide
+		guide.Questions = nonNilSlice(slices.Clone(guide.Questions))
+		guide.Stops = slices.Clone(guide.Stops)
+		for idx := range guide.Stops {
+			guide.Stops[idx].Excerpts = nonNilSlice(slices.Clone(guide.Stops[idx].Excerpts))
+		}
+		item.ReviewGuide = &guide
+	}
 	return item
 }
 
