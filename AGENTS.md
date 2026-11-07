@@ -517,11 +517,13 @@ All under `daemon/`:
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
+  `internal/engine/fake_publication.go` (the attended fake-candidate
+  workflow: exports a handoff, verifies it, and pushes it through the
+  publish gate),
   `internal/engine/production_review_gate.go` (decides whether a reviewed
   candidate may reach publication),
-  `internal/engine/production_reentry*.go` and
-  `internal/engine/production_unpublished_reentry.go` (re-earn readiness
-  against a new base), `internal/engine/production_handoff.go` (verifies
+  `internal/engine/production_reentry*.go` (re-earn readiness against a
+  new base), `internal/engine/production_handoff.go` (verifies
   the merge into a moved tip and decides whether the handoff may publish),
   `internal/engine/production_rebuild.go` (binds the image that verifies a
   candidate and writes a refused rebuild's failed verification),
