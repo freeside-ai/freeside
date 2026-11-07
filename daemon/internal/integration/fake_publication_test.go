@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/repotemplate"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -139,6 +140,12 @@ type publicationHarness struct {
 	repairRefusal func(domain.ProjectImage) domain.ImageUpkeepRefusalInput
 }
 
+// publicationBaseTemplates builds each distinct base file set once per test
+// binary; every harness gets its own copy, so a test that commits to its
+// baseDir changes only that copy. The fixed fixture identity and dates make
+// the copy the same commit a fresh build would make.
+var publicationBaseTemplates repotemplate.Cache[string]
+
 func newPublicationHarness(t *testing.T) *publicationHarness {
 	t.Helper()
 	return newPublicationHarnessWithRecipe(t, []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`))
@@ -153,18 +160,17 @@ func newPublicationHarnessWithBaseFiles(t *testing.T, recipe []byte, files map[s
 	t.Helper()
 	ctx := t.Context()
 	root := t.TempDir()
-	base := filepath.Join(root, "base")
-	if err := os.Mkdir(base, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, base, "init", "-q", "-b", "main")
-	writeFile(t, base, "README.md", "base\n")
-	for path, body := range files {
-		writeFile(t, base, path, body)
-	}
-	runGit(t, base, "add", "-A")
-	runGit(t, base, "commit", "-q", "-m", "base")
-	baseSHA := runGit(t, base, "rev-parse", "HEAD")
+	base, baseSHA := publicationBaseTemplates.Copy(t, repotemplate.FilesKey(files), func() (string, string) {
+		dir := t.TempDir()
+		runGit(t, dir, "init", "-q", "-b", "main")
+		writeFile(t, dir, "README.md", "base\n")
+		for path, body := range files {
+			writeFile(t, dir, path, body)
+		}
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "-q", "-m", "base")
+		return dir, runGit(t, dir, "rev-parse", "HEAD")
+	})
 
 	recipeDigest := verify.RecipeDigest(recipe)
 	auditEvidence := integrationWorkflowAuditEvidence(t, fakePublicationRepo, "publish")
