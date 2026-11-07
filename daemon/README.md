@@ -32,7 +32,7 @@ The rest shard passes its heaviest packages to `go test` first, in the order
 of `REST_PACKAGE_ORDER` in `scripts/daemon-test-shards.py`, so `-p` starts
 them before the short ones; every other package follows in `go list` order.
 The list is a scheduling hint only: it selects nothing, and an entry missing
-from the inventory is skipped.
+from the package list is skipped.
 
 The darwin shard runs `DARWIN_SELECTION` in `scripts/daemon-test-shards.py`:
 the tests whose behaviour differs on macOS through a build tag, the
@@ -58,22 +58,26 @@ DAEMON_TEST_EVIDENCE_DIR=/tmp/daemon-shard-1 \
 The rest shard uses `kind=rest`, index/count `1`, and integration count `3`;
 the `freesided` shard uses `kind=freesided` and the darwin shard
 `kind=darwin`, each with the same settings. Each integration runner
-discovers its compiled Test, Example, and Fuzz families; the `freesided`
-runner discovers `cmd/freesided` alone, the rest runner every package except
-that one and the integration package, and the darwin runner only the
-packages its selection names. A tree missing either carved-out package fails
-the rest shard rather than shrinking it. The weight file is only a
-scheduling hint: new families receive weight `1`, and removed weights do not
-select tests. Every shard uses `-count=1`, default Go concurrency and
-timeouts, and the existing opt-in skips; a package may still cap its own test
-parallelism (Testing conventions, Package parallelism caps). No race job is
-added.
+discovers its compiled Test, Example, and Fuzz families, the `freesided`
+runner those of `cmd/freesided` alone, and the darwin runner those of only
+the packages its selection names. The rest runner runs every package except
+`cmd/freesided` and the integration package in one unfiltered command with
+no compiled discovery: it takes its families from that run's top-level `run`
+events and checks them against the `go list` package set, so its test
+binaries link once (`devlog/2026-11-07-1026-rest-shard-run-inventory.md`).
+A tree missing either carved-out package fails the rest shard rather than
+shrinking it. The weight file is only a scheduling hint: new families receive
+weight `1`, and removed weights do not select tests. Every shard uses
+`-count=1`, default Go concurrency and timeouts, and the existing opt-in
+skips; a package may still cap its own test parallelism (Testing
+conventions, Package parallelism caps). No race job is added.
 
-Each test job uploads raw Go JSON, compiled inventories, assignments,
-execution reports, tested identities, tool/image versions, and cache sizes
-(before, after, and, on a cache-writing main push, trimmed). The platform
-gate re-accounts the raw events, checks every assigned family and package,
-and rejects missing, duplicate, stale, or failed execution. On Linux,
+Each test job uploads raw Go JSON, inventories, assignments, execution
+reports, tested identities, tool/image versions, and cache sizes (before,
+after, and, on a cache-writing main push, trimmed); a failed rest run
+uploads no inventory. The platform gate re-accounts the raw events,
+re-derives the rest inventory from them, checks every assigned family and
+package, and rejects missing, duplicate, stale, or failed execution. On Linux,
 integration shards share a build-cache restore group keyed by OS,
 architecture, Go version, and dependencies, and shard 1 alone writes that
 group's cache on a successful main push. The `freesided` shard restores the
