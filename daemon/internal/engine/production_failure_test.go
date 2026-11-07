@@ -12,7 +12,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -1024,32 +1023,19 @@ func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
 // TestRefusalHoldReasonsPinned pins refusalHoldReasons to
 // the two functions it summarizes: for every sentinel MutableAdmissionPolicyRefusal
 // accepts, dispatchHoldReason maps it to a reason in the set, and every reason
-// in the set is reached by at least one sentinel. It fails when either function
-// gains a member the other, or this list, does not know.
+// in the set is reached by at least one sentinel. It fails when the set stops
+// matching the table's mutable admission-policy rows.
 func TestRefusalHoldReasonsPinned(t *testing.T) {
 	t.Parallel()
-	// Every sentinel MutableAdmissionPolicyRefusal accepts (invocation.go).
-	sentinels := []error{
-		store.ErrBackendNotConformant,
-		domain.ErrConformanceConfigurationUnbound,
-		domain.ErrAdmissionConfigurationMismatch,
-		domain.ErrAdmissionExceedsConformance,
-		domain.ErrUnknownAdmissionFloor,
-		domain.ErrCapabilityBelowFloor,
-		domain.ErrCredentialModeNotApproved,
-		domain.ErrWaiverNotConfigured,
-		domain.ErrBackupHealthUnavailable,
-		domain.ErrCheckpointNotEncrypted,
-		domain.ErrCheckpointNotCurrent,
-		domain.ErrArtifactClosureIncomplete,
-		domain.ErrRestoreTestStale,
-		domain.ErrInvalidBackupHealthStatus,
-		store.ErrRepositoryUntrusted,
-		publish.ErrJanitorInactive,
-		domain.ErrRepositoryIdentityMismatch,
-		domain.ErrPathBoundaryMismatch,
-		domain.ErrTrustProfileSuperseded,
-		domain.ErrReviewConfigurationUnapproved,
+	// Every sentinel MutableAdmissionPolicyRefusal accepts.
+	var sentinels []error
+	for _, class := range holdClasses {
+		if class.action == holdActionPassMutablePolicy {
+			sentinels = append(sentinels, class.sentinel)
+		}
+	}
+	if len(sentinels) == 0 {
+		t.Fatal("holdClasses has no mutable admission-policy rows")
 	}
 	reached := make(map[domain.RunHoldReason]bool)
 	for _, sentinel := range sentinels {
