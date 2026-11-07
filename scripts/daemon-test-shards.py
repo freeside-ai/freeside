@@ -386,6 +386,42 @@ def run(args):
     return 0
 
 
+def local(args):
+    """Print the go test invocations of a full local check.sh run.
+
+    One `rest <package>` line per package outside internal/integration, then
+    one `integration <package> <pattern>` line per partition, in bin order.
+    The format is private to scripts/check.sh: fields hold no whitespace,
+    since list_packages and discovery_events reject it. Every line is built
+    before any is printed, so a failure prints nothing to stdout.
+    """
+    require(args.count > 0, "partition count must be positive")
+    packages = list_packages(args.go, args.daemon)
+    try:
+        inventory = discover(args.go, args.daemon, True, packages=packages)
+    except subprocess.CalledProcessError as error:
+        # -json wraps the compiler's report in events; unwrap it so a
+        # build failure reads as it would from a plain go test.
+        for line in (error.output or "").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                event = {"Output": line + "\n"}
+            if isinstance(event, dict):
+                sys.stderr.write(str(event.get("Output", "")))
+        raise
+    (package, families), = inventory.items()
+    # Before partition() builds the bins, so a mistyped huge count can't
+    # allocate them.
+    require(args.count <= len(families),
+            f"{args.count} partitions exceed {len(families)} integration families")
+    bins = partition(families, args.count, json.loads(args.weights.read_text()))
+    lines = [f"rest {p}" for p in packages if p != package]
+    lines += [f"integration {package} {run_pattern(b)}" for b in bins]
+    print("\n".join(lines))
+    return 0
+
+
 def read_json(path):
     return json.loads(path.read_text())
 
@@ -580,6 +616,11 @@ def main():
     shard.add_argument("--daemon", type=Path, default=ROOT / "daemon")
     shard.add_argument("--weights", type=Path, default=ROOT / "scripts/daemon-test-shards.json")
     shard.add_argument("--evidence-dir", type=Path)
+    partitions = commands.add_parser("local", help="print a full local run's go test invocations")
+    partitions.add_argument("--count", type=int, required=True, help="integration partitions")
+    partitions.add_argument("--go", default="go")
+    partitions.add_argument("--daemon", type=Path, default=ROOT / "daemon")
+    partitions.add_argument("--weights", type=Path, default=ROOT / "scripts/daemon-test-shards.json")
     comparison = commands.add_parser("compare")
     comparison.add_argument("--baseline", type=Path, required=True)
     comparison.add_argument("reports", type=Path, nargs="+")
@@ -597,6 +638,8 @@ def main():
     try:
         if args.command == "run":
             return run(args)
+        if args.command == "local":
+            return local(args)
         if args.command == "compare":
             compare(args)
         elif args.command == "verify":

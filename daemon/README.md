@@ -844,6 +844,27 @@ Each local run sizes itself to its share of the machine:
   checkouts; add the directory that holds them (for example
   `~/proj/freeside-ai`) under System Settings > Spotlight > Privacy.
 
+A full run tests `internal/integration`, which alone would set its wall time,
+as `DAEMON_TEST_INTEGRATION_PARTITIONS` concurrent `-run` partitions (default
+`3`, the count CI's integration shards use), beside one `go test` of every
+other package by name. All of them run inside the one slot, so a full run
+starts that many plus one `go test` processes. Python 3 lists the packages
+and compiles the integration test families first; when that discovery fails,
+the step fails with Go's build output rather than run part of the suite. The
+other packages' output streams as usual, and each partition's output prints
+whole, in order, after every invocation ends. The step takes the first
+failing invocation's exit code, and Ctrl-C ends every invocation.
+`DAEMON_TEST_INTEGRATION_PARTITIONS=1` runs `go test ./...` whole with no
+discovery, for a small machine or a comparison; a value that is not a
+positive integer is a usage error. Runs with `--` arguments and CI shard
+runs ignore the setting.
+
+Partitions spend idle cores, so a run that holds a slot under a limit above
+1, which owns only its share of the machine, runs as one `go test ./...`
+unless `DAEMON_TEST_INTEGRATION_PARTITIONS` is set. Each partition would
+otherwise get the slot's whole `GOMAXPROCS` share. An explicit count wins
+and runs over the share.
+
 `DAEMON_TEST_STATE_DIR` defaults to
 `${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test`. Use the same directory
 outside every checkout for all sessions that should share slots. Kernel file

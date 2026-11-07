@@ -55,6 +55,19 @@
 #                          CI is non-empty); 0 turns the limit off
 #   DAEMON_TEST_STATE_DIR  shared per-user state directory (default:
 #                          ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test)
+#   DAEMON_TEST_INTEGRATION_PARTITIONS
+#                          concurrent -run partitions of internal/integration
+#                          in a full run (default: 3, CI's shard count); 1
+#                          runs go test ./... whole with no discovery pass
+# A full run with more than one partition needs python3: it lists the
+# packages and compiles the integration families (daemon-test-shards.py
+# local), then starts one go test of every other package beside one go test
+# per partition, all inside the one slot, and prints each partition's output
+# whole after the run. A failed discovery fails the step with Go's build
+# output; it never falls back to a partial run. Shard runs and `--` runs
+# ignore the setting. A run holding a slot under a limit above 1 runs whole
+# unless the setting is present, since each partition would take the slot's
+# whole GOMAXPROCS share.
 # A queued run names the limit, state directory, and holders every 30 seconds.
 # The local (non-shard) path passes -timeout 30m before the package
 # arguments, so a -timeout after `--` wins. While it holds a slot, the test
@@ -118,9 +131,9 @@
 # Exit codes:
 #   0  every requested step passed
 #   1  a step failed (its command's output says which)
-#   2  usage error: unknown component or step, malformed daemon test limit,
-#      or a misplaced `--` (anywhere but after `daemon test`, with nothing
-#      after it, or in a shard run)
+#   2  usage error: unknown component or step, malformed daemon test limit
+#      or partition count, or a misplaced `--` (anywhere but after
+#      `daemon test`, with nothing after it, or in a shard run)
 set -euo pipefail
 
 PROG=$(basename "$0")
@@ -177,12 +190,88 @@ daemon_build() {
   in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o /dev/null ./cmd/freeside-export
 }
+daemon_test_shard_mode() {
+  [[ ${DAEMON_TEST_SHARD_KIND+x}${DAEMON_TEST_SHARD_INDEX+x}${DAEMON_TEST_SHARD_COUNT+x}${DAEMON_TEST_INTEGRATION_SHARDS+x}${DAEMON_TEST_EVIDENCE_DIR+x} ]]
+}
+
+# daemon_test_spawn <command...>: starts the command in the background from
+# daemon/. Bash starts a background command with SIGINT and SIGQUIT ignored,
+# and go test's compilers and test binaries would inherit that, so Ctrl-C
+# would leave them running outside the slot; restoring the defaults lets it
+# end every invocation, as it ended the single foreground go test. $! names
+# the command itself, since each layer execs the next.
+daemon_test_spawn() {
+  (cd "$ROOT/daemon" && exec python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@") &
+}
+
+# daemon_test_partitioned <count> <log dir>: runs a full local test step as
+# one go test of every package but internal/integration, beside <count>
+# concurrent -run partitions of that package, which alone would set the wall
+# time. The partition logs print whole after every invocation ends, so
+# concurrent failures never interleave. Returns the first non-zero exit code
+# in launch order.
+daemon_test_partitioned() {
+  local count=$1 logs=$2 plan kind package pattern integration='' rest=() patterns=()
+  local go_test=(go test -timeout 30m) pids=() pid i code rc=0
+  plan=$(in_dir "$ROOT" python3 scripts/daemon-test-shards.py local --count "$count") || return 1
+  while read -r kind package pattern; do
+    case $kind in
+      rest) rest+=("$package") ;;
+      integration)
+        integration=$package
+        patterns+=("$pattern")
+        ;;
+      *) echo "daemon test: unexpected partition line: $kind $package" >&2; return 1 ;;
+    esac
+  done <<<"$plan"
+  if ((${#rest[@]} == 0)) || [[ ${#patterns[@]} != "$count" ]]; then
+    echo "daemon test: the partition plan lacks a package list or an integration partition" >&2
+    return 1
+  fi
+  mkdir -p "$logs" || return 1
+  echo "daemon test: $integration runs as $count -run partitions; their output follows the run" >&2
+  printf '+ (cd %s && %s)\n' "$ROOT/daemon" "${go_test[*]} ${rest[*]}" >&2
+  daemon_test_spawn "${go_test[@]}" "${rest[@]}"
+  pids+=($!)
+  # No command echo: a partition's -run pattern can run to kilobytes.
+  for ((i = 0; i < count; i++)); do
+    daemon_test_spawn "${go_test[@]}" -run "${patterns[i]}" "$integration" \
+      >"$logs/$((i + 1)).log" 2>&1
+    pids+=($!)
+  done
+  for pid in "${pids[@]}"; do
+    code=0
+    wait "$pid" || code=$?
+    ((rc != 0)) || rc=$code
+  done
+  for ((i = 1; i <= count; i++)); do
+    echo "== $integration partition $i/$count" >&2
+    cat "$logs/$i.log"
+  done
+  return "$rc"
+}
+
+# daemon_test_run <decoy>: runs the selected tests; a partitioned full run
+# keeps its logs under <decoy>, which the decoy comparison never reads.
 daemon_test_run() {
   local args=(./...)
   ((${#daemon_test_args[@]} == 0)) || args=("${daemon_test_args[@]}")
-  if [[ ! ${DAEMON_TEST_SHARD_KIND+x}${DAEMON_TEST_SHARD_INDEX+x}${DAEMON_TEST_SHARD_COUNT+x}${DAEMON_TEST_INTEGRATION_SHARDS+x}${DAEMON_TEST_EVIDENCE_DIR+x} ]]; then
-    # A caller's -timeout after -- comes later and wins.
-    in_dir "$ROOT/daemon" go test -timeout 30m "${args[@]}"
+  if ! daemon_test_shard_mode; then
+    # A slot under a limit above 1 owns only its share of the machine, and
+    # each partition would take that whole share; an explicit count wins.
+    local partitions=$daemon_test_partitions
+    if [[ -n $daemon_test_slot && $daemon_test_limit != 1 && ! ${DAEMON_TEST_INTEGRATION_PARTITIONS+x} ]]; then
+      partitions=1
+    fi
+    if [[ $partitions != 1 ]]; then
+      daemon_test_partitioned "$partitions" "$1/partitions"
+    else
+      # A caller's -timeout after -- comes later and wins.
+      in_dir "$ROOT/daemon" go test -timeout 30m "${args[@]}"
+    fi
     return
   fi
   if ((${#daemon_test_args[@]} != 0)); then
@@ -366,6 +455,23 @@ daemon_test_remove_tmp() {
   rm -rf "$1"
 }
 
+# daemon_test_read_partitions: sets daemon_test_partitions, the integration
+# partition count of a full local run; shard and narrow runs ignore the
+# setting and run as one invocation. Dispatch calls it before any daemon
+# step, so a bad value stops `check.sh daemon` before go build runs.
+daemon_test_read_partitions() {
+  daemon_test_partitions=1
+  if daemon_test_shard_mode || ((${#daemon_test_args[@]} != 0)); then return 0; fi
+  local count=${DAEMON_TEST_INTEGRATION_PARTITIONS-3}
+  # Strip leading zeroes so Bash never treats the count as octal.
+  [[ ! $count =~ ^[0-9]+$ ]] || count=${count#"${count%%[!0]*}"}
+  if [[ ! $count =~ ^[1-9][0-9]*$ ]]; then
+    echo 'daemon test: DAEMON_TEST_INTEGRATION_PARTITIONS must be a positive integer' >&2
+    return 2
+  fi
+  daemon_test_partitions=$count
+}
+
 daemon_test() (
   local vars decoy tmp='' rc=0
   daemon_test_slot='' daemon_test_limit=''
@@ -401,7 +507,7 @@ daemon_test() (
   ( exec 9>&-; export GIT_DIR=$decoy/repo/.git/worktrees/wt
     [[ -z $tmp ]] || export TMPDIR=$tmp
     daemon_test_gomaxprocs
-    daemon_test_run ) || rc=$?
+    daemon_test_run "$decoy" ) || rc=$?
   if ! diff -r "$decoy/before" "$decoy/repo/.git" >"$decoy/diff" 2>&1; then
     echo 'daemon test: a test wrote to the decoy repository through the inherited GIT_DIR; build fixture git environments from gitenv.Scrubbed():' >&2
     cat "$decoy/diff" >&2
@@ -557,6 +663,9 @@ if [ "$component" = daemon ]; then
   # Shares compiled packages and test results across checkouts; see the
   # header. Appending keeps a caller's flags, such as a ward recipe's -p=2.
   export GOFLAGS="${GOFLAGS:+$GOFLAGS }-trimpath"
+  case " $* " in
+    *' test '*) daemon_test_read_partitions ;;
+  esac
 fi
 
 for step in "$@"; do
