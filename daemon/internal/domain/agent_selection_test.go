@@ -336,3 +336,28 @@ func sealedLaunch(t *testing.T, l domain.LaunchSpec) domain.LaunchSpec {
 	l.Digest = digest
 	return l
 }
+
+func TestLineageGroupOf(t *testing.T) {
+	for _, tc := range []struct {
+		client domain.HarnessClientKind
+		model  string
+		want   string
+	}{
+		{domain.HarnessClientClaudeCode, "claude-opus-4-5", domain.LineageGroupAnthropic},
+		{domain.HarnessClientClaudeCode, domain.ClaudeCodeNativeDefaultRouteModelID, domain.LineageGroupAnthropic},
+		{domain.HarnessClientCodexCLI, "gpt-5.6-sol", domain.LineageGroupOpenAI},
+		{domain.HarnessClientCodexCLI, "codex-mini-latest", domain.LineageGroupOpenAI},
+		// An alias or another vendor's id stays unknown, never a guess.
+		{domain.HarnessClientClaudeCode, "opus", ""},
+		{domain.HarnessClientClaudeCode, "gpt-5.6-sol", ""},
+		{domain.HarnessClientCodexCLI, "claude-opus-4-5", ""},
+		{"", "claude-opus-4-5", ""},
+	} {
+		if got := domain.LineageGroupOf(tc.client, tc.model); got != tc.want {
+			t.Errorf("LineageGroupOf(%q, %q) = %q, want %q", tc.client, tc.model, got, tc.want)
+		}
+	}
+	if relation := domain.CompareLineage(domain.LineageGroupOf(domain.HarnessClientClaudeCode, "opus"), "anthropic"); relation != domain.LineageUnknown {
+		t.Errorf("an unknown derived group compares %q, want %q", relation, domain.LineageUnknown)
+	}
+}

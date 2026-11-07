@@ -374,3 +374,33 @@ func sendsEffort(adapter AdapterFragment, effort string) bool {
 		return err == nil && translation.Effective() == effort
 	})
 }
+
+// Lineage groups LineageGroupOf derives. They are the values the tree's
+// offers carry, so a binding admitted under a selection records the same
+// group one admitted under an agent did.
+const (
+	LineageGroupAnthropic = "anthropic"
+	LineageGroupOpenAI    = "openai"
+)
+
+// LineageGroupOf derives a selection's lineage group from the client that
+// launches it and the model it names (§5.4: lineage is a recorded fact,
+// never a gate). It is conservative: a group is named only when the
+// client's vendor owns the model id by its naming (a claude_code launch of a
+// "claude-" model, which covers ClaudeCodeNativeDefaultRouteModelID, or a
+// codex_cli launch of a "gpt-" or "codex-" model), and anything else, an
+// alias included, returns the empty group,
+// which CompareLineage reads as unknown, never as a difference.
+func LineageGroupOf(client HarnessClientKind, model string) string {
+	switch client {
+	case HarnessClientClaudeCode:
+		if strings.HasPrefix(model, "claude-") {
+			return LineageGroupAnthropic
+		}
+	case HarnessClientCodexCLI:
+		if strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "codex-") {
+			return LineageGroupOpenAI
+		}
+	}
+	return ""
+}
