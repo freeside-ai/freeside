@@ -19,10 +19,14 @@ struct AgentCatalogSyncTests {
     /// a new revision, one agent fewer, and a reviewer moved to another agent.
     private static func changedCatalog() -> Components.Schemas.AgentCatalog {
         var catalog = UsageFixtures.defaultAgentCatalog()
-        catalog.lineup_revision = "sha256:" + String(repeating: "e", count: 64)
+        catalog.lineup_revision = .init(value1: "sha256:" + String(repeating: "e", count: 64))
         catalog.agents.removeAll { $0.name == "codex-primary" }
         catalog.lineup = catalog.lineup.map {
-            $0.role == .reviewer ? .init(role: .reviewer, agent: "claude-secondary") : $0
+            $0.role == .reviewer
+                ? .init(
+                    role: .reviewer, agent: "claude-secondary",
+                    selection: UsageFixtures.agentSelection("claude-secondary"))
+                : $0
         }
         return catalog
     }
@@ -35,11 +39,13 @@ struct AgentCatalogSyncTests {
         #expect(cache.load()?.agentCatalog == UsageFixtures.defaultAgentCatalog())
     }
 
-    @Test func aDaemonWithoutATreeLeavesNoCatalogAndNoBootstrapLoop() async throws {
-        let server = MockServer(agentCatalog: nil)
+    @Test func aDaemonWithoutATreeAdoptsATreelessCatalogAndNoBootstrapLoop() async throws {
+        let server = MockServer(agentCatalog: UsageFixtures.treelessAgentCatalog())
         let coordinator = makeCoordinator(server: server)
         await coordinator.bootstrap()
-        #expect(coordinator.agentCatalog == nil)
+        // The catalog still lists the enrollments; it has no tree half.
+        #expect(coordinator.agentCatalog == UsageFixtures.treelessAgentCatalog())
+        #expect(coordinator.agentCatalog?.lineup_revision == nil)
 
         let operations = OperationLog()
         await server.setBeforeRespond { await operations.append($0) }

@@ -56,10 +56,13 @@ struct RealDaemonConvergenceTests {
     @Test func submittedAgentChoicesBecomeTheTasksLinesAndReplayInAnyOrder() async throws {
         let device = try await ConvergenceHarness.pairDevice(displayName: "Agent choice")
         let coordinator = ConvergenceHarness.coordinator(for: device)
+        // The harness seeds these enrollments, with a discovery record on the
+        // Claude one only (freeside-signet-dev seedConvergenceEnrollments).
+        let claude = UsageFixtures.selection("convergence-claude/claude_code", "opus", "high")
+        let codex = UsageFixtures.selection("convergence-codex/codex_cli", "gpt-5.5-codex", "harness_default")
         let lines = try #require(
             AgentChoiceDisplay.taskLines(choices: [
-                .specifier: "claude-secondary", .implementer: "claude-secondary",
-                .remediator: "claude-secondary", .reviewer: "codex-primary",
+                .specifier: claude, .implementer: claude, .remediator: claude, .reviewer: codex,
             ]))
         let commandID = UUID().uuidString
         func command(_ lines: [Components.Schemas.TaskLineInput]) -> Components.Schemas.ClientCommand {
@@ -75,11 +78,15 @@ struct RealDaemonConvergenceTests {
             Issue.record("expected a submit_task record")
             return
         }
-        #expect(record.task_lines == lines)
+        // The record echoes each choice in the encoding it was sent in.
+        #expect(record.task_lines?.map(\.role) == lines.map(\.role))
+        #expect(record.task_lines?.allSatisfy { $0.agent == nil } == true)
+        #expect(record.task_lines?.map(\.selection?.value1) == lines.map(\.selection))
         await coordinator.refresh()
         let task = try #require(coordinator.tasks.first { $0.task.id == record.task_id }?.task)
         #expect(task.task_lines.map(\.role) == [.specifier, .implementer, .remediator, .reviewer])
-        #expect(task.task_lines.map(\.agent) == lines.map(\.agent))
+        #expect(task.task_lines.allSatisfy { $0.agent == nil })
+        #expect(task.task_lines.map(\.selection?.value1) == lines.map(\.selection))
         for line in task.task_lines {
             #expect(line.source == .submit_task && line.set_by == commandID && line.version == 1)
             #expect(line.predecessor_id == nil && line.provenance == nil)
@@ -89,13 +96,29 @@ struct RealDaemonConvergenceTests {
         // lines under the command id are refused 400, as the mock does.
         let replay = try await device.client.submitCommand(body: .json(command(lines.reversed()))).ok.body.json
         #expect(replay.record == created.record)
-        let changed = lines.map { Components.Schemas.TaskLineInput(role: $0.role, agent: "claude-primary") }
+        let sonnet = UsageFixtures.selection("convergence-claude/claude_code", "sonnet", "high")
+        let changed = lines.map { Components.Schemas.TaskLineInput(role: $0.role, selection: sonnet) }
         guard case .undocumented(let status, _) = try await device.client.submitCommand(body: .json(command(changed)))
         else {
             Issue.record("expected changed lines to be refused")
             return
         }
         #expect(status == 400)
+
+        // A model the enrollment's discovery record doesn't list is refused
+        // 400 under a fresh command, as the mock refuses it.
+        let unserved = UsageFixtures.selection("convergence-claude/claude_code", "haiku", "high")
+        let fresh = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: device.identity.deviceID,
+            payload: .submit_task(
+                .init(
+                    kind: .submit_task, project_id: "submission-convergence", source: "# Unserved model",
+                    task_lines: [.init(role: .implementer, selection: unserved)])))
+        guard case .undocumented(let refused, _) = try await device.client.submitCommand(body: .json(fresh)) else {
+            Issue.record("expected an unserved model to be refused")
+            return
+        }
+        #expect(refused == 400)
     }
 
     @Test func stopTaskAcceptanceReplayAndStaleBinding() async throws {

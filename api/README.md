@@ -50,12 +50,28 @@ pool carries `recorded_exhausted_marks`, every exhausted mark its record
 holds; a client lapses each by its `resets_at`, as it does `stale_at`, so the
 list changes only with a write.
 
-The bootstrap also carries `agent_catalog`: the committed agent tree's agents,
-each with its enrollment, model, effort, and lineage group, and the lineup's
-agent per bound role; null when the daemon holds no committed tree. A client
-offers only these agents. The heartbeat carries the tree's `lineup_revision`.
+The bootstrap also carries `agent_catalog`, never null. Its `enrollments`
+list every client enrollment the daemon holds, each with the models its
+harness last reported (`discovery`), or null when discovery recorded none; a
+new record moves the revision. Its tree part is the committed agent tree's
+agents, each with its enrollment, model, effort, lineage group, and the
+`selection` it runs, and the lineup's agent and selection per bound role;
+without a committed tree, `agents` and `lineup` are empty and
+`lineup_revision` is null. A client offers only selections these agents carry
+on a listed enrollment. The heartbeat carries the tree's `lineup_revision`.
 It changes only when the daemon restarts on a changed tree, which moves no
 revision, so a client bootstraps when it differs from the adopted catalog's.
+
+A task line on the wire is in one of two encodings, exactly one non-null: a
+line recorded before selections existed carries its `agent` name with a null
+`selection`, and every later line its `selection` (enrollment, model,
+effort) with a null `agent`. A client writes selections only, in
+`submit_task`, `change_task_line`, and a proposal start's `task_lines`. A
+selection whose enrollment the daemon lacks, or whose recorded discovery
+lists no such model, or no such effort for it, is 400 naming the field, such
+as `task_lines[0].selection.effort`, never the text. An enrollment with no
+recorded discovery passes on shape, and admission decides when the role
+runs.
 
 Five `/commands` kinds act on them. None carries `expected_entity_version` or
 `expected_bindings`. Each records an immutable receipt in the transaction that
@@ -74,7 +90,7 @@ revision. A `command_id` names one command of any kind.
   Naming the current collector records the receipt and nothing else. An
   enrollment not on that pool is 400.
 - **`change_task_line`** sets one role's line on a task, as `freesided
-  task-line` does, or clears it when `agent` is null or omitted. The record
+  task-line` does, or clears it when `selection` is null. The record
   carries `recorded: false` when the role already had that line, and `line`,
   the role's line afterwards or null when it has none. A role whose attempt
   runs is 409 with the current task snapshot and sync epoch.
@@ -91,7 +107,7 @@ revision. A `command_id` names one command of any kind.
   `alternate_agents`. The daemon re-derives the offer against current state
   and refuses with 400 when the task is no longer parked or the agent no
   longer qualifies, recording nothing. The record carries the alternate-agent
-  retry record and the task lines the move set: the implementer on the chosen
-  agent, and each other role the routing policy orders an agent on that pool
+  retry record and the task lines the move set: the implementer on the
+  selection the tree runs the chosen agent with, and each other role the routing policy orders an agent on that pool
   for, unless an operator set its line (`daemon/README.md`, Retry Or Move A
   Task To Another Agent).

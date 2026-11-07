@@ -199,7 +199,7 @@ func TestSignetWireGoldens(t *testing.T) {
 						{Kind: domain.TaskLifecycleStarted, RunID: runID, RecordedAt: createdAt},
 						{Kind: domain.TaskLifecycleCompleted, RunID: runID, BindingUnitID: new(domain.WorkUnitIDForRun(runID)), RecordedAt: mergedAt},
 					},
-					TaskLines: []TaskLine{wireTaskLineV1(taskLine)},
+					TaskLines: []TaskLine{wireTaskLine(taskLine)},
 					Attachments: []domain.TaskAttachment{{
 						Digest:    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
 						Name:      "design_handoff/screens/home.png",
@@ -225,7 +225,7 @@ func TestSignetWireGoldens(t *testing.T) {
 				},
 				UsagePools:    usagePoolsFixture(t, createdAt),
 				RoutingPolicy: routingPolicyFixture(t, createdAt),
-				AgentCatalog:  agentCatalogFixture(t),
+				AgentCatalog:  bootstrapCatalogFixture(t, agentCatalogFixture(t), createdAt),
 				UnattendedOperation: UnattendedOperationSnapshot{
 					Admission: domain.UnattendedAdmissionStopped,
 					Stops: []UnattendedStop{
@@ -349,6 +349,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			Schedules:           []ScheduleSnapshot{},
 			UnattendedOperation: UnattendedOperationSnapshot{Admission: domain.UnattendedAdmissionOpen, Stops: []UnattendedStop{}},
 			UsagePools:          []UsagePoolSnapshot{},
+			AgentCatalog:        bootstrapCatalogFixture(t, nil, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
 		},
 	})
 	for _, tc := range cases {
@@ -475,6 +476,40 @@ func TestEffectProposalFactsProvenanceGoldensDiffer(t *testing.T) {
 //
 // Each record is a valid domain record, so the fixtures double as
 // validation-positive cases.
+// bootstrapCatalogFixture is the bootstrap's catalog over tree (nil for no
+// committed tree): the tree's enrollments, one with a discovery record and
+// one the daemon has not discovered yet, as agentCatalogSnapshot reads them.
+func bootstrapCatalogFixture(t *testing.T, tree *AgentCatalog, at time.Time) AgentCatalog {
+	t.Helper()
+	catalog := AgentCatalog{Agents: []AgentCatalogEntry{}, Lineup: []AgentCatalogLineupLine{}}
+	if tree != nil {
+		catalog = *tree
+	}
+	discovered := domain.DiscoveredModelCatalog{
+		EnrollmentID: "anthropic-a/claude_code", HarnessBuild: "claude-code 2.1.0", ObservedAt: at,
+		Models: []domain.DiscoveredModel{
+			{
+				ID: "opus", ResolvedModel: new("claude-opus-5-5"), DisplayName: "Opus",
+				EffortLevels: []string{"low", "medium", "high", "xhigh", "max"},
+			},
+			{ID: "haiku", ResolvedModel: nil, DisplayName: "Haiku", EffortLevels: []string{}},
+		},
+	}
+	if err := discovered.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Enrollments = []AgentCatalogEnrollment{
+		{
+			EnrollmentID: discovered.EnrollmentID, HarnessClient: domain.HarnessClientClaudeCode,
+			Discovery: &AgentCatalogDiscovery{
+				HarnessBuild: discovered.HarnessBuild, ObservedAt: discovered.ObservedAt, Models: discovered.Models,
+			},
+		},
+		{EnrollmentID: "anthropic-b/claude_code", HarnessClient: domain.HarnessClientClaudeCode, Discovery: nil},
+	}
+	return catalog
+}
+
 func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 	t.Helper()
 	now := at.Add(10 * time.Minute)

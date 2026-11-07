@@ -86,7 +86,8 @@ func newSubmitTaskService(t *testing.T, submitter signet.TaskSubmitter, deviceSt
 	}); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	opts := []signet.Option{signet.WithBlobStore(blobs), withTestLineAgents()}
+	seedLineEnrollments(t, s)
+	opts := []signet.Option{signet.WithBlobStore(blobs)}
 	if submitter != nil {
 		opts = append(opts, signet.WithTaskSubmitter(submitter))
 	}
@@ -179,7 +180,7 @@ func TestLegacyTaskSubmissionReplayPreservesMissingNameFingerprint(t *testing.T)
 	// A historical row predates task lines, so a retry that adds one differs
 	// from what was recorded even though the row holds no digest to compare.
 	withLine := submitTaskCommand(original.CommandID, source, "")
-	withLine.SubmitTask.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleReviewer, Agent: "codex"}}
+	withLine.SubmitTask.TaskLines = []domain.TaskLineChoice{selectionChoice(domain.RoleReviewer, "codex")}
 	if _, err := service.Submit(ctx, withLine); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("legacy replay with a task line: error = %v, want ErrImmutableConflict", err)
 	}
@@ -393,7 +394,8 @@ func newRealSubmitTaskHandlerAndStore(t *testing.T) (http.Handler, *store.Store)
 	submitter := engine.NewTaskSubmitter(blobs, func(domain.ProjectID) (engine.ManualInitiator, bool) {
 		return initiator, true
 	})
-	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter), withTestLineAgents())
+	seedLineEnrollments(t, s)
+	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter))
 	return signet.NewHTTPHandler(service, testAuthorizer), s
 }
 

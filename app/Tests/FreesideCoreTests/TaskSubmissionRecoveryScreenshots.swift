@@ -6,8 +6,11 @@
     @testable import FreesideModel
 
     @MainActor enum TaskSubmissionRecoveryScreenshots {
-        static func model(client: any APIProtocol) throws -> TaskSubmissionModel {
+        static func model(client: any APIProtocol) async throws -> TaskSubmissionModel {
             let coordinator = SyncCoordinator(client: client, cache: InMemoryCacheStore())
+            // Synced, so a saved request's lines read as the catalog agents
+            // that carry their selections.
+            await coordinator.refresh()
             // The first request attached files and a folder (#2591), so its
             // item lists the files' names and the folder as one line; the
             // second chose agents, so its item shows its lines.
@@ -29,8 +32,10 @@
                 (
                     "saved-second",
                     AgentChoiceDisplay.taskLines(choices: [
-                        .specifier: "claude-secondary", .implementer: "claude-secondary",
-                        .remediator: "claude-secondary", .reviewer: "codex-primary",
+                        .specifier: UsageFixtures.agentSelection("claude-secondary"),
+                        .implementer: UsageFixtures.agentSelection("claude-secondary"),
+                        .remediator: UsageFixtures.agentSelection("claude-secondary"),
+                        .reviewer: UsageFixtures.agentSelection("codex-primary"),
                     ]),
                     nil
                 ),

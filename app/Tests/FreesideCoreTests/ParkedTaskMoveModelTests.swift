@@ -9,15 +9,27 @@ import Testing
 /// an agent its hold offers through a saved `move_parked_task` command, which
 /// settles once sync shows the revision the daemon recorded it at.
 @Suite @MainActor struct ParkedTaskMoveModelTests {
-    /// A mock daemon holding the parked task, its run, and the timeline whose
-    /// hold offers claude-team.
-    private func parkedServer() throws -> (server: MockServer, taskID: String) {
+    /// The selection the tree runs claude-team with. The daemon records a
+    /// move as that selection, so the mock's tree carries claude-team.
+    private static let teamSelection = UsageFixtures.selection(
+        UsageFixtures.readingCollectorID, "claude-opus", "low")
+
+    /// A mock daemon holding the parked task, its run, the timeline whose
+    /// hold offers claude-team, and a tree that carries claude-team.
+    private func parkedServer(treeCarriesTeam: Bool = true) throws -> (server: MockServer, taskID: String) {
         let parked = HoldPresentationFixtures.make("Quota window")
         let history = try #require(parked.history)
+        var catalog = UsageFixtures.defaultAgentCatalog()
+        if treeCarriesTeam {
+            catalog.agents.append(
+                .init(
+                    name: "claude-team", enrollment_id: UsageFixtures.readingCollectorID, model: "claude-opus",
+                    effort: .low, lineage_group: "anthropic", selection: Self.teamSelection))
+        }
         let server = MockServer(
             runs: parked.runs,
             tasks: [.init(as_of_revision: 1, entity_version: 1, task: parked.task)],
-            taskTimelines: [history])
+            taskTimelines: [history], agentCatalog: catalog)
         return (server, parked.task.id)
     }
 
@@ -48,7 +60,8 @@ import Testing
         #expect(model.failure == nil)
         #expect(coordinator.pendingParkedTaskMove == nil)
         let line = try #require(implementerLine(coordinator, taskID))
-        #expect(line.agent == "claude-team" && line.source == .alternate_agent_move)
+        #expect(line.agent == nil && line.selection?.value1 == Self.teamSelection)
+        #expect(line.source == .alternate_agent_move)
         #expect(line.provenance?.value1.pool == "claude-team-pool")
     }
 
@@ -62,6 +75,20 @@ import Testing
 
         #expect(model.failure == "The daemon refused the move (status 400). Nothing was changed.")
         #expect(coordinator.pendingParkedTaskMove == nil)
+        #expect(implementerLine(coordinator, taskID) == before)
+    }
+
+    /// The daemon records the selection its tree runs the agent with, so an
+    /// offered agent the tree no longer carries can't move the task.
+    @Test func anOfferedAgentTheTreeNoLongerCarriesIsRefused() async throws {
+        let (server, taskID) = try parkedServer(treeCarriesTeam: false)
+        let coordinator = await coordinator(server)
+        let model = ParkedTaskMoveModel(coordinator: coordinator)
+        let before = implementerLine(coordinator, taskID)
+
+        await model.move(taskID: taskID, to: "claude-team")
+
+        #expect(model.failure != nil)
         #expect(implementerLine(coordinator, taskID) == before)
     }
 
@@ -92,6 +119,6 @@ import Testing
         // The replay returns the recorded receipt and moves nothing twice.
         #expect(restored.pendingParkedTaskMove == nil)
         #expect(try await restored.store.client.getSyncRevision().ok.body.json.revision == applied)
-        #expect(implementerLine(restored, taskID)?.agent == "claude-team")
+        #expect(implementerLine(restored, taskID)?.selection?.value1 == Self.teamSelection)
     }
 }

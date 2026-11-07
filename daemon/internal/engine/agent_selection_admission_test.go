@@ -31,7 +31,7 @@ func (f *agentAdmissionFixture) recordCatalog(
 		EnrollmentID: enrollment, HarnessBuild: "2.1.0 (Claude Code)", ObservedAt: agentTestAt.Add(-time.Minute),
 		Models: []domain.DiscoveredModel{{ID: model, DisplayName: "Test model", EffortLevels: efforts}},
 	}
-	if err := f.store.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+	if err := f.store.Write(context.Background(), func(tx *store.WriteTx) error {
 		return tx.RecordDiscoveredModelCatalog(context.Background(), catalog)
 	}); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 				EffortLevels: []string{"high"},
 			}},
 		}
-		if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.RecordDiscoveredModelCatalog(ctx, catalog)
 		}); err != nil {
 			t.Fatal(err)

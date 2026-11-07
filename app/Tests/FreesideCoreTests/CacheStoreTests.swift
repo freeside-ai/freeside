@@ -520,6 +520,93 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(migrated.pendingCommands == state.pendingCommands)
     }
 
+    @Test func aPreSelectionFormatNineCacheDropsItsCatalogAndOnlyItsNamedLines() throws {
+        // Format 9 predates the catalog's enrollments and a client's selection
+        // lines (#2598). Its catalog, and a saved decision or submission whose
+        // lines name an agent, would throw on decode: the catalog would
+        // discard the whole cache, a named line its whole section. The load
+        // path drops the catalog and only the entries with named lines; the
+        // format bump discards the snapshots and cursors so the bootstrap
+        // restores the catalog.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.agentCatalog = UsageFixtures.defaultAgentCatalog()
+        func lineChange(_ id: String) -> Components.Schemas.ClientCommand {
+            .init(
+                command_id: id, device_id: "device-1",
+                payload: .change_task_line(
+                    .init(
+                        kind: .change_task_line, task_id: "task-1", role: .implementer,
+                        selection: .init(value1: UsageFixtures.agentSelection("claude-primary")))))
+        }
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved),
+            "item-b": .init(command: makeCommand(itemID: "item-b"), state: .unresolved),
+            "line-set": .init(command: lineChange("line-set"), state: .unresolved),
+            "line-clear": .init(command: lineChange("line-clear"), state: .unresolved),
+        ]
+        func submission(_ id: String) -> Components.Schemas.ClientCommand {
+            .init(
+                command_id: id, device_id: "device-1",
+                payload: .submit_task(.init(kind: .submit_task, project_id: "project-1", source: "Saved work")))
+        }
+        state.pendingTaskSubmissions = ["submission-1": submission("submission-1"), "named": submission("named")]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        // A format 9 catalog: no enrollments, and names where selections are.
+        var catalog = try #require(legacyState["agentCatalog"] as? [String: Any])
+        #expect(catalog.removeValue(forKey: "enrollments") != nil)
+        legacyState["agentCatalog"] = catalog
+        let namedLines: [[String: Any]] = [["role": "implementer", "agent": "claude-old"]]
+        var ledger = try #require(legacyState["pendingCommands"] as? [String: Any])
+        var entry = try #require(ledger["item-b"] as? [String: Any])
+        var command = try #require(entry["command"] as? [String: Any])
+        var payload = try #require(command["payload"] as? [String: Any])
+        payload["task_lines"] = namedLines
+        command["payload"] = payload
+        entry["command"] = command
+        ledger["item-b"] = entry
+        // A format 9 line change named its agent, or omitted it to clear.
+        for (key, agent) in [("line-set", "claude-old" as String?), ("line-clear", nil)] {
+            var entry = try #require(ledger[key] as? [String: Any])
+            var command = try #require(entry["command"] as? [String: Any])
+            var payload = try #require(command["payload"] as? [String: Any])
+            payload.removeValue(forKey: "selection")
+            if let agent { payload["agent"] = agent }
+            command["payload"] = payload
+            entry["command"] = command
+            ledger[key] = entry
+        }
+        legacyState["pendingCommands"] = ledger
+        var submissions = try #require(legacyState["pendingTaskSubmissions"] as? [String: Any])
+        var named = try #require(submissions["named"] as? [String: Any])
+        var namedPayload = try #require(named["payload"] as? [String: Any])
+        namedPayload["task_lines"] = namedLines
+        named["payload"] = namedPayload
+        submissions["named"] = named
+        legacyState["pendingTaskSubmissions"] = submissions
+        object["format"] = 9
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.agentCatalog == nil)
+        #expect(migrated.pendingCommands?.keys.sorted() == ["item-a", "line-clear"])
+        #expect(migrated.pendingCommands?["item-a"] == state.pendingCommands?["item-a"])
+        guard case .change_task_line(let clear) = migrated.pendingCommands?["line-clear"]?.command.payload else {
+            Issue.record("the saved clear did not survive as a line change")
+            return
+        }
+        #expect(clear.selection == nil)
+        #expect(migrated.pendingTaskSubmissions == ["submission-1": submission("submission-1")])
+    }
+
     @Test func aCachedBaseAdvanceWatchIsDroppedAndTheLedgerKept() throws {
         // Plan revision 110 retired the base_advance_watch kind (#2645).
         // A cached schedule of that kind would throw on decode and discard

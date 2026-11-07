@@ -194,6 +194,9 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 		return nil, err
 	}
 	cleanup = append(cleanup, func() { _ = st.Close() })
+	if err := seedConvergenceEnrollments(ctx, st); err != nil {
+		return nil, err
+	}
 
 	// A random per-process pairing key: codes minted through the control
 	// surface are redeemable only against this process, which is exactly the
@@ -212,9 +215,6 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 	}
 	options := []signet.Option{
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, convergenceManualInitiator)),
-		// A submission's task lines record selections, which signet
-		// translates from the names a client sends (#2597).
-		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) { return convergenceLineAgents{}, nil }),
 		signet.WithPairingKey(pairingKey),
 		signet.WithBlobStore(blobs),
 		// Fixed dev facts: the harness always listens on loopback

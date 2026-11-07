@@ -78,8 +78,9 @@ public final class SyncCoordinator {
     public private(set) var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
     /// The committed agent tree's agents and lineup from the last adopted
     /// bootstrap: the agents the daemon will accept, so the only ones a
-    /// client offers. Nil until a bootstrap supplies one, or when the daemon
-    /// holds no tree. A daemon restarted on a changed tree moves no revision,
+    /// client offers. Nil until a bootstrap supplies one; a daemon that holds
+    /// no tree serves one with a null lineup revision and no agents. A daemon
+    /// restarted on a changed tree moves no revision,
     /// so a heartbeat whose lineup revision differs triggers another
     /// bootstrap, never direct adoption.
     public private(set) var agentCatalog: Components.Schemas.AgentCatalog?
@@ -451,7 +452,7 @@ public final class SyncCoordinator {
                         // Backup health can change the gate without a write.
                         // Only bootstrap replaces the adopted verdict.
                         await bootstrap()
-                    } else if server.lineup_revision?.value1 != agentCatalog?.lineup_revision {
+                    } else if server.lineup_revision?.value1 != agentCatalog?.lineup_revision?.value1 {
                         // A restart on a changed agent tree moves no
                         // revision; only bootstrap replaces the catalog.
                         await bootstrap()
@@ -954,7 +955,7 @@ public final class SyncCoordinator {
         runs = snapshot.runs
         schedules = snapshot.schedules
         unattendedOperation = snapshot.unattended_operation
-        agentCatalog = snapshot.agent_catalog?.value1
+        agentCatalog = snapshot.agent_catalog
         routingPolicy = snapshot.routing_policy?.value1
         usagePools = snapshot.usage_pools
         tasks = snapshot.tasks

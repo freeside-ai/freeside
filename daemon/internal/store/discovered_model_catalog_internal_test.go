@@ -40,7 +40,7 @@ func discoveredCatalog(enrollment domain.ClientEnrollmentID, at time.Time, ids .
 
 func recordCatalog(t *testing.T, st *Store, catalog domain.DiscoveredModelCatalog) error {
 	t.Helper()
-	return st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	return st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordDiscoveredModelCatalog(t.Context(), catalog)
 	})
 }
@@ -126,5 +126,32 @@ func TestDiscoveredModelCatalogReadFailsOnABadRow(t *testing.T) {
 	}
 	if _, err := readCatalog(t, st, "enroll-1"); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("read of a bad row: err = %v, want a loud failure", err)
+	}
+}
+
+// A client reads the catalogs in its bootstrap's agent catalog, so a record
+// must move the sync revision, or a client would keep a stale model list.
+func TestDiscoveredModelCatalogRecordMovesTheRevision(t *testing.T) {
+	t.Parallel()
+	st := openEnrollmentStore(t)
+	recordEnrollmentFixtures(t, st)
+	revision := func() int64 {
+		t.Helper()
+		var state ServerState
+		if err := st.Read(t.Context(), func(tx *ReadTx) error {
+			var err error
+			state, err = tx.ServerState(t.Context())
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	before := revision()
+	if err := recordCatalog(t, st, discoveredCatalog("enroll-1", observationAt, "opus")); err != nil {
+		t.Fatal(err)
+	}
+	if after := revision(); after <= before {
+		t.Fatalf("revision after a record = %d, want more than %d", after, before)
 	}
 }

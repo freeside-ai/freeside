@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -64,35 +63,6 @@ func (s TaskLineSelection) Validate() error {
 		}
 	}
 	return nil
-}
-
-// AgentText is how a wire that names agents shows a selection no one agent
-// runs, until the API carries selections (#2598): enrollment/model/effort,
-// the form `freesided submit --task-line` takes. An agent name holds no
-// slash, so the text never names an agent.
-func (s TaskLineSelection) AgentText() string {
-	return string(s.EnrollmentID) + "/" + s.ModelID + "/" + s.Effort
-}
-
-// validLineAgentText reports whether text is what a wire line may show for
-// its agent: an agent name, or a valid selection's AgentText. An enrollment
-// id holds a slash itself, so the model and the effort are cut from the
-// right.
-func validLineAgentText(text string) bool {
-	if validAgentName(text) {
-		return true
-	}
-	cut := strings.LastIndexByte(text, '/')
-	if cut < 0 {
-		return false
-	}
-	rest, effort := text[:cut], text[cut+1:]
-	cut = strings.LastIndexByte(rest, '/')
-	if cut < 0 {
-		return false
-	}
-	selection := TaskLineSelection{EnrollmentID: ClientEnrollmentID(rest[:cut]), ModelID: rest[cut+1:], Effort: effort}
-	return selection.Validate() == nil
 }
 
 // TaskLineSource is the path that set a task line (plan §5.4, Admitted
@@ -426,11 +396,11 @@ func (r RoleName) TaskLineEligible() bool {
 
 // TaskLineChoice is one role's requested agent as an operator submits it:
 // the caller-supplied half of a line, before any task exists to hold it. It
-// holds exactly one of Agent and Selection. A client command carries a name,
-// which the daemon translates through its tree before it records a line
-// (#2598 moves the wire to the tuple); `freesided submit` carries the tuple.
-// Agent is omitted when empty, so a name choice keeps the byte form every
-// recorded command and submission digested before Selection existed.
+// holds exactly one of Agent and Selection. Every writer since #2597 records
+// a Selection: a client command and `freesided submit` both carry the tuple
+// (#2598). Agent remains for records written before then. It is omitted
+// when empty, so a name choice keeps the byte form every recorded command
+// and submission digested before Selection existed.
 type TaskLineChoice struct {
 	Role      RoleName           `json:"role"`
 	Agent     string             `json:"agent,omitempty"`

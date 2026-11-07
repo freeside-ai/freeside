@@ -294,10 +294,6 @@ type CommandResult struct {
 	// its arm with the arm's kind.
 	Receipt  *domain.CommandReceipt
 	Revision int64
-	// agents names the agent each recorded selection maps to on the wire
-	// (TaskLineAgents), set by Service.Submit; with nil a selection goes
-	// out as its enrollment/model/effort (choiceAgent).
-	agents TaskLineAgents
 }
 
 // kindedCommandRecord and kindedSubmissionRecord embed the domain record so its
@@ -309,7 +305,8 @@ type kindedCommandRecord struct {
 }
 
 // A wire field at the outer level shadows the embedded record's field of the
-// same JSON name: the record's selections go out as agent names.
+// same JSON name: the record's choices go out as the wire's agent and
+// selection pair.
 type kindedSubmissionRecord struct {
 	Kind domain.CommandKind `json:"kind"`
 	domain.TaskSubmission
@@ -327,7 +324,7 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 			domain.StopTaskReceipt
 		}{domain.CommandKindStopTask, *r.Stop}
 	} else if r.Receipt != nil {
-		record, err := kindedReceiptRecord(*r.Receipt, r.agents)
+		record, err := kindedReceiptRecord(*r.Receipt)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +332,7 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 	} else if r.Submission != nil {
 		wire.Record = kindedSubmissionRecord{
 			Kind: domain.CommandKindSubmitTask, TaskSubmission: *r.Submission,
-			TaskLines: wireTaskLineChoices(r.agents, r.Submission.TaskLines),
+			TaskLines: wireTaskLineChoices(r.Submission.TaskLines),
 		}
 	} else {
 		wire.Record = kindedCommandRecord{Kind: domain.CommandKindDecision, Command: r.Record}
@@ -346,7 +343,7 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 // kindedReceiptRecord flattens a receipt's arm beside its kind, producing the
 // wire UsageRefreshRecord, CollectorReassignmentRecord, TaskLineChangeRecord,
 // RoutingPolicyChangeRecord, or ParkedTaskMoveRecord.
-func kindedReceiptRecord(receipt domain.CommandReceipt, agents TaskLineAgents) (any, error) {
+func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 	kind := receipt.Kind()
 	switch kind {
 	case domain.CommandKindRefreshUsage:
@@ -362,14 +359,17 @@ func kindedReceiptRecord(receipt domain.CommandReceipt, agents TaskLineAgents) (
 	case domain.CommandKindChangeTaskLine:
 		var line *TaskLine
 		if receipt.TaskLineChange.Line != nil {
-			projected := wireTaskLine(agents, *receipt.TaskLineChange.Line)
+			projected := wireTaskLine(*receipt.TaskLineChange.Line)
 			line = &projected
 		}
+		// The stored request omits a nil selection; the wire carries the
+		// pair always, null for a clear and for a request from before #2598.
 		return struct {
 			Kind domain.CommandKind `json:"kind"`
 			*domain.TaskLineChangeReceipt
-			Line *TaskLine `json:"line"`
-		}{kind, receipt.TaskLineChange, line}, nil
+			Selection *domain.TaskLineSelection `json:"selection"`
+			Line      *TaskLine                 `json:"line"`
+		}{kind, receipt.TaskLineChange, receipt.TaskLineChange.Selection, line}, nil
 	case domain.CommandKindSetRoutingPolicy:
 		return struct {
 			Kind domain.CommandKind `json:"kind"`
@@ -380,7 +380,7 @@ func kindedReceiptRecord(receipt domain.CommandReceipt, agents TaskLineAgents) (
 			Kind domain.CommandKind `json:"kind"`
 			*domain.ParkedTaskMoveReceipt
 			Lines []TaskLine `json:"lines"`
-		}{kind, receipt.ParkedTaskMove, wireTaskLines(agents, receipt.ParkedTaskMove.Lines)}, nil
+		}{kind, receipt.ParkedTaskMove, wireTaskLines(receipt.ParkedTaskMove.Lines)}, nil
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 	}
 	return nil, domain.ErrCommandReceiptArms

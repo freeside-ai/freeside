@@ -248,17 +248,21 @@ import Testing
         let coordinator = coordinator()
         let model = TaskSubmissionModel(coordinator: coordinator)
         let lines = AgentChoiceDisplay.taskLines(choices: [
-            .specifier: "claude-secondary", .implementer: "claude-secondary", .remediator: "claude-secondary",
-            .reviewer: "codex-primary",
+            .specifier: UsageFixtures.agentSelection("claude-secondary"),
+            .implementer: UsageFixtures.agentSelection("claude-secondary"),
+            .remediator: UsageFixtures.agentSelection("claude-secondary"),
+            .reviewer: UsageFixtures.agentSelection("codex-primary"),
         ])
         let taskID = try #require(
             await model.submit(projectID: "project-1", source: "Add a health endpoint.", taskLines: lines))
         let task = try #require(coordinator.tasks.first { $0.task.id == taskID }?.task)
         #expect(task.task_lines.map(\.role) == [.specifier, .implementer, .remediator, .reviewer])
+        #expect(task.task_lines.allSatisfy { $0.agent == nil })
         #expect(
-            task.task_lines.map(\.agent) == [
-                "claude-secondary", "claude-secondary", "claude-secondary", "codex-primary",
-            ])
+            task.task_lines.map(\.selection?.value1)
+                == [
+                    "claude-secondary", "claude-secondary", "claude-secondary", "codex-primary",
+                ].map(UsageFixtures.agentSelection))
         #expect(task.task_lines.allSatisfy { $0.source == .submit_task && $0.version == 1 })
     }
 
@@ -285,7 +289,7 @@ import Testing
         await server.setAfterRespond { operationID in
             if operationID == "submitCommand" { try await lost.consume() }
         }
-        let lines = AgentChoiceDisplay.taskLines(choices: [.reviewer: "claude-primary"])
+        let lines = AgentChoiceDisplay.taskLines(choices: [.reviewer: UsageFixtures.agentSelection("claude-primary")])
         #expect(
             await model.submit(projectID: "project-1", source: "Add a health endpoint.", taskLines: lines) == nil)
         let saved = try #require(model.pendingSubmissions.first)
@@ -297,7 +301,7 @@ import Testing
 
         let taskID = try #require(await model.retry())
         let task = try #require(coordinator.tasks.first { $0.task.id == taskID }?.task)
-        #expect(task.task_lines.map(\.agent) == ["claude-primary"])
+        #expect(task.task_lines.map(\.selection?.value1) == [UsageFixtures.agentSelection("claude-primary")])
         #expect(task.task_lines.first?.set_by == saved.command_id)
     }
 

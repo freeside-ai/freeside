@@ -124,25 +124,44 @@ func TestTaskEventDetailContract(t *testing.T) {
 		LineID: line.LineID, Role: RoleReviewer, Agent: ptr("codex"), Version: 4,
 		Source: TaskLineSourceCLILineChange,
 	}
-	// A selection no one agent runs shows as its enrollment/model/effort,
-	// and an enrollment id holds a slash of its own (#2597).
-	unnamed := TaskEventTaskLine{
-		LineID: line.LineID, Role: RoleReviewer, Agent: ptr("claude-a/claude_code/claude-opus-4-5/high"), Version: 2,
-		Source: TaskLineSourceCLILineChange, SupersededAgent: ptr("enrollment-b/gpt-5.1-codex/medium"),
+	// A v2 version carries its selection and no name, and supersedes the
+	// previous version in that version's own encoding (#2598).
+	selection := TaskLineSelection{EnrollmentID: "claude-a/claude_code", ModelID: "claude-opus-4-5", Effort: "high"}
+	previous := TaskLineSelection{EnrollmentID: "enrollment-b/codex_cli", ModelID: "gpt-5.1-codex", Effort: "medium"}
+	overSelection := TaskEventTaskLine{
+		LineID: line.LineID, Role: RoleReviewer, Selection: &selection, Version: 2,
+		Source: TaskLineSourceCLILineChange, SupersededSelection: &previous,
+	}
+	overName := TaskEventTaskLine{
+		LineID: line.LineID, Role: RoleReviewer, Selection: &selection, Version: 2,
+		Source: TaskLineSourceCLILineChange, SupersededAgent: ptr("codex"),
 	}
 	for name, detail := range map[string]TaskEventTaskLine{
-		"operator": operator, "cleared": cleared, "after clear": afterClear, "unnamed selection": unnamed,
+		"operator": operator, "cleared": cleared, "after clear": afterClear,
+		"selection over a selection": overSelection, "selection over a name": overName,
 	} {
 		if err := (TaskEvent{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &detail}).Validate(); err != nil {
 			t.Fatalf("%s line event: %v", name, err)
 		}
 	}
 	for name, change := range map[string]func(*TaskEventTaskLine){
-		"bad line id":                func(l *TaskEventTaskLine) { l.LineID = "line-1" },
-		"ineligible role":            func(l *TaskEventTaskLine) { l.Role = RoleShadowReviewer },
-		"bad agent":                  func(l *TaskEventTaskLine) { l.Agent = ptr("Bad Agent") },
-		"selection without effort":   func(l *TaskEventTaskLine) { l.Agent = ptr("enrollment-a/model-a") },
-		"selection with empty model": func(l *TaskEventTaskLine) { l.Agent = ptr("enrollment-a//high") },
+		"bad line id":              func(l *TaskEventTaskLine) { l.LineID = "line-1" },
+		"ineligible role":          func(l *TaskEventTaskLine) { l.Role = RoleShadowReviewer },
+		"bad agent":                func(l *TaskEventTaskLine) { l.Agent = ptr("Bad Agent") },
+		"selection text as a name": func(l *TaskEventTaskLine) { l.Agent = ptr("enrollment-a/model-a/high") },
+		"name and selection": func(l *TaskEventTaskLine) {
+			l.Selection = &TaskLineSelection{EnrollmentID: "e/codex_cli", ModelID: "m", Effort: "high"}
+		},
+		"selection with empty model": func(l *TaskEventTaskLine) {
+			l.Agent, l.Selection = nil, &TaskLineSelection{EnrollmentID: "e/codex_cli", Effort: "high"}
+		},
+		"superseded name and selection": func(l *TaskEventTaskLine) {
+			l.Version, l.SupersededAgent = 2, ptr("codex")
+			l.SupersededSelection = &TaskLineSelection{EnrollmentID: "e/codex_cli", ModelID: "m", Effort: "high"}
+		},
+		"first that supersedes a selection": func(l *TaskEventTaskLine) {
+			l.SupersededSelection = &TaskLineSelection{EnrollmentID: "e/codex_cli", ModelID: "m", Effort: "high"}
+		},
 		"zero version":               func(l *TaskEventTaskLine) { l.Version = 0 },
 		"first that supersedes":      func(l *TaskEventTaskLine) { l.SupersededAgent = ptr("codex") },
 		"bad superseded agent":       func(l *TaskEventTaskLine) { l.Version = 2; l.SupersededAgent = ptr("Bad Agent") },

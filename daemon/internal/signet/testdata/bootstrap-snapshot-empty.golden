@@ -13,5 +13,44 @@
   },
   "usage_pools": [],
   "routing_policy": null,
-  "agent_catalog": null
+  "agent_catalog": {
+    "lineup_revision": null,
+    "enrollments": [
+      {
+        "enrollment_id": "anthropic-a/claude_code",
+        "harness_client": "claude_code",
+        "discovery": {
+          "harness_build": "claude-code 2.1.0",
+          "observed_at": "2026-05-01T12:00:00Z",
+          "models": [
+            {
+              "id": "opus",
+              "resolved_model": "claude-opus-5-5",
+              "display_name": "Opus",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            },
+            {
+              "id": "haiku",
+              "resolved_model": null,
+              "display_name": "Haiku",
+              "effort_levels": []
+            }
+          ]
+        }
+      },
+      {
+        "enrollment_id": "anthropic-b/claude_code",
+        "harness_client": "claude_code",
+        "discovery": null
+      }
+    ],
+    "agents": [],
+    "lineup": []
+  }
 }

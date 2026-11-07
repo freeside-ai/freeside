@@ -239,9 +239,11 @@
         "line_id": "sha256:b556aff69bdaae25e55a428ca8e12e984a6127ba29c833be9157b5e26b67081a",
         "role": "implementer",
         "agent": "claude-b",
+        "selection": null,
         "version": 1,
         "source": "router",
         "superseded_agent": null,
+        "superseded_selection": null,
         "provenance": {
           "policy_revision": 2,
           "tier": "soonest_reset",
@@ -366,9 +368,11 @@
         "line_id": "sha256:b3c327967e6a35dee1c21ea43dbfe45a93f92d93da84ab529d62ac72fbef0bfb",
         "role": "reviewer",
         "agent": "codex",
+        "selection": null,
         "version": 1,
         "source": "submit_task",
         "superseded_agent": null,
+        "superseded_selection": null,
         "provenance": null
       },
       "triage": null,

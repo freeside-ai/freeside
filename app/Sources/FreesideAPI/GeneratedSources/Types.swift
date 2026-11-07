@@ -1034,32 +1034,8 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/routing_policy`.
             public var routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload?
-            /// The committed agent tree's agents and lineup; null when the daemon holds no committed tree.
-            ///
-            ///
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog`.
-            public struct agent_catalogPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog/value1`.
-                public var value1: Components.Schemas.AgentCatalog
-                /// Creates a new `agent_catalogPayload`.
-                ///
-                /// - Parameters:
-                ///   - value1:
-                public init(value1: Components.Schemas.AgentCatalog) {
-                    self.value1 = value1
-                }
-                public init(from decoder: any Swift.Decoder) throws {
-                    self.value1 = try .init(from: decoder)
-                }
-                public func encode(to encoder: any Swift.Encoder) throws {
-                    try self.value1.encode(to: encoder)
-                }
-            }
-            /// The committed agent tree's agents and lineup; null when the daemon holds no committed tree.
-            ///
-            ///
-            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog`.
-            public var agent_catalog: Components.Schemas.BootstrapSnapshot.agent_catalogPayload?
+            public var agent_catalog: Components.Schemas.AgentCatalog
             /// Creates a new `BootstrapSnapshot`.
             ///
             /// - Parameters:
@@ -1074,7 +1050,7 @@ public enum Components {
             ///   - unattended_operation:
             ///   - usage_pools: Every usage pool's usage record, in pool id order.
             ///   - routing_policy: The current routing policy revision; null until one is set.
-            ///   - agent_catalog: The committed agent tree's agents and lineup; null when the daemon holds no committed tree.
+            ///   - agent_catalog:
             public init(
                 sync_epoch: Swift.String,
                 revision: Swift.Int64,
@@ -1087,7 +1063,7 @@ public enum Components {
                 unattended_operation: Components.Schemas.UnattendedOperationSnapshot,
                 usage_pools: [Components.Schemas.UsagePoolSnapshot],
                 routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload? = nil,
-                agent_catalog: Components.Schemas.BootstrapSnapshot.agent_catalogPayload? = nil
+                agent_catalog: Components.Schemas.AgentCatalog
             ) {
                 self.sync_epoch = sync_epoch
                 self.revision = revision
@@ -2157,13 +2133,39 @@ public enum Components {
                 ])
             }
         }
-        /// The agents the daemon's committed agent tree carries, and the lineup that runs a role when no task line or routing policy names an agent (plan §5.4). The daemon admits only agents listed here. It loads the tree once at startup, so the catalog changes only when the daemon restarts on a changed tree; lineup_revision, the tree's digest and the value a RoutingPolicy records as its lineup_revision, then changes with it.
+        /// What a client can choose for a task line (plan §5.4). It is always present. enrollments is every enrollment the daemon holds, each with the models the daemon discovered for it; it is store state, so a new discovery record moves the sync revision. agents and lineup are the committed agent tree's agents and the lineup that runs a role when no task line or routing policy chooses; both are empty, and lineup_revision null, when the daemon holds no committed tree. The daemon loads the tree once at startup, so that half changes only when the daemon restarts on a changed tree; lineup_revision, the tree's digest and the value a RoutingPolicy records as its lineup_revision, then changes with it, and the heartbeat carries it too. The daemon records a task line whose enrollment it holds and whose model and effort that enrollment's discovery serves, but until admission resolves a selection without a tree agent (#2734) a role admits only a selection one of agents runs, so a client offers those.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AgentCatalog`.
         public struct AgentCatalog: Codable, Hashable, Sendable {
+            /// The committed tree's digest; null when the daemon holds no committed tree.
+            ///
             /// - Remark: Generated from `#/components/schemas/AgentCatalog/lineup_revision`.
-            public var lineup_revision: Components.Schemas.Digest
+            public struct lineup_revisionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AgentCatalog/lineup_revision/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `lineup_revisionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The committed tree's digest; null when the daemon holds no committed tree.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalog/lineup_revision`.
+            public var lineup_revision: Components.Schemas.AgentCatalog.lineup_revisionPayload?
+            /// Every enrollment the daemon holds, in enrollment_id order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalog/enrollments`.
+            public var enrollments: [Components.Schemas.AgentCatalogEnrollment]
             /// Every agent the tree carries, in name order.
             ///
             /// - Remark: Generated from `#/components/schemas/AgentCatalog/agents`.
@@ -2176,28 +2178,36 @@ public enum Components {
             /// Creates a new `AgentCatalog`.
             ///
             /// - Parameters:
-            ///   - lineup_revision:
+            ///   - lineup_revision: The committed tree's digest; null when the daemon holds no committed tree.
+            ///   - enrollments: Every enrollment the daemon holds, in enrollment_id order.
             ///   - agents: Every agent the tree carries, in name order.
             ///   - lineup: One line per TaskLineRole the lineup binds, in TaskLineRole order. A role the lineup does not bind has no entry.
             public init(
-                lineup_revision: Components.Schemas.Digest,
+                lineup_revision: Components.Schemas.AgentCatalog.lineup_revisionPayload? = nil,
+                enrollments: [Components.Schemas.AgentCatalogEnrollment],
                 agents: [Components.Schemas.AgentCatalogEntry],
                 lineup: [Components.Schemas.AgentCatalogLineupLine]
             ) {
                 self.lineup_revision = lineup_revision
+                self.enrollments = enrollments
                 self.agents = agents
                 self.lineup = lineup
             }
             public enum CodingKeys: String, CodingKey {
                 case lineup_revision
+                case enrollments
                 case agents
                 case lineup
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.lineup_revision = try container.decode(
-                    Components.Schemas.Digest.self,
+                self.lineup_revision = try container.decodeIfPresent(
+                    Components.Schemas.AgentCatalog.lineup_revisionPayload.self,
                     forKey: .lineup_revision
+                )
+                self.enrollments = try container.decode(
+                    [Components.Schemas.AgentCatalogEnrollment].self,
+                    forKey: .enrollments
                 )
                 self.agents = try container.decode(
                     [Components.Schemas.AgentCatalogEntry].self,
@@ -2209,12 +2219,209 @@ public enum Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "lineup_revision",
+                    "enrollments",
                     "agents",
                     "lineup"
                 ])
             }
         }
-        /// One agent of the committed tree with its route offer's facts. effort is the effort the agent's source sets.
+        /// One enrollment a task line can select. discovery is null until the daemon records the enrollment's discovered models, so a client can tell "not discovered yet" from "offers nothing". The daemon accepts a selection on an enrollment with no discovery record and checks it when it admits the role.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentCatalogEnrollment`.
+        public struct AgentCatalogEnrollment: Codable, Hashable, Sendable {
+            /// Joins TaskLineSelection.enrollment_id and UsagePoolEnrollment.enrollment_id.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEnrollment/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEnrollment/harness_client`.
+            public var harness_client: Components.Schemas.HarnessClientKind
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEnrollment/discovery`.
+            public struct discoveryPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AgentCatalogEnrollment/discovery/value1`.
+                public var value1: Components.Schemas.AgentCatalogDiscovery
+                /// Creates a new `discoveryPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AgentCatalogDiscovery) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEnrollment/discovery`.
+            public var discovery: Components.Schemas.AgentCatalogEnrollment.discoveryPayload?
+            /// Creates a new `AgentCatalogEnrollment`.
+            ///
+            /// - Parameters:
+            ///   - enrollment_id: Joins TaskLineSelection.enrollment_id and UsagePoolEnrollment.enrollment_id.
+            ///   - harness_client:
+            ///   - discovery:
+            public init(
+                enrollment_id: Swift.String,
+                harness_client: Components.Schemas.HarnessClientKind,
+                discovery: Components.Schemas.AgentCatalogEnrollment.discoveryPayload? = nil
+            ) {
+                self.enrollment_id = enrollment_id
+                self.harness_client = harness_client
+                self.discovery = discovery
+            }
+            public enum CodingKeys: String, CodingKey {
+                case enrollment_id
+                case harness_client
+                case discovery
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.harness_client = try container.decode(
+                    Components.Schemas.HarnessClientKind.self,
+                    forKey: .harness_client
+                )
+                self.discovery = try container.decodeIfPresent(
+                    Components.Schemas.AgentCatalogEnrollment.discoveryPayload.self,
+                    forKey: .discovery
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "enrollment_id",
+                    "harness_client",
+                    "discovery"
+                ])
+            }
+        }
+        /// The models an enrollment's harness reported, as the daemon last recorded them. A selection on the enrollment must name one of these models and, unless its effort is harness_default, one of that model's effort levels.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentCatalogDiscovery`.
+        public struct AgentCatalogDiscovery: Codable, Hashable, Sendable {
+            /// The harness build that reported the models.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogDiscovery/harness_build`.
+            public var harness_build: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogDiscovery/observed_at`.
+            public var observed_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogDiscovery/models`.
+            public var models: [Components.Schemas.DiscoveredModel]
+            /// Creates a new `AgentCatalogDiscovery`.
+            ///
+            /// - Parameters:
+            ///   - harness_build: The harness build that reported the models.
+            ///   - observed_at:
+            ///   - models:
+            public init(
+                harness_build: Swift.String,
+                observed_at: Foundation.Date,
+                models: [Components.Schemas.DiscoveredModel]
+            ) {
+                self.harness_build = harness_build
+                self.observed_at = observed_at
+                self.models = models
+            }
+            public enum CodingKeys: String, CodingKey {
+                case harness_build
+                case observed_at
+                case models
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.harness_build = try container.decode(
+                    Swift.String.self,
+                    forKey: .harness_build
+                )
+                self.observed_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .observed_at
+                )
+                self.models = try container.decode(
+                    [Components.Schemas.DiscoveredModel].self,
+                    forKey: .models
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "harness_build",
+                    "observed_at",
+                    "models"
+                ])
+            }
+        }
+        /// One model an enrollment's harness reported.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DiscoveredModel`.
+        public struct DiscoveredModel: Codable, Hashable, Sendable {
+            /// The value the harness's model option takes, and a selection's model_id.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DiscoveredModel/id`.
+            public var id: Swift.String
+            /// The provider model the id resolves to, when the harness said; an alias such as "opus" resolves to a dated model.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DiscoveredModel/resolved_model`.
+            public var resolved_model: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DiscoveredModel/display_name`.
+            public var display_name: Swift.String
+            /// The harness's own effort strings, in its order; empty for a model without effort support. They are not EffortLevel: a harness reports levels that enum lacks.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DiscoveredModel/effort_levels`.
+            public var effort_levels: [Swift.String]
+            /// Creates a new `DiscoveredModel`.
+            ///
+            /// - Parameters:
+            ///   - id: The value the harness's model option takes, and a selection's model_id.
+            ///   - resolved_model: The provider model the id resolves to, when the harness said; an alias such as "opus" resolves to a dated model.
+            ///   - display_name:
+            ///   - effort_levels: The harness's own effort strings, in its order; empty for a model without effort support. They are not EffortLevel: a harness reports levels that enum lacks.
+            public init(
+                id: Swift.String,
+                resolved_model: Swift.String? = nil,
+                display_name: Swift.String,
+                effort_levels: [Swift.String]
+            ) {
+                self.id = id
+                self.resolved_model = resolved_model
+                self.display_name = display_name
+                self.effort_levels = effort_levels
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case resolved_model
+                case display_name
+                case effort_levels
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.resolved_model = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .resolved_model
+                )
+                self.display_name = try container.decode(
+                    Swift.String.self,
+                    forKey: .display_name
+                )
+                self.effort_levels = try container.decode(
+                    [Swift.String].self,
+                    forKey: .effort_levels
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "resolved_model",
+                    "display_name",
+                    "effort_levels"
+                ])
+            }
+        }
+        /// One agent of the committed tree with its route offer's facts. effort is the effort the agent's source sets. selection is what a task line records to run the agent.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry`.
@@ -2235,6 +2442,8 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/lineage_group`.
             public var lineage_group: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/selection`.
+            public var selection: Components.Schemas.TaskLineSelection
             /// Creates a new `AgentCatalogEntry`.
             ///
             /// - Parameters:
@@ -2243,18 +2452,21 @@ public enum Components {
             ///   - model: The model the agent's route passes to the harness.
             ///   - effort:
             ///   - lineage_group: The offer's lineage group; null when the offer declares none.
+            ///   - selection:
             public init(
                 name: Swift.String,
                 enrollment_id: Swift.String,
                 model: Swift.String,
                 effort: Components.Schemas.EffortLevel,
-                lineage_group: Swift.String? = nil
+                lineage_group: Swift.String? = nil,
+                selection: Components.Schemas.TaskLineSelection
             ) {
                 self.name = name
                 self.enrollment_id = enrollment_id
                 self.model = model
                 self.effort = effort
                 self.lineage_group = lineage_group
+                self.selection = selection
             }
             public enum CodingKeys: String, CodingKey {
                 case name
@@ -2262,6 +2474,7 @@ public enum Components {
                 case model
                 case effort
                 case lineage_group
+                case selection
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -2285,16 +2498,21 @@ public enum Components {
                     Swift.String.self,
                     forKey: .lineage_group
                 )
+                self.selection = try container.decode(
+                    Components.Schemas.TaskLineSelection.self,
+                    forKey: .selection
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "enrollment_id",
                     "model",
                     "effort",
-                    "lineage_group"
+                    "lineage_group",
+                    "selection"
                 ])
             }
         }
-        /// The agent the lineup binds to one role.
+        /// The agent the lineup binds to one role, and that agent's selection.
         ///
         /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine`.
         public struct AgentCatalogLineupLine: Codable, Hashable, Sendable {
@@ -2302,21 +2520,27 @@ public enum Components {
             public var role: Components.Schemas.TaskLineRole
             /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/agent`.
             public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/selection`.
+            public var selection: Components.Schemas.TaskLineSelection
             /// Creates a new `AgentCatalogLineupLine`.
             ///
             /// - Parameters:
             ///   - role:
             ///   - agent:
+            ///   - selection:
             public init(
                 role: Components.Schemas.TaskLineRole,
-                agent: Swift.String
+                agent: Swift.String,
+                selection: Components.Schemas.TaskLineSelection
             ) {
                 self.role = role
                 self.agent = agent
+                self.selection = selection
             }
             public enum CodingKeys: String, CodingKey {
                 case role
                 case agent
+                case selection
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -2328,9 +2552,14 @@ public enum Components {
                     Swift.String.self,
                     forKey: .agent
                 )
+                self.selection = try container.decode(
+                    Components.Schemas.TaskLineSelection.self,
+                    forKey: .selection
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "role",
-                    "agent"
+                    "agent",
+                    "selection"
                 ])
             }
         }
@@ -3366,32 +3595,30 @@ public enum Components {
             case remediator = "remediator"
             case reviewer = "reviewer"
         }
-        /// An operator's choice of agent for one role on one task. It names an agent only; the role's prompt stays the lineup's. The daemon checks the name's shape when it accepts the command and resolves the agent when it admits the role.
+        /// An operator's choice for one role on one task: the selection the role runs. The role's prompt stays the lineup's. When it accepts the command the daemon refuses, with a 400 that names the field, a selection whose enrollment it doesn't hold, or whose model or effort the enrollment's discovery record doesn't list; with no discovery record it checks the selection when it admits the role.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineInput`.
         public struct TaskLineInput: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TaskLineInput/role`.
             public var role: Components.Schemas.TaskLineRole
-            /// The agent's name in the control-plane tree.
-            ///
-            /// - Remark: Generated from `#/components/schemas/TaskLineInput/agent`.
-            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineInput/selection`.
+            public var selection: Components.Schemas.TaskLineSelection
             /// Creates a new `TaskLineInput`.
             ///
             /// - Parameters:
             ///   - role:
-            ///   - agent: The agent's name in the control-plane tree.
+            ///   - selection:
             public init(
                 role: Components.Schemas.TaskLineRole,
-                agent: Swift.String
+                selection: Components.Schemas.TaskLineSelection
             ) {
                 self.role = role
-                self.agent = agent
+                self.selection = selection
             }
             public enum CodingKeys: String, CodingKey {
                 case role
-                case agent
+                case selection
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -3399,13 +3626,135 @@ public enum Components {
                     Components.Schemas.TaskLineRole.self,
                     forKey: .role
                 )
-                self.agent = try container.decode(
-                    Swift.String.self,
-                    forKey: .agent
+                self.selection = try container.decode(
+                    Components.Schemas.TaskLineSelection.self,
+                    forKey: .selection
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "role",
-                    "agent"
+                    "selection"
+                ])
+            }
+        }
+        /// What a task line runs: an enrollment the daemon holds, a model id the enrollment's harness takes (a DiscoveredModel id), and an effort as that harness names it, or harness_default to send none. It names no agent. Each value is a launch option: at most 256 bytes, with no whitespace or control character, and not starting with "-".
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineSelection`.
+        public struct TaskLineSelection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineSelection/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineSelection/model_id`.
+            public var model_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineSelection/effort`.
+            public var effort: Swift.String
+            /// Creates a new `TaskLineSelection`.
+            ///
+            /// - Parameters:
+            ///   - enrollment_id:
+            ///   - model_id:
+            ///   - effort:
+            public init(
+                enrollment_id: Swift.String,
+                model_id: Swift.String,
+                effort: Swift.String
+            ) {
+                self.enrollment_id = enrollment_id
+                self.model_id = model_id
+                self.effort = effort
+            }
+            public enum CodingKeys: String, CodingKey {
+                case enrollment_id
+                case model_id
+                case effort
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.model_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .model_id
+                )
+                self.effort = try container.decode(
+                    Swift.String.self,
+                    forKey: .effort
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "enrollment_id",
+                    "model_id",
+                    "effort"
+                ])
+            }
+        }
+        /// A recorded choice for one role, in the encoding it was recorded in: exactly one of agent and selection is non-null. A choice recorded since #2598 holds its selection; one recorded before it holds the agent name the command named then.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineChoice`.
+        public struct TaskLineChoice: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineChoice/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/TaskLineChoice/agent`.
+            public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskLineChoice/selection`.
+            public struct selectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLineChoice/selection/value1`.
+                public var value1: Components.Schemas.TaskLineSelection
+                /// Creates a new `selectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelection) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLineChoice/selection`.
+            public var selection: Components.Schemas.TaskLineChoice.selectionPayload?
+            /// Creates a new `TaskLineChoice`.
+            ///
+            /// - Parameters:
+            ///   - role:
+            ///   - agent:
+            ///   - selection:
+            public init(
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String? = nil,
+                selection: Components.Schemas.TaskLineChoice.selectionPayload? = nil
+            ) {
+                self.role = role
+                self.agent = agent
+                self.selection = selection
+            }
+            public enum CodingKeys: String, CodingKey {
+                case role
+                case agent
+                case selection
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.selection = try container.decodeIfPresent(
+                    Components.Schemas.TaskLineChoice.selectionPayload.self,
+                    forKey: .selection
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "role",
+                    "agent",
+                    "selection"
                 ])
             }
         }
@@ -3826,7 +4175,7 @@ public enum Components {
                 ])
             }
         }
-        /// One version of a task's line for one role: the agent chosen for that role in that task. A change is a new version naming the one it supersedes; a version is never edited. id is the content address of every other field. provenance is set exactly when source is router or alternate_agent_move.
+        /// One version of a task's line for one role: what was chosen for that role in that task. A change is a new version naming the one it supersedes; a version is never edited. id is the content address of the version as the daemon records it. Exactly one of agent and selection is non-null: a version recorded since #2597 carries its selection, and an older one the agent name it recorded. The daemon never translates one into the other. provenance is set exactly when source is router or alternate_agent_move.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLine`.
@@ -3838,7 +4187,27 @@ public enum Components {
             /// - Remark: Generated from `#/components/schemas/TaskLine/role`.
             public var role: Components.Schemas.TaskLineRole
             /// - Remark: Generated from `#/components/schemas/TaskLine/agent`.
-            public var agent: Swift.String
+            public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskLine/selection`.
+            public struct selectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLine/selection/value1`.
+                public var value1: Components.Schemas.TaskLineSelection
+                /// Creates a new `selectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelection) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLine/selection`.
+            public var selection: Components.Schemas.TaskLine.selectionPayload?
             /// - Remark: Generated from `#/components/schemas/TaskLine/version`.
             public var version: Swift.Int
             /// The version this one supersedes; null for version 1.
@@ -3900,6 +4269,7 @@ public enum Components {
             ///   - task_id:
             ///   - role:
             ///   - agent:
+            ///   - selection:
             ///   - version:
             ///   - predecessor_id: The version this one supersedes; null for version 1.
             ///   - source:
@@ -3910,7 +4280,8 @@ public enum Components {
                 id: Components.Schemas.Digest,
                 task_id: Swift.String,
                 role: Components.Schemas.TaskLineRole,
-                agent: Swift.String,
+                agent: Swift.String? = nil,
+                selection: Components.Schemas.TaskLine.selectionPayload? = nil,
                 version: Swift.Int,
                 predecessor_id: Components.Schemas.TaskLine.predecessor_idPayload? = nil,
                 source: Components.Schemas.TaskLineSource,
@@ -3922,6 +4293,7 @@ public enum Components {
                 self.task_id = task_id
                 self.role = role
                 self.agent = agent
+                self.selection = selection
                 self.version = version
                 self.predecessor_id = predecessor_id
                 self.source = source
@@ -3934,6 +4306,7 @@ public enum Components {
                 case task_id
                 case role
                 case agent
+                case selection
                 case version
                 case predecessor_id
                 case source
@@ -3955,9 +4328,13 @@ public enum Components {
                     Components.Schemas.TaskLineRole.self,
                     forKey: .role
                 )
-                self.agent = try container.decode(
+                self.agent = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .agent
+                )
+                self.selection = try container.decodeIfPresent(
+                    Components.Schemas.TaskLine.selectionPayload.self,
+                    forKey: .selection
                 )
                 self.version = try container.decode(
                     Swift.Int.self,
@@ -3988,6 +4365,7 @@ public enum Components {
                     "task_id",
                     "role",
                     "agent",
+                    "selection",
                     "version",
                     "predecessor_id",
                     "source",
@@ -6119,7 +6497,7 @@ public enum Components {
                 ])
             }
         }
-        /// One task line version as the timeline shows it. agent is null on a cleared version, which returned the role to the lineup. superseded_agent is the agent of the version this one supersedes, null for version 1 and after a cleared version. provenance is the router's citation, null for an operator line.
+        /// One task line version as the timeline shows it, in its own encoding as TaskLine carries it: at most one of agent and selection is non-null, and both are null on a cleared version, which returned the role to the lineup. superseded_agent and superseded_selection are the version this one supersedes, in that version's encoding; both are null for version 1 and after a cleared version. provenance is the router's citation, null for an operator line.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine`.
@@ -6130,12 +6508,52 @@ public enum Components {
             public var role: Components.Schemas.TaskLineRole
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/agent`.
             public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/selection`.
+            public struct selectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/selection/value1`.
+                public var value1: Components.Schemas.TaskLineSelection
+                /// Creates a new `selectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelection) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/selection`.
+            public var selection: Components.Schemas.TaskEventTaskLine.selectionPayload?
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/version`.
             public var version: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/source`.
             public var source: Components.Schemas.TaskLineSource
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/superseded_agent`.
             public var superseded_agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/superseded_selection`.
+            public struct superseded_selectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/superseded_selection/value1`.
+                public var value1: Components.Schemas.TaskLineSelection
+                /// Creates a new `superseded_selectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelection) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/superseded_selection`.
+            public var superseded_selection: Components.Schemas.TaskEventTaskLine.superseded_selectionPayload?
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/provenance`.
             public struct provenancePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/provenance/value1`.
@@ -6162,34 +6580,42 @@ public enum Components {
             ///   - line_id:
             ///   - role:
             ///   - agent:
+            ///   - selection:
             ///   - version:
             ///   - source:
             ///   - superseded_agent:
+            ///   - superseded_selection:
             ///   - provenance:
             public init(
                 line_id: Components.Schemas.Digest,
                 role: Components.Schemas.TaskLineRole,
                 agent: Swift.String? = nil,
+                selection: Components.Schemas.TaskEventTaskLine.selectionPayload? = nil,
                 version: Swift.Int,
                 source: Components.Schemas.TaskLineSource,
                 superseded_agent: Swift.String? = nil,
+                superseded_selection: Components.Schemas.TaskEventTaskLine.superseded_selectionPayload? = nil,
                 provenance: Components.Schemas.TaskEventTaskLine.provenancePayload? = nil
             ) {
                 self.line_id = line_id
                 self.role = role
                 self.agent = agent
+                self.selection = selection
                 self.version = version
                 self.source = source
                 self.superseded_agent = superseded_agent
+                self.superseded_selection = superseded_selection
                 self.provenance = provenance
             }
             public enum CodingKeys: String, CodingKey {
                 case line_id
                 case role
                 case agent
+                case selection
                 case version
                 case source
                 case superseded_agent
+                case superseded_selection
                 case provenance
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -6206,6 +6632,10 @@ public enum Components {
                     Swift.String.self,
                     forKey: .agent
                 )
+                self.selection = try container.decodeIfPresent(
+                    Components.Schemas.TaskEventTaskLine.selectionPayload.self,
+                    forKey: .selection
+                )
                 self.version = try container.decode(
                     Swift.Int.self,
                     forKey: .version
@@ -6218,6 +6648,10 @@ public enum Components {
                     Swift.String.self,
                     forKey: .superseded_agent
                 )
+                self.superseded_selection = try container.decodeIfPresent(
+                    Components.Schemas.TaskEventTaskLine.superseded_selectionPayload.self,
+                    forKey: .superseded_selection
+                )
                 self.provenance = try container.decodeIfPresent(
                     Components.Schemas.TaskEventTaskLine.provenancePayload.self,
                     forKey: .provenance
@@ -6226,9 +6660,11 @@ public enum Components {
                     "line_id",
                     "role",
                     "agent",
+                    "selection",
                     "version",
                     "source",
                     "superseded_agent",
+                    "superseded_selection",
                     "provenance"
                 ])
             }
@@ -9430,7 +9866,7 @@ public enum Components {
                 ])
             }
         }
-        /// Change a waiting task's line for one role, as `freesided task-line` does on the daemon host: name an agent, or null to clear the line and return the role to the lineup. Refused while an attempt of the role runs. The new version's source is client_line_change.
+        /// Change a waiting task's line for one role, as `freesided task-line` does on the daemon host: a selection, or null to clear the line and return the role to the lineup. Refused while an attempt of the role runs, and refused as TaskLineInput's selection is, with a 400 naming the selection's field. The new version's source is client_line_change.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload`.
@@ -9445,31 +9881,49 @@ public enum Components {
             public var task_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/role`.
             public var role: Components.Schemas.TaskLineRole
-            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/agent`.
-            public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/selection`.
+            public struct selectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/selection/value1`.
+                public var value1: Components.Schemas.TaskLineSelection
+                /// Creates a new `selectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelection) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/selection`.
+            public var selection: Components.Schemas.ChangeTaskLinePayload.selectionPayload?
             /// Creates a new `ChangeTaskLinePayload`.
             ///
             /// - Parameters:
             ///   - kind:
             ///   - task_id:
             ///   - role:
-            ///   - agent:
+            ///   - selection:
             public init(
                 kind: Components.Schemas.ChangeTaskLinePayload.kindPayload,
                 task_id: Swift.String,
                 role: Components.Schemas.TaskLineRole,
-                agent: Swift.String? = nil
+                selection: Components.Schemas.ChangeTaskLinePayload.selectionPayload? = nil
             ) {
                 self.kind = kind
                 self.task_id = task_id
                 self.role = role
-                self.agent = agent
+                self.selection = selection
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case task_id
                 case role
-                case agent
+                case selection
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -9485,15 +9939,15 @@ public enum Components {
                     Components.Schemas.TaskLineRole.self,
                     forKey: .role
                 )
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
+                self.selection = try container.decodeIfPresent(
+                    Components.Schemas.ChangeTaskLinePayload.selectionPayload.self,
+                    forKey: .selection
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "task_id",
                     "role",
-                    "agent"
+                    "selection"
                 ])
             }
         }
@@ -9785,7 +10239,7 @@ public enum Components {
                 ])
             }
         }
-        /// The receipt of a line change: the request, whether it recorded a new version, and the role's current line after it. recorded false means the role already had that line. line is null when the role has no line: it never had one, or the change cleared it.
+        /// The receipt of a line change: the request, whether it recorded a new version, and the role's current line after it. The request holds at most one of agent and selection, and neither for a clear: a request accepted since #2598 holds its selection, one accepted before it the agent name it sent. recorded false means the role already had that line. line is null when the role has no line: it never had one, or the change cleared it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord`.
@@ -9806,6 +10260,26 @@ public enum Components {
             public var role: Components.Schemas.TaskLineRole
             /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/agent`.
             public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/selection`.
+            public struct selectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/selection/value1`.
+                public var value1: Components.Schemas.TaskLineSelection
+                /// Creates a new `selectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelection) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/selection`.
+            public var selection: Components.Schemas.TaskLineChangeRecord.selectionPayload?
             /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/recorded`.
             public var recorded: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/line`.
@@ -9837,6 +10311,7 @@ public enum Components {
             ///   - task_id:
             ///   - role:
             ///   - agent:
+            ///   - selection:
             ///   - recorded:
             ///   - line:
             public init(
@@ -9846,6 +10321,7 @@ public enum Components {
                 task_id: Swift.String,
                 role: Components.Schemas.TaskLineRole,
                 agent: Swift.String? = nil,
+                selection: Components.Schemas.TaskLineChangeRecord.selectionPayload? = nil,
                 recorded: Swift.Bool,
                 line: Components.Schemas.TaskLineChangeRecord.linePayload? = nil
             ) {
@@ -9855,6 +10331,7 @@ public enum Components {
                 self.task_id = task_id
                 self.role = role
                 self.agent = agent
+                self.selection = selection
                 self.recorded = recorded
                 self.line = line
             }
@@ -9865,6 +10342,7 @@ public enum Components {
                 case task_id
                 case role
                 case agent
+                case selection
                 case recorded
                 case line
             }
@@ -9894,6 +10372,10 @@ public enum Components {
                     Swift.String.self,
                     forKey: .agent
                 )
+                self.selection = try container.decodeIfPresent(
+                    Components.Schemas.TaskLineChangeRecord.selectionPayload.self,
+                    forKey: .selection
+                )
                 self.recorded = try container.decode(
                     Swift.Bool.self,
                     forKey: .recorded
@@ -9909,6 +10391,7 @@ public enum Components {
                     "task_id",
                     "role",
                     "agent",
+                    "selection",
                     "recorded",
                     "line"
                 ])
@@ -10714,7 +11197,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/finding_routes`.
             public var finding_routes: [Components.Schemas.FindingRouteChoice]?
-            /// Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
+            /// Per-role choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type, where the daemon rejects it with 400. A selection the daemon doesn't serve is refused as TaskLineInput describes.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/task_lines`.
@@ -10743,7 +11226,7 @@ public enum Components {
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
             ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
-            ///   - task_lines: Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
+            ///   - task_lines: Per-role choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type, where the daemon rejects it with 400. A selection the daemon doesn't serve is refused as TaskLineInput describes.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
                 kind: Components.Schemas.DecisionPayload.kindPayload,
@@ -10924,7 +11407,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/name`.
             public var name: Swift.String?
-            /// Optional per-role agent choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed agent name is rejected with 400 and nothing is written. The lines are recorded when the command creates the task. Admission does not read task lines yet: until it does, a line is recorded and the lineup still selects every agent.
+            /// Optional per-role choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed or unserved selection (TaskLineInput) is rejected with 400 and nothing is written. The lines are recorded when the command creates the task, and admission holds each role to its line.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/task_lines`.
@@ -10941,7 +11424,7 @@ public enum Components {
             ///   - project_id: The project the task is submitted into.
             ///   - source: The task's source text, registered as a digest-addressed artifact.
             ///   - name: Optional operator-chosen task name, stored with source operator so the namer never runs for it. The daemon trims surrounding whitespace, then requires one line of 1 to 60 characters (Unicode code points), valid UTF-8, with no credential-shaped token. A name that fails after trimming is rejected with 400 and nothing is written; the daemon never truncates it or drops it. The name is applied only when the command creates the task and is ignored, but still validated, when the command fetches an existing task.
-            ///   - task_lines: Optional per-role agent choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed agent name is rejected with 400 and nothing is written. The lines are recorded when the command creates the task. Admission does not read task lines yet: until it does, a line is recorded and the lineup still selects every agent.
+            ///   - task_lines: Optional per-role choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed or unserved selection (TaskLineInput) is rejected with 400 and nothing is written. The lines are recorded when the command creates the task, and admission holds each role to its line.
             ///   - attachments: Optional files for the new task, in the order the operator gave them; upload each first through PUT /attachments/{digest}. The list is part of the command's identity: the same command_id with an entry changed, added, removed, or reordered is rejected with 400, and a historical record without a request digest rejects a retry that carries attachments. An absent field behaves as before the field existed. An empty list, a digest that is not stored, a name that breaks a rule or repeats, a malformed claim, or a breach of any size or count limit (TaskAttachment) is rejected with 400 and nothing is written. The daemon records each attachment with the media type it determines from the bytes and the stored size.
             public init(
                 kind: Components.Schemas.SubmitTaskPayload.kindPayload,
@@ -11299,11 +11782,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name`.
             public var name: Components.Schemas.TaskSubmissionRecord.namePayload
-            /// The per-role agent choices the command carried, in TaskLineRole order; admission holds a submitted line to them (plan §5.4). Absent when the command carried none, or was recorded before the field existed. Manual Retry returns the record as it was recorded.
+            /// The per-role choices the command carried, in TaskLineRole order and in the encoding they were recorded in; admission holds a submitted line to them (plan §5.4). Absent when the command carried none, or was recorded before the field existed. Manual Retry returns the record as it was recorded.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/task_lines`.
-            public var task_lines: [Components.Schemas.TaskLineInput]?
+            public var task_lines: [Components.Schemas.TaskLineChoice]?
             /// Creates a new `TaskSubmissionRecord`.
             ///
             /// - Parameters:
@@ -11316,7 +11799,7 @@ public enum Components {
             ///   - task_id: The task the command created or fetched by the intake key.
             ///   - specification_run_id: The task's specification run started (or already present).
             ///   - name: The task's display name at acceptance. Manual Retry returns the original recorded name, even if the task has since been renamed.
-            ///   - task_lines: The per-role agent choices the command carried, in TaskLineRole order; admission holds a submitted line to them (plan §5.4). Absent when the command carried none, or was recorded before the field existed. Manual Retry returns the record as it was recorded.
+            ///   - task_lines: The per-role choices the command carried, in TaskLineRole order and in the encoding they were recorded in; admission holds a submitted line to them (plan §5.4). Absent when the command carried none, or was recorded before the field existed. Manual Retry returns the record as it was recorded.
             public init(
                 kind: Components.Schemas.TaskSubmissionRecord.kindPayload,
                 command_id: Swift.String,
@@ -11327,7 +11810,7 @@ public enum Components {
                 task_id: Swift.String,
                 specification_run_id: Swift.String,
                 name: Components.Schemas.TaskSubmissionRecord.namePayload,
-                task_lines: [Components.Schemas.TaskLineInput]? = nil
+                task_lines: [Components.Schemas.TaskLineChoice]? = nil
             ) {
                 self.kind = kind
                 self.command_id = command_id
@@ -11391,7 +11874,7 @@ public enum Components {
                     forKey: .name
                 )
                 self.task_lines = try container.decodeIfPresent(
-                    [Components.Schemas.TaskLineInput].self,
+                    [Components.Schemas.TaskLineChoice].self,
                     forKey: .task_lines
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -14186,6 +14669,35 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/native_effort`.
             public var native_effort: Swift.String?
+            /// The selection admission resolved, with selection_model_id, selection_effort, and selection_digest: one tuple, null together on a binding admitted before the selection was recorded.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/enrollment_id`.
+            public var enrollment_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_model_id`.
+            public var selection_model_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_effort`.
+            public var selection_effort: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_digest`.
+            public struct selection_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `selection_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_digest`.
+            public var selection_digest: Components.Schemas.InvocationAdmissionFacts.selection_digestPayload?
             /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/cost_owner`.
             public var cost_owner: Swift.String?
             /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/lineage_group`.
@@ -14272,6 +14784,10 @@ public enum Components {
             ///   - model: The model the route passed to the harness.
             ///   - requested_effort:
             ///   - native_effort: The effort as the harness names it, after any rendered clamp.
+            ///   - enrollment_id: The selection admission resolved, with selection_model_id, selection_effort, and selection_digest: one tuple, null together on a binding admitted before the selection was recorded.
+            ///   - selection_model_id:
+            ///   - selection_effort:
+            ///   - selection_digest:
             ///   - cost_owner:
             ///   - lineage_group:
             ///   - credential_mode:
@@ -14290,6 +14806,10 @@ public enum Components {
                 model: Swift.String? = nil,
                 requested_effort: Components.Schemas.InvocationAdmissionFacts.requested_effortPayload? = nil,
                 native_effort: Swift.String? = nil,
+                enrollment_id: Swift.String? = nil,
+                selection_model_id: Swift.String? = nil,
+                selection_effort: Swift.String? = nil,
+                selection_digest: Components.Schemas.InvocationAdmissionFacts.selection_digestPayload? = nil,
                 cost_owner: Swift.String? = nil,
                 lineage_group: Swift.String? = nil,
                 credential_mode: Components.Schemas.InvocationAdmissionFacts.credential_modePayload? = nil,
@@ -14308,6 +14828,10 @@ public enum Components {
                 self.model = model
                 self.requested_effort = requested_effort
                 self.native_effort = native_effort
+                self.enrollment_id = enrollment_id
+                self.selection_model_id = selection_model_id
+                self.selection_effort = selection_effort
+                self.selection_digest = selection_digest
                 self.cost_owner = cost_owner
                 self.lineage_group = lineage_group
                 self.credential_mode = credential_mode
@@ -14327,6 +14851,10 @@ public enum Components {
                 case model
                 case requested_effort
                 case native_effort
+                case enrollment_id
+                case selection_model_id
+                case selection_effort
+                case selection_digest
                 case cost_owner
                 case lineage_group
                 case credential_mode
@@ -14377,6 +14905,22 @@ public enum Components {
                     Swift.String.self,
                     forKey: .native_effort
                 )
+                self.enrollment_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.selection_model_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .selection_model_id
+                )
+                self.selection_effort = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .selection_effort
+                )
+                self.selection_digest = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.selection_digestPayload.self,
+                    forKey: .selection_digest
+                )
                 self.cost_owner = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .cost_owner
@@ -14416,6 +14960,10 @@ public enum Components {
                     "model",
                     "requested_effort",
                     "native_effort",
+                    "enrollment_id",
+                    "selection_model_id",
+                    "selection_effort",
+                    "selection_digest",
                     "cost_owner",
                     "lineage_group",
                     "credential_mode",

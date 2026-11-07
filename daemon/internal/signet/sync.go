@@ -315,9 +315,10 @@ type BootstrapSnapshot struct {
 	UsagePools          []UsagePoolSnapshot         `json:"usage_pools"`
 	// RoutingPolicy is nil until a policy is first set.
 	RoutingPolicy *RoutingPolicySnapshot `json:"routing_policy"`
-	// AgentCatalog is nil when the daemon holds no committed tree. It is read
-	// from the tree loaded at startup, not the store.
-	AgentCatalog *AgentCatalog `json:"agent_catalog"`
+	// AgentCatalog is never nil: its enrollments are read in the snapshot's
+	// transaction and its agents and lineup from the tree loaded at startup,
+	// empty when the daemon holds no committed tree.
+	AgentCatalog AgentCatalog `json:"agent_catalog"`
 }
 
 // Bootstrap returns the one response that advances a client's
@@ -374,6 +375,10 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return err
 		}
+		agentCatalog, err := agentCatalogSnapshot(ctx, tx, s.agentCatalog())
+		if err != nil {
+			return err
+		}
 
 		out = BootstrapSnapshot{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
@@ -386,7 +391,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			UnattendedOperation: unattendedOperationSnapshot(gate),
 			UsagePools:          usagePools,
 			RoutingPolicy:       routingPolicy,
-			AgentCatalog:        s.agentCatalog(),
+			AgentCatalog:        agentCatalog,
 		}
 		snoozedItems := make(map[domain.ItemID]bool)
 		for _, item := range items {
@@ -438,7 +443,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			if err := validateSnapshot(state, task.Snapshot); err != nil {
 				return err
 			}
-			snapshot, err := projectTaskSnapshot(ctx, tx, state, task.Value, projectedRuns, s.TaskLineAgents())
+			snapshot, err := projectTaskSnapshot(ctx, tx, state, task.Value, projectedRuns)
 			if errors.Is(err, ErrRunObservationIntegrity) {
 				s.logger.Warn("task projection integrity failure; excluding task from bootstrap", "task_id", task.Value.ID, "error", err)
 				continue

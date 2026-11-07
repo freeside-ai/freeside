@@ -69,7 +69,7 @@
             let server =
                 switch state {
                 case .policy: MockServer(routingPolicy: canvasPolicy())
-                case .noTree: MockServer(routingPolicy: nil, agentCatalog: nil)
+                case .noTree: MockServer(routingPolicy: nil, agentCatalog: UsageFixtures.treelessAgentCatalog())
                 case .drainFirst: MockServer(routingPolicy: drainFirstPolicy())
                 default: MockServer()
                 }

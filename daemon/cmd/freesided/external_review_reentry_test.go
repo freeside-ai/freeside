@@ -618,7 +618,7 @@ func TestTaskTimelineShowsExternalReviewReentry(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			timeline, err := signet.ReadTaskTimeline(ctx, tx, nil, run.TaskID, activeResourceTestTime)
+			timeline, err := signet.ReadTaskTimeline(ctx, tx, run.TaskID, activeResourceTestTime)
 			if err != nil {
 				return err
 			}

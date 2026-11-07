@@ -149,19 +149,26 @@ func (r CollectorReassignmentReceipt) Validate() error {
 	return nil
 }
 
-// TaskLineChangeRequest is a change_task_line command as accepted. Agent is
-// nil for a clear.
+// TaskLineChangeRequest is a change_task_line command as accepted. It holds
+// at most one of Agent and Selection, and neither for a clear: a request
+// accepted since #2598 carries the client's selection, and one accepted
+// before it the agent name the client sent then. Selection is omitted when
+// nil, so a stored receipt from before it keeps its bytes.
 type TaskLineChangeRequest struct {
 	CommandIdentity
-	TaskID TaskID   `json:"task_id"`
-	Role   RoleName `json:"role"`
-	Agent  *string  `json:"agent"`
+	TaskID    TaskID             `json:"task_id"`
+	Role      RoleName           `json:"role"`
+	Agent     *string            `json:"agent"`
+	Selection *TaskLineSelection `json:"selection,omitempty"`
 }
 
 // Same reports whether two requests ask for the same change.
 func (r TaskLineChangeRequest) Same(other TaskLineChangeRequest) bool {
 	sameAgent := (r.Agent == nil) == (other.Agent == nil) && (r.Agent == nil || *r.Agent == *other.Agent)
-	return r.CommandIdentity == other.CommandIdentity && r.TaskID == other.TaskID && r.Role == other.Role && sameAgent
+	sameSelection := (r.Selection == nil) == (other.Selection == nil) &&
+		(r.Selection == nil || *r.Selection == *other.Selection)
+	return r.CommandIdentity == other.CommandIdentity && r.TaskID == other.TaskID && r.Role == other.Role &&
+		sameAgent && sameSelection
 }
 
 func (r TaskLineChangeRequest) validate() error {
@@ -176,6 +183,14 @@ func (r TaskLineChangeRequest) validate() error {
 	}
 	if r.Agent != nil && !validAgentName(*r.Agent) {
 		return fmt.Errorf("role %s agent: %w", r.Role, ErrInvalidAgentName)
+	}
+	if r.Selection != nil {
+		if r.Agent != nil {
+			return fmt.Errorf("role %s names an agent and a selection: %w", r.Role, ErrInvalidTaskLineSelection)
+		}
+		if err := r.Selection.Validate(); err != nil {
+			return fmt.Errorf("role %s: %w", r.Role, err)
+		}
 	}
 	return nil
 }
@@ -196,7 +211,7 @@ func (r TaskLineChangeReceipt) Validate() error {
 	}
 	if r.Line == nil {
 		// Only a clear leaves the role with no line.
-		if r.Agent != nil {
+		if r.Agent != nil || r.Selection != nil {
 			return fmt.Errorf("task line change receipt %q line: %w", r.CommandID, ErrParentKeyMismatch)
 		}
 		return nil
@@ -204,11 +219,7 @@ func (r TaskLineChangeReceipt) Validate() error {
 	if err := r.Line.Validate(); err != nil {
 		return fmt.Errorf("task line change receipt %q line: %w", r.CommandID, err)
 	}
-	// A v2 line holds the selection the daemon's tree translated the
-	// request's agent to when it was accepted; which selection that was is
-	// the tree's question, so only a v1 line is compared by name here.
-	if r.Line.Cleared || r.Line.TaskID != r.TaskID || r.Line.Role != r.Role ||
-		r.Agent == nil || (r.Line.Encoding == TaskLineEncodingV1 && r.Line.Agent != *r.Agent) {
+	if r.Line.Cleared || r.Line.TaskID != r.TaskID || r.Line.Role != r.Role || !r.lineMatches(*r.Line) {
 		return fmt.Errorf("task line change receipt %q line: %w", r.CommandID, ErrParentKeyMismatch)
 	}
 	if r.Recorded && r.Line.Source != TaskLineSourceClientLineChange {
@@ -216,6 +227,22 @@ func (r TaskLineChangeReceipt) Validate() error {
 			r.CommandID, r.Line.Source, ErrInvalidTaskLineSource)
 	}
 	return nil
+}
+
+// lineMatches reports whether line holds what the request asked for. A
+// request since #2598 records its own selection as a v2 line. One from
+// before it named an agent: a v1 line holds that name, and a v2 line the
+// selection the daemon's tree translated it to then, which is the tree's
+// question, so such a line is not compared here.
+func (r TaskLineChangeReceipt) lineMatches(line TaskLine) bool {
+	switch {
+	case r.Selection != nil:
+		return line.Encoding == TaskLineEncodingV2 && line.Selection != nil && *line.Selection == *r.Selection
+	case r.Agent != nil:
+		return line.Encoding != TaskLineEncodingV1 || line.Agent == *r.Agent
+	default:
+		return false
+	}
 }
 
 // RoutingPolicyChangeRequest is a set_routing_policy command as accepted,

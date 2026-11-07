@@ -231,7 +231,7 @@ func recordModelCatalog(
 	if err != nil {
 		return domain.DiscoveredModelCatalog{}, err
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordDiscoveredModelCatalog(ctx, catalog)
 	}); err != nil {
 		return domain.DiscoveredModelCatalog{}, err

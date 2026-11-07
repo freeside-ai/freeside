@@ -716,8 +716,7 @@ func taskLineProposal(t *testing.T, f *agentAdmissionFixture) (ProposalAdmission
 		t.Fatal(err)
 	}
 	service := signet.NewService(f.store, signet.WithBlobStore(engine.artifacts.(*signet.BlobStore)),
-		signet.WithClock(func() time.Time { return agentTestAt.Add(time.Minute) }),
-		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) { return f.selection.Tree, nil }))
+		signet.WithClock(func() time.Time { return agentTestAt.Add(time.Minute) }))
 	return proposal, service, signet.ClientCommand{
 		CommandID: "start-task-line", DeviceID: "device-lines", ExpectedEntityVersion: 1,
 		Payload: signet.DecisionPayload{
@@ -732,7 +731,9 @@ func TestProposalTaskLineAdmitsChosenSpecifier(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	_, enrollment := f.addSecondAgent(t)
 	_, service, command := taskLineProposal(t, f)
-	command.Payload.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: agentTestSecondAgent}}
+	command.Payload.TaskLines = []domain.TaskLineChoice{{
+		Role: domain.RoleSpecifier, Selection: f.lineSelection(t, agentTestSecondAgent),
+	}}
 	if _, err := service.Submit(t.Context(), command); err != nil {
 		t.Fatal(err)
 	}
@@ -842,7 +843,9 @@ func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	_, service, first := taskLineProposal(t, f)
-	first.Payload.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: agentTestSecondAgent}}
+	first.Payload.TaskLines = []domain.TaskLineChoice{{
+		Role: domain.RoleSpecifier, Selection: f.lineSelection(t, agentTestSecondAgent),
+	}}
 	result, err := service.Submit(t.Context(), first)
 	if err != nil {
 		t.Fatal(err)
@@ -862,7 +865,9 @@ func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
 	}
 	original := readLine()
 	engine := newProposalAdmissionEngine(t, f.store)
-	for i, choices := range [][]domain.TaskLineChoice{nil, {{Role: domain.RoleSpecifier, Agent: agentTestWriterAgent}}} {
+	for i, choices := range [][]domain.TaskLineChoice{
+		nil, {{Role: domain.RoleSpecifier, Selection: f.lineSelection(t, agentTestWriterAgent)}},
+	} {
 		id := []string{"lineless-repeat", "changed-repeat"}[i]
 		request := proposalAdmissionFixture(t, id)
 		proposal, err := engine.admitProposalAt(t.Context(), request, agentTestAt)

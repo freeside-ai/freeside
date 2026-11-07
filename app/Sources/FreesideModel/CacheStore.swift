@@ -248,9 +248,12 @@ public struct DiskCacheStore: CacheStore {
     /// until a write moved the revision. 9: an artifact-sourced task's
     /// source joined its required work-item digest; a format 8 file's
     /// artifact-sourced tasks lack it, and its cursor would skip the
-    /// bootstrap that supplies them. A pre-current cache cannot claim
-    /// freshness while durable rows from a newer client surface are absent.
-    static let format = 9
+    /// bootstrap that supplies them. 10: the agent catalog gained the
+    /// enrollments and each agent's selection (#2598); a format 9 cursor
+    /// would skip the bootstrap that supplies them. A pre-current cache cannot
+    /// claim freshness while durable rows from a newer client surface are
+    /// absent.
+    static let format = 10
 
     private struct CacheFile: Codable {
         var format: Int
@@ -271,8 +274,8 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4, 5, 6, 7, 8:
-            // Formats 2 to 8 already carried retryable commands, but predate
+        case 2, 3, 4, 5, 6, 7, 8, 9:
+            // Formats 2 to 9 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
@@ -345,6 +348,14 @@ public struct DiskCacheStore: CacheStore {
     ///    (#2645). `ScheduleKind` decodes strictly, so a cached schedule of
     ///    that kind would throw and discard the cache, ledger included. The
     ///    schedule is dropped, matching the daemon, which deletes those rows.
+    /// 8. A client's task lines became selections (#2598). A cached agent
+    ///    catalog without `enrollments` would throw and discard the cache,
+    ///    ledger included; it is dropped, and the format bump makes the
+    ///    bootstrap restore it. A saved command or submission whose lines,
+    ///    or line change, name an agent would fail its section's decode and
+    ///    drop every entry in it; only that entry is dropped, since the
+    ///    daemon now refuses a name from a client, so its verbatim retry
+    ///    could only be refused.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -469,9 +480,39 @@ public struct DiskCacheStore: CacheStore {
             }
         }
 
+        if let catalog = state["agentCatalog"] as? [String: Any], catalog["enrollments"] == nil {
+            state.removeValue(forKey: "agentCatalog")
+            changed = true
+        }
+        for section in ["pendingCommands", "pendingTaskSubmissions"] {
+            guard let entries = state[section] as? [String: Any] else { continue }
+            let current = entries.filter { !namesAnAgentLine($0.value) }
+            if current.count != entries.count {
+                state[section] = current
+                changed = true
+            }
+        }
+
         guard changed else { return data }
         root["state"] = state
         return (try? JSONSerialization.data(withJSONObject: root)) ?? data
+    }
+
+    /// Whether a saved ledger entry or submission carries a task line in the
+    /// retired name encoding: `agent` and no `selection` (translation 8). A
+    /// ledger entry wraps its command; a submission is the command. A line
+    /// change names its agent on the payload itself; one that cleared the
+    /// line omitted `agent` and still decodes as the same clear. A parked
+    /// move's `agent` is current and never matches.
+    private static func namesAnAgentLine(_ value: Any) -> Bool {
+        guard let object = value as? [String: Any] else { return false }
+        let command = object["command"] as? [String: Any] ?? object
+        guard let payload = command["payload"] as? [String: Any] else { return false }
+        if payload["kind"] as? String == "change_task_line" {
+            return payload["agent"] is String && payload["selection"] == nil
+        }
+        guard let lines = payload["task_lines"] as? [[String: Any]] else { return false }
+        return lines.contains { $0["agent"] != nil && $0["selection"] == nil }
     }
 
     /// Drops a cached hold's detail when it names the retired

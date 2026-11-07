@@ -17,8 +17,15 @@ import Testing
         command(id, .reassign_collector(.init(kind: .reassign_collector, pool: pool, enrollment_id: enrollment)))
     }
 
-    private func line(_ id: String, task: String, agent: String?) -> Components.Schemas.ClientCommand {
-        command(id, .change_task_line(.init(kind: .change_task_line, task_id: task, role: .implementer, agent: agent)))
+    private func line(
+        _ id: String, task: String, selection: Components.Schemas.TaskLineSelection?
+    ) -> Components.Schemas.ClientCommand {
+        command(
+            id,
+            .change_task_line(
+                .init(
+                    kind: .change_task_line, task_id: task, role: .implementer,
+                    selection: selection.map { .init(value1: $0) })))
     }
 
     private func policy(
@@ -64,7 +71,7 @@ import Testing
         // The same command_id with another body, or another kind, conflicts.
         let changed = refresh("refresh", pool: UsageFixtures.unsupportedPoolID)
         #expect(status(try await client.submitCommand(body: .json(changed))) == 400)
-        let crossKind = line("refresh", task: "task-1", agent: "codex-primary")
+        let crossKind = line("refresh", task: "task-1", selection: UsageFixtures.agentSelection("codex-primary"))
         #expect(status(try await client.submitCommand(body: .json(crossKind))) == 400)
     }
 
@@ -119,14 +126,16 @@ import Testing
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
         let task = try #require(try await client.getSyncBootstrap().ok.body.json.tasks.first)
-        let changeCommand = line("line-1", task: task.task.id, agent: "codex-primary")
+        let changeCommand = line("line-1", task: task.task.id, selection: UsageFixtures.agentSelection("codex-primary"))
         let changed = try await client.submitCommand(body: .json(changeCommand)).ok.body.json
         guard case .change_task_line(let record) = changed.record, let first = record.line?.value1 else {
             Issue.record("missing line receipt")
             return
         }
         #expect(record.recorded)
-        #expect(first.agent == "codex-primary" && first.version == 1 && first.source == .client_line_change)
+        #expect(record.agent == nil && record.selection?.value1 == UsageFixtures.agentSelection("codex-primary"))
+        #expect(first.agent == nil && first.selection?.value1 == UsageFixtures.agentSelection("codex-primary"))
+        #expect(first.version == 1 && first.source == .client_line_change)
         #expect(CommandResultTrust.accepts(changed, for: changeCommand))
         let after = try await client.getSyncBootstrap().ok.body.json
         let current = try #require(after.tasks.first { $0.task.id == task.task.id })
@@ -134,7 +143,7 @@ import Testing
         #expect(current.entity_version == changed.revision)
 
         let repeated = try await client.submitCommand(
-            body: .json(line("line-2", task: task.task.id, agent: "codex-primary"))
+            body: .json(line("line-2", task: task.task.id, selection: UsageFixtures.agentSelection("codex-primary")))
         ).ok.body.json
         guard case .change_task_line(let repeatRecord) = repeated.record else {
             Issue.record("missing repeat receipt")
@@ -142,28 +151,30 @@ import Testing
         }
         #expect(!repeatRecord.recorded && repeatRecord.line?.value1 == first)
 
-        let clearCommand = line("line-3", task: task.task.id, agent: nil)
+        let clearCommand = line("line-3", task: task.task.id, selection: nil)
         let cleared = try await client.submitCommand(body: .json(clearCommand)).ok.body.json
         guard case .change_task_line(let clear) = cleared.record else {
             Issue.record("missing clear receipt")
             return
         }
-        #expect(clear.recorded && clear.line == nil && clear.agent == nil)
+        #expect(clear.recorded && clear.line == nil && clear.agent == nil && clear.selection == nil)
         #expect(CommandResultTrust.accepts(cleared, for: clearCommand))
         #expect(!CommandResultTrust.accepts(cleared, for: changeCommand))
         let afterClear = try await client.getSyncBootstrap().ok.body.json
         #expect(afterClear.tasks.first { $0.task.id == task.task.id }?.task.task_lines == [])
 
-        let missing = line("line-4", task: "task-missing", agent: "codex-primary")
+        let missing = line("line-4", task: "task-missing", selection: UsageFixtures.agentSelection("codex-primary"))
         #expect(status(try await client.submitCommand(body: .json(missing))) == 404)
 
-        let invalid = line("line-invalid", task: task.task.id, agent: "Codex Primary")
+        var malformed = UsageFixtures.agentSelection("codex-primary")
+        malformed.model_id = "gpt codex"
+        let invalid = line("line-invalid", task: task.task.id, selection: malformed)
         #expect(status(try await client.submitCommand(body: .json(invalid))) == 400)
 
         await server.setTaskLineRoleRunning(taskID: task.task.id, role: .implementer, running: true)
         // The line the role already has answers before the running check.
         let held = try await client.submitCommand(
-            body: .json(line("line-held", task: task.task.id, agent: nil))
+            body: .json(line("line-held", task: task.task.id, selection: nil))
         ).ok.body.json
         guard case .change_task_line(let heldRecord) = held.record else {
             Issue.record("missing held receipt")
@@ -172,7 +183,7 @@ import Testing
         #expect(!heldRecord.recorded)
         let revision = try await client.getSyncRevision().ok.body.json.revision
         let refused = try await client.submitCommand(
-            body: .json(line("line-5", task: task.task.id, agent: "claude-primary"))
+            body: .json(line("line-5", task: task.task.id, selection: UsageFixtures.agentSelection("claude-primary")))
         ).conflict.body.json
         guard case .TaskLineChangeRejection(let rejection) = refused else {
             Issue.record("wrong conflict arm")
@@ -189,7 +200,7 @@ import Testing
         let task = try #require(tasks.first)
         let seeded = Components.Schemas.TaskLine(
             id: "sha256:" + String(repeating: "b", count: 64), task_id: task.task.id, role: .reviewer,
-            agent: "claude-primary", version: 2,
+            selection: .init(value1: UsageFixtures.agentSelection("claude-primary")), version: 2,
             predecessor_id: .init(value1: "sha256:" + String(repeating: "c", count: 64)),
             source: .submit_task, set_by: "command-seeded", set_at: Date(timeIntervalSince1970: 0))
         tasks[0].task.task_lines = [seeded]
@@ -200,7 +211,9 @@ import Testing
                 command(
                     "held",
                     .change_task_line(
-                        .init(kind: .change_task_line, task_id: task.task.id, role: .reviewer, agent: "claude-primary"))
+                        .init(
+                            kind: .change_task_line, task_id: task.task.id, role: .reviewer,
+                            selection: .init(value1: UsageFixtures.agentSelection("claude-primary"))))
                 ))
         ).ok.body.json
         guard case .change_task_line(let heldRecord) = held.record else {
@@ -210,7 +223,8 @@ import Testing
         #expect(!heldRecord.recorded && heldRecord.line?.value1 == seeded)
 
         let changed = try await client.submitCommand(
-            body: .json(line("implementer", task: task.task.id, agent: "codex-primary"))
+            body: .json(
+                line("implementer", task: task.task.id, selection: UsageFixtures.agentSelection("codex-primary")))
         ).ok.body.json
         guard case .change_task_line(let record) = changed.record, let added = record.line?.value1 else {
             Issue.record("missing receipt")
@@ -225,7 +239,9 @@ import Testing
                 command(
                     "moved",
                     .change_task_line(
-                        .init(kind: .change_task_line, task_id: task.task.id, role: .reviewer, agent: "codex-primary")))
+                        .init(
+                            kind: .change_task_line, task_id: task.task.id, role: .reviewer,
+                            selection: .init(value1: UsageFixtures.agentSelection("codex-primary")))))
             )
         ).ok.body.json
         guard case .change_task_line(let movedRecord) = moved.record, let next = movedRecord.line?.value1 else {
@@ -288,7 +304,7 @@ import Testing
         let server = MockServer(routingPolicy: nil)
         let client = APIClientFactory.mock(server: server)
         var changed = UsageFixtures.defaultAgentCatalog()
-        changed.lineup_revision = "sha256:" + String(repeating: "e", count: 64)
+        changed.lineup_revision = .init(value1: "sha256:" + String(repeating: "e", count: 64))
         changed.agents.removeAll { $0.name == "codex-primary" }
         await server.setAgentCatalog(changed)
 
@@ -306,7 +322,7 @@ import Testing
             Issue.record("wrong receipt arm")
             return
         }
-        #expect(record.policy.lineup_revision == changed.lineup_revision)
+        #expect(record.policy.lineup_revision == changed.lineup_revision?.value1)
     }
 
     @Test func routingPolicyChangeRecordsADrainFirstAccount() async throws {
@@ -360,7 +376,8 @@ import Testing
     }
 
     @Test func routingPolicyChangeFailsClosedWithoutATree() async throws {
-        let client = APIClientFactory.mock(server: MockServer(routingPolicy: nil, agentCatalog: nil))
+        let client = APIClientFactory.mock(
+            server: MockServer(routingPolicy: nil, agentCatalog: UsageFixtures.treelessAgentCatalog()))
         let first = policy("first", expected: nil, agents: ["claude-primary"])
         #expect(status(try await client.submitCommand(body: .json(first))) == 500)
         #expect(try await client.getSyncBootstrap().ok.body.json.routing_policy == nil)

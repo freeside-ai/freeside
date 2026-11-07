@@ -57,20 +57,24 @@ public enum CommandResultTrust {
             return record.command_id == command.command_id && record.device_id == command.device_id
                 && record.pool == payload.pool && record.collector == payload.enrollment_id
         case .change_task_line(let payload):
-            // line is the role's line after the change: the named agent's, or
-            // none after a clear.
+            // line is the role's line after the change: the requested
+            // selection's, or none after a clear. A client writes only
+            // selections, so neither the receipt nor its line names an agent.
             guard case .change_task_line(let record) = result.record else { return false }
+            let selection = payload.selection?.value1
             let line = record.line?.value1
             return record.command_id == command.command_id && record.device_id == command.device_id
                 && record.task_id == payload.task_id && record.role == payload.role
-                && record.agent == payload.agent
-                && line?.agent == payload.agent
+                && record.agent == nil && record.selection?.value1 == selection
+                && line?.agent == nil && line?.selection?.value1 == selection
                 && (line.map { $0.task_id == payload.task_id && $0.role == payload.role } ?? true)
                 && (!record.recorded || line.map { $0.source == .client_line_change } ?? true)
         case .move_parked_task(let payload):
             // The receipt records the move the client asked for: the chosen
-            // agent on the task, a parked move's record (no card), and the
-            // implementer line set to that agent, every line citing the record.
+            // agent on the task, a parked move's record (no card), and an
+            // implementer line, every line citing the record. The daemon
+            // records the line as the selection its tree runs that agent with,
+            // so only a legacy name-encoded line can be held to the agent.
             guard case .move_parked_task(let record) = result.record else { return false }
             let retry = record.retry
             return record.command_id == command.command_id && record.device_id == command.device_id
@@ -80,7 +84,7 @@ public enum CommandResultTrust {
                 && record.lines.allSatisfy {
                     $0.task_id == payload.task_id && $0.source == .alternate_agent_move && $0.set_by == retry.id
                 }
-                && record.lines.contains { $0.role == .implementer && $0.agent == payload.agent }
+                && record.lines.contains { $0.role == .implementer && ($0.agent.map { $0 == payload.agent } ?? true) }
         case .set_routing_policy(let payload):
             // The policy is the revision current after the change, holding the
             // requested orders and drain-first account: the one after

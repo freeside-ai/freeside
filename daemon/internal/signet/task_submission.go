@@ -81,6 +81,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidSubmitTaskPayload, err)
 	}
+	requestedLines := p.TaskLines
 	p.TaskLines = lines
 	// Attachments are resolved before the transaction opens: the blob store
 	// sits outside SQLite, and a stored blob never changes or goes away, so
@@ -150,17 +151,15 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		if err := gateActiveDevice(ctx, tx, in.DeviceID); err != nil {
 			return err
 		}
-		// The request digest above keeps the names the client sent, so a
-		// retry is matched by its own bytes; the record and the lines hold
-		// the selections those names map to now.
-		selected, err := s.lineSelections(p.TaskLines)
-		if err != nil {
+		// Checked in the order the client sent them, so a refusal names its
+		// own index.
+		if err := validateLineSelections(ctx, &tx.ReadTx, requestedLines); err != nil {
 			return fmt.Errorf("submit command %q: %w", in.CommandID, err)
 		}
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
 			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice, RequestDigest: requestDigest,
 			ProjectID: p.ProjectID, Source: source, SourceDigest: digest, OperatorName: p.Name,
-			TaskLines: selected, Attachments: attachments,
+			TaskLines: p.TaskLines, Attachments: attachments,
 		})
 		if err != nil {
 			return err
@@ -169,7 +168,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice,
 			DeviceID: &in.DeviceID, ProjectID: p.ProjectID,
 			SourceDigest: digest, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
-			Name: outcome.Name, TaskLines: selected,
+			Name: outcome.Name, TaskLines: p.TaskLines,
 		}
 		if err := tx.PutTaskSubmissionRequest(ctx, submission, requestDigest); err != nil {
 			return err
@@ -345,13 +344,14 @@ func OpenImageRepairTask(
 // role: the contract's minItems, which the decoder does not enforce.
 var errEmptyTaskLines = errors.New("task_lines must name at least one role when present")
 
-// errTaskLineSelectionOnWire rejects a command choice that carries a
-// selection: the wire names agents until #2598, and signet alone translates a
-// name to the selection a line records (Service.lineSelections).
-var errTaskLineSelectionOnWire = errors.New("task_lines name an agent, not a selection")
+// errTaskLineSelectionRequired rejects a command choice that carries no
+// selection: since #2598 the wire carries the tuple a line records, never an
+// agent name.
+var errTaskLineSelectionRequired = errors.New("task_lines carry a selection, not an agent name")
 
-// canonicalTaskLines validates a command's task lines, each naming an agent,
-// and returns them in canonical role order; nil in, nil out. The error is
+// canonicalTaskLines validates a command's task lines, each carrying a
+// selection, and returns them in canonical role order; nil in, nil out. It
+// checks shape only; validateLineSelections checks the store. The error is
 // safe to return to the client: domain.ValidateTaskLineChoices never puts
 // refused request text in one.
 func canonicalTaskLines(lines []domain.TaskLineChoice) ([]domain.TaskLineChoice, error) {
@@ -359,8 +359,8 @@ func canonicalTaskLines(lines []domain.TaskLineChoice) ([]domain.TaskLineChoice,
 		return nil, errEmptyTaskLines
 	}
 	for _, line := range lines {
-		if line.Selection != nil {
-			return nil, errTaskLineSelectionOnWire
+		if line.Selection == nil {
+			return nil, errTaskLineSelectionRequired
 		}
 	}
 	return domain.CanonicalTaskLineChoices(lines)

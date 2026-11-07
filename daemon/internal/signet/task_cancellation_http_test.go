@@ -96,12 +96,13 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 				f := newFixture(t)
 				id := seedStopTask(t, f.store)
 				seedUsageEnrollment(t, f.store, operatorAt.Add(-time.Hour))
+				seedLineEnrollments(t, f.store)
 				blobs, err := signet.NewBlobStore(t.TempDir())
 				if err != nil {
 					t.Fatal(err)
 				}
 				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
-					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(),
+					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
 					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), signet.WithParkedTaskMover(fakeParkedTaskMover))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {

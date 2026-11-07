@@ -92,7 +92,6 @@ func projectTaskSource(source *domain.SpecificationSource) *TaskSource {
 
 func projectTaskSnapshot(
 	ctx context.Context, tx *store.ReadTx, state store.ServerState, task domain.Task, runs map[domain.RunID]Run,
-	agents TaskLineAgents,
 ) (TaskSnapshot, error) {
 	ids, err := tx.TaskRunIDs(ctx, task.ID)
 	if err != nil {
@@ -130,7 +129,7 @@ func projectTaskSnapshot(
 	value.TaskLines = make([]TaskLine, 0, len(current))
 	for _, role := range domain.TaskLineRoles {
 		if line, ok := current[role]; ok {
-			value.TaskLines = append(value.TaskLines, wireTaskLine(agents, line))
+			value.TaskLines = append(value.TaskLines, wireTaskLine(line))
 		}
 	}
 	attachments, err := tx.TaskAttachments(ctx, task.ID)

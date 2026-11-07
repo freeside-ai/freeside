@@ -58,13 +58,16 @@ import Testing
 
         // The catalog's agents run as the pools' enrollments, and the
         // heartbeat carries its revision.
-        let catalog = try #require(bootstrap.agent_catalog?.value1)
+        let catalog = bootstrap.agent_catalog
         #expect(catalog == UsageFixtures.defaultAgentCatalog())
         let enrollments = Set(bootstrap.usage_pools.flatMap { $0.pool.enrollments.map(\.enrollment_id) })
         #expect(catalog.agents.allSatisfy { enrollments.contains($0.enrollment_id) })
-        #expect(catalog.lineup_revision == policy.policy.lineup_revision)
+        #expect(catalog.enrollments.allSatisfy { enrollments.contains($0.enrollment_id) })
+        // Each agent's selection runs on its own enrollment.
+        #expect(catalog.agents.allSatisfy { $0.selection.enrollment_id == $0.enrollment_id })
+        #expect(catalog.lineup_revision?.value1 == policy.policy.lineup_revision)
         let heartbeat = try await client.getSyncRevision().ok.body.json
-        #expect(heartbeat.lineup_revision?.value1 == catalog.lineup_revision)
+        #expect(heartbeat.lineup_revision?.value1 == catalog.lineup_revision?.value1)
     }
 
     @Test func advancingAUsagePoolRaisesTheRevisionAndTheRecordVersion() async throws {
@@ -87,12 +90,16 @@ import Testing
     }
 
     @Test func bootstrapWithoutARoutingPolicyOrTreeCarriesNull() async throws {
-        let server = MockServer(usagePools: [], routingPolicy: nil, agentCatalog: nil)
+        let server = MockServer(
+            usagePools: [], routingPolicy: nil, agentCatalog: UsageFixtures.treelessAgentCatalog())
         let client = APIClientFactory.mock(server: server)
         let bootstrap = try await client.getSyncBootstrap().ok.body.json
         #expect(bootstrap.usage_pools.isEmpty)
         #expect(bootstrap.routing_policy == nil)
-        #expect(bootstrap.agent_catalog == nil)
+        // A daemon with no tree still serves its enrollments.
+        #expect(bootstrap.agent_catalog.lineup_revision == nil)
+        #expect(bootstrap.agent_catalog.agents.isEmpty && bootstrap.agent_catalog.lineup.isEmpty)
+        #expect(!bootstrap.agent_catalog.enrollments.isEmpty)
         #expect(try await client.getSyncRevision().ok.body.json.lineup_revision == nil)
     }
 
@@ -102,12 +109,12 @@ import Testing
         let before = try await client.getSyncRevision().ok.body.json
 
         var changed = UsageFixtures.defaultAgentCatalog()
-        changed.lineup_revision = "sha256:" + String(repeating: "e", count: 64)
+        changed.lineup_revision = .init(value1: "sha256:" + String(repeating: "e", count: 64))
         await server.setAgentCatalog(changed)
         let after = try await client.getSyncRevision().ok.body.json
         #expect(after.revision == before.revision)
-        #expect(after.lineup_revision?.value1 == changed.lineup_revision)
-        #expect(try await client.getSyncBootstrap().ok.body.json.agent_catalog?.value1 == changed)
+        #expect(after.lineup_revision?.value1 == changed.lineup_revision?.value1)
+        #expect(try await client.getSyncBootstrap().ok.body.json.agent_catalog == changed)
     }
 
     @Test func healthIsAnonymousAndTracksRestartsAndOutages() async throws {
@@ -2030,7 +2037,8 @@ extension MockServerTests {
     @Test func submitTaskRecordsItsLinesOnTheTask() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let lines: [Components.Schemas.TaskLineInput] = [
-            .init(role: .reviewer, agent: "codex-primary"), .init(role: .implementer, agent: "claude-secondary"),
+            .init(role: .reviewer, selection: UsageFixtures.agentSelection("codex-primary")),
+            .init(role: .implementer, selection: UsageFixtures.agentSelection("claude-secondary")),
         ]
         let result = try await client.submitCommand(body: .json(submitTaskCommand("cmd-lines", lines: lines)))
             .ok.body.json
@@ -2040,7 +2048,10 @@ extension MockServerTests {
         #expect(record.task_lines?.map(\.role) == [.implementer, .reviewer])
         let bootstrap = try await client.getSyncBootstrap().ok.body.json
         let task = try #require(bootstrap.tasks.first { $0.task.id == record.task_id }?.task)
-        #expect(task.task_lines.map(\.agent) == ["claude-secondary", "codex-primary"])
+        #expect(task.task_lines.allSatisfy { $0.agent == nil })
+        #expect(
+            task.task_lines.map(\.selection?.value1)
+                == [UsageFixtures.agentSelection("claude-secondary"), UsageFixtures.agentSelection("codex-primary")])
         for line in task.task_lines {
             #expect(line.source == .submit_task && line.set_by == "cmd-lines" && line.version == 1)
             #expect(line.predecessor_id == nil && line.provenance == nil)
@@ -2050,7 +2061,9 @@ extension MockServerTests {
         let change = Components.Schemas.ClientCommand(
             command_id: "cmd-change", device_id: "device-1",
             payload: .change_task_line(
-                .init(kind: .change_task_line, task_id: record.task_id, role: .implementer, agent: "claude-primary")))
+                .init(
+                    kind: .change_task_line, task_id: record.task_id, role: .implementer,
+                    selection: .init(value1: UsageFixtures.agentSelection("claude-primary")))))
         let changed = try await client.submitCommand(body: .json(change)).ok.body.json
         guard case .change_task_line(let changeRecord) = changed.record, let line = changeRecord.line?.value1 else {
             Issue.record("expected a change_task_line record")
@@ -2208,7 +2221,8 @@ extension MockServerTests {
     @Test func taskTimelineRecordsEachLineVersionTheMockWrites() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let lines: [Components.Schemas.TaskLineInput] = [
-            .init(role: .implementer, agent: "claude-secondary"), .init(role: .reviewer, agent: "codex-primary"),
+            .init(role: .implementer, selection: UsageFixtures.agentSelection("claude-secondary")),
+            .init(role: .reviewer, selection: UsageFixtures.agentSelection("codex-primary")),
         ]
         let submit = submitTaskCommand("cmd-lines", lines: lines)
         let taskID = try await client.submitCommand(body: .json(submit)).ok.body.json.record.asSubmitTask.task_id
@@ -2218,22 +2232,27 @@ extension MockServerTests {
         }
         // The whole event is compared, so every detail the daemon leaves null
         // (run_id, campaign_id, and the rest) must be null here too.
+        // The mock writes only selections, so no event names an agent.
         func expected(
-            lineID: String, role: Components.Schemas.TaskLineRole, agent: String?, version: Int,
-            source: Components.Schemas.TaskLineSource, superseded: String?, at: Date
+            lineID: String, role: Components.Schemas.TaskLineRole, selection: Components.Schemas.TaskLineSelection?,
+            version: Int, source: Components.Schemas.TaskLineSource,
+            superseded: Components.Schemas.TaskLineSelection?, at: Date
         ) -> Components.Schemas.TaskEvent {
             .init(
                 line: .init(
                     value1: .init(
-                        line_id: lineID, role: role, agent: agent, version: version, source: source,
-                        superseded_agent: superseded, provenance: nil)),
+                        line_id: lineID, role: role, agent: nil, selection: selection.map { .init(value1: $0) },
+                        version: version, source: source, superseded_agent: nil,
+                        superseded_selection: superseded.map { .init(value1: $0) }, provenance: nil)),
                 kind: .task_line_set, recorded_at: at)
         }
         func change(_ commandID: String, agent: String?) async throws -> Components.Schemas.TaskLine? {
             let command = Components.Schemas.ClientCommand(
                 command_id: commandID, device_id: "device-1",
                 payload: .change_task_line(
-                    .init(kind: .change_task_line, task_id: taskID, role: .implementer, agent: agent)))
+                    .init(
+                        kind: .change_task_line, task_id: taskID, role: .implementer,
+                        selection: agent.map { .init(value1: UsageFixtures.agentSelection($0)) })))
             let result = try await client.submitCommand(body: .json(command)).ok.body.json
             guard case .change_task_line(let record) = result.record else {
                 Issue.record("expected a change_task_line record")
@@ -2251,8 +2270,8 @@ extension MockServerTests {
             #expect(
                 submitted.contains(
                     expected(
-                        lineID: line.id, role: line.role, agent: line.agent, version: 1, source: .submit_task,
-                        superseded: nil, at: line.set_at)))
+                        lineID: line.id, role: line.role, selection: line.selection?.value1, version: 1,
+                        source: .submit_task, superseded: nil, at: line.set_at)))
         }
 
         // A change records version 2, superseding the submitted agent.
@@ -2262,8 +2281,10 @@ extension MockServerTests {
         #expect(
             events.contains(
                 expected(
-                    lineID: v2.id, role: .implementer, agent: "claude-primary", version: 2,
-                    source: .client_line_change, superseded: "claude-secondary", at: v2.set_at)))
+                    lineID: v2.id, role: .implementer, selection: UsageFixtures.agentSelection("claude-primary"),
+                    version: 2,
+                    source: .client_line_change, superseded: UsageFixtures.agentSelection("claude-secondary"),
+                    at: v2.set_at)))
 
         // A clear records a version with no agent; setting the role again
         // supersedes nothing.
@@ -2273,8 +2294,12 @@ extension MockServerTests {
         let implementer = events.compactMap { $0.line?.value1 }.filter { $0.role == .implementer }
             .sorted { $0.version < $1.version }
         try #require(implementer.map(\.version) == [1, 2, 3, 4])
-        #expect(implementer[2].agent == nil && implementer[2].superseded_agent == "claude-primary")
-        #expect(implementer[3].agent == "claude-secondary" && implementer[3].superseded_agent == nil)
+        #expect(
+            implementer[2].selection == nil
+                && implementer[2].superseded_selection?.value1 == UsageFixtures.agentSelection("claude-primary"))
+        #expect(
+            implementer[3].selection?.value1 == UsageFixtures.agentSelection("claude-secondary")
+                && implementer[3].superseded_selection == nil)
 
         // The line the role already has, a replayed change, and a replayed
         // submit record nothing.
@@ -2288,7 +2313,8 @@ extension MockServerTests {
     @Test func submitTaskReplaysReorderedLinesAndConflictsOnChangedOnes() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let lines: [Components.Schemas.TaskLineInput] = [
-            .init(role: .implementer, agent: "claude-secondary"), .init(role: .reviewer, agent: "codex-primary"),
+            .init(role: .implementer, selection: UsageFixtures.agentSelection("claude-secondary")),
+            .init(role: .reviewer, selection: UsageFixtures.agentSelection("codex-primary")),
         ]
         let first = try await client.submitCommand(body: .json(submitTaskCommand("cmd-1", lines: lines)))
             .ok.body.json
@@ -2298,20 +2324,86 @@ extension MockServerTests {
         #expect(replay == first)
 
         let changed: [Components.Schemas.TaskLineInput] = [
-            .init(role: .implementer, agent: "claude-primary"), .init(role: .reviewer, agent: "codex-primary"),
+            .init(role: .implementer, selection: UsageFixtures.agentSelection("claude-primary")),
+            .init(role: .reviewer, selection: UsageFixtures.agentSelection("codex-primary")),
         ]
         #expect(try await refusalStatus(client, submitTaskCommand("cmd-1", lines: changed)) == 400)
         #expect(try await refusalStatus(client, submitTaskCommand("cmd-1", lines: nil)) == 400)
     }
 
-    @Test func submitTaskRejectsAnEmptyRepeatedOrMisnamedLineList() async throws {
+    /// The mock refuses a selection the catalog doesn't serve as the daemon
+    /// does: 400 naming the field and its leg, never the selection's text,
+    /// and no write. An enrollment with no discovery record checks shape only.
+    @Test func lineCommandsRefuseAnUnservedSelectionByField() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let taskID = try #require(try await client.getSyncBootstrap().ok.body.json.tasks.first?.task.id)
+        let discovered = UsageFixtures.readingCollectorID
+        func message(_ command: Components.Schemas.ClientCommand) async throws -> String? {
+            guard case .undocumented(400, let payload) = try await client.submitCommand(body: .json(command)),
+                let body = payload.body
+            else { return nil }
+            let data = try await Data(collecting: body, upTo: 1 << 16)
+            return try JSONDecoder().decode(Components.Schemas._Error.self, from: data).message
+        }
+        func change(_ id: String, _ selection: Components.Schemas.TaskLineSelection) -> Components.Schemas.ClientCommand
+        {
+            .init(
+                command_id: id, device_id: "device-1",
+                payload: .change_task_line(
+                    .init(
+                        kind: .change_task_line, task_id: taskID, role: .implementer,
+                        selection: .init(value1: selection))))
+        }
+        // The daemon checks the selection before it asks whether the role
+        // runs, so a running role still refuses by field.
+        await server.setTaskLineRoleRunning(taskID: taskID, role: .implementer, running: true)
+        let before = try await client.getSyncRevision().ok.body.json.revision
+        for (id, selection, field) in [
+            (
+                "unknown-enrollment", UsageFixtures.selection("enrollment-unlisted-x", "claude-opus", "high"),
+                "selection.enrollment_id"
+            ),
+            ("unknown-model", UsageFixtures.selection(discovered, "claude-unlisted-x", "high"), "selection.model_id"),
+            ("unknown-effort", UsageFixtures.selection(discovered, "claude-sonnet", "max"), "selection.effort"),
+        ] {
+            let text = try #require(try await message(change(id, selection)), "\(id) was not refused 400")
+            #expect(text.hasPrefix("malformed command: \(field): "), "\(id): \(text)")
+            #expect(!text.contains("unlisted-x") && !text.contains("sonnet"), "\(id) echoed the selection")
+        }
+        let submit = submitTaskCommand(
+            "cmd-unserved",
+            lines: [
+                .init(role: .implementer, selection: UsageFixtures.agentSelection("claude-primary")),
+                .init(role: .reviewer, selection: UsageFixtures.selection(discovered, "claude-unlisted-x", "high")),
+            ])
+        let refused = try #require(try await message(submit))
+        #expect(refused.hasPrefix("malformed command: task_lines[1].selection.model_id: "))
+        #expect(try await client.getSyncRevision().ok.body.json.revision == before)
+        await server.setTaskLineRoleRunning(taskID: taskID, role: .implementer, running: false)
+
+        // A resolved model names its entry; harness_default is always served;
+        // an undiscovered enrollment takes any well-formed model and effort.
+        for (id, selection) in [
+            ("resolved", UsageFixtures.selection(discovered, "claude-opus-5-5", "max")),
+            ("harness-default", UsageFixtures.selection(discovered, "claude-sonnet", "harness_default")),
+            ("undiscovered", UsageFixtures.selection(UsageFixtures.readingSecondEnrollmentID, "any-model", "any")),
+        ] {
+            _ = try await client.submitCommand(body: .json(change(id, selection))).ok
+        }
+    }
+
+    @Test func submitTaskRejectsAnEmptyRepeatedOrMalformedLineList() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         #expect(try await refusalStatus(client, submitTaskCommand("cmd-empty", lines: [])) == 400)
         let repeated: [Components.Schemas.TaskLineInput] = [
-            .init(role: .reviewer, agent: "codex-primary"), .init(role: .reviewer, agent: "claude-primary"),
+            .init(role: .reviewer, selection: UsageFixtures.agentSelection("codex-primary")),
+            .init(role: .reviewer, selection: UsageFixtures.agentSelection("claude-primary")),
         ]
         #expect(try await refusalStatus(client, submitTaskCommand("cmd-repeat", lines: repeated)) == 400)
-        let misnamed: [Components.Schemas.TaskLineInput] = [.init(role: .reviewer, agent: "Codex Primary")]
+        let misnamed: [Components.Schemas.TaskLineInput] = [
+            .init(role: .reviewer, selection: .init(enrollment_id: "codex primary", model_id: "gpt", effort: "high"))
+        ]
         #expect(try await refusalStatus(client, submitTaskCommand("cmd-misnamed", lines: misnamed)) == 400)
         let bootstrap = try await client.getSyncBootstrap().ok.body.json
         #expect(!bootstrap.tasks.contains { $0.task.id.hasPrefix("task-submitted-") })

@@ -146,9 +146,6 @@ func (p *pairingControl) registerControlRoutes(
 		repositoryID: repositoryID, credentialIntegrityProbe: integrityProbe,
 		commitWorkflowClosure: commitWorkflowClosure, usageCollection: usage,
 	}
-	if attention != nil {
-		daemon.taskLineAgents = attention.TaskLineAgents
-	}
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
 		return observation.ObserveRun(ctx, domain.RunID(r.PathValue("run_id")))

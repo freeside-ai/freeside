@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -284,12 +285,11 @@ func recordProposalTaskLines(ctx context.Context, tx *store.WriteTx, command dom
 }
 
 // The command row has no line payload. Compare all versions this command
-// wrote, including choices that a later start on the same task superseded.
-// names are the retry's choices and selected the selections they map to now,
-// in the same order: a v1 line, which a start before #2597 wrote, matches its
-// name, and a v2 line its selection.
+// wrote, including choices that a later start on the same task superseded,
+// with the retry's canonical choices. A start before #2597 wrote v1 lines,
+// which no retry's selections match, so such a retry is a conflict.
 func replayProposalTaskLines(
-	ctx context.Context, tx *store.WriteTx, command domain.Command, names, selected []domain.TaskLineChoice,
+	ctx context.Context, tx *store.WriteTx, command domain.Command, lines []domain.TaskLineChoice,
 ) error {
 	taskID, err := tx.ProposalTask(ctx, command.ItemID)
 	if err != nil {
@@ -309,11 +309,7 @@ func replayProposalTaskLines(
 	if err != nil {
 		return err
 	}
-	matches := len(recorded) == len(names)
-	for i := 0; matches && i < len(recorded); i++ {
-		matches = recorded[i].Same(names[i]) || recorded[i].Same(selected[i])
-	}
-	if !matches {
+	if !slices.EqualFunc(recorded, lines, domain.TaskLineChoice.Same) {
 		return fmt.Errorf("proposal start command %q task lines: %w", command.CommandID, store.ErrImmutableConflict)
 	}
 	return nil

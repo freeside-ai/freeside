@@ -59,7 +59,7 @@ func (s *Service) stopTask(ctx context.Context, in ClientCommand) (CommandResult
 				if err != nil {
 					return err
 				}
-				snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task, s.TaskLineAgents())
+				snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task)
 				if err != nil {
 					return err
 				}
@@ -85,7 +85,7 @@ func (s *Service) stopTask(ctx context.Context, in ClientCommand) (CommandResult
 }
 
 func currentTaskSnapshot(
-	ctx context.Context, tx *store.ReadTx, state store.ServerState, task domain.Task, agents TaskLineAgents,
+	ctx context.Context, tx *store.ReadTx, state store.ServerState, task domain.Task,
 ) (TaskSnapshot, error) {
 	ids, err := tx.TaskRunIDs(ctx, task.ID)
 	if err != nil {
@@ -107,5 +107,5 @@ func currentTaskSnapshot(
 		}
 		runs[id] = projected.Run
 	}
-	return projectTaskSnapshot(ctx, tx, state, task, runs, agents)
+	return projectTaskSnapshot(ctx, tx, state, task, runs)
 }

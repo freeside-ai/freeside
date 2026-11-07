@@ -93,7 +93,7 @@ struct TaskSubmissionRecoverySheet: View {
                     .foregroundStyle(Color.ink)
                 // Retry resends these lines and attachments unchanged, so
                 // show them.
-                if let agents = AgentChoiceDisplay.summary(payload.task_lines) {
+                if let agents = AgentChoiceDisplay.summary(payload.task_lines, catalog: model.agentCatalog) {
                     Text(agents)
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)

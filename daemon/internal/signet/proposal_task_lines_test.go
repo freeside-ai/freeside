@@ -16,7 +16,7 @@ import (
 )
 
 func proposalLineChoices() []domain.TaskLineChoice {
-	return []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: "claude"}, {Role: domain.RoleImplementer, Agent: "codex"}}
+	return []domain.TaskLineChoice{selectionChoice(domain.RoleSpecifier, "claude"), selectionChoice(domain.RoleImplementer, "codex")}
 }
 
 func (f proposalDecisionFixture) taskLines(t *testing.T) []domain.TaskLine {
@@ -91,7 +91,7 @@ func TestProposalStartTaskLines(t *testing.T) {
 			if err != nil || replay.Revision != first.Revision || f.revision(t) != before || len(f.taskLines(t)) != 2 {
 				t.Fatalf("replay = %+v, %v; want unchanged result and lines", replay, err)
 			}
-			for _, changed := range [][]domain.TaskLineChoice{nil, {{Role: domain.RoleSpecifier, Agent: "other"}}} {
+			for _, changed := range [][]domain.TaskLineChoice{nil, {selectionChoice(domain.RoleSpecifier, "other")}} {
 				command.Payload.TaskLines = changed
 				if _, err := f.service.Submit(t.Context(), command); !errors.Is(err, store.ErrImmutableConflict) {
 					t.Fatalf("changed replay = %v, want immutable conflict", err)
@@ -178,26 +178,37 @@ func TestProposalTaskLinesStaleDecisionWritesNothing(t *testing.T) {
 
 func TestDecisionTaskLinesRefusals(t *testing.T) {
 	t.Parallel()
+	unknownEnrollment := lineSelectionOf("claude")
+	unknownEnrollment.EnrollmentID = "nobody/codex_cli"
+	invalid := signet.ErrInvalidProposalDecisionPayload
 	for _, tc := range []struct {
 		name   string
 		action domain.Action
 		lines  []domain.TaskLineChoice
+		want   error
 	}{
-		{"decline", domain.ActionDecline, proposalLineChoices()},
-		{"snooze", domain.ActionSnooze, proposalLineChoices()},
-		{"approve", domain.ActionApprove, proposalLineChoices()},
-		{"empty", domain.ActionStart, []domain.TaskLineChoice{}},
-		{"duplicate", domain.ActionStart, []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: "a"}, {Role: domain.RoleSpecifier, Agent: "b"}}},
-		{"ineligible role", domain.ActionStart, []domain.TaskLineChoice{{Role: domain.RoleShadowReviewer, Agent: "a"}}},
-		{"malformed agent", domain.ActionStart, []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: "bad name"}}},
+		{"decline", domain.ActionDecline, proposalLineChoices(), invalid},
+		{"snooze", domain.ActionSnooze, proposalLineChoices(), invalid},
+		{"approve", domain.ActionApprove, proposalLineChoices(), invalid},
+		{"empty", domain.ActionStart, []domain.TaskLineChoice{}, invalid},
+		{"duplicate", domain.ActionStart, []domain.TaskLineChoice{
+			selectionChoice(domain.RoleSpecifier, "claude"), selectionChoice(domain.RoleSpecifier, "codex"),
+		}, invalid},
+		{"ineligible role", domain.ActionStart, []domain.TaskLineChoice{selectionChoice(domain.RoleShadowReviewer, "codex")}, invalid},
+		{"agent name", domain.ActionStart, []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: "codex"}}, invalid},
+		{
+			"unknown enrollment", domain.ActionStart,
+			[]domain.TaskLineChoice{{Role: domain.RoleSpecifier, Selection: &unknownEnrollment}},
+			signet.ErrTaskLineSelectionUnserved,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newProposalDecisionFixture(t)
 			command := f.proposalCommand("bad-lines", tc.action)
 			command.Payload.TaskLines = tc.lines
 			before := f.revision(t)
-			if _, err := f.service.Submit(t.Context(), command); !errors.Is(err, signet.ErrInvalidProposalDecisionPayload) {
-				t.Fatalf("invalid lines = %v", err)
+			if _, err := f.service.Submit(t.Context(), command); !errors.Is(err, tc.want) {
+				t.Fatalf("invalid lines = %v, want %v", err, tc.want)
 			}
 			if f.revision(t) != before {
 				t.Fatal("invalid lines advanced the revision")
@@ -211,12 +222,13 @@ func TestDecisionHTTPTaskLines(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, action string
-		lines        []map[string]string
+		lines        []map[string]any
 		status       int
 	}{
-		{"start", "start", []map[string]string{{"role": "specifier", "agent": "codex"}}, http.StatusOK},
-		{"empty", "start", []map[string]string{}, http.StatusBadRequest},
-		{"decline", "decline", []map[string]string{{"role": "specifier", "agent": "codex"}}, http.StatusBadRequest},
+		{"start", "start", []map[string]any{{"role": "specifier", "selection": lineSelectionOf("codex")}}, http.StatusOK},
+		{"empty", "start", []map[string]any{}, http.StatusBadRequest},
+		{"decline", "decline", []map[string]any{{"role": "specifier", "selection": lineSelectionOf("codex")}}, http.StatusBadRequest},
+		{"agent name", "start", []map[string]any{{"role": "specifier", "agent": "codex"}}, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newProposalDecisionFixture(t)
