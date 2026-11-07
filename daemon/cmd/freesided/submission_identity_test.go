@@ -75,6 +75,7 @@ func TestSubmissionIdentityRetainedBeforeFirstCommit(t *testing.T) {
 	if _, err := os.Stat(cfg.DBPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("retention unexpectedly opened the database")
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(t.Context(), submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID})
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +161,7 @@ func TestSubmissionIdentityInvalidInputsDoNotOccupyPreparedIdentity(t *testing.T
 					t.Fatalf("invalid request created %s: %v", path, err)
 				}
 			}
+			seedTemplateStore(t, cfg.DBPath)
 			if _, err := runSubmitCommand(t.Context(), cfg); err != nil {
 				t.Fatalf("corrected request could not use prepared identity: %v", err)
 			}

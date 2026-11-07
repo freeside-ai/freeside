@@ -55,6 +55,7 @@ func TestSubmitCommandRequiresWorkUnit(t *testing.T) {
 				}
 			}
 			cfg.WorkUnitPath = declaredWorkUnit(t)
+			seedTemplateStore(t, cfg.DBPath)
 			declared, err := runSubmitCommand(t.Context(), cfg)
 			if err != nil || declared.WorkUnitID != domain.WorkUnitIDForRun(declared.RunID) {
 				t.Fatalf("declared submit = %+v, %v; want the run's work unit", declared, err)

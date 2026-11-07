@@ -190,6 +190,7 @@ func killRecoveryReadinessOptions(grant domain.Digest) store.Options {
 func seedKillRecoveryReadiness(t *testing.T, path string) {
 	t.Helper()
 	resolution, waiver, event := killRecoveryReadinessFixture(t)
+	seedTemplateStore(t, path)
 	if err := seedKillRecoveryReadinessRecords(path, resolution, waiver, event); err != nil {
 		t.Fatal(err)
 	}

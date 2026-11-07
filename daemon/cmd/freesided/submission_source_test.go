@@ -81,6 +81,11 @@ func TestSubmitCommandSourceReference(t *testing.T) {
 				DBPath: filepath.Join(root, "state.db"), SubmissionID: "source", ProjectID: "proj-source",
 				TaskPath: task, PolicyPath: policy, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication,
 			}
+			// A refusal must leave no store, so only an accepted case starts
+			// from the template.
+			if !tc.refused() {
+				seedTemplateStore(t, cfg.DBPath)
+			}
 			result, err := runSubmitCommand(t.Context(), cfg)
 			if tc.refused() {
 				checkSourceRefusal(t, err)

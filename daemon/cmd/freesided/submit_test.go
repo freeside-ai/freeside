@@ -619,6 +619,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		ProjectID: "proj-submit",
 	}
 
+	seedTemplateStore(t, cfg.DBPath)
 	first, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -695,6 +696,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	otherPolicy := cfg
 	otherPolicy.SubmissionID = "other-policy"
 	otherPolicy.DBPath = filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, otherPolicy.DBPath)
 	otherPolicy.PolicyPath = filepath.Join(root, "other-policy.json")
 	otherPolicyBody := submissionPolicyBody("app/**", strings.Repeat("cd", 32))
 	if err := os.WriteFile(otherPolicy.PolicyPath, []byte(otherPolicyBody), 0o600); err != nil {
@@ -712,6 +714,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	otherPublication := cfg
 	otherPublication.SubmissionID = "other-publication"
 	otherPublication.DBPath = filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, otherPublication.DBPath)
 	otherPublication.PublicationPath = filepath.Join(root, "other-publication.json")
 	if err := os.WriteFile(
 		otherPublication.PublicationPath,
@@ -1430,15 +1433,10 @@ func TestSubmitRefusesAnExistingStoreWithoutItsTopicKey(t *testing.T) {
 	root := t.TempDir()
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	dbPath := filepath.Join(root, "freeside.db")
-	st, err := store.Open(ctx, dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("create existing store: %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("close existing store: %v", err)
-	}
+	// The migrated template with no topic key beside it.
+	storetest.Copy(t, dbPath)
 
-	_, err = runSubmitCommand(ctx, submitCommandConfig{
+	_, err := runSubmitCommand(ctx, submitCommandConfig{
 		DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath,
 		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",

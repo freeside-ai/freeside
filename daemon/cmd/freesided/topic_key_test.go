@@ -12,6 +12,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// TestOpenStoreWithTopicKey opens from empty on purpose: a missing store and
+// key are the first-run cases it proves.
 func TestOpenStoreWithTopicKey(t *testing.T) {
 	t.Parallel()
 	t.Run("fresh store mints key before opening", func(t *testing.T) {

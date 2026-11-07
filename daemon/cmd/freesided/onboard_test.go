@@ -422,6 +422,8 @@ func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	// From empty on purpose: the store onboard creates is what submit's
+	// topic-key gate must accept.
 	err := runOnboardCommand(t.Context(), []string{
 		"example/repo",
 		"-db", dbPath,

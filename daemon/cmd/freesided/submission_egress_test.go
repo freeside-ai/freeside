@@ -321,6 +321,11 @@ func TestSubmitCommandEgressPolicy(t *testing.T) {
 			task, policy, publication := writeSubmissionInputs(t, root)
 			writeSubmissionEgressPolicy(t, policy, tc.values)
 			cfg := submitCommandConfig{DBPath: filepath.Join(root, "state.db"), SubmissionID: "egress", ProjectID: "proj-egress", TaskPath: task, PolicyPath: policy, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication}
+			// A refusal must leave no store, so only an accepted case starts
+			// from the template.
+			if tc.wantErr == nil {
+				seedTemplateStore(t, cfg.DBPath)
+			}
 			_, err := runSubmitCommand(t.Context(), cfg)
 			checkSubmissionEgressError(t, err, tc)
 			if tc.wantErr != nil {

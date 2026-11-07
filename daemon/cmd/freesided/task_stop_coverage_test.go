@@ -100,6 +100,7 @@ func TestDeputyTaskCoverageCoversTasksSavedAfterIt(t *testing.T) {
 	ctx := t.Context()
 	for _, savedBefore := range []bool{false, true} {
 		_, paths, settings := deputyLeaseFixture(t)
+		seedTemplateStore(t, paths.DB)
 		var before domain.TaskID
 		if savedBefore {
 			before = saveCoverageTestTask(t, paths.DB, 1, "")
