@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -301,15 +302,26 @@ func TestOpenExistingRejectsStaleSchemaWithoutMigrating(t *testing.T) {
 	}
 }
 
+// olderSchemaImage builds the image one schema version behind this binary
+// once per process. It uses context.Background because the first caller's
+// t.Context ends with that test while later callers still read the image.
+var olderSchemaImage = sync.OnceValues(func() ([]byte, error) {
+	head, err := store.CurrentSchemaVersion()
+	if err != nil {
+		return nil, err
+	}
+	return store.TemplateDatabaseAt(context.Background(), head-1)
+})
+
 // writeOlderSchemaDatabase writes a database one schema version behind this
-// binary, as an older build would have left it.
+// binary, as an older build would have left it, to a new file per caller.
 func writeOlderSchemaDatabase(t *testing.T) (path string, head int) {
 	t.Helper()
 	head, err := store.CurrentSchemaVersion()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := store.TemplateDatabaseAt(t.Context(), head-1)
+	data, err := olderSchemaImage()
 	if err != nil {
 		t.Fatal(err)
 	}
