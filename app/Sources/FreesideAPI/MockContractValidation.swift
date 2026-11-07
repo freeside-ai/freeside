@@ -688,6 +688,11 @@ enum MockContractValidation {
                 }
             }
         }
+        if let guide = item.review_guide?.value1,
+            let breach = reviewGuideBreach(guide, on: item)
+        {
+            return breach
+        }
         if let failure = item.execution_failure?.value1 {
             if item._type != .execution_failure {
                 return "execution_failure facts on a different item type"
@@ -1159,6 +1164,89 @@ enum MockContractValidation {
         if conclusion.cause == .decision { return "decision conclusion without a decision" }
         if isBlank(conclusion.reason) { return "daemon conclusion without a reason" }
         if item.decided_at != nil { return "daemon conclusion with decided_at" }
+        return nil
+    }
+
+    /// Mirrors domain.AttentionItem.validateReviewGuide and
+    /// ReviewGuide.Validate: the guide rides only a ready item, at its head,
+    /// parsed from exactly one reserved application/json claim without inline
+    /// text, and within the caps. String caps count Unicode scalars, as the
+    /// daemon counts code points. Generated enums already reject unknown
+    /// attention, side, and unresolved-reason members.
+    private static func reviewGuideBreach(
+        _ guide: Components.Schemas.ReviewGuide,
+        on item: Components.Schemas.AttentionItem
+    ) -> String? {
+        if item._type != .ready_for_final_review {
+            return "review_guide on a different item type"
+        }
+        if guide.head_sha.isEmpty || guide.head_sha != item.pr_head_sha {
+            return "review_guide head_sha differs from pr_head_sha"
+        }
+        let named = item.agent_claims.filter { $0.digest == guide.claim_digest }
+        let labeled = item.agent_claims.filter { $0.label == "freeside.review-guide" }
+        guard named.count == 1, labeled.count == 1, let claim = named.first,
+            claim.label == "freeside.review-guide"
+        else {
+            return "review_guide claim_digest must name the one freeside.review-guide claim"
+        }
+        if claim.metadata.media_type != .application_sol_json || claim.text != nil {
+            return "review_guide claim must be application/json without inline text"
+        }
+        guard case .head_bound(let bound) = claim.provenance,
+            bound.source_head_sha == guide.head_sha
+        else {
+            return "review_guide claim must be head-bound to the guide's head"
+        }
+        // The guide's prose rides inline, so its claim is held to the bar
+        // on inline claim text.
+        if bound.sensitivity_class == .high_sensitivity {
+            return "review_guide claim is high-sensitivity"
+        }
+        func emptyOrOver(_ value: String, _ limit: Int) -> Bool {
+            value.isEmpty || value.unicodeScalars.count > limit
+        }
+        if guide.stops.isEmpty || guide.stops.count > 12 {
+            return "review_guide must carry 1 to 12 stops"
+        }
+        if guide.questions.count > 8 || guide.questions.contains(where: { emptyOrOver($0, 500) }) {
+            return "invalid review_guide questions"
+        }
+        if let notes = guide.notes, emptyOrOver(notes, 2000) {
+            return "invalid review_guide notes"
+        }
+        for stop in guide.stops {
+            if emptyOrOver(stop.title, 120) || emptyOrOver(stop.summary, 2000) {
+                return "invalid review_guide stop title or summary"
+            }
+            if stop.excerpts.count > 4 {
+                return "review_guide stop carries more than 4 excerpts"
+            }
+            for excerpt in stop.excerpts {
+                if emptyOrOver(excerpt.path, 1024) || excerpt.path.hasPrefix("/")
+                    || excerpt.path.contains("\\")
+                    || excerpt.path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f })
+                    || excerpt.path.split(separator: "/", omittingEmptySubsequences: false)
+                        .contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+                {
+                    return "review_guide excerpt path is not a canonical repository path"
+                }
+                if excerpt.start_line < 1 || excerpt.start_line > excerpt.end_line
+                    || excerpt.end_line - excerpt.start_line + 1 > 80
+                {
+                    return "invalid review_guide excerpt line range"
+                }
+                if emptyOrOver(excerpt.caption, 300) {
+                    return "invalid review_guide excerpt caption"
+                }
+                if (excerpt.text == nil) == (excerpt.unresolved_reason == nil) {
+                    return "review_guide excerpt must carry exactly one of text and unresolved_reason"
+                }
+                if let text = excerpt.text, text.utf8.count > 8192 {
+                    return "review_guide excerpt text exceeds 8 KiB"
+                }
+            }
+        }
         return nil
     }
 
