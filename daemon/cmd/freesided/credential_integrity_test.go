@@ -113,6 +113,7 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	// The store opens the way the daemon opens it, over an initialized
 	// backup file set it can lend to a borrowing command.
+	seedTemplateStore(t, dbPath)
 	blobs, err := signet.NewBlobStore(dbPath + ".blobs")
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +126,6 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedTemplateStore(t, dbPath)
 	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{BackupHealthSource: backupHealth})
 	if err != nil {
 		t.Fatal(err)

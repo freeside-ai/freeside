@@ -72,6 +72,9 @@ func TestSeedFixtureServesRepresentativeState(t *testing.T) {
 
 func startDaemon(t *testing.T, cfg config) *daemon {
 	t.Helper()
+	// A -seed-fixture start writes artifacts the template's checkpoint never
+	// covers. Only Doctor and admission read that checkpoint, and no caller
+	// runs Doctor or admits work, so what they assert is unchanged.
 	seedTemplateStore(t, cfg.DBPath)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)

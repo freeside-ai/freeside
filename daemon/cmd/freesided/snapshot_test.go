@@ -86,8 +86,8 @@ func TestSnapshotThroughExclusiveDaemon(t *testing.T) {
 	err = runDoctorCommand(t.Context(), []string{
 		"-db", dbPath, "-backend-configuration-digest", "sha256:" + strings.Repeat("a", 64),
 	}, &doctorOut, io.Discard)
-	// A fresh daemon has no backup evidence, so doctor serves an unhealthy
-	// report; a busy live file would fail before producing one.
+	// Doctor serves a report that is unhealthy on this bare daemon; a busy
+	// live file would fail before producing one.
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !json.Valid(doctorOut.Bytes()) {
 		t.Fatalf("routed doctor = %s, %v", doctorOut.String(), err)
 	}

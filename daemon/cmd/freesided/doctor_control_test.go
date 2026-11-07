@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
@@ -50,6 +51,13 @@ func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The first start must checkpoint the recipe-B artifact, so the store is
+	// the uncheckpointed template: the database behind the symlink, and the
+	// topic key beside the alias, where the daemon looks for it.
+	if _, err := loadOrCreateTopicKey(dbPath, false); err != nil {
+		t.Fatal(err)
+	}
+	storetest.Copy(t, target)
 	seed, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{ApprovedRecipes: approved})
 	if err != nil {
 		t.Fatal(err)

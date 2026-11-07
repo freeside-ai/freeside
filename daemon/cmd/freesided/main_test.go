@@ -993,7 +993,9 @@ func TestRepositoryIDFlag(t *testing.T) {
 func TestRunDrivesFakeWorkflow(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
-	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
+	// Uncheckpointed: the health read below proves the checkpoint this start
+	// produces.
+	seedUncheckpointedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(ctx, nil, config{
 		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),
