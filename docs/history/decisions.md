@@ -3507,3 +3507,35 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-04 on #2629;
 [decision note](../../devlog/2026-11-05-0951-verify-at-handoff-not-on-base-advance.md).)
+
+## Revision 111 ("Select by Enrollment, Model, and Effort"):
+
+1. **An agent selection is the tuple `{enrollment, model, effort}`, chosen
+   ad hoc by an authenticated operator, in place of the named agent
+   document.** Models and their per-model effort levels are discovered from
+   each enrollment's harness and stored as daemon records; the fixed effort
+   vocabulary becomes the levels each model reports. The committed tree keeps
+   what is authority: an adapter pin per client kind, each route's terms
+   basis, and an optional allow or deny list over discovered models. Offers
+   as authored fragments go away, and with them `identity_stability` and
+   `not_after`: a contradicting observation still fails the attempt, and a
+   model the harness stops reporting is withdrawn from new selection.
+   Admission still canonicalizes and hashes the resolved tuple (enrollment
+   id, model id, effort level, and the adapter pin), so run records and the
+   comparison keys of shadow and wardless roles keep a digest. The lineup
+   stays in the tree and names each role's default tuple, resolved at
+   admission; review independence derives lineage from the enrollment's
+   client kind and the model; the routing policy orders enrollments per role
+   and keeps the lineup's model and effort, so it no longer puts a different
+   model on each pool (Sections [4](../plan.md#4-the-attention-model), [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry), and [7](../plan.md#7-review-policy)). Only an operator chooses the
+   enrollment; intake still sets nothing. This overturns revision 39's "one
+   atomic agent document over per-axis policy keys", whose premise, that a
+   reviewed document per combination would be cheap, did not hold: each new
+   combination cost an offer, an agent, two lock entries, a lineup line, a
+   commit, and a restart. Rejected: keeping offers as a hand-maintained
+   model allowlist, which keeps that friction; and fetching a model manifest
+   from a remote branch at runtime, as T3 Code does, which would be an
+   unreviewed remote input to a control-plane decision.
+
+(Owner decision of 2026-11-04 on #2593;
+[decision note](../../devlog/2026-11-05-1035-select-by-enrollment-model-effort.md).)
