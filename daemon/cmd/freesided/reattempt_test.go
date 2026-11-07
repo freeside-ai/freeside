@@ -55,6 +55,8 @@ func TestReattemptArgumentsFailBeforeOpeningStore(t *testing.T) {
 
 func TestReattemptTaskMatchesCampaignAndUsesLatestAttempt(t *testing.T) {
 	t.Parallel()
+	// The subtests stay serial: the --task case compares its result with
+	// the one --campaign recorded.
 	var campaignResult submitResult
 	for _, selector := range []string{"--campaign", "--task"} {
 		t.Run(selector, func(t *testing.T) {

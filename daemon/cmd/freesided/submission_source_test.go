@@ -75,6 +75,7 @@ func TestSubmitCommandSourceReference(t *testing.T) {
 	t.Parallel()
 	for _, tc := range submissionSourceCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			task, policy, publication := writeSubmissionSource(t, root, tc)
 			cfg := submitCommandConfig{
@@ -327,6 +328,7 @@ func TestRetainedSourceSubmissionDoesNotCreateWork(t *testing.T) {
 	t.Parallel()
 	for _, tc := range refusedSourceCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cfg, req := retainHistoricalSource(t, tc)
 			seedTemplateStore(t, cfg.DBPath)
 			_, err := runSubmitCommand(t.Context(), submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID})

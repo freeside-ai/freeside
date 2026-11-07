@@ -396,6 +396,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 	approval := "approval-" + domain.ItemID(defaultFakeRunID)
 
 	t.Run("rejected", func(t *testing.T) {
+		t.Parallel()
 		sink := newNtfySink(t, http.StatusServiceUnavailable)
 		var logs lockedBuffer
 		h := startNotifyingDaemon(t, t.TempDir(), sink.URL, &logs)
@@ -425,6 +426,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 	})
 
 	t.Run("unreachable", func(t *testing.T) {
+		t.Parallel()
 		// A server that is gone: its address refuses every connection.
 		gone := httptest.NewServer(strayrequest.Ignore(http.NotFoundHandler()))
 		goneURL := gone.URL

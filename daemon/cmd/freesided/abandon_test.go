@@ -25,6 +25,7 @@ func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
 				name = failure + "/control"
 			}
 			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 				ctx := t.Context()
 				dbPath := filepath.Join(t.TempDir(), "freeside.db")
 				seedTemplateStore(t, dbPath)

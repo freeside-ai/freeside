@@ -39,6 +39,7 @@ func TestSubmitCommandRequiresWorkUnit(t *testing.T) {
 	t.Parallel()
 	for name, submissionID := range map[string]string{"generated identity": "", "prepared identity": "undeclared"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			task, policy, publication := writeSubmissionInputs(t, root)
 			cfg := submitCommandConfig{
@@ -141,6 +142,7 @@ func TestRetainedUndeclaredSubmissionDoesNotCreateWork(t *testing.T) {
 		"repeated identity": func(cfg submitCommandConfig) submitCommandConfig { return cfg },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			cfg, req := retainHistoricalSource(t, undeclaredSubmission)
 			seedTemplateStore(t, cfg.DBPath)
 			_, err := runSubmitCommand(t.Context(), retry(cfg))

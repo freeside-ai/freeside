@@ -782,6 +782,7 @@ func TestControlServesExecutionMode(t *testing.T) {
 		{name: "fake driver", cfg: config{FakeDriverEnabled: true}, want: executionFake},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			seedTemplateStore(t, dbPath)
 			cfg := tc.cfg

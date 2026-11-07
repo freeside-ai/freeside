@@ -1492,6 +1492,8 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 		t.Fatal("a policy with duplicate JSON keys was accepted")
 	}
 
+	// The subtests stay serial: they share this test's store and root with
+	// the refusals that follow them.
 	for name, body := range map[string]string{
 		"invalid branch":     `{"branch":"bad branch","title":"Test work","body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,
 		"reserved branch":    `{"branch":"freeside/task","title":"Test work","body":"Reviewer context.","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`,

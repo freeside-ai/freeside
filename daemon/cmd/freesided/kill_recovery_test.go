@@ -84,6 +84,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			ntfy := newNtfySink(t, http.StatusOK)
 			marker := filepath.Join(root, "kill-checkpoint")
