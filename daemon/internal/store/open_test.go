@@ -39,7 +39,8 @@ func openStoreAt(t *testing.T, path string, opts store.Options) *store.Store {
 	return storetest.Open(t, path, opts)
 }
 
-// Open-contract and restore tests build their own databases from scratch.
+// Open-contract tests build their own databases from scratch, because Open
+// on an empty file is their subject; other tests start from the template.
 func openRawStore(t *testing.T, opts store.Options) *store.Store {
 	t.Helper()
 	s, err := store.Open(t.Context(), tempDBPath(t), opts)
