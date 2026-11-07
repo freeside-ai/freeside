@@ -10,7 +10,8 @@ name: scripts CI
 # stand-ins for the build, signing, and device boundaries, no Xcode). A
 # macOS job runs the installers' real Foundation URL validator, and the
 # Mac installer's exclusive rename path. The retired-vocabulary check runs
-# from vocabulary-ci.yml because its triggers span components.
+# from vocabulary-ci.yml because its triggers span components, and the
+# Tier A path check runs from tier-a-paths.yml on every pull request.
 # The suites test the script implementations only; nothing here parses
 # PR prose. Shellcheck runs as a pinned, checksum-verified prebuilt binary,
 # matching the pinned-vacuum/golangci-lint determinism convention (a

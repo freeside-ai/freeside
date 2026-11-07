@@ -141,6 +141,9 @@ jobs:
   migration-history:
     uses: ./.github/workflows/migration-history.yml
 
+  tier-a-paths:
+    uses: ./.github/workflows/tier-a-paths.yml
+
   # The job name is the context branch protection requires; keep it exact.
   required:
     name: required
@@ -156,6 +159,7 @@ jobs:
       - vocabulary
       - commit-messages
       - migration-history
+      - tier-a-paths
     runs-on: ubuntu-latest
     steps:
       - name: Require every selected job to succeed
@@ -166,10 +170,10 @@ jobs:
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
           # Only an explicitly unselected component may skip. A selected
           # reusable workflow must propagate every failed or skipped child.
-          jq -e 'keys == (["select", "commit-messages", "migration-history", "daemon", "app", "api", "docs",
-                          "scripts", "convergence", "vocabulary"] | sort)
+          jq -e 'keys == (["select", "commit-messages", "migration-history", "tier-a-paths", "daemon", "app",
+                          "api", "docs", "scripts", "convergence", "vocabulary"] | sort)
             and .select.result == "success" and .["commit-messages"].result == "success"
-            and .["migration-history"].result == "success"
+            and .["migration-history"].result == "success" and .["tier-a-paths"].result == "success"
             and (. as $needs | all(["daemon", "app", "api", "docs", "scripts", "convergence", "vocabulary"][];
               . as $component | if $needs.select.outputs[$component] == "true"
               then $needs[$component].result == "success"

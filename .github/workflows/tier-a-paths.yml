@@ -1,0 +1,26 @@
+name: tier-a paths
+
+# Fails when an AGENTS.md Tier A Paths entry matches no file
+# (scripts/check-tier-a-paths.sh). It runs on every PR, not only when the
+# scripts component is selected: the list goes stale from a daemon/ rename
+# or an AGENTS.md edit, which never select scripts.
+
+on:
+  # Run on every PR through pull-request.yml and report through required.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier-a-paths-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that every Tier A path resolves
+        run: bash scripts/check.sh scripts tier-a-paths
