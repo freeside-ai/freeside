@@ -40,6 +40,9 @@ var fixtureTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 // runGit runs git over a test-owned repo with ambient git state and global and
 // system config neutralized and a fixed identity, so commits are deterministic
 // and no developer git config leaks in. Mirrors the importer suite's helper.
+// Automatic maintenance and gc are off, because otherwise a fixture commit
+// or fetch starts a detached `git maintenance run --auto` child: one more
+// process spawn per call, which costs about 6 ms on macOS.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test running git over test-owned repos with test-chosen args
@@ -51,6 +54,9 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		"GIT_AUTHOR_DATE=1700000000 +0000",
 		"GIT_COMMITTER_NAME=fixture", "GIT_COMMITTER_EMAIL=fixture@test.invalid",
 		"GIT_COMMITTER_DATE=1700000000 +0000",
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=maintenance.auto", "GIT_CONFIG_VALUE_0=false",
+		"GIT_CONFIG_KEY_1=gc.auto", "GIT_CONFIG_VALUE_1=0",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
