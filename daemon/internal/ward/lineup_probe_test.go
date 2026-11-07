@@ -523,6 +523,59 @@ func TestProbeLineupImageRefusesBeforeCreatingAnything(t *testing.T) {
 	}
 }
 
+// TestProbeLineupImageRefusesAnUnattestedNetwork pins the probe's network
+// attestation: a network whose inspected name or mode is wrong is refused
+// before the proxy starts, so no container runs and no credential is copied.
+func TestProbeLineupImageRefusesAnUnattestedNetwork(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, want string
+		change     func(*NetworkReport)
+	}{
+		{
+			name: "NAT mode", want: "lineup probe network is not host-only",
+			change: func(r *NetworkReport) { r.Mode = NetworkNAT },
+		},
+		{
+			name: "wrong name", want: "lineup probe network inspection identified the wrong network",
+			change: func(r *NetworkReport) { r.Name = lineupProbeNetworkName("000000000000") },
+		},
+	} {
+		for _, p := range []LineupProbe{claudeWriterProbe(t), codexReviewerProbe()} {
+			t.Run(tc.name+"/"+string(p.Harness), func(t *testing.T) {
+				t.Parallel()
+				rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("2.1.282 (Claude Code)\n", `{"type":"result"}`, "", "0\n")...)
+				rt.onInspectNetwork = func(_ string, report NetworkReport) (NetworkReport, error) {
+					tc.change(&report)
+					// startConnectProxy refuses a blank gateway, so a proxy
+					// started before the attestation would fail with "start
+					// lineup probe proxy" instead of the refusal below.
+					report.IPv4Gateway = ""
+					return report, nil
+				}
+				rt.onCopyIntoContainer = func(string, string, string) error {
+					t.Error("the probe copied into a container on an unattested network")
+					return nil
+				}
+				if _, err := ProbeLineupImage(t.Context(), rt, p, nil); err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v, want %q", err, tc.want)
+				}
+				rt.mu.Lock()
+				defer rt.mu.Unlock()
+				for _, call := range rt.calls {
+					if strings.HasPrefix(call, "create-container ") || strings.HasPrefix(call, "start-container ") ||
+						strings.HasPrefix(call, "copy ") {
+						t.Fatalf("the probe reached %q on an unattested network: %v", call, rt.calls)
+					}
+				}
+				if len(rt.ctrs) != 0 || len(rt.nets) != 0 {
+					t.Fatalf("left %d containers and %d networks behind", len(rt.ctrs), len(rt.nets))
+				}
+			})
+		}
+	}
+}
+
 func TestReviewSnapshotProbeCredential(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
