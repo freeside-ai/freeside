@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func TestReviewEvidenceJSONPreservesRetainedBytes(t *testing.T) {
@@ -307,6 +309,67 @@ func TestRunReviewFindingsRereviewAndFailure(t *testing.T) {
 	}
 	evidence, err := f.service.GetReviewEvidence(ctx, run.ID, 2)
 	if err != nil || evidence.Availability != "unavailable" || evidence.PublishEligible || evidence.SourceHeadSHA != request.HeadSHA {
+		t.Fatalf("evidence: %#v, %v", evidence, err)
+	}
+}
+
+// TestReviewEvidenceFailedRoundWithoutJournalBinding reads a failed round
+// whose source wrote its failure fence before any launch, so the round has
+// no journal binding. The fence carries no evidence to hold to a provider,
+// so the read needs no binding and reports the evidence unavailable.
+func TestReviewEvidenceFailedRoundWithoutJournalBinding(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newCorpusFixture(t)
+	run := corpusRun("review-fence")
+	request := domain.ReviewRequestRecord{
+		InvocationID: "review-fence-1", RunID: run.ID, Round: 1,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), RequestedAt: f.at,
+	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestBody, err := json.Marshal(exec.ReviewRequest{
+		Admission: fake.ReviewAdmission(domain.RoleReviewer, run.ID, request.InvocationID),
+		RunID:     run.ID, Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
+		BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, Workspace: "/workspace",
+		Verification: exec.ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		},
+		Instructions: instructions, RequestedAt: f.at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence, err := json.Marshal(ward.CodexReviewSourceOutcome{
+		InvocationID: request.InvocationID, FailureClass: domain.ReviewFailureTransient, Failure: "review stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustWrite(t, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutReviewRequest(ctx, request); err != nil {
+			return err
+		}
+		return tx.PutReviewFailure(ctx, domain.ReviewFailure{
+			InvocationID: request.InvocationID, RunID: run.ID, Round: 1, BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
+			Class: domain.ReviewFailureTransient, Reason: "Review stopped", ObservedAt: f.at,
+		})
+	})
+	f.mustWriteInternal(t, func(tx *store.InternalTx) error {
+		if err := tx.RecordCodexReviewRequest(ctx, string(request.InvocationID), requestBody); err != nil {
+			return err
+		}
+		return tx.RecordCodexReviewOutcome(ctx, string(request.InvocationID), fence)
+	})
+	evidence, err := f.service.GetReviewEvidence(ctx, run.ID, 1)
+	if err != nil || evidence.Availability != domain.ReviewEvidenceUnavailable || evidence.CollectionEvidence != nil {
 		t.Fatalf("evidence: %#v, %v", evidence, err)
 	}
 }
