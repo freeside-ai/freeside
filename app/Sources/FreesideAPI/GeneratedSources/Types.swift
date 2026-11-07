@@ -16897,6 +16897,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/review_diminishing`.
             public var review_diminishing: Components.Schemas.AttentionItem.review_diminishingPayload?
+            /// The producing invocation's reading order for the pull request, on a ready_for_final_review item whose invocation wrote one; null on every other type and on a ready item without a guide, so a client must render the item without it.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide`.
+            public struct review_guidePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide/value1`.
+                public var value1: Components.Schemas.ReviewGuide
+                /// Creates a new `review_guidePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewGuide) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The producing invocation's reading order for the pull request, on a ready_for_final_review item whose invocation wrote one; null on every other type and on a ready item without a guide, so a client must render the item without it.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide`.
+            public var review_guide: Components.Schemas.AttentionItem.review_guidePayload?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/item_version`.
             public var item_version: Swift.Int
             /// - Remark: Generated from `#/components/schemas/AttentionItem/interruption_class`.
@@ -17038,6 +17064,7 @@ public enum Components {
             ///   - spec_revision: Authenticated revision facts for a revised spec_approval item; null on the initial approval and every other item type.
             ///   - agent_question: Typed question facts, present on every agent_question item and null on every other type.
             ///   - review_diminishing: Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.
+            ///   - review_guide: The producing invocation's reading order for the pull request, on a ready_for_final_review item whose invocation wrote one; null on every other type and on a ready item without a guide, so a client must render the item without it.
             ///   - item_version:
             ///   - interruption_class:
             ///   - conversation_id:
@@ -17088,6 +17115,7 @@ public enum Components {
                 spec_revision: Components.Schemas.AttentionItem.spec_revisionPayload? = nil,
                 agent_question: Components.Schemas.AttentionItem.agent_questionPayload? = nil,
                 review_diminishing: Components.Schemas.AttentionItem.review_diminishingPayload? = nil,
+                review_guide: Components.Schemas.AttentionItem.review_guidePayload? = nil,
                 item_version: Swift.Int,
                 interruption_class: Components.Schemas.InterruptionClass,
                 conversation_id: Swift.String? = nil,
@@ -17138,6 +17166,7 @@ public enum Components {
                 self.spec_revision = spec_revision
                 self.agent_question = agent_question
                 self.review_diminishing = review_diminishing
+                self.review_guide = review_guide
                 self.item_version = item_version
                 self.interruption_class = interruption_class
                 self.conversation_id = conversation_id
@@ -17189,6 +17218,7 @@ public enum Components {
                 case spec_revision
                 case agent_question
                 case review_diminishing
+                case review_guide
                 case item_version
                 case interruption_class
                 case conversation_id
@@ -19468,6 +19498,291 @@ public enum Components {
                 case observed
                 case observed_at
             }
+        }
+        /// A reading order for a ready_for_final_review item's pull request (plan §7; mirrors domain.ReviewGuide). The stops, captions, questions, and notes are the agent's labeled claim; each excerpt's text is a daemon fact read from the imported commit or its bound base. head_sha equals the item's pr_head_sha. claim_digest names exactly one agent_claims entry, the one the guide was parsed from: label freeside.review-guide, media_type application/json, null inline text, and head_bound provenance whose source_head_sha equals head_sha and whose sensitivity_class is not high_sensitivity, since the guide's prose rides inline on the item as inline claim text does.
+        /// The agent writes the guide to .freeside-evidence/review-guide.json as this object without head_sha and claim_digest, and each excerpt without text and unresolved_reason. The handoff supplies head_sha, import supplies claim_digest, and excerpt resolution supplies text or unresolved_reason. The file carries no version field (the reserved label and path identify the format), and import rejects unknown fields. String caps count Unicode code points.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewGuide`.
+        public struct ReviewGuide: Codable, Hashable, Sendable {
+            /// The imported commit the guide was written against.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewGuide/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewGuide/claim_digest`.
+            public var claim_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/ReviewGuide/stops`.
+            public var stops: [Components.Schemas.ReviewStop]
+            /// Questions the agent wants the reviewer to answer.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewGuide/questions`.
+            public var questions: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/ReviewGuide/notes`.
+            public var notes: Swift.String?
+            /// Creates a new `ReviewGuide`.
+            ///
+            /// - Parameters:
+            ///   - head_sha: The imported commit the guide was written against.
+            ///   - claim_digest:
+            ///   - stops:
+            ///   - questions: Questions the agent wants the reviewer to answer.
+            ///   - notes:
+            public init(
+                head_sha: Swift.String,
+                claim_digest: Components.Schemas.Digest,
+                stops: [Components.Schemas.ReviewStop],
+                questions: [Swift.String],
+                notes: Swift.String? = nil
+            ) {
+                self.head_sha = head_sha
+                self.claim_digest = claim_digest
+                self.stops = stops
+                self.questions = questions
+                self.notes = notes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case head_sha
+                case claim_digest
+                case stops
+                case questions
+                case notes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                self.claim_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .claim_digest
+                )
+                self.stops = try container.decode(
+                    [Components.Schemas.ReviewStop].self,
+                    forKey: .stops
+                )
+                self.questions = try container.decode(
+                    [Swift.String].self,
+                    forKey: .questions
+                )
+                self.notes = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .notes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "head_sha",
+                    "claim_digest",
+                    "stops",
+                    "questions",
+                    "notes"
+                ])
+            }
+        }
+        /// One stop in a review guide, in reading order; mirrors domain.ReviewStop.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewStop`.
+        public struct ReviewStop: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewStop/title`.
+            public var title: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewStop/summary`.
+            public var summary: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewStop/attention`.
+            public var attention: Components.Schemas.ReviewAttention
+            /// - Remark: Generated from `#/components/schemas/ReviewStop/excerpts`.
+            public var excerpts: [Components.Schemas.ReviewExcerpt]
+            /// Creates a new `ReviewStop`.
+            ///
+            /// - Parameters:
+            ///   - title:
+            ///   - summary:
+            ///   - attention:
+            ///   - excerpts:
+            public init(
+                title: Swift.String,
+                summary: Swift.String,
+                attention: Components.Schemas.ReviewAttention,
+                excerpts: [Components.Schemas.ReviewExcerpt]
+            ) {
+                self.title = title
+                self.summary = summary
+                self.attention = attention
+                self.excerpts = excerpts
+            }
+            public enum CodingKeys: String, CodingKey {
+                case title
+                case summary
+                case attention
+                case excerpts
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.title = try container.decode(
+                    Swift.String.self,
+                    forKey: .title
+                )
+                self.summary = try container.decode(
+                    Swift.String.self,
+                    forKey: .summary
+                )
+                self.attention = try container.decode(
+                    Components.Schemas.ReviewAttention.self,
+                    forKey: .attention
+                )
+                self.excerpts = try container.decode(
+                    [Components.Schemas.ReviewExcerpt].self,
+                    forKey: .excerpts
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "title",
+                    "summary",
+                    "attention",
+                    "excerpts"
+                ])
+            }
+        }
+        /// A line range the stop points at, with its text as a daemon fact (mirrors domain.ReviewExcerpt). path is a canonical repository-relative path (no leading slash, no backslash, no control character, no empty, `.`, or `..` segment). start_line and end_line are 1-based and inclusive, start_line <= end_line, and the span covers at most 80 lines. Exactly one of text and unresolved_reason is null: text is the range read from the imported commit (side head) or its bound base (side base), at most 8 KiB of UTF-8; unresolved_reason says why the daemon could not read it, and a span whose text would exceed the cap resolves to too_large.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewExcerpt`.
+        public struct ReviewExcerpt: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/path`.
+            public var path: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/side`.
+            public var side: Components.Schemas.ReviewExcerptSide
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/start_line`.
+            public var start_line: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/end_line`.
+            public var end_line: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/caption`.
+            public var caption: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/text`.
+            public var text: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/unresolved_reason`.
+            public struct unresolved_reasonPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/unresolved_reason/value1`.
+                public var value1: Components.Schemas.ReviewExcerptUnresolved
+                /// Creates a new `unresolved_reasonPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewExcerptUnresolved) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewExcerpt/unresolved_reason`.
+            public var unresolved_reason: Components.Schemas.ReviewExcerpt.unresolved_reasonPayload?
+            /// Creates a new `ReviewExcerpt`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - side:
+            ///   - start_line:
+            ///   - end_line:
+            ///   - caption:
+            ///   - text:
+            ///   - unresolved_reason:
+            public init(
+                path: Swift.String,
+                side: Components.Schemas.ReviewExcerptSide,
+                start_line: Swift.Int,
+                end_line: Swift.Int,
+                caption: Swift.String,
+                text: Swift.String? = nil,
+                unresolved_reason: Components.Schemas.ReviewExcerpt.unresolved_reasonPayload? = nil
+            ) {
+                self.path = path
+                self.side = side
+                self.start_line = start_line
+                self.end_line = end_line
+                self.caption = caption
+                self.text = text
+                self.unresolved_reason = unresolved_reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case path
+                case side
+                case start_line
+                case end_line
+                case caption
+                case text
+                case unresolved_reason
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.path = try container.decode(
+                    Swift.String.self,
+                    forKey: .path
+                )
+                self.side = try container.decode(
+                    Components.Schemas.ReviewExcerptSide.self,
+                    forKey: .side
+                )
+                self.start_line = try container.decode(
+                    Swift.Int.self,
+                    forKey: .start_line
+                )
+                self.end_line = try container.decode(
+                    Swift.Int.self,
+                    forKey: .end_line
+                )
+                self.caption = try container.decode(
+                    Swift.String.self,
+                    forKey: .caption
+                )
+                self.text = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .text
+                )
+                self.unresolved_reason = try container.decodeIfPresent(
+                    Components.Schemas.ReviewExcerpt.unresolved_reasonPayload.self,
+                    forKey: .unresolved_reason
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "path",
+                    "side",
+                    "start_line",
+                    "end_line",
+                    "caption",
+                    "text",
+                    "unresolved_reason"
+                ])
+            }
+        }
+        /// What a review stop asks the reviewer to weigh (mirrors domain.ReviewAttention).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewAttention`.
+        @frozen public enum ReviewAttention: String, Codable, Hashable, Sendable, CaseIterable {
+            case tradeoff = "tradeoff"
+            case contract = "contract"
+            case product = "product"
+            case risk = "risk"
+            case accessibility = "accessibility"
+        }
+        /// Which commit an excerpt reads: head is the imported commit, base its bound base (mirrors domain.ReviewExcerptSide).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewExcerptSide`.
+        @frozen public enum ReviewExcerptSide: String, Codable, Hashable, Sendable, CaseIterable {
+            case head = "head"
+            case base = "base"
+        }
+        /// Why the daemon could not read an excerpt (mirrors domain.ReviewExcerptUnresolved): path_missing (no such file on that side), range_out_of_file (the range runs past the file's end), binary (the file is not text), too_large (the text exceeds 8 KiB).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewExcerptUnresolved`.
+        @frozen public enum ReviewExcerptUnresolved: String, Codable, Hashable, Sendable, CaseIterable {
+            case path_missing = "path_missing"
+            case range_out_of_file = "range_out_of_file"
+            case binary = "binary"
+            case too_large = "too_large"
         }
         /// Every coordinate of one immutable persisted review contradiction, including its exact body digest. A recover_review command authorizes only this row; a later contradiction requires another decision.
         ///

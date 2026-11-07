@@ -266,6 +266,64 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// A ready item carrying a two-stop review guide: one excerpt the daemon
+    /// read on head and one it could not read on base. The guide's reserved
+    /// claim is head-bound application/json without inline text, as import
+    /// leaves it. Mirrors the daemon's attention_item_ready_review_guide
+    /// golden; the default ready fixture keeps review_guide null.
+    public static func readyWithReviewGuide() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready-review-guide"
+        let head = snapshot.item.pr_head_sha
+        let digest = "sha256:review-guide"
+        var claim = agentClaim(
+            label: "freeside.review-guide",
+            artifactID: "art-review-guide",
+            digest: digest,
+            provenance: .head_bound(
+                .init(
+                    producer_class: .agent,
+                    producer_invocation_id: "inv-agent-ready_for_final_review",
+                    head_binding: .head_bound,
+                    source_head_sha: head,
+                    verification_recipe_digest: nil,
+                    sensitivity_class: .normal
+                )))
+        claim.metadata.media_type = .application_sol_json
+        snapshot.item.agent_claims.append(claim)
+        snapshot.item.artifact_digests = Array(Set(snapshot.item.artifact_digests + [digest])).sorted()
+        snapshot.item.review_guide = .init(
+            value1: .init(
+                head_sha: head,
+                claim_digest: digest,
+                stops: [
+                    .init(
+                        title: "Start with the guide's validation",
+                        summary: "Validate enforces every cap the schema cannot express.",
+                        attention: .contract,
+                        excerpts: [
+                            .init(
+                                path: "daemon/internal/domain/review_guide.go", side: .head,
+                                start_line: 10, end_line: 11, caption: "The head check comes first.",
+                                text: "func (g ReviewGuide) Validate() error {\n\tif g.HeadSHA == \"\" {\n",
+                                unresolved_reason: nil)
+                        ]),
+                    .init(
+                        title: "The removed helper",
+                        summary: "The old helper is gone; nothing else called it.",
+                        attention: .risk,
+                        excerpts: [
+                            .init(
+                                path: "daemon/internal/domain/old_helper.go", side: .base,
+                                start_line: 1, end_line: 20, caption: "The helper before its removal.",
+                                text: nil, unresolved_reason: .init(value1: .path_missing))
+                        ]),
+                ],
+                questions: ["Should the span cap be per stop instead of per excerpt?"],
+                notes: "The schema change is the contract; the rest follows it."))
+        return snapshot
+    }
+
     public static func scopeConflictQuestion() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .agent_question)
         snapshot.item.id = "item-scope-conflict"

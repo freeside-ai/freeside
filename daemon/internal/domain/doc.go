@@ -50,6 +50,8 @@
 //   - review_diminishing.go, drift_audit.go
 //     the diminishing-returns card facts and the drift audit that parks a run (§7)
 //   - review_dispute.go dispute routes and per-finding adjudication blocks
+//   - review_guide.go a ready item's reading order: the agent's stops and the
+//     daemon-read excerpts, bound to the item's head and claim (§7)
 //   - review_yield.go per-round diff metrics and yield history (§7)
 //   - shadow_review.go, shadow_review_configuration.go
 //     shadow review sources and their owner-approved configuration

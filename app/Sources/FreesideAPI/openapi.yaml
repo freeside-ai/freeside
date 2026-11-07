@@ -7182,6 +7182,7 @@ components:
         - spec_revision
         - agent_question
         - review_diminishing
+        - review_guide
         - item_version
         - interruption_class
         - conversation_id
@@ -7465,6 +7466,15 @@ components:
             item; null on every other type. Also null on such an item stored
             before the facts existed and on one a review escalation raised,
             so a client must render the item without them.
+        review_guide:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewGuide"
+          description: >
+            The producing invocation's reading order for the pull request, on
+            a ready_for_final_review item whose invocation wrote one; null on
+            every other type and on a ready item without a guide, so a client
+            must render the item without it.
         item_version:
           type: integer
           minimum: 1
@@ -7672,6 +7682,7 @@ components:
         spec_revision: null
         agent_question: null
         review_diminishing: null
+        review_guide: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -9044,6 +9055,155 @@ components:
         bound: "cafebabe"
         observed: "feedface"
         observed_at: "2026-01-02T03:54:05Z"
+
+    ReviewGuide:
+      type: object
+      description: >
+        A reading order for a ready_for_final_review item's pull request
+        (plan §7; mirrors domain.ReviewGuide). The stops, captions,
+        questions, and notes are the agent's labeled claim; each excerpt's
+        text is a daemon fact read from the imported commit or its bound
+        base. head_sha equals the item's pr_head_sha. claim_digest names
+        exactly one agent_claims entry, the one the guide was parsed from:
+        label freeside.review-guide, media_type application/json, null
+        inline text, and head_bound provenance whose source_head_sha equals
+        head_sha and whose sensitivity_class is not high_sensitivity, since
+        the guide's prose rides inline on the item as inline claim text
+        does.
+
+        The agent writes the guide to .freeside-evidence/review-guide.json
+        as this object without head_sha and claim_digest, and each excerpt
+        without text and unresolved_reason. The handoff supplies head_sha,
+        import supplies claim_digest, and excerpt resolution supplies text
+        or unresolved_reason. The file carries no version field (the
+        reserved label and path identify the format), and import rejects
+        unknown fields. String caps count Unicode code points.
+      additionalProperties: false
+      required: [head_sha, claim_digest, stops, questions, notes]
+      properties:
+        head_sha:
+          type: string
+          minLength: 1
+          description: The imported commit the guide was written against.
+        claim_digest:
+          $ref: "#/components/schemas/Digest"
+        stops:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/ReviewStop"
+        questions:
+          type: array
+          maxItems: 8
+          description: Questions the agent wants the reviewer to answer.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+        notes:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          nullable: true
+
+    ReviewStop:
+      type: object
+      description: >
+        One stop in a review guide, in reading order; mirrors
+        domain.ReviewStop.
+      additionalProperties: false
+      required: [title, summary, attention, excerpts]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        attention:
+          $ref: "#/components/schemas/ReviewAttention"
+        excerpts:
+          type: array
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/ReviewExcerpt"
+
+    ReviewExcerpt:
+      type: object
+      description: >
+        A line range the stop points at, with its text as a daemon fact
+        (mirrors domain.ReviewExcerpt). path is a canonical
+        repository-relative path (no leading slash, no backslash, no control
+        character, no empty, `.`, or `..` segment). start_line and end_line are 1-based and
+        inclusive, start_line <= end_line, and the span covers at most 80
+        lines. Exactly one of text and unresolved_reason is null: text is
+        the range read from the imported commit (side head) or its bound
+        base (side base), at most 8 KiB of UTF-8; unresolved_reason says why
+        the daemon could not read it, and a span whose text would exceed the
+        cap resolves to too_large.
+      additionalProperties: false
+      required: [path, side, start_line, end_line, caption, text, unresolved_reason]
+      properties:
+        path:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        side:
+          $ref: "#/components/schemas/ReviewExcerptSide"
+        start_line:
+          type: integer
+          minimum: 1
+        end_line:
+          type: integer
+          minimum: 1
+        caption:
+          type: string
+          minLength: 1
+          maxLength: 300
+        text:
+          type: string
+          nullable: true
+        unresolved_reason:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewExcerptUnresolved"
+
+    ReviewAttention:
+      type: string
+      description: >
+        What a review stop asks the reviewer to weigh (mirrors
+        domain.ReviewAttention).
+      enum:
+        - tradeoff
+        - contract
+        - product
+        - risk
+        - accessibility
+
+    ReviewExcerptSide:
+      type: string
+      description: >
+        Which commit an excerpt reads: head is the imported commit, base its
+        bound base (mirrors domain.ReviewExcerptSide).
+      enum:
+        - head
+        - base
+
+    ReviewExcerptUnresolved:
+      type: string
+      description: >
+        Why the daemon could not read an excerpt (mirrors
+        domain.ReviewExcerptUnresolved): path_missing (no such file on that
+        side), range_out_of_file (the range runs past the file's end),
+        binary (the file is not text), too_large (the text exceeds 8 KiB).
+      enum:
+        - path_missing
+        - range_out_of_file
+        - binary
+        - too_large
 
     ReviewRecoveryBinding:
       type: object

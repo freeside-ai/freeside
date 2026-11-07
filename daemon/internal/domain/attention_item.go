@@ -592,6 +592,12 @@ type AttentionItem struct {
 	// audit's facts, on a review_diminishing_returns item (plan §7 Review
 	// Drift). It is nil on items created before the field existed.
 	ReviewDiminishing *ReviewDiminishingFacts `json:"review_diminishing"`
+	// ReviewGuide is the producing invocation's reading order on a
+	// ready_for_final_review item whose invocation wrote one, parsed from the
+	// agent_claims entry its ClaimDigest names (plan §7). It is nil on every
+	// other type, on a ready item without a guide, and on items stored before
+	// the field existed.
+	ReviewGuide *ReviewGuide `json:"review_guide"`
 	// AlternateAgents are the agents the item offers to retry the failed role
 	// under (plan §4, alternate-agent retry): present exactly when the item
 	// offers retry_with_alternate_agent, and only on the execution_failure,
@@ -682,6 +688,7 @@ type AttentionItemInput struct {
 	SpecRevision                     *SpecRevisionFacts
 	AgentQuestion                    *AgentQuestionFacts
 	ReviewDiminishing                *ReviewDiminishingFacts
+	ReviewGuide                      *ReviewGuide
 	AlternateAgents                  []AlternateAgentOffer
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
@@ -744,6 +751,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		SpecRevision:                     cloneSpecRevisionFacts(in.SpecRevision),
 		AgentQuestion:                    cloneAgentQuestionFacts(in.AgentQuestion),
 		ReviewDiminishing:                cloneReviewDiminishingFacts(in.ReviewDiminishing),
+		ReviewGuide:                      cloneReviewGuide(in.ReviewGuide),
 		AlternateAgents:                  slices.Clone(in.AlternateAgents),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
@@ -1037,6 +1045,11 @@ func (i AttentionItem) Validate() error {
 		}
 		if err := i.ReviewDiminishing.Validate(); err != nil {
 			return fmt.Errorf("item %s review_diminishing: %w", i.ID, err)
+		}
+	}
+	if i.ReviewGuide != nil {
+		if err := i.validateReviewGuide(); err != nil {
+			return err
 		}
 	}
 	if i.ExecutionFailure != nil {

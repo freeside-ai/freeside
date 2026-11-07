@@ -56,6 +56,17 @@ const (
 	PublicationEvidencePath  = EvidenceWorkspaceDir + "/publication.md"
 )
 
+// ReviewGuideEvidenceLabel and ReviewGuideEvidencePath reserve the
+// agent-written review guide (domain.ReviewGuide, api/openapi.yaml
+// ReviewGuide), which the launcher declares like the summary: the launcher
+// fixes the label, path, media type, and provenance, and the agent controls
+// only whether the file exists and what it says. The label equals
+// domain.ReviewGuideClaimLabel. Nothing declares it yet; #2750 wires it.
+const (
+	ReviewGuideEvidenceLabel = "freeside.review-guide"
+	ReviewGuideEvidencePath  = EvidenceWorkspaceDir + "/review-guide.json"
+)
+
 // EvidenceSourceVersion identifies the evidence *source descriptor* wire format
 // (the agent-facing input the helper reads), independent of and distinct from
 // the evidence *manifest* the helper emits (EvidenceManifestVersion). Any

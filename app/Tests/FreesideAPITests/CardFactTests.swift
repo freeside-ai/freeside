@@ -215,6 +215,82 @@ import Testing
         }
     }
 
+    @Test func reviewGuideFixtureIsValidOnlyOnItsReadyItem() {
+        let ready = AttentionFixtures.readyWithReviewGuide().item
+        #expect(MockContractValidation.itemValidityBreach(ready) == nil)
+        #expect(ready.review_guide?.value1.stops.count == 2)
+        #expect(AttentionFixtures.fixture(type: .ready_for_final_review).item.review_guide == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .execution_failure).item
+        wrongType.review_guide = ready.review_guide
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "review_guide on a different item type")
+
+        func breach(_ mutate: (inout Components.Schemas.AttentionItem) -> Void) -> String? {
+            var item = ready
+            mutate(&item)
+            return MockContractValidation.itemValidityBreach(item)
+        }
+        #expect(
+            breach { $0.review_guide?.value1.head_sha = "feedface" }
+                == "review_guide head_sha differs from pr_head_sha")
+        #expect(
+            breach { $0.agent_claims.removeAll { $0.label == "freeside.review-guide" } }
+                == "review_guide claim_digest must name the one freeside.review-guide claim")
+        #expect(
+            breach { $0.review_guide?.value1.stops[0].excerpts[0].unresolved_reason = .init(value1: .binary) }
+                == "review_guide excerpt must carry exactly one of text and unresolved_reason")
+        #expect(
+            breach { $0.review_guide?.value1.stops[0].excerpts[0].end_line = 90 }
+                == "invalid review_guide excerpt line range")
+        #expect(
+            breach { $0.review_guide?.value1.stops[0].excerpts[0].path = "../secret" }
+                == "review_guide excerpt path is not a canonical repository path")
+        #expect(
+            breach { $0.review_guide?.value1.stops[0].title = String(repeating: "é", count: 121) }
+                == "invalid review_guide stop title or summary")
+        #expect(
+            breach { $0.review_guide?.value1.stops[0].excerpts[0].path = "daemon/a\tb.go" }
+                == "review_guide excerpt path is not a canonical repository path")
+        #expect(
+            breach { $0.review_guide?.value1.stops[0].excerpts[0].text = String(repeating: "x", count: 8193) }
+                == "review_guide excerpt text exceeds 8 KiB")
+        #expect(
+            breach { $0.review_guide?.value1.stops = [] } == "review_guide must carry 1 to 12 stops")
+        #expect(
+            breach { item in
+                let excerpt = item.review_guide!.value1.stops[0].excerpts[0]
+                item.review_guide?.value1.stops[0].excerpts = Array(repeating: excerpt, count: 5)
+            } == "review_guide stop carries more than 4 excerpts")
+        #expect(
+            breach { $0.review_guide?.value1.questions = Array(repeating: "Why?", count: 9) }
+                == "invalid review_guide questions")
+        #expect(breach { $0.review_guide?.value1.notes = "" } == "invalid review_guide notes")
+
+        func claimBreach(_ mutate: (inout Components.Schemas.AgentClaim) -> Void) -> String? {
+            breach { item in
+                let index = item.agent_claims.firstIndex { $0.label == "freeside.review-guide" }!
+                mutate(&item.agent_claims[index])
+            }
+        }
+        #expect(
+            claimBreach { $0.metadata.media_type = .text_sol_markdown }
+                == "review_guide claim must be application/json without inline text")
+        #expect(
+            claimBreach { claim in
+                guard case .head_bound(var bound) = claim.provenance else { return }
+                bound.source_head_sha = "feedface"
+                claim.provenance = .head_bound(bound)
+            } == "review_guide claim must be head-bound to the guide's head")
+        #expect(
+            claimBreach { claim in
+                guard case .head_bound(var bound) = claim.provenance else { return }
+                bound.sensitivity_class = .high_sensitivity
+                claim.provenance = .head_bound(bound)
+            } == "review_guide claim is high-sensitivity")
+    }
+
     @Test func validationMirrorsReviewDiminishingFactRules() {
         typealias Facts = Components.Schemas.DriftAuditFacts
         func breach(

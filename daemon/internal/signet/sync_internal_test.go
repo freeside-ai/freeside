@@ -203,3 +203,22 @@ func TestNormalizeAttentionItemNormalizesNestedAdjudicationArraysWithoutMutation
 		t.Fatalf("input proposal mutated: %+v", original)
 	}
 }
+
+func TestNormalizeAttentionItemRendersEmptyReviewGuideListsWithoutMutation(t *testing.T) {
+	t.Parallel()
+	item := domain.AttentionItem{
+		ReviewGuide: &domain.ReviewGuide{Stops: []domain.ReviewStop{{Title: "Start here"}}},
+	}
+
+	normalized := normalizeAttentionItem(item)
+	body, err := json.Marshal(normalized.ReviewGuide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"questions":[]`) || !strings.Contains(string(body), `"excerpts":[]`) {
+		t.Fatalf("normalized review guide = %s, want empty questions and excerpts as []", body)
+	}
+	if item.ReviewGuide.Questions != nil || item.ReviewGuide.Stops[0].Excerpts != nil {
+		t.Fatalf("input review guide mutated: %+v", item.ReviewGuide)
+	}
+}

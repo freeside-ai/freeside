@@ -224,7 +224,7 @@ func TestGolden(t *testing.T) {
 		FilesChanged: 12, Additions: 240, Deletions: 31,
 		BaseSHA: "deadbeef", HeadSHA: "cafebabe",
 	}
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+	readyInput := domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "checks are green and the diff is ready",
@@ -242,7 +242,19 @@ func TestGolden(t *testing.T) {
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, CreatedAt: &ts, ExpiresWhen: &expires, Status: domain.StatusOpen,
-	}, approved)
+	}
+	item, err := domain.NewAttentionItem(readyInput, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same ready item carrying a review guide and the reserved claim it
+	// was parsed from, so the guide's every field is pinned on an item.
+	guide := reviewGuideFixture(readyInput.PRHeadSHA)
+	guideInput := readyInput
+	guideInput.ID = "item-review-guide"
+	guideInput.AgentClaims = append([]domain.AgentClaim{agentClaim}, reviewGuideClaimFixture(readyInput.PRHeadSHA))
+	guideInput.ReviewGuide = &guide
+	guideItem, err := domain.NewAttentionItem(guideInput, approved)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2428,6 +2440,8 @@ func TestGolden(t *testing.T) {
 		{"schedule_occurrence_consumed", consumedOccurrence},
 		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
+		{"attention_item_ready_review_guide", guideItem},
+		{"review_guide", guide},
 		{"decision_surface", decisionSurface},
 		{"recommendation_source_record", recommendationSource},
 		{"attention_item_review_diminishing_yield", diminishingItem},
