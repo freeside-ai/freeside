@@ -201,15 +201,25 @@ milestones exist is the half-scheduled state the sweep detects.
   most similar merged PR and its authored count, measured as:
 
   ```sh
-  gh api --paginate repos/freeside-ai/freeside/pulls/<PR>/files \
-    --jq '.[] | "\(.additions + .deletions)\t\(.filename)"' \
-    | grep -v -E "$REGENERATED" | awk '{n += $1} END {print n}'
+  m=$(gh pr view <PR> --repo freeside-ai/freeside \
+    --json mergeCommit --jq .mergeCommit.oid)
+  git fetch -q origin "$m"
+  git log --no-merges --numstat --format='@%H' "$m^1..$m^2" \
+    | awk -F '\t' -v re="$REGENERATED" -v ignore="$(git show \
+        "$m:.git-blame-ignore-revs" | grep -E '^[0-9a-f]{40}$' | tr '\n' ' ')" '
+        /^@/ { skip = index(ignore, substr($0, 2)) > 0; next }
+        NF == 3 && !skip && $3 !~ re { n += $1 + $2 }
+        END { print n + 0 }'
   ```
 
   `REGENERATED` is a non-empty extended regex of the paths Unit Sizing
-  lists as regenerated output. Use this paginated read, not
-  `gh pr view --json files`, which stops at 100 files. Write the estimate, the reference PR, and declared
-  regenerated output into the unit's Scope. A unit over budget is split now
+  lists as regenerated output. The count sums the PR's own commits, skipping
+  each mechanical commit listed in `.git-blame-ignore-revs` at the merge,
+  all under one rename setting. On PRs with no mechanical commit it matches
+  the forge's file totals to within a few lines. A listed SHA that a rebase
+  rewrote is not skipped, so the count errs high, never to zero. Write the
+  estimate, the reference PR, and declared regenerated output and
+  mechanical commits into the unit's Scope. A unit over budget is split now
   along a Unit Sizing seam, or kept larger only by a recorded owner
   decision; ask, don't decide.
 
