@@ -26,7 +26,9 @@ spec = importlib.util.spec_from_file_location('shards', path)
 shards = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(shards)
 integration = 'module/internal/integration'
-inventory = {integration: ['ExampleThing', 'FuzzThing', 'TestA', 'TestNew'], 'module/rest': ['TestRest']}
+freesided = 'module/cmd/freesided'
+inventory = {integration: ['ExampleThing', 'FuzzThing', 'TestA', 'TestNew'], 'module/rest': ['TestRest'],
+             freesided: ['TestServe']}
 
 
 def events(selected):
@@ -149,7 +151,7 @@ class Coverage(unittest.TestCase):
             if event.get('Test') == 'TestNew' and event['Action'] == 'pass':
                 event['Action'] = 'skip'
         report = shards.account(data, inventory)
-        self.assertEqual(len(report['cases']), 6)
+        self.assertEqual(len(report['cases']), 7)
         self.assertEqual(next(c for c in report['cases'] if c['name'] == 'TestNew')['outcome'], 'skip')
 
     def test_execution_cannot_pass_with_missing_duplicate_foreign_or_failed_case(self):
@@ -214,9 +216,8 @@ class Coverage(unittest.TestCase):
             self.assertIn('bash scripts/check.sh daemon test', tests)
             # A PR's macOS job runs the declared darwin selection; the full
             # rest shard runs there only after the merge, in macos-main.
-            single = 'rest' if platform == 'linux' else 'darwin'
-            self.assertEqual([r for r in re.findall(rows, tests) if r[0] in ('rest', 'darwin')],
-                             [(single, '1', '1')])
+            single = [('rest', '1', '1'), ('freesided', '1', '1')] if platform == 'linux' else [('darwin', '1', '1')]
+            self.assertEqual([r for r in re.findall(rows, tests) if r[0] != 'integration'], single)
             self.assertIn('DAEMON_TEST_INTEGRATION_SHARDS: 3', tests)
             # Evidence from any attempt is safe to read only after the gate
             # has required every child's current result to succeed, and only
@@ -245,8 +246,22 @@ class Coverage(unittest.TestCase):
         self.assertNotIn('GOLANGCI_LINT_VERSION', build)
         self.assertIn('run: bash scripts/check.sh daemon build vet\n', build)
         self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', jobs['linux'])
-        self.assertIn("github.event_name == 'push' && matrix.index == 1", linux)
         self.assertNotIn("github.event_name != 'push'", linux)
+        # The freesided shard restores the rest namespace and never saves:
+        # the rest shard stays its only main-push writer, and compiles the
+        # cmd/freesided test binary it no longer runs so the trim keeps it.
+        namespace = "${{ matrix.kind == 'integration' && 'integration' || 'rest' }}-${{ hashFiles('daemon/go.sum') }}-"
+        self.assertEqual(linux.count(namespace), 2)
+        self.assertNotIn('${{ matrix.kind }}-${{ hashFiles', linux)
+        linux_steps = dict(re.findall(r'^      - name: (.*?)\n(.*?)(?=^      - |\Z)', linux, re.M | re.S))
+        compile_freesided = 'Compile the freesided test binary for the saved cache'
+        self.assertIn("        if: github.event_name == 'push' && matrix.kind == 'rest'\n"
+                      '        working-directory: daemon\n', linux_steps[compile_freesided])
+        self.assertIn("        run: go test -trimpath -count=1 -run '^$' ./cmd/freesided\n",
+                      linux_steps[compile_freesided])
+        titles = list(linux_steps)
+        self.assertLess(titles.index('test (scripts/check.sh)'), titles.index(compile_freesided))
+        self.assertLess(titles.index(compile_freesided), titles.index("Trim the build cache to this job's outputs"))
         # macOS: a PR runs the darwin selection alone, restores the rest
         # namespace, and saves no cache; a push to main runs the full rest
         # shard and the three integration shards in one job, warms the cache
@@ -272,10 +287,10 @@ class Coverage(unittest.TestCase):
                                  r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
                                  r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/([\w-]+)\n'
                                  r' *run: bash scripts/check.sh daemon test\n', main)
-        self.assertEqual(shard_steps, [('rest', '1', '1', '3', 'rest')] +
+        self.assertEqual(shard_steps, [('rest', '1', '1', '3', 'rest'), ('freesided', '1', '1', '3', 'freesided')] +
                          [('integration', str(i), '3', '3', f'integration-{i}') for i in range(1, 4)])
-        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 4)
-        self.assertIn('for shard in rest integration-1 integration-2 integration-3; do\n', main)
+        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 5)
+        self.assertIn('for shard in rest freesided integration-1 integration-2 integration-3; do\n', main)
         self.assertIn('metadata --evidence-dir "evidence/$shard"', main)
         upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - )', main, re.M | re.S).group(1)
         self.assertIn('        if: always()\n', upload)
@@ -302,7 +317,8 @@ class Coverage(unittest.TestCase):
         push = "github.event_name == 'push'"
         for name, record, upload, if_push in [
                 ('linux-build', 'Record static-job cache size', 'Upload static-job evidence', push),
-                ('linux-tests', 'Record cache size after tests', 'Upload test evidence', push + ' && matrix.index == 1'),
+                ('linux-tests', 'Record cache size after tests', 'Upload test evidence',
+                 push + " && matrix.index == 1 && matrix.kind != 'freesided'"),
                 ('macos-main', 'Record cache size after tests', 'Upload test evidence', push)]:
             steps = re.findall(r'^      - (.*?)\n(.*?)(?=^      - |\Z)', jobs[name], re.M | re.S)
             titles = [title.removeprefix('name: ') for title, _ in steps]
@@ -507,9 +523,11 @@ fi
             # The fake go runs packages in fixture order, so the command, not
             # the event stream, shows the order go test receives.
             report = shards.read_json(output / 'execution.json')
-            self.assertEqual(report['commands'], [[str(fake), 'test', '-json', '-count=1'] + hinted + unhinted])
+            # The freesided shard owns cmd/freesided, so the rest run leaves it out.
+            rest_hinted = [p for p in hinted if p != 'module/cmd/freesided']
+            self.assertEqual(report['commands'], [[str(fake), 'test', '-json', '-count=1'] + rest_hinted + unhinted])
             # The inventories that verify and compare read stay as discovered.
-            discovered = {p: ['TestRest'] for p in listed}
+            discovered = {p: ['TestRest'] for p in listed if p != 'module/cmd/freesided'}
             self.assertEqual(report['inventory'], discovered)
             self.assertEqual(shards.read_json(output / 'inventory.json'), discovered)
 
@@ -534,12 +552,13 @@ fi
             self.assertEqual(call('--kind', 'rest', '--index', '1', '--count', '1',
                                   '--integration-count', '0'), 1)
             for selection in [('integration', '0', '2'), ('integration', '3', '2'),
-                              ('integration', '1', '0'), ('rest', '1', '2'), ('integration', '1', '9')]:
+                              ('integration', '1', '0'), ('rest', '1', '2'), ('freesided', '1', '2'),
+                              ('integration', '1', '9')]:
                 with self.subTest(selection=selection):
                     self.assertEqual(call('--kind', selection[0], '--index', selection[1], '--count', selection[2]), 1)
             env['SHARD_EXECUTE'] = 'yes'
             reports = []
-            for kind, index, count in [('rest', 1, 1), ('integration', 1, 2), ('integration', 2, 2)]:
+            for kind, index, count in [('rest', 1, 1), ('freesided', 1, 1), ('integration', 1, 2), ('integration', 2, 2)]:
                 output = directory / f'{kind}-{index}'
                 env.pop('GOFLAGS', None)
                 if kind == 'rest':
@@ -553,7 +572,23 @@ fi
                     'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1'}))
                 reports.append(output / 'execution.json')
             # The evidence names the width that produced it, empty when unset.
-            self.assertEqual([shards.read_json(r)['goflags'] for r in reports], ['-p=6', '', ''])
+            self.assertEqual([shards.read_json(r)['goflags'] for r in reports], ['-p=6', '', '', ''])
+            # cmd/freesided runs whole in its own shard and nowhere else.
+            self.assertEqual(shards.read_json(reports[0].parent / 'inventory.json'), {'module/rest': ['TestRest']})
+            self.assertEqual(shards.read_json(reports[1].parent / 'inventory.json'), {freesided: ['TestServe']})
+            self.assertEqual(shards.read_json(reports[1])['commands'],
+                             [[str(fake), 'test', '-json', '-count=1', freesided]])
+            # A tree without cmd/freesided fails both kinds instead of
+            # quietly shrinking rest.
+            fixture.write_text(json.dumps({p: n for p, n in inventory.items() if p != freesided}))
+            for kind in ('rest', 'freesided'):
+                with self.subTest(kind=kind):
+                    result = subprocess.run(base + ['--kind', kind, '--index', '1', '--count', '1',
+                                                    '--evidence-dir', str(directory / f'missing-{kind}')],
+                                            env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn('missing or ambiguous freesided package', result.stderr)
+            fixture.write_text(json.dumps(inventory))
             baseline = events(inventory) + [
                 {'Package': integration, 'Test': 'FuzzThing/seed#0', 'Action': 'run'},
                 {'Package': integration, 'Test': 'FuzzThing/seed#0', 'Action': 'pass'}]
@@ -587,29 +622,55 @@ fi
             with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='1'):
                 shards.verify_reports(reports)
                 # A declared shard set verifies its own full coverage and
-                # rejects a shard outside it or a hole inside it.
-                shards.verify_reports(reports[:1], 'rest')
-                shards.verify_reports(reports[1:], 'integration')
+                # rejects a shard outside it or a hole inside it. The rest
+                # set is rest plus freesided: every non-integration package.
+                shards.verify_reports(reports[:2], 'rest')
+                shards.verify_reports(reports[2:], 'integration')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports[:1] + reports[2:])
+                with self.assertRaisesRegex(ValueError, 'duplicate shard evidence in one attempt'):
+                    shards.verify_reports(reports + reports[1:2])
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports[:1], 'rest')
                 with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
                     shards.verify_reports(reports, 'rest')
                 with self.assertRaisesRegex(ValueError, 'exactly one rest shard'):
-                    shards.verify_reports(reports[1:], 'rest')
+                    shards.verify_reports(reports[1:2], 'rest')
                 with self.assertRaisesRegex(ValueError, 'rejects a rest shard'):
                     shards.verify_reports(reports, 'integration')
                 with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
-                    shards.verify_reports(reports[1:2], 'integration')
+                    shards.verify_reports(reports[1:], 'integration')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports[2:3], 'integration')
                 with self.assertRaisesRegex(ValueError, 'duplicate shard evidence in one attempt'):
-                    shards.verify_reports(reports[1:] + reports[1:2], 'integration')
+                    shards.verify_reports(reports[2:] + reports[2:3], 'integration')
                 with self.assertRaises(ValueError):
                     shards.verify_reports(reports, 'other')
                 rest_inventory = reports[0].parent / 'inventory.json'
                 saved_inventory = rest_inventory.read_text()
-                rest_inventory.write_text(json.dumps({integration: inventory[integration]}))
-                with self.assertRaisesRegex(ValueError, 'rest shard omitted'):
-                    shards.verify_reports(reports[:1], 'rest')
+                for tampered in ({integration: inventory[integration]},
+                                 dict(json.loads(saved_inventory), **{freesided: inventory[freesided]})):
+                    rest_inventory.write_text(json.dumps(tampered))
+                    with self.subTest(tampered=tampered), self.assertRaisesRegex(ValueError, 'rest shard omitted'):
+                        shards.verify_reports(reports)
                 rest_inventory.write_text(saved_inventory)
+                freesided_inventory = reports[1].parent / 'inventory.json'
+                saved_inventory = freesided_inventory.read_text()
+                freesided_inventory.write_text(json.dumps(dict(json.loads(saved_inventory), **{'module/rest': ['TestRest']})))
+                with self.assertRaisesRegex(ValueError, 'freesided shard omitted'):
+                    shards.verify_reports(reports)
+                freesided_inventory.write_text(saved_inventory)
+                # An inventory without cmd/freesided fails closed.
+                saved_packages = (reports[0].parent / 'packages.json').read_text()
+                for report in reports:
+                    (report.parent / 'packages.json').write_text(
+                        json.dumps([p for p in inventory if p != freesided]))
+                with self.assertRaisesRegex(ValueError, 'missing or ambiguous freesided package'):
+                    shards.verify_reports(reports)
+                for report in reports:
+                    (report.parent / 'packages.json').write_text(saved_packages)
                 verify = [sys.executable, str(path), 'verify']
-                self.assertEqual(subprocess.run(verify + ['--shards', 'rest', str(reports[0])],
+                self.assertEqual(subprocess.run(verify + ['--shards', 'rest'] + list(map(str, reports[:2])),
                                                 capture_output=True).returncode, 0)
                 self.assertNotEqual(subprocess.run(verify + ['--shards', 'integration', str(reports[0])],
                                                    capture_output=True).returncode, 0)
@@ -731,6 +792,8 @@ fi
             env['SHARD_EXECUTE'] = 'yes'
             rest = directory / 'rest'
             self.assertEqual(call(data, 'rest', rest).returncode, 0)
+            own = directory / 'freesided'
+            self.assertEqual(call(data, 'freesided', own).returncode, 0)
             stray = directory / 'integration'
             self.assertEqual(call(data, 'integration', stray).returncode, 0)
             reports = [p / 'execution.json' for p in (darwin, rest, stray)]
@@ -740,6 +803,8 @@ fi
                     shards.verify_reports(reports[:2], 'darwin')
                 with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
                     shards.verify_reports([reports[0], reports[2]], 'darwin')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports([reports[0], own / 'execution.json'], 'darwin')
                 # A full-coverage gate never accepts the darwin selection.
                 with self.assertRaisesRegex(ValueError, 'exactly one rest shard'):
                     shards.verify_reports(reports[:1])
