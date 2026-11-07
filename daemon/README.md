@@ -24,6 +24,12 @@ merge. The lander reads PR checks only, so nothing hands a landing back for
 it, and a later push in a landing batch cancels an earlier push's run, so the
 batch's last tip carries the macOS evidence for the whole batch.
 
+The rest shard passes its heaviest packages to `go test` first, in the order
+of `REST_PACKAGE_ORDER` in `scripts/daemon-test-shards.py`, so `-p` starts
+them before the short ones; every other package follows in `go list` order.
+The list is a scheduling hint only: it selects nothing, and an entry missing
+from the inventory is skipped.
+
 The darwin shard runs `DARWIN_SELECTION` in `scripts/daemon-test-shards.py`:
 the tests whose behaviour differs on macOS through a build tag, the
 filesystem (case-insensitive APFS, the `/var` to `/private` link), or

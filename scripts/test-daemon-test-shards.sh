@@ -459,6 +459,41 @@ fi
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('daemon=' + expected + '\n', output.read_text())
 
+    def test_rest_shard_passes_hinted_packages_first(self):
+        listed = ['module/a', 'module/internal/ward', 'module/b', 'module/internal/store',
+                  'module/cmd/freesided', 'module/c']
+        hinted = ['module/cmd/freesided', 'module/internal/store', 'module/internal/ward']
+        unhinted = ['module/a', 'module/b', 'module/c']
+        # Most hint entries are absent here; a missing entry is skipped.
+        self.assertLess(len(hinted), len(shards.REST_PACKAGE_ORDER))
+        self.assertEqual(shards.rest_order(listed), hinted + unhinted)
+        self.assertEqual(shards.rest_order(unhinted), unhinted)
+        # The hint orders arguments only: it never adds or drops a package.
+        self.assertEqual(sorted(shards.rest_order(listed)), sorted(listed))
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fixture = directory / 'fixture.json'
+            data = {integration: ['TestA']} | {p: ['TestRest'] for p in listed}
+            fixture.write_text(json.dumps(data))
+            fake = directory / 'go'
+            fake.write_text(FAKE_GO)
+            fake.chmod(0o755)
+            output = directory / 'rest'
+            result = subprocess.run(
+                [sys.executable, str(path), 'run', '--go', str(fake), '--daemon', str(directory),
+                 '--kind', 'rest', '--index', '1', '--count', '1', '--evidence-dir', str(output)],
+                env=dict(os.environ, SHARD_FIXTURE=str(fixture), SHARD_EXECUTE='yes'),
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # The fake go runs packages in fixture order, so the command, not
+            # the event stream, shows the order go test receives.
+            report = shards.read_json(output / 'execution.json')
+            self.assertEqual(report['commands'], [[str(fake), 'test', '-json', '-count=1'] + hinted + unhinted])
+            # The inventories that verify and compare read stay as discovered.
+            discovered = {p: ['TestRest'] for p in listed}
+            self.assertEqual(report['inventory'], discovered)
+            self.assertEqual(shards.read_json(output / 'inventory.json'), discovered)
+
     def test_real_child_failure_and_invalid_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
