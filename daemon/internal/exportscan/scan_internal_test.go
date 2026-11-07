@@ -32,11 +32,11 @@ func TestCredentialScannerReadsPastTheChunkBoundary(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			matched, err := scanFile(context.Background(), path)
+			_, matched, err := scanFile(context.Background(), path)
 			if err != nil {
 				t.Fatalf("scanFile: %v", err)
 			}
-			if matched == nil {
+			if !matched {
 				t.Fatal("scanner reported a file carrying credential material as clean")
 			}
 		})

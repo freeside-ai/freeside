@@ -122,7 +122,8 @@ func TestScreenAuthoredTextAcceptsSafeArtifact(t *testing.T) {
 
 func TestScreenAuthoredTextRejectsDelimiterSplicedSecrets(t *testing.T) {
 	t.Parallel()
-	// Each body splits a valid-format GitHub PAT (ghp_ + 36 chars) with a
+	// Each body splits a valid-format GitHub token at the shared rule's floor
+	// (ghp_ + 16 chars, so neither piece alone is a token) with a
 	// construct GitHub collapses out of its visible text: emphasis, a code span,
 	// backslash escapes, entity-encoded emphasis, link/image syntax whose
 	// bracketed text the renderer keeps while dropping the target, and a code span
@@ -131,7 +132,7 @@ func TestScreenAuthoredTextRejectsDelimiterSplicedSecrets(t *testing.T) {
 	// the interrupting punctuation and passes; the visible form GitHub renders is
 	// the intact token. The v2 field screen must refuse all of them, and must not
 	// echo the reconstructed secret.
-	lead, tail := strings.Repeat("z", 18), strings.Repeat("z", 16)
+	lead, tail := strings.Repeat("z", 8), strings.Repeat("z", 6)
 	for name, spliced := range map[string]string{
 		"emphasis":          "ghp_" + lead + "**zz**" + tail,
 		"code-span":         "ghp_" + lead + "`zz`" + tail,
@@ -162,7 +163,7 @@ func TestScreenAuthoredTextAcceptsBenignInteriorNewlineSpan(t *testing.T) {
 	// becomes a single space that survives), so it does not reconstruct a
 	// contiguous token. The code-span normalization must strip padding only, not
 	// collapse the surviving separator, so this benign body stays accepted.
-	lead, tail := strings.Repeat("z", 18), strings.Repeat("z", 16)
+	lead, tail := strings.Repeat("z", 8), strings.Repeat("z", 6)
 	a := domain.PublicationAuthoring{
 		Title:          "Safe title",
 		Body:           "# Fix\n\nghp_" + lead + "`z\nz`" + tail,
@@ -410,10 +411,11 @@ func renderMarkdownViaGitHub(t *testing.T, text string) string {
 }
 
 // htmlTagRe strips HTML tags so the rendered HTML can be reduced to the visible
-// text a reader sees. renderedPATRe matches a valid-format GitHub PAT payload.
+// text a reader sees. renderedPATRe matches a valid-format GitHub token payload,
+// at the 16-character floor of the shared credentialpattern rule.
 var (
 	htmlTagRe     = regexp.MustCompile(`<[^>]*>`)
-	renderedPATRe = regexp.MustCompile(`ghp_[A-Za-z0-9]{36}`)
+	renderedPATRe = regexp.MustCompile(`ghp_[A-Za-z0-9]{16,}`)
 )
 
 func TestRenderAuthoredPublicationLiveMarkdownStaysInert(t *testing.T) {
@@ -442,7 +444,7 @@ func TestRenderAuthoredPublicationLiveMarkdownStaysInert(t *testing.T) {
 // and the live oracle confirms the reconstruction is real against GitHub's own
 // renderer. The ref-link entry carries its definition so GitHub resolves it.
 func adversarialSecretCorpus() []string {
-	lead, tail := strings.Repeat("z", 18), strings.Repeat("z", 16)
+	lead, tail := strings.Repeat("z", 8), strings.Repeat("z", 6)
 	return []string{
 		"ghp_" + lead + "**zz**" + tail,
 		"ghp_" + lead + "`zz`" + tail,

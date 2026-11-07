@@ -5,35 +5,17 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"regexp"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/credentialpattern"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
-// secretRule is one high-signal credential pattern. The set is
-// deliberately narrow: §5.4 promises best-effort scanning of supported
-// textual formats, not universal detection, and a low false-positive
-// set keeps the publish-blocking signal meaningful. re matches the
-// token's own structure, so a match is the credential, not a mention.
-type secretRule struct {
-	id string
-	re *regexp.Regexp
-}
+// secretRules is the shared credential rule list (internal/credentialpattern),
+// held once so the per-line loop in scanText doesn't copy it.
+var secretRules = credentialpattern.All()
 
-// secretRules are compiled once. Each id names the credential class; the
-// pattern anchors on the vendor's own token structure.
-var secretRules = []secretRule{
-	{"anthropic_token", regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{16,}`)},
-	{"github_token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}\b`)},
-	{"github_pat", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`)},
-	{"aws_access_key_id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
-	{"slack_token", regexp.MustCompile(`\bxox[abprs]-[0-9A-Za-z-]{10,}\b`)},
-	{"pem_private_key", regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----`)},
-	{"gcp_service_account_key", regexp.MustCompile(`"private_key_id"\s*:\s*"[0-9a-f]{40}"`)},
-}
-
-// ContainsSecret reports whether content matches one of the importer's
+// ContainsSecret reports whether content matches one of the shared
 // high-signal credential rules. It deliberately exposes only a boolean so
 // callers can reject agent-written structured text without copying a matched
 // credential into an error, finding, or durable attention record.
@@ -138,8 +120,8 @@ func scanText(path string, content []byte) []Finding {
 	var findings []Finding
 	for line, b := range splitLines(content) {
 		for _, rule := range secretRules {
-			if rule.re.Match(b) {
-				findings = append(findings, Finding{Path: path, Kind: FindingSecret, Rule: rule.id, Line: line + 1})
+			if rule.Pattern.Match(b) {
+				findings = append(findings, Finding{Path: path, Kind: FindingSecret, Rule: rule.ID, Line: line + 1})
 			}
 		}
 	}
