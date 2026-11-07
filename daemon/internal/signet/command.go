@@ -102,11 +102,15 @@ type DecisionPayload struct {
 	// attachment order is authored content, preserved as sent.
 	Message     string
 	Attachments []domain.Digest
-	// TaskProposalRevision, EffectProposalRevision, and SnoozeUntil are the typed
-	// wire inputs for the parameterized proposal decisions (start_with_changes,
-	// approve_with_changes, and snooze). Submit canonicalizes exactly one of them
-	// into the durable Command.Message representation so retries retain the
-	// existing write-once command identity.
+	// TaskProposalRevision, EffectProposalRevision, SnoozeUntil,
+	// AlternativeChoices, FindingRoutes, CapabilityManifestDigest, and
+	// AlternateAgent are the typed wire inputs for the parameterized decisions
+	// (start_with_changes, approve_with_changes, snooze,
+	// choose_alternative_route, adjudicate_findings, retry_with_capabilities,
+	// and retry_with_alternate_agent, in that order). decisionMessage
+	// canonicalizes exactly the one each action names into the durable
+	// Command.Message representation so retries retain the existing
+	// write-once command identity.
 	TaskProposalRevision     *TaskProposalRevisionInput
 	EffectProposalRevision   *EffectProposalRevisionInput
 	SnoozeUntil              *time.Time
