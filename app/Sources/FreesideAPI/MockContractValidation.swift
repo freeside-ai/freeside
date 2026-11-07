@@ -1185,6 +1185,33 @@ enum MockContractValidation {
     /// The daemon's agent-name rule (domain validAgentName): lowercase
     /// letters, digits, `_`, and `-`, starting and ending alphanumeric, at most
     /// 246 characters.
+    /// The daemon's selection shape check (domain TaskLineSelection.Validate):
+    /// each leg is a non-empty launch option value (ValidLaunchOptionValue),
+    /// at most 256 bytes, with no leading dash, whitespace, or non-graphic
+    /// character, since each leg reaches a harness argv.
+    static func validLineSelection(_ selection: Components.Schemas.TaskLineSelection) -> Bool {
+        [selection.enrollment_id, selection.model_id, selection.effort].allSatisfy { value in
+            !value.isEmpty && value.utf8.count <= 256 && !value.hasPrefix("-")
+                && !value.unicodeScalars.contains { $0.properties.isWhitespace || !Self.isGraphic($0) }
+        }
+    }
+
+    /// Go's unicode.IsGraphic: letters, marks, numbers, punctuation,
+    /// symbols, and the ASCII space.
+    private static func isGraphic(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+            .nonspacingMark, .spacingMark, .enclosingMark,
+            .decimalNumber, .letterNumber, .otherNumber,
+            .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
+            .initialPunctuation, .finalPunctuation, .otherPunctuation,
+            .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol, .spaceSeparator:
+            return true
+        default:
+            return false
+        }
+    }
+
     static func validAgentName(_ name: String) -> Bool {
         name.utf8.count <= 246
             && name.wholeMatch(of: /[a-z0-9]([a-z0-9_-]*[a-z0-9])?/) != nil
@@ -1285,8 +1312,8 @@ enum MockContractValidation {
                     throw malformed("empty pool or enrollment")
                 }
             case .change_task_line(let payload):
-                guard !payload.task_id.isEmpty, payload.agent.map(validAgentName) ?? true else {
-                    throw malformed("empty task or invalid agent")
+                guard !payload.task_id.isEmpty, payload.selection.map({ validLineSelection($0.value1) }) ?? true else {
+                    throw malformed("empty task or malformed selection")
                 }
             case .set_routing_policy(let payload):
                 guard (payload.expected_revision ?? 1) >= 1 else { throw malformed("non-positive expected_revision") }

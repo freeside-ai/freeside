@@ -79,9 +79,29 @@ func receiptParkedTaskMove(t *testing.T) domain.CommandReceipt {
 	}}
 }
 
+// receiptSelection is the selection a change since #2598 sends and its v2
+// line records.
+var receiptSelection = domain.TaskLineSelection{
+	EnrollmentID: "openai-a/codex_cli", ModelID: "gpt-5.5-codex", Effort: "high",
+}
+
+func receiptSelectionLine(t *testing.T) domain.TaskLine {
+	t.Helper()
+	selection := receiptSelection
+	line, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: &selection,
+		Source: domain.TaskLineSourceClientLineChange, SetBy: "cmd-selection",
+	}, 1, nil, receiptAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line
+}
+
 func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 	t.Helper()
 	line := receiptTaskLine(t)
+	selectionLine := receiptSelectionLine(t)
 	return map[string]domain.CommandReceipt{
 		"usage_refresh_receipt": {UsageRefresh: &domain.UsageRefreshReceipt{
 			UsageRefreshRequest: domain.UsageRefreshRequest{CommandIdentity: receiptIdentity("cmd-refresh"), Pool: "pool-a"},
@@ -99,6 +119,13 @@ func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 				Role: domain.RoleImplementer, Agent: new("codex-primary"),
 			},
 			Recorded: true, Line: &line,
+		}},
+		"task_line_selection_receipt": {TaskLineChange: &domain.TaskLineChangeReceipt{
+			TaskLineChangeRequest: domain.TaskLineChangeRequest{
+				CommandIdentity: receiptIdentity("cmd-selection"), TaskID: "task-1",
+				Role: domain.RoleImplementer, Selection: &receiptSelection,
+			},
+			Recorded: true, Line: &selectionLine,
 		}},
 		"task_line_clear_receipt": {TaskLineChange: &domain.TaskLineChangeReceipt{
 			TaskLineChangeRequest: domain.TaskLineChangeRequest{
@@ -156,6 +183,11 @@ func TestCommandReceiptRefusals(t *testing.T) {
 		edit(&receipt)
 		return domain.CommandReceipt{TaskLineChange: &receipt}
 	}
+	selectionChange := func(edit func(*domain.TaskLineChangeReceipt)) domain.CommandReceipt {
+		receipt := *validReceipts(t)["task_line_selection_receipt"].TaskLineChange
+		edit(&receipt)
+		return domain.CommandReceipt{TaskLineChange: &receipt}
+	}
 	policyChange := func(edit func(*domain.RoutingPolicyChangeReceipt)) domain.CommandReceipt {
 		receipt := *validReceipts(t)["routing_policy_change_receipt"].RoutingPolicyChange
 		edit(&receipt)
@@ -187,6 +219,29 @@ func TestCommandReceiptRefusals(t *testing.T) {
 		{
 			"line for a clear", lineChange(func(r *domain.TaskLineChangeReceipt) { r.Agent = nil }),
 			domain.ErrParentKeyMismatch,
+		},
+		{
+			"no line for a selection", selectionChange(func(r *domain.TaskLineChangeReceipt) { r.Line = nil }),
+			domain.ErrParentKeyMismatch,
+		},
+		{
+			"line holding another selection", selectionChange(func(r *domain.TaskLineChangeReceipt) {
+				other := receiptSelection
+				other.Effort = "max"
+				r.Selection = &other
+			}),
+			domain.ErrParentKeyMismatch,
+		},
+		{
+			"v1 line for a selection", selectionChange(func(r *domain.TaskLineChangeReceipt) {
+				v1 := receiptTaskLineOf(t, "task-1", domain.TaskLineSourceClientLineChange)
+				r.Line = &v1
+			}),
+			domain.ErrParentKeyMismatch,
+		},
+		{
+			"agent and selection", selectionChange(func(r *domain.TaskLineChangeReceipt) { r.Agent = new("codex-primary") }),
+			domain.ErrInvalidTaskLineSelection,
 		},
 		{
 			"recorded under another source", lineChange(func(r *domain.TaskLineChangeReceipt) { r.Line = &cli }),

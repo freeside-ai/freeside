@@ -88,10 +88,11 @@ import Testing
         #expect(draft.offered(for: .reviewer, catalog: catalog) == catalog.agents.map(\.name))
     }
 
-    @Test func withoutACatalogThePolicyReadsButCannotChange() async throws {
+    @Test func withoutATreeThePolicyReadsButCannotChange() async throws {
         var policy = UsageFixtures.defaultRoutingPolicy()
         policy.drain_first_account = UsageFixtures.readingPoolID
-        let coordinator = await coordinator(MockServer(routingPolicy: policy, agentCatalog: nil))
+        let coordinator = await coordinator(
+            MockServer(routingPolicy: policy, agentCatalog: UsageFixtures.treelessAgentCatalog()))
         let model = RoutingPolicyModel(coordinator: coordinator)
         #expect(model.policy == policy)
         #expect(model.policy?.drain_first_account == UsageFixtures.readingPoolID)
@@ -111,7 +112,8 @@ import Testing
         #expect(model.drainFirstPools.first?.agents == ["claude-primary", "claude-secondary"])
         #expect(model.drainFirstPools.last?.agents == ["codex-primary"])
         #expect(RoutingPolicyModel.drainFirstPools(UsageFixtures.defaultUsagePools(), catalog: nil).isEmpty)
-        let withoutTree = RoutingPolicyModel(coordinator: await coordinator(MockServer(agentCatalog: nil)))
+        let withoutTree = RoutingPolicyModel(
+            coordinator: await coordinator(MockServer(agentCatalog: UsageFixtures.treelessAgentCatalog())))
         #expect(withoutTree.drainFirstPools.isEmpty)
     }
 

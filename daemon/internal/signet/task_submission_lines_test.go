@@ -33,17 +33,15 @@ func TestSubmitTaskCommandBindsTaskLinesToItsIdentity(t *testing.T) {
 	ctx := context.Background()
 	submitter := &fakeTaskSubmitter{}
 	service, _ := newSubmitTaskService(t, submitter, domain.DeviceActive)
-	reviewer := domain.TaskLineChoice{Role: domain.RoleReviewer, Agent: "codex"}
-	implementer := domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: "claude-b"}
+	reviewer := selectionChoice(domain.RoleReviewer, "codex")
+	implementer := selectionChoice(domain.RoleImplementer, "claude-b")
 
 	result, err := service.Submit(ctx, submitTaskCommandWithLines("cmd-1", reviewer, implementer))
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	// The submitter receives the lines in canonical role order.
-	if want := []domain.TaskLineChoice{
-		selectionChoice(domain.RoleImplementer, "claude-b"), selectionChoice(domain.RoleReviewer, "codex"),
-	}; !reflect.DeepEqual(submitter.last.TaskLines, want) {
+	if want := []domain.TaskLineChoice{implementer, reviewer}; !reflect.DeepEqual(submitter.last.TaskLines, want) {
 		t.Fatalf("submitter lines = %+v, want %+v", submitter.last.TaskLines, want)
 	}
 
@@ -56,11 +54,11 @@ func TestSubmitTaskCommandBindsTaskLinesToItsIdentity(t *testing.T) {
 	}
 
 	for name, cmd := range map[string]signet.ClientCommand{
-		"different agent": submitTaskCommandWithLines("cmd-1", reviewer,
-			domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: "codex"}),
+		"different selection": submitTaskCommandWithLines("cmd-1", reviewer,
+			selectionChoice(domain.RoleImplementer, "codex")),
 		"line removed": submitTaskCommandWithLines("cmd-1", reviewer),
 		"line added": submitTaskCommandWithLines("cmd-1", reviewer, implementer,
-			domain.TaskLineChoice{Role: domain.RoleSpecifier, Agent: "codex"}),
+			selectionChoice(domain.RoleSpecifier, "codex")),
 		"no lines": submitTaskCommandWithLines("cmd-1"),
 	} {
 		if _, err := service.Submit(ctx, cmd); !errors.Is(err, store.ErrImmutableConflict) {
@@ -99,24 +97,26 @@ func TestSubmitTaskRequestDigestWithoutLinesIsUnchanged(t *testing.T) {
 }
 
 // TestSubmitTaskRequestDigestWithLinesIsPinned pins the bytes a submission
-// with lines is digested over: the lines in canonical role order under their
-// wire names. Reordering the eligible roles or renaming a field would change
+// with lines is digested over: the lines in canonical role order, each its
+// selection, under their wire names. Reordering the eligible roles or renaming a field would change
 // the replay identity of every recorded submission that carries a line.
 func TestSubmitTaskRequestDigestWithLinesIsPinned(t *testing.T) {
 	t.Parallel()
 	submitter := &fakeTaskSubmitter{}
 	service, _ := newSubmitTaskService(t, submitter, domain.DeviceActive)
 	cmd := submitTaskCommandWithLines("cmd-1",
-		domain.TaskLineChoice{Role: domain.RoleReviewer, Agent: "codex"},
-		domain.TaskLineChoice{Role: domain.RoleRemediator, Agent: "claude-b"},
-		domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: "codex"},
-		domain.TaskLineChoice{Role: domain.RoleSpecifier, Agent: "claude-b"})
+		selectionChoice(domain.RoleReviewer, "codex"),
+		selectionChoice(domain.RoleRemediator, "claude-b"),
+		selectionChoice(domain.RoleImplementer, "codex"),
+		selectionChoice(domain.RoleSpecifier, "claude-b"))
 	if _, err := service.Submit(context.Background(), cmd); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
+	const claudeB = `{"enrollment_id":"line-claude-b/codex_cli","model_id":"model-claude-b","effort":"high"}`
+	const codex = `{"enrollment_id":"line-codex/codex_cli","model_id":"model-codex","effort":"high"}`
 	const pinned = `{"Device":"device-1","Payload":{"ProjectID":"project-1","Source":"Add a health endpoint.","Name":"Health endpoint",` +
-		`"TaskLines":[{"role":"specifier","agent":"claude-b"},{"role":"implementer","agent":"codex"},` +
-		`{"role":"remediator","agent":"claude-b"},{"role":"reviewer","agent":"codex"}]}}`
+		`"TaskLines":[{"role":"specifier","selection":` + claudeB + `},{"role":"implementer","selection":` + codex + `},` +
+		`{"role":"remediator","selection":` + claudeB + `},{"role":"reviewer","selection":` + codex + `}]}}`
 	if want := domain.Digest(contentaddr.Sum([]byte(pinned))); submitter.last.RequestDigest != want {
 		t.Fatalf("request digest = %s, want %s", submitter.last.RequestDigest, want)
 	}
@@ -128,14 +128,18 @@ func TestSubmitTaskCommandRejectsMalformedTaskLines(t *testing.T) {
 	submitter := &fakeTaskSubmitter{}
 	service, _ := newSubmitTaskService(t, submitter, domain.DeviceActive)
 	for name, lines := range map[string][]domain.TaskLineChoice{
-		"empty list":      {},
-		"shadow reviewer": {{Role: domain.RoleShadowReviewer, Agent: "codex"}},
-		"wardless role":   {{Role: domain.RoleTaskNamer, Agent: "codex"}},
-		"unknown role":    {{Role: "researcher", Agent: "codex"}},
-		"missing role":    {{Agent: "codex"}},
-		"duplicate role":  {{Role: domain.RoleReviewer, Agent: "codex"}, {Role: domain.RoleReviewer, Agent: "claude"}},
-		"missing agent":   {{Role: domain.RoleReviewer}},
-		"malformed agent": {{Role: domain.RoleReviewer, Agent: "../codex"}},
+		"empty list":          {},
+		"shadow reviewer":     {selectionChoice(domain.RoleShadowReviewer, "codex")},
+		"wardless role":       {selectionChoice(domain.RoleTaskNamer, "codex")},
+		"unknown role":        {selectionChoice("researcher", "codex")},
+		"missing role":        {selectionChoice("", "codex")},
+		"duplicate role":      {selectionChoice(domain.RoleReviewer, "codex"), selectionChoice(domain.RoleReviewer, "claude")},
+		"missing selection":   {{Role: domain.RoleReviewer}},
+		"agent name":          {{Role: domain.RoleReviewer, Agent: "codex"}},
+		"agent and selection": {{Role: domain.RoleReviewer, Agent: "codex", Selection: selectionChoice(domain.RoleReviewer, "codex").Selection}},
+		"malformed selection": {{Role: domain.RoleReviewer, Selection: &domain.TaskLineSelection{
+			EnrollmentID: "line-codex/codex_cli", ModelID: "model codex", Effort: "high",
+		}}},
 	} {
 		cmd := submitTaskCommandWithLines("cmd-" + name)
 		cmd.SubmitTask.TaskLines = lines
@@ -185,7 +189,8 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 		return lines
 	}
 
-	const chosen = `,"task_lines":[{"role":"reviewer","agent":"codex"},{"role":"implementer","agent":"claude-b"}]`
+	chosen := `,"task_lines":[` + wireChoice(t, domain.RoleReviewer, "codex") + `,` +
+		wireChoice(t, domain.RoleImplementer, "claude-b") + `]`
 	ok := post("cmd-lines", chosen)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s, want 200", ok.Code, ok.Body.String())
@@ -200,7 +205,7 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 		t.Fatalf("read task: %v", err)
 	}
 	// The wire record carries the lines in canonical role order, under the
-	// names the contract gives them.
+	// names the contract gives them: each its selection, with a null agent.
 	recordOf := func(response *httptest.ResponseRecorder) string {
 		t.Helper()
 		var envelope struct {
@@ -211,7 +216,11 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 		}
 		return string(envelope.Record)
 	}
-	const wireLines = `"task_lines":[{"role":"implementer","agent":"claude-b"},{"role":"reviewer","agent":"codex"}]`
+	recordedChoice := func(role domain.RoleName, name string) string {
+		return strings.Replace(wireChoice(t, role, name), `,"selection"`, `,"agent":null,"selection"`, 1)
+	}
+	wireLines := `"task_lines":[` + recordedChoice(domain.RoleImplementer, "claude-b") + `,` +
+		recordedChoice(domain.RoleReviewer, "codex") + `]`
 	if !strings.Contains(recordOf(ok), wireLines) {
 		t.Fatalf("record = %s, want it to carry %s", recordOf(ok), wireLines)
 	}
@@ -225,11 +234,11 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 		if line.Encoding != domain.TaskLineEncodingV2 || line.Selection == nil {
 			t.Fatalf("line = %+v, want a v2 line", line)
 		}
-		name, err := testLineAgents.AgentForSelection(line.Role, *line.Selection)
-		if err != nil {
-			t.Fatal(err)
+		for _, name := range testLineNames {
+			if *line.Selection == lineSelectionOf(name) {
+				agents[line.Role] = name
+			}
 		}
-		agents[line.Role] = name
 	}
 	if want := map[domain.RoleName]string{domain.RoleReviewer: "codex", domain.RoleImplementer: "claude-b"}; !reflect.DeepEqual(agents, want) {
 		t.Fatalf("recorded lines = %v, want %v", agents, want)
@@ -295,7 +304,8 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 
 	// The same command_id with another choice is refused, and the recorded
 	// choice stands.
-	changed := post("cmd-lines", `,"task_lines":[{"role":"reviewer","agent":"claude-b"},{"role":"implementer","agent":"claude-b"}]`)
+	changed := post("cmd-lines", `,"task_lines":[`+wireChoice(t, domain.RoleReviewer, "claude-b")+`,`+
+		wireChoice(t, domain.RoleImplementer, "claude-b")+`]`)
 	if changed.Code != http.StatusBadRequest {
 		t.Fatalf("changed lines status = %d body=%s, want 400", changed.Code, changed.Body.String())
 	}
@@ -317,24 +327,29 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 }
 
 // TestSubmitTaskCommandHTTPRejectsMalformedTaskLines covers the wire shapes
-// the contract forbids. Each answers 400, writes no submission, and never
-// echoes the agent text, which may be a credential pasted into the wrong
-// field.
+// the contract forbids, and selections the daemon doesn't serve. Each
+// answers 400, writes no submission, and never echoes the refused text,
+// which may be a credential pasted into the wrong field.
 func TestSubmitTaskCommandHTTPRejectsMalformedTaskLines(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	handler, s := newRealSubmitTaskHandlerAndStore(t)
 	const secret = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	codex := `{"enrollment_id":"line-codex/codex_cli","model_id":"model-codex","effort":"high"}`
 	for name, lines := range map[string]string{
-		"empty list":      `[]`,
-		"not a list":      `{"role":"reviewer","agent":"codex"}`,
-		"shadow reviewer": `[{"role":"shadow_reviewer","agent":"codex"}]`,
-		"unknown role":    `[{"role":"` + secret + `","agent":"codex"}]`,
-		"missing role":    `[{"agent":"codex"}]`,
-		"duplicate role":  `[{"role":"reviewer","agent":"codex"},{"role":"reviewer","agent":"claude"}]`,
-		"missing agent":   `[{"role":"reviewer"}]`,
-		"malformed agent": `[{"role":"reviewer","agent":"` + secret + `"}]`,
-		"unknown field":   `[{"role":"reviewer","agent":"codex","prompt":"review"}]`,
+		"empty list":        `[]`,
+		"not a list":        `{"role":"reviewer","selection":` + codex + `}`,
+		"shadow reviewer":   `[{"role":"shadow_reviewer","selection":` + codex + `}]`,
+		"unknown role":      `[{"role":"` + secret + `","selection":` + codex + `}]`,
+		"missing role":      `[{"selection":` + codex + `}]`,
+		"duplicate role":    `[{"role":"reviewer","selection":` + codex + `},{"role":"reviewer","selection":` + codex + `}]`,
+		"missing selection": `[{"role":"reviewer"}]`,
+		"agent name":        `[{"role":"reviewer","agent":"` + secret + `"}]`,
+		"malformed selection": `[{"role":"reviewer","selection":{"enrollment_id":"line-codex/codex_cli",` +
+			`"model_id":"` + secret + ` x","effort":"high"}}]`,
+		"unknown enrollment": `[{"role":"reviewer","selection":{"enrollment_id":"` + secret + `/codex_cli",` +
+			`"model_id":"model-codex","effort":"high"}}]`,
+		"unknown field": `[{"role":"reviewer","selection":` + codex + `,"prompt":"review"}]`,
 	} {
 		commandID := "cmd-" + strings.ReplaceAll(name, " ", "-")
 		body := `{"command_id":"` + commandID + `","device_id":"device-1","payload":{"kind":"submit_task",` +
@@ -352,5 +367,57 @@ func TestSubmitTaskCommandHTTPRejectsMalformedTaskLines(t *testing.T) {
 		}); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("%s: submission lookup = %v, want ErrNotFound (nothing written)", name, err)
 		}
+	}
+}
+
+// wireChoice is the choice a client sends for role run by name.
+func wireChoice(t *testing.T, role domain.RoleName, name string) string {
+	t.Helper()
+	selection, err := json.Marshal(lineSelectionOf(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return `{"role":"` + string(role) + `","selection":` + string(selection) + `}`
+}
+
+// TestSubmitTaskCommandHTTPRefusesAnUnservedModel: a selection naming a
+// model the enrollment's discovered catalog lacks answers a classified 400
+// that names the field by the client's own index, not the canonical role
+// order, without the model text, and writes nothing. With no discovery
+// record the same model is accepted.
+func TestSubmitTaskCommandHTTPRefusesAnUnservedModel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	handler, s := newRealSubmitTaskHandlerAndStore(t)
+	post := func(commandID, model string) *httptest.ResponseRecorder {
+		body := `{"command_id":"` + commandID + `","device_id":"device-1","payload":{"kind":"submit_task",` +
+			`"project_id":"project-1","source":"Body.","task_lines":[` +
+			`{"role":"reviewer","selection":{"enrollment_id":"line-codex/codex_cli","model_id":"model-codex","effort":"high"}},` +
+			`{"role":"specifier","selection":{"enrollment_id":"line-codex/codex_cli","model_id":"` + model + `","effort":"high"}}]}}`
+		return authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader([]byte(body)))
+	}
+	if accepted := post("cmd-undiscovered", "model-unlisted"); accepted.Code != http.StatusOK {
+		t.Fatalf("no discovery record: status = %d body=%s, want 200", accepted.Code, accepted.Body.String())
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordDiscoveredModelCatalog(ctx, domain.DiscoveredModelCatalog{
+			EnrollmentID: "line-codex/codex_cli", HarnessBuild: "codex-cli 0.50.0", ObservedAt: operatorAt,
+			Models: []domain.DiscoveredModel{{ID: "model-codex", DisplayName: "Codex", EffortLevels: []string{"high"}}},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refused := post("cmd-unserved", "model-unlisted")
+	if refused.Code != http.StatusBadRequest || !strings.Contains(refused.Body.String(), "task_lines[1].selection.model_id") {
+		t.Fatalf("status = %d body=%s, want 400 naming task_lines[1].selection.model_id", refused.Code, refused.Body.String())
+	}
+	if strings.Contains(refused.Body.String(), "model-unlisted") {
+		t.Fatalf("400 body echoes the refused model: %s", refused.Body.String())
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		_, _, err := tx.GetTaskSubmissionSnapshot(ctx, "cmd-unserved")
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("submission lookup = %v, want ErrNotFound (nothing written)", err)
 	}
 }

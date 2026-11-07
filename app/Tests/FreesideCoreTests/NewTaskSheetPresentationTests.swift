@@ -49,9 +49,11 @@ import Testing
         await server.setBeforeRespond { operationID in
             if operationID == "submitCommand" { throw MockServer.ForcedStatus(503) }
         }
-        let choices: [NewTaskSheet.Role: String] = [
-            .specifier: "claude-secondary", .implementer: "claude-secondary", .remediator: "claude-secondary",
-            .reviewer: "codex-primary",
+        let choices: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [
+            .specifier: UsageFixtures.agentSelection("claude-secondary"),
+            .implementer: UsageFixtures.agentSelection("claude-secondary"),
+            .remediator: UsageFixtures.agentSelection("claude-secondary"),
+            .reviewer: UsageFixtures.agentSelection("codex-primary"),
         ]
         _ = await NewTaskSheet.send(
             NewTaskSheet.submission(source: " Add a health endpoint.\n"), projectID: "project-1", choices: choices,

@@ -119,38 +119,40 @@ type TaskEventExternalReview struct {
 	HeadSHA       string    `json:"head_sha"`
 }
 
-// TaskEventTaskLine names one task line version as the timeline shows it.
-// Agent is nil on a cleared version, and a selection's AgentText when no one
-// agent runs it (#2597). SupersededAgent is the agent of the
-// version this one supersedes, nil for version 1 and after a cleared version,
-// which names none. Provenance is the router's citation, nil for an operator
-// line; its passed-over mark names the agent a first admission passed over.
+// TaskEventTaskLine names one task line version as the timeline shows it,
+// in the line's own encoding: Selection for a v2 line, Agent for a v1 line,
+// and neither on a cleared version. SupersededAgent and SupersededSelection
+// are the same pair for the version this one supersedes, both nil for
+// version 1 and after a cleared version. Provenance is the router's
+// citation, nil for an operator line; its passed-over mark names the agent a
+// first admission passed over.
 type TaskEventTaskLine struct {
-	LineID          Digest              `json:"line_id"`
-	Role            RoleName            `json:"role"`
-	Agent           *string             `json:"agent"`
-	Version         int                 `json:"version"`
-	Source          TaskLineSource      `json:"source"`
-	SupersededAgent *string             `json:"superseded_agent"`
-	Provenance      *TaskLineProvenance `json:"provenance"`
+	LineID              Digest              `json:"line_id"`
+	Role                RoleName            `json:"role"`
+	Agent               *string             `json:"agent"`
+	Selection           *TaskLineSelection  `json:"selection"`
+	Version             int                 `json:"version"`
+	Source              TaskLineSource      `json:"source"`
+	SupersededAgent     *string             `json:"superseded_agent"`
+	SupersededSelection *TaskLineSelection  `json:"superseded_selection"`
+	Provenance          *TaskLineProvenance `json:"provenance"`
 }
 
 func (l TaskEventTaskLine) validate() error {
+	superseded := l.SupersededAgent != nil || l.SupersededSelection != nil
 	if !contentaddr.Valid(string(l.LineID)) || !l.Role.TaskLineEligible() ||
-		l.Version < 1 || (l.Version == 1 && l.SupersededAgent != nil) || !l.Source.valid() ||
+		l.Version < 1 || (l.Version == 1 && superseded) || !l.Source.valid() ||
 		(l.Provenance != nil) != l.Source.CarriesProvenance() {
 		return ErrTaskEventDetailMismatch
 	}
-	if l.Agent == nil {
+	if l.Agent == nil && l.Selection == nil {
 		// A cleared version, which only a line change writes and never as
 		// the first of its chain.
 		if !l.Source.IsLineChange() || l.Version == 1 {
 			return ErrTaskEventDetailMismatch
 		}
-	} else if !validLineAgentText(*l.Agent) {
-		return ErrTaskEventDetailMismatch
 	}
-	if l.SupersededAgent != nil && !validLineAgentText(*l.SupersededAgent) {
+	if !validLineEncoding(l.Agent, l.Selection) || !validLineEncoding(l.SupersededAgent, l.SupersededSelection) {
 		return ErrTaskEventDetailMismatch
 	}
 	if l.Provenance != nil {
@@ -295,4 +297,18 @@ func (e TaskEvent) Validate() error {
 		return check(false, false, false, false, false, false)
 	}
 	return ErrInvalidTaskEventKind
+}
+
+// validLineEncoding reports whether a line's wire pair holds at most one of
+// a v1 agent name and a v2 selection, each well-formed.
+func validLineEncoding(agent *string, selection *TaskLineSelection) bool {
+	switch {
+	case agent != nil && selection != nil:
+		return false
+	case agent != nil:
+		return validAgentName(*agent)
+	case selection != nil:
+		return selection.Validate() == nil
+	}
+	return true
 }

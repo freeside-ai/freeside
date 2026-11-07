@@ -739,7 +739,8 @@
             newTaskCoordinator.store.freshness = .fresh
             let newTaskModel = TaskSubmissionModel(coordinator: newTaskCoordinator)
             let noTreeCoordinator = SyncCoordinator(
-                client: APIClientFactory.mock(server: MockServer(routingPolicy: nil, agentCatalog: nil)),
+                client: APIClientFactory.mock(
+                    server: MockServer(routingPolicy: nil, agentCatalog: UsageFixtures.treelessAgentCatalog())),
                 cache: InMemoryCacheStore())
             await noTreeCoordinator.refresh()
             noTreeCoordinator.store.freshness = .fresh
@@ -773,11 +774,15 @@
             // open composer draws the four role chips; a daemon with no
             // agent tree, so the Agents chip is disabled; and an implementer
             // the catalog no longer carries, which blocks Submit.
-            let writerAndReviewer: [NewTaskSheet.Role: String] = [
-                .specifier: "claude-secondary", .implementer: "claude-secondary", .remediator: "claude-secondary",
-                .reviewer: "claude-primary",
+            let writerAndReviewer: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [
+                .specifier: UsageFixtures.agentSelection("claude-secondary"),
+                .implementer: UsageFixtures.agentSelection("claude-secondary"),
+                .remediator: UsageFixtures.agentSelection("claude-secondary"),
+                .reviewer: UsageFixtures.agentSelection("claude-primary"),
             ]
-            let staleImplementer: [NewTaskSheet.Role: String] = [.implementer: "claude-retired"]
+            let staleImplementer: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [
+                .implementer: UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-retired", "high")
+            ]
             for (name, width, scheme, model, choices, open) in [
                 ("new-task-sheet-agents", CGFloat(380), ColorScheme.light, newTaskModel, writerAndReviewer, true),
                 ("new-task-sheet-agents-dark", CGFloat(380), ColorScheme.dark, newTaskModel, writerAndReviewer, true),
@@ -791,7 +796,12 @@
                 ("new-task-sheet-phone-no-catalog", CGFloat(390), ColorScheme.light, noTreeModel, [:], false),
                 ("new-task-sheet-phone-no-catalog-dark", CGFloat(390), ColorScheme.dark, noTreeModel, [:], false),
                 ("new-task-sheet-agent-missing", CGFloat(380), ColorScheme.light, newTaskModel, staleImplementer, true),
-            ] as [(String, CGFloat, ColorScheme, TaskSubmissionModel, [NewTaskSheet.Role: String], Bool)] {
+            ]
+                as [(
+                    String, CGFloat, ColorScheme, TaskSubmissionModel,
+                    [NewTaskSheet.Role: AgentChoiceDisplay.Selection], Bool
+                )]
+            {
                 surfaces.append(
                     Surface(
                         name: name, width: width, colorScheme: scheme,
@@ -862,7 +872,7 @@
                                 initialAttachments: composerAttachments, initialRefusals: refusals))))
             }
 
-            let recoveryModel = try TaskSubmissionRecoveryScreenshots.model(client: client)
+            let recoveryModel = try await TaskSubmissionRecoveryScreenshots.model(client: client)
             for (name, width, scheme) in [
                 ("new-task-recovery", CGFloat(380), ColorScheme.light),
                 ("new-task-recovery-dark", CGFloat(380), ColorScheme.dark),

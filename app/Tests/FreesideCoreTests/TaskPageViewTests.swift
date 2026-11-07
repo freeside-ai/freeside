@@ -1179,6 +1179,13 @@ import Testing
         #expect(
             TaskTimelinePresentation.currentRunLine(page.task, run: specification, runTimeline: timeline)
                 == "Claude Code · claude-opus-5-5 · effort high · pool S · unattended")
+        // A selection-encoded line reads as its selection.
+        page.task.task_lines[1].agent = nil
+        page.task.task_lines[1].selection = .init(
+            value1: .init(enrollment_id: "claude-a/claude_code", model_id: "opus", effort: "high"))
+        #expect(
+            TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: nil)
+                == "claude-a/claude_code · opus · high · pool A")
         page.task.task_lines = []
         #expect(TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: nil) == nil)
     }

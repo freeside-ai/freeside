@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -583,6 +584,8 @@ func TestTaskTimelineAuthenticatesOpenedPRWithoutCompletionMilestone(t *testing.
 // TestBootstrapTaskCarriesCurrentLinesInRoleOrder: the synced task carries
 // each role's current line in TaskLineRoles order, not the store's
 // alphabetical role order, and only the latest version of a changed role.
+// Each line goes out in its own encoding with no tree bound: a v1 line its
+// agent name, a v2 line its selection.
 func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
@@ -603,7 +606,11 @@ func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
 		}
 		reviewer, err := appendLine(domain.RoleReviewer, "codex")
 		if err == nil {
-			reviewer, err = appendLine(domain.RoleReviewer, "claude-a")
+			selection := lineSelectionOf("claude-reviewer")
+			reviewer, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
+				TaskID: task.ID, Role: domain.RoleReviewer, Selection: &selection,
+				Source: domain.TaskLineSourceClientLineChange, SetBy: "cmd-2",
+			}, task.CreatedAt)
 		}
 		if err != nil {
 			return err
@@ -628,6 +635,18 @@ func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
 		}
 		if !reflect.DeepEqual(snapshot.Task.TaskLines, want) {
 			t.Fatalf("task lines = %+v, want %+v", snapshot.Task.TaskLines, want)
+		}
+		encoded, err := json.Marshal(snapshot.Task.TaskLines)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, encoding := range []string{
+			`"agent":"claude-b","selection":null`,
+			`"agent":null,"selection":{"enrollment_id":"line-claude-reviewer/codex_cli"`,
+		} {
+			if !strings.Contains(string(encoded), encoding) {
+				t.Fatalf("task lines on the wire = %s, want %s", encoded, encoding)
+			}
 		}
 		return
 	}

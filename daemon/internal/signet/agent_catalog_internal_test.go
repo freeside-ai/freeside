@@ -115,25 +115,32 @@ func TestAgentCatalogOf(t *testing.T) {
 	t.Parallel()
 	got := agentCatalogFixture(t)
 	anthropic := "anthropic"
+	revision := catalogFixtureRevision
+	selection := func(enrollment domain.ClientEnrollmentID, model, effort string) domain.TaskLineSelection {
+		return domain.TaskLineSelection{EnrollmentID: enrollment, ModelID: model, Effort: effort}
+	}
+	claudeA := selection("anthropic-a/claude_code", "claude-opus-5-5", "high")
+	claudeC := selection("anthropic-b/claude_code", "claude-preview", string(domain.EffortHarnessDefault))
 	want := &AgentCatalog{
-		LineupRevision: catalogFixtureRevision,
+		LineupRevision: &revision,
 		Agents: []AgentCatalogEntry{
 			{
 				Name: "claude-a", EnrollmentID: "anthropic-a/claude_code", Model: "claude-opus-5-5",
-				Effort: domain.EffortHigh, LineageGroup: &anthropic,
+				Effort: domain.EffortHigh, LineageGroup: &anthropic, Selection: claudeA,
 			},
 			{
 				Name: "claude-b", EnrollmentID: "anthropic-b/claude_code", Model: "claude-opus-5-5",
 				Effort: domain.EffortMax, LineageGroup: &anthropic,
+				Selection: selection("anthropic-b/claude_code", "claude-opus-5-5", "max"),
 			},
 			{
 				Name: "claude-c", EnrollmentID: "anthropic-b/claude_code", Model: "claude-preview",
-				Effort: domain.EffortHarnessDefault, LineageGroup: nil,
+				Effort: domain.EffortHarnessDefault, LineageGroup: nil, Selection: claudeC,
 			},
 		},
 		Lineup: []AgentCatalogLineupLine{
-			{Role: domain.RoleImplementer, Agent: "claude-a"},
-			{Role: domain.RoleReviewer, Agent: "claude-c"},
+			{Role: domain.RoleImplementer, Agent: "claude-a", Selection: claudeA},
+			{Role: domain.RoleReviewer, Agent: "claude-c", Selection: claudeC},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

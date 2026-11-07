@@ -87,30 +87,83 @@ public enum UsageFixtures {
             lineup_revision: lineupRevision, drain_first_account: nil)
     }
 
-    /// The mock's committed agent tree: the agents set_routing_policy accepts,
-    /// as the daemon checks a policy against its tree. Each agent's enrollment
-    /// joins a pool fixture's enrollment, one offer declares no lineage group,
-    /// and the lineup binds every task-line role.
+    /// The mock's agent catalog. Its tree half holds the agents
+    /// set_routing_policy accepts, as the daemon checks a policy against its
+    /// tree: each agent's enrollment joins a pool fixture's enrollment, one
+    /// offer declares no lineage group, and the lineup binds every task-line
+    /// role. Its enrollments are those pools' enrollments, two with a
+    /// discovery record and one the daemon hasn't discovered yet, so a
+    /// selection on it passes on shape alone.
     public static func defaultAgentCatalog() -> Components.Schemas.AgentCatalog {
-        .init(
-            lineup_revision: lineupRevision,
+        let claudePrimary = selection(readingCollectorID, "claude-opus", "high")
+        let claudeSecondary = selection(readingSecondEnrollmentID, "claude-opus", "max")
+        let codexPrimary = selection(unsupportedCollectorID, "gpt-codex", "harness_default")
+        return .init(
+            lineup_revision: .init(value1: lineupRevision),
+            enrollments: [
+                .init(
+                    enrollment_id: readingCollectorID, harness_client: .claude_code,
+                    discovery: .init(
+                        value1: .init(
+                            harness_build: "claude-code 2.1.0", observed_at: date(600),
+                            models: [
+                                .init(
+                                    id: "claude-opus", resolved_model: "claude-opus-5-5", display_name: "Opus",
+                                    effort_levels: ["low", "medium", "high", "xhigh", "max"]),
+                                .init(
+                                    id: "claude-sonnet", resolved_model: "claude-sonnet-5-5",
+                                    display_name: "Sonnet", effort_levels: ["low", "medium", "high"]),
+                            ]))),
+                .init(enrollment_id: readingSecondEnrollmentID, harness_client: .claude_code, discovery: nil),
+                .init(
+                    enrollment_id: unsupportedCollectorID, harness_client: .codex_cli,
+                    discovery: .init(
+                        value1: .init(
+                            harness_build: "codex-cli 0.50.0", observed_at: date(600),
+                            models: [
+                                .init(
+                                    id: "gpt-codex", resolved_model: nil, display_name: "GPT Codex",
+                                    effort_levels: ["low", "medium", "high"])
+                            ]))),
+            ],
             agents: [
                 .init(
                     name: "claude-primary", enrollment_id: readingCollectorID, model: "claude-opus",
-                    effort: .high, lineage_group: "anthropic"),
+                    effort: .high, lineage_group: "anthropic", selection: claudePrimary),
                 .init(
                     name: "claude-secondary", enrollment_id: readingSecondEnrollmentID, model: "claude-opus",
-                    effort: .max, lineage_group: "anthropic"),
+                    effort: .max, lineage_group: "anthropic", selection: claudeSecondary),
                 .init(
                     name: "codex-primary", enrollment_id: unsupportedCollectorID, model: "gpt-codex",
-                    effort: .harness_default, lineage_group: nil),
+                    effort: .harness_default, lineage_group: nil, selection: codexPrimary),
             ],
             lineup: [
-                .init(role: .specifier, agent: "claude-primary"),
-                .init(role: .implementer, agent: "claude-primary"),
-                .init(role: .remediator, agent: "claude-secondary"),
-                .init(role: .reviewer, agent: "codex-primary"),
+                .init(role: .specifier, agent: "claude-primary", selection: claudePrimary),
+                .init(role: .implementer, agent: "claude-primary", selection: claudePrimary),
+                .init(role: .remediator, agent: "claude-secondary", selection: claudeSecondary),
+                .init(role: .reviewer, agent: "codex-primary", selection: codexPrimary),
             ])
+    }
+
+    /// The catalog of a daemon that holds no committed tree: the enrollments
+    /// still, and no agents, lineup, or revision.
+    public static func treelessAgentCatalog() -> Components.Schemas.AgentCatalog {
+        .init(lineup_revision: nil, enrollments: defaultAgentCatalog().enrollments, agents: [], lineup: [])
+    }
+
+    public static func selection(
+        _ enrollment: String, _ model: String, _ effort: String
+    ) -> Components.Schemas.TaskLineSelection {
+        .init(enrollment_id: enrollment, model_id: model, effort: effort)
+    }
+
+    /// The selection the default catalog's tree runs `agent` with, as a
+    /// client's choice of that agent sends it.
+    public static func agentSelection(_ agent: String) -> Components.Schemas.TaskLineSelection {
+        guard let entry = defaultAgentCatalog().agents.first(where: { $0.name == agent }) else {
+            preconditionFailure("no default catalog agent \(agent)")
+        }
+        return entry.selection
     }
 
     private static func date(_ offset: TimeInterval) -> Date {

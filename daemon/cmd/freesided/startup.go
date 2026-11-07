@@ -204,17 +204,6 @@ func newAttentionService(
 			}, now)
 			return signet.TaskLineChangeOutcome{Recorded: result.Recorded, Line: result.Line}, err
 		}),
-		// A client names a line's agent; the line records the selection that
-		// agent of the committed tree reduces to, and goes back to the client
-		// as the agent its selection maps to. The tree exists only after the
-		// Claude composition (composeClaudeWorkflow); without it a change
-		// fails closed and a line goes out as its enrollment/model/effort.
-		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) {
-			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
-				return nil, signet.ErrOperatorSettingUnavailable
-			}
-			return late.claudeWiring.env.Agents.Tree, nil
-		}),
 		// A policy names agents of the committed tree, which exists only
 		// after the Claude composition (composeClaudeWorkflow); without it
 		// the command fails closed.

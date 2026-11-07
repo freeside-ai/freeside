@@ -1134,12 +1134,7 @@ components:
           allOf:
             - $ref: "#/components/schemas/RoutingPolicySnapshot"
         agent_catalog:
-          nullable: true
-          description: >
-            The committed agent tree's agents and lineup; null when the
-            daemon holds no committed tree.
-          allOf:
-            - $ref: "#/components/schemas/AgentCatalog"
+          $ref: "#/components/schemas/AgentCatalog"
 
     UnattendedOperationSnapshot:
       type: object
@@ -1618,18 +1613,34 @@ components:
     AgentCatalog:
       type: object
       description: >
-        The agents the daemon's committed agent tree carries, and the lineup
-        that runs a role when no task line or routing policy names an agent
-        (plan §5.4). The daemon admits only agents listed here. It loads the
-        tree once at startup, so the catalog changes only when the daemon
-        restarts on a changed tree; lineup_revision, the tree's digest and
-        the value a RoutingPolicy records as its lineup_revision, then
-        changes with it.
+        What a client can choose for a task line (plan §5.4). It is always
+        present. enrollments is every enrollment the daemon holds, each with
+        the models the daemon discovered for it; it is store state, so a new
+        discovery record moves the sync revision. agents and lineup are the
+        committed agent tree's agents and the lineup that runs a role when no
+        task line or routing policy chooses; both are empty, and
+        lineup_revision null, when the daemon holds no committed tree. The
+        daemon loads the tree once at startup, so that half changes only when
+        the daemon restarts on a changed tree; lineup_revision, the tree's
+        digest and the value a RoutingPolicy records as its lineup_revision,
+        then changes with it, and the heartbeat carries it too. The daemon
+        records a task line whose enrollment it holds and whose model and
+        effort that enrollment's discovery serves, but until admission
+        resolves a selection without a tree agent (#2734) a role admits only
+        a selection one of agents runs, so a client offers those.
       additionalProperties: false
-      required: [lineup_revision, agents, lineup]
+      required: [lineup_revision, enrollments, agents, lineup]
       properties:
         lineup_revision:
-          $ref: "#/components/schemas/Digest"
+          nullable: true
+          description: The committed tree's digest; null when the daemon holds no committed tree.
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+        enrollments:
+          type: array
+          description: Every enrollment the daemon holds, in enrollment_id order.
+          items:
+            $ref: "#/components/schemas/AgentCatalogEnrollment"
         agents:
           type: array
           description: Every agent the tree carries, in name order.
@@ -1642,14 +1653,122 @@ components:
             A role the lineup does not bind has no entry.
           items:
             $ref: "#/components/schemas/AgentCatalogLineupLine"
+      example:
+        lineup_revision: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        enrollments:
+          - enrollment_id: "anthropic-a/claude_code"
+            harness_client: claude_code
+            discovery:
+              harness_build: "claude-code 2.1.0"
+              observed_at: "2026-08-10T12:34:56Z"
+              models:
+                - id: "opus"
+                  resolved_model: "claude-opus-5-5"
+                  display_name: "Opus"
+                  effort_levels: ["low", "medium", "high", "xhigh", "max"]
+          - enrollment_id: "anthropic-b/claude_code"
+            harness_client: claude_code
+            discovery: null
+        agents:
+          - name: "claude-a"
+            enrollment_id: "anthropic-a/claude_code"
+            model: "claude-opus-5-5"
+            effort: high
+            lineage_group: "anthropic"
+            selection:
+              enrollment_id: "anthropic-a/claude_code"
+              model_id: "claude-opus-5-5"
+              effort: "high"
+        lineup:
+          - role: implementer
+            agent: "claude-a"
+            selection:
+              enrollment_id: "anthropic-a/claude_code"
+              model_id: "claude-opus-5-5"
+              effort: "high"
+
+    AgentCatalogEnrollment:
+      type: object
+      description: >
+        One enrollment a task line can select. discovery is null until the
+        daemon records the enrollment's discovered models, so a client can
+        tell "not discovered yet" from "offers nothing". The daemon accepts a
+        selection on an enrollment with no discovery record and checks it
+        when it admits the role.
+      additionalProperties: false
+      required: [enrollment_id, harness_client, discovery]
+      properties:
+        enrollment_id:
+          type: string
+          minLength: 1
+          description: Joins TaskLineSelection.enrollment_id and UsagePoolEnrollment.enrollment_id.
+        harness_client:
+          $ref: "#/components/schemas/HarnessClientKind"
+        discovery:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AgentCatalogDiscovery"
+
+    AgentCatalogDiscovery:
+      type: object
+      description: >
+        The models an enrollment's harness reported, as the daemon last
+        recorded them. A selection on the enrollment must name one of these
+        models and, unless its effort is harness_default, one of that model's
+        effort levels.
+      additionalProperties: false
+      required: [harness_build, observed_at, models]
+      properties:
+        harness_build:
+          type: string
+          minLength: 1
+          description: The harness build that reported the models.
+        observed_at:
+          type: string
+          format: date-time
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiscoveredModel"
+
+    DiscoveredModel:
+      type: object
+      description: One model an enrollment's harness reported.
+      additionalProperties: false
+      required: [id, resolved_model, display_name, effort_levels]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: The value the harness's model option takes, and a selection's model_id.
+        resolved_model:
+          type: string
+          nullable: true
+          minLength: 1
+          description: >
+            The provider model the id resolves to, when the harness said; an
+            alias such as "opus" resolves to a dated model.
+        display_name:
+          type: string
+          minLength: 1
+        effort_levels:
+          type: array
+          description: >
+            The harness's own effort strings, in its order; empty for a model
+            without effort support. They are not EffortLevel: a harness
+            reports levels that enum lacks.
+          items:
+            type: string
+            minLength: 1
 
     AgentCatalogEntry:
       type: object
       description: >
         One agent of the committed tree with its route offer's facts. effort
-        is the effort the agent's source sets.
+        is the effort the agent's source sets. selection is what a task line
+        records to run the agent.
       additionalProperties: false
-      required: [name, enrollment_id, model, effort, lineage_group]
+      required: [name, enrollment_id, model, effort, lineage_group, selection]
       properties:
         name:
           type: string
@@ -1671,12 +1790,14 @@ components:
           nullable: true
           minLength: 1
           description: The offer's lineage group; null when the offer declares none.
+        selection:
+          $ref: "#/components/schemas/TaskLineSelection"
 
     AgentCatalogLineupLine:
       type: object
-      description: The agent the lineup binds to one role.
+      description: The agent the lineup binds to one role, and that agent's selection.
       additionalProperties: false
-      required: [role, agent]
+      required: [role, agent, selection]
       properties:
         role:
           $ref: "#/components/schemas/TaskLineRole"
@@ -1685,6 +1806,8 @@ components:
           minLength: 1
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        selection:
+          $ref: "#/components/schemas/TaskLineSelection"
 
     AttentionItemSnapshot:
       type: object
@@ -2030,12 +2153,53 @@ components:
     TaskLineInput:
       type: object
       description: >
-        An operator's choice of agent for one role on one task. It names an
-        agent only; the role's prompt stays the lineup's. The daemon checks
-        the name's shape when it accepts the command and resolves the agent
-        when it admits the role.
+        An operator's choice for one role on one task: the selection the role
+        runs. The role's prompt stays the lineup's. When it accepts the
+        command the daemon refuses, with a 400 that names the field, a
+        selection whose enrollment it doesn't hold, or whose model or effort
+        the enrollment's discovery record doesn't list; with no discovery
+        record it checks the selection when it admits the role.
       additionalProperties: false
-      required: [role, agent]
+      required: [role, selection]
+      properties:
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        selection:
+          $ref: "#/components/schemas/TaskLineSelection"
+
+    TaskLineSelection:
+      type: object
+      description: >
+        What a task line runs: an enrollment the daemon holds, a model id the
+        enrollment's harness takes (a DiscoveredModel id), and an effort as
+        that harness names it, or harness_default to send none. It names no
+        agent. Each value is a launch option: at most 256 bytes, with no
+        whitespace or control character, and not starting with "-".
+      additionalProperties: false
+      required: [enrollment_id, model_id, effort]
+      properties:
+        enrollment_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        model_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        effort:
+          type: string
+          minLength: 1
+          maxLength: 256
+
+    TaskLineChoice:
+      type: object
+      description: >
+        A recorded choice for one role, in the encoding it was recorded in:
+        exactly one of agent and selection is non-null. A choice recorded
+        since #2598 holds its selection; one recorded before it holds the
+        agent name the command named then.
+      additionalProperties: false
+      required: [role, agent, selection]
       properties:
         role:
           $ref: "#/components/schemas/TaskLineRole"
@@ -2044,7 +2208,11 @@ components:
           minLength: 1
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
-          description: The agent's name in the control-plane tree.
+          nullable: true
+        selection:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelection"
 
     TaskAttachmentInput:
       type: object
@@ -2253,13 +2421,16 @@ components:
     TaskLine:
       type: object
       description: >
-        One version of a task's line for one role: the agent chosen for that
+        One version of a task's line for one role: what was chosen for that
         role in that task. A change is a new version naming the one it
         supersedes; a version is never edited. id is the content address of
-        every other field. provenance is set exactly when source is router or
-        alternate_agent_move.
+        the version as the daemon records it. Exactly one of agent and
+        selection is non-null: a version recorded since #2597 carries its
+        selection, and an older one the agent name it recorded. The daemon
+        never translates one into the other. provenance is set exactly when
+        source is router or alternate_agent_move.
       additionalProperties: false
-      required: [id, task_id, role, agent, version, predecessor_id, source, set_by, set_at, provenance]
+      required: [id, task_id, role, agent, selection, version, predecessor_id, source, set_by, set_at, provenance]
       properties:
         id:
           $ref: "#/components/schemas/Digest"
@@ -2273,6 +2444,11 @@ components:
           minLength: 1
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+          nullable: true
+        selection:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelection"
         version:
           type: integer
           minimum: 1
@@ -3065,13 +3241,15 @@ components:
     TaskEventTaskLine:
       type: object
       description: >
-        One task line version as the timeline shows it. agent is null on a
-        cleared version, which returned the role to the lineup. superseded_agent
-        is the agent of the version this one supersedes, null for version 1
-        and after a cleared version. provenance is the router's citation, null
-        for an operator line.
+        One task line version as the timeline shows it, in its own encoding
+        as TaskLine carries it: at most one of agent and selection is
+        non-null, and both are null on a cleared version, which returned the
+        role to the lineup. superseded_agent and superseded_selection are the
+        version this one supersedes, in that version's encoding; both are
+        null for version 1 and after a cleared version. provenance is the
+        router's citation, null for an operator line.
       additionalProperties: false
-      required: [line_id, role, agent, version, source, superseded_agent, provenance]
+      required: [line_id, role, agent, selection, version, source, superseded_agent, superseded_selection, provenance]
       properties:
         line_id:
           $ref: "#/components/schemas/Digest"
@@ -3083,6 +3261,10 @@ components:
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
           nullable: true
+        selection:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelection"
         version:
           type: integer
           minimum: 1
@@ -3094,6 +3276,10 @@ components:
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
           nullable: true
+        superseded_selection:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelection"
         provenance:
           nullable: true
           allOf:
@@ -4435,10 +4621,12 @@ components:
       additionalProperties: false
       description: >
         Change a waiting task's line for one role, as `freesided task-line`
-        does on the daemon host: name an agent, or null to clear the line and
+        does on the daemon host: a selection, or null to clear the line and
         return the role to the lineup. Refused while an attempt of the role
-        runs. The new version's source is client_line_change.
-      required: [kind, task_id, role, agent]
+        runs, and refused as TaskLineInput's selection is, with a 400 naming
+        the selection's field. The new version's source is
+        client_line_change.
+      required: [kind, task_id, role, selection]
       properties:
         kind:
           type: string
@@ -4448,12 +4636,10 @@ components:
           minLength: 1
         role:
           $ref: "#/components/schemas/TaskLineRole"
-        agent:
-          type: string
-          minLength: 1
-          maxLength: 246
-          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        selection:
           nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelection"
 
     SetRoutingPolicyPayload:
       type: object
@@ -4566,10 +4752,13 @@ components:
       additionalProperties: false
       description: >
         The receipt of a line change: the request, whether it recorded a new
-        version, and the role's current line after it. recorded false means
-        the role already had that line. line is null when the role has no
-        line: it never had one, or the change cleared it.
-      required: [kind, command_id, device_id, task_id, role, agent, recorded, line]
+        version, and the role's current line after it. The request holds at
+        most one of agent and selection, and neither for a clear: a request
+        accepted since #2598 holds its selection, one accepted before it the
+        agent name it sent. recorded false means the role already had that
+        line. line is null when the role has no line: it never had one, or
+        the change cleared it.
+      required: [kind, command_id, device_id, task_id, role, agent, selection, recorded, line]
       properties:
         kind:
           type: string
@@ -4591,6 +4780,10 @@ components:
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
           nullable: true
+        selection:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelection"
         recorded:
           type: boolean
         line:
@@ -4921,11 +5114,11 @@ components:
           items:
             $ref: "#/components/schemas/TaskLineInput"
           description: >
-            Per-role agent choices for the task a start or start_with_changes
+            Per-role choices for the task a start or start_with_changes
             decision on a task_proposal creates; at most one line per role.
-            Absent for every other action and item type. The daemon does not
-            yet apply lines from a decision and rejects a decision that
-            carries this field with 400.
+            Absent for every other action and item type, where the daemon
+            rejects it with 400. A selection the daemon doesn't serve is
+            refused as TaskLineInput describes.
         decision_action_surface_digest:
           type: string
           nullable: true
@@ -4995,13 +5188,12 @@ components:
           items:
             $ref: "#/components/schemas/TaskLineInput"
           description: >
-            Optional per-role agent choices for the new task; at most one line
-            per role. A role with no line takes its agent from the lineup. An
-            empty list, a repeated role, or a malformed agent name is rejected
-            with 400 and nothing is written. The lines are recorded when the
-            command creates the task. Admission does not read task lines yet:
-            until it does, a line is recorded and the lineup still selects
-            every agent.
+            Optional per-role choices for the new task; at most one line per
+            role. A role with no line takes its agent from the lineup. An
+            empty list, a repeated role, or a malformed or unserved selection
+            (TaskLineInput) is rejected with 400 and nothing is written. The
+            lines are recorded when the command creates the task, and
+            admission holds each role to its line.
         attachments:
           type: array
           minItems: 1
@@ -5193,12 +5385,13 @@ components:
           minItems: 1
           maxItems: 4
           items:
-            $ref: "#/components/schemas/TaskLineInput"
+            $ref: "#/components/schemas/TaskLineChoice"
           description: >
-            The per-role agent choices the command carried, in TaskLineRole
-            order; admission holds a submitted line to them (plan §5.4). Absent
-            when the command carried none, or was recorded before the field
-            existed. Manual Retry returns the record as it was recorded.
+            The per-role choices the command carried, in TaskLineRole order
+            and in the encoding they were recorded in; admission holds a
+            submitted line to them (plan §5.4). Absent when the command
+            carried none, or was recorded before the field existed. Manual
+            Retry returns the record as it was recorded.
       example:
         kind: "submit_task"
         command_id: "cmd-2"
@@ -6369,6 +6562,10 @@ components:
         - model
         - requested_effort
         - native_effort
+        - enrollment_id
+        - selection_model_id
+        - selection_effort
+        - selection_digest
         - cost_owner
         - lineage_group
         - credential_mode
@@ -6416,6 +6613,26 @@ components:
           nullable: true
           minLength: 1
           description: The effort as the harness names it, after any rendered clamp.
+        enrollment_id:
+          type: string
+          nullable: true
+          minLength: 1
+          description: >
+            The selection admission resolved, with selection_model_id,
+            selection_effort, and selection_digest: one tuple, null together
+            on a binding admitted before the selection was recorded.
+        selection_model_id:
+          type: string
+          nullable: true
+          minLength: 1
+        selection_effort:
+          type: string
+          nullable: true
+          minLength: 1
+        selection_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
         cost_owner:
           type: string
           nullable: true

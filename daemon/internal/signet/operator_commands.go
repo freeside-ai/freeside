@@ -29,12 +29,12 @@ type ReassignCollectorPayload struct {
 	EnrollmentID domain.ClientEnrollmentID `json:"enrollment_id"`
 }
 
-// ChangeTaskLinePayload mirrors the API's ChangeTaskLinePayload; a nil Agent
-// clears the line.
+// ChangeTaskLinePayload mirrors the API's ChangeTaskLinePayload; a nil
+// Selection clears the line.
 type ChangeTaskLinePayload struct {
-	TaskID domain.TaskID   `json:"task_id"`
-	Role   domain.RoleName `json:"role"`
-	Agent  *string         `json:"agent"`
+	TaskID    domain.TaskID             `json:"task_id"`
+	Role      domain.RoleName           `json:"role"`
+	Selection *domain.TaskLineSelection `json:"selection"`
 }
 
 // SetRoutingPolicyPayload mirrors the API's SetRoutingPolicyPayload; a nil
@@ -83,7 +83,7 @@ type UsageOperator interface {
 }
 
 // TaskLineChange is one line change for the TaskLineChanger: Selection is
-// the one the client's agent name maps to (Service.lineSelection), nil
+// the client's, checked against the store (validateLineSelection), nil
 // exactly when Clear.
 type TaskLineChange struct {
 	TaskID    domain.TaskID
@@ -325,16 +325,17 @@ func (s *Service) changeTaskLine(ctx context.Context, in ClientCommand) (Command
 	p := in.ChangeTaskLine
 	request := domain.TaskLineChangeRequest{
 		CommandIdentity: domain.CommandIdentity{CommandID: in.CommandID, DeviceID: in.DeviceID},
-		TaskID:          p.TaskID, Role: p.Role, Agent: p.Agent,
+		TaskID:          p.TaskID, Role: p.Role, Selection: p.Selection,
 	}
 	if !in.operatorArmOnly() || p.TaskID == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
 	change := TaskLineChange{
-		TaskID: p.TaskID, Role: p.Role, Clear: p.Agent == nil, Source: domain.TaskLineSourceClientLineChange,
+		TaskID: p.TaskID, Role: p.Role, Selection: p.Selection, Clear: p.Selection == nil,
+		Source: domain.TaskLineSourceClientLineChange,
 	}
-	if p.Agent != nil {
-		if err := domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: p.Role, Agent: *p.Agent}}); err != nil {
+	if p.Selection != nil {
+		if err := domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: p.Role, Selection: p.Selection}}); err != nil {
 			return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
 		}
 	} else if !p.Role.TaskLineEligible() {
@@ -349,15 +350,12 @@ func (s *Service) changeTaskLine(ctx context.Context, in ClientCommand) (Command
 			if s.taskLineChanger == nil {
 				return domain.CommandReceipt{}, ErrOperatorSettingUnavailable
 			}
-			// Translated only for a new command. A replay compares the
-			// request with the stored one above and reads no tree here;
-			// its receipt goes out under the current tree (choiceAgent).
-			if p.Agent != nil {
-				selection, err := s.lineSelection(p.Role, *p.Agent)
-				if err != nil {
+			// Checked only for a new command. A replay compares the request
+			// with the stored one above.
+			if p.Selection != nil {
+				if err := validateLineSelection(ctx, &tx.ReadTx, *p.Selection, "selection"); err != nil {
 					return domain.CommandReceipt{}, err
 				}
-				change.Selection = &selection
 			}
 			outcome, err := s.taskLineChanger(ctx, tx, change, now)
 			if errors.Is(err, domain.ErrTaskLineRoleRunning) {
@@ -367,7 +365,7 @@ func (s *Service) changeTaskLine(ctx context.Context, in ClientCommand) (Command
 				return domain.CommandReceipt{}, err
 			}
 			line := outcome.Line
-			// A cleared head is no line: the wire TaskLine names an agent.
+			// A cleared head is no line: the wire TaskLine names a choice.
 			if line != nil && line.Cleared {
 				line = nil
 			}
@@ -386,7 +384,7 @@ func (s *Service) taskLineRoleRunning(ctx context.Context, tx *store.WriteTx, id
 	if err != nil {
 		return err
 	}
-	snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task, s.TaskLineAgents())
+	snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task)
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,23 @@
+{
+  "invocation_id": "inv-6",
+  "kind": "execution",
+  "role": "implementer",
+  "admitted_at": "2026-01-02T03:04:05Z",
+  "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "selection_source": "lineup",
+  "harness": "claude_code",
+  "model": "claude-opus-5-5",
+  "requested_effort": "max",
+  "native_effort": "max",
+  "enrollment_id": "anthropic-A/claude",
+  "selection_model_id": "claude-opus-5-5",
+  "selection_effort": "max",
+  "selection_digest": "sha256:1e188081302e14a3d0ddc4bcf615fba8a2ba2633720decf51d2f9f344cdd8833",
+  "cost_owner": "platform-team",
+  "lineage_group": "anthropic",
+  "credential_mode": "subscription_contained",
+  "egress_profile": "provider_only",
+  "operating_mode": "attended_dev",
+  "isolation_class": "fresh_vm_read_only_volume_handoff",
+  "independence": null
+}

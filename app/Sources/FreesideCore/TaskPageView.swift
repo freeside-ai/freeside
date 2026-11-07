@@ -1733,7 +1733,7 @@ enum TaskTimelinePresentation {
                 admission.operating_mode.map { RunDisplay.label($0.value1).lowercased() },
             ]
         } else {
-            parts = [line?.agent, pool]
+            parts = [line.flatMap { TaskDisplay.lineLabel(agent: $0.agent, selection: $0.selection?.value1) }, pool]
         }
         let present = parts.compactMap { $0 }
         return present.isEmpty ? nil : present.joined(separator: " · ")
@@ -1892,7 +1892,7 @@ enum TaskTimelinePresentation {
         }.first
     }
 
-    /// The agent the task's line for `stage` names, and its pool. The line
+    /// The choice the task's line for `stage` records, and its pool. The line
     /// is what the next admission reads: the wire names no agent for a run
     /// in progress, so this is the nearest fact, and a remediation reads as
     /// its stage's implementer. The daemon records a pool only on a router
@@ -1907,7 +1907,11 @@ enum TaskTimelinePresentation {
             case .implementation, .verification, nil: .implementer
             }
         guard let line = task.task_lines.first(where: { $0.role == role }) else { return [] }
-        return [line.agent] + [line.provenance?.value1.pool].compactMap { $0.map { "pool \($0)" } }
+        return [
+            TaskDisplay.lineLabel(agent: line.agent, selection: line.selection?.value1),
+            line.provenance.map { "pool \($0.value1.pool)" },
+        ]
+        .compactMap { $0 }
     }
 
     /// The header's one status line, which reads the same words the task's
@@ -2515,10 +2519,13 @@ enum TaskTimelinePresentation {
     // An agent the router passed over never ran, and falling back is routine,
     // so that row names it without a reason or a warning. The operator stays
     // implied, as on the other rows it causes.
+    // Each choice reads in the encoding its version recorded (lineLabel).
     static func label(_ line: Components.Schemas.TaskEventTaskLine) -> String {
         let subject = label(line.role)
-        guard let agent = line.agent else {
-            return "\(subject) back to lineup" + (line.superseded_agent.map { " · \($0)" } ?? "")
+        let superseded = TaskDisplay.lineLabel(
+            agent: line.superseded_agent, selection: line.superseded_selection?.value1)
+        guard let agent = TaskDisplay.lineLabel(agent: line.agent, selection: line.selection?.value1) else {
+            return "\(subject) back to lineup" + (superseded.map { " · \($0)" } ?? "")
         }
         let actor =
             switch line.source {
@@ -2526,7 +2533,7 @@ enum TaskTimelinePresentation {
             case .triage: " by triage"
             default: ""
             }
-        if let superseded = line.superseded_agent {
+        if let superseded {
             return "\(subject) changed\(actor) · \(superseded) → \(agent)"
         }
         let fallback = line.provenance?.value1.passed_over.map { " instead of \($0.value1.agent)" } ?? ""

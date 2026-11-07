@@ -1695,6 +1695,10 @@ func TestGolden(t *testing.T) {
 	writerFacts := domain.AdmittedFactsOfExecution(recordedFactsAdmission, domain.RoleImplementer)
 	preFactsWriterFacts := domain.AdmittedFactsOfExecution(claudeAdmission, domain.RoleImplementer)
 	legacyWriterFacts := domain.AdmittedFactsOfExecution(admission, "")
+	// A writer admitted since #2596 also carries its selection; every facts
+	// fixture above predates it and keeps the four selection fields null.
+	selectedWriterFacts := domain.AdmittedFactsOfExecution(
+		selectedExecution(recordedFactsAdmission, "claude-opus-5-5", "max"), domain.RoleImplementer)
 	reviewerFacts := domain.AdmittedFactsOfReview(recordedFactsReview, map[domain.RoleName]string{
 		domain.RoleImplementer: "anthropic",
 	})
@@ -2610,6 +2614,7 @@ func TestGolden(t *testing.T) {
 		{"invocation_admission_facts_execution", writerFacts},
 		{"invocation_admission_facts_execution_pre_facts", preFactsWriterFacts},
 		{"invocation_admission_facts_execution_legacy", legacyWriterFacts},
+		{"invocation_admission_facts_execution_selected", selectedWriterFacts},
 		{"invocation_admission_facts_review", reviewerFacts},
 		{"attention_item_execution_failure_admitted", admittedFailureItem},
 		{"adapter_conformance", adapterConformance},

@@ -158,7 +158,11 @@ package final class RoutingPolicyModel {
     }
 
     package var policy: Components.Schemas.RoutingPolicy? { coordinator.routingPolicy?.policy }
-    package var catalog: Components.Schemas.AgentCatalog? { coordinator.agentCatalog }
+    /// The synced catalog when the daemon holds an agent tree, which is what
+    /// a policy orders; nil without one, so the policy reads but can't change.
+    package var catalog: Components.Schemas.AgentCatalog? {
+        coordinator.agentCatalog.flatMap { $0.lineup_revision == nil ? nil : $0 }
+    }
     package var pending: PendingRoutingPolicyChange? { coordinator.pendingRoutingPolicyChange }
     /// The change sync confirmed this session, while it is still the policy;
     /// a later revision from anywhere replaces it.

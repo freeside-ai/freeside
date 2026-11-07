@@ -411,6 +411,27 @@ import Testing
         #expect(TaskTimelinePresentation.label(again) == "Reviewing agent set · claude-a")
     }
 
+    /// A version reads in the encoding it recorded: a legacy line by agent
+    /// name, a selection as `enrollment · model · effort`, so a move from a
+    /// name to a selection names both sides.
+    @Test func aSelectionLineReadsAsItsEnrollmentModelAndEffort() {
+        let digest = "sha256:" + String(repeating: "a", count: 64)
+        let selection = Components.Schemas.TaskLineSelection(
+            enrollment_id: "claude-a/claude_code", model_id: "opus", effort: "high")
+        let changed = Components.Schemas.TaskEventTaskLine(
+            line_id: digest, role: .implementer, selection: .init(value1: selection), version: 2,
+            source: .client_line_change, superseded_agent: "claude-old")
+        #expect(
+            TaskTimelinePresentation.label(changed)
+                == "Implementing agent changed · claude-old → claude-a/claude_code · opus · high")
+        let cleared = Components.Schemas.TaskEventTaskLine(
+            line_id: digest, role: .implementer, version: 3, source: .client_line_change,
+            superseded_selection: .init(value1: selection))
+        #expect(
+            TaskTimelinePresentation.label(cleared)
+                == "Implementing agent back to lineup · claude-a/claude_code · opus · high")
+    }
+
     @Test func aRunWithNoRoleKeepsItsLabelsAndDrawsNoStart() {
         // Its review is still a stage the events name.
         #expect(

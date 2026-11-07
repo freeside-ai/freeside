@@ -91,6 +91,7 @@ func newOperatorService(t *testing.T, opts ...signet.Option) (*signet.Service, *
 		t.Fatal(err)
 	}
 	seedUsageEnrollment(t, st, operatorAt.Add(-time.Hour))
+	seedLineEnrollments(t, st)
 	id := seedStopTask(t, st)
 	opts = append([]signet.Option{signet.WithClock(func() time.Time { return operatorAt })}, opts...)
 	return signet.NewService(st, opts...), st, id
@@ -112,11 +113,15 @@ func reassignCommand(id string, pool domain.UsagePoolID, enrollment domain.Clien
 	return in
 }
 
-// lineCommand changes task's implementer line to agent, or clears it when
-// agent is nil.
-func lineCommand(id string, task domain.TaskID, agent *string) signet.ClientCommand {
+// lineCommand changes task's implementer line to the selection that runs
+// name (lineSelectionOf), or clears it when name is nil.
+func lineCommand(id string, task domain.TaskID, name *string) signet.ClientCommand {
 	in := operatorCommand(id, domain.CommandKindChangeTaskLine)
-	in.ChangeTaskLine = signet.ChangeTaskLinePayload{TaskID: task, Role: domain.RoleImplementer, Agent: agent}
+	in.ChangeTaskLine = signet.ChangeTaskLinePayload{TaskID: task, Role: domain.RoleImplementer}
+	if name != nil {
+		selection := lineSelectionOf(*name)
+		in.ChangeTaskLine.Selection = &selection
+	}
 	return in
 }
 
@@ -206,7 +211,7 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-				signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 			before := serverRevision(t, st)
 			result, err := svc.Submit(t.Context(), tc.command(id))
 			if err != nil {
@@ -322,7 +327,7 @@ func TestUsageCommandsRunTheirEffectOnlyAfterCommit(t *testing.T) {
 
 func TestChangeTaskLineRecordsRepeatsAndClears(t *testing.T) {
 	t.Parallel()
-	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents())
+	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(engineTaskLineChanger))
 	steps := []struct {
 		agent    *string
 		recorded bool
@@ -378,7 +383,7 @@ func TestChangeTaskLineRefusesARunningRole(t *testing.T) {
 	running := func(context.Context, *store.WriteTx, signet.TaskLineChange, time.Time) (signet.TaskLineChangeOutcome, error) {
 		return signet.TaskLineChangeOutcome{}, domain.ErrTaskLineRoleRunning
 	}
-	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(running), withTestLineAgents())
+	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(running))
 	state, err := st.ServerState(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +538,7 @@ func TestOperatorCommandsFailClosedWithoutTheirHook(t *testing.T) {
 func TestOperatorCommandsHTTP(t *testing.T) {
 	t.Parallel()
 	svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-		signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+		signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 	handler := signet.NewHTTPHandler(svc, testAuthorizer)
 	post := func(t *testing.T, body string) (int, map[string]any) {
 		t.Helper()
@@ -554,19 +559,20 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 		body string
 		want int
 	}{
-		"mistyped agent": {command("h1", `{"kind":"change_task_line","task_id":"`+task+`","role":"implementer","agent":7}`), 400},
-		"missing roles":  {command("h2", `{"kind":"set_routing_policy","expected_revision":null}`), 400},
-		"unknown member": {command("h3", `{"kind":"refresh_usage","pool":"pool-a","force":true}`), 400},
+		"mistyped selection": {command("h1", `{"kind":"change_task_line","task_id":"`+task+`","role":"implementer","selection":7}`), 400},
+		"agent name":         {command("h1a", `{"kind":"change_task_line","task_id":"`+task+`","role":"implementer","agent":"codex-primary"}`), 400},
+		"missing roles":      {command("h2", `{"kind":"set_routing_policy","expected_revision":null}`), 400},
+		"unknown member":     {command("h3", `{"kind":"refresh_usage","pool":"pool-a","force":true}`), 400},
 		"envelope version": {`{"command_id":"h4","device_id":"device-1","expected_entity_version":1,` +
 			`"payload":{"kind":"refresh_usage","pool":"pool-a"}}`, 400},
 		"envelope bindings": {`{"command_id":"h5","device_id":"device-1","expected_bindings":{},` +
 			`"payload":{"kind":"refresh_usage","pool":"pool-a"}}`, 400},
 		"unknown pool":         {command("h6", `{"kind":"refresh_usage","pool":"pool-missing"}`), 404},
-		"unknown task":         {command("h7", `{"kind":"change_task_line","task_id":"task-missing","role":"implementer","agent":null}`), 404},
+		"unknown task":         {command("h7", `{"kind":"change_task_line","task_id":"task-missing","role":"implementer","selection":null}`), 404},
 		"foreign enrollment":   {command("h8", `{"kind":"reassign_collector","pool":"pool-idle","enrollment_id":"enrollment-usage-1"}`), 400},
 		"unknown agent":        {command("h9", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["gemini"]}],"expected_revision":null}`), 400},
 		"repeated agent":       {command("h10", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["codex-primary","codex-primary"]}],"expected_revision":null}`), 400},
-		"ineligible line role": {command("h11", `{"kind":"change_task_line","task_id":"`+task+`","role":"verifier","agent":"codex-primary"}`), 400},
+		"ineligible line role": {command("h11", `{"kind":"change_task_line","task_id":"`+task+`","role":"verifier","selection":{"enrollment_id":"line-codex-primary/codex_cli","model_id":"model-codex-primary","effort":"high"}}`), 400},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if code, body := post(t, tc.body); code != tc.want {
@@ -578,16 +584,18 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 		t.Fatal("a refused request committed")
 	}
 
-	code, body := post(t, command("h-line", `{"kind":"change_task_line","task_id":"`+task+`","role":"implementer","agent":"codex-primary"}`))
+	code, body := post(t, command("h-line", `{"kind":"change_task_line","task_id":"`+task+`","role":"implementer","selection":{"enrollment_id":"line-codex-primary/codex_cli","model_id":"model-codex-primary","effort":"high"}}`))
 	record, _ := body["record"].(map[string]any)
 	line, _ := record["line"].(map[string]any)
+	selection, _ := line["selection"].(map[string]any)
 	if code != 200 || record["kind"] != "change_task_line" || record["recorded"] != true || record["device_id"] != "device-1" ||
-		line["agent"] != "codex-primary" || line["source"] != "client_line_change" || body["revision"] != float64(before+1) {
+		line["agent"] != nil || selection["model_id"] != "model-codex-primary" || line["source"] != "client_line_change" ||
+		body["revision"] != float64(before+1) {
 		t.Fatalf("line change: %d %v", code, body)
 	}
-	// The generated client omits a nil agent, so an absent agent clears.
+	// The generated client omits a nil selection, so an absent selection clears.
 	code, body = post(t, command("h-clear", `{"kind":"change_task_line","task_id":"`+task+`","role":"implementer"}`))
-	if record, _ := body["record"].(map[string]any); code != 200 || record["agent"] != nil || record["line"] != nil {
+	if record, _ := body["record"].(map[string]any); code != 200 || record["selection"] != nil || record["line"] != nil {
 		t.Fatalf("line clear: %d %v", code, body)
 	}
 	code, body = post(t, command("h-policy", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["codex-primary"]}]}`))
@@ -617,9 +625,9 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 	running := func(context.Context, *store.WriteTx, signet.TaskLineChange, time.Time) (signet.TaskLineChangeOutcome, error) {
 		return signet.TaskLineChangeOutcome{}, domain.ErrTaskLineRoleRunning
 	}
-	runningSvc, _, runningID := newOperatorService(t, signet.WithTaskLineChanger(running), withTestLineAgents())
+	runningSvc, _, runningID := newOperatorService(t, signet.WithTaskLineChanger(running))
 	response := authenticatedRequest(t, signet.NewHTTPHandler(runningSvc, testAuthorizer), http.MethodPost, "/commands",
-		bytes.NewReader([]byte(command("h-running", `{"kind":"change_task_line","task_id":"`+string(runningID)+`","role":"implementer","agent":"codex-primary"}`))))
+		bytes.NewReader([]byte(command("h-running", `{"kind":"change_task_line","task_id":"`+string(runningID)+`","role":"implementer","selection":{"enrollment_id":"line-codex-primary/codex_cli","model_id":"model-codex-primary","effort":"high"}}`))))
 	var rejection struct {
 		Message         string              `json:"message"`
 		Reason          string              `json:"reason"`

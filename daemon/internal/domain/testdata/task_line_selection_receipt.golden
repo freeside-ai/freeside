@@ -1,0 +1,30 @@
+{
+  "command_id": "cmd-selection",
+  "device_id": "device-1",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": null,
+  "selection": {
+    "enrollment_id": "openai-a/codex_cli",
+    "model_id": "gpt-5.5-codex",
+    "effort": "high"
+  },
+  "recorded": true,
+  "line": {
+    "id": "sha256:6e2d7574163a7a9a485d940d18ff8fcaf19a1ce57759e51b23ee2418e50a933c",
+    "encoding": "freeside.task_line/v2",
+    "task_id": "task-1",
+    "role": "implementer",
+    "selection": {
+      "enrollment_id": "openai-a/codex_cli",
+      "model_id": "gpt-5.5-codex",
+      "effort": "high"
+    },
+    "version": 1,
+    "predecessor_id": null,
+    "source": "client_line_change",
+    "set_by": "cmd-selection",
+    "set_at": "2026-01-02T03:04:05Z",
+    "provenance": null
+  }
+}

@@ -744,4 +744,14 @@ package enum TaskDisplay {
             "Source: none recorded"
         }
     }
+
+    /// A task line's choice as one label, in whichever encoding the daemon
+    /// recorded it: a legacy line's agent name, or a selection's
+    /// `enrollment · model · effort`. Nil when the line carries neither, as a
+    /// cleared version does.
+    package static func lineLabel(
+        agent: String?, selection: Components.Schemas.TaskLineSelection?
+    ) -> String? {
+        agent ?? selection.map(AgentChoiceDisplay.selectionLabel)
+    }
 }

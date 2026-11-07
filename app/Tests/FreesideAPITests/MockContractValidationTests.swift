@@ -1322,6 +1322,31 @@ import Testing
         }
     }
 
+    /// Each leg of a line's selection reaches a harness argv, so the mock
+    /// checks it as the daemon's ValidLaunchOptionValue does.
+    @Test func aLineChangeRefusesAMalformedSelectionLeg() throws {
+        func change(_ selection: Components.Schemas.TaskLineSelection) -> Components.Schemas.ClientCommand {
+            .init(
+                command_id: "line", device_id: "device-1",
+                payload: .change_task_line(
+                    .init(
+                        kind: .change_task_line, task_id: "task-1", role: .implementer,
+                        selection: .init(value1: selection))))
+        }
+        let valid = UsageFixtures.agentSelection("claude-primary")
+        try MockContractValidation.validate(change(valid))
+        for bad in ["", "-flag", "two words", "tab\there", "nul\u{0}", String(repeating: "m", count: 257)] {
+            for leg in [\Components.Schemas.TaskLineSelection.enrollment_id, \.model_id, \.effort] {
+                expectMalformed(reason: "empty task or malformed selection") {
+                    var selection = valid
+                    selection[keyPath: leg] = bad
+                    return change(selection)
+                }
+            }
+        }
+        try MockContractValidation.validate(change(.init(enrollment_id: "é/claude_code", model_id: "m", effort: "e")))
+    }
+
     @Test func malformedCommandThrowsWithTheReason() {
         let snapshot = AttentionFixtures.fixture(type: .spec_approval)
 

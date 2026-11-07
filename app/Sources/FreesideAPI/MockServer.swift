@@ -179,12 +179,15 @@ public actor MockServer {
     /// The current routing policy revision; the daemon stamps it with the
     /// serving revision because the policy row stores none of its own.
     private var routingPolicy: Components.Schemas.RoutingPolicy?
-    /// The committed agent tree's catalog; nil models a daemon that holds no
-    /// tree (the fake driver), which serves null and refuses a policy.
-    private var agentCatalog: Components.Schemas.AgentCatalog?
+    /// The agent catalog: the enrollments a line's selection is checked
+    /// against, and the committed tree's half. A catalog with a null
+    /// lineup_revision models a daemon that holds no tree (the fake driver),
+    /// which refuses a policy.
+    private var agentCatalog: Components.Schemas.AgentCatalog
     /// Each task role's newest line version, cleared ones included, keyed by
-    /// taskLineKey: the wire TaskLine names an agent, so a clear lives only
-    /// here and as the role's absence from the task's task_lines.
+    /// taskLineKey: the wire TaskLine never carries a cleared version, so a
+    /// clear lives only here and as the role's absence from the task's
+    /// task_lines.
     private var taskLineHeads: [String: (version: Int, id: String, line: Components.Schemas.TaskLine?)] = [:]
     /// The task_line_set events for the line versions this mock wrote, keyed
     /// by task ID: taskLineHeads keeps only the newest version, and the wire
@@ -236,7 +239,7 @@ public actor MockServer {
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
         usagePools: [Components.Schemas.UsagePoolSnapshot] = UsageFixtures.defaultUsagePools(),
         routingPolicy: Components.Schemas.RoutingPolicy? = UsageFixtures.defaultRoutingPolicy(),
-        agentCatalog: Components.Schemas.AgentCatalog? = UsageFixtures.defaultAgentCatalog(),
+        agentCatalog: Components.Schemas.AgentCatalog = UsageFixtures.defaultAgentCatalog(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -436,7 +439,7 @@ public actor MockServer {
     /// Replaces the agent catalog without a synchronized write, as a daemon
     /// restarted on a changed agent tree serves a new catalog and lineup
     /// revision at the same sync revision.
-    public func setAgentCatalog(_ catalog: Components.Schemas.AgentCatalog?) {
+    public func setAgentCatalog(_ catalog: Components.Schemas.AgentCatalog) {
         agentCatalog = catalog
     }
 
@@ -899,7 +902,7 @@ public actor MockServer {
         return .init(
             sync_epoch: syncEpoch, revision: revision,
             unattended_operation: unattendedOperationSnapshot(),
-            lineup_revision: agentCatalog.map { .init(value1: $0.lineup_revision) })
+            lineup_revision: agentCatalog.lineup_revision.map { .init(value1: $0.value1) })
     }
 
     /// The heartbeat with the daemon's long-poll rule: a request whose
@@ -965,7 +968,7 @@ public actor MockServer {
             unattended_operation: unattendedOperationSnapshot(),
             usage_pools: listUsagePools(),
             routing_policy: routingPolicySnapshot().map { .init(value1: $0) },
-            agent_catalog: agentCatalog.map { .init(value1: $0) }
+            agent_catalog: agentCatalog
         )
         return bootstrapTransform?(snapshot) ?? snapshot
     }
@@ -2336,11 +2339,15 @@ public actor MockServer {
     ) throws -> SubmitOutcome {
         if let replay = try replayOperatorCommand(command) { return replay }
         guard var snapshot = try task(id: payload.task_id) else { throw UnknownItemError(itemID: payload.task_id) }
+        let selection = payload.selection?.value1
         let key = Self.taskLineKey(payload.task_id, payload.role)
         let head = taskLineHeads[key]
-        let same = payload.agent == head?.line?.agent
-        // The daemon answers a request for the line the role already has
-        // before it asks whether the role runs.
+        let same = selection == head?.line?.selection?.value1 && head?.line?.agent == nil
+        // The daemon checks the selection first, then answers a request for
+        // the line the role already has before it asks whether the role runs.
+        if let selection {
+            try validateLineSelection(selection, field: "selection", commandID: command.command_id)
+        }
         guard same || !runningTaskLineRoles.contains(key) else {
             return .taskLineRejected(
                 .init(
@@ -2353,18 +2360,19 @@ public actor MockServer {
             let setBy = MockContractValidation.sha256Digest(of: "client_line_change/\(command.command_id)")
             let id = MockContractValidation.sha256Digest(
                 of: [
-                    payload.task_id, payload.role.rawValue, payload.agent ?? "", String(version), head?.id ?? "", setBy,
+                    payload.task_id, payload.role.rawValue, selection.map(Self.selectionText) ?? "", String(version),
+                    head?.id ?? "", setBy,
                 ]
                 .joined(separator: "/"))
-            let line = payload.agent.map { agent in
+            let line = selection.map { selection in
                 Components.Schemas.TaskLine(
-                    id: id, task_id: payload.task_id, role: payload.role, agent: agent, version: version,
-                    predecessor_id: head.map { .init(value1: $0.id) }, source: .client_line_change,
+                    id: id, task_id: payload.task_id, role: payload.role, selection: .init(value1: selection),
+                    version: version, predecessor_id: head.map { .init(value1: $0.id) }, source: .client_line_change,
                     set_by: setBy, set_at: currentTime, provenance: nil)
             }
             recordTaskLineEvent(
-                taskID: payload.task_id, lineID: id, role: payload.role, agent: payload.agent, version: version,
-                source: .client_line_change, supersededAgent: head?.line?.agent)
+                taskID: payload.task_id, lineID: id, role: payload.role, selection: selection, version: version,
+                source: .client_line_change, superseded: head?.line)
             taskLineHeads[key] = (version, id, line)
             snapshot.task.task_lines = Components.Schemas.TaskLineRole.allCases.compactMap {
                 taskLineHeads[Self.taskLineKey(payload.task_id, $0)]?.line
@@ -2378,7 +2386,8 @@ public actor MockServer {
             .change_task_line(
                 .init(
                     kind: .change_task_line, command_id: command.command_id, device_id: command.device_id,
-                    task_id: payload.task_id, role: payload.role, agent: payload.agent, recorded: !same,
+                    task_id: payload.task_id, role: payload.role, agent: nil,
+                    selection: selection.map { .init(value1: $0) }, recorded: !same,
                     line: taskLineHeads[key]?.line.map { .init(value1: $0) })))
     }
 
@@ -2399,7 +2408,11 @@ public actor MockServer {
         else {
             throw OperatorCommandRejectedError(commandID: command.command_id, reason: "task is not parked")
         }
-        guard let offer = window.alternate_agents?.first(where: { $0.agent == payload.agent }) else {
+        // The daemon records the selection its tree runs the agent with
+        // (agenttree LineSelection), so an agent outside the tree can't move.
+        guard let offer = window.alternate_agents?.first(where: { $0.agent == payload.agent }),
+            let selection = agentCatalog.agents.first(where: { $0.name == payload.agent })?.selection
+        else {
             throw OperatorCommandRejectedError(
                 commandID: command.command_id, reason: "alternate agent no longer qualifies")
         }
@@ -2415,15 +2428,22 @@ public actor MockServer {
         let head = taskLineHeads[key]
         let version = (head?.version ?? 0) + 1
         let id = MockContractValidation.sha256Digest(
-            of: [payload.task_id, "implementer", payload.agent, String(version), head?.id ?? "", retry.id]
-                .joined(separator: "/"))
+            of: [
+                payload.task_id, "implementer", Self.selectionText(selection), String(version), head?.id ?? "",
+                retry.id,
+            ]
+            .joined(separator: "/"))
         // The provenance names the agent the move left, with the hold's
-        // mark, when the policy orders it (engine.movedPastMark).
-        let left = (head?.line?.agent).flatMap { agent -> String? in
+        // mark, when the policy orders it (engine.movedPastMark): a v1 line's
+        // own name, or the tree agent that runs a v2 line's selection.
+        let leftName = head?.line.flatMap { line in
+            line.agent ?? agentCatalog.agents.first(where: { $0.selection == line.selection?.value1 })?.name
+        }
+        let left = leftName.flatMap { agent -> String? in
             routingPolicy?.roles.contains { $0.agents.contains(agent) } == true ? agent : nil
         }
         let line = Components.Schemas.TaskLine(
-            id: id, task_id: payload.task_id, role: .implementer, agent: payload.agent, version: version,
+            id: id, task_id: payload.task_id, role: .implementer, selection: .init(value1: selection), version: version,
             predecessor_id: head.map { .init(value1: $0.id) }, source: .alternate_agent_move, set_by: retry.id,
             set_at: currentTime,
             provenance: .init(
@@ -2437,8 +2457,8 @@ public actor MockServer {
                                 marked_at: window.set_at, resets_at: window.resets_at))
                     })))
         recordTaskLineEvent(
-            taskID: payload.task_id, lineID: id, role: .implementer, agent: payload.agent, version: version,
-            source: .alternate_agent_move, supersededAgent: head?.line?.agent)
+            taskID: payload.task_id, lineID: id, role: .implementer, selection: selection, version: version,
+            source: .alternate_agent_move, superseded: head?.line)
         taskLineHeads[key] = (version, id, line)
         snapshot.task.task_lines = Components.Schemas.TaskLineRole.allCases.compactMap {
             taskLineHeads[Self.taskLineKey(payload.task_id, $0)]?.line
@@ -2462,20 +2482,62 @@ public actor MockServer {
     }
 
     /// Records the task_line_set event for a line version this mock wrote,
-    /// as the daemon's taskHistoryEvents builds it: agent is nil on a cleared
-    /// version, and supersededAgent is the previous version's agent, nil for
+    /// as the daemon's taskHistoryEvents builds it: the mock writes only v2
+    /// versions, so the selection is nil only on a cleared version, and the
+    /// superseded pair is the previous version in its own encoding, nil for
     /// version 1 or after a cleared version.
     private func recordTaskLineEvent(
-        taskID: String, lineID: String, role: Components.Schemas.TaskLineRole, agent: String?, version: Int,
-        source: Components.Schemas.TaskLineSource, supersededAgent: String?
+        taskID: String, lineID: String, role: Components.Schemas.TaskLineRole,
+        selection: Components.Schemas.TaskLineSelection?, version: Int,
+        source: Components.Schemas.TaskLineSource, superseded: Components.Schemas.TaskLine?
     ) {
         taskLineEvents[taskID, default: []].append(
             .init(
                 line: .init(
                     value1: .init(
-                        line_id: lineID, role: role, agent: agent, version: version, source: source,
-                        superseded_agent: supersededAgent, provenance: nil)),
+                        line_id: lineID, role: role, selection: selection.map { .init(value1: $0) },
+                        version: version, source: source, superseded_agent: superseded?.agent,
+                        superseded_selection: superseded?.selection.map { .init(value1: $0.value1) },
+                        provenance: nil)),
                 kind: .task_line_set, recorded_at: currentTime))
+    }
+
+    /// A selection as one string, for the mock's line identities.
+    private static func selectionText(_ selection: Components.Schemas.TaskLineSelection) -> String {
+        [selection.enrollment_id, selection.model_id, selection.effort].joined(separator: "/")
+    }
+
+    /// The daemon's store check of a line's selection (signet
+    /// validateLineSelection, domain DiscoveredModelCatalog.Serves): the
+    /// enrollment is one the catalog lists, and when it has a discovery
+    /// record, the model is one the record lists, by id or else by resolved
+    /// model, at an effort one of those entries lists, or harness_default.
+    /// Claude Code's native-default model id names no catalog model. The
+    /// refusal names field and its leg, never the selection's text.
+    private func validateLineSelection(
+        _ selection: Components.Schemas.TaskLineSelection, field: String, commandID: String
+    ) throws {
+        func unserved(_ leg: String, _ reason: String) -> MalformedCommandError {
+            MalformedCommandError(commandID: commandID, reason: "\(field).\(leg): \(reason)")
+        }
+        guard let enrollment = agentCatalog.enrollments.first(where: { $0.enrollment_id == selection.enrollment_id })
+        else {
+            throw unserved("enrollment_id", "no enrollment the daemon holds")
+        }
+        guard selection.model_id != "claude-code-native-default", let discovery = enrollment.discovery?.value1 else {
+            return
+        }
+        let byID = discovery.models.filter { $0.id == selection.model_id }
+        let entries = byID.isEmpty ? discovery.models.filter { $0.resolved_model == selection.model_id } : byID
+        guard !entries.isEmpty else {
+            throw unserved("model_id", "not a model the enrollment's discovered catalog lists")
+        }
+        guard
+            selection.effort == "harness_default"
+                || entries.contains(where: { $0.effort_levels.contains(selection.effort) })
+        else {
+            throw unserved("effort", "not an effort the model's discovered catalog entry lists")
+        }
     }
 
     /// Replaces the routing policy (engine.SetRoutingPolicyTx) when the
@@ -2498,7 +2560,7 @@ public actor MockServer {
             return .routingPolicyRejected(
                 .init(message: "the routing policy changed", current_policy: routingPolicy.map { .init(value1: $0) }))
         }
-        guard let agentCatalog else { throw OperatorSettingUnavailableError() }
+        guard let lineupRevision = agentCatalog.lineup_revision?.value1 else { throw OperatorSettingUnavailableError() }
         let catalogAgents = Set(agentCatalog.agents.map(\.name))
         guard roles.allSatisfy({ $0.agents.allSatisfy(catalogAgents.contains) }) else {
             throw rejected("routing policy names an agent outside the agent tree")
@@ -2521,7 +2583,7 @@ public actor MockServer {
             routingPolicy = .init(
                 revision: (routingPolicy?.revision ?? 0) + 1, roles: roles, source: .client_routing_set,
                 set_by: "device:\(command.device_id)", set_at: currentTime,
-                lineup_revision: agentCatalog.lineup_revision, drain_first_account: payload.drain_first_account)
+                lineup_revision: lineupRevision, drain_first_account: payload.drain_first_account)
         }
         guard let policy = routingPolicy else { throw rejected("no routing policy") }
         return recordOperatorResult(
@@ -2543,6 +2605,7 @@ public actor MockServer {
         // check, as the daemon does (signet canonicalTaskLines), so a retry
         // listing the same lines in another order is the same request.
         var payload = payload
+        let requestedLines = payload.task_lines
         payload.task_lines = try Self.canonicalTaskLines(payload.task_lines, commandID: command.command_id)
         // Attachments are resolved before the replay check too, as the daemon
         // does (signet ResolveTaskAttachments); their order is part of the
@@ -2567,6 +2630,12 @@ public actor MockServer {
             }
             return .ok(commandResultTransform?(recorded) ?? recorded)
         }
+        // Checked after the replay, in the order the client sent them, as the
+        // daemon checks them against its store (signet validateLineSelections).
+        for (index, line) in (requestedLines ?? []).enumerated() {
+            try validateLineSelection(
+                line.selection, field: "task_lines[\(index)].selection", commandID: command.command_id)
+        }
         let key = command.command_id
         let suffix = String(
             MockContractValidation.sha256Digest(of: key).dropFirst("sha256:".count).suffix(12))
@@ -2590,7 +2659,7 @@ public actor MockServer {
             device_id: command.device_id,
             project_id: payload.project_id, source_digest: .init(value1: digest),
             task_id: taskID, specification_run_id: runID, name: .init(value1: name),
-            task_lines: payload.task_lines)
+            task_lines: payload.task_lines?.map { .init(role: $0.role, selection: .init(value1: $0.selection)) })
         let result = Components.Schemas.CommandResult(record: .submit_task(record), revision: revision)
         resultsByCommandID[command.command_id] = result
         submissionRequestsByID[command.command_id] = request
@@ -2599,8 +2668,8 @@ public actor MockServer {
 
     /// The daemon's task-line check for a submission (domain
     /// CanonicalTaskLineChoices): absent stays absent; a present list names
-    /// at least one role, each once, with a valid agent name, and comes back
-    /// in TaskLineRole order.
+    /// at least one role, each once, with a well-formed selection, and comes
+    /// back in TaskLineRole order. The store check is validateLineSelection.
     private static func canonicalTaskLines(
         _ lines: [Components.Schemas.TaskLineInput]?, commandID: String
     ) throws -> [Components.Schemas.TaskLineInput]? {
@@ -2610,8 +2679,8 @@ public actor MockServer {
         }
         guard !lines.isEmpty else { throw malformed("task_lines must name at least one role when present") }
         guard Set(lines.map(\.role)).count == lines.count else { throw malformed("task_lines names a role twice") }
-        guard lines.allSatisfy({ MockContractValidation.validAgentName($0.agent) }) else {
-            throw malformed("task_lines names an invalid agent")
+        guard lines.allSatisfy({ MockContractValidation.validLineSelection($0.selection) }) else {
+            throw malformed("task_lines carries a malformed selection")
         }
         return Components.Schemas.TaskLineRole.allCases.compactMap { role in lines.first { $0.role == role } }
     }
@@ -2750,14 +2819,15 @@ public actor MockServer {
         // supersedes it.
         let taskLines = lines.map { line in
             let id = MockContractValidation.sha256Digest(
-                of: [taskID, line.role.rawValue, line.agent, "1", "", commandID].joined(separator: "/"))
+                of: [taskID, line.role.rawValue, Self.selectionText(line.selection), "1", "", commandID]
+                    .joined(separator: "/"))
             let recorded = Components.Schemas.TaskLine(
-                id: id, task_id: taskID, role: line.role, agent: line.agent, version: 1, predecessor_id: nil,
-                source: .submit_task, set_by: commandID, set_at: currentTime, provenance: nil)
+                id: id, task_id: taskID, role: line.role, selection: .init(value1: line.selection), version: 1,
+                predecessor_id: nil, source: .submit_task, set_by: commandID, set_at: currentTime, provenance: nil)
             taskLineHeads[Self.taskLineKey(taskID, line.role)] = (1, id, recorded)
             recordTaskLineEvent(
-                taskID: taskID, lineID: id, role: line.role, agent: line.agent, version: 1, source: .submit_task,
-                supersededAgent: nil)
+                taskID: taskID, lineID: id, role: line.role, selection: line.selection, version: 1,
+                source: .submit_task, superseded: nil)
             return recorded
         }
         let task = Components.Schemas.Task(

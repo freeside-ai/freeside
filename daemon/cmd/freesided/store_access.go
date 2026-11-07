@@ -119,22 +119,8 @@ type (
 		// usageCollection is the running daemon's usage collection. A
 		// command that opens the store itself never has one.
 		usageCollection *usagecollect.Coordinator
-		// taskLineAgents is the running daemon's agent tree, which names the
-		// agent a v2 task line selects; nil while it has none. A command
-		// that opens the store itself never has one.
-		taskLineAgents func() signet.TaskLineAgents
 	}
 )
-
-// daemonTaskLineAgents is the running daemon's agent tree when the command
-// runs inside it, else nil.
-func daemonTaskLineAgents(ctx context.Context) signet.TaskLineAgents {
-	daemon, ok := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext)
-	if !ok || daemon.taskLineAgents == nil {
-		return nil
-	}
-	return daemon.taskLineAgents()
-}
 
 // requireApproved refuses any of recipes the running daemon does not
 // approve. The daemon approves the operator's set and every recipe adopted

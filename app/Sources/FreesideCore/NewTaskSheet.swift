@@ -67,7 +67,7 @@ struct NewTaskSheet: View {
     /// The chosen agent per role; a role left out goes to the daemon. A
     /// choice a newer catalog drops stays chosen and blocks Submit until
     /// changed.
-    @State private var choices: [Role: String]
+    @State private var choices: [Role: AgentChoiceDisplay.Selection]
     /// Whether the Agents chip shows the role chips.
     @State private var agentsOpen: Bool
     @State private var attachments: TaskAttachmentDraft
@@ -98,7 +98,7 @@ struct NewTaskSheet: View {
         rendersInteractiveControls: Bool = true,
         initialProjectID: String? = nil,
         initialSource: String = "",
-        initialChoices: [Role: String] = [:],
+        initialChoices: [Role: AgentChoiceDisplay.Selection] = [:],
         initialAgentsOpen: Bool = false,
         initialAttachments: TaskAttachmentDraft = TaskAttachmentDraft(),
         initialRefusals: [String] = []
@@ -149,7 +149,7 @@ struct NewTaskSheet: View {
     /// Sends a draft with the per-role lines, the attachments, and no name:
     /// the daemon's task namer names the task.
     static func send(
-        _ submission: Submission, projectID: String, choices: [Role: String],
+        _ submission: Submission, projectID: String, choices: [Role: AgentChoiceDisplay.Selection],
         attachments: TaskAttachmentDraft = TaskAttachmentDraft(), through model: TaskSubmissionModel
     ) async -> String? {
         await model.submit(
@@ -178,11 +178,11 @@ struct NewTaskSheet: View {
         !Self.submission(source: source).source.isEmpty && !projectID.isEmpty && projects.contains(projectID)
             && !isSubmitting && !isLost
             && TaskSubmissionModel.canCompose(freshness: model.freshness)
-            && missingAgents.isEmpty
+            && missingSelections.isEmpty
     }
 
-    private var missingAgents: [String] {
-        AgentChoiceDisplay.missingAgents(choices: choices, catalog: model.agentCatalog)
+    private var missingSelections: [String] {
+        AgentChoiceDisplay.missingSelections(choices: choices, catalog: model.agentCatalog)
     }
 
     var body: some View {
@@ -400,24 +400,28 @@ struct NewTaskSheet: View {
     @ViewBuilder private func roleChip(_ role: Role) -> some View {
         let title = AgentChoiceDisplay.title(for: role)
         let chosen = choices[role]
-        let chip = RoleChip(role: title, value: chosen)
+        let chosenLabel = chosen.map { AgentChoiceDisplay.choiceLabel($0, catalog: model.agentCatalog) }
+        let chip = RoleChip(role: title, value: chosenLabel)
         // Only the chip is Freeside's; the list stays system chrome, which
         // `ImageRenderer` cannot draw, so the goldens show the chip.
         if rendersInteractiveControls {
             let catalog = model.agentCatalog
-            let agents = catalog?.agents ?? []
+            let agents = AgentChoiceDisplay.pickable(catalog)
             let defaultLabel = AgentChoiceDisplay.defaultLabel(
                 role: role, policy: model.routingPolicy, catalog: catalog)
             Menu {
                 Picker("\(title) agent", selection: choice(for: role)) {
-                    Text(defaultLabel).tag(String?.none)
+                    Text(defaultLabel).tag(AgentChoiceDisplay.Selection?.none)
+                    // An entry names the tree agent and tags its selection,
+                    // which is what the line records.
                     ForEach(agents, id: \.name) { agent in
-                        Text("\(agent.name) · \(AgentChoiceDisplay.facts(agent))").tag(Optional(agent.name))
+                        Text("\(agent.name) · \(AgentChoiceDisplay.facts(agent))").tag(Optional(agent.selection))
                     }
                     // A stale choice keeps a matching tag, so the picker
                     // shows it selected instead of no entry at all.
-                    if let chosen, !agents.contains(where: { $0.name == chosen }) {
-                        Text("\(chosen) · not in the agent tree").tag(Optional(chosen)).disabled(true)
+                    if let chosen, !AgentChoiceDisplay.offers(catalog, chosen) {
+                        Text("\(AgentChoiceDisplay.selectionLabel(chosen)) · no longer offered")
+                            .tag(Optional(chosen)).disabled(true)
                     }
                 }
                 .pickerStyle(.inline)
@@ -428,24 +432,24 @@ struct NewTaskSheet: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .accessibilityLabel("\(title) agent")
-            .accessibilityValue(chosen ?? defaultLabel)
+            .accessibilityValue(chosenLabel ?? defaultLabel)
         } else {
             chip
         }
     }
 
-    private func choice(for role: Role) -> Binding<String?> {
+    private func choice(for role: Role) -> Binding<AgentChoiceDisplay.Selection?> {
         Binding(get: { choices[role] }, set: { choices[role] = $0 })
     }
 
-    /// Why a stale choice blocks Submit, one sentence per agent the catalog
-    /// dropped. It draws whether or not the role chips show, so Submit is
-    /// never blocked without a reason on screen.
+    /// Why a stale choice blocks Submit, one sentence per selection the
+    /// catalog no longer offers. It draws whether or not the role chips show,
+    /// so Submit is never blocked without a reason on screen.
     @ViewBuilder private var missingAgentNotice: some View {
-        if !missingAgents.isEmpty {
+        if !missingSelections.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(missingAgents, id: \.self) { agent in
-                    Text("\(agent) isn't in the daemon's agent tree. Choose another agent or Default to submit.")
+                ForEach(missingSelections, id: \.self) { selection in
+                    Text("\(selection) isn't an agent the daemon offers. Choose another agent or Default to submit.")
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.waxText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -715,10 +719,13 @@ struct NewTaskSheet: View {
     /// choose, unless a choice made against an earlier catalog is still set:
     /// the chip stays enabled so the operator can see and clear it.
     @ViewBuilder private var agentsChip: some View {
-        let summary = AgentChoiceDisplay.summary(AgentChoiceDisplay.taskLines(choices: choices)) ?? "Default agents"
+        let summary =
+            AgentChoiceDisplay.summary(AgentChoiceDisplay.taskLines(choices: choices), catalog: model.agentCatalog)
+            ?? "Default agents"
         // An open chip stays enabled so it can close, even once clearing
-        // the last stale choice leaves nothing to choose.
-        let unavailable = model.agentCatalog == nil && choices.isEmpty && !agentsOpen
+        // the last stale choice leaves nothing to choose. A daemon with no
+        // tree serves a catalog with no agents, so there is nothing to choose.
+        let unavailable = (model.agentCatalog?.agents.isEmpty ?? true) && choices.isEmpty && !agentsOpen
         let chip = ComposerChip(glyph: "◆", text: agentsOpen ? "Agents" : summary, isOpen: agentsOpen)
         if rendersInteractiveControls {
             Button {

@@ -61,11 +61,19 @@ type InvocationAdmissionFacts struct {
 	Model           *string               `json:"model"`
 	RequestedEffort *EffortLevel          `json:"requested_effort"`
 	NativeEffort    *string               `json:"native_effort"`
-	CostOwner       *string               `json:"cost_owner"`
-	LineageGroup    *string               `json:"lineage_group"`
-	CredentialMode  *CredentialMode       `json:"credential_mode"`
-	EgressProfile   *EgressProfile        `json:"egress_profile"`
-	OperatingMode   *OperatingMode        `json:"operating_mode"`
+	// EnrollmentID, SelectionModelID, SelectionEffort, and SelectionDigest
+	// are the selection admission resolved (issue #2596). They are null
+	// together on a binding admitted before it, enrollment included, so a
+	// client reads them as one tuple.
+	EnrollmentID     *ClientEnrollmentID `json:"enrollment_id"`
+	SelectionModelID *string             `json:"selection_model_id"`
+	SelectionEffort  *string             `json:"selection_effort"`
+	SelectionDigest  *Digest             `json:"selection_digest"`
+	CostOwner        *string             `json:"cost_owner"`
+	LineageGroup     *string             `json:"lineage_group"`
+	CredentialMode   *CredentialMode     `json:"credential_mode"`
+	EgressProfile    *EgressProfile      `json:"egress_profile"`
+	OperatingMode    *OperatingMode      `json:"operating_mode"`
 	// IsolationClass is the admitting backend's name, the class freesided
 	// doctor reports.
 	IsolationClass *string             `json:"isolation_class"`
@@ -116,6 +124,12 @@ func (f *InvocationAdmissionFacts) withBinding(b AdmissionAgentBinding) {
 	f.NativeEffort = recorded(b.NativeEffort)
 	f.CostOwner = recorded(b.CostOwner)
 	f.LineageGroup = recorded(b.LineageGroup)
+	if b.SelectionDigest != "" {
+		f.EnrollmentID = recorded(b.EnrollmentID)
+		f.SelectionModelID = recorded(b.SelectionModelID)
+		f.SelectionEffort = recorded(b.SelectionEffort)
+		f.SelectionDigest = recorded(b.SelectionDigest)
+	}
 }
 
 // recorded is a pointer to a recorded value, or nil for the empty value a
@@ -144,6 +158,10 @@ func cloneAdmissionFacts(facts *InvocationAdmissionFacts) *InvocationAdmissionFa
 	cloned.NativeEffort = clonePtr(facts.NativeEffort)
 	cloned.CostOwner = clonePtr(facts.CostOwner)
 	cloned.LineageGroup = clonePtr(facts.LineageGroup)
+	cloned.EnrollmentID = clonePtr(facts.EnrollmentID)
+	cloned.SelectionModelID = clonePtr(facts.SelectionModelID)
+	cloned.SelectionEffort = clonePtr(facts.SelectionEffort)
+	cloned.SelectionDigest = clonePtr(facts.SelectionDigest)
 	cloned.CredentialMode = clonePtr(facts.CredentialMode)
 	cloned.EgressProfile = clonePtr(facts.EgressProfile)
 	cloned.OperatingMode = clonePtr(facts.OperatingMode)
