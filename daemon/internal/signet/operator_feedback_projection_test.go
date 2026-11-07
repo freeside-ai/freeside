@@ -12,6 +12,7 @@ import (
 )
 
 func TestRetainedOperatorFeedbackStartRemainsVisible(t *testing.T) {
+	t.Parallel()
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "started", true: "failed"}[failed], func(t *testing.T) {
 			f := newCorpusFixture(t)
@@ -63,6 +64,7 @@ func TestRetainedOperatorFeedbackStartRemainsVisible(t *testing.T) {
 }
 
 func TestOperatorFeedbackReservedIntentProjection(t *testing.T) {
+	t.Parallel()
 	for _, submitted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "held_before_attempt", true: "forged_submission"}[submitted], func(t *testing.T) {
 			f := newCorpusFixture(t)

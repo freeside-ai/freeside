@@ -12,6 +12,7 @@ import (
 // attention types. It pins both halves of each allowed set: the listed
 // actions pass together, and every other member of the domain union fails.
 func TestAllowedActionsByType(t *testing.T) {
+	t.Parallel()
 	fixtures := map[domain.AttentionType][]domain.Action{
 		domain.AttentionSpecApproval: {
 			domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop,
@@ -105,6 +106,7 @@ func TestAllowedActionsByType(t *testing.T) {
 // the action opens. The app's cross-language policy matrix leaves this cell to
 // this test, because its seeded holds carry no reference.
 func TestOpenPRNeedsAPRReference(t *testing.T) {
+	t.Parallel()
 	hold := domain.AttentionItem{
 		Type:              domain.AttentionPublishBlocked,
 		RequestedDecision: []domain.Action{domain.ActionInspectTrustFailure, domain.ActionOpenPR},

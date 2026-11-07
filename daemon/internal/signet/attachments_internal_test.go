@@ -14,6 +14,7 @@ import (
 )
 
 func TestMakeBlobStoreDirectoryRetriesExistingParentSync(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	target := filepath.Join(root, "blobs")
 	failedSync := errors.New("injected parent sync failure")
@@ -45,6 +46,7 @@ func TestMakeBlobStoreDirectoryRetriesExistingParentSync(t *testing.T) {
 }
 
 func TestMakeBlobStoreDirectoryConvergesConcurrentCreators(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "state", "attachments", "blobs")
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -68,6 +70,7 @@ func TestMakeBlobStoreDirectoryConvergesConcurrentCreators(t *testing.T) {
 }
 
 func TestBlobStorePutRetriesExistingBlobDirectorySync(t *testing.T) {
+	t.Parallel()
 	store, err := NewBlobStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +103,7 @@ func TestBlobStorePutRetriesExistingBlobDirectorySync(t *testing.T) {
 }
 
 func TestBlobStoreVerifyHashesStoredBytes(t *testing.T) {
+	t.Parallel()
 	store, err := NewBlobStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

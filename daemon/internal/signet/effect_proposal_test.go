@@ -186,6 +186,7 @@ func (f closureFixture) approval(t *testing.T) *domain.ClosureApproval {
 // one item for a merge, returns the same item when re-opened with that merge,
 // and supersedes it for a changed merge.
 func TestOpenEffectProposalItemIdempotentAndSupersedes(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	first := f.open(t, f.merge)
 	if first.Type != domain.AttentionEffectProposal || first.Status != domain.StatusOpen {
@@ -234,6 +235,7 @@ func (f closureFixture) assertNoOpenItem(t *testing.T) {
 // runs again. Neither the same merge nor a moved one opens a card; the call
 // returns the item the decision was recorded against, unchanged.
 func TestOpenEffectProposalItemDecidedRebindOpensNothing(t *testing.T) {
+	t.Parallel()
 	movedHead := func(m domain.ProspectiveMerge) domain.ProspectiveMerge {
 		m.CandidateHeadSHA = "head-bbb"
 		return m
@@ -318,6 +320,7 @@ func TestOpenEffectProposalItemDecidedRebindOpensNothing(t *testing.T) {
 // TestGenericIntakeRefusesEffectProposal proves only the opener creates an
 // effect_proposal item; generic intake refuses the type.
 func TestGenericIntakeRefusesEffectProposal(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	item.ID = "hand-made-effect-proposal"
@@ -331,6 +334,7 @@ func TestGenericIntakeRefusesEffectProposal(t *testing.T) {
 // match the merge; AuthorizesClose accepts against that merge and rejects a
 // changed one.
 func TestEffectProposalApproveRecordsBindingAndAuthorizes(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	if _, err := f.service.Submit(context.Background(), f.decision(item, "approve-1", domain.ActionApprove)); err != nil {
@@ -362,6 +366,7 @@ func TestEffectProposalApproveRecordsBindingAndAuthorizes(t *testing.T) {
 // TestEffectProposalDeclineAndSnoozeLeaveUnapproved proves neither decline nor
 // snooze produces a ClosureApproval.
 func TestEffectProposalDeclineAndSnoozeLeaveUnapproved(t *testing.T) {
+	t.Parallel()
 	t.Run("decline", func(t *testing.T) {
 		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 		item := f.open(t, f.merge)
@@ -397,6 +402,7 @@ func TestEffectProposalDeclineAndSnoozeLeaveUnapproved(t *testing.T) {
 // revises the proposal (only resolves changes), supersedes the item, and binds
 // the approval to the revised digest.
 func TestEffectProposalApproveWithChangesFlipsResolves(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	cmd := f.decision(item, "approve-changes-1", domain.ActionApproveWithChanges)
@@ -423,6 +429,7 @@ func TestEffectProposalApproveWithChangesFlipsResolves(t *testing.T) {
 // TestEffectProposalApproveWithChangesRejectsUnchanged proves a revision that
 // leaves resolves unchanged is rejected because it changes no digest.
 func TestEffectProposalApproveWithChangesRejectsUnchanged(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	cmd := f.decision(item, "approve-changes-noop", domain.ActionApproveWithChanges)
@@ -436,6 +443,7 @@ func TestEffectProposalApproveWithChangesRejectsUnchanged(t *testing.T) {
 // proposal offers no approve_with_changes: the action is not in the offered set,
 // so a decision carrying it is refused.
 func TestEffectProposalFallbackOmitsApproveWithChanges(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, false, domain.ClosureFlagOriginDaemonFallback)
 	item := f.open(t, f.merge)
 	for _, a := range item.RequestedDecision {
@@ -454,6 +462,7 @@ func TestEffectProposalFallbackOmitsApproveWithChanges(t *testing.T) {
 // superseded item is refused, and a command carrying a different pr_head_sha is
 // refused by the binding check.
 func TestEffectProposalStaleAndWrongHeadRejected(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	stale := f.open(t, f.merge)
 	changed := f.merge
@@ -476,6 +485,7 @@ func TestEffectProposalStaleAndWrongHeadRejected(t *testing.T) {
 // TestEffectProposalStartActionRejected proves a task-proposal action (start) is
 // not offered on a closure item and is refused.
 func TestEffectProposalStartActionRejected(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	if _, err := f.service.Submit(context.Background(), f.decision(item, "wrong-family", domain.ActionStart)); err == nil {
@@ -487,6 +497,7 @@ func TestEffectProposalStartActionRejected(t *testing.T) {
 // opens as an exceptional interruption offering approve / decline / snooze (no
 // approve_with_changes, a fallback cannot be revised to resolve).
 func TestOpenEffectProposalNoticeExceptionalAndActions(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
 	item := f.openNotice(t, f.merge)
 	if item.Type != domain.AttentionEffectProposal || item.Status != domain.StatusOpen {
@@ -516,6 +527,7 @@ func TestOpenEffectProposalNoticeExceptionalAndActions(t *testing.T) {
 // records a human decision whose reconstructed approval never authorizes a
 // close: the fallback proposal does not resolve, so AuthorizesClose is false.
 func TestOpenEffectProposalNoticeApprovalNeverCloses(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
 	item := f.openNotice(t, f.merge)
 	if _, err := f.service.Submit(context.Background(), f.decision(item, "notice-approve", domain.ActionApprove)); err != nil {
@@ -533,6 +545,7 @@ func TestOpenEffectProposalNoticeApprovalNeverCloses(t *testing.T) {
 // TestOpenEffectProposalNoticeSupersedesOnMergeChange proves a changed merge
 // supersedes the open notice and opens a fresh one, exactly as the gate item.
 func TestOpenEffectProposalNoticeSupersedesOnMergeChange(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
 	first := f.openNotice(t, f.merge)
 	changed := f.merge
@@ -549,6 +562,7 @@ func TestOpenEffectProposalNoticeSupersedesOnMergeChange(t *testing.T) {
 // TestOpenEffectProposalNoticeDecidedRebindOpensNothing proves a decided
 // fallback notice does not reopen, for the same merge or a moved one.
 func TestOpenEffectProposalNoticeDecidedRebindOpensNothing(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
 	first := f.openNotice(t, f.merge)
 	if _, err := f.service.Submit(context.Background(), f.decision(first, "notice-approve", domain.ActionApprove)); err != nil {
@@ -568,6 +582,7 @@ func TestOpenEffectProposalNoticeDecidedRebindOpensNothing(t *testing.T) {
 // TestOpenEffectProposalNoticeRefusesProposeSite proves the notice is only for a
 // daemon_fallback proposal; a propose_site instance takes the gate card instead.
 func TestOpenEffectProposalNoticeRefusesProposeSite(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	if _, err := f.service.OpenEffectProposalNotice(context.Background(), f.instance.ID, f.merge); !errors.Is(err, domain.ErrEffectProposalInconsistent) {
 		t.Fatalf("notice on propose_site error = %v, want ErrEffectProposalInconsistent", err)
@@ -577,6 +592,7 @@ func TestOpenEffectProposalNoticeRefusesProposeSite(t *testing.T) {
 // TestEffectProposalNoticeFactsServed proves the facts route serves an open
 // fallback notice the same as a gate item: it is a visible effect_proposal.
 func TestEffectProposalNoticeFactsServed(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
 	item := f.openNotice(t, f.merge)
 	facts, err := f.service.GetEffectProposalFacts(context.Background(), item.ID)
@@ -596,6 +612,7 @@ func TestEffectProposalNoticeFactsServed(t *testing.T) {
 // projects the open closure item's version tuple, digest, resolved target, and
 // bound merge, with no supersedes and no subject handle on the wire.
 func TestEffectProposalFactsMatchItemAndCarryNoAuthority(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	snapshot, err := f.service.GetAttentionItem(context.Background(), item.ID)
@@ -643,6 +660,7 @@ func TestEffectProposalFactsMatchItemAndCarryNoAuthority(t *testing.T) {
 // snoozed closure item and a task_proposal item, matching the item reads'
 // visibility rules.
 func TestEffectProposalFactsHideSnoozedAndWrongType(t *testing.T) {
+	t.Parallel()
 	t.Run("snoozed", func(t *testing.T) {
 		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 		item := f.open(t, f.merge)
@@ -674,6 +692,7 @@ func TestEffectProposalFactsHideSnoozedAndWrongType(t *testing.T) {
 // facts after approve_with_changes carry the revised digest and a supersedes
 // with the prior digest and prior resolves.
 func TestEffectProposalRevisionFactsCarrySupersedes(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 	item := f.open(t, f.merge)
 	cmd := f.decision(item, "approve-changes-facts", domain.ActionApproveWithChanges)

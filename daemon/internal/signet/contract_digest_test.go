@@ -18,6 +18,7 @@ import (
 // bytes, so a spec edit that forgets to regenerate the constant fails here
 // (daemon-ci.yml runs on any daemon/** change).
 func TestContractDigestMatchesSpec(t *testing.T) {
+	t.Parallel()
 	body, err := os.ReadFile("../../../api/openapi.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,7 @@ func TestContractDigestMatchesSpec(t *testing.T) {
 // fixed placeholder so the golden does not churn on every spec change; the
 // real digest is gated by TestContractDigestMatchesSpec instead.
 func TestHealthResponseGolden(t *testing.T) {
+	t.Parallel()
 	fixture := signet.HealthResponse{
 		Status:         "ok",
 		ContractDigest: "sha256:" + strings.Repeat("0", 64),

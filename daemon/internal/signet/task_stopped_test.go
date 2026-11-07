@@ -14,6 +14,7 @@ import (
 )
 
 func TestConfirmedCancellationProjectsTerminalTaskAndReleasesOnlyHeldSlot(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"queued", "no-artifact", "spec-approval", "specification", "implementation", "review", "verification"} {
 		t.Run(phase, func(t *testing.T) {
 			f := newRunFixture(t)

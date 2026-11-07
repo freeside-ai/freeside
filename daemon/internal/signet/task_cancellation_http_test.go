@@ -15,6 +15,7 @@ import (
 )
 
 func TestStopTaskHTTPAuthenticationAndPayloads(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s)
 	state, _ := s.ServerState(t.Context())
@@ -84,12 +85,14 @@ func TestStopTaskHTTPAuthenticationAndPayloads(t *testing.T) {
 }
 
 func TestStopCommandCrossKindCollisions(t *testing.T) {
+	t.Parallel()
 	for _, firstKind := range domain.AllCommandKinds {
 		for _, secondKind := range domain.AllCommandKinds {
 			if firstKind == secondKind {
 				continue
 			}
 			t.Run(string(firstKind)+"/"+string(secondKind), func(t *testing.T) {
+				t.Parallel()
 				f := newFixture(t)
 				id := seedStopTask(t, f.store)
 				seedUsageEnrollment(t, f.store, operatorAt.Add(-time.Hour))

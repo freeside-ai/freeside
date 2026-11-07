@@ -17,6 +17,7 @@ import (
 )
 
 func TestRerunTrustEvaluationCommitsCommandResolutionAndIntentAtomically(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedPublicationReevaluationAuthority(t, f, false)
@@ -97,6 +98,7 @@ func TestRerunTrustEvaluationCommitsCommandResolutionAndIntentAtomically(t *test
 }
 
 func TestRerunTrustEvaluationPreservesFakePublicationConclusion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := publicationBlockedFixture(t, f.item)
@@ -136,6 +138,7 @@ func TestRerunTrustEvaluationPreservesFakePublicationConclusion(t *testing.T) {
 }
 
 func TestRerunTrustEvaluationRejectsMalformedProductionActionSet(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := publicationBlockedFixture(t, f.item)
@@ -170,6 +173,7 @@ func TestRerunTrustEvaluationRejectsMalformedProductionActionSet(t *testing.T) {
 }
 
 func TestRerunTrustEvaluationRollsBackOnConflictingIntent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	seedPublicationReevaluationAuthority(t, f, false)
@@ -219,6 +223,7 @@ func TestRerunTrustEvaluationRollsBackOnConflictingIntent(t *testing.T) {
 }
 
 func TestRerunTrustEvaluationRejectsAlreadyEvaluatedCurrentProfile(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	profile := seedPublicationReevaluationAuthority(t, f, true)
@@ -395,6 +400,7 @@ func publicationBlockedFixture(t *testing.T, base domain.AttentionItem) domain.A
 }
 
 func TestPublicationReevaluationIdentityRoundTrips(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run/with/reevaluation/segments")
 	commandID := "command/with/slash"
 	key := signet.PublicationReevaluationKey(runID, commandID)

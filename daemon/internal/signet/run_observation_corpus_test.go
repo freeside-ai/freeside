@@ -527,6 +527,7 @@ func (f corpusFixture) storeProfile(
 // regression that broke a baseline (rather than the boundary) surfaces here
 // instead of hiding as a green forge.
 func TestRunObservationCorpusValidBaselines(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("run_submitted", func(t *testing.T) {
@@ -994,6 +995,7 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 // no pool. The synced run names the same pool in hold_usage_pool, and null
 // beside every other reason.
 func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	pool := domain.UsagePoolID("pool-shared")
 	refusedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -1133,6 +1135,7 @@ type forgeCase struct {
 // boundary line, or are pinned by the store package's own tamper tests
 // (internal/store/observation_internal_test.go).
 func TestRunObservationCorpusForges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := []forgeCase{
 		// run_submitted: reserved outbox production intent bound to a declared
@@ -1818,6 +1821,7 @@ func TestRunObservationCorpusForges(t *testing.T) {
 // other-kind item bound to the run neither authenticates nor blocks the
 // projection.
 func TestRunObservationCorpusIgnoresUnrelatedItems(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	f.seedAuthIdentity(t)

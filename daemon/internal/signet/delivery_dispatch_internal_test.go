@@ -13,6 +13,7 @@ import (
 // a device's pairing never does, and a failed attempt is retried on the
 // 1, 2, 4, 8, 16 minute schedule until the sixth attempt.
 func TestOwedDeliveries(t *testing.T) {
+	t.Parallel()
 	paired := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	now := paired.Add(24 * time.Hour)
 	before, after := paired.Add(-time.Second), paired.Add(time.Second)

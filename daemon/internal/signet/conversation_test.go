@@ -190,6 +190,7 @@ func completeInvocation(t *testing.T, f *convFixture, driver *fake.StageDriver, 
 // and the daemon dies pre-invocation; recovery produces exactly one accepted
 // invocation result and the workflow does not advance twice.
 func TestDiscussRecoverySingleAcceptedResult(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 	driverDir := t.TempDir()
@@ -286,6 +287,7 @@ func TestDiscussRecoverySingleAcceptedResult(t *testing.T) {
 // arriving with both clients closed is later retrieved by both as the same
 // ordered thread.
 func TestAgentResponseRetrievedByBothClients(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -363,6 +365,7 @@ func sha256sum(b []byte) []byte {
 // TestConcurrentDiscussSingleWinner is §5.14 test 7: concurrent discuss on
 // one item version — one wins, no second accepted result.
 func TestConcurrentDiscussSingleWinner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -426,6 +429,7 @@ func TestConcurrentDiscussSingleWinner(t *testing.T) {
 // TestRetriedAttachmentAndMessageConverge is §5.14 test 10: a retried
 // attachment or message yields one artifact and one message.
 func TestRetriedAttachmentAndMessageConverge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 	handler := signet.NewHTTPHandler(f.service, headerDeviceAuthorizer)
@@ -507,6 +511,7 @@ func TestRetriedAttachmentAndMessageConverge(t *testing.T) {
 // the message sequence, so a client holding every message still learns of
 // the flip through the ordinary revision heartbeat and snapshot refetch.
 func TestConversationStatusChangeReachesCaughtUpClient(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -549,6 +554,7 @@ func TestConversationStatusChangeReachesCaughtUpClient(t *testing.T) {
 // and no side effect; once the reply is accepted the conversation is idle
 // and discuss works again.
 func TestDiscussRejectedWhileAgentReplyPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -602,6 +608,7 @@ func TestDiscussRejectedWhileAgentReplyPending(t *testing.T) {
 // malformed or missing attachment; a genuinely new completion with a missing
 // attachment still fails loudly.
 func TestCompletionRedeliveryConvergesBeforeAttachmentChecks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -644,6 +651,7 @@ func TestCompletionRedeliveryConvergesBeforeAttachmentChecks(t *testing.T) {
 // completion wholly retryable: the inbox dedup, conversation append, item
 // replacement, and server revision all roll back together.
 func TestCompletionPreCommitGateRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -702,6 +710,7 @@ func TestCompletionPreCommitGateRollsBack(t *testing.T) {
 // TestCompletionDedupPrecedesPreCommitGate pins replay convergence: once the
 // completion committed, later policy drift cannot make its redelivery fail.
 func TestCompletionDedupPrecedesPreCommitGate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -741,6 +750,7 @@ func TestCompletionDedupPrecedesPreCommitGate(t *testing.T) {
 // verdict can go stale before commit. A profile activation started after the
 // gate reads P1 cannot commit until that acceptance releases its transaction.
 func TestCompletionGateSerializesWithTrustProfileActivation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 	profile1 := completionTrustProfile(t, "sha256:review-config-1")
@@ -868,6 +878,7 @@ func completionTrustProfile(t *testing.T, reviewConfig domain.Digest) domain.Aut
 // fact, durable per test 6) and idles the conversation, but a terminal
 // decision is final: no replacement version is written past it.
 func TestCompletionAfterTerminalDecisionAppendsWithoutReplacement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -918,6 +929,7 @@ func TestCompletionAfterTerminalDecisionAppendsWithoutReplacement(t *testing.T) 
 // ("inv-X") would collide with the agent reply's id and wedge the thread on
 // the duplicate-ID gate.
 func TestMessageNamespacesDisjoint(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -949,6 +961,7 @@ func TestMessageNamespacesDisjoint(t *testing.T) {
 }
 
 func TestDiscussRejectsOverlongCommandIDBeforeCommit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 	before := f.revision(t)
@@ -970,6 +983,7 @@ func TestDiscussRejectsOverlongCommandIDBeforeCommit(t *testing.T) {
 }
 
 func TestReconstructAgentCompletionRejectsMisplacedMessage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 	conversationID := domain.ConversationID("conv-misplaced")
@@ -1030,6 +1044,7 @@ func TestReconstructAgentCompletionRejectsMisplacedMessage(t *testing.T) {
 // idempotency key is never started and never marked dispatched; the row
 // stays pending as loud evidence.
 func TestDispatchRejectsCorruptIntent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newConversationFixture(t)
 
@@ -1067,6 +1082,7 @@ func TestDispatchRejectsCorruptIntent(t *testing.T) {
 // discuss submission commits over POST /commands, and the content-policy
 // rejections map to 400.
 func TestHTTPDiscussCommand(t *testing.T) {
+	t.Parallel()
 	f := newConversationFixture(t)
 	handler := signet.NewHTTPHandler(f.service, headerDeviceAuthorizer)
 
@@ -1132,6 +1148,7 @@ func TestHTTPDiscussCommand(t *testing.T) {
 // trust boundary: only sha256:<64 lowercase hex> ever reaches the
 // filesystem.
 func TestBlobStoreRejectsMalformedDigests(t *testing.T) {
+	t.Parallel()
 	f := newConversationFixture(t)
 	valid := strings.Repeat("ab", 32)
 	cases := []string{

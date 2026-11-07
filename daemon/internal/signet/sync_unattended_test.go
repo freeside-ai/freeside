@@ -84,6 +84,7 @@ func newBackupHealthService(t *testing.T, health func() domain.BackupHealth) (*s
 }
 
 func TestRevisionTracksLiveBackupHealthWithoutRevisionChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	health := healthyBackup()
 	service, item := newBackupHealthService(t, func() domain.BackupHealth { return health })
@@ -114,6 +115,7 @@ func TestRevisionTracksLiveBackupHealthWithoutRevisionChange(t *testing.T) {
 }
 
 func TestRevisionFailsWhenUnattendedGateCannotBeRead(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	item := seedHealthItem(t, f, "broken-health")
 	db, err := sql.Open("sqlite", f.dbPath)
@@ -146,6 +148,7 @@ func requireOpen(t *testing.T, when string, got signet.UnattendedOperationSnapsh
 // reopens it. Each step moves the server revision, which is what makes a
 // client's heartbeat re-bootstrap without polling.
 func TestUnattendedOperationSyncSurface(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	requireOpen(t, "fresh daemon", bootstrapUnattended(t, f.service))
@@ -221,6 +224,7 @@ func TestUnattendedOperationSyncSurface(t *testing.T) {
 // client never words it as an operator's decision, and it clears when the
 // daemon resolves the item.
 func TestUnattendedOperationSyncDurableStop(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	posture := domain.HealthPostureBlocking

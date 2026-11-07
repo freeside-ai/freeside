@@ -45,6 +45,7 @@ func gunzip(t *testing.T, body []byte) []byte {
 // gzipped when the client accepts it, decodes to exactly the plain body, and
 // varies on Accept-Encoding either way.
 func TestHTTPGzipsJSONForAcceptingClients(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	seedSyncResources(t, f)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
@@ -98,6 +99,7 @@ func TestHTTPGzipsJSONForAcceptingClients(t *testing.T) {
 // compressed like any other JSON response without losing its status or the
 // headers its handler set before writing.
 func TestHTTPGzipKeepsErrorStatusAndHeaders(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 
@@ -119,6 +121,7 @@ func TestHTTPGzipKeepsErrorStatusAndHeaders(t *testing.T) {
 // already-compressed images, so they are served verbatim even to a client
 // that accepts gzip.
 func TestHTTPNeverGzipsAttachments(t *testing.T) {
+	t.Parallel()
 	f := newConversationFixture(t)
 	handler := signet.NewHTTPHandler(f.service, headerDeviceAuthorizer)
 	blob := []byte("card-image-bytes")

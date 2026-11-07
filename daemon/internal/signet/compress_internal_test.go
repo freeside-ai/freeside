@@ -5,6 +5,7 @@ import "testing"
 // TestAcceptsGzip pins the Accept-Encoding reading behind compressJSON: a
 // gzip entry decides, then a * entry, and q=0 or an unparseable q refuses.
 func TestAcceptsGzip(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		values []string

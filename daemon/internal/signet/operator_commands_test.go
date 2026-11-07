@@ -176,6 +176,7 @@ func serverRevision(t *testing.T, st *store.Store) int64 {
 // its command_id returns that result unchanged and writes nothing, and the
 // same command_id with another body is an immutable conflict.
 func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		kind            domain.CommandKind
 		command, change func(domain.TaskID) signet.ClientCommand
@@ -229,6 +230,7 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 }
 
 func TestUsageCommandsCheckThePoolAndEnrollment(t *testing.T) {
+	t.Parallel()
 	operator := &recordingUsageOperator{}
 	svc, st, _ := newOperatorService(t, signet.WithUsageOperator(operator))
 	before := serverRevision(t, st)
@@ -274,6 +276,7 @@ func TestUsageCommandsCheckThePoolAndEnrollment(t *testing.T) {
 // The operator's after-commit effect, such as starting a collection, runs
 // once for each command that committed and for nothing else.
 func TestUsageCommandsRunTheirEffectOnlyAfterCommit(t *testing.T) {
+	t.Parallel()
 	operator := &recordingUsageOperator{}
 	svc, _, _ := newOperatorService(t, signet.WithUsageOperator(operator))
 	submit := func(command signet.ClientCommand) error {
@@ -318,6 +321,7 @@ func TestUsageCommandsRunTheirEffectOnlyAfterCommit(t *testing.T) {
 }
 
 func TestChangeTaskLineRecordsRepeatsAndClears(t *testing.T) {
+	t.Parallel()
 	svc, st, id := newOperatorService(t, signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents())
 	steps := []struct {
 		agent    *string
@@ -370,6 +374,7 @@ func TestChangeTaskLineRecordsRepeatsAndClears(t *testing.T) {
 // A role whose attempt runs refuses the change with the current task
 // projection, so the client can replace its stale copy.
 func TestChangeTaskLineRefusesARunningRole(t *testing.T) {
+	t.Parallel()
 	running := func(context.Context, *store.WriteTx, signet.TaskLineChange, time.Time) (signet.TaskLineChangeOutcome, error) {
 		return signet.TaskLineChangeOutcome{}, domain.ErrTaskLineRoleRunning
 	}
@@ -393,6 +398,7 @@ func TestChangeTaskLineRefusesARunningRole(t *testing.T) {
 }
 
 func TestSetRoutingPolicyHoldsTheExpectedRevision(t *testing.T) {
+	t.Parallel()
 	svc, st, _ := newOperatorService(t, signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 	first, err := svc.Submit(t.Context(), policyCommand("policy-1", nil, "codex-primary", "claude-primary"))
 	if err != nil {
@@ -488,6 +494,7 @@ func TestSetRoutingPolicyHoldsTheExpectedRevision(t *testing.T) {
 // A service composed without a hook fails closed: the command records nothing,
 // and the request's own refusals still come first.
 func TestOperatorCommandsFailClosedWithoutTheirHook(t *testing.T) {
+	t.Parallel()
 	svc, st, id := newOperatorService(t)
 	before := serverRevision(t, st)
 	for _, tc := range []struct {
@@ -524,6 +531,7 @@ func TestOperatorCommandsFailClosedWithoutTheirHook(t *testing.T) {
 }
 
 func TestOperatorCommandsHTTP(t *testing.T) {
+	t.Parallel()
 	svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
 		signet.WithTaskLineChanger(engineTaskLineChanger), withTestLineAgents(), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 	handler := signet.NewHTTPHandler(svc, testAuthorizer)

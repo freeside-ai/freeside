@@ -45,6 +45,7 @@ func listDevicesOverHTTP(t *testing.T, handler http.Handler, token string) (map[
 // instant is a full granularity old, and never moves the server revision or a
 // device's entity version by recording activity.
 func TestHTTPListDevices(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -182,6 +183,7 @@ func assertNoCredentialMaterial(t *testing.T, f fixture, body string, tokens ...
 // The authorizer here vouches for a device with no row, which the activity
 // table's foreign key rejects.
 func TestHTTPActivityRecordingFailureDoesNotDenyTheRequest(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, func(*http.Request) (domain.DeviceID, bool) {
 		return "device-without-a-row", true

@@ -25,6 +25,7 @@ func testAuthorizer(r *http.Request) (domain.DeviceID, bool) {
 }
 
 func TestHTTPAuthenticationFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	for name, handler := range map[string]http.Handler{
 		"nil authorizer":      signet.NewHTTPHandler(f.service, nil),
@@ -43,6 +44,7 @@ func TestHTTPAuthenticationFailsClosed(t *testing.T) {
 }
 
 func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	startedAt := time.Date(2026, 8, 10, 12, 13, 14, 0, time.UTC)
 	handler := signet.NewHTTPHandler(f.service, nil, signet.HealthResponse{
@@ -70,6 +72,7 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 }
 
 func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, nil)
 	for _, route := range []struct {
@@ -118,6 +121,7 @@ func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
 // full-snapshot cursor; the heartbeat still reveals a write the refetch did
 // not cover, so the client must bootstrap or refetch every affected resource.
 func TestHTTPPartialRefetchPreservesRevisionGap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	initial, err := f.service.Bootstrap(ctx)
@@ -171,6 +175,7 @@ func TestHTTPPartialRefetchPreservesRevisionGap(t *testing.T) {
 }
 
 func TestHTTPBootstrapMatchesOpenAPIEnvelope(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	seedSyncResources(t, f)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
@@ -201,6 +206,7 @@ func TestHTTPBootstrapMatchesOpenAPIEnvelope(t *testing.T) {
 }
 
 func TestHTTPCommandBindsAuthenticatedDevice(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	before := f.revision(t)
@@ -235,6 +241,7 @@ func TestHTTPCommandBindsAuthenticatedDevice(t *testing.T) {
 }
 
 func TestHTTPCommandRendersStaleReplacement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	advanced := f.item
@@ -266,6 +273,7 @@ func TestHTTPCommandRendersStaleReplacement(t *testing.T) {
 }
 
 func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	valid := string(mustJSON(map[string]any{
@@ -330,6 +338,7 @@ func closureCommandBody(
 // approve_with_changes carrying it records an approval bound to the revised
 // digest, not the prior one.
 func TestHTTPApproveWithChangesRecordsRevisedClosureApproval(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	item := f.open(t, f.merge)
@@ -355,6 +364,7 @@ func TestHTTPApproveWithChangesRecordsRevisedClosureApproval(t *testing.T) {
 // required resolves member is a 400 rather than a silent revision to false.
 // None advances the server revision.
 func TestHTTPEffectProposalRevisionRejectedOnWrongActionOrNullArm(t *testing.T) {
+	t.Parallel()
 	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	item := f.open(t, f.merge)
@@ -412,6 +422,7 @@ func bearerRequest(t *testing.T, handler http.Handler, method, target, header st
 // device (200, DeviceSnapshot), and observe the credential stop working
 // (401) while a second device's re-revoke returns the recorded snapshot.
 func TestHTTPPairingFlowEndToEnd(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -479,6 +490,7 @@ func TestHTTPPairingFlowEndToEnd(t *testing.T) {
 // consumed codes produce byte-identical 403 responses (the anti-probing
 // contract), and malformed requests fail 400 before touching pairing state.
 func TestHTTPPairingRejectionsAreUndifferentiated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -536,6 +548,7 @@ func TestHTTPPairingRejectionsAreUndifferentiated(t *testing.T) {
 // live code, no revision movement, and the same code then pairs with a grant
 // carrying the same facts.
 func TestHTTPPreviewPairingReportsFactsAndLeavesTheCodeRedeemable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -590,6 +603,7 @@ func TestHTTPPreviewPairingReportsFactsAndLeavesTheCodeRedeemable(t *testing.T) 
 // malformed requests fail 400, and an oversized body fails 413, none of it
 // touching pairing state.
 func TestHTTPPreviewPairingRejectionsAreUndifferentiated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -653,6 +667,7 @@ func TestHTTPPreviewPairingRejectionsAreUndifferentiated(t *testing.T) {
 // credential (only /pairing is unauthenticated), and an unknown device is
 // 404.
 func TestHTTPRevokeRequiresAuthAndKnownDevice(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 
@@ -670,6 +685,7 @@ func TestHTTPRevokeRequiresAuthAndKnownDevice(t *testing.T) {
 // the real authorizer, a revoked device's prepared command dies at the
 // credential (401) before the service gate even runs.
 func TestHTTPRevokedDeviceCommandRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -701,6 +717,7 @@ func TestHTTPRevokedDeviceCommandRejected(t *testing.T) {
 // other-device attempt is 404 (the device comes from the credential, never
 // the path).
 func TestHTTPReportDeliveryOpened(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
@@ -770,6 +787,7 @@ func TestHTTPReportDeliveryOpened(t *testing.T) {
 // device (a revocation racing authentication) the in-transaction gate refuses
 // with 403 and no effect.
 func TestHTTPReportDeliveryOpenedRevokedDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
@@ -818,6 +836,7 @@ func TestHTTPReportDeliveryOpenedRevokedDevice(t *testing.T) {
 // yields a working late receipt (#130): opening a resolved item's attempt is
 // honest telemetry, recorded after the refused decision.
 func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
 	f.seedDevice(t, "device-2")

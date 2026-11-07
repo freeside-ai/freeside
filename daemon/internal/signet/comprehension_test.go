@@ -31,6 +31,7 @@ func registerAndDerive(t *testing.T, f fixture, deviceID domain.DeviceID, action
 }
 
 func TestDeriveActionSurfaceIntersectsContract(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	// Contract omits stop, so the surface is the item's set minus stop.
 	surface := registerAndDerive(t, f, f.device.ID, []domain.Action{domain.ActionOpenPR, domain.ActionDismiss})
@@ -49,6 +50,7 @@ func TestDeriveActionSurfaceIntersectsContract(t *testing.T) {
 }
 
 func TestRegisterCapabilityIdempotentNoExtraBump(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	if _, err := f.service.RegisterClientCapability(ctx, f.device.ID, itemActions); err != nil {
@@ -64,6 +66,7 @@ func TestRegisterCapabilityIdempotentNoExtraBump(t *testing.T) {
 }
 
 func TestDeriveActionSurfaceRequiresCapability(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	_, err := f.service.DeriveActionSurface(context.Background(), f.device.ID, f.item.ID)
 	if !errors.Is(err, signet.ErrCapabilityNotRegistered) {
@@ -72,6 +75,7 @@ func TestDeriveActionSurfaceRequiresCapability(t *testing.T) {
 }
 
 func TestSubmitStampsDecisionEvidence(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
@@ -94,6 +98,7 @@ func TestSubmitStampsDecisionEvidence(t *testing.T) {
 }
 
 func TestSubmitRejectsForeignActionSurface(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	f.seedDevice(t, "device-2")
 	foreign := registerAndDerive(t, f, "device-2", itemActions)
@@ -110,6 +115,7 @@ func TestSubmitRejectsForeignActionSurface(t *testing.T) {
 }
 
 func TestSubmitRejectsUnknownActionSurface(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	if _, err := f.service.RegisterClientCapability(context.Background(), f.device.ID, itemActions); err != nil {
 		t.Fatalf("register: %v", err)
@@ -123,6 +129,7 @@ func TestSubmitRejectsUnknownActionSurface(t *testing.T) {
 }
 
 func TestSubmitRejectsActionOutsideSurface(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	// Contract omits stop, so the surface does not offer it; the item still
 	// does, so only the surface check rejects the stop command.
@@ -135,6 +142,7 @@ func TestSubmitRejectsActionOutsideSurface(t *testing.T) {
 }
 
 func TestSubmitRejectsStaleCapabilityDigest(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
@@ -151,6 +159,7 @@ func TestSubmitRejectsStaleCapabilityDigest(t *testing.T) {
 }
 
 func TestSubmitReplayIgnoresDifferentDigest(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
@@ -181,6 +190,7 @@ func TestSubmitReplayIgnoresDifferentDigest(t *testing.T) {
 }
 
 func TestRecordComprehensionEventNoRevisionBump(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
@@ -202,6 +212,7 @@ func TestRecordComprehensionEventNoRevisionBump(t *testing.T) {
 }
 
 func TestRecordActionTakenRequiresBackingCommand(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
@@ -231,6 +242,7 @@ func TestRecordActionTakenRequiresBackingCommand(t *testing.T) {
 }
 
 func TestRecordComprehensionEventReplay(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
@@ -258,6 +270,7 @@ func TestRecordComprehensionEventReplay(t *testing.T) {
 }
 
 func TestRecordComprehensionEventInactiveDevice(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestTaskHistoryIncludesRecordedWorkflowAndStableSourceBindings(t *testing.T) {
+	t.Parallel()
 	task, inputs := taskTimelineFixtureInputs()
 	at := task.CreatedAt
 	run := inputs[1].run.ID
@@ -64,6 +65,7 @@ func TestTaskHistoryIncludesRecordedWorkflowAndStableSourceBindings(t *testing.T
 }
 
 func TestTaskHistoryLifecycleAndQueuedStopping(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	for _, state := range domain.AllTaskCancellationStates {
 		t.Run(string(state), func(t *testing.T) {

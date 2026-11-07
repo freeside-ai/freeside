@@ -14,6 +14,7 @@ import (
 // bootstrap snapshot and the partial /schedules fetch with its store-stamped
 // metadata, and an empty collection encodes as [], never null.
 func TestScheduleSyncSurface(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 

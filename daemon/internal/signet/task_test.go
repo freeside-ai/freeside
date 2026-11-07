@@ -10,6 +10,7 @@ import (
 )
 
 func TestBootstrapProjectsStoredTaskAndNewestRun(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	ctx := t.Context()
 	var task domain.Task

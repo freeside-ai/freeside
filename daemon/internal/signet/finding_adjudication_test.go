@@ -124,6 +124,7 @@ func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
 }
 
 func TestSubmitFindingAdjudicationAcceptAndReplay(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedFindingAdjudicationItem(t, f)
@@ -147,6 +148,7 @@ func TestSubmitFindingAdjudicationAcceptAndReplay(t *testing.T) {
 }
 
 func TestSubmitFindingAdjudicationReplayIdentityMatrix(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	actions := []domain.Action{
 		domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
@@ -216,6 +218,7 @@ func TestSubmitFindingAdjudicationReplayIdentityMatrix(t *testing.T) {
 }
 
 func TestSubmitFindingAdjudicationAlternativeChoice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedFindingAdjudicationItem(t, f)
@@ -255,6 +258,7 @@ func TestSubmitFindingAdjudicationAlternativeChoice(t *testing.T) {
 }
 
 func TestSubmitFindingAdjudicationRejectsUnofferedChoice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedFindingAdjudicationItem(t, f)
@@ -279,6 +283,7 @@ func TestSubmitFindingAdjudicationRejectsUnofferedChoice(t *testing.T) {
 // through the re-gating snapshot read, which binds the offered set to the
 // artifact and rejects the divergence before the choice is evaluated.
 func TestSubmitFindingAdjudicationRejectsRawRowForgedOffer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedFindingAdjudicationItem(t, f)
@@ -314,6 +319,7 @@ func TestSubmitFindingAdjudicationRejectsRawRowForgedOffer(t *testing.T) {
 }
 
 func TestSubmitFindingAdjudicationDiscussAndStop(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("discuss", func(t *testing.T) {
 		f := newFixture(t)
@@ -343,6 +349,7 @@ func TestSubmitFindingAdjudicationDiscussAndStop(t *testing.T) {
 }
 
 func TestSubmitFindingAdjudicationRejectsDiscussUntilAcceptedReplyConsumed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedFindingAdjudicationItem(t, f)
@@ -390,6 +397,7 @@ func TestSubmitFindingAdjudicationRejectsDiscussUntilAcceptedReplyConsumed(t *te
 }
 
 func TestSubmitFindingAdjudicationStaleAcceptReturnsReplacement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	item := seedFindingAdjudicationItem(t, f)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestRunSnapshotProjectsObservationTimestamps(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	invocationID := domain.InvocationID("inv-1")
 	instant := func(offset time.Duration) time.Time { return base.Add(offset) }

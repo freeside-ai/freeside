@@ -21,6 +21,7 @@ import (
 )
 
 func TestReviewEvidenceJSONPreservesRetainedBytes(t *testing.T) {
+	t.Parallel()
 	events := []byte{'e', 0xff, 0x00, '\n'}
 	result := []byte{'r', 0xfe, 0xc0}
 	digest := domain.Digest("sha256:" + strings.Repeat("e", 64))
@@ -40,6 +41,7 @@ func TestReviewEvidenceJSONPreservesRetainedBytes(t *testing.T) {
 }
 
 func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
+	t.Parallel()
 	for _, mismatch := range []string{"none", "head", "base", "round", "invocation", "foreign observation"} {
 		t.Run(mismatch, func(t *testing.T) {
 			ctx := context.Background()
@@ -131,6 +133,7 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 }
 
 func TestRunReviewTimelineNamesAdmittedReviewerBeforeResult(t *testing.T) {
+	t.Parallel()
 	for _, terminal := range []string{"record", "failure", "foreign run", "shadow role"} {
 		t.Run(terminal, func(t *testing.T) {
 			ctx := context.Background()
@@ -216,6 +219,7 @@ func TestRunReviewTimelineNamesAdmittedReviewerBeforeResult(t *testing.T) {
 }
 
 func TestReviewCorruptionDoesNotBreakRunListings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	run := corpusRun("review-corrupt")
@@ -253,6 +257,7 @@ func TestReviewCorruptionDoesNotBreakRunListings(t *testing.T) {
 }
 
 func TestRunReviewFindingsRereviewAndFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newCorpusFixture(t)
 	run := corpusRun("review-history")
@@ -497,6 +502,7 @@ func (f reviewSubjectFixture) rounds(t *testing.T) []signet.RunReviewRound {
 }
 
 func TestRunReviewSubjectAndRemediation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newReviewSubjectFixture(t)
 	if rounds := f.rounds(t); rounds[0].Subject == nil || rounds[0].Subject.Kind != domain.ReviewSubjectImplementation ||
@@ -532,6 +538,7 @@ func TestRunReviewSubjectAndRemediation(t *testing.T) {
 }
 
 func TestRunReviewRemediationNullCases(t *testing.T) {
+	t.Parallel()
 	t.Run("declined adjudication dispatches no remediation", func(t *testing.T) {
 		f := newReviewSubjectFixture(t)
 		item := f.adjudicationItem(t)
@@ -588,6 +595,7 @@ func TestRunReviewRemediationNullCases(t *testing.T) {
 // remediation intent: dispatch authentication proves only its identity, so a
 // finding or review lineage the round's records do not carry fails the read.
 func TestRunReviewRemediationLineageFailsClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("remediation routes a finding the round did not report", func(t *testing.T) {
 		f := newReviewSubjectFixture(t)
 		f.decideRemediation(t, func(intent *domain.RemediationInvocationIntent) {
@@ -632,6 +640,7 @@ func TestRunReviewRemediationLineageFailsClosed(t *testing.T) {
 }
 
 func TestRunReviewSubjectNullCases(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("failed review retried on the same head keeps its producer", func(t *testing.T) {
 		f := newReviewSubjectFixture(t)
@@ -684,6 +693,7 @@ func TestRunReviewSubjectNullCases(t *testing.T) {
 // one independence entry per writing role, unknown when no writer was
 // admitted before it.
 func TestRunTimelineAdmittedFacts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newReviewSubjectFixture(t)
 	f.mustWrite(t, func(tx *store.WriteTx) error {

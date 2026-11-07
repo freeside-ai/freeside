@@ -59,6 +59,7 @@ func advanceRevision(t *testing.T, s *store.Store, marker string) {
 }
 
 func TestStopTaskAcceptsRevisionMovedByUnrelatedWrite(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s, "implementation")
 	// The client prepares against the current revision, then unrelated writes
@@ -96,6 +97,7 @@ func TestStopTaskAcceptsRevisionMovedByUnrelatedWrite(t *testing.T) {
 }
 
 func TestStopTaskAcceptanceAndImmutableReplay(t *testing.T) {
+	t.Parallel()
 	for _, phases := range [][]string{nil, {"specification"}, {"implementation", "review", "verification", "older-child"}} {
 		t.Run("runs="+strconv.Itoa(len(phases)), func(t *testing.T) {
 			svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
@@ -174,6 +176,7 @@ func TestStopTaskAcceptanceAndImmutableReplay(t *testing.T) {
 }
 
 func TestStopTaskRejectsChangedRequestsAndStaleBindings(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s)
 	command := stopCommand(t, s, id, "stop-1")
@@ -237,6 +240,7 @@ func TestStopTaskRejectsChangedRequestsAndStaleBindings(t *testing.T) {
 }
 
 func TestStopTaskConcurrentDevicesAndLateAcknowledgement(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s, "old-child")
 	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
@@ -299,6 +303,7 @@ func TestStopTaskConcurrentDevicesAndLateAcknowledgement(t *testing.T) {
 }
 
 func TestStopTaskCommandWireRecord(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s)
 	result, err := svc.Submit(t.Context(), stopCommand(t, s, id, "wire"))
@@ -325,6 +330,7 @@ func TestStopTaskCommandWireRecord(t *testing.T) {
 }
 
 func TestStopTaskConcurrentDeviceRequestsConverge(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s)
 	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
@@ -371,6 +377,7 @@ func TestStopTaskConcurrentDeviceRequestsConverge(t *testing.T) {
 }
 
 func TestStopTaskRestartPreservesReceiptAndFence(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	id := seedStopTask(t, f.store, "specification")
 	command := stopCommand(t, f.store, id, "survives-restart")
@@ -405,6 +412,7 @@ func TestStopTaskRestartPreservesReceiptAndFence(t *testing.T) {
 }
 
 func TestStopTaskPreservesLifecycleAndRejectsPriorEpisodeAcknowledgement(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s, "specification", "implementation")
 	start := time.Now().UTC()
@@ -465,6 +473,7 @@ func TestStopTaskPreservesLifecycleAndRejectsPriorEpisodeAcknowledgement(t *test
 }
 
 func TestStopTaskEpochChangeRequiresNewFence(t *testing.T) {
+	t.Parallel()
 	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
 	id := seedStopTask(t, s)
 	command := stopCommand(t, s, id, "old-epoch")

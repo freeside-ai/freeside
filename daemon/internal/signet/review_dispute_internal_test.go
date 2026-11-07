@@ -10,6 +10,7 @@ import (
 )
 
 func TestAdjudicateFindingsCommandIDStaysWithinArtifactBudget(t *testing.T) {
+	t.Parallel()
 	commandID := strings.Repeat("\x00", MaxAdjudicateFindingsCommandIDBytes)
 	command, err := domain.NewCommand(domain.CommandInput{
 		CommandID: commandID, DeviceID: "device-1", ItemID: "item-1", ItemVersion: 1,
@@ -52,6 +53,7 @@ func TestAdjudicateFindingsCommandIDStaysWithinArtifactBudget(t *testing.T) {
 }
 
 func TestReviewDisputeDecisionCountsOnlyListedFindings(t *testing.T) {
+	t.Parallel()
 	item := domain.AttentionItem{
 		ID: "subset", Type: domain.AttentionReviewDispute, Status: domain.StatusOpen,
 		ItemVersion: 1, RequestedDecision: []domain.Action{domain.ActionAdjudicateFindings},
@@ -88,6 +90,7 @@ func TestReviewDisputeDecisionCountsOnlyListedFindings(t *testing.T) {
 // rule: a decline or defer of an external finding posts a reply, so it needs
 // the person's reason, and every other choice refuses one (#2352).
 func TestReviewDisputeDecisionRequiresReasonOnExternalReplies(t *testing.T) {
+	t.Parallel()
 	item := domain.AttentionItem{
 		ID: "dispute", Type: domain.AttentionReviewDispute, Status: domain.StatusOpen,
 		ItemVersion: 1, RequestedDecision: []domain.Action{domain.ActionAdjudicateFindings},
@@ -163,6 +166,7 @@ func TestReviewDisputeDecisionRequiresReasonOnExternalReplies(t *testing.T) {
 // had before reasons existed, which the store gate re-marshals byte for byte,
 // and that a closed card's routes drop the reason.
 func TestFindingRoutesKeepTheReasonlessMessage(t *testing.T) {
+	t.Parallel()
 	const reasonless = `[{"finding_id":"a","route":"remediate"},{"finding_id":"b","route":"decline"}]`
 	message, err := decisionMessage(DecisionPayload{
 		Action: domain.ActionAdjudicateFindings,

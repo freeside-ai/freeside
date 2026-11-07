@@ -8,6 +8,7 @@ import (
 )
 
 func TestAlternateAgentRetryAcceptsOnlyAnOfferedAgent(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run-alternate-agent")
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-alternate-agent", ProjectID: "proj-1",
@@ -60,6 +61,7 @@ func TestAlternateAgentRetryAcceptsOnlyAnOfferedAgent(t *testing.T) {
 }
 
 func TestAlternateAgentDecisionPayloadCarriesOnlyTheAgent(t *testing.T) {
+	t.Parallel()
 	agent := "claude-second"
 	message, err := decisionMessage(DecisionPayload{
 		Action: domain.ActionRetryWithAlternateAgent, AlternateAgent: &agent,

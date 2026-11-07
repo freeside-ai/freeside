@@ -10,6 +10,7 @@ import (
 )
 
 func TestStopTaskWireGoldens(t *testing.T) {
+	t.Parallel()
 	target := domain.TaskCancellationTarget{TaskID: "task-1", ProjectID: "project-1", Runs: []domain.TaskCancellationRun{}}
 	receipt := domain.StopTaskReceipt{StopTaskRequest: domain.StopTaskRequest{CommandID: "stop-1", DeviceID: "device-1", TaskID: target.TaskID, ProjectID: target.ProjectID, ExpectedSyncEpoch: "epoch-1", ExpectedEntityVersion: 4}, Cancellation: domain.TaskCancellation{RequestID: "cancel-1", Target: target, TargetDigest: target.Digest("epoch-1"), SyncEpoch: "epoch-1", FenceRevision: 5, RequestedAt: time.Date(2026, 9, 17, 1, 0, 0, 0, time.UTC), State: domain.TaskCancellationRequested}}
 	if err := receipt.Validate(); err != nil {

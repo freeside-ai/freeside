@@ -8,6 +8,7 @@ import (
 )
 
 func TestCapabilityRetryAcceptsOnlyAnOfferedDigest(t *testing.T) {
+	t.Parallel()
 	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
 	if err != nil {
 		t.Fatal(err)

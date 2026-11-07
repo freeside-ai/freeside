@@ -89,6 +89,7 @@ func codexCommandOn(item domain.AttentionItem, commandID string, action domain.A
 }
 
 func TestSubmitCodexReenrollmentRecoveryIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	binding := seedVerifiedCodexReenrollment(t, f)
@@ -130,6 +131,7 @@ func TestSubmitCodexReenrollmentRecoveryIsAtomicAndIdempotent(t *testing.T) {
 }
 
 func TestSubmitCodexReenrollmentRecoveryRejectsDecisionBeforeVerification(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	binding := seedVerifiedCodexReenrollment(t, f)
@@ -159,6 +161,7 @@ func TestSubmitCodexReenrollmentRecoveryRejectsDecisionBeforeVerification(t *tes
 }
 
 func TestSubmitCodexReenrollmentRecoveryMismatchRollsBack(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*domain.CodexReenrollmentRecoveryBinding){
 		"identity": func(b *domain.CodexReenrollmentRecoveryBinding) { b.AuthIdentityID = "codex-other" },
 		"fence":    func(b *domain.CodexReenrollmentRecoveryBinding) { b.LeaseFence++ },
@@ -195,6 +198,7 @@ func TestSubmitCodexReenrollmentRecoveryMismatchRollsBack(t *testing.T) {
 }
 
 func TestSubmitCodexReenrollmentRecoveryRejectsDifferentSystemHealthCarrier(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	binding := seedVerifiedCodexReenrollment(t, f)
@@ -237,6 +241,7 @@ func TestSubmitCodexReenrollmentRecoveryRejectsDifferentSystemHealthCarrier(t *t
 }
 
 func TestSubmitCodexReenrollmentRecoveryRejectsMutatedMarkerShape(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*domain.AttentionItem){
 		"reason": func(item *domain.AttentionItem) { item.Reason += " " },
 		"actions": func(item *domain.AttentionItem) {
@@ -282,6 +287,7 @@ func TestSubmitCodexReenrollmentRecoveryRejectsMutatedMarkerShape(t *testing.T) 
 }
 
 func TestSubmitCodexReenrollmentRecoveryRejectsNonLatestVerifiedOperation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	oldBinding := seedVerifiedCodexReenrollment(t, f)
@@ -324,6 +330,7 @@ func TestSubmitCodexReenrollmentRecoveryRejectsNonLatestVerifiedOperation(t *tes
 }
 
 func TestAcknowledgeDoesNotResolveCodexReenrollment(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	binding := seedVerifiedCodexReenrollment(t, f)
 	item := seedCodexRecoveryItem(t, f, binding)

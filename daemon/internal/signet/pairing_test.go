@@ -24,6 +24,7 @@ const pairingCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 // keyed digest; minting is daemon-internal bookkeeping, so it must not bump
 // the server revision (no client cache invalidates because a code exists).
 func TestMintPairingCodeDisplaysPlaintextPersistsDigest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	before := f.revision(t)
@@ -67,6 +68,7 @@ func TestMintPairingCodeDisplaysPlaintextPersistsDigest(t *testing.T) {
 // the token's digest as the verifier; the grant's snapshot carries the
 // pairing transaction's own store-stamped metadata.
 func TestPairGrantsDeviceAndOneTimeToken(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	plaintext, _, err := f.service.MintPairingCode(ctx)
@@ -129,6 +131,7 @@ func TestPairGrantsDeviceAndOneTimeToken(t *testing.T) {
 // boundary: each code holder receives only its new device's distinct topic,
 // and the synchronized Device snapshot does not grow a topic field.
 func TestPairGrantTopicsArePrivatePerDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	grants := make([]signet.PairingGrant, 0, 2)
@@ -161,6 +164,7 @@ func TestPairGrantTopicsArePrivatePerDevice(t *testing.T) {
 // redeemable when notification composition is absent: a failed grant must
 // not create a device or burn the caller's one-time authenticator.
 func TestPairRequiresUsableNtfyBeforeConsumingCode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	code, _, err := f.service.MintPairingCode(ctx)
@@ -214,6 +218,7 @@ func TestPairRequiresUsableNtfyBeforeConsumingCode(t *testing.T) {
 // the server revision, and all three surface as the same undifferentiated
 // rejection.
 func TestPairRejectsExpiredConsumedUnknownCodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -253,6 +258,7 @@ func TestPairRejectsExpiredConsumedUnknownCodes(t *testing.T) {
 // code nor moves the server revision, and the same code then pairs, its
 // grant carrying the same facts.
 func TestPreviewPairingReturnsFactsWithoutConsuming(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	plaintext, code, err := f.service.MintPairingCode(ctx)
@@ -295,6 +301,7 @@ func TestPreviewPairingReturnsFactsWithoutConsuming(t *testing.T) {
 // codes surface as the same undifferentiated rejection, and no preview moves
 // the server revision.
 func TestPreviewPairingRejectsExpiredConsumedUnknownCodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -334,6 +341,7 @@ func TestPreviewPairingRejectsExpiredConsumedUnknownCodes(t *testing.T) {
 // both refuse, and the refusal is a configuration error, not a code
 // rejection, so nothing is consumed.
 func TestPairingFailsClosedWithoutHostFacts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	plaintext, _, err := f.service.MintPairingCode(ctx)
@@ -366,6 +374,7 @@ func TestPairingFailsClosedWithoutHostFacts(t *testing.T) {
 // sequential second attempt exercises the same conditional-update path a
 // raced loser hits.
 func TestPairSingleDevicePerCode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	plaintext, code, err := f.service.MintPairingCode(ctx)
@@ -402,6 +411,7 @@ func TestPairSingleDevicePerCode(t *testing.T) {
 // glyphs the minted alphabet excludes (O for 0, I and L for 1), and grouping
 // separators all redeem the same code.
 func TestPairNormalizesTypedCodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 
@@ -437,6 +447,7 @@ func TestPairNormalizesTypedCodes(t *testing.T) {
 // pins consumed_at >= created_at); the redemption instant clamps to the
 // code's created_at, the same rule Revoke applies to revoked_at.
 func TestPairClampsBackwardsClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	plaintext, code, err := f.service.MintPairingCode(ctx)
@@ -470,6 +481,7 @@ func TestPairClampsBackwardsClock(t *testing.T) {
 // request must fail before the code is spent, so the client can retry with a
 // fixed label.
 func TestPairRejectsEmptyDisplayNameBeforeConsuming(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t)
 	plaintext, _, err := f.service.MintPairingCode(ctx)
