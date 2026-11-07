@@ -749,6 +749,15 @@ removals. Migrations 0001 to 0099 predate the line and can't gain one, so the
 test's frozen allowlist holds their removals and refuses an entry for any
 later file.
 
+**Give a new enum column no CHECK list.** A column that stores a Go enum
+gets no SQL `CHECK (... IN (...))` list, because SQLite can't alter one and
+each new member would rebuild the table, a Tier A migration. The store
+validates the value on write and on decode with the record's `Validate`,
+which calls the enum's `valid()`, and a store test round-trips every
+member of its `AllX` slice. Existing CHECK lists stay, and widening one
+still takes a rebuild. Decision record:
+`devlog/2026-11-07-1113-enum-columns-go-validation.md`.
+
 **Renumber at rebase when another migration took your number.** Two branches
 can both take the next number; the one that lands second renames behind the
 other:
