@@ -429,6 +429,12 @@ engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
   plain validation, and a bad row is a bug that fails loudly. No
   column-versus-body cross-checks, no tamper tests, and a note only when
   an ordinary decision-note trigger applies.
+  A unit that changes a Tier B row's decode or its tests removes that
+  row's existing column-versus-body cross-checks and tamper cases
+  instead of extending or reshaping them, unless a Tier A gate relies on
+  them; trace the read's Tier A callers first. A tamper test of a Tier A
+  gate stays Tier A (Classification). Decision record:
+  `devlog/2026-11-07-1119-tier-b-tamper-ratchet.md`.
 - **Tier C, advisory.** Usage readings shown to the operator,
   comprehension events, and metrics. Best effort: skip and log a bad row
   rather than fail a whole listing.
@@ -599,11 +605,17 @@ All under `daemon/`:
 - **Task lines and routing policy: Tier B.**
   `internal/engine/task_line_change.go`,
   `internal/engine/routing_policy.go`, `internal/store/task_line.go`, and
-  `internal/store/routing_policy.go` decode their rows with plain
-  validation. The Tier A check sits where the routed agent gets its
-  credential: admission in `internal/engine/agent_admission.go` and the
-  mount in `internal/exec/claude/spec.go`. The forged-row check that
-  admission runs on a task line today stays under the ratchet.
+  `internal/store/routing_policy.go` are Tier B, though their store
+  decodes still carry cross-checks from before the tiers. The Tier A
+  check sits where the routed agent gets its credential: admission in
+  `internal/engine/agent_admission.go` and the mount in
+  `internal/exec/claude/spec.go`. The forged-row check that admission
+  runs on a task line is Tier A and stays, and so does every
+  `internal/store/task_line.go` check that admission relies on: the
+  chain check, the id rebuild of each line row, and the binding of a
+  change record to its id in `GetTaskLineChange`. Admission reads a
+  routing policy's body, not its columns, so the column comparison in
+  `scanRoutingPolicy` goes when a unit next changes it.
 - **Usage collector: credential handling Tier A, readings Tier C.**
   `internal/ward/usage_collector.go` calls the provider under an
   enrollment's credential, so it is Tier A.
