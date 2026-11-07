@@ -12,7 +12,7 @@ func TestClosureOutcomeEnumValidity(t *testing.T) {
 			t.Errorf("reference %q not valid", r)
 		}
 	}
-	if (ClosureReference("")).valid() {
+	if ClosureReference("").valid() {
 		t.Error("zero reference is valid")
 	}
 	for _, h := range AllClosureHolds {
@@ -20,7 +20,7 @@ func TestClosureOutcomeEnumValidity(t *testing.T) {
 			t.Errorf("hold %q not valid", h)
 		}
 	}
-	if (ClosureHold("")).valid() {
+	if ClosureHold("").valid() {
 		t.Error("zero hold is valid")
 	}
 	for _, i := range AllClosureItems {
@@ -28,7 +28,7 @@ func TestClosureOutcomeEnumValidity(t *testing.T) {
 			t.Errorf("item %q not valid", i)
 		}
 	}
-	if (ClosureItem("")).valid() {
+	if ClosureItem("").valid() {
 		t.Error("zero item is valid")
 	}
 }

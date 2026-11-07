@@ -28,33 +28,33 @@ func must[T any](value T, err error) T {
 
 func claudeRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
 	return domain.ClientEnrollment{
-			ID: "claude-a/claude_code", AuthIdentityID: "claude-a",
-			HarnessClient: domain.HarnessClientClaudeCode, Route: agentbaseline.DefaultClaudeRoute,
-			AuthMethod: domain.AuthMethodSetupToken, CredentialMode: domain.CredentialSubscriptionContained,
-			RefreshStrategy: domain.RefreshExternal, SupportsReadOnlyAuthSnapshot: true,
-			AccountBinding: "operator@example.com",
-		}, domain.AuthIdentity{
-			ID: "claude-a", Provider: "claude", AuthStoreMutationLease: true,
-			Enabled: true, AccountBinding: "operator@example.com", CostOwner: "operator",
-			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-cred", RefreshStrategy: domain.RefreshOnDemand},
-		}
+		ID: "claude-a/claude_code", AuthIdentityID: "claude-a",
+		HarnessClient: domain.HarnessClientClaudeCode, Route: agentbaseline.DefaultClaudeRoute,
+		AuthMethod: domain.AuthMethodSetupToken, CredentialMode: domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshExternal, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: "operator@example.com",
+	}, domain.AuthIdentity{
+		ID: "claude-a", Provider: "claude", AuthStoreMutationLease: true,
+		Enabled: true, AccountBinding: "operator@example.com", CostOwner: "operator",
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-cred", RefreshStrategy: domain.RefreshOnDemand},
+	}
 }
 
 func codexRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
 	return domain.ClientEnrollment{
-			ID: "codex-a/codex_cli", AuthIdentityID: "codex-a",
-			HarnessClient: domain.HarnessClientCodexCLI, Route: agentbaseline.DefaultCodexRoute,
-			AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
-			RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
-			AccountBinding: "acct-1",
-		}, domain.AuthIdentity{
-			ID: "codex-a", Provider: "openai", AuthStoreMutationLease: true,
-			Enabled: true, AccountBinding: "acct-1", CostOwner: "operator",
-			Interim: domain.InterimClientFacts{
-				AuthStoreVolume: "/private/auth.json", RefreshStrategy: domain.RefreshOnDemand,
-				SupportsReadOnlyAuthSnapshot: true,
-			},
-		}
+		ID: "codex-a/codex_cli", AuthIdentityID: "codex-a",
+		HarnessClient: domain.HarnessClientCodexCLI, Route: agentbaseline.DefaultCodexRoute,
+		AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: "acct-1",
+	}, domain.AuthIdentity{
+		ID: "codex-a", Provider: "openai", AuthStoreMutationLease: true,
+		Enabled: true, AccountBinding: "acct-1", CostOwner: "operator",
+		Interim: domain.InterimClientFacts{
+			AuthStoreVolume: "/private/auth.json", RefreshStrategy: domain.RefreshOnDemand,
+			SupportsReadOnlyAuthSnapshot: true,
+		},
+	}
 }
 
 func prompt(name string) agentbaseline.Prompt {

@@ -139,7 +139,7 @@ func TestWorkspaceSeedValidate(t *testing.T) {
 
 func TestAllSeedModesValid(t *testing.T) {
 	t.Parallel()
-	if (SeedMode("")).valid() {
+	if SeedMode("").valid() {
 		t.Error("the zero SeedMode is valid; it must not be")
 	}
 	for _, m := range AllSeedModes {

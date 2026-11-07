@@ -160,7 +160,7 @@ func TestASecondSignalTerminatesAWedgedTeardown(t *testing.T) {
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
 	select {
-	case <-waited:
+	case <-waited: //nolint:errcheck // The exit status is checked below through cmd.ProcessState.
 	case <-time.After(30 * time.Second):
 		t.Fatal("helper survived a second SIGTERM during teardown; the signal was swallowed")
 	}

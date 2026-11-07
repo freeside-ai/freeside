@@ -212,9 +212,9 @@ func TestKeystoreMultipleRegistrations(t *testing.T) {
 		testAppDir(ks, personal.OwnerID):      0o700,
 		filepath.Join(testAppDir(ks, personal.OwnerID), keyFileNameForTest):  0o600,
 		filepath.Join(testAppDir(ks, personal.OwnerID), metaFileNameForTest): 0o600,
-		testAppDir(ks, org.OwnerID):                                          0o700,
-		filepath.Join(testAppDir(ks, org.OwnerID), keyFileNameForTest):       0o600,
-		filepath.Join(testAppDir(ks, org.OwnerID), metaFileNameForTest):      0o600,
+		testAppDir(ks, org.OwnerID):                                     0o700,
+		filepath.Join(testAppDir(ks, org.OwnerID), keyFileNameForTest):  0o600,
+		filepath.Join(testAppDir(ks, org.OwnerID), metaFileNameForTest): 0o600,
 	} {
 		info, err := os.Stat(path)
 		if err != nil {

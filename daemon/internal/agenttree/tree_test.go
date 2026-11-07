@@ -92,16 +92,16 @@ func fixtureTree(t *testing.T) agenttree.Tree {
 
 func fixtureRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
 	return domain.ClientEnrollment{
-			ID: "openai-chatgpt-a/codex_cli", AuthIdentityID: "openai-chatgpt-a",
-			HarnessClient: domain.HarnessClientCodexCLI, Route: routeName,
-			AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
-			RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
-			AccountBinding: "acct-1",
-		}, domain.AuthIdentity{
-			ID: "openai-chatgpt-a", Provider: "codex", AuthStoreMutationLease: true,
-			Enabled: true, AccountBinding: "acct-1", CostOwner: "owner",
-			Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-store", RefreshStrategy: domain.RefreshOnDemand},
-		}
+		ID: "openai-chatgpt-a/codex_cli", AuthIdentityID: "openai-chatgpt-a",
+		HarnessClient: domain.HarnessClientCodexCLI, Route: routeName,
+		AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+		AccountBinding: "acct-1",
+	}, domain.AuthIdentity{
+		ID: "openai-chatgpt-a", Provider: "codex", AuthStoreMutationLease: true,
+		Enabled: true, AccountBinding: "acct-1", CostOwner: "owner",
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-store", RefreshStrategy: domain.RefreshOnDemand},
+	}
 }
 
 func TestRenderParseRoundTrip(t *testing.T) {

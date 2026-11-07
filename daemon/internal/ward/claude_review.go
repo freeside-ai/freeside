@@ -130,7 +130,8 @@ func (claudeReviewProvider) containerEnv() []string {
 	}
 }
 
-func (claudeReviewProvider) snapshotCredentialName() string  { return claudeReviewSnapshotTokenName }
+func (claudeReviewProvider) snapshotCredentialName() string { return claudeReviewSnapshotTokenName }
+
 func (claudeReviewProvider) snapshotInstructionName() string { return claudeReviewSnapshotInstrName }
 
 // requiresExpiringCredential is false: a setup token has no access-token

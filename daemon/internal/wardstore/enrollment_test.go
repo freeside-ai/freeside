@@ -571,22 +571,22 @@ func openEnrollmentStore(t *testing.T) (*store.Store, *wardstore.Adapters) {
 func claudeEnrollmentFixture(id domain.AuthIdentityID, account string) (domain.AuthIdentity, ward.EnrollmentBootstrap) {
 	enrollmentID := domain.ClientEnrollmentID(string(id) + "/claude_code")
 	return domain.AuthIdentity{
-			ID: id, Provider: "claude", AccountBinding: account, AuthStoreMutationLease: true,
-			Enabled: true, CostOwner: "operator",
-			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
-		}, ward.EnrollmentBootstrap{
-			Enrollment: domain.ClientEnrollment{
-				ID: enrollmentID, AuthIdentityID: id, HarnessClient: domain.HarnessClientClaudeCode,
-				Route: "anthropic-subscription", AuthMethod: domain.AuthMethodSetupToken,
-				CredentialMode:  domain.CredentialSubscriptionContained,
-				RefreshStrategy: domain.RefreshExternal, SupportsReadOnlyAuthSnapshot: true,
-				AccountBinding: account,
-			},
-			Binding: domain.LeaseGenerationBinding{
-				EnrollmentID: enrollmentID, AuthStoreVolume: "claude-main-auth",
-				StoreManifestDigest: domain.Digest(contentaddr.Sum([]byte("token"))),
-			},
-		}
+		ID: id, Provider: "claude", AccountBinding: account, AuthStoreMutationLease: true,
+		Enabled: true, CostOwner: "operator",
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
+	}, ward.EnrollmentBootstrap{
+		Enrollment: domain.ClientEnrollment{
+			ID: enrollmentID, AuthIdentityID: id, HarnessClient: domain.HarnessClientClaudeCode,
+			Route: "anthropic-subscription", AuthMethod: domain.AuthMethodSetupToken,
+			CredentialMode:  domain.CredentialSubscriptionContained,
+			RefreshStrategy: domain.RefreshExternal, SupportsReadOnlyAuthSnapshot: true,
+			AccountBinding: account,
+		},
+		Binding: domain.LeaseGenerationBinding{
+			EnrollmentID: enrollmentID, AuthStoreVolume: "claude-main-auth",
+			StoreManifestDigest: domain.Digest(contentaddr.Sum([]byte("token"))),
+		},
+	}
 }
 
 func assertNoIdentity(t *testing.T, st *store.Store, id domain.AuthIdentityID) {
