@@ -803,8 +803,34 @@ and reinstall with `app/scripts/install-mac-app.sh dev --daemon-path
 `bash scripts/check.sh daemon test` runs at most one local test step at once
 per user. Extra runs wait, reporting the limit, state directory, and holders
 every 30 seconds. `DAEMON_TEST_MAX_RUNS` sets the limit; `0` disables it. The
-default is `0` when `CI` is non-empty, and an explicit value wins. The limit
-does not change Go's concurrency, timeout, or test arguments.
+default is `0` when `CI` is non-empty, and an explicit value wins.
+
+Each local run sizes itself to its share of the machine:
+
+- **Timeout:** the step runs `go test -timeout 30m`, ahead of the package
+  arguments, so a contended run doesn't lose itself to Go's 10-minute
+  default. A `-timeout` after `--` comes later and wins. CI's shard runs keep
+  Go's default.
+- **Concurrency:** while a run holds a slot under a limit above 1, its tests
+  get `GOMAXPROCS` of the core count (`getconf _NPROCESSORS_ONLN`) divided by
+  the limit, rounded up, minimum 2: on 10 cores, 5 for two slots and 4 for
+  three. Go's `-p`, each test binary's `-parallel`, and its runtime threads
+  all follow it. A `GOMAXPROCS` you set wins, and a limit of 1 keeps Go's
+  default. If the cores can't be counted, the step prints a notice and keeps
+  the default.
+- **Scratch files:** while a run holds a slot, its tests get
+  `TMPDIR=<state>/slots/<slot>.tmp.noindex`, emptied when the run starts and
+  removed when it ends. Spotlight skips a directory whose name ends in
+  `.noindex`; during a contended run on 2026-11-07, `mds_stores` used 54 to
+  283% CPU indexing test scratch files. Go's test cache keys a result on
+  `TMPDIR` and `-timeout`, so a repeated run in the same slot reuses cached
+  results, while a run in another slot, with another timeout, or outside
+  `check.sh` doesn't. Removal first makes read-only leftovers writable, since
+  a test killed by its timeout skips its cleanup. Go's own build directories
+  follow `TMPDIR` too.
+  A run without a slot keeps the inherited `TMPDIR`. Spotlight still indexes
+  checkouts; add the directory that holds them (for example
+  `~/proj/freeside-ai`) under System Settings > Spotlight > Privacy.
 
 `DAEMON_TEST_STATE_DIR` defaults to
 `${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test`. Use the same directory
@@ -858,7 +884,8 @@ the run limit, the git change, and the decoy, and its `PASS:` line names the
 selection. Under the default limit of one it holds the same slot, and so the
 same decoy path, every time, which lets a repeated run reuse Go's cached
 results. A bare `go test` gets none of the git change, the run limit, the
-decoy, or `-trimpath`; without the flag it shares no daemon package entries
+decoy, the timeout, the `GOMAXPROCS` share, the `.noindex` `TMPDIR`, or
+`-trimpath`; without the flag it shares no daemon package entries
 with `check.sh` runs, and its different `PATH` and `GIT_DIR` can also keep it
 from reusing their results.
 
@@ -886,8 +913,12 @@ python3 scripts/daemon-test-report.py --one-at-a-time ./internal/importer ./inte
 python3 scripts/daemon-test-report.py --no-git-count --tests 0
 ```
 
-It runs `go test -json -count=1` directly, with Go's default timeout and
-concurrency. Package patterns default to `./...`. `--one-at-a-time` runs each
+It runs `go test -json -count=1 -timeout 30m` directly, under the same slot
+limit and state directory as `check.sh`, so a report and a `check.sh` run
+count against one limit. While every slot is held it waits, naming the
+holders every 30 seconds, and the wait isn't timed. Its `go test` gets the
+same per-slot `TMPDIR` and `GOMAXPROCS` share as a `check.sh` run (Local
+Test Runs on a Shared Machine). Package patterns default to `./...`. `--one-at-a-time` runs each
 listed package separately, removing contention between packages in that run.
 `--tests N` limits the slowest top-level tests to N rows (30 by default, 0 for
 all); unfinished tests always appear. Subtest times aren't added to their
@@ -895,7 +926,9 @@ parents or counted as separate tests.
 
 The tab-separated header identifies the commit, changes under `daemon/`,
 machine, cores, Go version, git binary and version, mode, counting setting,
-wall time, result, and load averages (1, 5, and 15 minutes) at the start, end,
+slot limit (`slot_limit`: `0` when off, `N (not enforced)` when the slot
+state is unusable), effective `GOMAXPROCS` (`default`
+when unset), the test child's `TMPDIR` (`unset` when none), wall time, result, and load averages (1, 5, and 15 minutes) at the start, end,
 and peak. `package` rows give elapsed seconds, passed/failed/skipped/unfinished
 counts, and both git counts. `test` rows list top-level test outcomes and
 elapsed seconds, slowest first. Build failures, timeouts, incomplete packages,

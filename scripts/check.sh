@@ -56,6 +56,12 @@
 #   DAEMON_TEST_STATE_DIR  shared per-user state directory (default:
 #                          ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test)
 # A queued run names the limit, state directory, and holders every 30 seconds.
+# The local (non-shard) path passes -timeout 30m before the package
+# arguments, so a -timeout after `--` wins. While it holds a slot, the test
+# child gets TMPDIR=<slot>.tmp.noindex, emptied at the start and removed at
+# exit; Spotlight skips a directory named *.noindex. Under a limit above 1 it
+# also gets GOMAXPROCS of cores / limit rounded up, minimum 2, unless
+# GOMAXPROCS is already set. A run without a slot keeps both as inherited.
 # Outside CI on macOS, when git resolves to /usr/bin/git, the test step uses
 # xcrun's git through a stable directory containing only git on PATH, with
 # its helpers and config preserved. Other git installations and later steps
@@ -175,7 +181,8 @@ daemon_test_run() {
   local args=(./...)
   ((${#daemon_test_args[@]} == 0)) || args=("${daemon_test_args[@]}")
   if [[ ! ${DAEMON_TEST_SHARD_KIND+x}${DAEMON_TEST_SHARD_INDEX+x}${DAEMON_TEST_SHARD_COUNT+x}${DAEMON_TEST_INTEGRATION_SHARDS+x}${DAEMON_TEST_EVIDENCE_DIR+x} ]]; then
-    in_dir "$ROOT/daemon" go test "${args[@]}"
+    # A caller's -timeout after -- comes later and wins.
+    in_dir "$ROOT/daemon" go test -timeout 30m "${args[@]}"
     return
   fi
   if ((${#daemon_test_args[@]} != 0)); then
@@ -241,6 +248,7 @@ except OSError as e:
         pid=${BASHPID:-$(exec sh -c 'echo "$PPID"')}
         printf 'run PID %s: %s\n' "$pid" "$ROOT" >"$file"
         daemon_test_slot=$file
+        daemon_test_limit=$limit
         return 0
       else
         rc=$?
@@ -263,6 +271,30 @@ except OSError as e:
     sleep 1
     waited=$((waited + 1))
   done
+}
+
+# daemon_test_gomaxprocs: exports GOMAXPROCS as the held slot's share of the
+# cores, cores / limit rounded up with a floor of 2, so go's -p, each test
+# binary's -parallel, and its runtime threads shrink together. A caller's
+# GOMAXPROCS wins, and a limit of 1 keeps Go's default.
+daemon_test_gomaxprocs() {
+  local cores limit=$daemon_test_limit
+  [[ -n $daemon_test_slot && $limit != 1 && ! ${GOMAXPROCS+x} ]] || return 0
+  cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null) || cores=''
+  if [[ ! $cores =~ ^[1-9][0-9]*$ ]]; then
+    echo "daemon test: cannot count cores; keeping Go's GOMAXPROCS" >&2
+    return 0
+  fi
+  # Compare decimal strings: a valid limit can overflow Bash arithmetic.
+  # shellcheck disable=SC2071 # Equal-length decimal strings sort numerically.
+  if [[ ${#limit} -gt ${#cores} || ( ${#limit} -eq ${#cores} &&
+      ( $limit > "$cores" || $limit == "$cores" ) ) ]]; then
+    GOMAXPROCS=2
+  else
+    GOMAXPROCS=$(( (cores + limit - 1) / limit ))
+    ((GOMAXPROCS >= 2)) || GOMAXPROCS=2
+  fi
+  export GOMAXPROCS
 }
 
 daemon_test_use_real_git() {
@@ -325,9 +357,18 @@ daemon_test_decoy() {
     cp -R "$dir/repo/.git" "$dir/before"
 }
 
+# daemon_test_remove_tmp <dir>: removes a slot's test TMPDIR. A test killed by
+# its timeout skips its cleanup and can leave read-only directories, which
+# would make rm fail on every later run in that slot. chmod -R follows no
+# symbolic links.
+daemon_test_remove_tmp() {
+  chmod -R u+rwX "$1" 2>/dev/null || :
+  rm -rf "$1"
+}
+
 daemon_test() (
-  local vars decoy rc=0
-  daemon_test_slot=''
+  local vars decoy tmp='' rc=0
+  daemon_test_slot='' daemon_test_limit=''
   daemon_test_use_real_git
   daemon_test_take_slot
   # An ambient repository (GIT_DIR from `git rebase -x`) must reach neither
@@ -337,20 +378,30 @@ daemon_test() (
   unset $vars
   if [[ -n $daemon_test_slot ]]; then
     decoy=$daemon_test_slot.decoy
+    # Spotlight skips a directory whose name ends in .noindex.
+    tmp=$daemon_test_slot.tmp.noindex
   else
     decoy=$(mktemp -d "${TMPDIR:-/tmp}/freeside-decoy.XXXXXX") || return 1
   fi
   # Each fixture resolves a relative GIT_DIR against its own directory.
   [[ $decoy == /* ]] || decoy=$PWD/$decoy
-  trap 'rm -rf "$decoy"' EXIT
+  [[ -z $tmp || $tmp == /* ]] || tmp=$PWD/$tmp
+  trap 'rm -rf "$decoy"; [[ -z $tmp ]] || daemon_test_remove_tmp "$tmp"' EXIT
   if ! daemon_test_decoy "$decoy"; then
     echo "daemon test: cannot build the decoy repository in $decoy" >&2
+    return 1
+  fi
+  if [[ -n $tmp ]] && ! { daemon_test_remove_tmp "$tmp" && mkdir -p "$tmp"; }; then
+    echo "daemon test: cannot create the test TMPDIR $tmp" >&2
     return 1
   fi
   # Bash 3.2 saves a redirection on another descriptor if applied to the
   # function call. Close it inside a subshell so orphaned children can't
   # inherit either the slot descriptor or a saved copy.
-  ( exec 9>&-; export GIT_DIR=$decoy/repo/.git/worktrees/wt; daemon_test_run ) || rc=$?
+  ( exec 9>&-; export GIT_DIR=$decoy/repo/.git/worktrees/wt
+    [[ -z $tmp ]] || export TMPDIR=$tmp
+    daemon_test_gomaxprocs
+    daemon_test_run ) || rc=$?
   if ! diff -r "$decoy/before" "$decoy/repo/.git" >"$decoy/diff" 2>&1; then
     echo 'daemon test: a test wrote to the decoy repository through the inherited GIT_DIR; build fixture git environments from gitenv.Scrubbed():' >&2
     cat "$decoy/diff" >&2
