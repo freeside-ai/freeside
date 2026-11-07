@@ -191,14 +191,14 @@ func deliveriesFor(t *testing.T, h *daemon, itemID domain.ItemID, deviceID domai
 // cadence itself is pinned under synctest in the signet package.
 func eventually(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(daemonWaitBound)
 	for time.Now().Before(deadline) {
 		if ok() {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("%s did not happen within 5s", what)
+	t.Fatalf("%s did not happen within %s", what, daemonWaitBound)
 }
 
 // TestDaemonNotifiesAPhoneOncePerItem is the sender's whole-daemon proof: an
@@ -347,14 +347,19 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 	case before = <-asked:
 	case err := <-failed:
 		t.Fatalf("discuss during the feedback item's publish: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the feedback item's notification was not published within 5s")
+	case <-time.After(daemonWaitBound):
+		t.Fatalf("the feedback item's notification was not published within %s", daemonWaitBound)
 	}
 	if before.Item.Timing.DeliveryCount != 1 || before.Item.Timing.FirstAcceptedAt != nil {
 		t.Fatalf("timing when the discuss was asked = %+v, want one submitted delivery, not yet accepted", before.Item.Timing)
 	}
 
 	eventually(t, "the discuss's accepted reply", func() bool {
+		// A durable stop (#1946) never yields the reply, so fail on it now
+		// rather than wait out the bound.
+		if stops := durableStops(t, h); len(stops) > 0 {
+			t.Fatalf("daemon recorded a durable stop before the discuss's reply: %+v", stops)
+		}
 		item, err := h.attention.GetAttentionItem(ctx, feedbackID)
 		if err != nil {
 			t.Fatalf("get feedback: %v", err)
@@ -494,17 +499,26 @@ func assertDaemonHealthy(t *testing.T, h *daemon) {
 		t.Errorf("daemon reported a component exit: %v", err)
 	default:
 	}
-	// A durable stop leaves the listener up and h.errs empty; its item is
-	// the only sign of it.
+	for _, item := range durableStops(t, h) {
+		t.Errorf("daemon recorded a durable stop: %+v", item)
+	}
+}
+
+// durableStops returns the daemon's open durable-stop items. A durable stop
+// leaves the listener up and h.errs empty; its item is the only sign of it.
+func durableStops(t *testing.T, h *daemon) []domain.AttentionItem {
+	t.Helper()
+	var stops []domain.AttentionItem
 	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range items {
 			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
-				t.Errorf("daemon recorded a durable stop: %+v", item)
+				stops = append(stops, item)
 			}
 		}
 		return err
 	}); err != nil {
 		t.Fatalf("list system health items: %v", err)
 	}
+	return stops
 }

@@ -16,9 +16,18 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
-// scenarioWaitBound bounds each wait on the scenario daemon's loops. A clean
-// run takes about a second; the margin is for a loaded CI host.
-const scenarioWaitBound = 60 * time.Second
+// scenarioWaitBound bounds each wait on the scenario daemon's loops, so it
+// catches a hang, not a slow run. The longest wait, the quota park's from the
+// allowed reading to the parked run's terminal, takes about 2s without -race,
+// 17s with it, and about 30s with it on a heavily loaded host: the engine's
+// serial reconcile pass slows several times under the race detector.
+//
+// The bound exceeds the quota-park scenario's 2-minute reset (scenario.go),
+// so it no longer proves the allowed reading, rather than the reset, released
+// the park; TestScenarioQuotaParkResumes checks that against the start time.
+// It stays under go test's default 10-minute timeout, so a hang still fails
+// with the waiting test's own message.
+const scenarioWaitBound = 3 * time.Minute
 
 func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
 	t.Parallel()
@@ -198,9 +207,38 @@ func TestScenarioQuotaParkResumes(t *testing.T) {
 
 	recordScenarioAllowedReading(t, h.store, window.Pool, window.Window)
 	assertScenarioPublished(t, h.attention, submitted.TaskID, parked)
+	assertStartedBeforeReset(t, h.attention, submitted.TaskID, parked, window.ResetsAt)
 	if err := h.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+}
+
+// assertStartedBeforeReset checks that the parked run's invocation started
+// before the refused window's reset. Once the reset passes, the park lets the
+// attempt start whatever the readings say, so a start at or after it no
+// longer proves the allowed reading released the park. The check holds
+// whatever the wait bound.
+func assertStartedBeforeReset(t *testing.T, attention *signet.Service, task domain.TaskID, run domain.RunID, resetsAt *time.Time) {
+	t.Helper()
+	if resetsAt == nil {
+		t.Fatal("parked hold carries no reset")
+	}
+	timeline, err := attention.GetTaskTimeline(t.Context(), task)
+	if err != nil {
+		t.Fatalf("task timeline: %v", err)
+	}
+	for _, event := range timeline.Events {
+		if event.RunID == nil || *event.RunID != run ||
+			event.Milestone == nil || event.Milestone.Kind != domain.MilestoneInvocationStarted {
+			continue
+		}
+		if started := event.Milestone.RecordedAt; !started.Before(*resetsAt) {
+			t.Fatalf("run %s started at %s, not before the refusal's reset at %s: the reset, not the allowed reading, may have released the park",
+				run, started.Format(time.RFC3339Nano), resetsAt.Format(time.RFC3339Nano))
+		}
+		return
+	}
+	t.Fatalf("run %s recorded no %s milestone; events: %+v", run, domain.MilestoneInvocationStarted, timeline.Events)
 }
 
 func scenarioConfig(t *testing.T, played *scenario) config {
