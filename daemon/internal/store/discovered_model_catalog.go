@@ -8,9 +8,10 @@ import (
 )
 
 // Discovered model catalogs (migration 0127, issue #2594): what each Claude
-// enrollment's pinned CLI last reported it can run. Daemon-internal
-// observation that grants nothing (Tier B), so it is written on InternalTx
-// and is not synchronized; a bad row fails the read loudly.
+// enrollment's pinned CLI last reported it can run. Observation that grants
+// nothing (Tier B). It is written on WriteTx because the bootstrap's agent
+// catalog carries it (#2598), so a new record moves the sync revision and a
+// client refetches; a bad row fails the read loudly.
 
 const (
 	putDiscoveredModelCatalogSQL = `
@@ -30,7 +31,7 @@ FROM discovered_model_catalogs ORDER BY enrollment_id`
 
 // RecordDiscoveredModelCatalog stores an enrollment's catalog, replacing any
 // earlier one. The enrollment must exist: ErrNotFound otherwise.
-func (tx *InternalTx) RecordDiscoveredModelCatalog(ctx context.Context, catalog domain.DiscoveredModelCatalog) error {
+func (tx *WriteTx) RecordDiscoveredModelCatalog(ctx context.Context, catalog domain.DiscoveredModelCatalog) error {
 	fail := func(err error) error {
 		return fmt.Errorf("record discovered model catalog %q: %w", catalog.EnrollmentID, err)
 	}
