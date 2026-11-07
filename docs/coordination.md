@@ -308,13 +308,15 @@ reports the post-merge results required by AGENTS.md.
 
 ## Unit Sizing
 
-A work unit's expected pull request stays around or under 1,000 authored
-changed lines. The budget is soft, not a gate: merged-PR review history
-shows automated-review convergence flat below roughly that size and
-multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md, which
-counted every added line; devlog 2026-10-05-1014-unit-sizing-revision.md
-narrows the count to authored lines), so a unit kept deliberately larger
-records its reason on the issue and proceeds.
+A work unit's expected pull request stays around or under 1,500 authored
+changed lines. The budget is soft, not a gate: merged pull requests up to
+about that size land as cleanly as smaller ones, and larger ones are sent
+back by CI and handed back by the lander more often
+(devlog 2026-11-07-1006-unit-size-budget-1500.md, which replaces the
+retired reviewer's review-round evidence behind the earlier 1,000 figure in
+devlog 2026-08-18-0818-unit-size-budget.md and
+devlog 2026-10-05-1014-unit-sizing-revision.md), so a unit kept
+deliberately larger records its reason on the issue and proceeds.
 
 The budget counts authored lines because each one is a decision a
 reviewer has to weigh. One test tells authored lines from regenerated
