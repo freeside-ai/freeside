@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Hermetic tests of compiled discovery, coverage accounting, and CI gates.
+# Hermetic tests of compiled and run-event discovery, coverage accounting,
+# and CI gates.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 python3 - "$ROOT" <<'PY'
@@ -43,7 +44,8 @@ def events(selected):
 
 # A `go` stand-in serving SHARD_FIXTURE's {package: families}: it lists the
 # named packages (or all for ./...) and, with SHARD_EXECUTE=yes, runs the
-# families a -run pattern selects in each named package.
+# families a -run pattern selects in each named package. With
+# SHARD_NO_LIST=yes it refuses compiled discovery, as a rest shard needs none.
 FAKE_GO = '''#!/usr/bin/env python3
 import json, os, sys
 import re
@@ -51,6 +53,7 @@ import signal
 data = json.load(open(os.environ['SHARD_FIXTURE']))
 if sys.argv[1] == 'list':
     print('\\n'.join(data)); sys.exit(0)
+if '-list' in sys.argv and os.environ.get('SHARD_NO_LIST') == 'yes': sys.exit(8)
 if '-list' in sys.argv:
     for p, names in data.items():
         if './...' not in sys.argv and p not in sys.argv: continue
@@ -142,6 +145,46 @@ class Coverage(unittest.TestCase):
         with patch.object(shards.subprocess, 'check_output', side_effect=subprocess.CalledProcessError(7, 'go')), \
                 self.assertRaises(subprocess.CalledProcessError):
             shards.discover('go', root)
+
+    def test_run_inventory_matches_compiled_discovery(self):
+        # Shapes from go1.26 test2json: a package with no test files skips
+        # with no run event, one with test files but no tests passes with
+        # none, a parallel test runs once beside its nested subtests, an
+        # example without an output comment is neither listed nor run, and a
+        # benchmark is listed but not run by default.
+        notests, empty, full = 'module/notests', 'module/empty', 'module/full'
+        packages = [notests, empty, full]
+        listing = [{'Package': notests, 'Action': 'skip'}] + [
+            {'Package': full, 'Action': 'output', 'Output': n + '\n'}
+            for n in ['TestParallel', 'TestSkip', 'BenchmarkThing', 'FuzzThing', 'Example_hello',
+                      'ok  \tmodule/full\t0.1s']] + [
+            {'Package': full, 'Action': 'pass'}, {'Package': empty, 'Action': 'pass'}]
+        def step(action, name=None):
+            return dict({'Package': full, 'Action': action}, **({'Test': name} if name else {}))
+        run = [{'Package': p, 'Action': 'start'} for p in packages] + [
+            {'Package': notests, 'Action': 'skip'},
+            step('run', 'TestParallel'), step('pause', 'TestParallel'),
+            step('run', 'TestSkip'), step('skip', 'TestSkip'), step('cont', 'TestParallel'),
+            step('run', 'TestParallel/outer'), step('run', 'TestParallel/outer/inner'),
+            step('pause', 'TestParallel/outer/inner'), step('cont', 'TestParallel/outer/inner'),
+            step('pass', 'TestParallel/outer/inner'), step('pass', 'TestParallel/outer'),
+            step('pass', 'TestParallel'), step('run', 'FuzzThing'), step('run', 'FuzzThing/seed#0'),
+            step('pass', 'FuzzThing/seed#0'), step('pass', 'FuzzThing'),
+            step('run', 'Example_hello'), step('output', 'Example_hello'), step('pass', 'Example_hello'),
+            step('pass'), {'Package': empty, 'Action': 'pass'}]
+        derived = shards.run_inventory(run, packages)
+        self.assertEqual(derived, shards.discovery_events(listing, packages))
+        self.assertEqual(derived, {notests: [], empty: [],
+                                   full: ['Example_hello', 'FuzzThing', 'TestParallel', 'TestSkip']})
+        self.assertEqual(len(shards.account(run, derived)['cases']), 7)
+        # A listed package with no completion fails accounting, as before.
+        with self.assertRaisesRegex(ValueError, 'missing package completion'):
+            shards.account(run[:-1], shards.run_inventory(run[:-1], packages))
+        for bad in [run + [{'Package': 'module/foreign', 'Test': 'TestForeign', 'Action': 'run'}],
+                    run + [step('run', 'BenchmarkThing')], run + [step('run', 'Test bad')],
+                    run + [step('run')], run + [step('run', 'TestSkip')], run + [[]]]:
+            with self.subTest(bad=bad[-1]), self.assertRaises(ValueError):
+                shards.run_inventory(bad, packages)
 
     def test_execution_accounts_for_examples_fuzz_seeds_and_default_skips(self):
         data = events(inventory)
@@ -529,7 +572,8 @@ fi
             # The freesided shard owns cmd/freesided, so the rest run leaves it out.
             rest_hinted = [p for p in hinted if p != 'module/cmd/freesided']
             self.assertEqual(report['commands'], [[str(fake), 'test', '-json', '-count=1'] + rest_hinted + unhinted])
-            # The inventories that verify and compare read stay as discovered.
+            # The run-derived inventories that verify and compare read keep
+            # every rest package: the hint orders only the command.
             discovered = {p: ['TestRest'] for p in listed if p != 'module/cmd/freesided'}
             self.assertEqual(report['inventory'], discovered)
             self.assertEqual(shards.read_json(output / 'inventory.json'), discovered)
@@ -545,8 +589,16 @@ fi
             base = [sys.executable, str(path), 'run', '--go', str(fake), '--daemon', str(directory)]
             env = dict(os.environ, SHARD_FIXTURE=str(fixture))
             def call(*selection):
-                return subprocess.run(base + list(selection), env=env, capture_output=True, text=True).returncode
-            self.assertEqual(call('--kind', 'rest', '--index', '1', '--count', '1'), 7)
+                child = dict(env, SHARD_NO_LIST='yes') if 'rest' in selection else env
+                return subprocess.run(base + list(selection), env=child, capture_output=True, text=True).returncode
+            # A rest inventory exists only after a successful run, so a
+            # failed run also removes one an earlier run left behind.
+            failed = directory / 'rest-failed'
+            failed.mkdir()
+            (failed / 'inventory.json').write_text('{}')
+            self.assertEqual(call('--kind', 'rest', '--index', '1', '--count', '1', '--evidence-dir', str(failed)), 7)
+            self.assertFalse((failed / 'inventory.json').exists())
+            self.assertFalse((failed / 'execution.json').exists())
             env['SHARD_EXECUTE'] = 'signal'
             self.assertEqual(call('--kind', 'rest', '--index', '1', '--count', '1'), 143)
             del env['SHARD_EXECUTE']
@@ -560,6 +612,14 @@ fi
                 with self.subTest(selection=selection):
                     self.assertEqual(call('--kind', selection[0], '--index', selection[1], '--count', selection[2]), 1)
             env['SHARD_EXECUTE'] = 'yes'
+            # A filter in GOFLAGS would shrink a run-derived inventory.
+            for goflags in ('-run=TestA', '-trimpath --skip TestA', '-test.list=.', '-run'):
+                with self.subTest(goflags=goflags):
+                    env['GOFLAGS'] = goflags
+                    self.assertEqual(call('--kind', 'rest', '--index', '1', '--count', '1'), 1)
+            env['GOFLAGS'] = '-p=2 -trimpath -runner=x'
+            self.assertEqual(call('--kind', 'rest', '--index', '1', '--count', '1'), 0)
+            del env['GOFLAGS']
             reports = []
             for kind, index, count in [('rest', 1, 1), ('freesided', 1, 1), ('integration', 1, 2), ('integration', 2, 2)]:
                 output = directory / f'{kind}-{index}'
@@ -576,6 +636,10 @@ fi
                 reports.append(output / 'execution.json')
             # The evidence names the width that produced it, empty when unset.
             self.assertEqual([shards.read_json(r)['goflags'] for r in reports], ['-p=6', '', '', ''])
+            # The rest shard runs one unfiltered command and takes its
+            # inventory from that run.
+            self.assertEqual(shards.read_json(reports[0])['commands'],
+                             [[str(fake), 'test', '-json', '-count=1', 'module/rest']])
             # cmd/freesided runs whole in its own shard and nowhere else.
             self.assertEqual(shards.read_json(reports[0].parent / 'inventory.json'), {'module/rest': ['TestRest']})
             self.assertEqual(shards.read_json(reports[1].parent / 'inventory.json'), {freesided: ['TestServe']})
@@ -656,7 +720,21 @@ fi
                     rest_inventory.write_text(json.dumps(tampered))
                     with self.subTest(tampered=tampered), self.assertRaisesRegex(ValueError, 'rest shard omitted'):
                         shards.verify_reports(reports)
+                # A saved rest inventory, and the report beside it, must match
+                # the one re-derived from the raw events.
+                saved_report = reports[0].read_text()
+                for families in (['TestExtra', 'TestRest'], []):
+                    rest_inventory.write_text(json.dumps({'module/rest': families}))
+                    reports[0].write_text(json.dumps(dict(json.loads(saved_report),
+                                                          inventory={'module/rest': families})))
+                    with self.subTest(families=families), \
+                            self.assertRaisesRegex(ValueError, 'rest inventory differs from raw events'):
+                        shards.verify_reports(reports[:2], 'rest')
                 rest_inventory.write_text(saved_inventory)
+                reports[0].write_text(json.dumps(dict(json.loads(saved_report), goflags='-skip=TestRest')))
+                with self.assertRaisesRegex(ValueError, 'GOFLAGS filtered'):
+                    shards.verify_reports(reports[:2], 'rest')
+                reports[0].write_text(saved_report)
                 freesided_inventory = reports[1].parent / 'inventory.json'
                 saved_inventory = freesided_inventory.read_text()
                 freesided_inventory.write_text(json.dumps(dict(json.loads(saved_inventory), **{'module/rest': ['TestRest']})))
@@ -746,7 +824,9 @@ fi
                 result = subprocess.run([sys.executable, str(path), 'run', '--go', str(fake),
                                          '--daemon', str(directory), '--kind', kind, '--index', '1',
                                          '--count', count, '--integration-count', '1',
-                                         '--evidence-dir', str(output)], env=env, capture_output=True, text=True)
+                                         '--evidence-dir', str(output)],
+                                        env=dict(env, SHARD_NO_LIST='yes') if kind == 'rest' else env,
+                                        capture_output=True, text=True)
                 if result.returncode == 0:
                     (output / 'metadata.json').write_text(json.dumps({
                         'tested_commit': 'head', 'production_tree': 'production',

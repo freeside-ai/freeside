@@ -70,8 +70,8 @@ DARWIN_SELECTION = [
 # 20.8, and 19.6 s). `go test -p` starts packages in argument order, so
 # passing these first keeps a long package from waiting for a slot behind
 # short ones. The list only orders the command's arguments; it selects
-# nothing, and an entry missing from the inventory is skipped because it is
-# a scheduling hint, not a check.
+# nothing, and an entry missing from the package list is skipped because it
+# is a scheduling hint, not a check.
 REST_PACKAGE_ORDER = [
     "cmd/freesided",
     "internal/store",
@@ -130,24 +130,63 @@ def own_package(packages, kind):
     return matches[0]
 
 
-def discover(go, daemon, integration_only=False, *, packages=None, rest_only=False, only=None):
+def rest_packages(packages):
+    """Every package that no single-package shard kind runs."""
+    # Fail closed on a missing carve-out: rest would otherwise shrink silently.
+    excluded = {own_package(packages, kind) for kind in OWN_PACKAGES}
+    return [p for p in packages if p not in excluded]
+
+
+def discover(go, daemon, integration_only=False, *, packages=None, only=None):
     packages = list_packages(go, daemon) if packages is None else packages
     if integration_only:
         packages = [own_package(packages, "integration")]
-    if rest_only:
-        # Fail closed on a missing carve-out: rest would otherwise shrink silently.
-        excluded = {own_package(packages, kind) for kind in OWN_PACKAGES}
-        packages = [p for p in packages if p not in excluded]
     if only is not None:
         require(set(only) <= set(packages), "discovery selection names an unknown package")
         packages = list(only)
     require(packages, "empty discovery selection")
-    subset = integration_only or rest_only or only is not None
+    subset = integration_only or only is not None
     listing = subprocess.check_output(
         [go, "test", "-json", "-list", "."] + (packages if subset else ["./..."]),
         cwd=daemon, text=True
     )
     return discovery_events((json.loads(line) for line in listing.splitlines()), packages)
+
+
+def run_inventory(events, packages):
+    """Derive the families a run executed, in discovery_events()'s shape.
+
+    Every top-level test, example with an output comment, and fuzz target
+    emits exactly one `run` event whose name has no `/`, so these events list
+    what `go test -list` lists without a second compile and link of every
+    test binary (devlog/2026-11-07-1026-rest-shard-run-inventory.md). A
+    package with no tests keeps an empty list; account() checks that every
+    package completed.
+    """
+    inventory = {p: [] for p in packages}
+    for event in events:
+        require(isinstance(event, dict), "execution event is not an object")
+        name = event.get("Test")
+        if event.get("Action") != "run" or "/" in (name or ""):
+            continue
+        package = event.get("Package")
+        require(package in inventory, "execution returned an unselected package")
+        require(isinstance(name, str) and name.isidentifier()
+                and name.startswith(("Test", "Example", "Fuzz")), f"malformed executed family: {name!r}")
+        require(name not in inventory[package], f"duplicate executed family: {package}/{name}")
+        inventory[package].append(name)
+    for names in inventory.values():
+        names.sort()
+    return inventory
+
+
+def filters_tests(goflags):
+    """Whether GOFLAGS filters or replaces the tests a run executes.
+
+    A run inventory only names what ran, so a -run, -skip, or -list that
+    reaches the rest shard through GOFLAGS would shrink it unnoticed.
+    """
+    return any(re.match(r"-{1,2}(test\.)?(run|skip|list)(=|$)", word) for word in goflags.split())
 
 
 def darwin_packages(packages):
@@ -263,45 +302,52 @@ def run(args):
     directory = args.evidence_dir
     if directory:
         directory.mkdir(parents=True, exist_ok=True)
-        # A report only becomes evidence after this invocation accounts for every family.
-        (directory / "execution.json").unlink(missing_ok=True)
+        # A report only becomes evidence after this invocation accounts for
+        # every family, and a rest inventory only after its run succeeds.
+        for name in ("execution.json", "inventory.json"):
+            (directory / name).unlink(missing_ok=True)
     packages = list_packages(args.go, args.daemon)
     write_json(directory, "packages.json", packages)
-    darwin = darwin_packages(packages) if args.kind == "darwin" else None
-    only = None
-    if args.kind == "darwin":
-        only = list(darwin)
-    elif args.kind == "freesided":
-        only = [own_package(packages, "freesided")]
-    inventory = discover(args.go, args.daemon, args.kind == "integration",
-                         packages=packages, rest_only=args.kind == "rest", only=only)
     package = own_package(packages, "integration")
     count = args.count if args.kind == "integration" else (args.integration_count or 3)
     bins = []
-    if args.kind == "integration":
-        weights = json.loads(args.weights.read_text())
-        bins = partition(inventory[package], count, weights)
-        selected = {package: bins[args.index - 1]}
-    elif args.kind == "darwin":
-        selected = darwin_families(darwin, inventory)
-    else:
-        selected = inventory
-    require(selected, "empty package selection")
-    write_json(directory, "inventory.json", inventory)
-    write_json(directory, "partition.json", {"count": count, "integration": bins})
     base = [args.go, "test", "-json", "-count=1"]
-    if args.kind == "integration":
-        commands = [base + ["-run", run_pattern(selected[package]), package]]
-    elif args.kind == "darwin":
-        # One -run applies to every package in a command, and accounting
-        # rejects an unselected family, so each filtered package runs alone.
-        whole = [p for p, families in darwin.items() if families is None]
-        commands = ([base + whole] if whole else []) + [
-            base + ["-run", run_pattern(selected[p]), p]
-            for p, families in darwin.items() if families is not None]
+    if args.kind == "rest":
+        # The rest shard runs every family unfiltered, so its own run events
+        # give its inventory (run_inventory) and no compiled discovery runs.
+        rest = rest_packages(packages)
+        require(rest, "empty package selection")
+        require(not filters_tests(os.environ.get("GOFLAGS", "")), "GOFLAGS filters the rest shard's tests")
+        commands = [base + rest_order(rest)]
     else:
-        commands = [base + rest_order(list(selected))]
-    print(f"shard {args.kind} {args.index}/{args.count}: {len(selected)} packages", file=sys.stderr)
+        darwin = darwin_packages(packages) if args.kind == "darwin" else None
+        only = None
+        if args.kind == "darwin":
+            only = list(darwin)
+        elif args.kind == "freesided":
+            only = [own_package(packages, "freesided")]
+        inventory = discover(args.go, args.daemon, args.kind == "integration", packages=packages, only=only)
+        if args.kind == "integration":
+            weights = json.loads(args.weights.read_text())
+            bins = partition(inventory[package], count, weights)
+            selected = {package: bins[args.index - 1]}
+            commands = [base + ["-run", run_pattern(selected[package]), package]]
+        elif args.kind == "freesided":
+            selected = inventory
+            commands = [base + list(selected)]
+        else:
+            selected = darwin_families(darwin, inventory)
+            # One -run applies to every package in a command, and accounting
+            # rejects an unselected family, so each filtered package runs alone.
+            whole = [p for p, families in darwin.items() if families is None]
+            commands = ([base + whole] if whole else []) + [
+                base + ["-run", run_pattern(selected[p]), p]
+                for p, families in darwin.items() if families is not None]
+        require(selected, "empty package selection")
+        write_json(directory, "inventory.json", inventory)
+    write_json(directory, "partition.json", {"count": count, "integration": bins})
+    width = len(rest) if args.kind == "rest" else len(selected)
+    print(f"shard {args.kind} {args.index}/{args.count}: {width} packages", file=sys.stderr)
     evidence = (directory / "tests.jsonl").open("w") if directory else None
     events = []
     invalid = None
@@ -326,7 +372,11 @@ def run(args):
     if code:
         return code if code > 0 else 128 - code
     require(invalid is None, "malformed JSON execution output")
+    if args.kind == "rest":
+        inventory = selected = run_inventory(events, rest)
     report = account(events, selected)
+    if args.kind == "rest":
+        write_json(directory, "inventory.json", inventory)
     report.update({"kind": args.kind, "index": args.index, "count": args.count,
                    "integration_count": count, "commands": commands, "inventory": selected})
     # The commands do not show the width; GOFLAGS reaches go test through the environment.
@@ -424,8 +474,14 @@ def verify_reports(paths, shards="all"):
         discovered = read_json(directory / "inventory.json")
         selected = report["inventory"]
         if report["kind"] == "rest":
-            require(set(discovered) == set(packages) - {package, freesided} and selected == discovered,
+            rest = rest_packages(packages)
+            require(set(discovered) == set(rest) and selected == discovered,
                     "rest shard omitted a package or family")
+            require(not filters_tests(report["goflags"]), "GOFLAGS filtered the rest shard's tests")
+            # The rest inventory came from the run, so re-derive it from the
+            # raw events instead of trusting the saved file.
+            require(discovered == run_inventory(read_events(directory / "tests.jsonl"), rest),
+                    "rest inventory differs from raw events")
         elif report["kind"] == "freesided":
             require(set(discovered) == {freesided} and selected == discovered,
                     "freesided shard omitted a package or family")
