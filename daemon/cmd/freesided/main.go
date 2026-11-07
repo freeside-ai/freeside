@@ -29,20 +29,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
-	"github.com/freeside-ai/freeside/daemon/internal/inference"
-	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
-	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/usagecollect"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -870,25 +866,8 @@ type daemon struct {
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
 	startedAt := time.Now().UTC()
-	if !cfg.Environment.valid() {
-		return nil, fmt.Errorf("environment %q is not prod, dev, or ephemeral", cfg.Environment)
-	}
-	if cfg.DBPath == "" {
-		return nil, errors.New("-db is required")
-	}
-	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
-		return nil, errors.New("-seed-walking-skeleton requires -driver fake")
-	}
-	if cfg.Scenario != nil {
-		// Before the lock or the store: a non-ephemeral store must never
-		// receive the fake backend's conformance claim.
-		if cfg.Environment != environmentEphemeral {
-			return nil, fmt.Errorf("-driver scenario requires -environment %s, not %q",
-				environmentEphemeral, cfg.Environment)
-		}
-		if cfg.FakeDriverEnabled || cfg.Claude != nil {
-			return nil, errors.New("-driver scenario cannot run beside another driver")
-		}
+	if err := validateRunConfig(cfg); err != nil {
+		return nil, err
 	}
 	var fixture seedfixture.Name
 	if cfg.SeedFixture != "" {
@@ -1055,51 +1034,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	if fixture != "" {
-		inventory, err := seedfixture.Seed(parent, st, fixture)
-		if errors.Is(err, seedfixture.ErrStoreNotEmpty) {
-			return nil, fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", cfg.DBPath)
-		}
-		if err != nil {
-			// The fixture commits in several transactions, so a failure after
-			// the first leaves a partial fixture that the emptiness check then
-			// refuses to reseed.
-			return nil, fmt.Errorf("-seed-fixture %s: %w (store %q may be partially seeded; delete it before retrying)",
-				fixture, err, cfg.DBPath)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Info("seeded fixture", "fixture", fixture,
-				"projects", inventory.Projects, "tasks", inventory.Tasks, "runs", inventory.Runs,
-				"attention_items", inventory.AttentionItems)
-		}
-	}
-	// Backup evidence is maintained before anything can admit work. Orphan
-	// reconciliation below resumes writers through the unattended admission
-	// gate, which reads backup health, so a pass that has not yet scanned the
-	// live database would let that gate see a stale checkpoint's verdict.
-	localBackups, err := localBackupFiles.NewProducer(st)
-	if err != nil {
-		return nil, err
-	}
-	// A store written before proposal paths persisted their evidence bodies
-	// holds carrier rows whose bytes the closure scan cannot verify. Rebuild
-	// them from the durable proposal rows first, so this pass already sees them.
-	// A failed rebuild is reported, never fatal, for the reason below: it
-	// re-gates every proposal row, including ones no backup pass reads, and a
-	// body it could not write still surfaces as unhealthy backup closure.
-	if restored, err := signet.RestoreProposalEvidence(parent, st, blobs); err != nil {
-		fmt.Fprintln(os.Stderr, "freesided:", err)
-	} else if restored > 0 && cfg.Logger != nil {
-		cfg.Logger.Info("restored effect-proposal evidence bodies", "count", restored)
-	}
-	if err := localBackups.Maintain(parent); err != nil {
-		// A durable row this binary cannot reconstruct is reported, never
-		// fatal: startup is the one pass an operator cannot retry past, and
-		// the dominant cause is a downgrade that starting is what lets them
-		// undo. Backup health carries the refusal (store.ErrBackupClosureIncomplete).
-		if !errors.Is(err, store.ErrBackupClosureIncomplete) {
+		if err := seedStartupFixture(parent, st, fixture, cfg); err != nil {
 			return nil, err
 		}
-		fmt.Fprintln(os.Stderr, "freesided:", err)
+	}
+	localBackups, err := maintainLocalBackups(parent, st, blobs, localBackupFiles, cfg)
+	if err != nil {
+		return nil, err
 	}
 	// The fake driver's state directory is only claimed in fake mode: the
 	// production composition must not require walking-skeleton state on a
@@ -1114,436 +1055,34 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var (
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
-		agentCatalog          *signet.AgentCatalog
 		imageUpkeep           *engine.ImageUpkeep
-		upkeepTrigger         *imageUpkeepTrigger
 		scenarioWiring        *scenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
+		late                  = &startupBindings{}
 	)
-	// A reading is stale once one scheduled doctor pass, the collection's
-	// cadence, has been missed. Collection and the bootstrap's stale_at share
-	// the age, so a client sees a reading stale exactly when collection does.
-	usageRefreshAge := 2 * cfg.DoctorInterval
-	usageCollectors, claudeUsage := usageCollectorsFor(cfg.usageCollectors)
-	usage := usagecollect.New(st, usageCollectors, usagecollect.Config{
-		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
-	})
-	// One sink serves both capture paths: a collected terminal (the engine)
-	// and an unattended export (the driver's export recorder). It stays a nil
-	// interface without the Claude collector, never a typed nil.
-	var claudeUsageCaptures engine.ClaudeUsageSink
-	if claudeUsage != nil {
-		claudeUsageCaptures = claudeUsageSink{collector: claudeUsage, usage: usage}
-	}
-	attention := signet.NewService(st,
-		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
-			if workflow == nil {
-				return commit()
-			}
-			return workflow.CommitTaskStop(stopCtx, taskID, commit)
-		}),
-		signet.WithFollowUpFiler(func() signet.FollowUpFiler {
-			return followUpFilerBinding(claudeWiring)
-		}),
-		// An approved image-policy adoption wakes upkeep to build under it.
-		signet.WithImageUpkeepWake(func() {
-			if upkeepTrigger != nil {
-				upkeepTrigger.wake()
-			}
-		}),
-		signet.WithPairingKey(pairingKey),
-		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
-		signet.WithClock(cfg.now),
-		signet.WithLogger(cfg.Logger),
-		signet.WithDoctorSchedule(doctorScheduleID, doctorAvailable.Load),
-		signet.WithBlobStore(blobs),
-		// Client task submission (plan §5.11) resolves each project's policy from
-		// its operator-configured startup snapshot, independently of label intake.
-		// An omitted manual-submission file disables new client tasks.
-		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator)),
-		// A client line change runs the engine's rule inside the command's
-		// transaction, so the receipt commits with the line.
-		signet.WithTaskLineChanger(func(
-			ctx context.Context, tx *store.WriteTx, change signet.TaskLineChange, now time.Time,
-		) (signet.TaskLineChangeOutcome, error) {
-			result, err := engine.ChangeTaskLineTx(ctx, tx, engine.ChangeTaskLineRequest{
-				TaskID: change.TaskID, Role: change.Role, Selection: change.Selection, Clear: change.Clear,
-				Source: change.Source,
-			}, now)
-			return signet.TaskLineChangeOutcome{Recorded: result.Recorded, Line: result.Line}, err
-		}),
-		// A client names a line's agent; the line records the selection that
-		// agent of the committed tree reduces to, and goes back to the client
-		// as the agent its selection maps to. The tree exists only after the
-		// Claude composition below; without it a change fails closed and a
-		// line goes out as its enrollment/model/effort.
-		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) {
-			if claudeWiring == nil || claudeWiring.env.Agents == nil {
-				return nil, signet.ErrOperatorSettingUnavailable
-			}
-			return claudeWiring.env.Agents.Tree, nil
-		}),
-		// A policy names agents of the committed tree, which exists only after
-		// the Claude composition below; without it the command fails closed.
-		signet.WithRoutingPolicySetter(func(
-			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
-		) (signet.RoutingPolicyOutcome, error) {
-			if claudeWiring == nil {
-				return signet.RoutingPolicyOutcome{}, signet.ErrOperatorSettingUnavailable
-			}
-			result, err := engine.SetRoutingPolicyTx(ctx, tx,
-				claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision,
-				engine.SetRoutingPolicyRequest{
-					Roles: change.Roles, DrainFirstAccount: change.DrainFirstAccount,
-					Source: change.Source, SetBy: change.SetBy,
-				}, now)
-			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
-		}),
-		// An alternate-agent choice re-derives its rule against the committed
-		// tree and the daemon's admission settings, which exist only after the
-		// Claude composition below; without them both commands fail closed.
-		signet.WithAlternateAgentRetrier(func(
-			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
-		) (domain.AlternateAgentRetry, error) {
-			if claudeWiring == nil || claudeWiring.env.Agents == nil {
-				return domain.AlternateAgentRetry{}, signet.ErrOperatorSettingUnavailable
-			}
-			return claudeWiring.env.Agents.AcceptAlternateAgentRetryTx(ctx, tx, command, item, now)
-		}),
-		signet.WithParkedTaskMover(func(
-			ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
-		) (domain.ParkedTaskMoveReceipt, error) {
-			if claudeWiring == nil || claudeWiring.env.Agents == nil {
-				return domain.ParkedTaskMoveReceipt{}, signet.ErrOperatorSettingUnavailable
-			}
-			return claudeWiring.env.Agents.MoveParkedTaskTx(ctx, tx, request, now)
-		}),
-		// The catalog, like the tree it projects, exists only after the
-		// Claude composition below; until then, and in the fake-driver and
-		// scenario compositions that load no tree, clients see null.
-		signet.WithAgentCatalog(func() *signet.AgentCatalog { return agentCatalog }),
-		signet.WithUsageRefreshAge(usageRefreshAge),
-		// A client's refresh or reassignment starts its collection only after
-		// the command commits.
-		signet.WithUsageOperator(usageOperator{coordinator: usage}),
-		signet.WithNtfy(signet.NtfyConfig{
-			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
-		}),
-		// The effective digest exists only after the Claude composition below;
-		// the func indirection lets the decision-time adoption gate read it
-		// then. The fake-driver composition leaves it empty (gate absent);
-		// the scenario's review source is the fake's default configuration.
-		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
-			if scenarioWiring != nil {
-				return fake.DefaultReviewConfigurationDigest
-			}
-			if claudeWiring == nil {
-				return ""
-			}
-			return claudeWiring.reviewConfigurationDigest
-		}),
-	)
+	usageRefreshAge, usage, claudeUsageCaptures := newUsageCollection(st, cfg)
+	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
+		manualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
 	if cfg.FakeDriverEnabled {
-		walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock), engine.WithMachineCapacity(bound)}
-		if cfg.Logger != nil {
-			walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
-		}
-		workflow, err = engine.New(
-			st, attention, autoScriptStageDriver{StageDriver: driver}, walkingSkeletonOptions...)
+		workflow, err = composeFakeWorkflow(parent, st, attention, driver, lock, bound, cfg, late)
 		if err != nil {
 			return nil, err
-		}
-		// Even explicit fake execution starts without sample work unless asked.
-		if cfg.SeedWalkingSkeleton {
-			if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
-				RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
-				SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
-			}); err != nil {
-				return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
-			}
 		}
 	} else if cfg.Claude != nil {
-		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, claudeUsageCaptures, cfg.Logger)
-		if err != nil {
-			// A review role the lineup cannot fill stops startup: the review
-			// sources cannot be composed without its identity. Leave the
-			// item naming the role for the next start that gets far enough
-			// to serve it.
-			var roleFailure *roleAdmissionError
-			if errors.As(err, &roleFailure) {
-				err = errors.Join(err, reportRoleFailure(ctx, st, roleFailure, startupNow(cfg.now)))
-			}
-			return nil, err
-		}
-		logEffectiveReviewConfiguration(cfg.Logger, claudeWiring.reviewConfigurationDigest)
-		// Reconcile below can resume credential-bearing sessions before every
-		// later startup step has succeeded. Register their awaited cleanup
-		// immediately, while the store they need is still open.
-		startupSessionCloser = claudeWiring.closer
-		// The tree already parsed, so a projection error is a daemon bug.
-		catalog, err := signet.AgentCatalogOf(claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision)
+		var claude *claudeWorkflow
+		claude, err = composeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, cfg, manualProjects,
+			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late)
 		if err != nil {
 			return nil, err
 		}
-		agentCatalog = &catalog
-		stageDriver, err := claudeWiring.stageDriver(blobs)
-		if err != nil {
-			return nil, err
-		}
-		engineOptions := []engine.Option{
-			engine.WithDaemonLock(lock),
-			engine.WithMachineCapacity(bound),
-			engine.WithAdmission(claudeWiring.backend, admissionFloor(cfg.Claude.OperatingMode),
-				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
-			engine.WithAdmissionDerivation(claudeWiring.derive),
-		}
-		if claudeWiring.selectImage != nil {
-			engineOptions = append(engineOptions, engine.WithAdmissionImageSelection(claudeWiring.selectImage))
-		}
-		judgmentBudget := inference.Budget{
-			Window: 24 * time.Hour,
-			Site: inference.Limits{
-				Calls: 100, ComputeUnits: 1_000_000, AttentionItems: 25, Starvation: time.Hour,
-			},
-			Project: inference.Limits{
-				Calls: 500, ComputeUnits: 5_000_000, AttentionItems: 100, Starvation: 4 * time.Hour,
-			},
-			Global: inference.Limits{
-				Calls: 1_000, ComputeUnits: 10_000_000, AttentionItems: 200, Starvation: 8 * time.Hour,
-			},
-			// The ledger reserves each site's full bound per call, so the
-			// per-root allowance is the call ceiling at the largest bound
-			// (20 calls at the adjudicator's and drift auditor's 120 seconds)
-			// and never parks a root the ceiling still admits, whatever the
-			// mix of sites.
-			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
-		}
-		sites := judgmentSites(judgmentBudget)
-		advisoryStore, advisoryErr := openAdvisoryStore(cfg.StateDir, sites)
-		var advisoryWriter inference.AdvisoryWriter = advisoryStore
-		if advisoryErr != nil {
-			advisoryWriter = advisory.Unavailable(advisoryErr)
-			if cfg.Logger != nil {
-				cfg.Logger.Warn("inference advisory store unavailable; judgment calls will fail safe", "error", advisoryErr)
-			}
-		}
-		judgmentRuntime, ownedJudgments, err := composeProductionJudgments(cfg.StateDir, cfg.Claude.Judgments)
-		if err != nil {
-			return nil, err
-		}
-		if judgmentRuntime.Driver == nil && cfg.Logger != nil {
-			cfg.Logger.Info("subscription judgments are off; every judgment site returns its fail-safe")
-		}
-		judgmentHealth := newJudgmentRoleHealth(st, func() time.Time { return time.Now().UTC() }, cfg.Logger)
-		judgments, err := inference.New(inference.Config{
-			Logger:     cfg.Logger,
-			StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
-			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
-			Roles: judgmentRoles{
-				st: st, tree: claudeWiring.env.Agents.Tree, revision: claudeWiring.env.Agents.LineupRevision,
-				runtime: judgmentRuntime,
-				credentials: productionJudgmentCredentials(
-					st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin), cfg.Logger),
-			},
-			Health:   judgmentHealth,
-			Sites:    sites,
-			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
-		})
-		if err != nil {
-			return nil, fmt.Errorf("compose inference boundary: %w", err)
-		}
-		engineOptions = append(engineOptions, engine.WithInference(judgments))
-		researchFetcher, err := specify.NewFetcherWithIssueTokens(st, blobs, nil, claudeWiring.issueReadTokens)
-		if err != nil {
-			return nil, fmt.Errorf("compose research fetcher: %w", err)
-		}
-		deliveryMaterializer, err := productionMaterializer(blobs)
-		if err != nil {
-			return nil, fmt.Errorf("compose specification delivery validator: %w", err)
-		}
-		engineOptions = append(engineOptions, engine.WithProductionDeliveryValidation(
-			productionImplementationDeliveryValidator(deliveryMaterializer),
-		))
-		engineOptions = append(engineOptions, engine.WithSpecification(engine.SpecificationConfig{
-			Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
-			PromptPackageDigest: claudeWiring.specificationPromptPackage,
-			ValidateDelivery:    productionSpecificationDeliveryValidator(deliveryMaterializer),
-		}))
-		var shadowReviewFailure func(domain.RunID, int, domain.ReviewFailureClass, error)
-		if claudeWiring.shadowReviewSource != nil {
-			shadowReviewFailure = func(runID domain.RunID, round int, class domain.ReviewFailureClass, err error) {
-				if cfg.Logger != nil {
-					cfg.Logger.Warn("shadow review abandoned", "run_id", runID, "round", round,
-						"failure_class", class, "error", err)
-				}
-			}
-		}
-		verificationOwnership, err := ward.NewVerificationOwnership(
-			filepath.Join(cfg.StateDir, "task-verification"), ward.NewCLIRuntime(claudeWiring.containerBin))
-		if err != nil {
-			return nil, err
-		}
-		coverage, err := openTaskRuntimeCoverage(ctx, st, cfg.StateDir)
-		if err != nil {
-			return nil, err
-		}
-		engineOptions = append(engineOptions, engine.WithTaskCancellationRuntime(engine.TaskCancellationRuntime{
-			Timeout: 2 * time.Minute,
-			StopRun: func(stopCtx context.Context, run domain.Run, reviews []domain.ReviewRequestRecord) error {
-				var joined error
-				// Still request exact known teardown for an uncovered legacy task,
-				// but never equate its missing private records with absence.
-				if reason, err := unprovableTaskStop(stopCtx, st, coverage, run.TaskID); err != nil {
-					joined = errors.Join(joined, err)
-				} else if reason != "" {
-					joined = errors.Join(joined, errors.New(reason))
-				}
-				var mu sync.Mutex
-				var children sync.WaitGroup
-				stop := func(owner string, call func() error) {
-					children.Go(func() {
-						err := call()
-						mu.Lock()
-						if err != nil {
-							joined = errors.Join(joined, fmt.Errorf("%s: %w", owner, err))
-						}
-						mu.Unlock()
-					})
-				}
-				for _, stage := range run.Stages {
-					for _, attempt := range stage.Attempts {
-						stop("stage "+string(attempt.InvocationID), func() error {
-							return claudeWiring.driver.CancelAndConfirm(stopCtx, attempt.InvocationID)
-						})
-					}
-				}
-				for _, review := range reviews {
-					stop("review "+string(review.InvocationID), func() error {
-						return engine.StopTaskReviews(stopCtx, st, review, claudeWiring.reviewSource, claudeWiring.shadowReviewSource)
-					})
-				}
-				stop("verification", func() error { return verificationOwnership.StopRun(stopCtx, run.TaskID, run.ID) })
-				stop("judgments", func() error { return ownedJudgments.ConfirmRun(stopCtx, run.TaskID, run.ID) })
-				stop("publication", func() error { return claudeWiring.publisher.ReconcileCancelledRun(stopCtx, run.ID) })
-				children.Wait()
-				return joined
-			},
-			Unprovable: func(ctx context.Context, task domain.TaskID) (string, error) {
-				return unprovableTaskStop(ctx, st, coverage, task)
-			},
-		}))
-		rebuild, err := newProjectImageRebuild(*cfg.Claude, st)
-		if err != nil {
-			return nil, err
-		}
-		// Upkeep shares the lane's rebuild, and with it the one build gate.
-		imageUpkeep, err = composeImageUpkeep(st, attention, blobs, cfg, claudeWiring, rebuild, manualProjects,
-			&doctorConvergenceLock)
-		if err != nil {
-			return nil, err
-		}
-		if claudeWiring.bindImageUpkeep != nil {
-			claudeWiring.bindImageUpkeep(imageUpkeep.PendingResolution)
-		}
-		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
-			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
-			Transport: claudeWiring.publicationTransport,
-			Publisher: claudeWiring.publisher, Artifacts: blobs,
-			ApprovedRecipes:                 cfg.ApprovedRecipes,
-			RepositoryID:                    cfg.Claude.RepositoryID,
-			RemediationPromptPackageDigest:  claudeWiring.remediationPromptPackage,
-			ReviewSource:                    claudeWiring.reviewSource,
-			ShadowReviewSource:              claudeWiring.shadowReviewSource,
-			ReviewAdmission:                 claudeWiring.reviewAdmission,
-			ReviewRecovery:                  claudeWiring.reviewRecovery,
-			ReviewConfigurationDigest:       claudeWiring.reviewConfigurationDigest,
-			ShadowReviewConfigurationDigest: claudeWiring.shadowReviewConfigurationDigest,
-			ShadowReviewDefaultRate: enabledShadowReviewRate(
-				claudeWiring.shadowReviewSource, claudeWiring.shadowReviewRate),
-			ShadowReviewFailure:    shadowReviewFailure,
-			ReviewHostInstructions: claudeWiring.reviewHostInstructions,
-			HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
-			RebuildProjectImage:    rebuild,
-			ImageUpkeepPending:     imageUpkeep.PendingResolution,
-			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
-				return ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
-			},
-			NewBoundRoom: func(image domain.ProjectImage, size ward.ContainerSize, run domain.Run, invocation domain.InvocationID) (engine.ProductionVerificationRoom, error) {
-				room, err := ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
-				if err != nil {
-					return nil, err
-				}
-				if err := verificationOwnership.Bind(room, run.TaskID, run.ID, invocation); err != nil {
-					return nil, err
-				}
-				return room, nil
-			},
-		}))
-		if cfg.Claude.OperatingMode == domain.ModeUnattended {
-			engineOptions = append(engineOptions, engine.WithUnattendedHealthRefresh(
-				func(refreshCtx context.Context) error {
-					doctorConvergenceLock.Lock()
-					defer doctorConvergenceLock.Unlock()
-					return (operations.Doctor{
-						Store: st, Attention: attention,
-						ProjectID:                 domain.ProjectID("project-system"),
-						ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
-						Mode:                      domain.ModeUnattended,
-						Now:                       cfg.now,
-					}).ConvergeReviewConfiguration(refreshCtx)
-				},
-			))
-		}
-		if cfg.Logger != nil {
-			engineOptions = append(engineOptions, engine.WithLogger(cfg.Logger))
-		}
-		if claudeUsageCaptures != nil {
-			engineOptions = append(engineOptions, engine.WithClaudeUsageSink(claudeUsageCaptures))
-		}
-		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
-		if err != nil {
-			return nil, err
-		}
-		// Before any loop admits: report why selection is not active, if it
-		// is not.
-		if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.now)); err != nil {
-			return nil, fmt.Errorf("activate agent selection: %w", err)
-		}
-		// The same for the judgment roles: name each one the lineup cannot
-		// fill before a site returns its fail-safe for it, and resolve the
-		// item of a role fixed since the last start.
-		if err := checkJudgmentRolesAtStartup(ctx, judgments, judgmentHealth, cfg.Logger); err != nil {
-			return nil, fmt.Errorf("check judgment roles: %w", err)
-		}
-		claudeWiring.driver.SetRecoveryLauncher(workflow.ResumeTaskInvocation)
-		claudeWiring.driver.SetRecoveryObserver(workflow.RecoverTaskInvocation)
-		for _, source := range []exec.ReviewSource{claudeWiring.reviewSource, claudeWiring.shadowReviewSource} {
-			if guarded, ok := source.(interface {
-				SetTaskWorkGuard(func(context.Context, domain.RunID) (context.Context, func(), error))
-			}); ok {
-				guarded.SetTaskWorkGuard(workflow.BeginRunWork)
-			}
-		}
-		// Give every orphan its first adoption attempt before the engine loop.
-		// An operational retry or a mutable policy refusal holds the intent,
-		// so the attempt's later Inspect passes drive the same recovery again
-		// without a process restart. Any other failure quarantines only
-		// that intent and raises its item, and the daemon still starts (#386).
-		// An intent directory that cannot be listed, or an item that cannot
-		// be written, still stops startup.
-		recovery, reconcileErr := claudeWiring.driver.Reconcile(ctx, heldClaudeRecovery)
-		if reconcileErr != nil {
-			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", reconcileErr)
-		}
-		if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.now)); err != nil {
-			return nil, fmt.Errorf("report quarantined stage intents: %w", err)
-		}
+		claudeWiring, workflow, imageUpkeep = claude.claudeWiring, claude.workflow, claude.imageUpkeep
 	} else if cfg.Scenario != nil {
 		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg, bound)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
+		late.scenarioWiring = scenarioWiring
 		// The forge serves only once its loop starts; a start that fails
 		// before then still owns the listener.
 		defer func() {
@@ -1552,6 +1091,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 		}()
 		workflow = scenarioWiring.workflow
+		late.workflow = workflow
 	}
 	// The live credential-integrity probe exists only in Claude mode, where
 	// the daemon has a runtime and a pinned exporter image to observe with.
@@ -1561,37 +1101,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin)),
 			cfg.now, cfg.Logger)
 	}
-	doctorPass := func(probe credentialIntegrityProbe) func(context.Context) error {
-		return func(runCtx context.Context) error {
-			if cfg.Claude == nil {
-				return nil
-			}
-			// The probe runs before the lock is taken. It lasts as long as
-			// its observer containers do, and the unattended engine waits on
-			// this lock before every dispatch.
-			replay := probe.runOnce(runCtx)
-			doctorConvergenceLock.Lock()
-			defer doctorConvergenceLock.Unlock()
-			_, err := (operations.Doctor{
-				Store: st, Attention: attention,
-				ProjectID:                 domain.ProjectID("project-system"),
-				Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
-				ConfigurationDigest:       claudeWiring.backend.ConfigurationDigest(),
-				ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
-				Mode:                      cfg.Claude.OperatingMode,
-				Now:                       cfg.now,
-				CredentialIntegrityProbe:  replay,
-				IdentityLabel:             credentialIdentityLabel,
-			}).Run(runCtx)
-			return err
-		}
-	}
 	// The startup pass reports recorded marks only, so starting the daemon
 	// starts no observer container. Scheduled passes run the live probe.
-	if err := doctorPass(nil)(parent); err != nil {
+	if err := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, nil)(parent); err != nil {
 		return nil, fmt.Errorf("initial doctor pass: %w", err)
 	}
-	runDoctor := doctorPass(integrityProbe)
+	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, integrityProbe)
 	if workflow != nil {
 		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
 			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
@@ -1655,9 +1170,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return workflow.CommitTaskWorkflowClosure(ctx, id, commit)
 		})
 	var fakeSched *scheduler.Scheduler
-	var claudeSched *scheduler.Scheduler
-	var activeReconciler *activeResourceReconciler
-	var intakeReconcilerLoop *intakeReconciler
+	var loops *claudeLoops
 	if cfg.FakeDriverEnabled {
 		// Construct every loop before making restart-gated recovery available.
 		// None is running yet, so no operator can resume into a partial start.
@@ -1667,40 +1180,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		fakeSched.SetLogger(cfg.Logger)
 	} else if claudeWiring != nil {
-		// The doctor and janitor cadences live on the §5.16 durable scheduler;
-		// their initial coverage remains the direct calls above.
-		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, d.usage.CollectAll, imageUpkeep)
+		loops, err = d.composeClaudeLoops(parent, st, attention, blobs, cfg, claudeWiring, workflow, imageUpkeep,
+			runDoctor, late)
 		if err != nil {
 			return nil, err
-		}
-		claudeSched.SetLogger(cfg.Logger)
-		if err := armTrustedConfigJobs(parent, claudeSched, cfg); err != nil {
-			return nil, err
-		}
-		upkeepTrigger = newImageUpkeepTrigger()
-		activeReconciler = &activeResourceReconciler{
-			store: st, pull: claudeWiring.observePull,
-			issue:  claudeWiring.observeIssue,
-			review: claudeWiring.observeReview,
-			// The default automated reviewer is wired here, not in the domain
-			// (plan §5.16, §7; AGENTS.md, Automated reviewer).
-			reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
-			reviewInvalidate: claudeWiring.reviewInvalidate,
-			evictConcluded:   claudeWiring.evictConcluded,
-			tipWatch: repositoryTipWatch{
-				Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,
-			},
-			observeTip:       claudeWiring.observeRepositoryTip,
-			upkeepTipAdvance: upkeepTrigger.tipAdvanced,
-			now:              func() time.Time { return time.Now().UTC() },
-		}
-		intakeReconcilerLoop = &intakeReconciler{
-			store: st, blobs: blobs, engine: workflow, attention: attention,
-			observeLabel: claudeWiring.observeLabelIssues,
-			observeIssue: claudeWiring.observeIssue,
-			evictLabel:   claudeWiring.evictLabelIssues,
-			initiators:   cfg.IntakeInitiators,
-			now:          func() time.Time { return time.Now().UTC() },
 		}
 	}
 	if workflow != nil {
@@ -1709,93 +1192,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}
 
-	// Usage collection starts before the control socket serves and the
-	// scheduler runs, either of which can trigger it. It only observes and
-	// ends only at shutdown, so it is not a supervised component: nothing it
-	// meets stops the daemon.
-	d.usage.Start(ctx)
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
-		d.usage.Wait()
-	}()
-	// Model discovery observes like usage collection: it runs once in the
-	// background, one container at a time, and nothing it meets stops the
-	// daemon.
-	if claudeWiring != nil {
-		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.containerBin,
-			cfg.claudeModelDiscoverer, cfg.codexModelDiscoverer, logger)
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			refresh.run(ctx)
-		}()
-	}
-	d.wg.Add(2)
-	go func() {
-		defer d.wg.Done()
-		err := d.server.Serve(listener)
-		if errors.Is(err, http.ErrServerClosed) {
-			return
-		}
-		d.componentExited(parent, ctx, componentHTTP, err)
-	}()
-	if loopbackTwin != nil {
-		// The same d.server serves both listeners, so d.server.Shutdown closes
-		// this one too; its exit is the same componentHTTP failure as the primary.
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			err := d.server.Serve(loopbackTwin)
-			if errors.Is(err, http.ErrServerClosed) {
-				return
-			}
-			d.componentExited(parent, ctx, componentHTTP, err)
-		}()
-	}
-	if d.pairing != nil {
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			if err := d.pairing.Serve(); !errors.Is(err, http.ErrServerClosed) {
-				d.componentExited(parent, ctx, componentPairingControl, err)
-			}
-		}()
-	}
-	if workflow != nil {
-		d.wg.Add(2)
-		go func() {
-			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
-		}()
-		go func() {
-			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
-		}()
-	}
-	go func() {
-		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentLocalBackups, localBackups.Run(ctx))
-	}()
-	if cfg.AttentionDeliveryInterval > 0 {
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			err := attention.RunDeliveries(ctx, cfg.AttentionDeliveryInterval, func(err error) {
-				reportAttentionDelivery(cfg.Logger, err)
-			})
-			if errors.Is(err, signet.ErrNotifierUnavailable) {
-				// A channel that cannot publish is a daemon without
-				// notifications, not a failed component: pairing already
-				// fails closed on the same check, and the inbox still works.
-				if cfg.Logger != nil {
-					cfg.Logger.Warn("phone notifications are off", "error", err)
-				}
-				return
-			}
-			d.componentExited(parent, ctx, componentAttentionDeliveries, err)
-		}()
-	}
+	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, listener, loopbackTwin,
+		localBackups, logger)
 	defer func() {
 		if !success {
 			if stop != nil {
@@ -1820,82 +1218,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				fakeSched.Run(ctx, cfg.SchedulerInterval))
 		}()
 	}
-	if claudeSched != nil {
-		d.wg.Add(6)
-		go func() {
-			defer d.wg.Done()
-			err := claudeWiring.followUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
-				if cfg.Logger != nil {
-					cfg.Logger.Error("follow-up filing pass failed", "error", err)
-				}
-			})
-			d.componentExited(parent, ctx, componentFollowUpFiling, err)
-		}()
-		doctorAvailable.Store(true)
-		go func() {
-			defer d.wg.Done()
-			err := claudeWiring.reviewReplier.Run(ctx, time.Minute, func(err error) {
-				if cfg.Logger != nil {
-					cfg.Logger.Warn("external review reply sweep", "error", err)
-				}
-			})
-			d.componentExited(parent, ctx, componentReviewReplies, err)
-		}()
-
-		// The production publication lane gets its own loop: one task holds a
-		// clone, a containerized verification, and GitHub calls for minutes,
-		// which inside the reconcile loop would stall every other run,
-		// invocation, and attention item for that whole span (issue #425).
-		go func() {
-			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentProductionPublication,
-				workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
-		}()
-		go func() {
-			defer d.wg.Done()
-			err := claudeSched.Run(ctx, cfg.SchedulerInterval)
-			doctorAvailable.Store(false)
-			d.componentExited(parent, ctx, componentScheduler, err)
-		}()
-		go func() {
-			defer d.wg.Done()
-			err := activeReconciler.Run(ctx,
-				defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
-			d.componentExited(parent, ctx, componentActiveResource, err)
-		}()
-		go func() {
-			defer d.wg.Done()
-			err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
-			d.componentExited(parent, ctx, componentLabelIntake, err)
-		}()
-		// The start and tip-advance triggers: an upgrade's rebuild can take
-		// an hour, so start does not wait for it.
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			upkeepTrigger.run(ctx, imageUpkeep, logger)
-		}()
+	if loops != nil {
+		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
 	}
 	if scenarioWiring != nil {
-		// The scenario's own loops: the in-process forge publication talks
-		// to, the publication lane, and the durable scheduler's publication
-		// watches. The forge is an HTTP server like the API, so its exit is
-		// the same component failure.
-		d.wg.Add(3)
-		go func() {
-			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
-		}()
-		go func() {
-			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentProductionPublication,
-				workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
-		}()
-		go func() {
-			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentScheduler,
-				scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
-		}()
+		d.startScenarioLoops(parent, ctx, cfg, scenarioWiring, workflow)
 	}
 	pairingCode, _, err := attention.MintPairingCode(parent)
 	if err != nil {
