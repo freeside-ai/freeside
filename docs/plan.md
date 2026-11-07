@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 111
+revision: 112
 status: active
-updated: 2026-11-05
+updated: 2026-11-07
 ---
 
 # Freeside
@@ -281,6 +281,10 @@ maintenance still decide whether Freeside creates a positive return.
    on GitHub; Freeside owns workflow decisions and approvals. A human merge
    is the current accountability checkpoint. Whether narrow, risk-bounded
    classes of change ever earn automatic merge is deliberately left open.
+   The ready card's review guide (Section [9](#9-comprehension), Summary Provenance) orders a
+   reading of the change and points into the PR. That is navigation, not
+   review: no stop carries a verdict, a reply, or a resolution, and the
+   operator still reviews and merges on GitHub.
 2. It is not a product for hypothetical users: no multi-tenancy or billing.
 3. It is **not a harness**. It uses sanctioned vendor batch interfaces and never
    owns a model loop.
@@ -6008,7 +6012,9 @@ below governs which layers each type carries:
 2. **The summary**: what happened, why, and what remains open, with uncertainty
    preserved. It is absorbable in seconds. It is a labeled agent claim and is
    present only where the card concerns agent work. A purely mechanical card
-   (`system_health`) carries daemon facts alone.
+   (`system_health`) carries daemon facts alone. On `ready_for_final_review`
+   the layer also carries the review guide, whose excerpt text is a daemon
+   fact (Summary Provenance).
 3. **Evidence**: the `evidence_snapshot` packet (Section [5.15](#515-evidence-and-images)). Evidence
    precedes any long-form agent text.
 4. **Drill-down**: full artifacts, full specifications and diffs, and
@@ -6099,7 +6105,7 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 | `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
 | `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
 | `publish_blocked` | The trust rule that failed (daemon fact). | The failing artifact or scan detail. |
-| `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. Then View PR, when the client supports it (revision 78). View PR is navigation: it never resolves the item, and capability filtering still decides whether it renders. | Digested review history, then the evidence packet and the routine bindings. |
+| `ready_for_final_review` | The ask, a labeled change summary, then the review guide when the run wrote one: ordered stops whose prose is a labeled claim, each excerpt's text a daemon fact read from the imported commit or its base (Summary Provenance). Then daemon verification verdicts with diff stats. Then View PR, when the client supports it (revision 78). View PR is navigation: it never resolves the item, and capability filtering still decides whether it renders. | Digested review history, then the evidence packet and the routine bindings. |
 | `task_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
 | `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
@@ -6119,6 +6125,23 @@ Two content classes, two producers:
 The same labeling covers any agent prose a card leads with, such as an agent's
 question or a proposal's intent line. It renders as a labeled claim, never as
 unlabeled authoritative text.
+
+The **review guide** on `ready_for_final_review` (revision 112) lists the
+places in the change where the operator's judgment matters, in the order the
+change is understood, each pointing at the code it concerns. It is a
+reserved, launcher-declared labeled claim like the summary: its prose is
+`producer_class: agent`, provenance-bound to its `agent_claims` entry, and it
+never enters `evidence_snapshot`. Its size is bounded so that it reads as
+summary-layer prose, not long-form agent text. It is bound to the candidate
+head it was written against. A head change supersedes the ready item, and
+Section [5.15](#515-evidence-and-images) rule 2 invalidates head-bound evidence, so a re-entered or
+remediated candidate brings its own guide or none, and no guide outlives its
+head. Each excerpt's text is a daemon fact, held to the same rule as a card
+fact: the agent supplies a location and a caption, never code text, and the
+daemon reads the lines from the imported commit, or from its base for
+removed code. An excerpt the daemon cannot read renders as unresolved, never
+as agent-supplied code. A guide is optional: a missing one never blocks a
+ready item. A malformed one is invalid evidence and fails the import closed.
 
 In Phase 1 the summarizer is the stage agent whose work the card concerns,
 labeled with its `producer_invocation_id`. On every item type (revision 82),
@@ -7219,37 +7242,43 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 111 ("Select by Enrollment, Model, and Effort"):
+Revision 112 ("A Reading Order on the Ready Card"):
 
-1. **An agent selection is the tuple `{enrollment, model, effort}`, chosen
-   ad hoc by an authenticated operator, in place of the named agent
-   document.** Models and their per-model effort levels are discovered from
-   each enrollment's harness and stored as daemon records; the fixed effort
-   vocabulary becomes the levels each model reports. The committed tree keeps
-   what is authority: an adapter pin per client kind, each route's terms
-   basis, and an optional allow or deny list over discovered models. Offers
-   as authored fragments go away, and with them `identity_stability` and
-   `not_after`: a contradicting observation still fails the attempt, and a
-   model the harness stops reporting is withdrawn from new selection.
-   Admission still canonicalizes and hashes the resolved tuple (enrollment
-   id, model id, effort level, and the adapter pin), so run records and the
-   comparison keys of shadow and wardless roles keep a digest. The lineup
-   stays in the tree and names each role's default tuple, resolved at
-   admission; review independence derives lineage from the enrollment's
-   client kind and the model; the routing policy orders enrollments per role
-   and keeps the lineup's model and effort, so it no longer puts a different
-   model on each pool (Sections [4](#4-the-attention-model), [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry), and [7](#7-review-policy)). Only an operator chooses the
-   enrollment; intake still sets nothing. This overturns revision 39's "one
-   atomic agent document over per-axis policy keys", whose premise, that a
-   reviewed document per combination would be cheap, did not hold: each new
-   combination cost an offer, an agent, two lock entries, a lineup line, a
-   commit, and a restart. Rejected: keeping offers as a hand-maintained
-   model allowlist, which keeps that friction; and fetching a model manifest
-   from a remote branch at runtime, as T3 Code does, which would be an
-   unreviewed remote input to a control-plane decision.
+1. **The `ready_for_final_review` card carries an optional review guide
+   after the change summary and before the verification verdicts.** The
+   guide is an ordered list of stops: the places in the change where the
+   operator's judgment matters, each pointing at the code it concerns, so
+   the operator reads the PR in the order the change is understood instead
+   of file by file. It rides the summary layer, so a card still presents at
+   most four layers, and the verdicts still precede the actions (Section [9](#9-comprehension)).
+   The shape follows T3 Code's pull-request review guide. Rejected: a
+   daemon-generated diff summary, which can say what changed but not where
+   judgment matters.
+2. **The guide's prose is a labeled claim, and its excerpt text is a daemon
+   fact.** The implementer or remediator writes the guide as reserved,
+   launcher-declared evidence in its own handoff; it never enters
+   `evidence_snapshot` (Section [5.15](#515-evidence-and-images) rule 2). The agent supplies a location and a
+   caption, never code text; the daemon reads the lines from the imported
+   commit or its base, and an excerpt it cannot read renders as unresolved,
+   never as agent-supplied code. Rejected: free Markdown inside the summary
+   claim, which would let agent-quoted code pass as the change's real code;
+   and T3's separate generator agent in a temporary checkout, because the
+   implementer's own handoff gives provenance and head binding for free.
+3. **A guide is bound to the head it was written against.** A head change
+   already supersedes the ready item, so a re-entered or remediated
+   candidate brings its own guide or none. Rejected: keeping a stale guide
+   across heads, which would point the operator at code the PR no longer
+   holds.
+4. **A missing guide never blocks a ready item; a malformed one fails the
+   import closed** as invalid evidence, while a well-formed excerpt the
+   daemon declines to read renders as unresolved.
+5. **Non-Goal 1 holds.** The guide orders a reading and points into the PR.
+   It adds no inline comments, no per-stop resolution, and no verdict; review
+   and merging stay on GitHub. This extends revision 78's rule that View PR
+   is navigation and never resolves the item.
 
-(Owner decision of 2026-11-04 on #2593;
-[decision note](../devlog/2026-11-05-1035-select-by-enrollment-model-effort.md).)
+(Owner decision of 2026-11-07 on #2738;
+[decision note](../devlog/2026-11-07-1021-review-guide-on-ready-card.md).)
 
 ## 14. Risks
 
