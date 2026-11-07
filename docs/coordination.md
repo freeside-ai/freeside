@@ -308,27 +308,33 @@ reports the post-merge results required by AGENTS.md.
 
 ## Unit Sizing
 
-A work unit's expected pull request stays around or under 1,000 authored
-changed lines. The budget is soft, not a gate: merged-PR review history
-shows automated-review convergence flat below roughly that size and
-multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md, which
-counted every added line; devlog 2026-10-05-1014-unit-sizing-revision.md
-narrows the count to authored lines), so a unit kept deliberately larger
-records its reason on the issue and proceeds.
+A work unit's expected pull request stays around or under 1,500 authored
+changed lines. The budget is soft, not a gate: merged pull requests up to
+about that size land as cleanly as smaller ones, and larger ones are sent
+back by CI and handed back by the lander more often
+(devlog 2026-11-07-1006-unit-size-budget-1500.md, which replaces the
+retired reviewer's review-round evidence behind the earlier 1,000 figure in
+devlog 2026-08-18-0818-unit-size-budget.md and
+devlog 2026-10-05-1014-unit-sizing-revision.md), so a unit kept
+deliberately larger records its reason on the issue and proceeds.
 
 The budget counts authored lines because each one is a decision a
-reviewer has to weigh. One test tells authored lines from regenerated
-output:
+reviewer has to weigh. Two tests take lines out of the count:
 
 - **Authored:** someone, agent or person, decided the line, and a
   reviewer has to weigh it.
 - **Regenerated:** a documented command reproduces the file from tracked
   inputs. A reviewer confirms that the command reproduces it, then scans
   the diff for change the authored lines don't explain.
+- **Mechanical:** the line belongs to a commit listed in
+  `.git-blame-ignore-revs`, the move, rename, or format that AGENTS.md
+  (Commits) keeps in its own commit. A reviewer confirms that the commit
+  changes no behavior instead of weighing each line.
 
-The estimate declares regenerated output beside the authored count and
-leaves it out of the count. That output is still verified, and a
-golden's diff is still reviewed (`daemon/README.md`):
+The estimate declares mechanical commits beside the authored count and
+leaves them out of it. It does the same for regenerated output, which is
+still verified, and a golden's diff is still reviewed
+(`daemon/README.md`):
 
 - the generated API client under
   `app/Sources/FreesideAPI/GeneratedSources/`, with the schema mirror and
@@ -407,6 +413,16 @@ estimate stops growing the pull request: remainder work outside the
 issue's acceptance criteria defers as a tracked issue, while deferring
 acceptance-required work first needs the owner or planner to rescope the
 unit's contract.
+
+A pull request whose issue carries an estimate records its actual
+authored count beside that estimate, measured at handoff on the head
+handed off, as one Verification bullet:
+`Checked: N authored lines against an estimate of E (#issue).` Count
+it the way the plan-wave skill measures a reference pull request, over
+`origin/main..HEAD` and reading `.git-blame-ignore-revs` from `HEAD`. The
+bullet is change-specific evidence CI doesn't show, so it sits beside
+`Passed: required checks.` Estimates have run two to four times low,
+and the recorded pairs are what a later planner calibrates against.
 
 ## Session End
 
