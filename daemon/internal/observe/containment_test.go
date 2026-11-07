@@ -61,6 +61,7 @@ var permittedImports = map[string]bool{
 // operator's -db path is passed to the injected opener, and nothing here
 // distinguishes a careful use of it from a careless one.
 func TestFollowReachesNoWriterSurface(t *testing.T) {
+	t.Parallel()
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read package directory: %v", err)

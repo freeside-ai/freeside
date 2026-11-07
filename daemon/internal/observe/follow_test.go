@@ -178,6 +178,7 @@ func runFollow(
 }
 
 func TestFollowUsesAuthenticatedConclusion(t *testing.T) {
+	t.Parallel()
 	verification := domain.HoldVerificationFindings
 	observation := snapshot(t, []domain.RunMilestone{
 		blockedMilestone(10, verification),
@@ -238,6 +239,7 @@ func assertNoCompletionFraction(t *testing.T, output string) {
 // also pins the settling read: publication converges before the terminal
 // record lands, and the later milestone is emitted rather than truncated.
 func TestFollowNormalRunToPublishedOutcome(t *testing.T) {
+	t.Parallel()
 	submitted := invocationMilestone(domain.MilestoneRunSubmitted, 0)
 	admitted := invocationMilestone(domain.MilestoneInvocationAdmitted, 1)
 	started := invocationMilestone(domain.MilestoneInvocationStarted, 1)
@@ -300,6 +302,7 @@ outcome  published
 // else that advances, so without it the display would go silent and an
 // operator could not tell a standing hold from a stopped daemon.
 func TestFollowHeldRunShowsTheClosedReason(t *testing.T) {
+	t.Parallel()
 	submitted := invocationMilestone(domain.MilestoneRunSubmitted, 0)
 	got := runFollow(t, []domain.RunObservation{
 		snapshot(t, []domain.RunMilestone{submitted}, hold(domain.HoldOperationStopped, 0, 0)),
@@ -326,6 +329,7 @@ outcome  pending
 // execution is a final outcome with no publication to wait for, and the
 // recorded terminal class rides the outcome line.
 func TestFollowTerminalFailure(t *testing.T) {
+	t.Parallel()
 	submitted := invocationMilestone(domain.MilestoneRunSubmitted, 0)
 	admitted := invocationMilestone(domain.MilestoneInvocationAdmitted, 1)
 	started := invocationMilestone(domain.MilestoneInvocationStarted, 1)
@@ -365,6 +369,7 @@ outcome  failed  terminal=failed
 // ages past the freshness window, so the display stops claiming the execution
 // is observed and says so structurally.
 func TestFollowDistinguishesLivenessFromAnObservationGap(t *testing.T) {
+	t.Parallel()
 	submitted := invocationMilestone(domain.MilestoneRunSubmitted, 0)
 	started := invocationMilestone(domain.MilestoneInvocationStarted, 1)
 	running := snapshot(t, []domain.RunMilestone{submitted, started}, nil,
@@ -394,6 +399,7 @@ outcome  pending
 // daemon durably observed, because the timeline is persisted rather than
 // derived from a live join.
 func TestFollowReconnectReplaysTheObservedTimeline(t *testing.T) {
+	t.Parallel()
 	blocked := []domain.RunMilestone{
 		invocationMilestone(domain.MilestoneRunSubmitted, 0),
 		invocationMilestone(domain.MilestoneInvocationAdmitted, 1),
@@ -429,6 +435,7 @@ outcome  blocked  reason=verification_findings
 // TestFollowRefusesAnUnobservedRun keeps a mistyped run id from following
 // nothing forever.
 func TestFollowRefusesAnUnobservedRun(t *testing.T) {
+	t.Parallel()
 	got := runFollow(t, []domain.RunObservation{{RunID: fixtureRun}},
 		[]time.Time{at(0)}, Config{})
 	if !errors.Is(got.err, ErrNoObservedTimeline) {
@@ -440,6 +447,7 @@ func TestFollowRefusesAnUnobservedRun(t *testing.T) {
 }
 
 func TestFollowRequiresARunID(t *testing.T) {
+	t.Parallel()
 	err := Follow(context.Background(), &scriptedObserver{t: t}, &bytes.Buffer{}, Config{})
 	if !errors.Is(err, domain.ErrEmptyID) {
 		t.Fatalf("follow err = %v, want %v", err, domain.ErrEmptyID)
@@ -473,6 +481,7 @@ func (o *interruptingObserver) ObserveRun(
 // so dating that block to the read before it would leave elapsed time and
 // liveness stale by the interval plus however long the read was blocked.
 func TestFollowInterruptedDuringAReadEndsCleanly(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	observer := &interruptingObserver{
@@ -507,6 +516,7 @@ outcome  pending
 // surface fails closed on a row the vocabulary cannot express, and the
 // command must not present that as an idle run.
 func TestFollowPropagatesReadFailures(t *testing.T) {
+	t.Parallel()
 	sentinel := errors.New("row names an unknown milestone kind")
 	observer := &scriptedObserver{t: t, err: sentinel}
 	err := Follow(context.Background(), observer, &bytes.Buffer{},
@@ -517,6 +527,7 @@ func TestFollowPropagatesReadFailures(t *testing.T) {
 }
 
 func TestConcludeClassifiesTheTimeline(t *testing.T) {
+	t.Parallel()
 	verification := domain.HoldVerificationFindings
 	canceled := domain.ObservedStatusCanceled
 	gone := domain.ObservedStatusGone
@@ -589,6 +600,7 @@ func TestConcludeClassifiesTheTimeline(t *testing.T) {
 }
 
 func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
+	t.Parallel()
 	approved := domain.Digest("sha256:approved")
 	lineage := &observedb.Lineage{
 		ApprovedSpecDigest: approved, SpecificationRunID: fixtureRun,
@@ -733,6 +745,7 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 }
 
 func TestAllSupervisionStatesAreValidAndUnique(t *testing.T) {
+	t.Parallel()
 	seen := make(map[SupervisionState]bool, len(AllSupervisionStates))
 	for _, state := range AllSupervisionStates {
 		if !state.valid() {
@@ -770,6 +783,7 @@ func equalTerminal(got, want *domain.ObservedInvocationStatus) bool {
 // newline or an ANSI escape must not be able to forge a line in this display
 // or drive the operator's terminal.
 func TestFollowEscapesHostileIdentifiers(t *testing.T) {
+	t.Parallel()
 	const (
 		hostileRun        domain.RunID        = "run-x\noutcome  published"
 		hostileInvocation domain.InvocationID = "inv-\x1b[31mred\x1b[0m"
@@ -833,6 +847,7 @@ func TestFollowEscapesHostileIdentifiers(t *testing.T) {
 // TestIdentifierLeavesOrdinaryIdsAlone keeps the escaping from taxing the
 // normal case: an ordinary id renders verbatim, unquoted.
 func TestIdentifierLeavesOrdinaryIdsAlone(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{
 		"run-walking-skeleton",
 		"run-3f9a2c11",
@@ -857,6 +872,7 @@ func TestIdentifierLeavesOrdinaryIdsAlone(t *testing.T) {
 // because the block would compare equal to the one already on screen, print
 // no closing status at all.
 func TestFollowResamplesTheClockOnInterrupt(t *testing.T) {
+	t.Parallel()
 	running := snapshot(t, []domain.RunMilestone{
 		invocationMilestone(domain.MilestoneRunSubmitted, 0),
 		invocationMilestone(domain.MilestoneInvocationStarted, 1),
@@ -884,6 +900,7 @@ outcome  pending
 // TestConclusionValidatesItsOutcomeContract pins the enum's registration and
 // the outcome-scoped detail fields, so a new outcome has to declare both.
 func TestConclusionValidatesItsOutcomeContract(t *testing.T) {
+	t.Parallel()
 	if got, want := AllOutcomes, domain.AllRunOutcomes; !slices.Equal(got, want) {
 		t.Fatalf("AllOutcomes = %v, want shared domain registration %v", got, want)
 	}

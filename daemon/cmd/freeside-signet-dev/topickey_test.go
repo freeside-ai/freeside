@@ -14,6 +14,7 @@ import (
 // (issue #133): create only against a fresh store, load an intact private
 // file, and refuse every questionable case rather than regenerate over it.
 func TestLoadOrCreateTopicKeyStates(t *testing.T) {
+	t.Parallel()
 	t.Run("creates a 0600 key against a fresh store", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "topic.key")
 		key, err := loadOrCreateTopicKey(path, false)
@@ -137,6 +138,7 @@ func TestLoadOrCreateTopicKeyStates(t *testing.T) {
 // state table: persist when a path is given, stay ephemeral only against a
 // fresh store, and refuse a reused store that carries no persisted key.
 func TestResolveTopicKeyPolicy(t *testing.T) {
+	t.Parallel()
 	t.Run("no file + fresh store mints an ephemeral key", func(t *testing.T) {
 		key, err := resolveTopicKey("", filepath.Join(t.TempDir(), "signet.db"), false)
 		if err != nil {
@@ -175,6 +177,7 @@ func TestResolveTopicKeyPolicy(t *testing.T) {
 // is refused before any key is written, so the derive-all-topics secret never
 // enters the backup/workspace surface or the attachment-served blob store.
 func TestResolveTopicKeyRejectsStorePaths(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "signet.db")
 	for name, keyPath := range map[string]string{
@@ -200,6 +203,7 @@ func TestResolveTopicKeyRejectsStorePaths(t *testing.T) {
 // symlinked parent, because filepath.Abs does not resolve the alias. Resolving
 // the deepest existing ancestor before comparison closes it.
 func TestResolveTopicKeyRejectsAliasedStorePaths(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "signet.db")
 	blobs := dbPath + ".blobs"
@@ -224,6 +228,7 @@ func TestResolveTopicKeyRejectsAliasedStorePaths(t *testing.T) {
 // real one. The symlink target exists so the resolved db differs from the raw
 // path (a dangling link would rejoin lexically and mask the bug).
 func TestResolveTopicKeyResolvesSymlinkedDB(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "realdb")
 	if err := os.WriteFile(target, []byte("db"), 0o600); err != nil {
 		t.Fatalf("write symlink target: %v", err)
@@ -248,6 +253,7 @@ func TestResolveTopicKeyResolvesSymlinkedDB(t *testing.T) {
 // though the raw `<dbPath>-journal` name differs. The store surface is derived
 // from both the raw and the resolved db path, so either is refused.
 func TestResolveTopicKeyRejectsResolvedSidecars(t *testing.T) {
+	t.Parallel()
 	realDir := t.TempDir()
 	realDB := filepath.Join(realDir, "real.db")
 	if err := os.WriteFile(realDB, []byte("db"), 0o600); err != nil {
@@ -270,6 +276,7 @@ func TestResolveTopicKeyRejectsResolvedSidecars(t *testing.T) {
 // a sidecar beside the resolved db that is itself a symlink onto the key file
 // is caught because each resolved-db-derived store path is itself resolved.
 func TestResolveTopicKeyRejectsSidecarSymlink(t *testing.T) {
+	t.Parallel()
 	realDir := t.TempDir()
 	realDB := filepath.Join(realDir, "real.db")
 	if err := os.WriteFile(realDB, []byte("db"), 0o600); err != nil {
@@ -297,6 +304,7 @@ func TestResolveTopicKeyRejectsSidecarSymlink(t *testing.T) {
 // key) must fail closed, not be rejoined lexically, or createTopicKey would
 // materialize the target and alias the store file onto the key.
 func TestResolveTopicKeyRejectsDanglingStoreSymlink(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "db")                  // fresh, never opened
 	keyFile := filepath.Join(dir, "creds", "topic.key") // does not exist yet
@@ -319,6 +327,7 @@ func TestResolveTopicKeyRejectsDanglingStoreSymlink(t *testing.T) {
 // must fail closed as a non-regular file rather than block the open forever
 // waiting for a writer. The bounded goroutine proves the call returns.
 func TestLoadOrCreateTopicKeyRejectsFifo(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "topic.key")
 	if err := syscall.Mkfifo(path, 0o600); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)

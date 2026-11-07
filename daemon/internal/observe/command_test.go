@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
@@ -39,12 +40,27 @@ func followAt(seconds int) time.Time {
 	return followBase.Add(time.Duration(seconds) * time.Second)
 }
 
-// openFollowStore opens an empty store at a temporary path and returns both
-// the handle for seeding and the path the command is given, so the test
-// exercises the command's own open of the daemon's database.
+// seedFollowStore lays down a topic key and then the migrated template at
+// path, in the order topicstore.Open's store-birth rule needs: a store that
+// exists without its key fails closed. The topicstore.Open that follows
+// opens an existing store with its key and runs no migrations. It mirrors
+// observedb's seedTopicStore, a test helper this package can't import.
+func seedFollowStore(t *testing.T, path string) {
+	t.Helper()
+	if _, err := topicstore.LoadOrCreateKey(path, false); err != nil {
+		t.Fatalf("create topic key: %v", err)
+	}
+	storetest.Copy(t, path)
+}
+
+// openFollowStore opens an empty store, copied from the migrated template, at
+// a temporary path and returns both the handle for seeding and the path the
+// command is given, so the test exercises the command's own open of the
+// daemon's database.
 func openFollowStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "freeside.db")
+	seedFollowStore(t, path)
 	st, _, err := topicstore.Open(context.Background(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -122,6 +138,9 @@ func runFollowCLI(t *testing.T, args ...string) (string, error) {
 }
 
 func TestFollowCommandCreatesAStoreThroughTheTopicKeyBoundary(t *testing.T) {
+	t.Parallel()
+	// From empty, not the template: the test asserts the command creates the
+	// store and its topic key.
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	_, err := runFollowCLI(t, "-db", dbPath, "-run", string(followRun), "-once")
 	if !errors.Is(err, ErrNoObservedTimeline) {
@@ -154,6 +173,7 @@ func assertFollowContains(t *testing.T, output string, want ...string) {
 // timeline, and keeps following until the run's outcome is final, including
 // milestones committed after the outcome's own transaction.
 func TestFollowCommandFollowsANormalRunToItsOutcome(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	appendFollowMilestones(t, st,
 		followMilestone(domain.MilestoneRunSubmitted, 0),
@@ -200,6 +220,7 @@ func TestFollowCommandFollowsANormalRunToItsOutcome(t *testing.T) {
 // scenario: the hold displays the contract's closed cause code, and nothing
 // beside it, because no free-text reason exists to display.
 func TestFollowCommandShowsAHeldRunsSafeReason(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	appendFollowMilestones(t, st, followMilestone(domain.MilestoneRunSubmitted, 0))
 	recordFollowHold(t, st, domain.HoldBlockingSystemHealth, 5)
@@ -219,6 +240,7 @@ func TestFollowCommandShowsAHeldRunsSafeReason(t *testing.T) {
 // a failed execution ends the follow with the recorded terminal class, and
 // observing a failed run is not itself a command failure.
 func TestFollowCommandReportsATerminalFailure(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	outcome := followMilestone(domain.MilestoneExecutionOutcomeRecorded, 40)
 	recorded := domain.ExecutionOutcomeFailed
@@ -245,6 +267,7 @@ func TestFollowCommandReportsATerminalFailure(t *testing.T) {
 }
 
 func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	run := domain.Run{
 		ID: followRun, ProjectID: "project-follow", SpecDigest: "sha256:spec",
@@ -306,6 +329,7 @@ func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
 }
 
 func TestFollowCommandSnapshotProjectsCurrentHoldWithoutAttention(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	ctx := context.Background()
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
@@ -371,6 +395,7 @@ func TestFollowCommandSnapshotProjectsCurrentHoldWithoutAttention(t *testing.T) 
 // route, severity, in-surface bit, and resolved-policy digest, while its
 // rationale never appears.
 func TestFollowCommandSnapshotProjectsAdjudications(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	ctx := context.Background()
 	at := followAt(5)
@@ -471,6 +496,7 @@ func TestFollowCommandSnapshotProjectsAdjudications(t *testing.T) {
 }
 
 func TestFollowCommandReportsPersistedSpecificationAsImplementationBound(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	rootImplementationRunID := domain.RunID("run-follow-implementation")
 	campaignID, err := engine.ProductionCampaignIDForImplementation(rootImplementationRunID)
@@ -536,6 +562,7 @@ func TestFollowCommandReportsPersistedSpecificationAsImplementationBound(t *test
 // milestone the first one saw, and the observation that the stopped daemon
 // left behind ages into an observation gap instead of a stale live verdict.
 func TestFollowCommandResumesAcrossReconnectAndDaemonRestart(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	appendFollowMilestones(t, st,
 		followMilestone(domain.MilestoneRunSubmitted, 0),
@@ -599,6 +626,7 @@ func maskElapsed(output string) string {
 // contract does derive, and the absence of the one it refuses to invent. A
 // concluded run's elapsed clock is frozen at its conclusion.
 func TestFollowCommandShowsElapsedAndLastObservation(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	terminal := followMilestone(domain.MilestoneTerminalRecorded, 40)
 	status := domain.ObservedStatusCompleted
@@ -628,6 +656,7 @@ func TestFollowCommandShowsElapsedAndLastObservation(t *testing.T) {
 // run is not over, so the display must keep counting rather than understate
 // how long the operator has been waiting.
 func TestFollowCommandKeepsTheClockRunningUntilTheOutcomeIsFinal(t *testing.T) {
+	t.Parallel()
 	st, path := openFollowStore(t)
 	terminal := followMilestone(domain.MilestoneTerminalRecorded, 40)
 	status := domain.ObservedStatusCompleted
@@ -662,6 +691,7 @@ func openSeededFollowStore(t *testing.T) (
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
+	seedFollowStore(t, path)
 	st, _, err := topicstore.Open(ctx, path, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: seedfixture.AdmissionCapabilities,
@@ -711,6 +741,7 @@ func openSeededFollowStore(t *testing.T) (
 // still says running. The status block shows the recorded terminal instead,
 // with the row's last-look instant.
 func TestFollowCommandShowsARecordedTerminal(t *testing.T) {
+	t.Parallel()
 	for _, terminal := range []domain.ObservedInvocationStatus{
 		domain.ObservedStatusCompleted, domain.ObservedStatusFailed,
 	} {
@@ -767,6 +798,7 @@ func TestFollowCommandShowsARecordedTerminal(t *testing.T) {
 // outcome or export backs. The command fails as an observation failure and
 // prints neither the forged status nor the row's.
 func TestFollowCommandRefusesAnUnbackedTerminal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, path, admission, row := openSeededFollowStore(t)
 	failed := domain.ObservedStatusFailed
@@ -792,6 +824,7 @@ func TestFollowCommandRefusesAnUnbackedTerminal(t *testing.T) {
 }
 
 func TestFollowCommandRefusesAnUnobservedRun(t *testing.T) {
+	t.Parallel()
 	_, path := openFollowStore(t)
 	output, err := runFollowCLI(t, "-db", path, "-run", "run-never-submitted", "-once")
 	if !errors.Is(err, ErrNoObservedTimeline) {
@@ -803,6 +836,7 @@ func TestFollowCommandRefusesAnUnobservedRun(t *testing.T) {
 }
 
 func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
+	t.Parallel()
 	_, path := openFollowStore(t)
 	for _, tc := range []struct {
 		name string
@@ -857,6 +891,7 @@ func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
 // command documents: a caller has to be able to tell a bad invocation from a
 // run it could not observe, and a successfully observed failure from both.
 func TestExitCodeSeparatesMisuseFromObservationFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		err  error
