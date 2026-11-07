@@ -566,6 +566,20 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		}); err != nil {
 			return err
 		}
+		// The snapshot shows the invocation's authenticated terminal, so the
+		// completed terminal needs the export that backs it.
+		export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+			InvocationID: invocationID, AdmissionID: admission.ID,
+			ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+			ManifestDigest: domain.Digest(contentaddr.Sum([]byte("manifest"))),
+			RecordedAt:     admittedAt.Add(2 * time.Minute),
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionExportRecord(ctx, export); err != nil {
+			return err
+		}
 		completed := domain.ObservedStatusCompleted
 		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: run.ID, Kind: domain.MilestoneTerminalRecorded,
@@ -1458,6 +1472,69 @@ func TestObserveConclusionShowsRecordedTerminal(t *testing.T) {
 			}
 			if !reflect.DeepEqual(conclusion, stored) {
 				t.Fatalf("conclusion = %+v, want the stored observation's %+v", conclusion, stored)
+			}
+		})
+	}
+}
+
+// observationReads are the observedb reads that return a run's observation
+// besides ObserveConclusion, which has its own tests above and below.
+var observationReads = map[string]func(*Store, context.Context, domain.RunID) (domain.RunObservation, error){
+	"ObserveRun": (*Store).ObserveRun,
+	"ObserveSnapshot": func(s *Store, ctx context.Context, runID domain.RunID) (domain.RunObservation, error) {
+		snapshot, err := s.ObserveSnapshot(ctx, runID)
+		return snapshot.Observation, err
+	},
+}
+
+// TestObservationReadsShowRecordedTerminal pins that the run route and the
+// supervision snapshot show an invocation's recorded terminal over its paced
+// last-look row, as ObserveConclusion does.
+func TestObservationReadsShowRecordedTerminal(t *testing.T) {
+	t.Parallel()
+	for name, read := range observationReads {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st, admission, row := openRunningSeed(t)
+			recordTerminal(t, st, admission, domain.ObservedStatusFailed, row.ObservedAt.Add(time.Minute))
+
+			observation, err := read(Borrow(st), ctx, admission.RunID)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			want := row
+			want.Status, want.Live = domain.ObservedStatusFailed, false
+			if len(observation.Invocations) != 1 || observation.Invocations[0] != want {
+				t.Fatalf("invocations = %+v, want [%+v]", observation.Invocations, want)
+			}
+		})
+	}
+}
+
+// TestObservationReadsRefuseUnbackedTerminal pins that the run route and the
+// supervision snapshot fail on a terminal milestone nothing backs instead of
+// showing the forged status or the row's.
+func TestObservationReadsRefuseUnbackedTerminal(t *testing.T) {
+	t.Parallel()
+	for name, read := range observationReads {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st, admission, row := openRunningSeed(t)
+			failed := domain.ObservedStatusFailed
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+					RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+					InvocationID: &admission.InvocationID, Terminal: &failed,
+					RecordedAt: row.ObservedAt.Add(time.Minute),
+				})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			observation, err := read(Borrow(st), ctx, admission.RunID)
+			if !errors.Is(err, signet.ErrRunObservationIntegrity) {
+				t.Fatalf("%s = %+v, %v, want ErrRunObservationIntegrity", name, observation, err)
 			}
 		})
 	}

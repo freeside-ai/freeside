@@ -1585,7 +1585,7 @@ func projectRunSnapshot(
 // error, a missing record or a failed read, comes back as it is and fails
 // the read whole, as these reads classified it before they shared this one.
 // Readers outside signet, which have neither the server state nor the
-// attention items, use AuthoritativeInvocationStatuses.
+// attention items, use ReadRunObservation.
 func observeAuthenticatedRun(
 	ctx context.Context,
 	tx *store.ReadTx,
@@ -1922,7 +1922,7 @@ func authenticateRunObservation(
 // authenticateStatusMilestone binds one status-bearing milestone (an export,
 // an outcome, or a terminal) to the durable record it summarizes and to the
 // run attempt it names. withAuthoritativeInvocationStatuses reads exactly
-// these kinds, so the full observation pass and AuthoritativeInvocationStatuses
+// these kinds, so the full observation pass and ReadRunObservation
 // both go through it and cannot drift apart on which statuses they accept.
 func authenticateStatusMilestone(
 	ctx context.Context,
@@ -1963,26 +1963,40 @@ func authenticateStatusMilestone(
 	return nil
 }
 
-// AuthoritativeInvocationStatuses overlays a run's authenticated terminal
-// facts on its invocation observations, the status rule the client run reads
-// apply (withAuthoritativeInvocationStatuses), for a reader that does not run
-// the full observation pass. It authenticates every status-bearing milestone
-// first, with the checks that pass runs for those kinds, and returns the
-// first failure tagged the way the client reads tag it: a milestone the
-// durable records do not back must fail the read, never print a status.
+// ReadRunObservation is the read a reader outside signet uses for one run's
+// observation. It reads the run's observation in the caller's transaction,
+// authenticates every status-bearing milestone with the checks the full
+// observation pass runs for those kinds, and overlays each invocation's
+// authenticated terminal status (withAuthoritativeInvocationStatuses), the
+// status rule the client run reads apply. It does the read itself so a caller
+// cannot hand it a raw observation or stop before the overlay, which is how
+// `freesided inspect task` and `freesided follow` once showed a finished
+// invocation as running.
+//
+// A status milestone the durable records do not back fails the read with
+// ErrRunObservationIntegrity, whether the record contradicts it or is missing:
+// it must fail the read, never print a status. A failed observation read
+// returns its error untagged.
 //
 // It deliberately checks nothing else. The other milestone kinds, the hold,
 // the invocation rows' run binding, and attention items stay the full pass's
-// job, so a reader can keep a fault there out of the invocations it prints.
-// The returned observation's milestones and hold are the caller's, unchanged.
-func AuthoritativeInvocationStatuses(
-	ctx context.Context, tx *store.ReadTx, run domain.Run, observation domain.RunObservation,
+// job, so one damaged attention item cannot blank every run's invocations
+// (devlog/2026-10-26-1500-task-record-invocation-authority.md). The returned
+// observation's milestones and hold are as stored.
+func ReadRunObservation(
+	ctx context.Context, tx *store.ReadTx, run domain.Run,
 ) (domain.RunObservation, error) {
+	observation, err := tx.ObserveRun(ctx, run.ID)
+	if err != nil {
+		return domain.RunObservation{}, err
+	}
 	attempts := runAttemptBindings(run)
 	for _, milestone := range observation.Milestones {
 		if err := authenticateStatusMilestone(ctx, tx, run.ID, attempts, milestone); err != nil {
-			return domain.RunObservation{}, fmt.Errorf("run %q invocation status: %w",
-				run.ID, asRunObservationIntegrityError(err))
+			if store.IsRowVerdict(err) {
+				err = fmt.Errorf("%w: %w", ErrRunObservationIntegrity, err)
+			}
+			return domain.RunObservation{}, fmt.Errorf("run %q invocation status: %w", run.ID, err)
 		}
 	}
 	return withAuthoritativeInvocationStatuses(observation), nil

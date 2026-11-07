@@ -196,14 +196,17 @@ func Open(ctx context.Context, path string, approvedRecipes ...domain.Digest) (*
 	return &Store{store: st}, nil
 }
 
-// ObserveRun reads one run's observation aggregate, re-validated by the store.
+// ObserveRun reads one run's observation aggregate. For a run with a durable
+// Run row, the invocations carry their authenticated terminal status and an
+// unbacked status milestone fails the read with
+// signet.ErrRunObservationIntegrity (signet.ReadRunObservation).
 func (s *Store) ObserveRun(
 	ctx context.Context, runID domain.RunID,
 ) (domain.RunObservation, error) {
 	var observation domain.RunObservation
 	if err := s.read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		observation, err = tx.ObserveRun(ctx, runID)
+		observation, _, err = readRunObservation(ctx, tx, runID)
 		return err
 	}); err != nil {
 		return domain.RunObservation{}, fmt.Errorf("observe run: %w", err)
@@ -217,26 +220,29 @@ func (s *Store) ObserveRun(
 // AttentionItems and therefore needs no mutable evidence-policy input.
 //
 // For a run with a durable Run row, the returned invocations carry their
-// authenticated terminal status (signet.AuthoritativeInvocationStatuses):
-// an invocation row is a paced last look that the engine's terminal path
-// does not rewrite (#785), so the durable export, outcome, or terminal is
-// the status authority while the row keeps its observed-at instant. A
-// status-bearing milestone that fails authentication fails the read with
-// signet.ErrRunObservationIntegrity. The conclusion is still computed from
-// the stored observation, before the overlay.
+// authenticated terminal status (signet.ReadRunObservation): an invocation
+// row is a paced last look that the engine's terminal path does not rewrite
+// (#785), so the durable export, outcome, or terminal is the status
+// authority while the row keeps its observed-at instant. A status-bearing
+// milestone that fails authentication fails the read with
+// signet.ErrRunObservationIntegrity. The conclusion reads invocation
+// statuses only for a run with no milestones, where the overlay changes
+// nothing, so it is the same before and after the overlay.
 func (s *Store) ObserveConclusion(
 	ctx context.Context, runID domain.RunID,
 ) (domain.RunObservation, domain.RunConclusion, error) {
 	var observation domain.RunObservation
 	var conclusion domain.RunConclusion
 	if err := s.read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		observation, err = tx.ObserveRun(ctx, runID)
+		var (
+			run *domain.Run
+			err error
+		)
+		observation, run, err = readRunObservation(ctx, tx, runID)
 		if err != nil {
 			return err
 		}
-		run, err := tx.GetRun(ctx, runID)
-		if errors.Is(err, store.ErrNotFound) {
+		if run == nil {
 			// Observation-only timelines predate the durable Run entity and
 			// cannot contain publication reevaluation authority. Preserve their
 			// milestone-only conclusion; every current production run takes the
@@ -255,21 +261,7 @@ func (s *Store) ObserveConclusion(
 			}
 			return nil
 		}
-		if err != nil {
-			return err
-		}
-		_, _, conclusion, err = authenticateRunConclusion(ctx, tx, run, observation)
-		if err != nil {
-			return err
-		}
-		observation, err = signet.AuthoritativeInvocationStatuses(ctx, tx, run, observation)
-		if store.IsRowVerdict(err) && !errors.Is(err, signet.ErrRunObservationIntegrity) {
-			// The overlay tags only a parent-key mismatch. A status milestone
-			// whose export or outcome is missing is the same contradiction
-			// in the store's own rows, so it gets the same tag, as
-			// `freesided inspect task` classifies it.
-			err = fmt.Errorf("%w: %w", signet.ErrRunObservationIntegrity, err)
-		}
+		_, _, conclusion, err = authenticateRunConclusion(ctx, tx, *run, observation)
 		return err
 	}); err != nil {
 		return domain.RunObservation{}, domain.RunConclusion{}, fmt.Errorf(
@@ -279,17 +271,41 @@ func (s *Store) ObserveConclusion(
 	return observation, conclusion, nil
 }
 
+// readRunObservation reads a run's observation through
+// signet.ReadRunObservation and returns the run it authenticated against. A
+// run with no durable Run row returns the stored observation and a nil run:
+// observation-only timelines predate the Run entity, so there is nothing to
+// authenticate their statuses against.
+func readRunObservation(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID,
+) (domain.RunObservation, *domain.Run, error) {
+	run, err := tx.GetRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		observation, err := tx.ObserveRun(ctx, runID)
+		return observation, nil, err
+	}
+	if err != nil {
+		return domain.RunObservation{}, nil, err
+	}
+	observation, err := signet.ReadRunObservation(ctx, tx, run)
+	if err != nil {
+		return domain.RunObservation{}, nil, err
+	}
+	return observation, &run, nil
+}
+
 // ObserveSnapshot reads one coherent supervision snapshot. Every source row
 // is reconstructed by the store before its bounded projection is returned;
-// no raw SQLite handle or mutable store capability crosses this package.
+// no raw SQLite handle or mutable store capability crosses this package. The
+// observation comes from signet.ReadRunObservation, as ObserveRun's does.
 func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapshot, error) {
 	var snapshot Snapshot
 	if err := s.read(ctx, func(tx *store.ReadTx) error {
-		observation, err := tx.ObserveRun(ctx, runID)
+		run, err := tx.GetRun(ctx, runID)
 		if err != nil {
 			return err
 		}
-		run, err := tx.GetRun(ctx, runID)
+		observation, err := signet.ReadRunObservation(ctx, tx, run)
 		if err != nil {
 			return err
 		}
