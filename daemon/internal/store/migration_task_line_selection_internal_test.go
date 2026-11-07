@@ -21,11 +21,11 @@ func TestTaskLineSelectionMigrationKeepsV1Rows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
+	copySnapshotThrough(t, path, "0130_")
 	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrateThrough(t, ctx, db, "0130_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}

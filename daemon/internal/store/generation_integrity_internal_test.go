@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -319,69 +318,10 @@ FROM client_enrollment_generations`
 	}
 
 	path := filepath.Join(t.TempDir(), "store.db")
+	copySnapshotThrough(t, path, "0087_")
 	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatalf("openDB: %v", err)
-	}
-	prior := map[string]string{}
-	entries, err := fs.ReadDir(migrations.FS, ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.Name() == "0087_generation_integrity_marks.sql" ||
-			entry.Name() == "0088_follow_up_filing_kind.sql" ||
-			entry.Name() == "0089_follow_up_filing_ledger.sql" ||
-			entry.Name() == "0090_external_finding_dispositions.sql" ||
-			entry.Name() == "0091_project_image_environment.sql" ||
-			entry.Name() == "0092_publish_audit_issues.sql" ||
-			entry.Name() == "0093_follow_up_filing_dispatch_identity.sql" ||
-			entry.Name() == "0094_device_activity.sql" ||
-			entry.Name() == "0095_task_lines.sql" ||
-			entry.Name() == "0096_retire_blocked_items.sql" ||
-			entry.Name() == "0097_review_admissions.sql" ||
-			entry.Name() == "0098_review_dispute_rows.sql" ||
-			entry.Name() == "0099_publish_installation_mint_holds.sql" ||
-			entry.Name() == "0100_task_workflow_closures.sql" ||
-			entry.Name() == "0101_work_unit_rebase_proofs.sql" ||
-			entry.Name() == "0102_usage_observations_review.sql" ||
-			entry.Name() == "0103_run_hold_admission_detail.sql" ||
-			entry.Name() == "0104_execution_outcome_cause.sql" ||
-			entry.Name() == "0105_admitted_image_pointers.sql" ||
-			entry.Name() == "0106_schedules_image_upkeep.sql" ||
-			entry.Name() == "0107_run_hold_image_upkeep.sql" ||
-			entry.Name() == "0108_image_upkeep.sql" ||
-			entry.Name() == "0109_task_submission_origin.sql" ||
-			entry.Name() == "0110_image_policy_adoption.sql" ||
-			entry.Name() == "0111_task_line_provenance.sql" ||
-			entry.Name() == "0112_usage_pools.sql" || entry.Name() == "0113_task_line_changes.sql" ||
-			entry.Name() == "0114_review_slot_releases.sql" ||
-			entry.Name() == "0115_routing_policies.sql" ||
-			entry.Name() == "0116_pool_usage_observations.sql" ||
-			entry.Name() == "0117_manual_submission_task_lines.sql" ||
-			entry.Name() == "0118_usage_operator_contract.sql" ||
-			entry.Name() == "0119_run_hold_quota_window.sql" ||
-			entry.Name() == "0120_launch_reservations.sql" ||
-			entry.Name() == "0121_routing_policy_drain_first.sql" ||
-			entry.Name() == "0122_memory_budget.sql" ||
-			entry.Name() == "0123_task_triages.sql" ||
-			entry.Name() == "0124_task_attachments.sql" ||
-			entry.Name() == "0125_alternate_agent_retries.sql" ||
-			entry.Name() == "0126_publication_handoff_checks.sql" ||
-			entry.Name() == "0127_discovered_model_catalogs.sql" ||
-			entry.Name() == "0128_retire_base_advance_watch.sql" ||
-			entry.Name() == "0129_bind_handoff_check_to_audit.sql" ||
-			entry.Name() == "0130_task_line_selection.sql" || entry.IsDir() {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		prior[entry.Name()] = string(body)
-	}
-	if err := migrate(ctx, db, mapFS(prior)); err != nil {
-		t.Fatalf("migrate to 0086: %v", err)
 	}
 	if got := rawVersion(t, db); got != 86 {
 		t.Fatalf("prior schema version = %d, want 86", got)

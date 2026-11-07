@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"io/fs"
 	"testing"
 	"time"
 
@@ -15,22 +14,7 @@ import (
 func TestMintAuditRegistrationMigrationPreservesLegacyRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	names, err := fs.Glob(migrations.FS, "000[1-9]_*.sql")
-	if err != nil {
-		t.Fatalf("glob pre-registration migrations: %v", err)
-	}
-	older := map[string]string{}
-	for _, name := range names {
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		older[name] = string(body)
-	}
-	if err := migrate(ctx, db, mapFS(older)); err != nil {
-		t.Fatalf("migrate old schema: %v", err)
-	}
+	db := openRawThrough(t, "0010_")
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO publish_mint_audits (
     minted_at, installation_id, repo,
@@ -67,25 +51,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 func TestMintAuditRepositoryMigrationPreservesLegacyRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	names, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatalf("glob pre-repository-ID migrations: %v", err)
-	}
-	older := map[string]string{}
-	for _, name := range names {
-		if name >= "0011_" {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		older[name] = string(body)
-	}
-	if err := migrate(ctx, db, mapFS(older)); err != nil {
-		t.Fatalf("migrate old schema: %v", err)
-	}
+	db := openRawThrough(t, "0011_")
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO publish_mint_audits (
     minted_at, registration_id, installation_id, repo,

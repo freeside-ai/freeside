@@ -15,7 +15,7 @@ import (
 func TestRevisionChangedClosesOnEveryCursorMove(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := openRawStore(t, store.Options{})
+	s := openStore(t, store.Options{})
 	checkpoint := filepath.Join(t.TempDir(), "checkpoint.db")
 	if err := s.Checkpoint(ctx, checkpoint); err != nil {
 		t.Fatalf("Checkpoint: %v", err)

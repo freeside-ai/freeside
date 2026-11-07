@@ -165,11 +165,12 @@ func seedMigrationAdjudication(
 func TestMigrateFindingAdjudicationRevisionsPreservesInitialRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, err := openDB(filepath.Join(t.TempDir(), "store.db"), Options{})
+	path := filepath.Join(t.TempDir(), "store.db")
+	copySnapshotThrough(t, path, "0057_")
+	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	migrateThrough(t, ctx, db, "0057_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seed epoch: %v", err)
 	}
