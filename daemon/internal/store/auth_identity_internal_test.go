@@ -17,8 +17,20 @@ import (
 // migrateThrough brings a raw database to the head immediately before the
 // named migration, so an "applies from the current head" test runs the new
 // migration against a database that was actually at the real prior head.
+// It refuses an empty database: a test starts from the snapshot cache
+// (openRawThrough or copySnapshotThrough), so no test rebuilds a prefix the
+// cache already holds.
 func migrateThrough(t *testing.T, ctx context.Context, db *sql.DB, before string) {
 	t.Helper()
+	var tracked bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')`,
+	).Scan(&tracked); err != nil {
+		t.Fatalf("read migration table: %v", err)
+	}
+	if !tracked || rawVersion(t, db) == 0 {
+		t.Fatalf("migrateThrough(%q) on an empty database: start from openRawThrough or copySnapshotThrough instead", before)
+	}
 	files, err := fs.Glob(migrations.FS, "*.sql")
 	if err != nil {
 		t.Fatalf("glob migrations: %v", err)
