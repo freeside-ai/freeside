@@ -213,6 +213,43 @@ func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
 	}
 }
 
+// TestCompatibleTerminalItemIgnoresElapsedDeadlines: the deadline handler
+// appends an elapse to the open ready item after creation (#2752), which can
+// happen while a publication task sits in its terminal crash seam. Recovery
+// rebuilds the item without the list, so the stored item must still read as
+// compatible, while an item that differs elsewhere stays foreign.
+func TestCompatibleTerminalItemIgnoresElapsedDeadlines(t *testing.T) {
+	t.Parallel()
+	st := watchTestStore(t)
+	expected := watchTestItem(t, st, domain.StatusOpen)
+	armedAt := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+	current := expected
+	current.ItemVersion = expected.ItemVersion + 2
+	current.ElapsedDeadlines = []domain.ElapsedDeadline{
+		{
+			Kind: domain.SchedulePRChecksDeadline, ArmedAt: armedAt,
+			DeadlineSeconds: int64(DefaultPRChecksDeadline / time.Second),
+			ElapsedAt:       armedAt.Add(DefaultPRChecksDeadline + time.Minute),
+		},
+		{
+			Kind: domain.ScheduleReviewWaitThreshold, ArmedAt: armedAt,
+			DeadlineSeconds: int64(DefaultReviewWaitThreshold / time.Second),
+			ElapsedAt:       armedAt.Add(DefaultReviewWaitThreshold + time.Minute),
+		},
+	}
+	if err := current.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("open ready item carrying elapsed deadlines rejected during recovery compatibility")
+	}
+	foreign := current
+	foreign.Reason = "a different item"
+	if compatibleTerminalItem(expected, foreign) {
+		t.Fatal("genuinely different item accepted")
+	}
+}
+
 func TestCompatibleTerminalItemIgnoresSameVersionPersistenceProjections(t *testing.T) {
 	t.Parallel()
 	st := watchTestStore(t)

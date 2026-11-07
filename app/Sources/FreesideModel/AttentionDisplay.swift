@@ -419,9 +419,13 @@ package enum AttentionDisplay {
             // readiness candidate's head and base, and Identifiers keep this
             // diff's own base and head as Diff base and Diff head, so
             // repeating them here made one datum render in three card modules
-            // (#1107).
-            guard let diff = item.diff_stats?.value1 else { return [] }
-            return [.init(diffFactLabel, diffStats(diff))]
+            // (#1107). An elapsed publication deadline follows it (#2752).
+            var rows: [FactRow] = []
+            if let diff = item.diff_stats?.value1 {
+                rows.append(.init(diffFactLabel, diffStats(diff)))
+            }
+            rows.append(contentsOf: (item.elapsed_deadlines ?? []).compactMap { elapsedDeadlineFact($0, now: now) })
+            return rows
         case .publish_blocked:
             guard let block = item.publish_block?.value1 else { return [] }
             if let rule = block.trust_rule?.value1 {
@@ -1263,6 +1267,10 @@ package enum AttentionDisplay {
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
             rows.append(.init(label: "Hold Code", value: hold.rawValue))
         }
+        for elapsed in item.elapsed_deadlines ?? [] {
+            guard let label = elapsedDeadlineIdentifierLabel(elapsed.kind) else { continue }
+            rows.append(.init(label: label, value: elapsed.elapsed_at.formatted(.iso8601)))
+        }
         rows.append(.init(label: "Item Version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
             rows.append(.init(label: "PR Head", value: item.pr_head_sha))
@@ -1313,6 +1321,41 @@ package enum AttentionDisplay {
     private static func nonempty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
+    }
+
+    /// One elapsed publication deadline as a Facts row: what the deadline
+    /// waited for, how long, and how long ago it passed. Freeside reads no
+    /// GitHub check or review state, so the row says the wait ran out, not
+    /// what the checks or reviewers did. Only the two publication deadline
+    /// kinds reach an item; any other kind draws nothing.
+    private static func elapsedDeadlineFact(
+        _ elapsed: Components.Schemas.ElapsedDeadline,
+        now: Date
+    ) -> FactRow? {
+        let duration = deadlineDuration(elapsed.deadline_seconds)
+        let ago = "elapsed \(relativeRowTime(elapsed.elapsed_at, now: now)) ago"
+        switch elapsed.kind {
+        case .pr_checks_deadline:
+            return .init("Checks", "Not confirmed after \(duration) · \(ago)")
+        case .review_wait_threshold:
+            return .init("Review", "None after \(duration) · \(ago)")
+        case .installation_poll, .doctor, .janitor, .image_upkeep:
+            return nil
+        }
+    }
+
+    private static func elapsedDeadlineIdentifierLabel(_ kind: Components.Schemas.ScheduleKind) -> String? {
+        switch kind {
+        case .pr_checks_deadline: return "Checks Deadline Elapsed"
+        case .review_wait_threshold: return "Review Deadline Elapsed"
+        case .installation_poll, .doctor, .janitor, .image_upkeep: return nil
+        }
+    }
+
+    /// A deadline's length in the unit an operator reads it in: minutes
+    /// under an hour, hours otherwise.
+    private static func deadlineDuration(_ seconds: Int64) -> String {
+        seconds < 3_600 ? "\(max(1, seconds / 60)) min" : "\(seconds / 3_600) h"
     }
 
     private static func relativeDuration(_ interval: TimeInterval) -> String {

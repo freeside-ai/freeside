@@ -32,6 +32,20 @@ const (
 	DefaultReviewWaitThreshold = 24 * time.Hour
 )
 
+// PublicationWatchDeadline is the fixed duration a publication watch kind
+// arms with, so the arming code and the deadline handler that records an
+// elapse read one source. It reports false for every other schedule kind.
+func PublicationWatchDeadline(kind domain.ScheduleKind) (time.Duration, bool) {
+	switch kind {
+	case domain.SchedulePRChecksDeadline:
+		return DefaultPRChecksDeadline, true
+	case domain.ScheduleReviewWaitThreshold:
+		return DefaultReviewWaitThreshold, true
+	case domain.ScheduleInstallationPoll, domain.ScheduleDoctor, domain.ScheduleJanitor, domain.ScheduleImageUpkeep:
+	}
+	return 0, false
+}
+
 // PublicationWatchScheduleID is the deterministic identity of one watch
 // kind bound to one item.
 func PublicationWatchScheduleID(kind domain.ScheduleKind, itemID domain.ItemID) domain.ScheduleID {

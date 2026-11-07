@@ -9014,6 +9014,44 @@ public enum Components {
             case janitor = "janitor"
             case image_upkeep = "image_upkeep"
         }
+        /// One publication deadline that elapsed on an open ready_for_final_review item (mirrors domain.ElapsedDeadline). armed_at is the nominal deadline minus deadline_seconds, so a re-armed schedule generation records the same deadline. kind is pr_checks_deadline or review_wait_threshold. elapsed_at is the instant the daemon's scheduler handled the fire, never before armed_at plus deadline_seconds.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ElapsedDeadline`.
+        public struct ElapsedDeadline: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ElapsedDeadline/kind`.
+            public var kind: Components.Schemas.ScheduleKind
+            /// - Remark: Generated from `#/components/schemas/ElapsedDeadline/armed_at`.
+            public var armed_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/ElapsedDeadline/deadline_seconds`.
+            public var deadline_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ElapsedDeadline/elapsed_at`.
+            public var elapsed_at: Foundation.Date
+            /// Creates a new `ElapsedDeadline`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - armed_at:
+            ///   - deadline_seconds:
+            ///   - elapsed_at:
+            public init(
+                kind: Components.Schemas.ScheduleKind,
+                armed_at: Foundation.Date,
+                deadline_seconds: Swift.Int64,
+                elapsed_at: Foundation.Date
+            ) {
+                self.kind = kind
+                self.armed_at = armed_at
+                self.deadline_seconds = deadline_seconds
+                self.elapsed_at = elapsed_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case armed_at
+                case deadline_seconds
+                case elapsed_at
+            }
+        }
         /// A schedule's lifecycle state (mirrors domain.ScheduleStatus): armed is live; fired is a one-shot deadline that terminated fired-and-handled; resolved was explicitly resolved (the awaited condition arrived, or the subject concluded); expired ended with its validity window.
         ///
         ///
@@ -16646,6 +16684,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/alternate_agents`.
             public var alternate_agents: [Components.Schemas.AlternateAgentOffer]?
+            /// Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. The daemon reads no GitHub check or review state, so an entry records that the deadline passed, not what the checks or reviewers did.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/elapsed_deadlines`.
+            public var elapsed_deadlines: [Components.Schemas.ElapsedDeadline]?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure`.
             public struct interpretation_failurePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure/value1`.
@@ -16985,6 +17028,7 @@ public enum Components {
             ///   - billable_cost_so_far: Billable cost observed so far on review_diminishing_returns items.
             ///   - execution_failure:
             ///   - alternate_agents: The agents an execution_failure item offers to retry the implementer under, sorted by agent, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
+            ///   - elapsed_deadlines: Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. The daemon reads no GitHub check or review state, so an entry records that the deadline passed, not what the checks or reviewers did.
             ///   - interpretation_failure:
             ///   - publish_block:
             ///   - diff_stats:
@@ -17034,6 +17078,7 @@ public enum Components {
                 billable_cost_so_far: Components.Schemas.AttentionItem.billable_cost_so_farPayload? = nil,
                 execution_failure: Components.Schemas.AttentionItem.execution_failurePayload? = nil,
                 alternate_agents: [Components.Schemas.AlternateAgentOffer]? = nil,
+                elapsed_deadlines: [Components.Schemas.ElapsedDeadline]? = nil,
                 interpretation_failure: Components.Schemas.AttentionItem.interpretation_failurePayload? = nil,
                 publish_block: Components.Schemas.AttentionItem.publish_blockPayload? = nil,
                 diff_stats: Components.Schemas.AttentionItem.diff_statsPayload? = nil,
@@ -17083,6 +17128,7 @@ public enum Components {
                 self.billable_cost_so_far = billable_cost_so_far
                 self.execution_failure = execution_failure
                 self.alternate_agents = alternate_agents
+                self.elapsed_deadlines = elapsed_deadlines
                 self.interpretation_failure = interpretation_failure
                 self.publish_block = publish_block
                 self.diff_stats = diff_stats
@@ -17133,6 +17179,7 @@ public enum Components {
                 case billable_cost_so_far
                 case execution_failure
                 case alternate_agents
+                case elapsed_deadlines
                 case interpretation_failure
                 case publish_block
                 case diff_stats

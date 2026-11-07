@@ -738,6 +738,25 @@ enum MockContractValidation {
                 return "invalid alternate_agents"
             }
         }
+        // domain.validateElapsedDeadlines: publication deadlines on the
+        // ready item their watch armed against, each kind once, never
+        // elapsed before its deadline. A Date carries no zone, so the
+        // domain's UTC rule has no mirror here.
+        if let elapsed = item.elapsed_deadlines {
+            guard item._type == .ready_for_final_review else {
+                return "elapsed_deadlines on a different item type"
+            }
+            let kinds = elapsed.map(\.kind)
+            if kinds.isEmpty || Set(kinds).count != kinds.count
+                || elapsed.contains(where: {
+                    ![.pr_checks_deadline, .review_wait_threshold].contains($0.kind)
+                        || $0.deadline_seconds <= 0
+                        || $0.elapsed_at < $0.armed_at.addingTimeInterval(TimeInterval($0.deadline_seconds))
+                })
+            {
+                return "invalid elapsed_deadlines"
+            }
+        }
         if let block = item.publish_block?.value1 {
             if item._type != .publish_blocked {
                 return "publish_block facts on a different item type"

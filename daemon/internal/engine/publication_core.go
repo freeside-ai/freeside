@@ -389,6 +389,14 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	// "disagrees" and stranding the publication task; the transition check below
 	// still enforces that open -> superseded is a legal move.
 	normalized.ReadinessInvalidation = expected.ReadinessInvalidation
+	// Elapsed deadlines are appended after creation by the scheduler's
+	// deadline handler (#2752), which can fire while a publication task sits
+	// between arming its watches and recording its terminal result, or across
+	// a restart. Recovery rebuilds the item without them, so they must not
+	// make the stored ready item read as foreign. The rebuilt item carries no
+	// list, so the transition check below admits any stored one; the list's
+	// own rules hold because the stored row passed Validate on decode.
+	normalized.ElapsedDeadlines = expected.ElapsedDeadlines
 	// These two fields are daemon projections added at the item persistence
 	// boundary. Recovery reconstructs the source shape, so neither may make an
 	// otherwise identical terminal item look foreign or stale.

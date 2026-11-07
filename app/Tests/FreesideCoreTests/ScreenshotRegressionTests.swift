@@ -1806,6 +1806,19 @@
                             view: AnyView(
                                 detail.screenshotCard(
                                     AttentionFixtures.staleReady().item, at: dynamicTypeSize))))
+                    // An open review whose checks deadline elapsed (#2752):
+                    // the elapse draws as a Checks fact after the Change row,
+                    // on the Mac and on the phone.
+                    let deadline = AttentionFixtures.readyWithElapsedChecksDeadline().item
+                    for (suffix, width) in [("", CGFloat?.none), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-ready_for_final_review-deadline\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        deadline, at: dynamicTypeSize, compactLayout: width != nil))))
+                    }
                 }
 
                 if snapshot.item._type == .publish_blocked {

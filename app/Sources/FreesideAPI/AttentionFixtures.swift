@@ -901,6 +901,24 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The open ready item after its pull request's checks deadline elapsed
+    /// (issue #2752): the daemon appended the elapse at the next item
+    /// version, nine minutes before the screenshot clock. The default inbox
+    /// keeps the ready item with no elapsed deadline; tests and screenshots
+    /// opt into this one.
+    public static func readyWithElapsedChecksDeadline() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready_for_final_review-deadline"
+        snapshot.item.item_version = 2
+        let armedAt = createdInstant.addingTimeInterval(17 * 3_600 + 20 * 60)
+        snapshot.item.elapsed_deadlines = [
+            .init(
+                kind: .pr_checks_deadline, armed_at: armedAt, deadline_seconds: 1_800,
+                elapsed_at: armedAt.addingTimeInterval(31 * 60))
+        ]
+        return snapshot
+    }
+
     /// The implementation failure as a quota exhaustion, whose card offers
     /// the routing policy's second agent on another pool (issue #869) in
     /// place of capability profiles, which no quota failure offers. The

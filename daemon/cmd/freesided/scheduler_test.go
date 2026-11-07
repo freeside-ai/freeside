@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -333,6 +335,266 @@ func TestDeadlineRegistrationTerminatesFired(t *testing.T) {
 	if got.Status != domain.ScheduleFired ||
 		got.Resolution.Reason != domain.ResolutionDeadlineElapsed {
 		t.Fatalf("deadline schedule = %+v", got)
+	}
+}
+
+// deadlineFixture is a scheduler over both publication deadline kinds with
+// an injected clock the test advances between passes.
+type deadlineFixture struct {
+	st   *store.Store
+	item domain.AttentionItem
+	s    *scheduler.Scheduler
+	now  time.Time
+}
+
+func newDeadlineFixture(t *testing.T) *deadlineFixture {
+	t.Helper()
+	st := schedTestStore(t)
+	f := &deadlineFixture{st: st, item: schedTestItem(t, st)}
+	handler := deadlineRegistration(st)
+	s, err := scheduler.New(st, domain.ModeUnattended,
+		func() time.Time { return f.now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.SchedulePRChecksDeadline:    handler,
+			domain.ScheduleReviewWaitThreshold: handler,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s = s
+	return f
+}
+
+// arm arms kind against the item's version 1, as armPublicationWatches does
+// at start: the nominal deadline is start plus the kind's fixed duration.
+func (f *deadlineFixture) arm(t *testing.T, kind domain.ScheduleKind, start time.Time) domain.ScheduleID {
+	t.Helper()
+	deadline, ok := engine.PublicationWatchDeadline(kind)
+	if !ok {
+		t.Fatalf("kind %s has no publication deadline", kind)
+	}
+	itemID, version := f.item.ID, f.item.ItemVersion
+	fireAt := start.Add(deadline)
+	policy := schedTestResolvedPolicy(*f.item.Subject.RunID)
+	sched, err := domain.NewSchedule(domain.ScheduleInput{
+		ID:        engine.PublicationWatchScheduleID(kind, itemID),
+		ProjectID: f.item.ProjectID, Kind: kind,
+		Subject: domain.ScheduleSubject{
+			Type:   domain.ScheduleSubjectAttentionItem,
+			ItemID: &itemID, ItemVersion: &version,
+		},
+		RunID: f.item.Subject.RunID, PolicyDigest: &policy.Digest,
+		CreatedAt: start, FireAt: &fireAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Arm(context.Background(), sched, fireAt); err != nil {
+		t.Fatal(err)
+	}
+	return sched.ID
+}
+
+func (f *deadlineFixture) runAt(t *testing.T, now time.Time) {
+	t.Helper()
+	f.now = now
+	if err := f.s.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *deadlineFixture) readItem(t *testing.T) domain.AttentionItem {
+	t.Helper()
+	var got domain.AttentionItem
+	if err := f.st.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetAttentionItem(context.Background(), f.item.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestDeadlineRecordsElapseOnOpenItem: a publication deadline firing on its
+// still-open ready item appends the elapse to the item at its next version
+// (#2752) and still terminates the schedule fired with deadline_elapsed.
+func TestDeadlineRecordsElapseOnOpenItem(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind    domain.ScheduleKind
+		seconds int64
+	}{
+		{domain.SchedulePRChecksDeadline, 1800},
+		{domain.ScheduleReviewWaitThreshold, 86400},
+	} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			t.Parallel()
+			f := newDeadlineFixture(t)
+			start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+			id := f.arm(t, tc.kind, start)
+			now := start.Add(time.Duration(tc.seconds)*time.Second + time.Second)
+			f.runAt(t, now)
+
+			got := f.readItem(t)
+			want := []domain.ElapsedDeadline{{
+				Kind: tc.kind, ArmedAt: start, DeadlineSeconds: tc.seconds, ElapsedAt: now,
+			}}
+			if !reflect.DeepEqual(got.ElapsedDeadlines, want) {
+				t.Fatalf("elapsed deadlines = %+v, want %+v", got.ElapsedDeadlines, want)
+			}
+			if got.ItemVersion != f.item.ItemVersion+1 || got.Status != domain.StatusOpen {
+				t.Fatalf("item version %d status %s, want %d open", got.ItemVersion, got.Status, f.item.ItemVersion+1)
+			}
+			sched := readScheduleRow(t, f.st, id)
+			if sched.Status != domain.ScheduleFired ||
+				sched.Resolution.Reason != domain.ResolutionDeadlineElapsed {
+				t.Fatalf("deadline schedule = %+v", sched)
+			}
+		})
+	}
+}
+
+// TestDeadlineRecordsBothElapsesInFiringOrder: the checks deadline fires
+// first and bumps the item, so the review threshold's binding goes stale and
+// re-arms under a new generation that keeps its nominal deadline. Its record
+// therefore carries the same armed_at the first generation would have.
+func TestDeadlineRecordsBothElapsesInFiringOrder(t *testing.T) {
+	t.Parallel()
+	f := newDeadlineFixture(t)
+	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+	f.arm(t, domain.SchedulePRChecksDeadline, start)
+	reviewID := f.arm(t, domain.ScheduleReviewWaitThreshold, start)
+
+	checksAt := start.Add(31 * time.Minute)
+	f.runAt(t, checksAt)
+	reviewAt := start.Add(24*time.Hour + time.Minute)
+	f.runAt(t, reviewAt) // the stale review binding re-arms
+	if got := readScheduleRow(t, f.st, reviewID); got.Generation != 2 {
+		t.Fatalf("review threshold generation = %d, want the re-armed 2", got.Generation)
+	}
+	f.runAt(t, reviewAt) // the re-armed generation fires
+
+	got := f.readItem(t)
+	want := []domain.ElapsedDeadline{
+		{Kind: domain.SchedulePRChecksDeadline, ArmedAt: start, DeadlineSeconds: 1800, ElapsedAt: checksAt},
+		{Kind: domain.ScheduleReviewWaitThreshold, ArmedAt: start, DeadlineSeconds: 86400, ElapsedAt: reviewAt},
+	}
+	if !reflect.DeepEqual(got.ElapsedDeadlines, want) {
+		t.Fatalf("elapsed deadlines = %+v, want %+v", got.ElapsedDeadlines, want)
+	}
+	if got.ItemVersion != f.item.ItemVersion+2 {
+		t.Fatalf("item version = %d, want %d", got.ItemVersion, f.item.ItemVersion+2)
+	}
+}
+
+// TestDeadlineLeavesConcludedItemUnchanged: a deadline whose item concluded
+// before it fired records the conclusion on the schedule and writes nothing
+// to the item.
+func TestDeadlineLeavesConcludedItemUnchanged(t *testing.T) {
+	t.Parallel()
+	f := newDeadlineFixture(t)
+	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+	id := f.arm(t, domain.SchedulePRChecksDeadline, start)
+	concluded := f.item
+	concluded.ItemVersion++
+	concluded.Status = domain.StatusDismissed
+	concluded = domaintest.MustConclude(concluded)
+	if err := f.st.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(context.Background(), concluded)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := f.readItem(t)
+
+	f.runAt(t, start.Add(31*time.Minute))
+	if got := f.readItem(t); !reflect.DeepEqual(got, before) {
+		t.Fatalf("concluded item changed:\n got %+v\nwant %+v", got, before)
+	}
+	sched := readScheduleRow(t, f.st, id)
+	if sched.Status != domain.ScheduleResolved ||
+		sched.Resolution.Reason != domain.ResolutionSubjectConcluded {
+		t.Fatalf("deadline schedule = %+v", sched)
+	}
+}
+
+// TestDeadlineOnClosedWorkflowConcludesWithoutTheItem: an abandoned task's
+// closed episode refuses every item put, and its retirement can lag. A
+// deadline firing on its still-open ready item records the elapse on the
+// schedule alone instead of failing the handler, which would stop the
+// scheduler.
+func TestDeadlineOnClosedWorkflowConcludesWithoutTheItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newDeadlineFixture(t)
+	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+	id := f.arm(t, domain.SchedulePRChecksDeadline, start)
+	var task domain.Task
+	if err := f.st.Write(ctx, func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(ctx, *f.item.Subject.RunID)
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordTaskStart(ctx, run.ID, start); err != nil {
+			return err
+		}
+		if task, err = tx.GetTask(ctx, run.TaskID); err != nil {
+			return err
+		}
+		_, err = tx.AbandonTask(ctx, task.ID, start.Add(time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.Write(ctx, func(tx *store.WriteTx) error {
+		_, _, err := tx.CloseTaskWorkflow(ctx, task.ID, task.CurrentStart().Ordinal, start.Add(time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := f.readItem(t)
+	if before.Status != domain.StatusOpen {
+		t.Fatalf("item status = %s, want open in the closed episode", before.Status)
+	}
+
+	f.runAt(t, start.Add(31*time.Minute))
+	if got := f.readItem(t); !reflect.DeepEqual(got, before) {
+		t.Fatalf("closed-episode item changed:\n got %+v\nwant %+v", got, before)
+	}
+	sched := readScheduleRow(t, f.st, id)
+	if sched.Status != domain.ScheduleFired ||
+		sched.Resolution.Reason != domain.ResolutionDeadlineElapsed {
+		t.Fatalf("deadline schedule = %+v", sched)
+	}
+}
+
+// TestDeadlineFiredBeforeItsDeadlineRedelivers: a redelivery after the wall
+// clock stepped back can carry a fire instant before the nominal deadline.
+// The consumption abandons itself to redeliver later rather than write a
+// record the item would refuse. The scheduler never fires early on its own
+// clock, so the handler is driven directly.
+func TestDeadlineFiredBeforeItsDeadlineRedelivers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newDeadlineFixture(t)
+	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+	id := f.arm(t, domain.SchedulePRChecksDeadline, start)
+	sched := readScheduleRow(t, f.st, id)
+	ev := domain.ScheduleEvent{
+		ScheduleID: sched.ID, ProjectID: sched.ProjectID, Kind: sched.Kind,
+		Generation: sched.Generation, Subject: sched.Subject,
+		NominalFireAt: *sched.FireAt, FiredAt: sched.FireAt.Add(-time.Second),
+	}
+	consumption, err := deadlineRegistration(f.st).Handle(ctx, ev, sched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.st.Write(ctx, func(tx *store.WriteTx) error { return consumption.Commit(ctx, tx) })
+	if !errors.Is(err, scheduler.ErrStaleConsumption) {
+		t.Fatalf("early fire commit = %v, want ErrStaleConsumption", err)
+	}
+	if got := f.readItem(t); got.ElapsedDeadlines != nil || got.ItemVersion != f.item.ItemVersion {
+		t.Fatalf("early fire wrote the item: %+v", got)
 	}
 }
 

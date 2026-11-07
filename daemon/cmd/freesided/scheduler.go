@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -59,8 +60,10 @@ type nativeReviewObserver func(ctx context.Context, repo string, number int) (pu
 // is never postponed and the deadline fires again on the next pass against
 // the current binding. A matching, still-open item
 // terminates fired-and-handled with deadline_elapsed on the synced
-// aggregate. Richer consumers (surfacing the elapsed deadline as attention,
-// binding to observed check runs) arrive with the §7 review stage (#427).
+// aggregate, and the consuming transaction appends the elapse to the item
+// itself (ElapsedDeadlines, #2752) at its next version, so the ready card and
+// the sync projection carry it. Freeside reads no GitHub check or review
+// state; the record says only that the deadline passed.
 func deadlineRegistration(st *store.Store) scheduler.Registration {
 	return scheduler.Registration{Handle: func(
 		ctx context.Context, ev domain.ScheduleEvent, sc domain.Schedule,
@@ -106,7 +109,36 @@ func deadlineRegistration(st *store.Store) scheduler.Registration {
 				if item.Status != domain.StatusOpen || item.ItemVersion != *ev.Subject.ItemVersion {
 					return scheduler.ErrStaleConsumption
 				}
-				return nil
+				// An open item whose task workflow episode closed (an
+				// abandonment whose retirement has not landed) refuses every
+				// put. The deadline still elapsed; record it on the schedule
+				// alone, as before #2752, rather than fail the handler, which
+				// stops the scheduler.
+				if err := tx.RequireItemWorkflowOpen(ctx, item); errors.Is(err, store.ErrTaskWorkflowClosed) {
+					return nil
+				} else if err != nil {
+					return err
+				}
+				deadline, ok := engine.PublicationWatchDeadline(sc.Kind)
+				if !ok {
+					return fmt.Errorf("deadline schedule %s kind %q has no publication deadline", sc.ID, sc.Kind)
+				}
+				// A redelivery after the wall clock stepped back can fire
+				// before the nominal deadline, which the record forbids.
+				// Redeliver once the clock passes it.
+				if ev.FiredAt.Before(*sc.FireAt) {
+					return scheduler.ErrStaleConsumption
+				}
+				// FireAt is the nominal deadline, which a re-armed generation
+				// keeps, so every generation records the same armed_at.
+				item.ElapsedDeadlines = append(slices.Clone(item.ElapsedDeadlines), domain.ElapsedDeadline{
+					Kind:            sc.Kind,
+					ArmedAt:         sc.FireAt.Add(-deadline).UTC(),
+					DeadlineSeconds: int64(deadline / time.Second),
+					ElapsedAt:       ev.FiredAt.UTC(),
+				})
+				item.ItemVersion++
+				return tx.PutAttentionItem(ctx, item)
 			},
 		}, nil
 	}}
