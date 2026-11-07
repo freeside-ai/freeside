@@ -86,7 +86,7 @@ func newSubmitTaskService(t *testing.T, submitter signet.TaskSubmitter, deviceSt
 	}); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	opts := []signet.Option{signet.WithBlobStore(blobs)}
+	opts := []signet.Option{signet.WithBlobStore(blobs), withTestLineAgents()}
 	if submitter != nil {
 		opts = append(opts, signet.WithTaskSubmitter(submitter))
 	}
@@ -393,7 +393,7 @@ func newRealSubmitTaskHandlerAndStore(t *testing.T) (http.Handler, *store.Store)
 	submitter := engine.NewTaskSubmitter(blobs, func(domain.ProjectID) (engine.ManualInitiator, bool) {
 		return initiator, true
 	})
-	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter))
+	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter), withTestLineAgents())
 	return signet.NewHTTPHandler(service, testAuthorizer), s
 }
 

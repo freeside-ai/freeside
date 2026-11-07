@@ -184,7 +184,7 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 	// appends no second version. Each line is set when its task is created.
 	for _, line := range in.TaskLines {
 		if _, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
-			TaskID: task.ID, Role: line.Role, Agent: line.Agent,
+			TaskID: task.ID, Role: line.Role, Selection: line.Selection,
 			Source: domain.TaskLineSourceSubmitTask, SetBy: in.CommandID,
 		}, task.CreatedAt); err != nil {
 			return signet.TaskSubmissionResult{}, fmt.Errorf("record task line: %w", err)

@@ -1,0 +1,13 @@
+{
+  "id": "sha256:8cf38212f5f3d42eff2be2ce11b15fcf8fa25b87c1df7abcc3bfa53478f38e7b",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "",
+  "version": 3,
+  "predecessor_id": "sha256:c419d2caaebcbfd280a35c27e02cde2edf0e58a1ccdbd72d2c008bf466b45ed6",
+  "source": "cli_line_change",
+  "set_by": "sha256:fa5c92871ff8a515b1e92f73fbb1569191c614228384eb8c4b988cd99a2b05fd",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": null,
+  "cleared": true
+}

@@ -193,7 +193,11 @@ func (f *agentAdmissionFixture) moveTask(
 		if err != nil {
 			return err
 		}
-		lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, inputs)
+		movedTo, err := f.selection.Tree.SelectionOfAgent(record.Agent)
+		if err != nil {
+			return err
+		}
+		lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, movedTo, inputs)
 		if err != nil {
 			return err
 		}
@@ -252,7 +256,7 @@ func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 		policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
 			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
 		line := f.moveTask(t, policy, left, withoutReceipt)
-		if line.Agent != agentTestSecondAgent || line.Source != domain.TaskLineSourceAlternateAgentMove ||
+		if f.lineAgent(line) != agentTestSecondAgent || line.Source != domain.TaskLineSourceAlternateAgentMove ||
 			line.Provenance == nil || line.Provenance.Pool != routerSecondPool ||
 			line.Provenance.PolicyRevision != policy.Revision || !reflect.DeepEqual(line.Provenance.PassedOver, left) {
 			t.Fatalf("moved line = %+v (provenance %+v)", line, line.Provenance)

@@ -1,0 +1,25 @@
+{
+  "id": "sha256:03c2e299f80141af27051719a7615f2adc7a78c2e6e4820e4052a8e7cb8eb997",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "claude-b",
+  "version": 1,
+  "predecessor_id": null,
+  "source": "router",
+  "set_by": "router:task-1",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": {
+    "policy_revision": 1,
+    "tier": "policy_order",
+    "pool": "claude-max-b",
+    "ranked_by": [],
+    "passed_over": {
+      "agent": "claude-a",
+      "pool": "claude-max-a",
+      "window": "seven_day_opus",
+      "source": "provider_refusal",
+      "marked_at": "2026-01-02T02:04:05Z",
+      "resets_at": "2026-01-04T05:04:05Z"
+    }
+  }
+}

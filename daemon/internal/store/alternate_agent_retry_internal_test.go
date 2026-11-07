@@ -191,9 +191,15 @@ func TestAlternateAgentMoveLines(t *testing.T) {
 	taskID, _ := seedOriginTestTarget(t, ctx, st)
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	record := seedParkedMove(t, taskID, at.Add(time.Hour))
+	// moveSelection stands in for the tree: the selection an agent reduces to.
+	moveSelection := func(agent string) *domain.TaskLineSelection {
+		return &domain.TaskLineSelection{
+			EnrollmentID: domain.ClientEnrollmentID("enrollment-" + agent), ModelID: "model-" + agent, Effort: "high",
+		}
+	}
 	move := func(role domain.RoleName, agent, setBy string) domain.TaskLineInput {
 		return domain.TaskLineInput{
-			TaskID: taskID, Role: role, Agent: agent, Source: domain.TaskLineSourceAlternateAgentMove,
+			TaskID: taskID, Role: role, Selection: moveSelection(agent), Source: domain.TaskLineSourceAlternateAgentMove,
 			SetBy: setBy, Provenance: routerProvenance("pool-b"),
 		}
 	}
@@ -201,7 +207,7 @@ func TestAlternateAgentMoveLines(t *testing.T) {
 		var lines []domain.TaskLine
 		err := st.Write(ctx, func(tx *WriteTx) error {
 			var err error
-			lines, err = tx.RecordAlternateAgentMoveLines(ctx, record, inputs)
+			lines, err = tx.RecordAlternateAgentMoveLines(ctx, record, *moveSelection(record.Agent), inputs)
 			return err
 		})
 		return lines, err

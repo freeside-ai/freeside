@@ -1,0 +1,17 @@
+{
+  "id": "sha256:d6370a11917e4075d557054739e8439b85d616cb667e5c3d839a4e2b6c3b2894",
+  "encoding": "freeside.task_line/v2",
+  "task_id": "task-1",
+  "role": "implementer",
+  "selection": {
+    "enrollment_id": "claude-max-a",
+    "model_id": "claude-opus-4-5",
+    "effort": "high"
+  },
+  "version": 1,
+  "predecessor_id": null,
+  "source": "submit_task",
+  "set_by": "cmd-1",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": null
+}

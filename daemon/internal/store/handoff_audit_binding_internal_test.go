@@ -14,6 +14,7 @@ import (
 // 0128 holds: audits record no ref and handoff checks name no audit.
 func rewindHandoffAuditBinding(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindTaskLineSelection(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE publication_handoff_checks DROP COLUMN workflow_audit_id`,
 		`ALTER TABLE workflow_audits DROP COLUMN audited_ref`,

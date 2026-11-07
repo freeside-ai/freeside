@@ -593,16 +593,21 @@ func TestPrelaunchRefusesARootADaemonHolds(t *testing.T) {
 func TestPrelaunchChecksTaskLinesAgainstTheTree(t *testing.T) {
 	t.Parallel()
 	f := newPrelaunchFixture(t)
-	record, body, stderr, err := f.run(t, f.args("-no-live", "--task-line", "implementer=nobody"))
+	record, body, stderr, err := f.run(t, f.args("-no-live", "--task-line", "implementer=nobody/none/high"))
 	if !errors.Is(err, errPrelaunchFailed) {
 		t.Fatalf("err %v, want a failed prelaunch", err)
 	}
 	if got := findPrelaunchCheck(record, prelaunchGroupInputs, "task_lines").Status; got != compositionFailed ||
-		!strings.Contains(stderr, "implementer=nobody") {
+		!strings.Contains(stderr, "implementer=nobody/none/high") {
 		t.Fatalf("task_lines = %q, stderr %q\n%s", got, stderr, body)
 	}
 	tree := loadAgentTreeAt(t, f.load(t))
-	record, body, _, err = f.run(t, f.args("-no-live", "--task-line", "implementer="+tree.Agents[0].Name))
+	selection, err := tree.SelectionOfAgent(tree.Agents[0].Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chosen := "implementer=" + string(selection.EnrollmentID) + "/" + selection.ModelID + "/" + selection.Effort
+	record, body, _, err = f.run(t, f.args("-no-live", "--task-line", chosen))
 	if err != nil || findPrelaunchCheck(record, prelaunchGroupInputs, "task_lines").Status != compositionPassed {
 		t.Fatalf("a task line naming %s: %v\n%s", tree.Agents[0].Name, err, body)
 	}

@@ -81,6 +81,10 @@ type Service struct {
 	// command closed, after replay.
 	parkedTaskMover       ParkedTaskMover
 	alternateAgentRetrier AlternateAgentRetrier
+	// taskLineAgents is the document bridge between wire agent names and
+	// line selections (task_line_agents.go). Nil fails a command that sets a
+	// line closed, and refuses to project a line that selects.
+	taskLineAgents func() (TaskLineAgents, error)
 	// usageRefreshAge bounds how long a usage reading counts as fresh in the
 	// projection (WithUsageRefreshAge); zero means only its reset does.
 	usageRefreshAge time.Duration
@@ -280,6 +284,16 @@ var errReplay = errors.New("idempotent replay: original result captured")
 // one Write, one revision, no window where the command exists without its
 // resolution.
 func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
+	result, err := s.submit(ctx, in)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	// The wire names the agent a recorded selection maps to now.
+	result.agents = s.TaskLineAgents()
+	return result, nil
+}
+
+func (s *Service) submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	switch in.Kind {
 	case domain.CommandKindStopTask:
 		return s.stopTask(ctx, in)
@@ -319,6 +333,11 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 	lines, err := canonicalTaskLines(in.Payload.TaskLines)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidProposalDecisionPayload, err)
+	}
+	// A start's lines record the selections its names map to now.
+	selected, err := s.lineSelections(lines)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
 	}
 	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q proposal snoozes: %w", in.CommandID, err)
@@ -522,7 +541,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeStartsProposal:
-				kind, err := s.applyStartProposal(ctx, tx, command, item, lines, s.now().UTC())
+				kind, err := s.applyStartProposal(ctx, tx, command, item, selected, s.now().UTC())
 				if err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
@@ -530,7 +549,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				approvedAdoption = item.Type == domain.AttentionEffectProposal &&
 					kind == domain.EffectImagePolicyAdoption
 			case outcomeRevisesAndStartsProposal:
-				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, lines, s.now().UTC()); err != nil {
+				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, selected, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeDeclinesProposal:
@@ -576,7 +595,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				return err
 			}
 			if command.Action == domain.ActionStart || command.Action == domain.ActionStartWithChanges {
-				if err := replayProposalTaskLines(ctx, tx, command, lines); err != nil {
+				if err := replayProposalTaskLines(ctx, tx, command, lines, selected); err != nil {
 					return err
 				}
 			}

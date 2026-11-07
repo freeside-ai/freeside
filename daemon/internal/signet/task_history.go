@@ -2,6 +2,7 @@ package signet
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -9,21 +10,41 @@ import (
 
 // taskHistoryEvents summarizes already authenticated records. It never derives
 // an event from a current status, and does not create a second persistence log.
-// The lines arrive ordered by role and then version, as the store reads them.
-func taskHistoryEvents(task domain.Task, lines []domain.TaskLine, triage *domain.TaskTriage, inputs []taskTimelineInput, sections []TaskTimelineSection) ([]domain.TaskEvent, error) {
+// The lines arrive ordered by role and then version, as the store reads them;
+// names holds the agent each uncleared v2 line selects (selectionAgentNames).
+func taskHistoryEvents(
+	task domain.Task, lines []domain.TaskLine, names map[domain.Digest]string, triage *domain.TaskTriage,
+	inputs []taskTimelineInput, sections []TaskTimelineSection,
+) ([]domain.TaskEvent, error) {
 	events := []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}}
+	agentOf := func(line domain.TaskLine) (*string, error) {
+		if line.Cleared {
+			return nil, nil
+		}
+		if line.Encoding == domain.TaskLineEncodingV1 {
+			return &line.Agent, nil
+		}
+		name, ok := names[line.ID]
+		if !ok {
+			return nil, fmt.Errorf("task line %s names no agent: %w", line.ID, ErrRunObservationIntegrity)
+		}
+		return &name, nil
+	}
 	for i, line := range lines {
 		detail := domain.TaskEventTaskLine{
 			LineID: line.ID, Role: line.Role, Version: line.Version,
 			Source: line.Source, Provenance: line.Provenance,
 		}
-		if !line.Cleared {
-			detail.Agent = &line.Agent
+		var err error
+		if detail.Agent, err = agentOf(line); err != nil {
+			return nil, err
 		}
 		// The store checked each chain, so a later version's predecessor is
 		// the line just before it. A cleared predecessor names no agent.
-		if line.Version > 1 && !lines[i-1].Cleared {
-			detail.SupersededAgent = &lines[i-1].Agent
+		if line.Version > 1 {
+			if detail.SupersededAgent, err = agentOf(lines[i-1]); err != nil {
+				return nil, err
+			}
 		}
 		events = append(events, domain.TaskEvent{Kind: domain.TaskEventTaskLineSet, RecordedAt: line.SetAt, Line: &detail})
 	}

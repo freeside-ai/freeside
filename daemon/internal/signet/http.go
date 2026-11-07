@@ -1031,7 +1031,7 @@ func isCommandRequestError(err error) bool {
 		// A collector must be enrolled on its pool, and a policy names only
 		// agents the daemon's tree carries and a drain-first account one of
 		// them is on: each is the client's request.
-		store.ErrEnrollmentNotOnPool, domain.ErrRoutingPolicyAgentUnknown,
+		store.ErrEnrollmentNotOnPool, domain.ErrRoutingPolicyAgentUnknown, ErrTaskLineAgentUnknown,
 		domain.ErrRoutingPolicyDrainFirstUnknown,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,

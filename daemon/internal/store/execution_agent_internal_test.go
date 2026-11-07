@@ -678,7 +678,7 @@ func TestTaskLineAdmissionResolvesTheLineItCites(t *testing.T) {
 		s := openAgentAdmissionStore(t)
 		generation := seedAgentClosure(t, s)
 		cited := appendRunTaskLine(t, s, "run-1", "codex")
-		change, err := domain.NewTaskLineChange(cited.TaskID, cited.Role, "", true, &cited.ID, cited.SetAt)
+		change, err := domain.NewTaskLineChange(cited.TaskID, cited.Role, nil, &cited.ID, cited.SetAt)
 		if err != nil {
 			t.Fatal(err)
 		}

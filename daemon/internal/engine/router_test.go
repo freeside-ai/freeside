@@ -273,7 +273,7 @@ func wantRouterLines(
 			continue
 		}
 		got[line.Role] = line
-		if line.Agent != want[line.Role] || line.Version != 1 || line.SetBy != "router:"+string(taskID) ||
+		if f.lineAgent(line) != want[line.Role] || line.Version != 1 || line.SetBy != "router:"+string(taskID) ||
 			!line.SetAt.Equal(setAt) || !reflect.DeepEqual(line.Provenance, provenance) {
 			t.Errorf("%s router line = %+v (provenance %+v), want %s citing %+v at %s",
 				line.Role, line, line.Provenance, want[line.Role], provenance, setAt)
