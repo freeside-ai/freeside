@@ -84,6 +84,11 @@ REST_PACKAGE_ORDER = [
 ]
 
 
+# Packages that run in a shard of their own and so are left out of rest.
+# cmd/freesided is the slowest package and alone bounds the rest shard (#2251).
+OWN_PACKAGES = {"integration": "/internal/integration", "freesided": "/cmd/freesided"}
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -118,13 +123,21 @@ def discovery_events(events, packages):
     return inventory
 
 
+def own_package(packages, kind):
+    """The one package a single-package shard kind runs whole or partitions."""
+    matches = [p for p in packages if p.endswith(OWN_PACKAGES[kind])]
+    require(len(matches) == 1, f"missing or ambiguous {kind} package")
+    return matches[0]
+
+
 def discover(go, daemon, integration_only=False, *, packages=None, rest_only=False, only=None):
     packages = list_packages(go, daemon) if packages is None else packages
     if integration_only:
-        packages = [p for p in packages if p.endswith("/internal/integration")]
-        require(len(packages) == 1, "missing or ambiguous integration package")
+        packages = [own_package(packages, "integration")]
     if rest_only:
-        packages = [p for p in packages if not p.endswith("/internal/integration")]
+        # Fail closed on a missing carve-out: rest would otherwise shrink silently.
+        excluded = {own_package(packages, kind) for kind in OWN_PACKAGES}
+        packages = [p for p in packages if p not in excluded]
     if only is not None:
         require(set(only) <= set(packages), "discovery selection names an unknown package")
         packages = list(only)
@@ -255,12 +268,14 @@ def run(args):
     packages = list_packages(args.go, args.daemon)
     write_json(directory, "packages.json", packages)
     darwin = darwin_packages(packages) if args.kind == "darwin" else None
+    only = None
+    if args.kind == "darwin":
+        only = list(darwin)
+    elif args.kind == "freesided":
+        only = [own_package(packages, "freesided")]
     inventory = discover(args.go, args.daemon, args.kind == "integration",
-                         packages=packages, rest_only=args.kind == "rest",
-                         only=list(darwin) if args.kind == "darwin" else None)
-    integration = [p for p in packages if p.endswith("/internal/integration")]
-    require(len(integration) == 1, "missing or ambiguous integration package")
-    package = integration[0]
+                         packages=packages, rest_only=args.kind == "rest", only=only)
+    package = own_package(packages, "integration")
     count = args.count if args.kind == "integration" else (args.integration_count or 3)
     bins = []
     if args.kind == "integration":
@@ -363,7 +378,8 @@ def verify_reports(paths, shards="all"):
     # A platform's shard set is declared by the workflow: PRs run the darwin
     # selection alone on macOS and a push to main runs every shard there, so
     # each gate verifies full coverage of its declared set and still rejects
-    # a shard outside it.
+    # a shard outside it. The rest set is rest plus freesided: every
+    # non-integration package.
     require(shards in ("all", "rest", "integration", "darwin"), "invalid shard selection")
     require(paths, "missing shard reports")
     paths, reports = latest_attempts(paths)
@@ -378,7 +394,7 @@ def verify_reports(paths, shards="all"):
     if shards == "darwin":
         expected = [("darwin", 1, 1)]
     else:
-        expected = [("rest", 1, 1)] if shards != "integration" else []
+        expected = [("rest", 1, 1), ("freesided", 1, 1)] if shards != "integration" else []
         if shards != "rest":
             expected += [("integration", i, count) for i in range(1, count + 1)]
     require(Counter((r["kind"], r["index"], r["count"]) for r in reports) == Counter(expected),
@@ -386,9 +402,8 @@ def verify_reports(paths, shards="all"):
     packages = read_json(paths[0].parent / "packages.json")
     require(isinstance(packages, list) and packages and len(set(packages)) == len(packages),
             "invalid package inventory")
-    integration = [p for p in packages if p.endswith("/internal/integration")]
-    require(len(integration) == 1, "missing or ambiguous integration package")
-    package = integration[0]
+    package = own_package(packages, "integration")
+    freesided = own_package(packages, "freesided")
     identity = read_json(paths[0].parent / "metadata.json")
     require(isinstance(identity, dict) and all(identity.get(k) for k in
             ("tested_commit", "production_tree", "go", "platform")), "missing tested identity")
@@ -409,8 +424,11 @@ def verify_reports(paths, shards="all"):
         discovered = read_json(directory / "inventory.json")
         selected = report["inventory"]
         if report["kind"] == "rest":
-            require(set(discovered) == set(packages) - {package} and selected == discovered,
+            require(set(discovered) == set(packages) - {package, freesided} and selected == discovered,
                     "rest shard omitted a package or family")
+        elif report["kind"] == "freesided":
+            require(set(discovered) == {freesided} and selected == discovered,
+                    "freesided shard omitted a package or family")
         elif report["kind"] == "darwin":
             darwin = darwin_packages(packages)
             require(set(discovered) == set(darwin) and selected == darwin_families(darwin, discovered),
@@ -498,7 +516,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     shard = commands.add_parser("run")
-    shard.add_argument("--kind", choices=("rest", "integration", "darwin"), required=True)
+    shard.add_argument("--kind", choices=("rest", "freesided", "integration", "darwin"), required=True)
     shard.add_argument("--index", type=int, required=True, help="one-based shard index")
     shard.add_argument("--count", type=int, required=True)
     shard.add_argument("--integration-count", type=int)

@@ -711,6 +711,12 @@ PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=darwin DAEMON_TEST_SHARD_INDEX=1 \
 assert_rc 0
 OUT=$(cat "$stub.args")
 assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\ndarwin\n--index\n1\n--count\n1'
+PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=freesided DAEMON_TEST_SHARD_INDEX=1 \
+  DAEMON_TEST_SHARD_COUNT=1 DAEMON_TEST_INTEGRATION_SHARDS=3 \
+  DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test
+assert_rc 0
+OUT=$(cat "$stub.args")
+assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\nfreesided\n--index\n1\n--count\n1'
 
 begin_case "shard runs refuse arguments after -- before go or the wrapper runs"
 rm -f "$stub.args" "$TMP/shard-args.args"
