@@ -414,6 +414,16 @@ issue's acceptance criteria defers as a tracked issue, while deferring
 acceptance-required work first needs the owner or planner to rescope the
 unit's contract.
 
+A pull request whose issue carries an estimate records its actual
+authored count beside that estimate, measured at handoff on the head
+handed off, as one Verification bullet:
+`Checked: N authored lines against an estimate of E (#issue).` Count
+it the way the plan-wave skill measures a reference pull request, over
+`origin/main..HEAD` and reading `.git-blame-ignore-revs` from `HEAD`. The
+bullet is change-specific evidence CI doesn't show, so it sits beside
+`Passed: required checks.` Estimates have run two to four times low,
+and the recorded pairs are what a later planner calibrates against.
+
 ## Session End
 
 Write or update the unit's decision note only when a Decision notes
