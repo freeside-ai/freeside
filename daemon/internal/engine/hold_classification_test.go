@@ -14,48 +14,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// holdClassificationSentinels is every sentinel the dispatch path
-// classifies: the operating gate, the quiet invocation and pass holds, the
-// mutable admission-policy refusals, and the fenced no-more-work outcomes.
-var holdClassificationSentinels = []error{
-	domain.ErrUnattendedOperationStopped,
-	domain.ErrBlockingSystemHealth,
-	exec.ErrInputUnavailable,
-	domain.ErrUsagePoolExhausted,
-	domain.ErrMachineCapacity,
-	ErrImageUpkeepPending,
-	ErrQuotaWindowExhausted,
-	store.ErrBackendNotConformant,
-	domain.ErrConformanceConfigurationUnbound,
-	domain.ErrAdmissionConfigurationMismatch,
-	domain.ErrAdmissionExceedsConformance,
-	domain.ErrBackupHealthUnavailable,
-	domain.ErrCheckpointNotEncrypted,
-	domain.ErrCheckpointNotCurrent,
-	domain.ErrArtifactClosureIncomplete,
-	domain.ErrRestoreTestStale,
-	domain.ErrInvalidBackupHealthStatus,
-	store.ErrRepositoryUntrusted,
-	publish.ErrJanitorInactive,
-	ErrProjectImageUnserved,
-	domain.ErrGenerationIntegrityMarked,
-	ErrEgressProfileNotEnforceable,
-	ErrEgressPolicyRefused,
-	exec.ErrCapabilityRefused,
-	exec.ErrPreJobRefused,
-	domain.ErrUnknownAdmissionFloor,
-	domain.ErrCapabilityBelowFloor,
-	domain.ErrCredentialModeNotApproved,
-	domain.ErrWaiverNotConfigured,
-	domain.ErrRepositoryIdentityMismatch,
-	domain.ErrPathBoundaryMismatch,
-	domain.ErrTrustProfileSuperseded,
-	domain.ErrReviewConfigurationUnapproved,
-	ErrAgentNotAdmissible,
-	store.ErrTaskCancellationFenced,
-	store.ErrTaskWorkflowClosed,
-}
-
 type holdClassificationCase struct {
 	name string
 	err  error
@@ -120,7 +78,7 @@ type holdClassification struct {
 func classifyHold(name string, err error) holdClassification {
 	wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", err)
 	reason, _ := dispatchHoldReason(wrapped)
-	gate, _ := operatingGateHoldToday(wrapped)
+	gate, _ := operatingGateHold(wrapped)
 	return holdClassification{
 		Case:                          name,
 		HoldReason:                    reason,
@@ -129,40 +87,21 @@ func classifyHold(name string, err error) holdClassification {
 		UnattendedDispatchRefusal:     unattendedDispatchRefusal(wrapped),
 		MutableAdmissionPolicyRefusal: MutableAdmissionPolicyRefusal(wrapped),
 		OperatingGateHold:             gate,
-		ClearedOnStart:                reason != "" && slices.Contains(clearOnStartHoldReasonsToday, reason),
+		ClearedOnStart:                reason != "" && slices.Contains(clearOnStartHoldReasons, reason),
 		RefusalHoldReason:             reason != "" && slices.Contains(refusalHoldReasons, reason),
 	}
 }
 
-// operatingGateHoldToday mirrors the operating-state switch in
-// dispatchPendingInvocations' pre-check and dispatchAdmittedIntent's gate,
-// which are inline today.
-func operatingGateHoldToday(err error) (domain.RunHoldReason, bool) {
-	switch {
-	case errors.Is(err, domain.ErrUnattendedOperationStopped):
-		return domain.HoldOperationStopped, true
-	case errors.Is(err, domain.ErrBlockingSystemHealth):
-		return domain.HoldBlockingSystemHealth, true
-	}
-	return "", false
-}
-
-// clearOnStartHoldReasonsToday mirrors the causes dispatchAdmittedIntent
-// clears when an invocation starts, which are inline today.
-var clearOnStartHoldReasonsToday = []domain.RunHoldReason{
-	domain.HoldUsagePoolExhausted, domain.HoldIdentityParallelism,
-	domain.HoldImageUpkeepPending, domain.HoldQuotaWindowExhausted, domain.HoldMachineCapacity,
-}
-
 // TestHoldClassificationGolden pins every classifier's answer for every
-// classified sentinel and for the joined errors whose precedence matters, so
-// a change to how the dispatch path holds, refuses, or records an error
-// shows up as a golden diff.
+// holdClasses sentinel and for the joined errors whose precedence matters,
+// so a change to how the dispatch path holds, refuses, or records an error,
+// including a row added or dropped, shows up as a golden diff.
 func TestHoldClassificationGolden(t *testing.T) {
 	t.Parallel()
 	var rows []holdClassification
 	seen := map[string]bool{}
-	for _, sentinel := range holdClassificationSentinels {
+	for _, class := range holdClasses {
+		sentinel := class.sentinel
 		name := sentinel.Error()
 		if seen[name] {
 			t.Fatalf("two classified sentinels share the text %q", name)

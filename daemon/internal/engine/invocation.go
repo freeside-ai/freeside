@@ -8,7 +8,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -90,14 +89,11 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				// the hold and its typed cause are observable per run
 				// (issue #394); the listing is a read, and dispatch below is
 				// skipped exactly as before.
-				switch {
-				case errors.Is(err, domain.ErrUnattendedOperationStopped):
-					held, holdReason = true, domain.HoldOperationStopped
-				case errors.Is(err, domain.ErrBlockingSystemHealth):
-					held, holdReason = true, domain.HoldBlockingSystemHealth
-				default:
+				reason, ok := operatingGateHold(err)
+				if !ok {
 					return err
 				}
+				held, holdReason = true, reason
 			}
 		}
 		var err error
@@ -670,81 +666,6 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 	return started, nil
 }
 
-func unattendedDispatchRefusal(err error) bool {
-	return errors.Is(err, exec.ErrCapabilityRefused) ||
-		errors.Is(err, exec.ErrPreJobRefused) ||
-		MutableAdmissionPolicyRefusal(err)
-}
-
-func invocationDispatchHold(err error) bool {
-	// A role whose agent does not pass admission holds its own invocation:
-	// the verdict reads the store and the selection gate, both of which can
-	// change, and another role's work may still be admissible.
-	//
-	// A marked generation is that same verdict reached in the admitting
-	// transaction: the mark landed after role resolution read the store, so
-	// the refusal arrives from the store without ErrAgentNotAdmissible. It
-	// holds like the read-side refusal, and re-enrollment clears it.
-	//
-	// A base no admitted image serves holds its own invocation too, whether
-	// upkeep may still serve it or not: an image that later serves the base
-	// resumes it without anyone acting.
-	return errors.Is(err, exec.ErrInputUnavailable) ||
-		errors.Is(err, ErrImageUpkeepPending) ||
-		errors.Is(err, ErrProjectImageUnserved) ||
-		workflowAdvancementFenced(err) ||
-		errors.Is(err, domain.ErrUsagePoolExhausted) ||
-		errors.Is(err, domain.ErrMachineCapacity) ||
-		errors.Is(err, ErrQuotaWindowExhausted) ||
-		errors.Is(err, ErrAgentNotAdmissible) ||
-		errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
-		egressAdmissionRefusal(err)
-}
-
-// egressAdmissionRefusal identifies a writer attempt refused for the egress
-// profile its own run requests. The verdict is the run's: its policy content,
-// or a profile this composition does not enforce yet, says nothing about any
-// other run, so it holds the one invocation instead of ending the pass. A
-// composition that later enforces the profile clears the second kind; the
-// first kind stays held under its recorded reason until the operator stops
-// the run, because a run's policy does not change.
-func egressAdmissionRefusal(err error) bool {
-	return errors.Is(err, ErrEgressProfileNotEnforceable) ||
-		errors.Is(err, ErrEgressPolicyRefused)
-}
-
-// MutableAdmissionPolicyRefusal identifies a fail-closed current-policy
-// verdict that can change without changing the recorded attempt. These
-// verdicts hold work for a later reconcile pass. Immutable-record corruption,
-// identity inconsistencies, and binding errors are deliberately absent: those
-// remain fatal correctness failures.
-func MutableAdmissionPolicyRefusal(err error) bool {
-	return backendConformanceRefusal(err) ||
-		errors.Is(err, domain.ErrUnknownAdmissionFloor) ||
-		errors.Is(err, domain.ErrCapabilityBelowFloor) ||
-		errors.Is(err, domain.ErrCredentialModeNotApproved) ||
-		errors.Is(err, domain.ErrWaiverNotConfigured) ||
-		errors.Is(err, domain.ErrBackupHealthUnavailable) ||
-		errors.Is(err, domain.ErrCheckpointNotEncrypted) ||
-		errors.Is(err, domain.ErrCheckpointNotCurrent) ||
-		errors.Is(err, domain.ErrArtifactClosureIncomplete) ||
-		errors.Is(err, domain.ErrRestoreTestStale) ||
-		errors.Is(err, domain.ErrInvalidBackupHealthStatus) ||
-		errors.Is(err, store.ErrRepositoryUntrusted) ||
-		errors.Is(err, publish.ErrJanitorInactive) ||
-		errors.Is(err, domain.ErrRepositoryIdentityMismatch) ||
-		errors.Is(err, domain.ErrPathBoundaryMismatch) ||
-		errors.Is(err, domain.ErrTrustProfileSuperseded) ||
-		errors.Is(err, domain.ErrReviewConfigurationUnapproved)
-}
-
-func backendConformanceRefusal(err error) bool {
-	return errors.Is(err, store.ErrBackendNotConformant) ||
-		errors.Is(err, domain.ErrConformanceConfigurationUnbound) ||
-		errors.Is(err, domain.ErrAdmissionConfigurationMismatch) ||
-		errors.Is(err, domain.ErrAdmissionExceedsConformance)
-}
-
 // dispatchIntent runs the lane-independent half of one dispatch: admit if no
 // attempt exists, record attempt and admission durably, start the driver, and
 // mark the intent dispatched. hold reports the operating-state refusal that
@@ -825,12 +746,9 @@ func (e *Engine) dispatchAdmittedIntent(
 		// already sees why — the stop notice or the blocking item is open
 		// in signet — and the run records the same typed hold the
 		// pre-check records, whatever its lane (issue #435).
-		if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
-			errors.Is(err, domain.ErrBlockingSystemHealth) {
-			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason, holdDetailFor(err)); obsErr != nil {
-					return false, false, obsErr
-				}
+		if reason, ok := operatingGateHold(err); ok {
+			if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason, holdDetailFor(err)); obsErr != nil {
+				return false, false, obsErr
 			}
 			return false, true, nil
 		}
@@ -874,14 +792,9 @@ func (e *Engine) dispatchAdmittedIntent(
 			return err
 		}
 		// A capacity, memory, image-upkeep, or quota window hold is current
-		// scheduling state, not history. Clear only those exact causes when
-		// this invocation starts; the store's predicate preserves a newer,
-		// different hold that may have replaced them. A stored identity_parallelism row clears with
-		// the pool hold that replaced its reason.
-		for _, cause := range []domain.RunHoldReason{
-			domain.HoldUsagePoolExhausted, domain.HoldIdentityParallelism,
-			domain.HoldImageUpkeepPending, domain.HoldQuotaWindowExhausted, domain.HoldMachineCapacity,
-		} {
+		// scheduling state, not history; clear those causes when this
+		// invocation starts (clearOnStartHoldReasons).
+		for _, cause := range clearOnStartHoldReasons {
 			if err := tx.ClearRunHoldCause(ctx, binding.run.ID, cause); err != nil {
 				return err
 			}

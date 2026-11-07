@@ -9,7 +9,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -153,114 +152,6 @@ func (e *QuotaWindowExhaustedError) Error() string {
 
 // Is matches ErrQuotaWindowExhausted.
 func (e *QuotaWindowExhaustedError) Is(target error) bool { return target == ErrQuotaWindowExhausted }
-
-// dispatchHoldReason classifies a dispatch-path hold or refusal error onto
-// the closed reason vocabulary. Only the code crosses into the observation;
-// an error that classifies onto no code records no hold and keeps its
-// ordinary loud failure path. Backup-protection sentinels are matched before
-// the general admission-policy class because they are a distinct operator
-// action.
-func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
-	switch {
-	case errors.Is(err, domain.ErrUnattendedOperationStopped):
-		return domain.HoldOperationStopped, true
-	case errors.Is(err, domain.ErrBlockingSystemHealth):
-		return domain.HoldBlockingSystemHealth, true
-	case errors.Is(err, exec.ErrInputUnavailable):
-		return domain.HoldInputUnavailable, true
-	case errors.Is(err, domain.ErrUsagePoolExhausted):
-		return domain.HoldUsagePoolExhausted, true
-	case errors.Is(err, domain.ErrMachineCapacity):
-		return domain.HoldMachineCapacity, true
-	case errors.Is(err, ErrImageUpkeepPending):
-		return domain.HoldImageUpkeepPending, true
-	case errors.Is(err, ErrQuotaWindowExhausted):
-		return domain.HoldQuotaWindowExhausted, true
-	case backendConformanceRefusal(err):
-		return domain.HoldBackendNotConformant, true
-	case errors.Is(err, domain.ErrBackupHealthUnavailable),
-		errors.Is(err, domain.ErrCheckpointNotEncrypted),
-		errors.Is(err, domain.ErrCheckpointNotCurrent),
-		errors.Is(err, domain.ErrArtifactClosureIncomplete),
-		errors.Is(err, domain.ErrRestoreTestStale),
-		errors.Is(err, domain.ErrInvalidBackupHealthStatus):
-		return domain.HoldBackupProtectionUnready, true
-	case errors.Is(err, store.ErrRepositoryUntrusted):
-		return domain.HoldRepositoryUntrusted, true
-	case errors.Is(err, publish.ErrJanitorInactive):
-		return domain.HoldProviderAuthorityUnavailable, true
-	case errors.Is(err, ErrAgentNotAdmissible),
-		errors.Is(err, ErrProjectImageUnserved),
-		errors.Is(err, domain.ErrGenerationIntegrityMarked),
-		egressAdmissionRefusal(err),
-		errors.Is(err, exec.ErrCapabilityRefused),
-		errors.Is(err, exec.ErrPreJobRefused),
-		errors.Is(err, domain.ErrUnknownAdmissionFloor),
-		errors.Is(err, domain.ErrCapabilityBelowFloor),
-		errors.Is(err, domain.ErrCredentialModeNotApproved),
-		errors.Is(err, domain.ErrWaiverNotConfigured),
-		errors.Is(err, domain.ErrRepositoryIdentityMismatch),
-		errors.Is(err, domain.ErrPathBoundaryMismatch),
-		errors.Is(err, domain.ErrTrustProfileSuperseded),
-		errors.Is(err, domain.ErrReviewConfigurationUnapproved):
-		return domain.HoldAdmissionPolicyRefused, true
-	}
-	return "", false
-}
-
-// admissionRefusalDetail names the check, and when known the agent and the
-// launch, behind an error dispatchHoldReason classifies as
-// admission_policy_refused; any other error has no detail. A typed agent
-// refusal names its own check; otherwise the most specific sentinel does,
-// and an agent refusal with neither names the generic agent check.
-func admissionRefusalDetail(err error) *domain.AdmissionRefusal {
-	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
-		return nil
-	}
-	var agent *AgentAdmissionRefusal
-	if errors.As(err, &agent) {
-		refusal := agent.Refusal
-		return &refusal
-	}
-	// An unserved base has no check in the vocabulary, and naming the agent
-	// check would blame an agent that was never asked.
-	if errors.Is(err, ErrProjectImageUnserved) {
-		return nil
-	}
-	var check domain.AdmissionCheck
-	switch {
-	case errors.Is(err, domain.ErrGenerationIntegrityMarked):
-		check = domain.AdmissionCheckGenerationIntegrityMarked
-	case errors.Is(err, ErrEgressProfileNotEnforceable):
-		check = domain.AdmissionCheckEgressProfileNotEnforceable
-	case errors.Is(err, ErrEgressPolicyRefused):
-		check = domain.AdmissionCheckEgressPolicyRefused
-	case errors.Is(err, exec.ErrCapabilityRefused):
-		check = domain.AdmissionCheckBackendCapabilityRefused
-	case errors.Is(err, exec.ErrPreJobRefused):
-		check = domain.AdmissionCheckBackendPreJobRefused
-	case errors.Is(err, domain.ErrUnknownAdmissionFloor):
-		check = domain.AdmissionCheckAdmissionFloorUnknown
-	case errors.Is(err, domain.ErrCapabilityBelowFloor):
-		check = domain.AdmissionCheckCapabilityBelowFloor
-	case errors.Is(err, domain.ErrCredentialModeNotApproved):
-		check = domain.AdmissionCheckCredentialModeNotApproved
-	case errors.Is(err, domain.ErrWaiverNotConfigured):
-		check = domain.AdmissionCheckWaiverNotConfigured
-	case errors.Is(err, domain.ErrRepositoryIdentityMismatch):
-		check = domain.AdmissionCheckRepositoryIdentityMismatch
-	case errors.Is(err, domain.ErrPathBoundaryMismatch):
-		check = domain.AdmissionCheckPathBoundaryMismatch
-	case errors.Is(err, domain.ErrTrustProfileSuperseded):
-		check = domain.AdmissionCheckTrustProfileSuperseded
-	case errors.Is(err, domain.ErrReviewConfigurationUnapproved):
-		check = domain.AdmissionCheckReviewConfigurationUnapproved
-	default:
-		// Only ErrAgentNotAdmissible is left in the reason's class.
-		check = domain.AdmissionCheckAgentAdmission
-	}
-	return &domain.AdmissionRefusal{Check: check}
-}
 
 // holdDetail is the typed fact beside a hold reason: an admission refusal
 // beside admission_policy_refused, what image upkeep waits on beside
@@ -454,23 +345,6 @@ func recordRunHold(
 		hold.InvocationID = &invocationID
 	}
 	return tx.RecordRunHold(ctx, hold)
-}
-
-// refusalHoldReasons is the closed set of hold reasons the production and
-// specification acceptance paths (acceptProductionAttempt,
-// acceptSpecificationAttempt) can record: exactly the image of
-// MutableAdmissionPolicyRefusal (invocation.go) under dispatchHoldReason. A
-// healthy acceptance pass clears every one, so a transient refusal that has
-// recovered (for example backend conformance that briefly lapsed) stops being
-// displayed as the run's hold. TestRefusalHoldReasonsPinned keeps
-// this set in lockstep with those two functions; a member added to one without
-// the other fails that test.
-var refusalHoldReasons = []domain.RunHoldReason{
-	domain.HoldBackendNotConformant,
-	domain.HoldAdmissionPolicyRefused,
-	domain.HoldBackupProtectionUnready,
-	domain.HoldRepositoryUntrusted,
-	domain.HoldProviderAuthorityUnavailable,
 }
 
 // observeRefusalHold records a paced hold observation for an attempt that an

@@ -16,10 +16,12 @@
 //     the 1A.0 walking skeleton and the 1A.1 fake-candidate publication workflow
 //   - invocation.go   dispatch of committed outbox requests into durable
 //     invocations
+//   - hold_classification.go the one table that classifies a dispatch error
+//     as a hold or refusal, with its reason and admission check
 //   - durable_transition.go the production crash-matrix registry
 //   - observation.go, workflow_observation.go
-//     paced observation writes, run-hold classification and recording, and
-//     closed runs' publication observation
+//     paced observation writes, run-hold details and recording, and closed
+//     runs' publication observation
 //   - legacy_vocabulary.go the pre-rename specification outbox and marker
 //     identities
 //   - admission.go, agent_admission.go
