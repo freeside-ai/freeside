@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,126 +15,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func migrationsBeforeReadyResource(t *testing.T) fs.FS {
-	t.Helper()
-	prior := map[string]string{}
-	entries, err := fs.ReadDir(migrations.FS, ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.Name() == "0028_ready_item_pr_binding.sql" ||
-			entry.Name() == "0029_review_stage.sql" ||
-			entry.Name() == "0030_native_review_observation.sql" ||
-			entry.Name() == "0031_review_retry.sql" ||
-			entry.Name() == "0032_review_recovery.sql" ||
-			entry.Name() == "0033_publish_installation_mint_audit.sql" ||
-			entry.Name() == "0034_review_configuration_recovery.sql" ||
-			entry.Name() == "0035_attention_health_posture.sql" ||
-			entry.Name() == "0036_attention_pr_reference.sql" ||
-			entry.Name() == "0037_finding_dispositions.sql" ||
-			entry.Name() == "0038_verification_readiness.sql" ||
-			entry.Name() == "0039_outbox_payload_authentication.sql" ||
-			entry.Name() == "0040_codex_reenrollment.sql" ||
-			entry.Name() == "0041_effect_proposals.sql" ||
-			entry.Name() == "0042_execution_identity_parallelism.sql" ||
-			entry.Name() == "0043_intake_occurrences.sql" ||
-			entry.Name() == "0044_agent_claims.sql" ||
-			entry.Name() == "0045_projects.sql" ||
-			entry.Name() == "0046_export_rejections.sql" ||
-			entry.Name() == "0047_current_import_starts.sql" ||
-			entry.Name() == "0048_production_attempts.sql" ||
-			entry.Name() == "0049_production_attempt_publication_digest.sql" ||
-			entry.Name() == "0050_attention_subject_run_binding.sql" ||
-			entry.Name() == "0051_finding_adjudications.sql" ||
-			entry.Name() == "0052_admitted_agents.sql" ||
-			entry.Name() == "0053_shadow_review.sql" ||
-			entry.Name() == "0054_attention_readiness_summary.sql" ||
-			entry.Name() == "0055_attention_yield_history.sql" ||
-			entry.Name() == "0056_shadow_review_configuration_approval.sql" ||
-			entry.Name() == "0057_finding_adjudication_revisions.sql" ||
-			entry.Name() == "0058_attention_decision_surfaces.sql" ||
-			entry.Name() == "0059_attention_decision_surface_bodies.sql" ||
-			entry.Name() == "0060_attention_recommendation_sources.sql" ||
-			entry.Name() == "0061_usage_observations.sql" ||
-			entry.Name() == "0062_ready_return_action.sql" ||
-			entry.Name() == "0063_attention_readiness_detail.sql" ||
-			entry.Name() == "0064_specification_vocabulary.sql" ||
-			entry.Name() == "0065_comprehension_telemetry.sql" ||
-			entry.Name() == "0066_work_unit_completed_milestone.sql" ||
-			entry.Name() == "0067_review_requests.sql" ||
-			entry.Name() == "0068_declared_publication_branch.sql" ||
-			entry.Name() == "0069_successor_publication.sql" || entry.Name() == "0070_tasks.sql" ||
-			entry.Name() == "0071_production_attempt_revision_link.sql" ||
-			entry.Name() == "0072_task_lifecycle_facts.sql" ||
-			entry.Name() == "0073_task_submission_commands.sql" ||
-			entry.Name() == "0074_task_proposal_vocabulary.sql" ||
-			entry.Name() == "0075_manual_submissions.sql" ||
-			entry.Name() == "0076_task_cancellation.sql" ||
-			entry.Name() == "0077_source_issue_closure_kind.sql" ||
-			entry.Name() == "0078_publication_authorings.sql" ||
-			entry.Name() == "0079_effect_proposal_approvals.sql" ||
-			entry.Name() == "0080_effect_proposal_policy_approvals.sql" ||
-			entry.Name() == "0081_project_authority_backfill.sql" ||
-			entry.Name() == "0082_auth_store_read_holds.sql" ||
-			entry.Name() == "0083_review_round_diff_metrics.sql" ||
-			entry.Name() == "0084_drift_audits.sql" ||
-			entry.Name() == "0085_finding_disposition_supersessions.sql" ||
-			entry.Name() == "0086_held_item_pr_bindings.sql" ||
-			entry.Name() == "0087_generation_integrity_marks.sql" ||
-			entry.Name() == "0088_follow_up_filing_kind.sql" ||
-			entry.Name() == "0089_follow_up_filing_ledger.sql" ||
-			entry.Name() == "0090_external_finding_dispositions.sql" ||
-			entry.Name() == "0091_project_image_environment.sql" ||
-			entry.Name() == "0092_publish_audit_issues.sql" ||
-			entry.Name() == "0093_follow_up_filing_dispatch_identity.sql" ||
-			entry.Name() == "0094_device_activity.sql" ||
-			entry.Name() == "0095_task_lines.sql" ||
-			entry.Name() == "0096_retire_blocked_items.sql" ||
-			entry.Name() == "0097_review_admissions.sql" ||
-			entry.Name() == "0098_review_dispute_rows.sql" ||
-			entry.Name() == "0099_publish_installation_mint_holds.sql" ||
-			entry.Name() == "0100_task_workflow_closures.sql" ||
-			entry.Name() == "0101_work_unit_rebase_proofs.sql" ||
-			entry.Name() == "0102_usage_observations_review.sql" ||
-			entry.Name() == "0103_run_hold_admission_detail.sql" ||
-			entry.Name() == "0104_execution_outcome_cause.sql" ||
-			entry.Name() == "0105_admitted_image_pointers.sql" ||
-			entry.Name() == "0106_schedules_image_upkeep.sql" ||
-			entry.Name() == "0107_run_hold_image_upkeep.sql" ||
-			entry.Name() == "0108_image_upkeep.sql" ||
-			entry.Name() == "0109_task_submission_origin.sql" ||
-			entry.Name() == "0110_image_policy_adoption.sql" ||
-			entry.Name() == "0111_task_line_provenance.sql" ||
-			entry.Name() == "0112_usage_pools.sql" || entry.Name() == "0113_task_line_changes.sql" ||
-			entry.Name() == "0114_review_slot_releases.sql" ||
-			entry.Name() == "0115_routing_policies.sql" ||
-			entry.Name() == "0116_pool_usage_observations.sql" ||
-			entry.Name() == "0117_manual_submission_task_lines.sql" ||
-			entry.Name() == "0118_usage_operator_contract.sql" ||
-			entry.Name() == "0119_run_hold_quota_window.sql" ||
-			entry.Name() == "0120_launch_reservations.sql" ||
-			entry.Name() == "0121_routing_policy_drain_first.sql" ||
-			entry.Name() == "0122_memory_budget.sql" ||
-			entry.Name() == "0123_task_triages.sql" ||
-			entry.Name() == "0124_task_attachments.sql" ||
-			entry.Name() == "0125_alternate_agent_retries.sql" ||
-			entry.Name() == "0126_publication_handoff_checks.sql" ||
-			entry.Name() == "0127_discovered_model_catalogs.sql" ||
-			entry.Name() == "0128_retire_base_advance_watch.sql" ||
-			entry.Name() == "0129_bind_handoff_check_to_audit.sql" ||
-			entry.Name() == "0130_task_line_selection.sql" || entry.IsDir() {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		prior[entry.Name()] = string(body)
-	}
-	return mapFS(prior)
-}
 
 // TestAttentionPRReferenceMigrationAppliesFromHead proves the synchronized
 // ready item is backfilled from the durable first-party PR binding. The body
@@ -842,10 +721,7 @@ func TestReadyResourceMigrationBackfillsOnlyExactHistory(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			db := openRaw(t)
-			if err := migrate(ctx, db, migrationsBeforeReadyResource(t)); err != nil {
-				t.Fatal(err)
-			}
+			db := openRawThrough(t, "0028_")
 			if _, err := db.ExecContext(ctx, `INSERT INTO runs
 				(id, project_id, policy_digest, entity_version, as_of_revision, body)
 				VALUES ('run-1', 'project-1', 'sha256:policy', 1, 1, '{}')`); err != nil {

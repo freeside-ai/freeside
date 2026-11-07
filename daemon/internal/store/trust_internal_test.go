@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"maps"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -18,25 +16,7 @@ import (
 func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	files, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatalf("glob migrations: %v", err)
-	}
-	prefix := fstest.MapFS{}
-	for _, name := range files {
-		if name >= "0012_" {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		prefix[name] = &fstest.MapFile{Data: body}
-	}
-	if err := migrate(ctx, db, prefix); err != nil {
-		t.Fatalf("migrate through 0011: %v", err)
-	}
+	db := openRawThrough(t, "0012_")
 
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: "freeside-ai/candidate-repo", RepositoryID: 123456789,
@@ -205,25 +185,7 @@ func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
 func TestWorkflowAuditEvidenceMigrationPreservesLegacyLedger(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	files, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatalf("glob migrations: %v", err)
-	}
-	prefix := fstest.MapFS{}
-	for _, name := range files {
-		if name >= "0023_" {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		prefix[name] = &fstest.MapFile{Data: body}
-	}
-	if err := migrate(ctx, db, prefix); err != nil {
-		t.Fatalf("migrate through 0022: %v", err)
-	}
+	db := openRawThrough(t, "0023_")
 	audit := domain.WorkflowAudit{
 		Repo: "freeside-ai/legacy-repo", AuditedCommitSHA: "cafebabe",
 		AuditedAt:           time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC),
@@ -1073,22 +1035,7 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	files, err := fs.Glob(migrations.FS, "000[1-7]_*.sql")
-	if err != nil {
-		t.Fatalf("glob pre-activation migrations: %v", err)
-	}
-	prefix := fstest.MapFS{}
-	for _, name := range files {
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		prefix[name] = &fstest.MapFile{Data: body}
-	}
-	if err := migrate(ctx, db, prefix); err != nil {
-		t.Fatalf("migrate through 0007: %v", err)
-	}
+	db := openRawThrough(t, "0008_")
 
 	profileA, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: "freeside-ai/candidate-repo", RepositoryID: 123456789, PRExecution: domain.PRExecutionAuditedSameRepo,

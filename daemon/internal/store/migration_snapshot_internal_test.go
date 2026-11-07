@@ -118,9 +118,17 @@ func versionBefore(t testing.TB, before string) int {
 // handle-returning form.
 func copySnapshotThrough(t testing.TB, path, before string) {
 	t.Helper()
-	image, err := snapshotImage(versionBefore(t, before))
+	copySnapshotAt(t, path, versionBefore(t, before))
+}
+
+// copySnapshotAt is copySnapshotThrough for a caller that names the schema
+// version rather than the next migration: path, which must not exist,
+// receives the cached image at version.
+func copySnapshotAt(t testing.TB, path string, version int) {
+	t.Helper()
+	image, err := snapshotImage(version)
 	if err != nil {
-		t.Fatalf("build snapshot before %s: %v", before, err)
+		t.Fatalf("build snapshot at version %d: %v", version, err)
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // test-owned path
 	if err != nil {

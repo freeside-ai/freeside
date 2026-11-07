@@ -24,8 +24,7 @@ func TestRetireBaseAdvanceWatchMigrationDeletesOnlyTheKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			db := openRaw(t)
-			migrateThrough(t, ctx, db, "0128_")
+			db := openRawThrough(t, "0128_")
 			if err := seedEpoch(ctx, db); err != nil {
 				t.Fatal(err)
 			}

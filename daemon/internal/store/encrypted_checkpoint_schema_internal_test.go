@@ -170,7 +170,11 @@ func installSchemaCheckpointFixture(
 	t *testing.T, ctx context.Context, files *LocalBackupFiles, schemaVersion int,
 ) {
 	t.Helper()
-	db, err := openDB(filepath.Join(t.TempDir(), "checkpoint.db"), Options{})
+	// The cached image is the database migrationsThrough(schemaVersion)
+	// builds from empty; the fixture's own version check below still holds.
+	path := filepath.Join(t.TempDir(), "checkpoint.db")
+	copySnapshotAt(t, path, schemaVersion)
+	db, err := openDB(path, Options{})
 	if err != nil {
 		t.Fatalf("open checkpoint database: %v", err)
 	}
@@ -179,13 +183,6 @@ func installSchemaCheckpointFixture(
 			t.Errorf("close checkpoint database: %v", err)
 		}
 	})
-	prefix, err := migrationsThrough(schemaVersion)
-	if err != nil {
-		t.Fatalf("select checkpoint migrations: %v", err)
-	}
-	if err := migrate(ctx, db, prefix); err != nil {
-		t.Fatalf("migrate checkpoint database: %v", err)
-	}
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seed checkpoint epoch: %v", err)
 	}
