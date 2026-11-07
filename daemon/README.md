@@ -3765,7 +3765,10 @@ depends on the cycle:
   remediation there (issue #2646). Its input carries the conflicted paths,
   or the failed verification's steps and transcript tail, and its new head
   is verified, reviewed, and handed off again under the successor's own
-  publication. The run blocks on the conflict's reason as before only when
+  publication. A return to the agent on the item that publication leaves,
+  and the remediations of the cycle it starts, run at the same tip, since
+  their candidate was written there (issue #2699).
+  The run blocks on the conflict's reason as before only when
   the review bound has no room for the remediation's review, the head is
   someone else's (a `head_changed` re-entry), or the task re-evaluates a
   blocked run's trust.
