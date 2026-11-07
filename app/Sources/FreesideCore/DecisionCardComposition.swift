@@ -471,9 +471,12 @@ struct DecisionCardComposition: Equatable {
     /// lead names that wait and its Waiting fact gives the duration, with
     /// the exact start in Identifiers, so the reason leaves the face. That holds
     /// only for the wait the daemon writes today: an item with no typed
-    /// wait keeps the generic ask, and no writer yet says what a wait on PR
-    /// checks or an external review records, so both keep the reason under
-    /// the ask.
+    /// wait keeps the generic ask and its reason under the ask. A wait on PR
+    /// checks or an external review is not a blocked item's wait: its one
+    /// writer (`deadlineRegistration` in daemon/cmd/freesided/scheduler.go,
+    /// #2752) records only that the deadline elapsed, on the ready item,
+    /// which draws it as a Checks or Review Facts row with the exact instant
+    /// in Identifiers.
     ///
     /// A proposal opened at its planned gate carries a reason that only
     /// restates the ask: "Start the daemon-enumerated work subject"

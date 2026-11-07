@@ -365,6 +365,16 @@ import Testing
         #expect(placement.folded == (folds.contains(type) ? facts : []))
     }
 
+    /// The ready card keeps an elapsed deadline (#2752) visible under Facts
+    /// after the Change row, above the checklist and View PR.
+    @Test func elapsedDeadlineIsAVisibleReadyFact() {
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        let placement = DecisionFactPlacement(
+            AttentionFixtures.readyWithElapsedChecksDeadline().item, includesCommitPlan: false, now: now)
+        #expect(placement.visible.map(\.label) == ["Diff", "Checks"])
+        #expect(placement.folded.isEmpty)
+    }
+
     @Test func foldedFactsAreTheRoutineCoordinates() {
         let now = Date(timeIntervalSince1970: 0)
         let question = DecisionFactPlacement(

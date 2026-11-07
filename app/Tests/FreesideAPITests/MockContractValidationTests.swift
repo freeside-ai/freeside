@@ -1737,4 +1737,40 @@ import Testing
         #expect(
             MockContractValidation.itemValidityBreach(AttentionFixtures.staleReady().item) == nil)
     }
+
+    /// Elapsed publication deadlines mirror domain.validateElapsedDeadlines
+    /// (#2752): only on the ready item, each publication kind once, a
+    /// positive length, and never elapsed before the deadline.
+    @Test func elapsedDeadlinesMirrorTheDomainRules() {
+        let ready = AttentionFixtures.readyWithElapsedChecksDeadline().item
+        #expect(MockContractValidation.itemValidityBreach(ready) == nil)
+        let entry = ready.elapsed_deadlines![0]
+
+        var review = ready
+        review.elapsed_deadlines = [
+            entry,
+            .init(
+                kind: .review_wait_threshold, armed_at: entry.armed_at, deadline_seconds: 86_400,
+                elapsed_at: entry.armed_at.addingTimeInterval(86_400)),
+        ]
+        #expect(MockContractValidation.itemValidityBreach(review) == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.elapsed_deadlines = [entry]
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "elapsed_deadlines on a different item type")
+
+        var early = entry
+        early.elapsed_at = entry.armed_at.addingTimeInterval(1_799)
+        var unknownKind = entry
+        unknownKind.kind = .janitor
+        var zeroLength = entry
+        zeroLength.deadline_seconds = 0
+        for bad: [Components.Schemas.ElapsedDeadline] in [[], [entry, entry], [early], [unknownKind], [zeroLength]] {
+            var item = ready
+            item.elapsed_deadlines = bad
+            #expect(MockContractValidation.itemValidityBreach(item) == "invalid elapsed_deadlines")
+        }
+    }
 }

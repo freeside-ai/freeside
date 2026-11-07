@@ -363,6 +363,37 @@ import Testing
         }
     }
 
+    /// An elapsed publication deadline (#2752) draws as its own fact after
+    /// the Change row, with its exact instant in Identifiers; a ready item
+    /// with none draws neither.
+    @Test func elapsedDeadlinesRenderAsFactsAndIdentifiers() throws {
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        var item = AttentionFixtures.readyWithElapsedChecksDeadline().item
+        let checks = try #require(item.elapsed_deadlines?.first)
+        let facts = AttentionDisplay.cardFacts(item, now: now)
+        #expect(facts.map(\.label) == ["Diff", "Checks"])
+        #expect(facts.last?.value == "Not confirmed after 30 min · elapsed 9m ago")
+        #expect(
+            AttentionDisplay.detailIdentifierRows(item).contains {
+                $0.label == "Checks Deadline Elapsed" && $0.value == checks.elapsed_at.formatted(.iso8601)
+            })
+
+        let reviewAt = checks.armed_at.addingTimeInterval(86_400 + 60)
+        item.elapsed_deadlines?.append(
+            .init(
+                kind: .review_wait_threshold, armed_at: checks.armed_at, deadline_seconds: 86_400,
+                elapsed_at: reviewAt))
+        item.diff_stats = nil
+        let reviewFacts = AttentionDisplay.cardFacts(item, now: reviewAt.addingTimeInterval(2 * 3_600))
+        #expect(reviewFacts.map(\.label) == ["Checks", "Review"])
+        #expect(reviewFacts.last?.value == "None after 24 h · elapsed 2h ago")
+        #expect(AttentionDisplay.detailIdentifierRows(item).contains { $0.label == "Review Deadline Elapsed" })
+
+        let plain = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(!AttentionDisplay.cardFacts(plain, now: now).contains { $0.label == "Checks" })
+        #expect(!AttentionDisplay.detailIdentifierRows(plain).contains { $0.label.hasSuffix("Deadline Elapsed") })
+    }
+
     @Test func typedLeadsRenderTheirDaemonValues() {
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         #expect(
