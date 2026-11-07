@@ -1114,12 +1114,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var (
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
-		agentCatalog          *signet.AgentCatalog
 		imageUpkeep           *engine.ImageUpkeep
 		upkeepTrigger         *imageUpkeepTrigger
 		scenarioWiring        *scenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
+		late                  = &startupBindings{}
 	)
 	// A reading is stale once one scheduled doctor pass, the collection's
 	// cadence, has been missed. Collection and the bootstrap's stale_at share
@@ -1138,18 +1138,18 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	attention := signet.NewService(st,
 		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
-			if workflow == nil {
+			if late.workflow == nil {
 				return commit()
 			}
-			return workflow.CommitTaskStop(stopCtx, taskID, commit)
+			return late.workflow.CommitTaskStop(stopCtx, taskID, commit)
 		}),
 		signet.WithFollowUpFiler(func() signet.FollowUpFiler {
-			return followUpFilerBinding(claudeWiring)
+			return followUpFilerBinding(late.claudeWiring)
 		}),
 		// An approved image-policy adoption wakes upkeep to build under it.
 		signet.WithImageUpkeepWake(func() {
-			if upkeepTrigger != nil {
-				upkeepTrigger.wake()
+			if late.upkeepTrigger != nil {
+				late.upkeepTrigger.wake()
 			}
 		}),
 		signet.WithPairingKey(pairingKey),
@@ -1179,21 +1179,21 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// Claude composition below; without it a change fails closed and a
 		// line goes out as its enrollment/model/effort.
 		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) {
-			if claudeWiring == nil || claudeWiring.env.Agents == nil {
+			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
 				return nil, signet.ErrOperatorSettingUnavailable
 			}
-			return claudeWiring.env.Agents.Tree, nil
+			return late.claudeWiring.env.Agents.Tree, nil
 		}),
 		// A policy names agents of the committed tree, which exists only after
 		// the Claude composition below; without it the command fails closed.
 		signet.WithRoutingPolicySetter(func(
 			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 		) (signet.RoutingPolicyOutcome, error) {
-			if claudeWiring == nil {
+			if late.claudeWiring == nil {
 				return signet.RoutingPolicyOutcome{}, signet.ErrOperatorSettingUnavailable
 			}
 			result, err := engine.SetRoutingPolicyTx(ctx, tx,
-				claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision,
+				late.claudeWiring.env.Agents.Tree, late.claudeWiring.env.Agents.LineupRevision,
 				engine.SetRoutingPolicyRequest{
 					Roles: change.Roles, DrainFirstAccount: change.DrainFirstAccount,
 					Source: change.Source, SetBy: change.SetBy,
@@ -1206,23 +1206,23 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		signet.WithAlternateAgentRetrier(func(
 			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
 		) (domain.AlternateAgentRetry, error) {
-			if claudeWiring == nil || claudeWiring.env.Agents == nil {
+			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
 				return domain.AlternateAgentRetry{}, signet.ErrOperatorSettingUnavailable
 			}
-			return claudeWiring.env.Agents.AcceptAlternateAgentRetryTx(ctx, tx, command, item, now)
+			return late.claudeWiring.env.Agents.AcceptAlternateAgentRetryTx(ctx, tx, command, item, now)
 		}),
 		signet.WithParkedTaskMover(func(
 			ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 		) (domain.ParkedTaskMoveReceipt, error) {
-			if claudeWiring == nil || claudeWiring.env.Agents == nil {
+			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
 				return domain.ParkedTaskMoveReceipt{}, signet.ErrOperatorSettingUnavailable
 			}
-			return claudeWiring.env.Agents.MoveParkedTaskTx(ctx, tx, request, now)
+			return late.claudeWiring.env.Agents.MoveParkedTaskTx(ctx, tx, request, now)
 		}),
 		// The catalog, like the tree it projects, exists only after the
 		// Claude composition below; until then, and in the fake-driver and
 		// scenario compositions that load no tree, clients see null.
-		signet.WithAgentCatalog(func() *signet.AgentCatalog { return agentCatalog }),
+		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.agentCatalog }),
 		signet.WithUsageRefreshAge(usageRefreshAge),
 		// A client's refresh or reassignment starts its collection only after
 		// the command commits.
@@ -1235,13 +1235,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// then. The fake-driver composition leaves it empty (gate absent);
 		// the scenario's review source is the fake's default configuration.
 		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
-			if scenarioWiring != nil {
+			if late.scenarioWiring != nil {
 				return fake.DefaultReviewConfigurationDigest
 			}
-			if claudeWiring == nil {
+			if late.claudeWiring == nil {
 				return ""
 			}
-			return claudeWiring.reviewConfigurationDigest
+			return late.claudeWiring.reviewConfigurationDigest
 		}),
 	)
 	if cfg.FakeDriverEnabled {
@@ -1254,6 +1254,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
+		late.workflow = workflow
 		// Even explicit fake execution starts without sample work unless asked.
 		if cfg.SeedWalkingSkeleton {
 			if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
@@ -1276,6 +1277,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 			return nil, err
 		}
+		late.claudeWiring = claudeWiring
 		logEffectiveReviewConfiguration(cfg.Logger, claudeWiring.reviewConfigurationDigest)
 		// Reconcile below can resume credential-bearing sessions before every
 		// later startup step has succeeded. Register their awaited cleanup
@@ -1286,7 +1288,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
-		agentCatalog = &catalog
+		late.agentCatalog = &catalog
 		stageDriver, err := claudeWiring.stageDriver(blobs)
 		if err != nil {
 			return nil, err
@@ -1505,6 +1507,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
+		late.workflow = workflow
 		// Before any loop admits: report why selection is not active, if it
 		// is not.
 		if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.now)); err != nil {
@@ -1544,6 +1547,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
+		late.scenarioWiring = scenarioWiring
 		// The forge serves only once its loop starts; a start that fails
 		// before then still owns the listener.
 		defer func() {
@@ -1552,6 +1556,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 		}()
 		workflow = scenarioWiring.workflow
+		late.workflow = workflow
 	}
 	// The live credential-integrity probe exists only in Claude mode, where
 	// the daemon has a runtime and a pinned exporter image to observe with.
@@ -1678,6 +1683,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 		upkeepTrigger = newImageUpkeepTrigger()
+		late.upkeepTrigger = upkeepTrigger
 		activeReconciler = &activeResourceReconciler{
 			store: st, pull: claudeWiring.observePull,
 			issue:  claudeWiring.observeIssue,
