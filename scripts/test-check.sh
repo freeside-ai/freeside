@@ -10,6 +10,9 @@ CHECK=$SCRIPT_DIR/check.sh
 
 TMP=$(mktemp -d)
 export DAEMON_TEST_MAX_RUNS=0 DAEMON_TEST_STATE_DIR=$TMP/state
+# The daemon test cases run go test ./... whole; the partition cases near the
+# end unset or set this themselves.
+export DAEMON_TEST_INTEGRATION_PARTITIONS=1
 trap 'rm -rf "$TMP"' EXIT
 
 pass=0
@@ -680,6 +683,191 @@ else
   echo 'skip: git PATH fixtures require /usr/bin/git'
 fi
 
+# The partition stand-in serves `go list` and `go test -json -list` for a
+# module with two packages beside internal/integration, appends one line per
+# call to $RUN.record (arguments, GIT_DIR, GOFLAGS, and whether SIGINT is
+# ignored, tab-separated), and prints each test call's output. PARTITION_LIST=fail fails discovery with a
+# build error; PARTITION_FAIL names a family whose partition exits 42;
+# REST_RC sets the other packages' code; DECOY_WRITE makes each partition
+# write through GIT_DIR.
+mkdir "$TMP/partition-tests"
+printf '#!/bin/bash\necho Linux\n' >"$TMP/partition-tests/uname"
+cat >"$TMP/partition-tests/go" <<'STUB'
+#!/usr/bin/env python3
+import json, os, signal, subprocess, sys
+args = sys.argv[1:]
+integration = 'module/internal/integration'
+families = ['TestFixtureA', 'TestFixtureB', 'TestFixtureC', 'TestFixtureD']
+with open(os.environ['RUN'] + '.record', 'a') as record:
+    ignored = signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+    record.write('\t'.join([' '.join(args), os.environ.get('GIT_DIR', 'unset'),
+                            os.environ.get('GOFLAGS', 'unset'),
+                            'sigint-ignored' if ignored else 'sigint-default']) + '\n')
+if args == ['list', './...']:
+    print('\n'.join(['module/a', integration, 'module/b']))
+    sys.exit(0)
+if '-list' in args:
+    if os.environ.get('PARTITION_LIST') == 'fail':
+        print(json.dumps({'ImportPath': integration, 'Action': 'build-output',
+                          'Output': 'integration_test.go:7: undefined: fixtureThing\n'}))
+        sys.exit(1)
+    for name in families:
+        print(json.dumps({'Package': integration, 'Action': 'output', 'Output': name + '\n'}))
+    print(json.dumps({'Package': integration, 'Action': 'pass'}))
+    sys.exit(0)
+# Go's version-control stamping in a test build runs git status.
+subprocess.run(['git', 'status', '--porcelain'], stdout=subprocess.DEVNULL, check=True)
+if '-run' not in args:
+    print('ok\t' + ' '.join(args[1:]))
+    sys.exit(int(os.environ.get('REST_RC', '0')))
+pattern = args[args.index('-run') + 1]
+if os.environ.get('DECOY_WRITE'):
+    subprocess.run(['git', 'config', 'freeside.decoy', 'touched'], check=True)
+print('partition output for ' + pattern)
+if os.environ.get('PARTITION_FAIL', '-') in pattern:
+    print('--- FAIL: ' + os.environ['PARTITION_FAIL'])
+    sys.exit(42)
+print('ok\t' + integration)
+STUB
+chmod +x "$TMP/partition-tests/"*
+partition_path=$TMP/partition-tests:$PATH
+run_partitioned() { # <name> <env-args...>; full run under one slot, default count
+  rm -f "$TMP/$1.record"
+  set +e
+  OUT=$(env -u DAEMON_TEST_INTEGRATION_PARTITIONS RUN="$TMP/$1" PATH="$partition_path" \
+    GIT_DIR="$TMP/ambient/.git" DAEMON_TEST_MAX_RUNS=1 \
+    DAEMON_TEST_STATE_DIR="$TMP/$1-state" "${@:2}" "$CHECK" daemon test 2>&1)
+  RC=$?
+  set -e
+}
+record_count() { # <name> <grep-pattern>; prints how many recorded calls match
+  grep -c -e "$2" "$TMP/$1.record" || true
+}
+assert_no_pass() {
+  case $OUT in
+    *'PASS: daemon'*) report_failure 'PASS printed after a failed run' ;;
+    *) pass=$((pass + 1)) ;;
+  esac
+}
+
+begin_case "a full run tests integration as three partitions beside the other packages"
+run_partitioned partitioned
+assert_rc 0
+partition_decoy=$TMP/partitioned-state/slots/1.decoy/repo/.git/worktrees/wt
+[[ $(record_count partitioned $'^test -timeout 30m module/a module/b\t') == 1 ]] ||
+  report_failure 'the other packages did not run once together'
+[[ $(record_count partitioned $'^test -timeout 30m -run ^(.*)$ module/internal/integration\t') == 3 ]] ||
+  report_failure 'integration did not run as three partitions'
+[[ $(cut -f1 "$TMP/partitioned.record" | grep -c '^test -timeout 30m -run' | tr -d ' ') == \
+  $(cut -f1 "$TMP/partitioned.record" | grep '^test -timeout 30m -run' | sort -u | wc -l | tr -d ' ') ]] ||
+  report_failure 'two partitions ran the same pattern'
+[[ $(cut -f2 "$TMP/partitioned.record" | sort -u) == "$partition_decoy" ]] ||
+  report_failure "a go call saw another GIT_DIR: $(cut -f2 "$TMP/partitioned.record" | sort -u)"
+# Background commands start with SIGINT ignored; Ctrl-C must still end them.
+# Discovery runs in the foreground and keeps whatever check.sh inherited.
+[[ $(grep -e '^test -timeout 30m module/' -e '^test -timeout 30m -run' "$TMP/partitioned.record" | cut -f4 | sort -u) == sigint-default ]] ||
+  report_failure 'a go call started with SIGINT ignored, so Ctrl-C would orphan it'
+[[ $(grep '^== .* partition ' <<<"$OUT") == "$(printf '== module/internal/integration partition %s/3\n' 1 2 3)" ]] ||
+  report_failure 'partition output was not printed in partition order'
+assert_contains $'partition 1/3\npartition output for ^('
+[[ $(tail -1 <<<"$OUT") == 'PASS: daemon test' ]] || report_failure 'a full run named a selection'
+assert_ambient_unchanged
+
+begin_case "a partitioned run hands every go call -trimpath, discovery included"
+run_partitioned partitioned-flags GOFLAGS=-p=2
+assert_rc 0
+[[ $(cut -f3 "$TMP/partitioned-flags.record" | sort -u) == '-p=2 -trimpath' ]] ||
+  report_failure "a go call saw GOFLAGS $(cut -f3 "$TMP/partitioned-flags.record" | sort -u)"
+[[ $(record_count partitioned-flags $'^list ./...\t') == 1 &&
+   $(record_count partitioned-flags $'^test -json -list . module/internal/integration\t') == 1 ]] ||
+  report_failure 'discovery did not run once'
+
+begin_case "a failing partition fails the step with its code and its whole output"
+run_partitioned partition-fail PARTITION_FAIL=TestFixtureB
+assert_rc 42
+assert_contains '--- FAIL: TestFixtureB'
+assert_no_pass
+[[ $(record_count partition-fail $'^test -timeout 30m -run') == 3 ]] ||
+  report_failure 'a failing partition stopped the others'
+
+begin_case "the first failing invocation in launch order sets the code"
+run_partitioned partition-first PARTITION_FAIL=TestFixtureB REST_RC=5
+assert_rc 5
+assert_contains '--- FAIL: TestFixtureB'
+assert_no_pass
+
+begin_case "a partition's write to the decoy fails the step after every invocation"
+run_partitioned partition-decoy DECOY_WRITE=1
+assert_rc 1
+assert_contains 'a test wrote to the decoy repository'
+assert_contains 'decoy = touched'
+assert_contains 'partition 3/3'
+assert_no_pass
+assert_ambient_unchanged
+
+begin_case "a failed discovery prints Go's build output and tests nothing"
+run_partitioned partition-list PARTITION_LIST=fail
+assert_rc 1
+assert_contains 'integration_test.go:7: undefined: fixtureThing'
+assert_no_pass
+[[ $(record_count partition-list '^test -json -list') == 1 &&
+   $(record_count partition-list '^test -[rt]\|^test module') == 0 ]] ||
+  report_failure 'a package was tested after discovery failed'
+
+begin_case "a partition count that is not a positive integer fails before go runs"
+for value in 0 00 abc '' -1 '1 2'; do
+  run_partitioned partition-usage DAEMON_TEST_INTEGRATION_PARTITIONS="$value"
+  assert_rc 2
+  assert_contains 'DAEMON_TEST_INTEGRATION_PARTITIONS must be a positive integer'
+  [[ ! -e $TMP/partition-usage.record ]] || report_failure "go ran with count '$value'"
+done
+
+begin_case "a bad partition count stops a full daemon check before go build runs"
+rm -f "$TMP/partition-usage.record"
+RUN=$TMP/partition-usage PATH=$partition_path DAEMON_TEST_INTEGRATION_PARTITIONS=abc \
+  run_check daemon build test
+assert_rc 2
+assert_contains 'DAEMON_TEST_INTEGRATION_PARTITIONS must be a positive integer'
+[[ ! -e $TMP/partition-usage.record ]] || report_failure 'go ran before the count was checked'
+RUN=$TMP/partition-usage PATH=$partition_path DAEMON_TEST_INTEGRATION_PARTITIONS=abc \
+  run_check daemon build
+assert_rc 0
+[[ $(cut -f1 "$TMP/partition-usage.record") == $'build ./...\nbuild -o /dev/null ./cmd/freeside-export' ]] ||
+  report_failure "a step without test checked the count: $(cut -f1 "$TMP/partition-usage.record")"
+
+begin_case "a partition count of 1 runs go test ./... whole without discovery"
+run_partitioned partition-whole DAEMON_TEST_INTEGRATION_PARTITIONS=001
+assert_rc 0
+[[ $(cut -f1 "$TMP/partition-whole.record") == 'test -timeout 30m ./...' ]] ||
+  report_failure "go received $(cut -f1 "$TMP/partition-whole.record")"
+
+begin_case "a slot under a limit above 1 runs whole unless the count is set"
+run_partitioned partition-share DAEMON_TEST_MAX_RUNS=2
+assert_rc 0
+[[ $(cut -f1 "$TMP/partition-share.record") == 'test -timeout 30m ./...' ]] ||
+  report_failure "a shared slot sent go $(cut -f1 "$TMP/partition-share.record")"
+run_partitioned partition-share-set DAEMON_TEST_MAX_RUNS=2 DAEMON_TEST_INTEGRATION_PARTITIONS=3
+assert_rc 0
+[[ $(record_count partition-share-set $'^test -timeout 30m -run ') == 3 ]] ||
+  report_failure 'an explicit count under a shared slot did not partition'
+
+begin_case "arguments after -- run whole under the default partition count"
+rm -f "$TMP/partition-narrow.record"
+RUN=$TMP/partition-narrow PATH=$partition_path DAEMON_TEST_INTEGRATION_PARTITIONS=abc \
+  run_check daemon test -- ./internal/integration/...
+assert_rc 0
+[[ $(cut -f1 "$TMP/partition-narrow.record") == 'test -timeout 30m ./internal/integration/...' ]] ||
+  report_failure "go received $(cut -f1 "$TMP/partition-narrow.record")"
+rm -f "$TMP/partition-narrow.record"
+set +e
+OUT=$(env -u DAEMON_TEST_INTEGRATION_PARTITIONS RUN="$TMP/partition-narrow" PATH="$partition_path" \
+  "$CHECK" daemon test -- ./internal/integration/... 2>&1)
+RC=$?
+set -e
+assert_rc 0
+[[ $(cut -f1 "$TMP/partition-narrow.record") == 'test -timeout 30m ./internal/integration/...' ]] ||
+  report_failure "go received $(cut -f1 "$TMP/partition-narrow.record")"
+
 begin_case "partial and empty shard configuration fail before go runs"
 DAEMON_TEST_SHARD_KIND='' run_check daemon test
 assert_rc 2
@@ -717,6 +905,15 @@ PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=freesided DAEMON_TEST_SHARD_INDEX=1 \
 assert_rc 0
 OUT=$(cat "$stub.args")
 assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\nfreesided\n--index\n1\n--count\n1'
+
+begin_case "shard runs ignore the integration partition count"
+rm -f "$stub.args"
+PATH="$TMP:$PATH" DAEMON_TEST_INTEGRATION_PARTITIONS=abc DAEMON_TEST_SHARD_KIND=rest \
+  DAEMON_TEST_SHARD_INDEX=1 DAEMON_TEST_SHARD_COUNT=1 DAEMON_TEST_INTEGRATION_SHARDS=3 \
+  DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test
+assert_rc 0
+OUT=$(cat "$stub.args")
+assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\nrest'
 
 begin_case "shard runs refuse arguments after -- before go or the wrapper runs"
 rm -f "$stub.args" "$TMP/shard-args.args"
