@@ -75,10 +75,10 @@
 //     the diminishing-returns park and the round's drift audit (§7)
 //   - review_dispute.go, per_finding_acceptance.go
 //     review dispute decisions and per-finding routes awaiting a person
-//   - finding_adjudication.go, finding_adjudication_fake.go,
-//     finding_adjudication_inference.go, adjudication_park_cause.go
-//     the adjudication seam, its contract fake and production adapter, and
-//     the park causes it reports
+//   - finding_adjudication.go, finding_adjudication_inference.go,
+//     adjudication_park_cause.go
+//     the adjudication seam, its production adapter, and the park causes it
+//     reports
 //   - follow_up_filing.go follow-up issue filings from an adjudication
 //   - external_finding_quote.go, external_review_cycle.go, external_review_reentry.go
 //     admitted external findings as model input, and the re-entry cycle they
