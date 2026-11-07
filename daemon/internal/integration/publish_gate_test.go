@@ -42,7 +42,9 @@ var fixtureTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 // and no developer git config leaks in. Mirrors the importer suite's helper.
 // Automatic maintenance and gc are off, because otherwise a fixture commit
 // or fetch starts a detached `git maintenance run --auto` child: one more
-// process spawn per call, which costs about 6 ms on macOS.
+// process spawn per call, which costs about 6 ms on macOS. It also keeps
+// publicationBaseTemplates' snapshot of .git free of a background writer
+// adding or removing lock files during the walk.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test running git over test-owned repos with test-chosen args
