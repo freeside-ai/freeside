@@ -68,6 +68,7 @@
       "qualification": "different_pool"
     }
   ],
+  "elapsed_deadlines": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,

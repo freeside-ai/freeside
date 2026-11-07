@@ -4136,6 +4136,36 @@ components:
         - janitor
         - image_upkeep
 
+    ElapsedDeadline:
+      type: object
+      description: >
+        One publication deadline that elapsed on an open
+        ready_for_final_review item (mirrors domain.ElapsedDeadline).
+        armed_at is the nominal deadline minus deadline_seconds, so a
+        re-armed schedule generation records the same deadline. kind is
+        pr_checks_deadline or review_wait_threshold. elapsed_at
+        is the instant the daemon's scheduler handled the fire, never before
+        armed_at plus deadline_seconds.
+      required: [kind, armed_at, deadline_seconds, elapsed_at]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ScheduleKind"
+        armed_at:
+          type: string
+          format: date-time
+        deadline_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+        elapsed_at:
+          type: string
+          format: date-time
+      example:
+        kind: "pr_checks_deadline"
+        armed_at: "2026-01-01T00:00:00Z"
+        deadline_seconds: 1800
+        elapsed_at: "2026-01-01T00:31:00Z"
+
     ScheduleStatus:
       type: string
       description: >
@@ -7142,6 +7172,7 @@ components:
         - billable_cost_so_far
         - execution_failure
         - alternate_agents
+        - elapsed_deadlines
         - interpretation_failure
         - publish_block
         - diff_stats
@@ -7363,6 +7394,21 @@ components:
             implementer under, sorted by agent, after a quota, credential, or
             capacity failure (issue #869). Present exactly when the item offers
             retry_with_alternate_agent; null on every other item.
+        elapsed_deadlines:
+          type: array
+          nullable: true
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ElapsedDeadline"
+          description: >
+            Daemon facts about a publication deadline the item's publication
+            watch armed (pr_checks_deadline, review_wait_threshold) that
+            elapsed while the item stayed open, in firing order with no kind
+            repeated (issue #2752). Present only on ready_for_final_review;
+            null until a deadline elapses. Append-only: a later item version
+            keeps every earlier entry as its prefix. The daemon reads no
+            GitHub check or review state, so an entry records that the
+            deadline passed, not what the checks or reviewers did.
         interpretation_failure:
           nullable: true
           allOf:
@@ -7611,6 +7657,7 @@ components:
         billable_cost_so_far: null
         execution_failure: null
         alternate_agents: null
+        elapsed_deadlines: null
         interpretation_failure: null
         publish_block: null
         diff_stats:

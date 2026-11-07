@@ -103,6 +103,7 @@
     }
   },
   "alternate_agents": null,
+  "elapsed_deadlines": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

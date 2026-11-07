@@ -93,6 +93,10 @@ func TestTerminalDigestIgnoresAttentionCreationTime(t *testing.T) {
 		Project: domain.DisplayName{Text: "Project label", Source: domain.DisplayNameSourceName},
 		Task:    domain.DisplayName{Text: "Approved task label", Source: domain.DisplayNameSourceSpecification},
 	}
+	item.ElapsedDeadlines = []domain.ElapsedDeadline{{
+		Kind: domain.SchedulePRChecksDeadline, ArmedAt: first, DeadlineSeconds: 1800,
+		ElapsedAt: first.Add(31 * time.Minute),
+	}}
 	projectedDigest, err := TerminalDigest(Task{RunID: "run-terminal"}, item)
 	if err != nil {
 		t.Fatal(err)

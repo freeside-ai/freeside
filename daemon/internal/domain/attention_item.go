@@ -388,6 +388,52 @@ type ReadinessInvalidation struct {
 	ObservedAt time.Time `json:"observed_at"`
 }
 
+// ElapsedDeadline is the daemon-recorded fact that a publication deadline the
+// ready_for_final_review item's publication watch armed (pr_checks_deadline,
+// review_wait_threshold) elapsed while the item stayed open (issue #2752).
+// The scheduler's deadline handler appends it in the transaction that
+// consumes the fire; it is never client-supplied (AttentionItemInput carries
+// no path to it), and ValidateAttentionItemTransition keeps the list
+// append-only. Freeside reads no GitHub check or review state, so the fact
+// says only that the deadline passed.
+type ElapsedDeadline struct {
+	Kind ScheduleKind `json:"kind"`
+	// ArmedAt is the nominal deadline minus DeadlineSeconds: a re-armed
+	// schedule generation keeps the nominal deadline, so every generation
+	// records the same ArmedAt.
+	ArmedAt         time.Time `json:"armed_at"`
+	DeadlineSeconds int64     `json:"deadline_seconds"`
+	// ElapsedAt is the instant the scheduler handled the fire.
+	ElapsedAt time.Time `json:"elapsed_at"`
+}
+
+// Validate reports whether the fact is structurally sound: a publication
+// deadline kind, a positive duration, UTC instants (the item body's re-put
+// convergence is a byte compare), and an elapse no earlier than the deadline.
+func (d ElapsedDeadline) Validate() error {
+	switch d.Kind {
+	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
+	default:
+		return fmt.Errorf("elapsed deadline kind %q: %w", d.Kind, ErrInvalidElapsedDeadlineKind)
+	}
+	if d.DeadlineSeconds <= 0 {
+		return fmt.Errorf("elapsed deadline seconds %d: %w", d.DeadlineSeconds, ErrNonPositive)
+	}
+	for name, t := range map[string]time.Time{"armed_at": d.ArmedAt, "elapsed_at": d.ElapsedAt} {
+		if t.IsZero() {
+			return fmt.Errorf("elapsed deadline %s: %w", name, ErrMissingTimestamp)
+		}
+		if t.Location() != time.UTC {
+			return fmt.Errorf("elapsed deadline %s: %w", name, ErrTimestampNotUTC)
+		}
+	}
+	if d.ElapsedAt.Before(d.ArmedAt.Add(time.Duration(d.DeadlineSeconds) * time.Second)) {
+		return fmt.Errorf("elapsed deadline %s elapsed at %s: %w",
+			d.Kind, d.ElapsedAt.Format(time.RFC3339Nano), ErrElapsedDeadlineEarly)
+	}
+	return nil
+}
+
 // PRReference is the structured identity of the published pull request a
 // ready_for_final_review item links to, or of the pull request a held run has
 // already published when a publish_blocked item carries one. The repository
@@ -552,11 +598,16 @@ type AttentionItem struct {
 	// review_dispute, and review_configuration types. Sorted by agent, fixed
 	// once attached; acceptance and admission re-derive each rule rather than
 	// trust it.
-	AlternateAgents   []AlternateAgentOffer `json:"alternate_agents"`
-	ItemVersion       int                   `json:"item_version"`
-	InterruptionClass InterruptionClass     `json:"interruption_class"`
-	ConversationID    *ConversationID       `json:"conversation_id"`
-	Timing            TimingSummary         `json:"timing"`
+	AlternateAgents []AlternateAgentOffer `json:"alternate_agents"`
+	// ElapsedDeadlines are the publication deadlines that elapsed while this
+	// ready_for_final_review item stayed open, in firing order with no kind
+	// repeated; nil until one elapses and on every other type. Append-only
+	// (ValidateAttentionItemTransition).
+	ElapsedDeadlines  []ElapsedDeadline `json:"elapsed_deadlines"`
+	ItemVersion       int               `json:"item_version"`
+	InterruptionClass InterruptionClass `json:"interruption_class"`
+	ConversationID    *ConversationID   `json:"conversation_id"`
+	Timing            TimingSummary     `json:"timing"`
 	// CreatedAt is the daemon-stamped instant this item was created. It is
 	// immutable across the item's lifecycle and nil only for legacy items
 	// persisted before the field existed.
@@ -1226,6 +1277,9 @@ func (i AttentionItem) Validate() error {
 			return fmt.Errorf("item %s: %w", i.ID, err)
 		}
 	}
+	if err := i.validateElapsedDeadlines(); err != nil {
+		return err
+	}
 	if i.DecidedAt != nil {
 		if i.DecidedAt.IsZero() {
 			return fmt.Errorf("item %s decided_at: %w", i.ID, ErrMissingTimestamp)
@@ -1359,6 +1413,33 @@ func bindingDigests(
 // validateAlternateAgents holds the alternate-agent offer to its facts, as
 // OfferedManifests holds the capability retry: the action and the offers
 // come together, on a type that can raise from a role's failure.
+// validateElapsedDeadlines admits elapsed deadlines only on a
+// ready_for_final_review item, the only item a publication watch arms
+// against, as a non-empty list (nil and [] would be two encodings of "none")
+// with each kind at most once: a one-shot deadline elapses once per item.
+func (i AttentionItem) validateElapsedDeadlines() error {
+	if i.ElapsedDeadlines == nil {
+		return nil
+	}
+	if i.Type != AttentionReadyForFinalReview {
+		return fmt.Errorf("item %s type %q carries elapsed deadlines: %w", i.ID, i.Type, ErrCardFactOutsideItem)
+	}
+	if len(i.ElapsedDeadlines) == 0 {
+		return fmt.Errorf("item %s elapsed_deadlines: %w", i.ID, ErrEmptyField)
+	}
+	seen := make(map[ScheduleKind]bool, len(i.ElapsedDeadlines))
+	for _, d := range i.ElapsedDeadlines {
+		if err := d.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		if seen[d.Kind] {
+			return fmt.Errorf("item %s elapsed deadline %s: %w", i.ID, d.Kind, ErrElapsedDeadlineRepeated)
+		}
+		seen[d.Kind] = true
+	}
+	return nil
+}
+
 func (i AttentionItem) validateAlternateAgents() error {
 	offers := i.Offers(ActionRetryWithAlternateAgent)
 	if offers != (i.AlternateAgents != nil) {

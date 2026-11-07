@@ -2120,6 +2120,24 @@ func TestGolden(t *testing.T) {
 	if err := invalidatedItem.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	// The same ready item, still open, after both publication deadlines its
+	// watch armed elapsed (#2752), in firing order: each records its nominal
+	// deadline's arming instant and elapses a minute after the deadline.
+	elapsedDeadlinesItem := item
+	elapsedDeadlinesItem.ItemVersion = item.ItemVersion + 2
+	elapsedDeadlinesItem.ElapsedDeadlines = []domain.ElapsedDeadline{
+		{
+			Kind: domain.SchedulePRChecksDeadline, ArmedAt: ts.Add(time.Hour),
+			DeadlineSeconds: 1800, ElapsedAt: ts.Add(91 * time.Minute),
+		},
+		{
+			Kind: domain.ScheduleReviewWaitThreshold, ArmedAt: ts.Add(time.Hour),
+			DeadlineSeconds: 86400, ElapsedAt: ts.Add(25*time.Hour + time.Minute),
+		},
+	}
+	if err := elapsedDeadlinesItem.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	identityInvalidatedItem := item
 	identityInvalidatedItem.ItemVersion = item.ItemVersion + 1
 	identityInvalidatedItem.Status = domain.StatusSuperseded
@@ -2400,6 +2418,7 @@ func TestGolden(t *testing.T) {
 		{"specification_source_issue", intakeIssueSource},
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},
+		{"attention_item_elapsed_deadlines", elapsedDeadlinesItem},
 		{"schedule_deadline", deadlineSchedule},
 		{"schedule_installation_poll", pollSchedule},
 		{"schedule_janitor", janitorSchedule},

@@ -223,14 +223,15 @@ func BindTerminal(task Task, item domain.AttentionItem) (domain.AttentionItem, e
 }
 
 // terminalDigestItem is the terminal commitment's view of an item: every
-// AttentionItem field except review_diminishing, interpretation_failure, and
-// conclusion.
+// AttentionItem field except review_diminishing, interpretation_failure,
+// conclusion, alternate_agents, and elapsed_deadlines.
 type terminalDigestItem struct {
 	domain.AttentionItem
 	ReviewDiminishing     *struct{} `json:"review_diminishing,omitempty"`
 	InterpretationFailure *struct{} `json:"interpretation_failure,omitempty"`
 	Conclusion            *struct{} `json:"conclusion,omitempty"`
 	AlternateAgents       *struct{} `json:"alternate_agents,omitempty"`
+	ElapsedDeadlines      *struct{} `json:"elapsed_deadlines,omitempty"`
 }
 
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
@@ -261,6 +262,9 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// conclusion is shadowed the same way: it is
 	// lifecycle state like status and decided_at, which the commitment resets
 	// to open, and an item bound before the field existed keeps its digest.
+	// Elapsed deadlines are shadowed as lifecycle state too: the scheduler
+	// appends them to a ready item after it was bound, so including them
+	// would fail the stored binding on its next validation.
 	// The shadowing fields win over the embedded item's and are always
 	// omitted; every other key keeps its place.
 	itemBody, err := json.Marshal(terminalDigestItem{AttentionItem: item})

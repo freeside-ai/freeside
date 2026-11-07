@@ -262,6 +262,24 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 				updated.ID, fact.name, ErrImmutableTransition)
 		}
 	}
+	// Elapsed deadlines accumulate (#2752): each fire appends one record, so
+	// the stored list must survive as the successor's prefix, in order.
+	if len(updated.ElapsedDeadlines) < len(old.ElapsedDeadlines) {
+		return fmt.Errorf("attention item %s: elapsed deadlines would be dropped: %w",
+			updated.ID, ErrImmutableTransition)
+	}
+	if len(old.ElapsedDeadlines) > 0 {
+		// Compared only when entries are stored: a nil list and an empty
+		// prefix encode differently ("null" against "[]").
+		sameElapsed, err := jsonEqual(old.ElapsedDeadlines, updated.ElapsedDeadlines[:len(old.ElapsedDeadlines)])
+		if err != nil {
+			return fmt.Errorf("attention item %s elapsed_deadlines: %w", updated.ID, err)
+		}
+		if !sameElapsed {
+			return fmt.Errorf("attention item %s: elapsed deadlines would be rewritten: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+	}
 	// Publication holds may move between canonical causes while their
 	// deterministic publish-blocked item remains open. Keep the fact present,
 	// but let the successor state describe the current hold rather than stale
