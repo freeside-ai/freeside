@@ -3,12 +3,21 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
 // ErrNoDiscoveredModels is returned for a catalog that lists no model: a
 // harness that reports none has told the daemon nothing it can select.
 var ErrNoDiscoveredModels = errors.New("discovered model catalog lists no model")
+
+// ErrDiscoveredModelUnserved and ErrDiscoveredEffortUnserved are Serves's
+// refusals: the catalog lists no entry for the model, or no entry for it
+// reports the effort.
+var (
+	ErrDiscoveredModelUnserved  = errors.New("the discovered catalog lists no such model")
+	ErrDiscoveredEffortUnserved = errors.New("the discovered catalog lists no such effort for the model")
+)
 
 // DiscoveredModelCatalog is what one enrollment's pinned harness reported it
 // can run, as of one observation (issue #2594). It is observation, never
@@ -100,6 +109,25 @@ func ValidateDiscoveredModels(models []DiscoveredModel) error {
 			return fmt.Errorf("model %d id: %w", i, ErrDuplicate)
 		}
 		seen[model.ID] = true
+	}
+	return nil
+}
+
+// Serves reports whether the catalog offers model at effort, the check a
+// selection's model and effort meet once a catalog is recorded. The model is
+// found by entry id or, failing that, by the model entries resolve to
+// (catalogEntries). EffortHarnessDefault passes for any listed model, since
+// it sends no effort. The error is ErrDiscoveredModelUnserved or
+// ErrDiscoveredEffortUnserved and quotes neither the caller's strings nor the
+// catalog's, so a caller can name the field it refuses.
+func (c DiscoveredModelCatalog) Serves(model, effort string) error {
+	entries := catalogEntries(c, model)
+	if len(entries) == 0 {
+		return ErrDiscoveredModelUnserved
+	}
+	if effort != string(EffortHarnessDefault) &&
+		!slices.ContainsFunc(entries, func(m DiscoveredModel) bool { return slices.Contains(m.EffortLevels, effort) }) {
+		return ErrDiscoveredEffortUnserved
 	}
 	return nil
 }

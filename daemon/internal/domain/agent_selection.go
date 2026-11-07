@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -255,14 +256,10 @@ func ResolveAgentSelection(in AgentSelectionInput) (AgentSelection, error) {
 				in.Enrollment.ID, client)
 		}
 	default:
-		entries := catalogEntries(*in.Catalog, in.Names.Model)
-		if len(entries) == 0 {
+		switch err := in.Catalog.Serves(in.Names.Model, in.Names.Effort); {
+		case errors.Is(err, ErrDiscoveredModelUnserved):
 			return fail("the model is not in enrollment %s's discovered catalog", in.Enrollment.ID)
-		}
-		if in.Names.Effort != string(EffortHarnessDefault) &&
-			!slices.ContainsFunc(entries, func(m DiscoveredModel) bool {
-				return slices.Contains(m.EffortLevels, in.Names.Effort)
-			}) {
+		case err != nil:
 			return fail("the effort is not one the model reports in enrollment %s's discovered catalog",
 				in.Enrollment.ID)
 		}
