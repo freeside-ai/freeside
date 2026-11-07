@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 const (
@@ -1817,20 +1818,20 @@ type codexReviewResourceNames struct {
 // owned by one review invocation. It preserves the complete admitted run ID,
 // so names remain collision-resistant without truncation or a hash alias.
 func codexReviewNames(runID string) codexReviewResourceNames {
-	prefix := "freeside-review-" + runID
+	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
 	return codexReviewResourceNames{
-		workspaceObserver: prefix + "-ws-obs",
-		shadowInitializer: prefix + "-agents-init",
-		shadowObserver:    prefix + "-agents-obs",
-		reviewContainer:   prefix + "-codex",
-		shadowVolume:      prefix + "-agents",
-		network:           prefix + "-egress",
-		snapshotVolume:    prefix + "-snap",
-		snapshotSeeder:    prefix + "-snap-init",
-		snapshotObserver:  prefix + "-snap-obs",
-		inputsVolume:      prefix + "-inputs",
-		inputsSeeder:      prefix + "-inputs-init",
-		inputsObserver:    prefix + "-inputs-obs",
+		workspaceObserver: name(wardname.WorkspaceObs),
+		shadowInitializer: name(wardname.AgentsInit),
+		shadowObserver:    name(wardname.AgentsObs),
+		reviewContainer:   name(wardname.Codex),
+		shadowVolume:      name(wardname.Agents),
+		network:           name(wardname.Egress),
+		snapshotVolume:    name(wardname.Snap),
+		snapshotSeeder:    name(wardname.SnapInit),
+		snapshotObserver:  name(wardname.SnapObs),
+		inputsVolume:      name(wardname.Inputs),
+		inputsSeeder:      name(wardname.InputsInit),
+		inputsObserver:    name(wardname.InputsObs),
 	}
 }
 
@@ -1847,7 +1848,7 @@ func reviewNames(provider reviewProvider, runID string) codexReviewResourceNames
 // reviewContainerName is the provider-specific review-container name: the shared
 // per-run prefix plus the provider's suffix (Codex: "-codex").
 func reviewContainerName(provider reviewProvider, runID string) string {
-	return "freeside-review-" + runID + provider.reviewContainerSuffix()
+	return wardname.ReviewPrefix + runID + provider.reviewContainerSuffix()
 }
 
 // CodexReviewRuntimeResourceNamesFor returns the complete current runtime
@@ -1902,14 +1903,14 @@ func codexReviewWorkspaceRuntimeResourceNames(runID string) RuntimeResourceNames
 // resources: pre-#587 launches used host binds, so their intents have the
 // six-resource shape.
 func legacyCodexReviewNames(runID string) codexReviewResourceNames {
-	prefix := "freeside-review-" + runID
+	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
 	return codexReviewResourceNames{
-		workspaceObserver: prefix + "-workspace-observer",
-		shadowInitializer: prefix + "-agents-init",
-		shadowObserver:    prefix + "-agents-observer",
-		reviewContainer:   prefix + "-codex",
-		shadowVolume:      prefix + "-agents",
-		network:           prefix + "-egress",
+		workspaceObserver: name(wardname.LegacyWorkspaceObserver),
+		shadowInitializer: name(wardname.AgentsInit),
+		shadowObserver:    name(wardname.LegacyAgentsObserver),
+		reviewContainer:   name(wardname.Codex),
+		shadowVolume:      name(wardname.Agents),
+		network:           name(wardname.Egress),
 	}
 }
 
@@ -1918,14 +1919,14 @@ func legacyCodexReviewNames(runID string) codexReviewResourceNames {
 // snapshot volume (#591). It authenticates the round-2 intent persisted by
 // run 482 for cleanup only; no new resource is created with this shape.
 func preSnapshotCodexReviewNames(runID string) codexReviewResourceNames {
-	prefix := "freeside-review-" + runID
+	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
 	return codexReviewResourceNames{
-		workspaceObserver: prefix + "-ws-obs",
-		shadowInitializer: prefix + "-agents-init",
-		shadowObserver:    prefix + "-agents-obs",
-		reviewContainer:   prefix + "-codex",
-		shadowVolume:      prefix + "-agents",
-		network:           prefix + "-egress",
+		workspaceObserver: name(wardname.WorkspaceObs),
+		shadowInitializer: name(wardname.AgentsInit),
+		shadowObserver:    name(wardname.AgentsObs),
+		reviewContainer:   name(wardname.Codex),
+		shadowVolume:      name(wardname.Agents),
+		network:           name(wardname.Egress),
 	}
 }
 

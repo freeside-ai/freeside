@@ -26,6 +26,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 const (
@@ -48,9 +49,9 @@ var (
 	ErrRigRecoveryConfirmation = errors.New("stale rig recovery requires explicit confirmation")
 	rigTokenDigestPattern      = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	rigSignaturePattern        = regexp.MustCompile(`^[0-9a-f]{128}$`)
-	rigContainerNamePattern    = regexp.MustCompile(`^(freeside-handoff-c[0-9a-f]{31}-(seeder|observer|ins-seed|ins-check|prompt-seed|prompt-check|inputs-seed|inputs-check|cfg-seed|cfg-check|projects-check|sess-check|writer-check|cred-pre|cred-post|agent|exporter)|freeside-handoff-conf-[0-9a-f]{16}-(seeder|observer|ins-seed|ins-check|writer-check|agent|exporter)|freeside-handoff-review-[0-9a-f]{24}-(seeder|observer)|freeside-review-review-[0-9a-f]{24}-(ws-obs|workspace-observer|agents-init|agents-obs|agents-observer|snap-init|snap-obs|inputs-init|inputs-obs|codex|claude)|freeside-ward-conf-[0-9a-f]{16}-prejob|freeside-ward-conf-conf-[0-9a-f]{16}-(liveness|seed|audit|excl-writer|excl-second|net-live|net|inx-live|inx)|freeside-preflight-credential-[0-9a-f]{12}|freeside-lineup-probe-[0-9a-f]{12})$`)
-	rigVolumeNamePattern       = regexp.MustCompile(`^(freeside-handoff-c[0-9a-f]{31}-(ws|ins|prompt|inputs|cfg|projects|session-env)|freeside-handoff-conf-[0-9a-f]{16}-(ws|ins)|freeside-handoff-review-[0-9a-f]{24}-ws|freeside-review-review-[0-9a-f]{24}-(agents|snap|inputs)|freeside-ward-conf-conf-[0-9a-f]{16}-(cred|liveness-ws|excl-ws|net-live-ws|inx-ws))$`)
-	rigNetworkNamePattern      = regexp.MustCompile(`^(freeside-handoff-(c[0-9a-f]{31}|conf-[0-9a-f]{16})-egress|freeside-review-review-[0-9a-f]{24}-egress|freeside-lineup-probe-[0-9a-f]{12}-egress)$`)
+	rigContainerNamePattern    = regexp.MustCompile(wardname.RigContainerPattern())
+	rigVolumeNamePattern       = regexp.MustCompile(wardname.RigVolumePattern())
+	rigNetworkNamePattern      = regexp.MustCompile(wardname.RigNetworkPattern())
 )
 
 // RigOwner is the deliberately narrow owner identity shown on a refusal. It
@@ -64,10 +65,8 @@ type RigOwner struct {
 
 // RigResources are the exact host resources one production acceptance
 // campaign binds. Container, volume, and network names are admitted only from
-// ward's owned namespaces before cleanup may act on them: the deterministic
-// handoff, review, and conformance names, plus the preflight credential
-// observer's and the lineup probe's names, which carry a 12-hex slice of a
-// fresh ownership label.
+// ward's owned namespaces, as wardname.RigShapes defines them, before cleanup
+// may act on them.
 type RigResources struct {
 	StateRoot     string   `json:"state_root"`
 	DatabasePath  string   `json:"database_path"`

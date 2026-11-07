@@ -497,6 +497,10 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/projectimage/apple.go` (the host-side image provenance and
   allowlist gates), and `internal/projectimage/oci_evidence.go` (decodes
   and verifies the untrusted image archive).
+- **Rig cleanup namespace:** `internal/wardname/` (the one definition of
+  the runtime names rig cleanup and stale recovery may act on) and
+  `internal/daemonlock/rig.go` (admits a bound name only through those
+  patterns).
 - **Credential injection, admission, and runner capabilities:**
   `internal/engine/agent_admission.go` (choosing an agent chooses which
   credential runs), `internal/engine/admission.go` (the runner capability

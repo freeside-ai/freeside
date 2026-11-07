@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 // claude_review.go is the thin Claude provider (#865) on the shared,
@@ -104,7 +105,7 @@ func (claudeReviewProvider) usageMeasurements(
 	)
 }
 
-func (claudeReviewProvider) reviewContainerSuffix() string { return "-claude" }
+func (claudeReviewProvider) reviewContainerSuffix() string { return "-" + wardname.Claude }
 
 // legacyTopologyVersions is nil: the Claude review topology has no prior
 // generation to reap.
