@@ -431,14 +431,24 @@ wait_for "$TMP/orphan-second.log" 'PASS: daemon test'
 kill "$(cat "$TMP/orphan.child")"
 wait "$waiter"
 
-# The stand-in go records its arguments and the GIT_DIR it inherits and, on
-# request, writes through it the way an unscrubbed fixture helper would.
+# The stand-in go records its arguments and the GIT_DIR, GOMAXPROCS, and
+# TMPDIR it inherits and, on request, writes through GIT_DIR the way an
+# unscrubbed fixture helper would. The stand-in getconf reports 10 cores.
 mkdir "$TMP/decoy-tests"
 printf '#!/bin/bash\necho Linux\n' >"$TMP/decoy-tests/uname"
+printf '#!/bin/bash\necho 10\n' >"$TMP/decoy-tests/getconf"
 cat >"$TMP/decoy-tests/go" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$@" >"$RUN.args"
 printf '%s\n' "${GIT_DIR-unset}" >"$RUN.git-dir"
+printf '%s\n' "${GOMAXPROCS-unset}" >"$RUN.gomaxprocs"
+printf '%s\n' "${TMPDIR-unset}" >"$RUN.tmpdir"
+if [[ ${TMPDIR-} == *.tmp.noindex ]]; then
+  [[ -d $TMPDIR && -z $(ls -A "$TMPDIR") ]] || exit 5
+  # A test its timeout killed leaves read-only directories behind.
+  [[ -z ${LEAVE_READ_ONLY:-} ]] ||
+    { mkdir -p "$TMPDIR/left/ro" && touch "$TMPDIR/left/ro/f" && chmod 500 "$TMPDIR/left/ro"; } || exit 6
+fi
 # Go's version-control stamping in a test build runs git status.
 git status --porcelain >/dev/null || exit 4
 [[ -z ${DECOY_WRITE:-} ]] || git config freeside.decoy touched || exit 3
@@ -499,7 +509,7 @@ esac
 begin_case "without -- the test step still runs every package"
 RUN=$TMP/full PATH=$decoy_path run_check daemon test
 assert_rc 0
-[[ $(cat "$TMP/full.args") == $'test\n./...' ]] ||
+[[ $(cat "$TMP/full.args") == $'test\n-timeout\n30m\n./...' ]] ||
   report_failure "go received $(cat "$TMP/full.args")"
 [[ $(tail -1 <<<"$OUT") == 'PASS: daemon test' ]] ||
   report_failure 'a full run named a selection'
@@ -508,7 +518,7 @@ begin_case "arguments after -- replace ./... under the held slot's decoy"
 RUN=$TMP/narrow PATH=$decoy_path GIT_DIR=$TMP/ambient/.git DAEMON_TEST_MAX_RUNS=1 \
   DAEMON_TEST_STATE_DIR=$TMP/narrow-state run_check daemon test -- ./internal/domain/... -run 'Test A'
 assert_rc 0
-[[ $(cat "$TMP/narrow.args") == $'test\n./internal/domain/...\n-run\nTest A' ]] ||
+[[ $(cat "$TMP/narrow.args") == $'test\n-timeout\n30m\n./internal/domain/...\n-run\nTest A' ]] ||
   report_failure "go received $(cat "$TMP/narrow.args")"
 [[ $(cat "$TMP/narrow.git-dir") == "$TMP/narrow-state/slots/1.decoy/repo/.git/worktrees/wt" ]] ||
   report_failure "GIT_DIR was $(cat "$TMP/narrow.git-dir")"
@@ -519,13 +529,62 @@ begin_case "a narrow run that writes to the decoy still fails"
 RUN=$TMP/narrow PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 \
   DAEMON_TEST_STATE_DIR=$TMP/narrow-state DECOY_WRITE=1 run_check daemon test -- ./internal/domain/...
 assert_rc 1
-[[ $(cat "$TMP/narrow.args") == $'test\n./internal/domain/...' ]] ||
+[[ $(cat "$TMP/narrow.args") == $'test\n-timeout\n30m\n./internal/domain/...' ]] ||
   report_failure "go received $(cat "$TMP/narrow.args")"
 assert_contains 'a test wrote to the decoy repository'
 case $OUT in
   *'PASS: daemon'*) report_failure "PASS printed after a decoy write" ;;
   *) pass=$((pass + 1)) ;;
 esac
+
+begin_case "a held slot sizes GOMAXPROCS to its share of the cores"
+for want in 1:unset 2:5 3:4 9223372036854775808:2; do
+  limit=${want%%:*}
+  rm -rf "$TMP/procs-state"
+  RUN=$TMP/procs PATH=$decoy_path DAEMON_TEST_MAX_RUNS=$limit \
+    DAEMON_TEST_STATE_DIR=$TMP/procs-state run_check daemon test
+  assert_rc 0
+  [[ $(cat "$TMP/procs.gomaxprocs") == "${want#*:}" ]] ||
+    report_failure "limit $limit gave GOMAXPROCS $(cat "$TMP/procs.gomaxprocs")"
+done
+rm -rf "$TMP/procs-state"
+RUN=$TMP/procs PATH=$decoy_path DAEMON_TEST_MAX_RUNS=3 GOMAXPROCS=7 \
+  DAEMON_TEST_STATE_DIR=$TMP/procs-state run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/procs.gomaxprocs") == 7 ]] ||
+  report_failure "a caller's GOMAXPROCS became $(cat "$TMP/procs.gomaxprocs")"
+mkdir "$TMP/no-cores"
+printf '#!/bin/bash\nexit 1\n' >"$TMP/no-cores/getconf"
+chmod +x "$TMP/no-cores/getconf"
+rm -rf "$TMP/procs-state"
+RUN=$TMP/procs PATH=$TMP/no-cores:$decoy_path DAEMON_TEST_MAX_RUNS=2 \
+  DAEMON_TEST_STATE_DIR=$TMP/procs-state run_check daemon test
+assert_rc 0
+assert_contains "cannot count cores; keeping Go's GOMAXPROCS"
+[[ $(cat "$TMP/procs.gomaxprocs") == unset ]] ||
+  report_failure "a failed core count gave GOMAXPROCS $(cat "$TMP/procs.gomaxprocs")"
+
+begin_case "a held slot gives the tests a per-slot .noindex TMPDIR, removed afterwards"
+RUN=$TMP/tmpdir PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/tmpdir-state run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/tmpdir.tmpdir") == "$TMP/tmpdir-state/slots/1.tmp.noindex" ]] ||
+  report_failure "TMPDIR was $(cat "$TMP/tmpdir.tmpdir")"
+[[ ! -e $TMP/tmpdir-state/slots/1.tmp.noindex ]] || report_failure 'the TMPDIR was left behind'
+mkdir -p "$TMP/tmpdir-state/slots/1.tmp.noindex/stale/ro"
+touch "$TMP/tmpdir-state/slots/1.tmp.noindex/stale/ro/f"
+chmod 500 "$TMP/tmpdir-state/slots/1.tmp.noindex/stale/ro"
+RUN=$TMP/tmpdir PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 LEAVE_READ_ONLY=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/tmpdir-state run_check daemon test
+assert_rc 0
+[[ ! -e $TMP/tmpdir-state/slots/1.tmp.noindex ]] || report_failure 'read-only leftovers survived'
+mkdir -p "$TMP/caller-tmp"
+RUN=$TMP/tmpdir PATH=$decoy_path TMPDIR=$TMP/caller-tmp DAEMON_TEST_MAX_RUNS=0 \
+  DAEMON_TEST_STATE_DIR=$TMP/tmpdir-off run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/tmpdir.tmpdir") == "$TMP/caller-tmp" ]] ||
+  report_failure "TMPDIR without a slot was $(cat "$TMP/tmpdir.tmpdir")"
+[[ ! -e $TMP/tmpdir-off ]] || report_failure 'a run without a slot created state'
 
 begin_case "a misplaced or empty -- is a usage error before go runs"
 for args in 'daemon test --' 'daemon -- ./x' 'daemon build test -- ./x' \
@@ -580,7 +639,7 @@ STUB
   else
     report_failure 'CI changed git PATH'
   fi
-  if [[ $(cat "$TMP/git-args") == $'test\n./...' ]]; then
+  if [[ $(cat "$TMP/git-args") == $'test\n-timeout\n30m\n./...' ]]; then
     pass=$((pass + 1))
   else
     report_failure 'CI changed the test command'
@@ -642,6 +701,10 @@ assert_rc 0
 OUT=$(cat "$stub.args")
 assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\nintegration\n--index\n2\n--count\n3'
 assert_contains $'--integration-count\n3\n--evidence-dir'
+case $OUT in
+  *-timeout*) report_failure 'the shard wrapper received -timeout' ;;
+  *) pass=$((pass + 1)) ;;
+esac
 PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=darwin DAEMON_TEST_SHARD_INDEX=1 \
   DAEMON_TEST_SHARD_COUNT=1 DAEMON_TEST_INTEGRATION_SHARDS=3 \
   DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test
