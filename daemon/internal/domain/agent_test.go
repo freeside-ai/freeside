@@ -753,30 +753,26 @@ func TestCanonicalStageRole(t *testing.T) {
 	}
 }
 
-// TestComputeTreatmentDigest pins the grouping: commercial facts (pricing,
-// terms, billing, deprecation) stay out, behavioural facts land in.
+// TestComputeTreatmentDigest pins the grouping: commercial facts (billing,
+// terms) stay out, behavioural facts (model, requested and effective effort)
+// land in.
 func TestComputeTreatmentDigest(t *testing.T) {
 	route := routeFragment(t)
-	offer := offerFragment(t)
 	launch := launchSpec(t)
 	adapter := adapterFragment(t)
-	base, err := domain.ComputeTreatmentDigest(
-		route, adapter.Digest, launch.Digest, offer, domain.EffortMax, "xhigh")
-	if err != nil {
-		t.Fatal(err)
+	digest := func(route domain.RouteFragment, model, requested, effective string) domain.Digest {
+		t.Helper()
+		got, err := domain.ComputeTreatmentDigest(route, adapter.Digest, launch.Digest, model, requested, effective)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
 	}
+	base := digest(route, "gpt-5.6", "max", "xhigh")
 	if !strings.HasPrefix(string(base), "sha256:") {
 		t.Fatalf("treatment digest %q", base)
 	}
 
-	repriced := offer
-	repriced.PricingRevision = "2026-09"
-	repriced.NotAfter = repriced.NotAfter.Add(24 * time.Hour)
-	digest, err := repriced.ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	repriced.Digest = digest
 	rebilled := route
 	rebilled.BillingMode = "api_metered"
 	rebilled.TermsBasisDate = "2026-09-01"
@@ -785,37 +781,19 @@ func TestComputeTreatmentDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	rebilled.Digest = routeDigest
-	same, err := domain.ComputeTreatmentDigest(
-		rebilled, adapter.Digest, launch.Digest, repriced, domain.EffortMax, "xhigh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if same != base {
+	if digest(rebilled, "gpt-5.6", "max", "xhigh") != base {
 		t.Fatal("commercial-only changes moved the treatment digest")
 	}
-
-	remodeled := offer
-	remodeled.RouteModelID = "gpt-5.7"
-	digest, err = remodeled.ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
+	for name, moved := range map[string]domain.Digest{
+		"model":            digest(route, "gpt-5.7", "max", "xhigh"),
+		"requested effort": digest(route, "gpt-5.6", "xhigh", "xhigh"),
+		"effective effort": digest(route, "gpt-5.6", "max", "high"),
+	} {
+		if moved == base {
+			t.Fatalf("%s change did not move the treatment digest", name)
+		}
 	}
-	remodeled.Digest = digest
-	moved, err := domain.ComputeTreatmentDigest(
-		route, adapter.Digest, launch.Digest, remodeled, domain.EffortMax, "xhigh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if moved == base {
-		t.Fatal("model change did not move the treatment digest")
-	}
-
-	clamped, err := domain.ComputeTreatmentDigest(
-		route, adapter.Digest, launch.Digest, offer, domain.EffortMax, "high")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if clamped == base {
-		t.Fatal("effective-effort change did not move the treatment digest")
+	if _, err := domain.ComputeTreatmentDigest(route, adapter.Digest, launch.Digest, "", "max", "xhigh"); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("treatment without a model = %v, want %v", err, domain.ErrEmptyField)
 	}
 }

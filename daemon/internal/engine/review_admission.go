@@ -238,8 +238,8 @@ func (s AgentSelection) AdmitReview(
 		return refuse(err)
 	}
 	treatment, err := domain.ComputeTreatmentDigest(
-		resolved.Route, resolved.Adapter.Digest, agent.launch.Digest, resolved.Offer,
-		definition.Effort, effort.Effective(),
+		resolved.Route, resolved.Adapter.Digest, agent.launch.Digest, resolved.Offer.RouteModelID,
+		string(definition.Effort), effort.Effective(),
 	)
 	if err != nil {
 		return refuse(err)

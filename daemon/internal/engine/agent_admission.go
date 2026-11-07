@@ -999,7 +999,8 @@ func resolveAgentAdmission(
 		return refuse(domain.AdmissionCheckAgentSnapshot, "%v", err)
 	}
 	treatment, err := domain.ComputeTreatmentDigest(
-		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer, definition.Effort, effort.Effective(),
+		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer.RouteModelID,
+		string(definition.Effort), effort.Effective(),
 	)
 	if err != nil {
 		return refuse(domain.AdmissionCheckAgentSnapshot, "%v", err)

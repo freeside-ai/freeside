@@ -25,7 +25,7 @@
         "audited_on": "2026-09-09"
       }
     },
-    "treatment_digest": "sha256:df51ddc161f132cc09e40c88eee74608a9b4394e9d7f877ba8ef1ac5bc525728",
+    "treatment_digest": "sha256:ae63f5bf103d306d479e312bbacea8ab8729061cc89da3127ac7b8cca11d293e",
     "site_contract_digest": "sha256:8965930eebde706b73366d39b1ffca028ee240c933712f1b0144976f44c77cd3",
     "credential_source": "enrollment",
     "requested_model_id": "test",

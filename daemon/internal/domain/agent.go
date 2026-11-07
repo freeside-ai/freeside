@@ -637,16 +637,17 @@ func CanonicalStageRole(name string) (StageName, error) {
 }
 
 // TreatmentEncodingVersion tags the treatment digest's canonical
-// serialization.
-const TreatmentEncodingVersion = 1
+// serialization. Version 2 groups by the selection's model and effort where
+// version 1 grouped by the offer; a binding keeps the digest it was admitted
+// with, so the two versions never meet in one comparison.
+const TreatmentEncodingVersion = 2
 
 // canonicalTreatment is the §5.4/§8 comparison grouping: route behaviour,
-// adapter, launch, offer behaviour, and requested plus effective effort.
-// Excluded by design: enrollment, generation, cost owner, pricing, terms
-// (the route's billing mode and terms basis, the offer's pricing revision),
-// deprecation (the offer's not_after), and labels. Two runs with one
-// treatment digest differ only in things that should not change behaviour;
-// the agent digest stays the audit key.
+// adapter, launch, the model the launch sends, and requested plus effective
+// effort. Excluded by design: enrollment, generation, cost owner, pricing,
+// terms (the route's billing mode and terms basis), and labels. Two runs with
+// one treatment digest differ only in things that should not change
+// behaviour; the agent digest stays the audit key.
 type canonicalTreatment struct {
 	EncodingVersion int `json:"encoding_version"`
 	Route           struct {
@@ -657,14 +658,12 @@ type canonicalTreatment struct {
 	} `json:"route"`
 	AdapterDigest Digest `json:"adapter_digest"`
 	LaunchDigest  Digest `json:"launch_digest"`
-	Offer         struct {
-		RouteModelID      string            `json:"route_model_id"`
-		LineageGroup      string            `json:"lineage_group"`
-		IdentityStability IdentityStability `json:"identity_stability"`
-	} `json:"offer"`
-	RequestedEffort EffortLevel `json:"requested_effort"`
+	RouteModelID  string `json:"route_model_id"`
+	// RequestedEffort is the effort the selection names, in the harness's
+	// own vocabulary.
+	RequestedEffort string `json:"requested_effort"`
 	// EffectiveEffort is the harness-native value the adapter actually sent,
-	// so a clamp (max → xhigh) lands in the grouping explicitly.
+	// so a clamp lands in the grouping explicitly.
 	EffectiveEffort string `json:"effective_effort"`
 }
 
@@ -672,13 +671,10 @@ type canonicalTreatment struct {
 // admitted configuration and observed effective effort.
 func ComputeTreatmentDigest(
 	route RouteFragment, adapterDigest, launchDigest Digest,
-	offer OfferFragment, requestedEffort EffortLevel, effectiveEffort string,
+	routeModelID, requestedEffort, effectiveEffort string,
 ) (Digest, error) {
 	if err := route.Validate(); err != nil {
 		return "", fmt.Errorf("treatment route: %w", err)
-	}
-	if err := offer.Validate(); err != nil {
-		return "", fmt.Errorf("treatment offer: %w", err)
 	}
 	if !contentaddr.Valid(string(adapterDigest)) {
 		return "", fmt.Errorf("treatment adapter_digest %q: %w", adapterDigest, ErrInvalidDigest)
@@ -686,24 +682,22 @@ func ComputeTreatmentDigest(
 	if !contentaddr.Valid(string(launchDigest)) {
 		return "", fmt.Errorf("treatment launch_digest %q: %w", launchDigest, ErrInvalidDigest)
 	}
-	if !requestedEffort.valid() {
-		return "", fmt.Errorf("treatment requested_effort %q: %w", requestedEffort, ErrInvalidEffortLevel)
-	}
-	if effectiveEffort == "" {
-		return "", fmt.Errorf("treatment effective_effort: %w", ErrEmptyField)
+	for _, field := range []struct{ name, value string }{
+		{"route_model_id", routeModelID}, {"requested_effort", requestedEffort}, {"effective_effort", effectiveEffort},
+	} {
+		if field.value == "" {
+			return "", fmt.Errorf("treatment %s: %w", field.name, ErrEmptyField)
+		}
 	}
 	treatment := canonicalTreatment{
 		EncodingVersion: TreatmentEncodingVersion,
-		AdapterDigest:   adapterDigest, LaunchDigest: launchDigest,
+		AdapterDigest:   adapterDigest, LaunchDigest: launchDigest, RouteModelID: routeModelID,
 		RequestedEffort: requestedEffort, EffectiveEffort: effectiveEffort,
 	}
 	treatment.Route.ServiceOperator = route.ServiceOperator
 	treatment.Route.Protocol = route.Protocol
 	treatment.Route.InferenceAuthorities = route.InferenceAuthorities
 	treatment.Route.FallbackPolicy = route.FallbackPolicy
-	treatment.Offer.RouteModelID = offer.RouteModelID
-	treatment.Offer.LineageGroup = offer.LineageGroup
-	treatment.Offer.IdentityStability = offer.IdentityStability
 	body, err := json.Marshal(treatment)
 	if err != nil {
 		return "", fmt.Errorf("treatment canonical encoding: %w", err)

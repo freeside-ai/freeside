@@ -239,8 +239,8 @@ func admitRole(
 	// A call's treatment is a run's with the call launch in the launch
 	// position (plan §5.4), so it is the same at every site of an agent.
 	treatment, err := domain.ComputeTreatmentDigest(
-		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer,
-		resolved.Agent.Effort, effort.Effective(),
+		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer.RouteModelID,
+		string(resolved.Agent.Effort), effort.Effective(),
 	)
 	if err != nil {
 		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
