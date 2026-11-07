@@ -65,6 +65,24 @@ DARWIN_SELECTION = [
      "reason": "filesystem: the non-Linux mv branch"},
 ]
 
+# The rest shard's heaviest packages, heaviest first, by their walls in the
+# rest shard of PR run 42279424310 (156.9, 120.1, 93.8, 63.4, 62.7, 27.5,
+# 20.8, and 19.6 s). `go test -p` starts packages in argument order, so
+# passing these first keeps a long package from waiting for a slot behind
+# short ones. The list only orders the command's arguments; it selects
+# nothing, and an entry missing from the inventory is skipped because it is
+# a scheduling hint, not a check.
+REST_PACKAGE_ORDER = [
+    "cmd/freesided",
+    "internal/store",
+    "internal/publish",
+    "internal/engine",
+    "internal/signet",
+    "internal/observe",
+    "cmd/freeside-signet-dev",
+    "internal/ward",
+]
+
 
 def require(condition, message):
     if not condition:
@@ -129,6 +147,15 @@ def darwin_packages(packages):
         require(matches[0] not in selection, f"duplicate darwin package: {entry['package']}")
         selection[matches[0]] = entry["families"]
     return selection
+
+
+def rest_order(packages):
+    """Return packages with REST_PACKAGE_ORDER's matches first, in hint order,
+    then every other package in its original order."""
+    hinted = [p for entry in REST_PACKAGE_ORDER for p in packages if p.endswith("/" + entry)]
+    ordered = hinted + [p for p in packages if p not in hinted]
+    require(Counter(ordered) == Counter(packages), "rest order must keep each package once")
+    return ordered
 
 
 def darwin_families(selection, inventory):
@@ -258,7 +285,7 @@ def run(args):
             base + ["-run", run_pattern(selected[p]), p]
             for p, families in darwin.items() if families is not None]
     else:
-        commands = [base + list(selected)]
+        commands = [base + rest_order(list(selected))]
     print(f"shard {args.kind} {args.index}/{args.count}: {len(selected)} packages", file=sys.stderr)
     evidence = (directory / "tests.jsonl").open("w") if directory else None
     events = []

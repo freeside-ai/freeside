@@ -185,6 +185,15 @@ class Coverage(unittest.TestCase):
                 shards.gate(needs, ['tests'], ['main'])
         with self.assertRaises(ValueError):
             shards.gate({'tests': {'result': 'success'}}, ['tests'], ['tests'])
+        # The linux gate's set: lint is its own child and must succeed too.
+        linux = ['linux-build', 'linux-lint', 'linux-tests']
+        shards.gate({k: {'result': 'success'} for k in linux}, linux)
+        for result in ['skipped', 'failure']:
+            with self.subTest(lint=result), self.assertRaises(ValueError):
+                shards.gate(dict({k: {'result': 'success'} for k in linux}, **{'linux-lint': {'result': result}}),
+                            linux)
+        with self.assertRaises(ValueError):
+            shards.gate({k: {'result': 'success'} for k in linux if k != 'linux-lint'}, linux)
 
     def test_workflow_wires_complete_matrices_and_tested_gate_predicate(self):
         workflow = (root / '.github/workflows/daemon-ci.yml').read_text()
@@ -193,7 +202,7 @@ class Coverage(unittest.TestCase):
         for platform in ['linux', 'macos']:
             gate = jobs[platform]
             needs = re.search(r'^    needs: \[(.*?)\]', gate, re.M).group(1).split(', ')
-            self.assertEqual(set(needs), ({'linux-build', 'linux-tests'} if platform == 'linux'
+            self.assertEqual(set(needs), ({'linux-build', 'linux-lint', 'linux-tests'} if platform == 'linux'
                                          else {'macos-tests', 'macos-main'}))
             self.assertIn('    if: always()', gate)
             self.assertIn('toJSON(needs)', gate)
@@ -224,7 +233,17 @@ class Coverage(unittest.TestCase):
         linux = jobs['linux-tests']
         integration_rows = [(int(i), int(n)) for kind, i, n in re.findall(rows, linux) if kind == 'integration']
         self.assertEqual(integration_rows, [(i, 3) for i in range(1, 4)])
-        self.assertIn('--expected linux-build linux-tests', jobs['linux'])
+        self.assertIn('--expected linux-build linux-lint linux-tests\n', jobs['linux'])
+        # Lint runs beside build and vet. Its cache key never falls back across
+        # salts (#2127), only a main push saves it, and it writes no build cache.
+        lint, build = jobs['linux-lint'], jobs['linux-build']
+        self.assertIn('golangci/golangci-lint-action@v8', lint)
+        self.assertRegex(lint, r'key: daemon-lint-v1-.*-\$\{\{ github.sha \}\}\n')
+        self.assertIn("      - name: Save golangci-lint cache\n        if: github.event_name == 'push'\n", lint)
+        self.assertEqual(lint.count('actions/cache/save'), 1)
+        self.assertNotIn('golangci-lint', build)
+        self.assertNotIn('GOLANGCI_LINT_VERSION', build)
+        self.assertIn('run: bash scripts/check.sh daemon build vet\n', build)
         self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', jobs['linux'])
         self.assertIn("github.event_name == 'push' && matrix.index == 1", linux)
         self.assertNotIn("github.event_name != 'push'", linux)
@@ -458,6 +477,41 @@ fi
                 result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('daemon=' + expected + '\n', output.read_text())
+
+    def test_rest_shard_passes_hinted_packages_first(self):
+        listed = ['module/a', 'module/internal/ward', 'module/b', 'module/internal/store',
+                  'module/cmd/freesided', 'module/c']
+        hinted = ['module/cmd/freesided', 'module/internal/store', 'module/internal/ward']
+        unhinted = ['module/a', 'module/b', 'module/c']
+        # Most hint entries are absent here; a missing entry is skipped.
+        self.assertLess(len(hinted), len(shards.REST_PACKAGE_ORDER))
+        self.assertEqual(shards.rest_order(listed), hinted + unhinted)
+        self.assertEqual(shards.rest_order(unhinted), unhinted)
+        # The hint orders arguments only: it never adds or drops a package.
+        self.assertEqual(sorted(shards.rest_order(listed)), sorted(listed))
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fixture = directory / 'fixture.json'
+            data = {integration: ['TestA']} | {p: ['TestRest'] for p in listed}
+            fixture.write_text(json.dumps(data))
+            fake = directory / 'go'
+            fake.write_text(FAKE_GO)
+            fake.chmod(0o755)
+            output = directory / 'rest'
+            result = subprocess.run(
+                [sys.executable, str(path), 'run', '--go', str(fake), '--daemon', str(directory),
+                 '--kind', 'rest', '--index', '1', '--count', '1', '--evidence-dir', str(output)],
+                env=dict(os.environ, SHARD_FIXTURE=str(fixture), SHARD_EXECUTE='yes'),
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # The fake go runs packages in fixture order, so the command, not
+            # the event stream, shows the order go test receives.
+            report = shards.read_json(output / 'execution.json')
+            self.assertEqual(report['commands'], [[str(fake), 'test', '-json', '-count=1'] + hinted + unhinted])
+            # The inventories that verify and compare read stay as discovered.
+            discovered = {p: ['TestRest'] for p in listed}
+            self.assertEqual(report['inventory'], discovered)
+            self.assertEqual(shards.read_json(output / 'inventory.json'), discovered)
 
     def test_real_child_failure_and_invalid_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -792,6 +846,13 @@ print((Path(os.environ['TIMING_FIXTURE']) / name).read_text())
             self.assertEqual(result['daemon_seconds'], 90)
             self.assertFalse(report(children[:-1])['samples'][0]['complete'])
             self.assertFalse(report([children[2], children[3]])['samples'][0]['complete'])
+            # After #2742 lint is its own job beside build and vet; a run with
+            # only half of the new pair, or with both shapes, is incomplete.
+            split = [job('daemon / linux (build, vet)', 10, 40), job('daemon / linux (lint)', 10, 62)]
+            self.assertTrue(report(children[:1] + split + children[2:])['samples'][0]['complete'])
+            for broken in (children[:1] + split[1:] + children[2:], children[:2] + split[1:] + children[2:],
+                           children[:1] + split[:1] + children[2:]):
+                self.assertFalse(report(broken)['samples'][0]['complete'])
             # A fresh trigger for attempt 2, never the original created_at.
             sample.update(attempt=2, triggered_at=stamp(200), trigger_source='recorded API rerun request')
             run['run_attempt'] = 2

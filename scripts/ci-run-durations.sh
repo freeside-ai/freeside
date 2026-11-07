@@ -71,7 +71,12 @@ def measure(sample, run, jobs, original):
         count = sample.get('integration_shards', 0)
         require(type(count) is int and count in (0, 2, 3, 4), 'invalid integration shard count')
         if count:
-            expected.add('linux (build, vet, lint)')
+            # #2742 split lint out of the static job. A run carries one shape
+            # or the other, and the exact-set check below rejects a mix.
+            if any(job_name(j) == 'linux (lint)' for j in jobs):
+                expected.update({'linux (build, vet)', 'linux (lint)'})
+            else:
+                expected.add('linux (build, vet, lint)')
             for platform in ('linux', 'macos'):
                 expected.add(f'{platform} (test, rest 1/1)')
                 expected.update(f'{platform} (test, integration {i}/{count})' for i in range(1, count + 1))

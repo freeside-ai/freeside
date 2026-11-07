@@ -7,8 +7,9 @@ Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemo
 ## CI Shards And Coverage Evidence
 
 CI runs three integration shards and one rest shard on Linux for every
-event. Linux build, vet, lint, and exporter cross-compilation run
-independently. On macOS the layout follows the event, because the org's plan
+event. Linux build, vet, and exporter cross-compilation run in one job, and
+lint runs beside it in its own job, which reads that job's build cache and
+never writes it. On macOS the layout follows the event, because the org's plan
 runs at most five macOS jobs at once across every workflow (#2248): a pull
 request builds the daemon and runs only the darwin shard (#2274), and a push
 to main runs the full rest shard and then the three integration shards, in
@@ -23,6 +24,12 @@ on main after its merge, which GitHub reports to the account that pushed the
 merge. The lander reads PR checks only, so nothing hands a landing back for
 it, and a later push in a landing batch cancels an earlier push's run, so the
 batch's last tip carries the macOS evidence for the whole batch.
+
+The rest shard passes its heaviest packages to `go test` first, in the order
+of `REST_PACKAGE_ORDER` in `scripts/daemon-test-shards.py`, so `-p` starts
+them before the short ones; every other package follows in `go list` order.
+The list is a scheduling hint only: it selects nothing, and an entry missing
+from the inventory is skipped.
 
 The darwin shard runs `DARWIN_SELECTION` in `scripts/daemon-test-shards.py`:
 the tests whose behaviour differs on macOS through a build tag, the
