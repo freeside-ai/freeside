@@ -85,8 +85,23 @@
 //     start
 //   - operator_feedback.go, operator_feedback_retry.go
 //     operator feedback invocations and their retries
-//   - production_publication.go the production publication workflow: import
-//     replay and the trust re-gate before publish
+//   - production_publication.go the production publication workflow: the
+//     reconcile loop, the binding re-gate, readiness, completion, and PR
+//     bindings
+//   - production_publication_task.go publication task keys and the restart
+//     reconstruction of a stored task row
+//   - production_publication_completion.go authenticating a publication's
+//     terminal and ready records
+//   - production_export_record.go committing the trusted export and the
+//     task that replays it
+//   - production_publication_outcome.go recovering and authorizing a
+//     committed publication outcome
+//   - production_verification.go running verification under an approved
+//     recipe and checkpointing its verdict
+//   - production_remediation_source.go authenticating a remediation's source
+//     tree
+//   - production_publication_holds.go a publication task's run holds and
+//     retry pacing
 //   - publication_core.go the git publication transport, the publication
 //     lock, and candidate identity
 //   - publication_authoring.go, publication_render_v2.go, publication_metadata.go,
