@@ -251,6 +251,7 @@ func TestObserveSnapshotProjectsPublicationCompletionIdentities(t *testing.T) {
 }
 
 func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	rootImplementationRunID := domain.RunID("run-snapshot-root")
@@ -660,6 +661,7 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 }
 
 func TestObserveSnapshotProjectsShadowEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	st := storetest.Open(t, path, store.Options{})
@@ -887,6 +889,7 @@ func seedAdjudicationRun(
 // computed calibration numerator and denominator are asserted from the projection
 // alone, with no raw SQLite access.
 func TestObserveSnapshotProjectsAdjudicationDispatch(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	st := storetest.Open(t, path, store.Options{})
@@ -1024,6 +1027,7 @@ func TestObserveSnapshotProjectsAdjudicationDispatch(t *testing.T) {
 // does not re-derive tree existence: a canonical in-scope path reads in-surface
 // whether or not it exists in a tree.
 func TestFindingInSurfaceRejectsNonCanonicalPaths(t *testing.T) {
+	t.Parallel()
 	matchAll := []string{"**"}
 	daemonScope := []string{"daemon/**"}
 	tests := []struct {
@@ -1061,6 +1065,7 @@ func TestFindingInSurfaceRejectsNonCanonicalPaths(t *testing.T) {
 // reach, so it is a deliberate edit to wantSurface with the containment
 // reasoning in view, never a silent addition.
 func TestExportedSurfaceStaysNarrow(t *testing.T) {
+	t.Parallel()
 	got := map[string]bool{}
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
@@ -1215,6 +1220,7 @@ func specNames(spec ast.Spec) []*ast.Ident {
 // nothing. Each case is a way to hand a caller the wrapped store's write,
 // checkpoint, and restore methods while changing no import.
 func TestSurfaceCollectorSeesFieldsAndEmbedding(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		src  string
@@ -1280,6 +1286,7 @@ func keys(m map[string]bool) []string {
 // there is nothing to bind it to: the read fails closed instead of reporting
 // a final completed outcome no gate ever authenticated.
 func TestObserveConclusionRefusesUnauthenticatedCompletion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	seedTopicStore(t, path)
@@ -1415,6 +1422,7 @@ func recordTerminal(
 // and keeps the row's observed-at. The conclusion is the one computed from
 // the stored observation, so the overlay changes only invocation values.
 func TestObserveConclusionShowsRecordedTerminal(t *testing.T) {
+	t.Parallel()
 	for _, terminal := range []domain.ObservedInvocationStatus{
 		domain.ObservedStatusCompleted, domain.ObservedStatusFailed,
 	} {
@@ -1459,6 +1467,7 @@ func TestObserveConclusionShowsRecordedTerminal(t *testing.T) {
 // no outcome or export backs. The read fails as an integrity fault instead
 // of returning either the forged status or the row's.
 func TestObserveConclusionRefusesUnbackedTerminal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, admission, row := openRunningSeed(t)
 	failed := domain.ObservedStatusFailed

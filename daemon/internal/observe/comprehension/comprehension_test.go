@@ -71,6 +71,7 @@ func surface(t *testing.T, deviceID domain.DeviceID, itemID domain.ItemID, actio
 }
 
 func TestOpenToDecisionMedian(t *testing.T) {
+	t.Parallel()
 	events := []domain.ComprehensionEvent{
 		event(t, "e1", "item-a", domain.ComprehensionCardOpened, base),
 		event(t, "e2", "item-b", domain.ComprehensionCardOpened, base),
@@ -88,6 +89,7 @@ func TestOpenToDecisionMedian(t *testing.T) {
 }
 
 func TestReversalRate(t *testing.T) {
+	t.Parallel()
 	// Both approved items are instrumented (card_opened), so they enter the
 	// denominator.
 	events := []domain.ComprehensionEvent{
@@ -111,6 +113,7 @@ func TestReversalRate(t *testing.T) {
 // card_opened event is pre-instrumentation history and must not enter the
 // approval denominator.
 func TestReversalExcludesUninstrumentedApprovals(t *testing.T) {
+	t.Parallel()
 	events := []domain.ComprehensionEvent{
 		event(t, "o1", "item-a", domain.ComprehensionCardOpened, base),
 	}
@@ -128,6 +131,7 @@ func TestReversalExcludesUninstrumentedApprovals(t *testing.T) {
 }
 
 func TestDrillDownRate(t *testing.T) {
+	t.Parallel()
 	// Both decided items are instrumented (card_opened); item-a also drilled
 	// down before deciding.
 	events := []domain.ComprehensionEvent{
@@ -149,6 +153,7 @@ func TestDrillDownRate(t *testing.T) {
 // event is pre-instrumentation history and must not enter the drill-down
 // denominator; an instrumented item counts exactly as before.
 func TestDrillDownExcludesUninstrumentedItems(t *testing.T) {
+	t.Parallel()
 	events := []domain.ComprehensionEvent{
 		// item-a is instrumented and drilled down; item-b has no card_opened.
 		event(t, "o1", "item-a", domain.ComprehensionCardOpened, base),
@@ -165,6 +170,7 @@ func TestDrillDownExcludesUninstrumentedItems(t *testing.T) {
 }
 
 func TestOverrideClassification(t *testing.T) {
+	t.Parallel()
 	src := domain.RecommendationDaemonPolicy
 	// A surface offering approve and request_changes.
 	full := surface(t, "device-1", "item-a", []domain.Action{domain.ActionApprove, domain.ActionRequestChanges})
@@ -213,6 +219,7 @@ func TestOverrideClassification(t *testing.T) {
 // event is pre-instrumentation history and must not enter the override
 // denominator; an instrumented item classifies exactly as before.
 func TestOverrideExcludesUninstrumentedItems(t *testing.T) {
+	t.Parallel()
 	src := domain.RecommendationDaemonPolicy
 	full := surface(t, "device-1", "item-a", []domain.Action{domain.ActionApprove, domain.ActionRequestChanges})
 	other := surface(t, "device-1", "item-b", []domain.Action{domain.ActionApprove, domain.ActionRequestChanges})
@@ -242,6 +249,7 @@ func TestOverrideExcludesUninstrumentedItems(t *testing.T) {
 }
 
 func TestOverrideExcludesRecordOnlyActions(t *testing.T) {
+	t.Parallel()
 	src := domain.RecommendationDaemonPolicy
 	full := surface(t, "device-1", "item-a", []domain.Action{domain.ActionApprove, domain.ActionRequestChanges})
 	events := []domain.ComprehensionEvent{
@@ -273,6 +281,7 @@ func TestOverrideExcludesRecordOnlyActions(t *testing.T) {
 }
 
 func TestDefectCount(t *testing.T) {
+	t.Parallel()
 	defects := []domain.ComprehensionDefect{
 		{ItemID: "item-a", ClaimDigest: digest("d"), RecordedAt: base, Reason: "x"},
 		{ItemID: "item-b", ClaimDigest: digest("e"), RecordedAt: base, Reason: "y"},

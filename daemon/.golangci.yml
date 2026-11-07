@@ -95,9 +95,6 @@ linters:
           |internal/inference/fake\
           |internal/intake\
           |internal/integration\
-          |internal/observe\
-          |internal/observe/comprehension\
-          |internal/observe/observedb\
           |internal/operations\
           |internal/pathfold\
           |internal/procbound\
