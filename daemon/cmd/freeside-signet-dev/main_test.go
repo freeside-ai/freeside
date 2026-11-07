@@ -17,16 +17,40 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
+
+// templateDBPath returns a fresh store path holding a copy of the migrated
+// template, so run opens an existing store and runs no migrations. A run with
+// NtfyURL set also needs templateTopicKey: run treats an existing store as one
+// that may hold paired devices and refuses to mint a key for it.
+func templateDBPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "signet.db")
+	storetest.Copy(t, path)
+	return path
+}
+
+// templateTopicKey returns a topic-key file created before any store exists,
+// in its own directory so it stays disjoint from the store's backup surface.
+func templateTopicKey(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "topic.key")
+	if _, err := loadOrCreateTopicKey(path, false); err != nil {
+		t.Fatalf("create topic key: %v", err)
+	}
+	return path
+}
 
 func startHarness(t *testing.T) (*harness, readiness) {
 	t.Helper()
 	h, err := run(context.Background(), config{
-		DBPath:      t.TempDir() + "/signet.db",
-		ListenAddr:  "127.0.0.1:0",
-		ControlAddr: "127.0.0.1:0",
-		NtfyURL:     "http://127.0.0.1:1",
+		DBPath:       templateDBPath(t),
+		ListenAddr:   "127.0.0.1:0",
+		ControlAddr:  "127.0.0.1:0",
+		NtfyURL:      "http://127.0.0.1:1",
+		TopicKeyFile: templateTopicKey(t),
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -150,6 +174,7 @@ func revision(t *testing.T, r readiness, bearer string) (string, int64) {
 // without -ntfy-url the same route reports the pipeline's fail-closed
 // refusal.
 func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
+	t.Parallel()
 	var (
 		clicksMu sync.Mutex
 		clicks   []string
@@ -164,6 +189,8 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 	// A local tool's probe must not count as a published notification (#2465).
 	strayrequest.Probe(t, fake.URL)
 
+	// From empty, not the template: this is the one end-to-end run of the
+	// default per-process topic key, which run refuses for an existing store.
 	h, err := run(context.Background(), config{
 		DBPath:      t.TempDir() + "/signet.db",
 		ListenAddr:  "127.0.0.1:0",
@@ -203,7 +230,7 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 	clicksMu.Unlock()
 
 	bareHarness, err := run(context.Background(), config{
-		DBPath: t.TempDir() + "/signet.db", ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
+		DBPath: templateDBPath(t), ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
 	})
 	if err != nil {
 		t.Fatalf("run without ntfy: %v", err)
@@ -255,6 +282,7 @@ func pairNewDeviceWithTopic(t *testing.T, r readiness, displayName string) (toke
 // files live in separate directories, showing the credential need not (and
 // does not) sit in the store's backup surface.
 func TestTopicSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	var (
 		topicsMu sync.Mutex
 		topics   []string
@@ -267,6 +295,8 @@ func TestTopicSurvivesRestart(t *testing.T) {
 	})))
 	t.Cleanup(fake.Close)
 
+	// From empty, not the template: run 1 must create the key against a
+	// never-opened store.
 	dbPath := filepath.Join(t.TempDir(), "signet.db")
 	keyPath := filepath.Join(t.TempDir(), "topic.key")
 	cfg := config{
@@ -335,6 +365,9 @@ func TestTopicSurvivesRestart(t *testing.T) {
 // file is lost but the store persists, the harness refuses to start rather
 // than mint a fresh key that would silently rekey every paired device.
 func TestRestartWithoutTopicKeyFails(t *testing.T) {
+	t.Parallel()
+	// From empty, not the template: run 1 must create the key against a
+	// never-opened store.
 	dbPath := filepath.Join(t.TempDir(), "signet.db")
 	keyPath := filepath.Join(t.TempDir(), "topic.key")
 	cfg := config{
@@ -367,6 +400,9 @@ func TestRestartWithoutTopicKeyFails(t *testing.T) {
 // database, so the operator's corrected retry still sees a fresh store instead
 // of being refused as a possible rekey.
 func TestRunWithBadTopicKeyLeavesNoStore(t *testing.T) {
+	t.Parallel()
+	// From empty, not the template: the test asserts the refused run leaves
+	// no store, and the corrected retry creates a fresh one.
 	dbPath := filepath.Join(t.TempDir(), "signet.db")
 	badKey := filepath.Join(dbPath+".blobs", "topic.key") // rejected: inside the blob tree
 	h, err := run(context.Background(), config{
@@ -414,6 +450,7 @@ func deviceIDFromToken(t *testing.T, token string) string {
 // bind, for either listener (plan §5.2; the control surface is
 // unauthenticated by design and must never be reachable off-host).
 func TestRunRefusesNonLoopback(t *testing.T) {
+	t.Parallel()
 	for name, cfg := range map[string]config{
 		"contract": {DBPath: t.TempDir() + "/signet.db", ListenAddr: "0.0.0.0:0", ControlAddr: "127.0.0.1:0"},
 		"control":  {DBPath: t.TempDir() + "/signet.db", ListenAddr: "127.0.0.1:0", ControlAddr: "0.0.0.0:0"},
@@ -430,6 +467,7 @@ func TestRunRefusesNonLoopback(t *testing.T) {
 // TestHarnessPairingFlowOverTheWire: a control-minted code is redeemable on
 // the contract surface exactly once, and the granted token authorizes reads.
 func TestHarnessPairingFlowOverTheWire(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 
 	if response, _ := getJSON(t, r.APIURL+"/sync/revision", ""); response.StatusCode != http.StatusUnauthorized {
@@ -445,6 +483,7 @@ func TestHarnessPairingFlowOverTheWire(t *testing.T) {
 // the control surface is client-visible (revision bump, item readable), the
 // real analogue of the mock's advance hook.
 func TestControlPutItemAdvancesRevision(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 	token := pairNewDevice(t, r, "Convergence A")
 	_, before := revision(t, r, token)
@@ -487,6 +526,7 @@ func TestControlPutItemAdvancesRevision(t *testing.T) {
 // asserts, never a harness 500. This is the Go-side counterpart to the Swift
 // cross-language enumeration; both mirror internal/signet's policy_test.go.
 func TestControlPutItemPolicyBoundary(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 
 	cases := []struct {
@@ -532,6 +572,7 @@ func TestControlPutItemPolicyBoundary(t *testing.T) {
 // (the minimal §5.14 test-8 stimulus) without bumping the revision. The real
 // data restore is covered by TestControlCheckpointRestore.
 func TestControlEpochRotation(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 	token := pairNewDevice(t, r, "Convergence A")
 	beforeEpoch, beforeRevision := revision(t, r, token)
@@ -555,6 +596,7 @@ func TestControlEpochRotation(t *testing.T) {
 // epoch in one call, so the epoch a client cached from the advanced state is
 // now stale even though its cached revision is the higher one.
 func TestControlCheckpointRestore(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 	token := pairNewDevice(t, r, "Convergence A")
 
@@ -616,6 +658,7 @@ func TestControlCheckpointRestore(t *testing.T) {
 // checkpoint dir), so a loopback control caller cannot make the raw table copy
 // in Store.Restore replace the store from an arbitrary database.
 func TestControlRestoreRejectsNonIssuedCheckpoint(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 	for name, checkpoint := range map[string]string{
 		"a non-issued name":             "not-a-checkpoint",
@@ -636,6 +679,7 @@ func TestControlRestoreRejectsNonIssuedCheckpoint(t *testing.T) {
 // persists across runs, so MkdirAll's silent accept of an existing loose dir
 // is a credential-leak surface.
 func TestRunRejectsLooseCheckpointDir(t *testing.T) {
+	t.Parallel()
 	// The gate requires exactly 0700: group/other bits are a credential leak,
 	// and a missing owner write/execute bit would only fail closed later, at
 	// the first checkpoint write, instead of here at startup.
@@ -670,8 +714,9 @@ func TestRunRejectsLooseCheckpointDir(t *testing.T) {
 // TestReadinessAddressesServe: the readiness line's URLs are the served
 // listeners, and Close stops both.
 func TestReadinessAddressesServe(t *testing.T) {
+	t.Parallel()
 	h, err := run(context.Background(), config{
-		DBPath:      t.TempDir() + "/signet.db",
+		DBPath:      templateDBPath(t),
 		ListenAddr:  "127.0.0.1:0",
 		ControlAddr: "127.0.0.1:0",
 	})
@@ -706,6 +751,7 @@ func TestReadinessAddressesServe(t *testing.T) {
 // unknown fields and trailing junk; the helper must reject them, and must
 // keep 413 (over cap) distinct from 400 (malformed).
 func TestDecodeControlRequest(t *testing.T) {
+	t.Parallel()
 	const prefix = `{"checkpoint":"` // 15 bytes; suffix `"}` is 2
 	atLimit := prefix + strings.Repeat("a", maxControlBodyBytes-len(prefix)-2) + `"}`
 	if len(atLimit) != maxControlBodyBytes {
@@ -747,6 +793,7 @@ func TestDecodeControlRequest(t *testing.T) {
 // prove a large but valid body still passes the boundary end to end (200), the
 // behavior the truncating LimitReader could not guarantee.
 func TestControlHandlersRejectMalformedBodies(t *testing.T) {
+	t.Parallel()
 	_, r := startHarness(t)
 	overCap := append([]byte("{} "), bytes.Repeat([]byte(" "), maxControlBodyBytes)...)
 	for _, route := range []string{"/control/restore", "/control/items", "/control/deliveries"} {
@@ -783,6 +830,8 @@ func TestControlHandlersRejectMalformedBodies(t *testing.T) {
 // checkpoint dir fails run() after both listeners bind, so the bound api
 // address must be immediately re-bindable. (TestRunRejectsLooseCheckpointDir
 // proves the complementary property that no store is created.)
+//
+//nolint:paralleltest // Serial: hands a just-freed loopback port back to run(); a parallel test's bind could take it first.
 func TestRunReleasesListenersAfterStartupFailure(t *testing.T) {
 	// Learn a free loopback address, then hand it back to run() as a fixed
 	// bind so a successful re-bind after the failure proves the release.
