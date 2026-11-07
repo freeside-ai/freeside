@@ -2,7 +2,8 @@
 # test-check-tier-a-paths.sh — fixtures for the Tier A path-list check.
 #
 # Builds synthetic repo roots (an AGENTS.md and a daemon/ tree) with no git
-# and no network. Exit code: 0 when every assertion passes, 1 otherwise.
+# and no network, then asserts the PR workflow runs the check on every pull
+# request. Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -251,6 +252,36 @@ begin_case "extra arguments are a usage error"
 run_check "$ROOT" extra
 assert_rc 2
 assert_contains 'usage:'
+
+begin_case "the PR workflow runs the check unconditionally and requires it"
+set +e
+OUT=$(python3 - "$SCRIPT_DIR/.." 2>&1 <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+workflow = (root / '.github/workflows/tier-a-paths.yml').read_text()
+assert '  workflow_call:' in workflow
+assert '  contents: read' in workflow
+assert 'group: tier-a-paths-${{' in workflow
+assert '        run: bash scripts/check.sh scripts tier-a-paths\n' in workflow
+assert not re.search(r'^\s+if:', workflow, re.M)
+caller = (root / '.github/workflows/pull-request.yml').read_text()
+jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', caller, re.M | re.S))
+job_lines = [line.strip() for line in jobs['tier-a-paths'].splitlines()
+             if line.strip() and not line.lstrip().startswith('#')]
+assert job_lines == ['uses: ./.github/workflows/tier-a-paths.yml'], job_lines
+assert '      - tier-a-paths\n' in jobs['required']
+assert '    if: always()\n' in jobs['required']
+assert '.["tier-a-paths"].result == "success"' in jobs['required']
+print('PASS: tier-a-paths workflow is unconditional and required')
+PY
+)
+RC=$?
+set -e
+assert_rc 0
+assert_contains 'PASS: tier-a-paths workflow is unconditional and required'
 
 echo
 echo "passed $pass assertion(s), failed $fail"

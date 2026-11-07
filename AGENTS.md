@@ -487,9 +487,10 @@ engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
 
 ### Tier A Paths
 
-`scripts/check-tier-a-paths.sh` fails when an entry matches nothing. An
-entry is a backticked path in a bullet; a bare file name resolves against
-the directory named before it in the same bullet. All under `daemon/`:
+`scripts/check-tier-a-paths.sh`, which the `required` check runs on every
+pull request, fails when an entry matches nothing. An entry is a
+backticked path in a bullet; a bare file name resolves against the
+directory named before it in the same bullet. All under `daemon/`:
 
 - **Runner containment, egress, and credential volumes:**
   `internal/ward/`, `internal/wardstore/`, `internal/buildproxy/`,

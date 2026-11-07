@@ -452,6 +452,7 @@ class Coverage(unittest.TestCase):
         needs['daemon']['result'] = 'success'
         needs['commit-messages'] = {'result': 'success'}
         needs['migration-history'] = {'result': 'success'}
+        needs['tier-a-paths'] = {'result': 'success'}
         def result(value):
             return subprocess.run(['bash', '-c', command], env=dict(os.environ, NEEDS=json.dumps(value)),
                                   capture_output=True).returncode
@@ -459,8 +460,10 @@ class Coverage(unittest.TestCase):
         for bad in ('skipped', 'failure', 'cancelled', 'unknown'):
             self.assertNotEqual(result(dict(needs, daemon={'result': bad})), 0)
             self.assertNotEqual(result(dict(needs, **{'migration-history': {'result': bad}})), 0)
+            self.assertNotEqual(result(dict(needs, **{'tier-a-paths': {'result': bad}})), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'daemon'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'migration-history'}), 0)
+        self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'tier-a-paths'}), 0)
         self.assertNotEqual(result(dict(needs, unexpected={'result': 'success'})), 0)
 
     def test_helper_and_weight_only_changes_select_daemon(self):
