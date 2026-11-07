@@ -50,8 +50,15 @@ func retainedReviewEvidence(ctx context.Context, tx *store.ReadTx, runID domain.
 	if err != nil {
 		return evidence, err
 	}
+	// The journal binding names the provider that ran the round. A failure
+	// fence written before launch has none, and ward reads it without one.
+	journalBinding, err := tx.GetCodexReviewBinding(ctx, string(round.InvocationID))
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return evidence, err
+	}
 	binding := domain.ReviewRequestRecord{InvocationID: round.InvocationID, RunID: runID, Round: round.Round, BaseSHA: round.BaseSHA, HeadSHA: round.HeadSHA}
-	outcome, err := ward.DecodeRetainedCodexReview(binding, request.Body, request.BodyDigest, row.State, row.Body, row.BodyDigest)
+	outcome, err := ward.DecodeRetainedCodexReview(binding, request.Body, request.BodyDigest, row.State, row.Body, row.BodyDigest,
+		journalBinding.Body, journalBinding.BodyDigest)
 	if err != nil {
 		return evidence, err
 	}

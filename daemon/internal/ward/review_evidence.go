@@ -2,6 +2,7 @@ package ward
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -10,10 +11,15 @@ import (
 )
 
 // DecodeRetainedCodexReview authenticates the opaque journal at the read-only
-// client boundary. Codex is the production reviewer; Claude shadow records
-// cannot pass its provider-specific gate or the caller's primary binding.
-// This does not authorize execution, cleanup, readiness, or publication.
-func DecodeRetainedCodexReview(binding domain.ReviewRequestRecord, requestBody []byte, requestDigest, state string, body []byte, bodyDigest string) (CodexReviewSourceOutcome, error) {
+// client boundary, for whichever provider ran the round. It re-checks the
+// outcome's completion evidence under the provider the invocation's journal
+// binding names (retainedReviewProvider), never one the outcome row chooses,
+// and holds a returned admission against the persisted request.
+// journalBindingBody and journalBindingDigest are the invocation's journal
+// binding row; an empty body means the round has none, which only a failure
+// fence that carries no collection evidence and no result may lack. This does
+// not authorize execution, cleanup, readiness, or publication.
+func DecodeRetainedCodexReview(binding domain.ReviewRequestRecord, requestBody []byte, requestDigest, state string, body []byte, bodyDigest string, journalBindingBody []byte, journalBindingDigest string) (CodexReviewSourceOutcome, error) {
 	var outcome CodexReviewSourceOutcome
 	if state != "ready" && state != "collected" {
 		return outcome, domain.ErrInvalidReviewCompletionEvidence
@@ -48,12 +54,58 @@ func DecodeRetainedCodexReview(binding domain.ReviewRequestRecord, requestBody [
 	if outcome.Result != nil && (outcome.Result.BaseSHA != binding.BaseSHA || outcome.Result.HeadSHA != binding.HeadSHA) {
 		return outcome, domain.ErrParentKeyMismatch
 	}
-	if err := errors.Join(
-		outcome.verifyCompletionEvidence(codexReviewProvider{}), outcome.verifyReturnedAdmission(request),
-	); err != nil {
+	var evidenceErr error
+	if outcome.CollectionEvidence != "" || outcome.Result != nil {
+		provider, err := retainedReviewProvider(outcome.InvocationID, journalBindingBody, journalBindingDigest)
+		if err != nil {
+			return outcome, err
+		}
+		evidenceErr = outcome.verifyCompletionEvidence(provider)
+	}
+	if err := errors.Join(evidenceErr, outcome.verifyReturnedAdmission(request)); err != nil {
 		return outcome, errors.Join(domain.ErrInvalidReviewCompletionEvidence, err)
 	}
 	return outcome, nil
+}
+
+// retainedReviewProvider resolves the provider that ran a retained round from
+// the invocation's journal binding, the record its source wrote before
+// launch, so an outcome row never chooses the gate it is held to. It
+// re-checks the binding's digest against its body, that the binding belongs
+// to the invocation, and that exactly one registered provider owns its
+// topology version, current or legacy. Recovery validates the whole binding
+// (reviewProviderForStartedIntent) because it acts on resources; a read
+// grants nothing, so it decodes only the two fields it needs and stays
+// readable across later binding schema changes.
+func retainedReviewProvider(invocationID domain.InvocationID, body []byte, digest string) (reviewProvider, error) {
+	if len(body) == 0 || contentaddr.Sum(body) != digest {
+		return nil, domain.ErrInvalidReviewCompletionEvidence
+	}
+	var binding struct {
+		TopologyVersion string `json:"topology_version"`
+		RunID           string `json:"run_id"`
+	}
+	if err := strictjson.DecodeAllowingUnknownFields(body, &binding, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		return nil, errors.Join(domain.ErrInvalidReviewCompletionEvidence, err)
+	}
+	if binding.RunID != string(invocationID) {
+		return nil, domain.ErrInvalidReviewCompletionEvidence
+	}
+	var matched reviewProvider
+	for _, provider := range allReviewProviders() {
+		if binding.TopologyVersion != provider.topologyVersion() &&
+			!slices.Contains(provider.legacyTopologyVersions(), binding.TopologyVersion) {
+			continue
+		}
+		if matched != nil {
+			return nil, domain.ErrInvalidReviewCompletionEvidence
+		}
+		matched = provider
+	}
+	if matched == nil {
+		return nil, domain.ErrInvalidReviewCompletionEvidence
+	}
+	return matched, nil
 }
 
 // DecodeRetainedCodexReviewRequestFacts authenticates request facts for the exact
