@@ -54,7 +54,7 @@ var holdlessPauseExits = map[string]string{
 	"operator_feedback.go:Engine.enqueueSpecificationAnswer":            cancellationInProgress,
 	"operator_feedback.go:Engine.persistImplementationFeedback":         cancellationInProgress,
 	"operator_feedback_retry.go:Engine.enqueueOperatorFeedbackRetry":    cancellationInProgress,
-	"production_publication.go:RecordProductionExecutionExport":         cancellationInProgress,
+	"production_export_record.go:RecordProductionExecutionExport":       cancellationInProgress,
 	"publication_continuation.go:Engine.enqueuePublicationContinuation": cancellationInProgress,
 	"readiness_reentry.go:StartReadinessReentry":                        cancellationInProgress,
 	"specification.go:Engine.enqueueSpecRevision":                       cancellationInProgress,
@@ -106,7 +106,7 @@ const (
 // dispatchPendingInvocations skipping specification intents when no
 // specification workflow is configured (#1646).
 var unclassifiedPauseExits = map[string]string{
-	"production_publication.go:productionPublicationWorkflow.recordPublicationEnvironmentHold": "a cancelled " +
+	"production_publication_holds.go:productionPublicationWorkflow.recordPublicationEnvironmentHold": "a cancelled " +
 		"context is the daemon shutting down, not a cause an operator can act on",
 	"production_review_gate.go:productionPublicationWorkflow.reconcileReviewGate": "the review gate's " +
 		"pending round shows its own review state; no reason code fits",

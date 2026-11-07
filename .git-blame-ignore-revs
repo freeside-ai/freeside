@@ -58,3 +58,24 @@ b57067e1c55b3efa10fbcdc861a70091a1b9e950
 
 # Carve freesided's run() into startup phases (#2762)
 71f1573f3494033e5721ea6814cd4f5b1b69c605
+
+# Move the publication task row code to its own file (#2761)
+50c1e81d46e9e960852b2f196de29b2dbce6ae34
+
+# Move publication completion authentication to its own file (#2761)
+fe735867b578c694fb35a08427ed772d7247b78c
+
+# Move export recording to its own file (#2761)
+b3b370c95de3ad11f6761e69e83f30d596a47d33
+
+# Move publication outcome recovery to its own file (#2761)
+9d1c44edc6275cb1d7b549ea0162f71a17a62ca9
+
+# Move production verification to its own file (#2761)
+4931adbc4830d5d17027667cfa63153e4dc0c163
+
+# Move the remediation source tree loaders to their own file (#2761)
+3f6e45aee7a2f85c172a95409cbc2c6525baddda
+
+# Move publication run holds to their own file (#2761)
+26c05608405279a7cec6777fcfc2228ec1b827eb

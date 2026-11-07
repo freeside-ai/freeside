@@ -524,6 +524,18 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
+  `internal/engine/production_publication_task.go` (the restart
+  reconstruction gate on a decoded publication task),
+  `internal/engine/production_publication_completion.go` (authenticates
+  terminal and ready records),
+  `internal/engine/production_export_record.go` (commits the trusted
+  export and the task that replays it),
+  `internal/engine/production_publication_outcome.go` (authorizes a
+  committed publication outcome),
+  `internal/engine/production_verification.go` (binds the approved
+  recipe, runs verification, and stores its verdict),
+  `internal/engine/production_remediation_source.go` (authenticates the
+  remediation source tree),
   `internal/engine/fake_publication.go` (the attended fake-candidate
   workflow: exports a handoff, verifies it, and pushes it through the
   publish gate),
