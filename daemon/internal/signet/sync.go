@@ -1020,18 +1020,14 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err := validateSnapshot(state, value.Snapshot); err != nil {
 			return err
 		}
-		observation, err := tx.ObserveRun(ctx, id)
-		if err != nil {
-			return err
-		}
 		items, err := tx.ListAttentionItems(ctx)
 		if err != nil {
 			return err
 		}
-		if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
-			return asRunObservationIntegrityError(err)
+		observation, err := observeAuthenticatedRun(ctx, tx, state, value.Value, items)
+		if err != nil {
+			return err
 		}
-		observation = withAuthoritativeInvocationStatuses(observation)
 		conclusion, err := AuthenticatedRunConclusion(
 			ctx, tx, value.Value, observation, publicationReadyMilestone(observation),
 		)
@@ -1077,18 +1073,14 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err := validateSnapshot(state, run.Snapshot); err != nil {
 			return err
 		}
-		observation, err := tx.ObserveRun(ctx, id)
-		if err != nil {
-			return err
-		}
 		items, err := tx.ListAttentionItems(ctx)
 		if err != nil {
 			return err
 		}
-		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
-			return asRunObservationIntegrityError(err)
+		observation, err := observeAuthenticatedRun(ctx, tx, state, run.Value, items)
+		if err != nil {
+			return err
 		}
-		observation = withAuthoritativeInvocationStatuses(observation)
 		facts, err := runProjectionFactsFor(ctx, tx, run.Value, observation)
 		if err != nil {
 			return asRunObservationIntegrityError(err)
@@ -1562,14 +1554,10 @@ func projectRunSnapshot(
 	snapshot store.Snapshot,
 	items []store.Snapshotted[domain.AttentionItem],
 ) (RunSnapshot, error) {
-	observation, err := tx.ObserveRun(ctx, run.ID)
+	observation, err := observeAuthenticatedRun(ctx, tx, state, run, items)
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, err)
 	}
-	if err := authenticateRunObservation(ctx, tx, state, run, observation, items); err != nil {
-		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, asRunObservationIntegrityError(err))
-	}
-	observation = withAuthoritativeInvocationStatuses(observation)
 	conclusion, err := AuthenticatedRunConclusion(
 		ctx, tx, run, observation, publicationReadyMilestone(observation),
 	)
@@ -1587,6 +1575,32 @@ func projectRunSnapshot(
 		return RunSnapshot{}, fmt.Errorf("run %q display names: %w", run.ID, err)
 	}
 	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames, facts), nil
+}
+
+// observeAuthenticatedRun is signet's own read of one run's observation for
+// the client run reads: the full authentication pass over every milestone,
+// the hold, and the attention items, then the authenticated status overlay.
+// An authentication failure that is a parent-key mismatch comes back tagged
+// ErrRunObservationIntegrity, so a listing read excludes the run; any other
+// error, a missing record or a failed read, comes back as it is and fails
+// the read whole, as these reads classified it before they shared this one.
+// Readers outside signet, which have neither the server state nor the
+// attention items, use AuthoritativeInvocationStatuses.
+func observeAuthenticatedRun(
+	ctx context.Context,
+	tx *store.ReadTx,
+	state store.ServerState,
+	run domain.Run,
+	items []store.Snapshotted[domain.AttentionItem],
+) (domain.RunObservation, error) {
+	observation, err := tx.ObserveRun(ctx, run.ID)
+	if err != nil {
+		return domain.RunObservation{}, err
+	}
+	if err := authenticateRunObservation(ctx, tx, state, run, observation, items); err != nil {
+		return domain.RunObservation{}, asRunObservationIntegrityError(err)
+	}
+	return withAuthoritativeInvocationStatuses(observation), nil
 }
 
 func publicationReadyMilestone(observation domain.RunObservation) bool {
