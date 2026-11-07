@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
+	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -42,6 +43,55 @@ type startupBindings struct {
 	agentCatalog   *signet.AgentCatalog
 	upkeepTrigger  *imageUpkeepTrigger
 	scenarioWiring *scenarioComposition
+}
+
+// validateRunConfig checks the flag combinations that no default can
+// repair. It runs before startup acquires anything, so a refused
+// configuration leaves no lock, listener, or store behind.
+func validateRunConfig(cfg config) error {
+	if !cfg.Environment.valid() {
+		return fmt.Errorf("environment %q is not prod, dev, or ephemeral", cfg.Environment)
+	}
+	if cfg.DBPath == "" {
+		return errors.New("-db is required")
+	}
+	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
+		return errors.New("-seed-walking-skeleton requires -driver fake")
+	}
+	if cfg.Scenario != nil {
+		// Before the lock or the store: a non-ephemeral store must never
+		// receive the fake backend's conformance claim.
+		if cfg.Environment != environmentEphemeral {
+			return fmt.Errorf("-driver scenario requires -environment %s, not %q",
+				environmentEphemeral, cfg.Environment)
+		}
+		if cfg.FakeDriverEnabled || cfg.Claude != nil {
+			return errors.New("-driver scenario cannot run beside another driver")
+		}
+	}
+	return nil
+}
+
+// seedStartupFixture seeds the named fixture into a store that must hold
+// no runs or attention items yet.
+func seedStartupFixture(parent context.Context, st *store.Store, fixture seedfixture.Name, cfg config) error {
+	inventory, err := seedfixture.Seed(parent, st, fixture)
+	if errors.Is(err, seedfixture.ErrStoreNotEmpty) {
+		return fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", cfg.DBPath)
+	}
+	if err != nil {
+		// The fixture commits in several transactions, so a failure after
+		// the first leaves a partial fixture that the emptiness check then
+		// refuses to reseed.
+		return fmt.Errorf("-seed-fixture %s: %w (store %q may be partially seeded; delete it before retrying)",
+			fixture, err, cfg.DBPath)
+	}
+	if cfg.Logger != nil {
+		cfg.Logger.Info("seeded fixture", "fixture", fixture,
+			"projects", inventory.Projects, "tasks", inventory.Tasks, "runs", inventory.Runs,
+			"attention_items", inventory.AttentionItems)
+	}
+	return nil
 }
 
 func maintainLocalBackups(

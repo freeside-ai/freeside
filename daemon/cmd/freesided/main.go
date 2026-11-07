@@ -866,25 +866,8 @@ type daemon struct {
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
 	startedAt := time.Now().UTC()
-	if !cfg.Environment.valid() {
-		return nil, fmt.Errorf("environment %q is not prod, dev, or ephemeral", cfg.Environment)
-	}
-	if cfg.DBPath == "" {
-		return nil, errors.New("-db is required")
-	}
-	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
-		return nil, errors.New("-seed-walking-skeleton requires -driver fake")
-	}
-	if cfg.Scenario != nil {
-		// Before the lock or the store: a non-ephemeral store must never
-		// receive the fake backend's conformance claim.
-		if cfg.Environment != environmentEphemeral {
-			return nil, fmt.Errorf("-driver scenario requires -environment %s, not %q",
-				environmentEphemeral, cfg.Environment)
-		}
-		if cfg.FakeDriverEnabled || cfg.Claude != nil {
-			return nil, errors.New("-driver scenario cannot run beside another driver")
-		}
+	if err := validateRunConfig(cfg); err != nil {
+		return nil, err
 	}
 	var fixture seedfixture.Name
 	if cfg.SeedFixture != "" {
@@ -1051,21 +1034,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	if fixture != "" {
-		inventory, err := seedfixture.Seed(parent, st, fixture)
-		if errors.Is(err, seedfixture.ErrStoreNotEmpty) {
-			return nil, fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", cfg.DBPath)
-		}
-		if err != nil {
-			// The fixture commits in several transactions, so a failure after
-			// the first leaves a partial fixture that the emptiness check then
-			// refuses to reseed.
-			return nil, fmt.Errorf("-seed-fixture %s: %w (store %q may be partially seeded; delete it before retrying)",
-				fixture, err, cfg.DBPath)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Info("seeded fixture", "fixture", fixture,
-				"projects", inventory.Projects, "tasks", inventory.Tasks, "runs", inventory.Runs,
-				"attention_items", inventory.AttentionItems)
+		if err := seedStartupFixture(parent, st, fixture, cfg); err != nil {
+			return nil, err
 		}
 	}
 	localBackups, err := maintainLocalBackups(parent, st, blobs, localBackupFiles, cfg)
