@@ -416,3 +416,16 @@ func assertRestoredUsageGuard(
 		t.Fatal("restored usage delete guard accepted a delete")
 	}
 }
+
+// A binding admitted under a selection has no pricing revision, and the
+// column refuses an empty one, so its observations record the literal none.
+func TestUsageObservationPricingRevisionOfAnUnpricedBinding(t *testing.T) {
+	t.Parallel()
+	priced := domain.AdmissionAgentBinding{PricingRevision: "pricing-2026-01"}
+	if got := observationPricingRevision(priced); got != "pricing-2026-01" {
+		t.Fatalf("priced binding records %q", got)
+	}
+	if got := observationPricingRevision(domain.AdmissionAgentBinding{}); got != "none" {
+		t.Fatalf("unpriced binding records %q, want none", got)
+	}
+}
