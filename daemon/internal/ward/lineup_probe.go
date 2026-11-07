@@ -333,13 +333,13 @@ func lineupProbeOption(flag, value string) string {
 	return " " + flag + " " + shellQuote(value)
 }
 
-// ProbeLineupImage runs one probe container: a host-only network whose
-// CONNECT proxy admits only the credential's provider endpoint, and a
-// container verified against its spec before it starts, given its
-// credential once it runs, and exported once it stops on its own. Every
-// object it creates carries a fresh ownership label and is removed before it
-// returns. authorize, when set, grants the container and network names
-// before either is created, as preflight's helpers do.
+// ProbeLineupImage runs one probe container: a network it attests as its own
+// and host-only before its CONNECT proxy starts, a proxy that admits only the
+// credential's provider endpoint, and a container verified against its spec
+// before it starts, given its credential once it runs, and exported once it
+// stops on its own. Every object it creates carries a fresh ownership label
+// and is removed before it returns. authorize, when set, grants the container
+// and network names before either is created, as preflight's helpers do.
 func ProbeLineupImage(
 	ctx context.Context, rt Runtime, p LineupProbe, authorize RuntimeResourceAuthorizer,
 ) (LineupProbeOutput, error) {
@@ -419,6 +419,14 @@ func (r *lineupProbeRun) probe(ctx context.Context, p LineupProbe) (LineupProbeO
 	report, err := r.rt.InspectNetwork(ctx, r.network)
 	if err != nil {
 		return LineupProbeOutput{}, fmt.Errorf("inspect lineup probe network: %w", err)
+	}
+	// The gate trusts nothing a Runtime returns, so the network is attested
+	// host-only here rather than assumed from how CreateNetwork made it.
+	if report.Name != r.network {
+		return LineupProbeOutput{}, errors.New("lineup probe network inspection identified the wrong network")
+	}
+	if report.Mode != NetworkHostOnly {
+		return LineupProbeOutput{}, errors.New("lineup probe network is not host-only")
 	}
 	if r.networkObj.fingerprint, err = ownedFingerprint(
 		report.CreationDate, report.Labels, report.LabelsObserved, r.owner,
