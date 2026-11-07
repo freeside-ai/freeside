@@ -6,13 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
-func countedCommitGit(t *testing.T) (string, func(int, int)) {
+// loggedGit returns a git wrapper that logs each invocation's arguments, and
+// a function returning one line per invocation so far.
+func loggedGit(t *testing.T) (string, func() []string) {
 	t.Helper()
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -24,14 +27,23 @@ func countedCommitGit(t *testing.T) (string, func(int, int)) {
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexec %s \"$@\"\n", quote(log), quote(realGit))
 	execfixture.Write(t, script, []byte(body), 0o700)
-	return script, func(trees, blobs int) {
+	return script, func() []string {
 		t.Helper()
 		data, err := os.ReadFile(log) //nolint:gosec // G304: test-owned invocation log in t.TempDir.
 		if err != nil {
 			t.Fatal(err)
 		}
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+}
+
+func countedCommitGit(t *testing.T) (string, func(int, int)) {
+	t.Helper()
+	script, calls := loggedGit(t)
+	return script, func(trees, blobs int) {
+		t.Helper()
 		counts := map[string]int{}
-		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		for _, line := range calls() {
 			args := strings.Fields(line)
 			command := ""
 			for i, arg := range args {
@@ -93,7 +105,45 @@ func TestCommitReaderPinsOnceAndKeepsReadChecks(t *testing.T) {
 			t.Fatalf("read %s at %s = %q, %t, %v; want %q, %t, %v", tc.path, tc.commit, content, present, err, tc.want, tc.present, tc.err)
 		}
 	}
-	check(7, 2)
+	// One batch process serves every blob read.
+	check(7, 1)
+}
+
+// tagOver writes an annotated tag over target, of targetType, into dir's
+// object store and returns the tag's object name. A tree entry may name
+// it under any mode, which git's own tree builder never does.
+func tagOver(t *testing.T, dir, target, targetType string) string {
+	t.Helper()
+	raw := fmt.Sprintf("object %s\ntype %s\ntag over\ntagger test <test@example.invalid> 1752600000 +0000\n\ntag\n", target, targetType)
+	return runGitStdin(t, dir, []byte(raw), "mktag")
+}
+
+// TestCommitReaderRefusesNonBlobEntries pins the size-cap bypass the batch
+// read closes. ls-tree -l lists a blob-mode entry naming a tag at the tag's
+// own size, so the cap passes; `cat-file blob` then followed the tag and
+// returned the whole tagged blob as present content. A blob-mode entry
+// naming a tree is refused the same way.
+func TestCommitReaderRefusesNonBlobEntries(t *testing.T) {
+	t.Parallel()
+	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
+	const max = 1024
+	big := runGitStdin(t, dir, []byte(strings.Repeat("b", 4*max)), "hash-object", "-w", "--stdin")
+	tag := tagOver(t, dir, big, "blob")
+	// The fixture only proves the bypass if the tag itself fits the cap.
+	if size, err := strconv.Atoi(runGit(t, dir, "cat-file", "-s", tag)); err != nil || size >= max {
+		t.Fatalf("tag size = %d, %v; want under the %d-byte cap", size, err, max)
+	}
+	subtree := runGitStdin(t, dir, treeRecord("100644", "b", big), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+	for name, object := range map[string]string{"tag": tag, "tree": subtree} {
+		t.Run(name, func(t *testing.T) {
+			tree := runGitStdin(t, dir, treeRecord("100644", "file", object), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+			head := runGit(t, dir, "commit-tree", tree, "-p", base, "-m", name+" entry")
+			content, present, err := ReadFileAtCommit(t.Context(), "git", dir, head, "file", max)
+			if !errors.Is(err, ErrMalformedTree) || present || content != nil {
+				t.Fatalf("read = %d bytes, %t, %v; want no content and ErrMalformedTree", len(content), present, err)
+			}
+		})
+	}
 }
 
 func TestCommitReaderSurvivesHeadAndWorktreeMovement(t *testing.T) {

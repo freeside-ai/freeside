@@ -22,5 +22,6 @@ func MaterializeExact(
 	if err != nil {
 		return err
 	}
+	defer g.close()
 	return g.materialize(ctx, commitSHA, destination)
 }

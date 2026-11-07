@@ -342,7 +342,7 @@ func TestObserveBaseInputsPinsOnceAndClosesItsReader(t *testing.T) {
 	if _, err := ObserveBaseInputs(t.Context(), git, repo.dir, base, npmLayout); err != nil {
 		t.Fatal(err)
 	}
-	check(5, 3)
+	check(5, 1)
 	// A later call opens its own reader, including one whose read fails.
 	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, strings.Repeat("0", 40), npmLayout); !errors.Is(err, verify.ErrGitPlumbing) {
 		t.Fatalf("missing commit = %v, want plumbing fault", err)

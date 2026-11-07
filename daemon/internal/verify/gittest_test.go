@@ -123,5 +123,6 @@ func newTestRunner(t *testing.T, dir string) *gitRunner {
 	if err != nil {
 		t.Fatalf("newGitRunner: %v", err)
 	}
+	t.Cleanup(g.close)
 	return g
 }
