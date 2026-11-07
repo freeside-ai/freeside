@@ -54,7 +54,7 @@ const (
 	goEmptyGoModHash = "h1:G7mAYYxgmS0lVkHyy2hEOLQCFB0DlQFTMLWggykrydY="
 )
 
-// goModVerbs are the directives Go 1.26 reads in a main module's go.mod; it
+// goModVerbs are the directives Go 1.27 reads in a main module's go.mod; it
 // refuses any other.
 var goModVerbs = []string{
 	"module", "go", "toolchain", "godebug", "require", "exclude", "replace", "retract", "tool", "ignore",

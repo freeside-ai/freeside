@@ -103,11 +103,12 @@ func TestInstallFailureBoundsLongEntryLists(t *testing.T) {
 }
 
 // The fixtures in testdata/go are the output of `go mod download` from Go
-// 1.26.10, the Go a Go image pins, run with the warm step's environment
+// 1.27.3, the Go a Go image pins, run with the warm step's environment
 // against proxy.golang.org: a go.sum with one zip or go.mod hash altered, a
 // version the proxy does not serve, and the build proxy refusing or failing
-// to resolve. proxy-410.txt is proxy-404.txt with the status replaced, since
-// the proxy's 410 can't be produced on demand.
+// to resolve. Go 1.26.10 wrote the same bytes for each. proxy-410.txt is
+// proxy-404.txt with the status replaced, since the proxy's 410 can't be
+// produced on demand.
 func readGoFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join("testdata", "go", name)) //nolint:gosec // G304: test-named fixture under testdata.
