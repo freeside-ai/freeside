@@ -94,13 +94,15 @@ func seedStartupFixture(parent context.Context, st *store.Store, fixture seedfix
 	return nil
 }
 
+// maintainLocalBackups runs the startup backup pass and returns the
+// producer whose loop startServing starts.
 func maintainLocalBackups(
 	parent context.Context, st *store.Store, blobs *signet.BlobStore, localBackupFiles *store.LocalBackupFiles,
 	cfg config,
 ) (*store.LocalBackupProducer, error) {
 	// Backup evidence is maintained before anything can admit work. Orphan
-	// reconciliation below resumes writers through the unattended admission
-	// gate, which reads backup health, so a pass that has not yet scanned the
+	// reconciliation in composeClaudeWorkflow resumes writers through the
+	// unattended admission gate, which reads backup health, so a pass that has not yet scanned the
 	// live database would let that gate see a stale checkpoint's verdict.
 	localBackups, err := localBackupFiles.NewProducer(st)
 	if err != nil {
@@ -130,6 +132,10 @@ func maintainLocalBackups(
 	return localBackups, nil
 }
 
+// newUsageCollection builds the usage coordinator, the age at which a
+// reading goes stale, and the Claude capture sink, which stays a nil
+// interface without the Claude collector. Collection starts in
+// startServing.
 func newUsageCollection(
 	st *store.Store, cfg config,
 ) (time.Duration, *usagecollect.Coordinator, engine.ClaudeUsageSink) {
@@ -151,6 +157,9 @@ func newUsageCollection(
 	return usageRefreshAge, usage, claudeUsageCaptures
 }
 
+// newAttentionService builds the attention service before any workflow
+// exists. Options that answer from a later composition read it through
+// late at call time.
 func newAttentionService(
 	st *store.Store, blobs *signet.BlobStore, cfg config, pairingKey []byte, hostName string,
 	connectionMode domain.ConnectionMode, topicKey []byte,
@@ -198,16 +207,17 @@ func newAttentionService(
 		// A client names a line's agent; the line records the selection that
 		// agent of the committed tree reduces to, and goes back to the client
 		// as the agent its selection maps to. The tree exists only after the
-		// Claude composition below; without it a change fails closed and a
-		// line goes out as its enrollment/model/effort.
+		// Claude composition (composeClaudeWorkflow); without it a change
+		// fails closed and a line goes out as its enrollment/model/effort.
 		signet.WithTaskLineAgents(func() (signet.TaskLineAgents, error) {
 			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
 				return nil, signet.ErrOperatorSettingUnavailable
 			}
 			return late.claudeWiring.env.Agents.Tree, nil
 		}),
-		// A policy names agents of the committed tree, which exists only after
-		// the Claude composition below; without it the command fails closed.
+		// A policy names agents of the committed tree, which exists only
+		// after the Claude composition (composeClaudeWorkflow); without it
+		// the command fails closed.
 		signet.WithRoutingPolicySetter(func(
 			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 		) (signet.RoutingPolicyOutcome, error) {
@@ -223,8 +233,9 @@ func newAttentionService(
 			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 		}),
 		// An alternate-agent choice re-derives its rule against the committed
-		// tree and the daemon's admission settings, which exist only after the
-		// Claude composition below; without them both commands fail closed.
+		// tree and the daemon's admission settings, which exist only after
+		// the Claude composition (composeClaudeWorkflow); without them both
+		// commands fail closed.
 		signet.WithAlternateAgentRetrier(func(
 			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
 		) (domain.AlternateAgentRetry, error) {
@@ -242,8 +253,9 @@ func newAttentionService(
 			return late.claudeWiring.env.Agents.MoveParkedTaskTx(ctx, tx, request, now)
 		}),
 		// The catalog, like the tree it projects, exists only after the
-		// Claude composition below; until then, and in the fake-driver and
-		// scenario compositions that load no tree, clients see null.
+		// Claude composition (composeClaudeWorkflow); until then, and in the
+		// fake-driver and scenario compositions that load no tree, clients
+		// see null.
 		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.agentCatalog }),
 		signet.WithUsageRefreshAge(usageRefreshAge),
 		// A client's refresh or reassignment starts its collection only after
@@ -252,10 +264,11 @@ func newAttentionService(
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 		}),
-		// The effective digest exists only after the Claude composition below;
-		// the func indirection lets the decision-time adoption gate read it
-		// then. The fake-driver composition leaves it empty (gate absent);
-		// the scenario's review source is the fake's default configuration.
+		// The effective digest exists only after the Claude composition
+		// (composeClaudeWorkflow); the func indirection lets the
+		// decision-time adoption gate read it then. The fake-driver
+		// composition leaves it empty (gate absent); the scenario's review
+		// source is the fake's default configuration.
 		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
 			if late.scenarioWiring != nil {
 				return fake.DefaultReviewConfigurationDigest
@@ -269,6 +282,8 @@ func newAttentionService(
 	return attention
 }
 
+// composeFakeWorkflow builds the fake-driver engine, publishes it to late,
+// and seeds the walking-skeleton run when asked.
 func composeFakeWorkflow(
 	parent context.Context, st *store.Store, attention *signet.Service, driver *fake.StageDriver,
 	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config, late *startupBindings,
@@ -295,12 +310,19 @@ func composeFakeWorkflow(
 	return workflow, nil
 }
 
+// claudeWorkflow is what the Claude composition hands the rest of startup.
 type claudeWorkflow struct {
 	claudeWiring *claudeComposition
 	workflow     *engine.Engine
 	imageUpkeep  *engine.ImageUpkeep
 }
 
+// composeClaudeWorkflow builds the Claude driver and the engine around it,
+// then gives orphaned handoffs their first adoption attempt. It assigns
+// *startupSessionCloser as soon as the driver exists, so run()'s cleanup
+// awaits every credential-bearing session even when a later step here
+// fails, and it publishes the wiring, the agent catalog, and the engine
+// to late as it composes each.
 func composeClaudeWorkflow(
 	ctx context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
 	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
@@ -592,6 +614,10 @@ func composeClaudeWorkflow(
 	return &claudeWorkflow{claudeWiring: claudeWiring, workflow: workflow, imageUpkeep: imageUpkeep}, nil
 }
 
+// newDoctorPass returns a doctor pass, which does nothing outside Claude
+// mode. The startup pass takes a nil probe, so it reports recorded
+// credential-integrity marks only and starting the daemon starts no
+// observer container; scheduled passes take the live probe.
 func newDoctorPass(
 	cfg config, st *store.Store, attention *signet.Service, claudeWiring *claudeComposition,
 	doctorConvergenceLock *sync.Mutex, probe credentialIntegrityProbe,
@@ -621,6 +647,8 @@ func newDoctorPass(
 	}
 }
 
+// claudeLoops holds the Claude composition's background loops between
+// their construction and their start.
 type claudeLoops struct {
 	claudeSched          *scheduler.Scheduler
 	activeReconciler     *activeResourceReconciler
@@ -628,6 +656,9 @@ type claudeLoops struct {
 	upkeepTrigger        *imageUpkeepTrigger
 }
 
+// composeClaudeLoops builds the Claude loops without starting any, so it
+// runs before startup makes durable-stop recovery available, and
+// publishes the image-upkeep trigger to late.
 func (d *daemon) composeClaudeLoops(
 	parent context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore, cfg config,
 	claudeWiring *claudeComposition, workflow *engine.Engine, imageUpkeep *engine.ImageUpkeep,
@@ -640,7 +671,7 @@ func (d *daemon) composeClaudeLoops(
 		upkeepTrigger        *imageUpkeepTrigger
 	)
 	// The doctor and janitor cadences live on the §5.16 durable scheduler;
-	// their initial coverage remains the direct calls above.
+	// their initial coverage remains the direct startup passes before this.
 	claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, d.usage.CollectAll, imageUpkeep)
 	if err != nil {
 		return nil, err
@@ -681,6 +712,11 @@ func (d *daemon) composeClaudeLoops(
 	}, nil
 }
 
+// startServing starts usage collection, model discovery, the API and
+// control servers, the workflow loops, local backups, and attention
+// deliveries. It cannot fail: run() registers the cleanup that stops
+// these goroutines as soon as it returns, and a component that exits
+// later reports through componentExited.
 func (d *daemon) startServing(
 	parent, ctx context.Context, cfg config, st *store.Store, attention *signet.Service,
 	workflow *engine.Engine, claudeWiring *claudeComposition, listener, loopbackTwin net.Listener,
@@ -775,6 +811,9 @@ func (d *daemon) startServing(
 	}
 }
 
+// startClaudeLoops starts the Claude loops after run() has registered the
+// cleanup that stops them, and marks the doctor available before its
+// scheduler starts.
 func (d *daemon) startClaudeLoops(
 	parent, ctx context.Context, cfg config, claudeWiring *claudeComposition, workflow *engine.Engine,
 	imageUpkeep *engine.ImageUpkeep, loops *claudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
@@ -839,6 +878,8 @@ func (d *daemon) startClaudeLoops(
 	}()
 }
 
+// startScenarioLoops starts the scenario's forge, publication lane, and
+// scheduler, at the point where the Claude loops would start.
 func (d *daemon) startScenarioLoops(
 	parent, ctx context.Context, cfg config, scenarioWiring *scenarioComposition, workflow *engine.Engine,
 ) {
