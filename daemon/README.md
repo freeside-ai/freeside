@@ -59,7 +59,9 @@ families; the rest runner discovers every other package, and the darwin
 runner only the packages its selection names. The weight file is
 only a scheduling hint: new families receive weight `1`, and removed weights
 do not select tests. Every shard uses `-count=1`, default Go concurrency and
-timeouts, and the existing opt-in skips. No race job is added.
+timeouts, and the existing opt-in skips; a package may still cap its own test
+parallelism (Testing conventions, Package parallelism caps). No race job is
+added.
 
 Each test job uploads raw Go JSON, compiled inventories, assignments, execution
 reports, tested identities, tool/image versions, and cache sizes (before,
@@ -615,6 +617,15 @@ migration under test from a cached snapshot with `openRawThrough(t, before)`,
 or `copySnapshotThrough(t, path, before)` when it opens and reopens the path
 itself, and still calls `migrateThrough` to move a database it has seeded
 forward, so the migrations under test run for real.
+
+**Package parallelism caps.** A package whose tests contend on a
+process-wide lock may cap its own `test.parallel` in a `TestMain`. The cap
+only lowers Go's default (GOMAXPROCS) and leaves an explicit `-parallel` on
+the command line alone, detected with `flag.Visit` rather than by comparing
+the value with the default. `internal/store/main_test.go` is the worked
+example: modernc's libc serializes every allocation under one mutex, so store
+tests slow down as parallelism rises, and its doc comment names the lock and
+the measurements behind the cap.
 
 **Repository templates.** Use `repotemplate.Cache[M].Copy` from
 `internal/repotemplate` for repeated small git fixtures. Each key builds once
