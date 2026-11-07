@@ -55,3 +55,6 @@ c5e65942551bb0ec863b0c882bc8904036ecccb5
 
 # Rename ward.ClaudeModelReport to ModelReport (#2705)
 b57067e1c55b3efa10fbcdc861a70091a1b9e950
+
+# Carve freesided's run() into startup phases (#2762)
+f45dc4b2774e4389f6476951b2df91e531ec867b
