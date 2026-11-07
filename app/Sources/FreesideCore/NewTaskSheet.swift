@@ -38,6 +38,7 @@ struct NewTaskSheet: View {
     typealias Role = AgentChoiceDisplay.Role
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The projects the picker offers: the sorted unique ids of the synced
     /// tasks (`TaskDisplay.knownProjects`), the same set the Tasks filter uses.
     let projects: [String]
@@ -794,7 +795,11 @@ struct NewTaskSheet: View {
     }
 
     /// Closed, the chip reads the choices as one sentence; open, it reads
-    /// `Agents` over the role chips. With no catalog there is nothing to
+    /// `Agents` over the role chips. The sentence keeps to one line and
+    /// truncates its tail, since a choice in full can outgrow the sheet;
+    /// the role chips, the accessibility value, and the Mac tooltip carry it
+    /// whole. At the accessibility sizes it wraps instead, where one line
+    /// would leave a word or two. With no catalog there is nothing to
     /// choose, unless a choice made against an earlier catalog is still set:
     /// the chip stays enabled so the operator can see and clear it.
     @ViewBuilder private var agentsChip: some View {
@@ -806,6 +811,7 @@ struct NewTaskSheet: View {
         // tree serves a catalog with no agents, so there is nothing to choose.
         let unavailable = (model.agentCatalog?.agents.isEmpty ?? true) && choices.isEmpty && !agentsOpen
         let chip = ComposerChip(glyph: "◆", text: agentsOpen ? "Agents" : summary, isOpen: agentsOpen)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         if rendersInteractiveControls {
             Button {
                 agentsOpen.toggle()
@@ -814,7 +820,7 @@ struct NewTaskSheet: View {
             }
             .buttonStyle(.plain)
             .disabled(unavailable)
-            .help(unavailable ? Self.noTreeText : "")
+            .help(unavailable ? Self.noTreeText : summary)
             .accessibilityLabel("Agents")
             .accessibilityValue(summary)
             .accessibilityHint(unavailable ? Self.noTreeText : "")

@@ -60,3 +60,17 @@ running tree-carried selections on an undiscovered enrollment.
 - **The Default entry reads in full** (`Default · lineup <enrollment> ·
   <model> · <effort>`): the enrollment alone is defined against the lineup,
   so it says nothing in the lineup's own entry.
+
+## The Closed Chip Keeps to One Line
+
+The issue requires the closed Agents chip to fit one line at the sheet's
+560pt. With enrollment ids of 20-odd characters, one enrollment beside
+one full form doesn't fit however short the form gets: the mixed golden
+(`new-task-sheet-agents-mixed`) wraps at 560 without a limit. Chose to
+truncate the tail over letting the chip wrap, since the open role chips,
+the accessibility value, and the Mac tooltip carry the whole sentence. At
+the accessibility sizes the chip wraps instead, where one line would keep
+a word or two.
+
+Revisit when: the catalog gives an enrollment a short display name the
+summary can use.
