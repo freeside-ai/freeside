@@ -1,0 +1,566 @@
+[
+  {
+    "case": "unattended operation is stopped by operator decision",
+    "hold_reason": "operation_stopped",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "operation_stopped",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "an open system_health item blocks unattended admission",
+    "hold_reason": "blocking_system_health",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "blocking_system_health",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "stage input is temporarily unavailable",
+    "hold_reason": "input_unavailable",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "usage pool execution limit reached",
+    "hold_reason": "usage_pool_exhausted",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "launch memory reservation does not fit the instance budget yet",
+    "hold_reason": "machine_capacity",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "image upkeep is pending for the run's base",
+    "hold_reason": "image_upkeep_pending",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "the refused quota window has not reset",
+    "hold_reason": "quota_window_exhausted",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "backend has no current passed conformance record",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "conformance record is not bound to a backend configuration",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "admission backend configuration differs from the current conformance proof",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "admission capability snapshot exceeds the backend's proven conformance declaration",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backup health is unavailable",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backup checkpoint is not encrypted",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backup checkpoint is not current",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backup artifact closure is incomplete",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backup restore test is stale",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "invalid backup health status",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "admission names a repository with no approved trust profile",
+    "hold_reason": "repository_untrusted",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "GitHub App installation janitor is not active",
+    "hold_reason": "provider_authority_unavailable",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "no admitted project image serves the run's base",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "enrollment generation is marked by the credential-integrity probe",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "generation_integrity_marked",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "egress profile is not enforceable by this composition",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "egress_profile_not_enforceable",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "run policy egress request is refused",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "egress_policy_refused",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backend capabilities below policy minimum",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "backend_capability_refused",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "backend pre-job gate refused dispatch",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "backend_pre_job_refused",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "no capability floor is configured for the admission's operating mode",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "admission_floor_unknown",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "admitted capability class is below the current policy floor",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "capability_below_floor",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "unattended admission runs under a credential mode policy has not approved",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "credential_mode_not_approved",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "admission claims a backup encryption waiver the operator has not configured",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "waiver_not_configured",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "recorded repository identity does not match the repository's trusted profile",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "repository_identity_mismatch",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "resolved run policy's declared paths disagree with the configured containment boundary",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "path_boundary_mismatch",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "admission names a trust profile revision that is no longer active",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "trust_profile_superseded",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "trust profile does not approve the effective reviewer configuration",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "review_configuration_unapproved",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "the role's agent does not pass admission",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "agent_admission",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "task cancellation fences further starts",
+    "hold_reason": "",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "task workflow episode is closed",
+    "hold_reason": "",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "fenced joined with machine capacity",
+    "hold_reason": "machine_capacity",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "agent not admissible joined with project image unserved",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "agent not admissible joined with generation integrity marked",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "generation_integrity_marked",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "review configuration joined with egress policy",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": {
+      "check": "egress_policy_refused",
+      "agent": null,
+      "launch_stage": null,
+      "launch_digest": null
+    },
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "input unavailable joined with capability refused",
+    "hold_reason": "input_unavailable",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "janitor inactive joined with backup health unavailable",
+    "hold_reason": "backup_protection_unready",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "agent not admissible joined with blocking system health",
+    "hold_reason": "blocking_system_health",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "blocking_system_health",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
+    "case": "typed agent gate refusal on blocking system health",
+    "hold_reason": "blocking_system_health",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "blocking_system_health",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  }
+]
