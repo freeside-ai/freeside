@@ -46,6 +46,8 @@ def events(selected):
 # named packages (or all for ./...) and, with SHARD_EXECUTE=yes, runs the
 # families a -run pattern selects in each named package. With
 # SHARD_NO_LIST=yes it refuses compiled discovery, as a rest shard needs none.
+# SHARD_LIST=fail makes discovery report a build failure the way go test
+# -json does, and SHARD_LIST=incomplete drops each package's completion event.
 FAKE_GO = '''#!/usr/bin/env python3
 import json, os, sys
 import re
@@ -55,10 +57,13 @@ if sys.argv[1] == 'list':
     print('\\n'.join(data)); sys.exit(0)
 if '-list' in sys.argv and os.environ.get('SHARD_NO_LIST') == 'yes': sys.exit(8)
 if '-list' in sys.argv:
+    if os.environ.get('SHARD_LIST') == 'fail':
+        print(json.dumps({'ImportPath': 'p', 'Action': 'build-output', 'Output': 'a_test.go:3: undefined: thing\\n'}))
+        sys.exit(1)
     for p, names in data.items():
         if './...' not in sys.argv and p not in sys.argv: continue
         for n in names: print(json.dumps({'Package': p, 'Action': 'output', 'Output': n+'\\n'}))
-        print(json.dumps({'Package': p, 'Action': 'pass'}))
+        if os.environ.get('SHARD_LIST') != 'incomplete': print(json.dumps({'Package': p, 'Action': 'pass'}))
     sys.exit(0)
 if os.environ.get('SHARD_EXECUTE') == 'signal': os.kill(os.getpid(), signal.SIGTERM)
 if os.environ.get('SHARD_EXECUTE') == 'filtered-fail':
@@ -809,6 +814,75 @@ fi
                     shards.verify_reports(reports + [retried])
             source.write_text(source.read_text().rsplit('\n', 2)[0])
             self.assertNotEqual(subprocess.run(command + list(map(str, reports)), capture_output=True).returncode, 0)
+
+    def test_local_partitions_cover_compiled_discovery_once(self):
+        fixture_inventory = dict(inventory, **{'module/other': ['TestOther']})
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fixture = directory / 'fixture.json'
+            fixture.write_text(json.dumps(fixture_inventory))
+            fake = directory / 'go'
+            fake.write_text(FAKE_GO)
+            fake.chmod(0o755)
+            env = dict(os.environ, SHARD_FIXTURE=str(fixture))
+            for count in (1, 2, 3, 4):
+                with self.subTest(count=count):
+                    result = subprocess.run(
+                        [sys.executable, str(path), 'local', '--count', str(count),
+                         '--go', str(fake), '--daemon', str(directory)],
+                        env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    lines = [line.split(' ') for line in result.stdout.splitlines()]
+                    self.assertEqual([fields for fields in lines if fields[0] == 'rest'],
+                                     [['rest', 'module/rest'], ['rest', freesided],
+                                      ['rest', 'module/other']])
+                    partitions = [fields for fields in lines if fields[0] == 'integration']
+                    self.assertEqual(len(partitions), count)
+                    self.assertEqual(lines[-count:], partitions)
+                    # Run each printed pattern and account for the union: every
+                    # discovered family runs once, across all the partitions.
+                    executed = []
+                    for kind, package, pattern in partitions:
+                        self.assertEqual(package, integration)
+                        run = subprocess.run([str(fake), 'test', '-json', '-run', pattern, package],
+                                             env=dict(env, SHARD_EXECUTE='yes'),
+                                             capture_output=True, text=True, check=True)
+                        executed += [json.loads(line) for line in run.stdout.splitlines()]
+                    # Each partition completes the package once; account()
+                    # takes one completion for the whole union.
+                    package_ends = [e for e in executed if not e.get('Test')]
+                    self.assertEqual(len(package_ends), count)
+                    shards.account([e for e in executed if e.get('Test')] + package_ends[:1],
+                                   {integration: inventory[integration]})
+
+    def test_local_fails_closed_without_printing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fixture = directory / 'fixture.json'
+            fake = directory / 'go'
+            fake.write_text(FAKE_GO)
+            fake.chmod(0o755)
+            def call(count, data, **extra):
+                fixture.write_text(json.dumps(data))
+                return subprocess.run(
+                    [sys.executable, str(path), 'local', '--count', str(count),
+                     '--go', str(fake), '--daemon', str(directory)],
+                    env=dict(os.environ, SHARD_FIXTURE=str(fixture), **extra),
+                    capture_output=True, text=True)
+            cases = [('more partitions than families', 5, inventory, {}),
+                     ('a count too large to allocate', 10**12, inventory, {}),
+                     ('no partitions', 0, inventory, {}),
+                     ('no integration package', 2, {'module/rest': ['TestRest']}, {}),
+                     ('a missing family completion', 2, inventory, {'SHARD_LIST': 'incomplete'}),
+                     ('a build failure', 2, inventory, {'SHARD_LIST': 'fail'})]
+            for name, count, data, extra in cases:
+                with self.subTest(name):
+                    result = call(count, data, **extra)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(result.stdout, '')
+                    self.assertIn('daemon-test-shards:', result.stderr)
+            self.assertIn('a_test.go:3: undefined: thing\n', call(2, inventory, SHARD_LIST='fail').stderr)
+            self.assertIn('5 partitions exceed 4 integration families', call(5, inventory).stderr)
 
     def test_darwin_selection_runs_declared_families_and_fails_closed(self):
         selection = {'module/' + e['package']: e['families'] for e in shards.DARWIN_SELECTION}
