@@ -20,10 +20,8 @@ concurrency:
 
 jobs:
   linux-build:
-    name: linux (build, vet, lint)
+    name: linux (build, vet)
     runs-on: ubuntu-latest
-    env:
-      GOLANGCI_LINT_VERSION: v2.12.2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,30 +68,6 @@ jobs:
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
       - name: build, vet (scripts/check.sh)
         run: bash scripts/check.sh daemon build vet
-      - name: Restore golangci-lint cache
-        id: lint-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/golangci-lint
-          # golangci-lint salts every entry with its version, its linter
-          # settings, and go.mod, and hashes dependency packages by their
-          # source paths, so an entry saved under other inputs or another
-          # Go toolchain holds no valid hit. Restoring one is harmful:
-          # outputs are content-addressed, a rewrite of an identical output
-          # keeps the restored file's old mtime, and the run's trim then
-          # deletes outputs that its new entries point to. The next run reads
-          # that cache and staticcheck reports false SA5011 issues (#2127).
-          # So the key covers all of those inputs and never falls back across
-          # them; only main pushes save, like the build cache.
-          key: daemon-lint-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('daemon/go.mod', 'daemon/.golangci.yml') }}-${{ github.sha }}
-          restore-keys: |
-            daemon-lint-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('daemon/go.mod', 'daemon/.golangci.yml') }}-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: daemon
-          skip-cache: true
       - name: Record static-job cache size
         if: always()
         run: |
@@ -124,6 +98,67 @@ jobs:
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  # Lint needs nothing build and vet produce, so it runs beside them. It
+  # reads the static job's build cache and never writes it: that job's
+  # push-time save stays the only writer of its key.
+  linux-lint:
+    name: linux (lint)
+    runs-on: ubuntu-latest
+    env:
+      GOLANGCI_LINT_VERSION: v2.12.2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        id: go
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: Resolve Go cache paths
+        id: go-cache
+        working-directory: daemon
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Restore the static job's Go build output
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-static-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-static-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-linux-${{ hashFiles('daemon/go.sum') }}-
+      - name: Restore golangci-lint cache
+        id: lint-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/golangci-lint
+          # golangci-lint salts every entry with its version, its linter
+          # settings, and go.mod, and hashes dependency packages by their
+          # source paths, so an entry saved under other inputs or another
+          # Go toolchain holds no valid hit. Restoring one is harmful:
+          # outputs are content-addressed, a rewrite of an identical output
+          # keeps the restored file's old mtime, and the run's trim then
+          # deletes outputs that its new entries point to. The next run reads
+          # that cache and staticcheck reports false SA5011 issues (#2127).
+          # So the key covers all of those inputs and never falls back across
+          # them; only main pushes save, like the build cache.
+          key: daemon-lint-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('daemon/go.mod', 'daemon/.golangci.yml') }}-${{ github.sha }}
+          restore-keys: |
+            daemon-lint-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('daemon/go.mod', 'daemon/.golangci.yml') }}-
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: daemon
+          skip-cache: true
       - name: Save golangci-lint cache
         if: github.event_name == 'push'
         uses: actions/cache/save@v4
@@ -440,13 +475,13 @@ jobs:
     name: linux (build, test, vet, lint)
     runs-on: ubuntu-latest
     if: always()
-    needs: [linux-build, linux-tests]
+    needs: [linux-build, linux-lint, linux-tests]
     steps:
       - uses: actions/checkout@v4
       - name: Require every child to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected linux-build linux-tests
+        run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected linux-build linux-lint linux-tests
       # Every attempt of this run: a failed-jobs rerun leaves the passed
       # shards' evidence in earlier attempts, and verify counts each shard's
       # latest attempt.

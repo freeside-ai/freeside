@@ -7,8 +7,9 @@ Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemo
 ## CI Shards And Coverage Evidence
 
 CI runs three integration shards and one rest shard on Linux for every
-event. Linux build, vet, lint, and exporter cross-compilation run
-independently. On macOS the layout follows the event, because the org's plan
+event. Linux build, vet, and exporter cross-compilation run in one job, and
+lint runs beside it in its own job, which reads that job's build cache and
+never writes it. On macOS the layout follows the event, because the org's plan
 runs at most five macOS jobs at once across every workflow (#2248): a pull
 request builds the daemon and runs only the darwin shard (#2274), and a push
 to main runs the full rest shard and then the three integration shards, in
