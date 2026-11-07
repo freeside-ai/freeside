@@ -2372,9 +2372,12 @@ func runClaudeConformance(
 // deliberately: pinning the base per run, rather than per daemon, is a
 // shared-contract change (the Run carries no base).
 //
-// One exception needs no such change: the engine admits a maintenance
-// task at its refusal's tip instead of this base. That tip comes from the
-// immutable refusal record, so every attempt derives the same one.
+// Two exceptions need no such change, and the engine applies both after
+// this derivation. It admits a maintenance task at its refusal's tip, and a
+// handoff conflict's remediation at the tip its handoff check sealed (issue
+// #2646), instead of this base. Each tip comes from an immutable record, the
+// refusal or the sealed handoff_conflict authority, so every attempt derives
+// the same one.
 func claudeAdmissionDerivation(cfg claudeDriverConfig) engine.AdmissionDerivation {
 	base := domain.BaseRevision{
 		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,

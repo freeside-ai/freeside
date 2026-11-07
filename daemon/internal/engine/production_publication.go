@@ -779,8 +779,14 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 			return false, err
 		}
 		if !recorded {
-			return false, fmt.Errorf("production publication task dispatched without a terminal record: %w",
-				domain.ErrImmutableTransition)
+			retired, err := w.retiredByHandoffConflict(ctx, task)
+			if err != nil {
+				return false, err
+			}
+			if !retired {
+				return false, fmt.Errorf("production publication task dispatched without a terminal record: %w",
+					domain.ErrImmutableTransition)
+			}
 		}
 	}
 	// The acceptance scan runs in every operating mode, while the pending
@@ -789,6 +795,25 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 	// from leaving an open notice behind in attended_dev.
 	return true, releaseProductionQuarantine(
 		ctx, w.store, w.attention, productionTaskQuarantinePrefix, run.ID)
+}
+
+// retiredByHandoffConflict reports whether a sealed handoff_conflict
+// authority ended the task: the write that seals it marks the conflicted
+// task's row done without a terminal, because the cycle it starts carries the
+// run on and records its own (issue #2646).
+func (w *productionPublicationWorkflow) retiredByHandoffConflict(
+	ctx context.Context, task productionPublicationTask,
+) (bool, error) {
+	retired := false
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		chain, err := tx.PublicationSuccessorChain(ctx, task.RunID)
+		for _, sealed := range chain {
+			retired = retired || (sealed.RemediatesHandoffConflict() &&
+				sealed.PredecessorItemID == task.readyItemID() && sealed.Reentry.HeadSHA == task.HeadSHA)
+		}
+		return err
+	})
+	return retired, err
 }
 
 // hasRecordedTerminal reports whether this invocation's terminal row exists.
@@ -1096,7 +1121,11 @@ func RecordProductionExecutionExport(
 				if readErr != nil {
 					return readErr
 				}
-				if cycle.EffectiveOrigin() == domain.PublicationSuccessorRemediation && request.Round == cycle.ReviewRound-1 && cycle.AllowsRemediation(domain.RemediationInvocationIntent(request)) {
+				// A remediation continuation and a handoff conflict each start
+				// their cycle with a remediation on the round before it, which
+				// creates the cycle's task.
+				starts := cycle.EffectiveOrigin() == domain.PublicationSuccessorRemediation || cycle.RemediatesHandoffConflict()
+				if starts && request.Round == cycle.ReviewRound-1 && cycle.AllowsRemediation(domain.RemediationInvocationIntent(request)) {
 					publication, successor, continuationFirst = verified.publication, &cycle, true
 					return nil
 				}
@@ -5250,6 +5279,12 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	}
 	if task.Successor != nil && remediatesExternalFindings(*task.Successor, request.Round) {
 		return w.loadReentryRemediationSourceTree(ctx, task, binding, request, checkoutDir)
+	}
+	if task.Successor != nil && task.Successor.AdmitsHandoffConflictRemediation(domain.RemediationInvocationIntent(request)) {
+		// A handoff conflict's first remediation rebuilt the candidate on the
+		// sealed tip, which the checkout holds as its base. It changed nothing
+		// when its tree is the tip's: the head would propose no change.
+		return w.reentryTreeSHA(ctx, checkoutDir, request.BaseSHA)
 	}
 	var (
 		entry  store.QueueEntry

@@ -117,25 +117,15 @@ func TestHandoffOpensTheClosureCardAtTheTip(t *testing.T) {
 	}
 }
 
-// TestHandoffBlockOpensNoClosureCard: the handoff runs before the
-// publication proposes its close, so a head that conflicts with the tip ends
-// the run blocked with no card opened against a merge that does not exist.
-func TestHandoffBlockOpensNoClosureCard(t *testing.T) {
+// TestHandoffConflictOpensNoClosureCard: the handoff runs before the
+// publication proposes its close, so a head that conflicts with the tip goes
+// to remediation with no card opened against a merge that does not exist.
+func TestHandoffConflictOpensNoClosureCard(t *testing.T) {
 	t.Parallel()
 	p := newClosureGateHarness(t)
 	p.advanceBaseBeforePublication(t, "README.md", "conflicting upstream change\n")
-	blocked := 0
-	for range 3 {
-		result, err := p.reconcileLanes()
-		if err != nil {
-			t.Fatal(err)
-		}
-		blocked += result.BlockedItemsCreated
-	}
-	if blocked != 1 {
-		t.Fatalf("conflicting handoff created %d blocked items, want 1", blocked)
-	}
+	p.startHandoffConflictRemediation(t, 1)
 	if open, closed := p.closureCards(t); len(open) != 0 || len(closed) != 0 {
-		t.Fatalf("closure cards after the blocked handoff = %d open, %d closed, want none", len(open), len(closed))
+		t.Fatalf("closure cards after the conflicting handoff = %d open, %d closed, want none", len(open), len(closed))
 	}
 }

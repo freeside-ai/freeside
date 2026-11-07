@@ -17,9 +17,11 @@ import (
 // so the store, not the engine, proves the tip was observed on the run's
 // target. The rows are ordinary state (Tier B): they decode with plain
 // validation, and a legacy row with no audit decodes with a zero id. The
-// authority they grant is re-checked where it is spent, in the publication
-// decision (publish.storePublicationDecision), which re-reads the named
-// audit and refuses a check that names none.
+// authority they grant is re-checked where it is spent, and both checks are
+// Tier A: the publication decision (publish.storePublicationDecision)
+// re-reads the named audit and refuses a check that names none, and the v7
+// handoff_conflict gate (validateHandoffConflictSuccessor) runs
+// checkHandoffTipAudit before a remediation is admitted at the sealed tip.
 
 const handoffCheckColumns = `run_id, publication_id, head_sha, evidence_base_sha, tip_sha,
     workflow_audit_id, merge_sha, verification_proof_digest`
@@ -66,8 +68,9 @@ func (tx *InternalTx) SealHandoffTip(ctx context.Context, check domain.HandoffCh
 
 // checkHandoffTipAudit requires the audit a check names to be a recorded
 // audit that resolved the run's target, the one repository and ref its
-// admissions name, to the check's tip.
-func (tx *InternalTx) checkHandoffTipAudit(ctx context.Context, check domain.HandoffCheck) error {
+// admissions name, to the check's tip. The seal runs it, and so does the v7
+// handoff_conflict gate, which admits a remediation at that tip.
+func (tx *ReadTx) checkHandoffTipAudit(ctx context.Context, check domain.HandoffCheck) error {
 	if check.WorkflowAuditID == 0 {
 		return fmt.Errorf("handoff check names no workflow audit: %w", domain.ErrParentKeyMismatch)
 	}

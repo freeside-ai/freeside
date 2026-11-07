@@ -1,0 +1,16 @@
+{
+  "version": "freeside.publication-successor/v7",
+  "run_id": "run-1",
+  "command_id": "",
+  "feedback_invocation_id": "",
+  "predecessor_item_id": "production-ready-run-1",
+  "prior_review_invocation_id": "review-2",
+  "review_round": 3,
+  "origin": "handoff_conflict",
+  "reentry": {
+    "base_sha": "tip-sha",
+    "head_sha": "head-sha"
+  },
+  "handoff_conflict_cause": "textual_conflict",
+  "first_publication": true
+}

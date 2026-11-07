@@ -524,7 +524,10 @@ All under `daemon/`:
   (screens agent prose before it reaches GitHub), and
   `internal/engine/verification_report.go` (reads the verifier's bytes),
   `internal/engine/publication_core.go` (the git publish transport, the
-  publication lock, and candidate identity), and
+  publication lock, and candidate identity),
+  `internal/engine/remediation.go` (authenticates a remediation against
+  its adjudication, or a sealed handoff conflict, before it runs or its
+  head publishes), and
   `internal/store/publication_authoring.go` (the evidence gate on
   authored prose).
 - **Import and handoff:** `internal/importer/`,
@@ -543,6 +546,12 @@ All under `daemon/`:
   (decides whether a canceled step's group reads as done).
 - **Approvals, decision binding, and trust records:**
   `internal/store/decision_surface.go`, `internal/store/trust.go`,
+  `internal/domain/publication_successor.go` and
+  `internal/store/publication_successor.go` (the successor authorities
+  that decide which head a cycle publishes and the base its writer starts
+  at, sealed and re-gated on read), `internal/store/handoff_check.go`
+  (binds a sealed handoff tip to the audit that observed it, re-checked
+  before a remediation starts at that tip),
   `internal/store/shadow_review_configuration.go`,
   `internal/domain/decision_surface.go`,
   `internal/domain/closure_approval.go`,
