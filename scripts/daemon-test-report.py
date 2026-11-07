@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
-"""Measure daemon tests, git calls, and competing test processes (stdlib only)."""
+"""Measure daemon tests, git calls, and competing test processes (stdlib only).
+
+The report runs go test under the same per-user slot limit as
+`scripts/check.sh daemon test`: DAEMON_TEST_MAX_RUNS (default 1, or 0 when CI
+is non-empty; 0 turns the limit off) slots in DAEMON_TEST_STATE_DIR, locked
+with flock on the same files, so the report and check.sh runs count against
+one limit. While every slot is held it waits, naming the holders every 30
+seconds; the wait is not timed. Its go test child gets what check.sh gives
+its own: -timeout 30m, and while a slot is held, TMPDIR=<slot>.tmp.noindex
+(which Spotlight skips) and, under a limit above 1, GOMAXPROCS of cores /
+limit rounded up, minimum 2, unless GOMAXPROCS is already set.
+"""
 
 import argparse
 from collections import Counter
+import errno
+import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import platform
 import shlex
@@ -134,6 +148,94 @@ def render_report(metadata, packages, counts, limit, counting):
     return "\n".join(lines) + "\n"
 
 
+def slot_limit(environ):
+    """Returns the slot limit as check.sh reads it, or None when malformed."""
+    value = environ.get("DAEMON_TEST_MAX_RUNS")
+    if value is None:
+        return 0 if environ.get("CI") else 1
+    return int(value) if re.fullmatch(r"[0-9]+", value) else None
+
+
+def state_directory(environ):
+    cache = environ.get("XDG_CACHE_HOME") or str(Path(environ.get("HOME", "")) / ".cache")
+    return Path(environ.get("DAEMON_TEST_STATE_DIR") or Path(cache) / "freeside/daemon-test")
+
+
+def take_slot(limit, state, owner):
+    """Holds a free slot of `limit` in `state`, waiting while all are held.
+
+    Returns the open, locked slot file, which must stay open for the run, or
+    None when the limit is off or unusable; check.sh falls back the same way.
+    """
+    if limit == 0:
+        return None
+    try:
+        (state / "slots").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        print(f"daemon-test-report: cannot create {state / 'slots'}; running without the limit", file=sys.stderr)
+        return None
+    waited = 0
+    while True:
+        slot = 1
+        while slot <= limit:
+            path = state / "slots" / str(slot)
+            try:
+                handle = path.open("a")
+            except OSError:
+                print(f"daemon-test-report: cannot open {path}; running without the limit", file=sys.stderr)
+                return None
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                handle.close()
+                if error.errno not in (errno.EACCES, errno.EAGAIN):
+                    print(f"daemon-test-report: cannot lock {path}; running without the limit", file=sys.stderr)
+                    return None
+                slot += 1
+                continue
+            handle.truncate(0)
+            handle.write(f"run PID {os.getpid()}: {owner}\n")
+            handle.flush()
+            return handle
+        if waited % 30 == 0:
+            print(f"daemon-test-report: waiting for a slot (limit {limit}, state {state}); "
+                  "DAEMON_TEST_MAX_RUNS=0 disables the limit", file=sys.stderr)
+            for slot in range(1, limit + 1):
+                holder = (state / "slots" / str(slot)).read_text().strip()
+                print(f"  slot {slot}: {holder}", file=sys.stderr)
+            sys.stderr.flush()
+        time.sleep(1)
+        waited += 1
+
+
+def remove_tree(path):
+    """Removes a slot's test TMPDIR, read-only leftovers included.
+
+    A test killed by its timeout skips its cleanup and can leave read-only
+    directories; without the chmod, every later run in the slot would fail.
+    Symbolic links are neither followed nor changed.
+    """
+    if not os.path.lexists(path):
+        return
+    if not os.path.islink(path):
+        os.chmod(path, 0o700)
+        for parent, directories, _ in os.walk(path):
+            for name in directories:
+                child = os.path.join(parent, name)
+                if not os.path.islink(child):
+                    os.chmod(child, 0o700)
+    shutil.rmtree(path) if not os.path.islink(path) else os.unlink(path)
+
+
+def derived_gomaxprocs(cores, limit, environ):
+    """Returns the GOMAXPROCS check.sh gives a slot's tests, or None for Go's default."""
+    if "GOMAXPROCS" in environ:
+        return environ["GOMAXPROCS"]
+    if limit <= 1 or not cores:
+        return None
+    return str(max(2, -(-cores // limit)))
+
+
 def output(command, cwd):
     return subprocess.check_output(command, cwd=cwd, text=True).strip()
 
@@ -160,6 +262,11 @@ def main():
         parser.error("--tests must be nonnegative and --daemon must be a directory")
     go, git = executable(args.go, parser), executable(args.git or "git", parser)
     daemon = args.daemon.resolve()
+    limit = slot_limit(os.environ)
+    if limit is None:
+        parser.error("DAEMON_TEST_MAX_RUNS must be a non-negative integer")
+    # Held until exit; Python's close-on-exec keeps it from go test's children.
+    slot = take_slot(limit, state_directory(os.environ), daemon.parent)
     counting = not args.no_git_count
     metadata = {"commit": output([str(git), "rev-parse", "HEAD"], daemon),
                 "daemon_dirty": bool(output([str(git), "status", "--porcelain", "--", "."], daemon)),
@@ -192,6 +299,20 @@ def main():
         destination = args.out or root
         destination.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
+        test_tmp = None
+        if slot:
+            test_tmp = Path(slot.name + ".tmp.noindex").absolute()
+            remove_tree(test_tmp)
+            test_tmp.mkdir()
+            env["TMPDIR"] = str(test_tmp)
+            if limit > 1 and "GOMAXPROCS" not in env and not os.cpu_count():
+                print("daemon-test-report: cannot count cores; keeping Go's GOMAXPROCS", file=sys.stderr)
+            gomaxprocs = derived_gomaxprocs(os.cpu_count(), limit, env)
+            if gomaxprocs:
+                env["GOMAXPROCS"] = gomaxprocs
+        metadata.update(slot_limit=limit if slot or limit == 0 else f"{limit} (not enforced)",
+                        gomaxprocs=env.get("GOMAXPROCS", "default"),
+                        tmpdir=env.get("TMPDIR", "unset"))
         launcher = write_launchers(root, git) if counting else None
         if not counting and args.git:
             # A symlink selects the requested binary without a counting wrapper.
@@ -205,7 +326,7 @@ def main():
         with (destination / "events.jsonl").open("w") as raw:
             try:
                 for target in targets if args.one_at_a_time else [targets]:
-                    command = [str(go), "test", "-json", "-count=1"]
+                    command = [str(go), "test", "-json", "-count=1", "-timeout", "30m"]
                     if launcher:
                         command += ["-exec", shlex.quote(str(launcher))]
                     command += [target] if isinstance(target, str) else target
@@ -226,6 +347,8 @@ def main():
                 stop.set()
                 thread.join()
                 sample()
+                if test_tmp:
+                    remove_tree(test_tmp)
         packages, bad_lines = read_events((destination / "events.jsonl").read_text().splitlines())
         counts = git_counts(root, directories) if counting else {}
         failed = (not packages or any(returncodes)

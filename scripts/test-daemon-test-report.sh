@@ -7,11 +7,13 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import fcntl
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 script = Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location("report", script)
@@ -73,6 +75,19 @@ processes = """10 1 python3 report.py
 assert module.foreign_tests(processes, 10) == [20, 21, 25, 26]
 assert module.foreign_tests("12 11 /tmp/own.test\n11 10 go test ./...\n", 10) == []
 
+# The slot limit and GOMAXPROCS derivation match scripts/check.sh's cases.
+assert module.slot_limit({}) == 1 and module.slot_limit({"CI": "true"}) == 0
+assert module.slot_limit({"CI": "true", "DAEMON_TEST_MAX_RUNS": "2"}) == 2
+assert module.slot_limit({"DAEMON_TEST_MAX_RUNS": "abc"}) is None
+assert module.slot_limit({"DAEMON_TEST_MAX_RUNS": ""}) is None
+for cores, limit, expected in ((10, 0, None), (10, 1, None), (10, 2, "5"), (10, 3, "4"),
+                               (10, 20, "2"), (10, 9223372036854775808, "2"), (None, 2, None)):
+    assert module.derived_gomaxprocs(cores, limit, {}) == expected, (cores, limit)
+assert module.derived_gomaxprocs(10, 3, {"GOMAXPROCS": "7"}) == "7"
+assert module.state_directory({"HOME": "/h"}) == Path("/h/.cache/freeside/daemon-test")
+assert module.state_directory({"HOME": "/h", "XDG_CACHE_HOME": "/x"}) == Path("/x/freeside/daemon-test")
+assert module.state_directory({"HOME": "/h", "DAEMON_TEST_STATE_DIR": "/s"}) == Path("/s")
+
 # Pin the classification contract instead of silently miscounting after a change.
 runner = (script.parent.parent / "daemon/internal/gitrun/runner.go").read_text()
 assert re.search(r'func Baseline\(\) \[\]string\s*\{\s*return \[\]string\s*\{\s*"-c",\s*"core.hooksPath=/dev/null"', runner)
@@ -116,6 +131,7 @@ with tempfile.TemporaryDirectory(prefix="report suite ") as temporary:
     bin_dir = root / "bin"
     bin_dir.mkdir()
     calls = root / "go-calls.jsonl"
+    test_env = root / "go-test-env.json"
     test_binary = executable(bin_dir / "test-binary", "#!/bin/sh\n"
                              "git -c core.hooksPath=/dev/null status >/dev/null\n"
                              "git show >/dev/null\n")
@@ -142,6 +158,15 @@ elif arguments[0] == 'list':
         else:
             print(f'example/{name}\t{Path.cwd() / name}')
 elif arguments[0] == 'test':
+    tmpdir = os.environ.get('TMPDIR')
+    with open(os.environ['REPORT_TEST_ENV'], 'w') as out:
+        json.dump(dict(TMPDIR=tmpdir, GOMAXPROCS=os.environ.get('GOMAXPROCS'),
+                       tmpdir_empty=bool(tmpdir) and os.path.isdir(tmpdir) and not os.listdir(tmpdir)), out)
+    if tmpdir and os.environ.get('LEAVE_READ_ONLY'):
+        # A test its timeout killed leaves read-only directories behind.
+        os.makedirs(os.path.join(tmpdir, 'left/ro'))
+        open(os.path.join(tmpdir, 'left/ro/f'), 'w').close()
+        os.chmod(os.path.join(tmpdir, 'left/ro'), 0o500)
     scenario = os.environ.get('REPORT_SCENARIO', 'pass')
     targets = [arguments[-1]] if arguments[-1].startswith(('example/', './missing-')) else ['example/a', 'example/b']
     for package in targets:
@@ -167,16 +192,23 @@ elif arguments[0] == 'test':
 else:
     sys.exit(9)
 ''')
+    # Every case takes its slot from temporary state, never the user's; an
+    # explicit limit keeps CI's limit-off default from skipping the slot.
+    state = root / "state"
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", REPORT_CALLS=str(calls),
-               REPORT_BINARY=str(test_binary), REPORT_SCENARIO="pass", REPORT_SHARED="no")
+               REPORT_TEST_ENV=str(test_env), REPORT_BINARY=str(test_binary),
+               REPORT_SCENARIO="pass", REPORT_SHARED="no",
+               DAEMON_TEST_STATE_DIR=str(state), DAEMON_TEST_MAX_RUNS="1")
+    env.pop("GOMAXPROCS", None)
 
-    def run(scenario="pass", *options, shared=False):
+    def run(scenario="pass", *options, shared=False, extra=None):
         calls.write_text("")
         destination = root / "output"
         result = subprocess.run([sys.executable, str(script), "--go", str(fake_go),
                                  "--git", str(fake_git), "--daemon", str(daemon),
                                  "--out", str(destination), *options],
-                                env=dict(env, REPORT_SCENARIO=scenario, REPORT_SHARED="yes" if shared else "no"),
+                                env=dict(env, REPORT_SCENARIO=scenario, REPORT_SHARED="yes" if shared else "no",
+                                         **(extra or {})),
                                 text=True, capture_output=True)
         if result.returncode not in (0, 1):
             raise AssertionError(result.stderr)
@@ -189,7 +221,65 @@ else:
     assert "shared\tunshared\n" in result.stdout and "sampling_errors\t0\n" in result.stdout
     assert "package\texample/a\tpass\t2.000\t1\t0\t0\t0\t1\t1" in result.stdout
     test_calls = [call for call in invocations if call[0] == 'test']
-    assert len(test_calls) == 1 and test_calls[0][:4] == ['test', '-json', '-count=1', '-exec']
+    assert len(test_calls) == 1
+    assert test_calls[0][:6] == ['test', '-json', '-count=1', '-timeout', '30m', '-exec']
+    slot_tmp = str(state / "slots/1.tmp.noindex")
+    assert json.loads(test_env.read_text()) == dict(TMPDIR=slot_tmp, GOMAXPROCS=None, tmpdir_empty=True)
+    assert not Path(slot_tmp).exists()
+    assert "slot_limit\t1\n" in result.stdout and "gomaxprocs\tdefault\n" in result.stdout
+    assert f"tmpdir\t{slot_tmp}\n" in result.stdout
+    stale = Path(slot_tmp) / "stale/ro"
+    stale.mkdir(parents=True)
+    (stale / "f").write_text("")
+    stale.chmod(0o500)
+    result, _ = run(extra=dict(LEAVE_READ_ONLY="1"))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(test_env.read_text())["tmpdir_empty"] and not Path(slot_tmp).exists()
+    outside = root / "outside"
+    (outside / "ro").mkdir(parents=True)
+    outside.chmod(0o500)
+    os.symlink(outside, slot_tmp)
+    module.remove_tree(Path(slot_tmp))
+    assert not os.path.lexists(slot_tmp) and (outside / "ro").is_dir()
+    assert outside.stat().st_mode & 0o777 == 0o500
+    outside.chmod(0o700)
+    result, _ = run(extra=dict(DAEMON_TEST_MAX_RUNS="2"))
+    derived = module.derived_gomaxprocs(os.cpu_count(), 2, {})
+    assert json.loads(test_env.read_text())["GOMAXPROCS"] == derived
+    assert f"gomaxprocs\t{derived or 'default'}\n" in result.stdout
+    result, _ = run(extra=dict(DAEMON_TEST_MAX_RUNS="3", GOMAXPROCS="7"))
+    assert json.loads(test_env.read_text())["GOMAXPROCS"] == "7"
+    assert "slot_limit\t3\n" in result.stdout and "gomaxprocs\t7\n" in result.stdout
+    off = root / "state-off"
+    result, _ = run(extra=dict(DAEMON_TEST_MAX_RUNS="0", DAEMON_TEST_STATE_DIR=str(off), TMPDIR=str(root)))
+    assert result.returncode == 0 and not off.exists()
+    assert json.loads(test_env.read_text())["TMPDIR"] == str(root)
+    assert "slot_limit\t0\n" in result.stdout and f"tmpdir\t{root}\n" in result.stdout
+
+    # A held slot makes the report wait, without starting go, until it is released.
+    (state / "slots").mkdir(parents=True, exist_ok=True)
+    calls.write_text("")
+    errors = root / "waiting.err"
+    with open(state / "slots/1", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held.truncate(0)
+        held.write("run PID 1: suite\n")
+        held.flush()
+        with open(errors, "w") as stderr:
+            waiting = subprocess.Popen([sys.executable, str(script), "--go", str(fake_go),
+                                        "--git", str(fake_git), "--daemon", str(daemon)],
+                                       env=env, stdout=subprocess.DEVNULL, stderr=stderr)
+        deadline = time.monotonic() + 30
+        while "slot 1: " not in errors.read_text():
+            assert time.monotonic() < deadline and waiting.poll() is None, errors.read_text()
+            time.sleep(0.1)
+        notice = errors.read_text()
+        assert "limit 1" in notice and str(state) in notice and "slot 1: run PID 1: suite" in notice
+        assert "DAEMON_TEST_MAX_RUNS=0" in notice
+        time.sleep(0.5)
+        assert calls.read_text() == "", calls.read_text()
+    assert waiting.wait(timeout=30) == 0, errors.read_text()
+    assert any(json.loads(line)[0] == 'test' for line in calls.read_text().splitlines())
     assert '-e' in next(call for call in invocations if call[0] == 'list')
     assert test_calls[0][-1] == './...'
     _, invocations = run("pass", "--one-at-a-time", "./internal/gitrun")
@@ -216,8 +306,12 @@ else:
         if scenario in ('timeout', 'partial'):
             assert "TestTop\tunfinished\t-" in result.stdout
     for options in (["--tests", "-1"], ["--unknown"], ["--go", str(root / "missing")]):
-        result = subprocess.run([sys.executable, str(script), *options], text=True, capture_output=True)
+        result = subprocess.run([sys.executable, str(script), *options], env=env, text=True, capture_output=True)
         assert result.returncode == 2
+    result = subprocess.run([sys.executable, str(script), "--go", str(fake_go), "--git", str(fake_git),
+                             "--daemon", str(daemon)], env=dict(env, DAEMON_TEST_MAX_RUNS="abc"),
+                            text=True, capture_output=True)
+    assert result.returncode == 2 and "must be a non-negative integer" in result.stderr
 
 print("daemon-test-report: all hermetic regressions passed")
 PY
