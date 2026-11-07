@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 // InspectCredentialVolumeManifest observes an existing credential volume
@@ -42,6 +44,12 @@ func observeCredentialVolume(
 	return proof.tree, err
 }
 
+// preflightCredentialContainerName is the preflight credential observer's
+// container: one per inspection, named by a slice of its fresh ownership label.
+func preflightCredentialContainerName(ownerSlice string) string {
+	return wardname.BareName(wardname.PreflightCredentialPrefix, ownerSlice)
+}
+
 // observeCredentialVolumeProof runs one credential observer over the volume
 // and returns its parsed proof, with the token a token-read observer read;
 // observer selects the script (observeCredentialProof).
@@ -63,7 +71,7 @@ func observeCredentialVolumeProof(
 		return fail(err)
 	}
 	runID := "preflight-" + owner.Value[:12]
-	name := "freeside-preflight-credential-" + owner.Value[:12]
+	name := preflightCredentialContainerName(owner.Value[:12])
 	if authorize != nil {
 		if err := authorize(ctx, RuntimeResourceNames{Containers: []string{name}}); err != nil {
 			return fail(err)

@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 // BackendName is the backend's name in policy, refusals, and audit records:
@@ -874,32 +875,33 @@ type handoffNames struct {
 }
 
 func namesFor(runID string) handoffNames {
+	name := func(role string) string { return wardname.Name(wardname.HandoffPrefix, runID, role) }
 	return handoffNames{
-		Prompt:              "freeside-handoff-" + runID + "-prompt",
-		PromptSeeder:        "freeside-handoff-" + runID + "-prompt-seed",
-		PromptObserver:      "freeside-handoff-" + runID + "-prompt-check",
-		Inputs:              "freeside-handoff-" + runID + "-inputs",
-		InputsSeeder:        "freeside-handoff-" + runID + "-inputs-seed",
-		InputsObserver:      "freeside-handoff-" + runID + "-inputs-check",
-		Workspace:           "freeside-handoff-" + runID + "-ws",
-		Instructions:        "freeside-handoff-" + runID + "-ins",
-		ConfigRoot:          "freeside-handoff-" + runID + "-cfg",
-		Continuity:          "freeside-handoff-" + runID + "-projects",
-		SessionScratch:      "freeside-handoff-" + runID + "-session-env",
-		Seeder:              "freeside-handoff-" + runID + "-seeder",
-		Observer:            "freeside-handoff-" + runID + "-observer",
-		InstructionSeeder:   "freeside-handoff-" + runID + "-ins-seed",
-		InstructionObserver: "freeside-handoff-" + runID + "-ins-check",
-		ConfigRootSeeder:    "freeside-handoff-" + runID + "-cfg-seed",
-		ConfigRootObserver:  "freeside-handoff-" + runID + "-cfg-check",
-		ContinuityObserver:  "freeside-handoff-" + runID + "-projects-check",
-		ScratchObserver:     "freeside-handoff-" + runID + "-sess-check",
-		WriterObserver:      "freeside-handoff-" + runID + "-writer-check",
-		CredObsPre:          "freeside-handoff-" + runID + "-cred-pre",
-		CredObsPost:         "freeside-handoff-" + runID + "-cred-post",
-		Agent:               "freeside-handoff-" + runID + "-agent",
-		Exporter:            "freeside-handoff-" + runID + "-exporter",
-		Network:             "freeside-handoff-" + runID + "-egress",
+		Prompt:              name(wardname.Prompt),
+		PromptSeeder:        name(wardname.PromptSeed),
+		PromptObserver:      name(wardname.PromptCheck),
+		Inputs:              name(wardname.Inputs),
+		InputsSeeder:        name(wardname.InputsSeed),
+		InputsObserver:      name(wardname.InputsCheck),
+		Workspace:           name(wardname.Workspace),
+		Instructions:        name(wardname.Ins),
+		ConfigRoot:          name(wardname.Cfg),
+		Continuity:          name(wardname.Projects),
+		SessionScratch:      name(wardname.SessionEnv),
+		Seeder:              name(wardname.Seeder),
+		Observer:            name(wardname.Observer),
+		InstructionSeeder:   name(wardname.InsSeed),
+		InstructionObserver: name(wardname.InsCheck),
+		ConfigRootSeeder:    name(wardname.CfgSeed),
+		ConfigRootObserver:  name(wardname.CfgCheck),
+		ContinuityObserver:  name(wardname.ProjectsCheck),
+		ScratchObserver:     name(wardname.SessCheck),
+		WriterObserver:      name(wardname.WriterCheck),
+		CredObsPre:          name(wardname.CredPre),
+		CredObsPost:         name(wardname.CredPost),
+		Agent:               name(wardname.Agent),
+		Exporter:            name(wardname.Exporter),
+		Network:             name(wardname.Egress),
 	}
 }
 
@@ -945,7 +947,7 @@ func PreJobRunIDForInvocation(invocationID domain.InvocationID) string {
 // PreJobContainerNameForInvocation is the exact deterministic host container
 // the pre-job probe may create before an invocation starts.
 func PreJobContainerNameForInvocation(invocationID domain.InvocationID) string {
-	return conformanceObjectName(PreJobRunIDForInvocation(invocationID), "prejob")
+	return conformanceObjectName(PreJobRunIDForInvocation(invocationID), wardname.PreJob)
 }
 
 // WorkspaceRef is the ward lane's opaque workspace reference for a run: the

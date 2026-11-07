@@ -7,6 +7,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 // reviewFindingsJSONSchema is the provider-neutral structured-output contract
@@ -194,7 +195,7 @@ func (codexReviewProvider) usageMeasurements(
 	return codexUsageMeasurements(events, observedAt)
 }
 
-func (codexReviewProvider) reviewContainerSuffix() string { return "-codex" }
+func (codexReviewProvider) reviewContainerSuffix() string { return "-" + wardname.Codex }
 
 func (codexReviewProvider) legacyTopologyVersions() []string {
 	return []string{codexReviewTopologyVersionV2}

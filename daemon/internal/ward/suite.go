@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 // Suite runs the workspace-handoff backend's conformance checks at the plan
@@ -164,16 +165,16 @@ const (
 	probeStopTimeout = 3 * time.Minute
 	// The networkless probe suffixes keep the longest valid RunID within Apple
 	// container's 64-character container-ID limit.
-	networklessProbeSuffix               = "net"
-	networklessLivenessProbeSuffix       = "net-live"
-	networklessLivenessVolumeProbeSuffix = "net-live-ws"
+	networklessProbeSuffix               = wardname.Net
+	networklessLivenessProbeSuffix       = wardname.NetLive
+	networklessLivenessVolumeProbeSuffix = wardname.NetLiveWS
 	// The in-exporter (check 5) probe suffixes, likewise short.
-	inExporterProbeSuffix       = "inx"
-	inExporterLivenessSuffix    = "inx-live"
-	inExporterVolumeProbeSuffix = "inx-ws"
+	inExporterProbeSuffix       = wardname.Inx
+	inExporterLivenessSuffix    = wardname.InxLive
+	inExporterVolumeProbeSuffix = wardname.InxWS
 	// conformanceObjectPrefix leaves enough room under that same limit for the
 	// longest valid RunID and the suite's longest existing role suffix.
-	conformanceObjectPrefix = "freeside-ward-conf-"
+	conformanceObjectPrefix = wardname.ConformancePrefix
 	// registryWitnessHost is the one registry Full declares for its
 	// provider_registry handoff.
 	// The proof needs a real public registry: the proxy resolves the name
@@ -638,7 +639,7 @@ func NewSuite(b *Backend, fx SuiteFixture, opts ...SuiteOption) (*Suite, error) 
 // and a role, disjoint from the handoff's own object names (namesFor). A free
 // function so NewSuite can derive generated paths before a Suite exists.
 func conformanceObjectName(runID, role string) string {
-	return conformanceObjectPrefix + runID + "-" + role
+	return wardname.Name(conformanceObjectPrefix, runID, role)
 }
 
 // conformanceName builds a probe object's runtime name for this suite's run.
@@ -663,14 +664,14 @@ func FullConformanceRuntimeResourceNamesFor(runID, registryRunID string) Runtime
 		resources.Networks = append(resources.Networks, handoff.Network)
 	}
 	for _, role := range []string{
-		"liveness", "seed", "audit", "excl-writer", "excl-second",
+		wardname.Liveness, wardname.Seed, wardname.Audit, wardname.ExclWriter, wardname.ExclSecond,
 		networklessLivenessProbeSuffix, networklessProbeSuffix,
 		inExporterLivenessSuffix, inExporterProbeSuffix,
 	} {
 		resources.Containers = append(resources.Containers, conformanceObjectName(runID, role))
 	}
 	for _, role := range []string{
-		"cred", "liveness-ws", "excl-ws",
+		wardname.Cred, wardname.LivenessWS, wardname.ExclWS,
 		networklessLivenessVolumeProbeSuffix, inExporterVolumeProbeSuffix,
 	} {
 		resources.Volumes = append(resources.Volumes, conformanceObjectName(runID, role))
@@ -1011,7 +1012,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		}
 	}()
 
-	credVolume := s.conformanceName("cred")
+	credVolume := s.conformanceName(wardname.Cred)
 
 	// The credential volume is the suite's own object (unlike a real handoff,
 	// where the caller owns it): create, seed, and always reap it here. The
@@ -1028,8 +1029,8 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// as stopped. This nonterminating probe uses the writer's own mount topology,
 	// so a runtime that eager-starts only mounted containers is caught too. It
 	// runs before seeding, so its inert payload never observes credential data.
-	livenessName := s.conformanceName("liveness")
-	livenessVolume := s.conformanceName("liveness-ws")
+	livenessName := s.conformanceName(wardname.Liveness)
+	livenessVolume := s.conformanceName(wardname.LivenessWS)
 	defer run.reapVolume(ctx, livenessVolume)
 	defer run.reapContainer(ctx, livenessName)
 	if err := run.createVolume(ctx, livenessVolume, s.fx.WorkspaceSizeMB); err != nil {
@@ -1369,7 +1370,7 @@ func (s *Suite) preJob(ctx context.Context) (err error) {
 	// created, so mirror Full: prove absence on every exit (not just after a
 	// clean delete) and join any leak, and reap before the create so an
 	// ambiguous create is reaped too.
-	name := s.conformanceName("prejob")
+	name := s.conformanceName(wardname.PreJob)
 	defer func() {
 		if verr := run.verifyReaped(ctx); verr != nil {
 			err = errors.Join(err, verr)
@@ -1653,7 +1654,7 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 // throwaway seed container, then reaps it. The marker lands at
 // CredentialTarget/token, where the writer and audit containers read it.
 func (s *Suite) seedCredential(ctx context.Context, run *suiteRun, credVolume string) error {
-	name := s.conformanceName("seed")
+	name := s.conformanceName(wardname.Seed)
 	token := shellQuote(path.Join(s.fx.CredentialTarget, credentialTokenFile))
 	spec := ContainerSpec{
 		Size:            DefaultLaunchSize(LaunchConformance),
@@ -1699,7 +1700,7 @@ func (s *Suite) seedCredential(ctx context.Context, run *suiteRun, credVolume st
 // carry that sentinel. Its absence means the credential did not survive
 // detachment (the containment claim would be deletion, not omission).
 func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, credVolume string) error {
-	name := s.conformanceName("audit")
+	name := s.conformanceName(wardname.Audit)
 	token := shellQuote(path.Join(s.fx.CredentialTarget, credentialTokenFile))
 	markerFile := shellQuote(auditMarkerPath(s.fx.RunID))
 	spec := ContainerSpec{
@@ -1909,9 +1910,9 @@ func archiveHasRegularFile(r io.Reader, absolutePath, content string) (bool, err
 // exclusion check 3's writer-termination requirement depends on does not
 // hold, so the gate could export a workspace another VM still holds.
 func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) error {
-	volume := s.conformanceName("excl-ws")
-	writer := s.conformanceName("excl-writer")
-	second := s.conformanceName("excl-second")
+	volume := s.conformanceName(wardname.ExclWS)
+	writer := s.conformanceName(wardname.ExclWriter)
+	second := s.conformanceName(wardname.ExclSecond)
 
 	// Reaps registered before any create so an ambiguous create is reaped;
 	// LIFO runs them in reverse dependency order (writer, then second, then

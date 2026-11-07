@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 // The lineup probe (#2208) makes one bounded provider call through an image
@@ -345,6 +346,16 @@ func ProbeLineupImage(
 	return probeLineupImage(ctx, rt, p, authorize, Config{})
 }
 
+// lineupProbeContainerName and lineupProbeNetworkName are one lineup probe's
+// runtime objects, named by a slice of its fresh ownership label.
+func lineupProbeContainerName(ownerSlice string) string {
+	return wardname.BareName(wardname.LineupProbePrefix, ownerSlice)
+}
+
+func lineupProbeNetworkName(ownerSlice string) string {
+	return wardname.Name(wardname.LineupProbePrefix, ownerSlice, wardname.Egress)
+}
+
 // probeLineupImage is ProbeLineupImage with the ward settings it runs under,
 // so a test can inject the proxy's upstream dialer.
 func probeLineupImage(
@@ -361,8 +372,8 @@ func probeLineupImage(
 	if err != nil {
 		return LineupProbeOutput{}, err
 	}
-	name := "freeside-lineup-probe-" + owner.Value[:12]
-	network := name + "-egress"
+	name := lineupProbeContainerName(owner.Value[:12])
+	network := lineupProbeNetworkName(owner.Value[:12])
 	if authorize != nil {
 		if err := authorize(ctx, RuntimeResourceNames{Containers: []string{name}, Networks: []string{network}}); err != nil {
 			return LineupProbeOutput{}, err
