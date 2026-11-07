@@ -33,6 +33,7 @@ func TestKillRecoverySeedRefusesHeldDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedTemplateStore(t, path)
 	if err := seedKillRecoveryReadinessRecords(path, resolution, waiver, event); err != nil {
 		t.Fatalf("seed after lock release: %v", err)
 	}

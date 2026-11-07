@@ -12,9 +12,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// TestOpenStoreWithTopicKey opens from empty on purpose: a missing store and
+// key are the first-run cases it proves.
 func TestOpenStoreWithTopicKey(t *testing.T) {
 	t.Parallel()
 	t.Run("fresh store mints key before opening", func(t *testing.T) {
+		t.Parallel()
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		st, key, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{})
 		if err != nil {
@@ -30,6 +33,7 @@ func TestOpenStoreWithTopicKey(t *testing.T) {
 	})
 
 	t.Run("preexisting store without key fails closed", func(t *testing.T) {
+		t.Parallel()
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		seed, err := store.Open(t.Context(), dbPath, store.Options{})
 		if err != nil {
@@ -44,6 +48,7 @@ func TestOpenStoreWithTopicKey(t *testing.T) {
 	})
 
 	t.Run("failed store open leaves reusable key before database", func(t *testing.T) {
+		t.Parallel()
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		if st, _, err := openStoreWithTopicKey(
 			t.Context(), dbPath, store.Options{BusyTimeout: -time.Second},
@@ -77,6 +82,7 @@ func TestOpenStoreWithTopicKey(t *testing.T) {
 	})
 
 	t.Run("existing key is loaded byte-identical", func(t *testing.T) {
+		t.Parallel()
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		want, err := loadOrCreateTopicKey(dbPath, false)
 		if err != nil {

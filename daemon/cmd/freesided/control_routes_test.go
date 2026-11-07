@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
@@ -493,6 +494,8 @@ func TestControlFindsDatabaseBehindDanglingSymlink(t *testing.T) {
 	if err := os.Symlink(target, alias); err != nil {
 		t.Fatal(err)
 	}
+	// From empty on purpose: the daemon's first start creates the database
+	// behind the dangling symlink.
 	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: alias, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
@@ -735,6 +738,12 @@ func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
 	if err := os.Symlink(target, alias); err != nil {
 		t.Fatal(err)
 	}
+	// The database sits behind the symlink and its topic key beside the
+	// alias, where the daemon looks for it.
+	if _, err := loadOrCreateTopicKey(alias, false); err != nil {
+		t.Fatal(err)
+	}
+	storetest.Copy(t, target)
 	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: alias, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
@@ -773,6 +782,7 @@ func TestControlServesExecutionMode(t *testing.T) {
 		{name: "fake driver", cfg: config{FakeDriverEnabled: true}, want: executionFake},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			seedTemplateStore(t, dbPath)
 			cfg := tc.cfg

@@ -139,6 +139,7 @@ func TestRaiseItemRefusedOutsideEphemeral(t *testing.T) {
 	t.Parallel()
 	for _, env := range AllEnvironments {
 		t.Run(string(env), func(t *testing.T) {
+			t.Parallel()
 			// The supervised-path guards of dev and prod run in main, not
 			// run, so a temporary database is safe here.
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
@@ -219,6 +220,8 @@ func TestRaiseItemReachesClients(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The subtests stay serial: they share this daemon, and the checks after
+	// the loop read the state every raise left.
 	for _, alert := range AllRaiseAlerts {
 		t.Run(string(alert), func(t *testing.T) {
 			cfg := raiseItemCommandConfig{DBPath: dbPath, Alert: alert}

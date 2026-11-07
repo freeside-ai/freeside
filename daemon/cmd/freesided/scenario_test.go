@@ -45,6 +45,7 @@ func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
 		{"seed fixture", config{Scenario: &clean, Environment: environmentEphemeral, SeedFixture: "representative"}, "-seed-fixture requires -driver disabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			tc.cfg.DBPath = dbPath
 			tc.cfg.ListenAddr = "127.0.0.1:0"

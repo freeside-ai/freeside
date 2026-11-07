@@ -84,6 +84,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			ntfy := newNtfySink(t, http.StatusOK)
 			marker := filepath.Join(root, "kill-checkpoint")
@@ -190,6 +191,7 @@ func killRecoveryReadinessOptions(grant domain.Digest) store.Options {
 func seedKillRecoveryReadiness(t *testing.T, path string) {
 	t.Helper()
 	resolution, waiver, event := killRecoveryReadinessFixture(t)
+	seedTemplateStore(t, path)
 	if err := seedKillRecoveryReadinessRecords(path, resolution, waiver, event); err != nil {
 		t.Fatal(err)
 	}

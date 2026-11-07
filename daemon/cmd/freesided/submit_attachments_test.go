@@ -235,10 +235,12 @@ func TestSubmitCommandRefusesAnUnstoredAttachment(t *testing.T) {
 	root := t.TempDir()
 	cfg := attachmentSubmitConfig(t, root, "unstored-attach")
 	cfg.AttachPaths = []string{writeAttachment(t, filepath.Join(root, "notes.txt"), []byte("notes"))}
+	seedTemplateStore(t, cfg.DBPath)
 	if _, err := runSubmitCommand(ctx, cfg); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	// Keep the journal; lose the database and the blobs it named.
+	// Keep the journal; lose the database and the blobs it named. The retry
+	// then opens from empty on purpose: a lost database is the case.
 	for _, path := range []string{cfg.DBPath, cfg.DBPath + "-wal", cfg.DBPath + "-shm", cfg.DBPath + ".blobs"} {
 		if err := os.RemoveAll(path); err != nil {
 			t.Fatal(err)

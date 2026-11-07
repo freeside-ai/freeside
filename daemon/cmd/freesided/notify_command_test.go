@@ -169,6 +169,7 @@ func TestNotifyTestOneDevice(t *testing.T) {
 func TestNotifyTestReportsAFailureWithoutTheTopic(t *testing.T) {
 	t.Parallel()
 	t.Run("rejected", func(t *testing.T) {
+		t.Parallel()
 		sink := newNtfySink(t, http.StatusForbidden)
 		f := startNotifyTestFixture(t, sink.URL)
 		f.pair(t, "phone", "Phone")
@@ -184,6 +185,7 @@ func TestNotifyTestReportsAFailureWithoutTheTopic(t *testing.T) {
 	})
 
 	t.Run("unreachable", func(t *testing.T) {
+		t.Parallel()
 		gone := httptest.NewServer(strayrequest.Ignore(http.NotFoundHandler()))
 		goneURL := gone.URL
 		gone.Close()

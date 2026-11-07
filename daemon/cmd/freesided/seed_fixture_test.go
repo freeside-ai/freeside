@@ -28,6 +28,7 @@ func TestSeedFixtureRefusedBeforeStoreOpens(t *testing.T) {
 		{"unknown name", config{SeedFixture: "nope", Environment: environmentEphemeral}, "-seed-fixture: unknown fixture"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			tc.cfg.DBPath = dbPath
 			tc.cfg.ListenAddr = "127.0.0.1:0"
@@ -72,6 +73,9 @@ func TestSeedFixtureServesRepresentativeState(t *testing.T) {
 
 func startDaemon(t *testing.T, cfg config) *daemon {
 	t.Helper()
+	// A -seed-fixture start writes artifacts the template's checkpoint never
+	// covers. Only Doctor and admission read that checkpoint, and no caller
+	// runs Doctor or admits work, so what they assert is unchanged.
 	seedTemplateStore(t, cfg.DBPath)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)

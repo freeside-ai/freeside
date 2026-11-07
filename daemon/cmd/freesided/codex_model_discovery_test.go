@@ -119,6 +119,7 @@ func TestModelCatalogRefreshSkipsCodexWithoutACodexReviewer(t *testing.T) {
 		"Claude reviewer": claudeReviewer, "API-key Codex reviewer": apiKeyReviewer, "attended": attended,
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if codexReviewerConfigured(cfg) {
 				t.Fatal("Codex discovery would run")
 			}
@@ -212,6 +213,7 @@ func TestAuthAddCodexDiscoversWithAnAgentImage(t *testing.T) {
 		{"no image", false, nil, 0, "the next daemon start with a Codex reviewer discovers it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			seedTemplateStore(t, dbPath)
 			args, _, _ := codexAuthAddArgs(t, dbPath)
