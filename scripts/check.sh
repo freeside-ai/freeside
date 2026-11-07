@@ -16,7 +16,7 @@
 #   daemon       build test vet lint
 #   app          generate format test linux build-mac build-ios
 #   api          lint digest
-#   scripts      syntax shellcheck suites vocabulary trackercollect
+#   scripts      syntax shellcheck suites vocabulary tier-a-paths trackercollect
 #   convergence  run
 #   docs         plan-links
 #
@@ -136,7 +136,7 @@ steps_for() { # <component>; prints the component's steps in default order
     daemon) echo 'build test vet lint' ;;
     app) echo 'generate format test linux build-mac build-ios' ;;
     api) echo 'lint digest' ;;
-    scripts) echo 'syntax shellcheck suites vocabulary trackercollect' ;;
+    scripts) echo 'syntax shellcheck suites vocabulary tier-a-paths trackercollect' ;;
     convergence) echo 'run' ;;
     docs) echo 'plan-links' ;;
     *) return 1 ;;
@@ -487,6 +487,7 @@ scripts_suites() {
   for t in "$ROOT"/scripts/test-*.sh; do run bash "$t"; done
 }
 scripts_vocabulary() { in_dir "$ROOT" bash scripts/check-vocabulary.sh; }
+scripts_tier_a_paths() { in_dir "$ROOT" bash scripts/check-tier-a-paths.sh; }
 scripts_trackercollect() {
   in_dir "$ROOT" go -C scripts/trackercollect build ./...
   in_dir "$ROOT" go -C scripts/trackercollect test ./...
