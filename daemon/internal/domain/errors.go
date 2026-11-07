@@ -466,6 +466,8 @@ var (
 		"agent selection source is not lineup, task_line, or card")
 	ErrAgentSelectionInconsistent = errors.New(
 		"agent selection record id does not fit its selection source")
+	ErrSelectionBindingInconsistent = errors.New(
+		"admission agent binding admitted under a selection carries an offer's pricing revision or an effort level")
 	ErrLineupShadowOnWardRole = errors.New(
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(

@@ -404,3 +404,19 @@ func LineageGroupOf(client HarnessClientKind, model string) string {
 	}
 	return ""
 }
+
+// SelectionTreatmentDigest is the treatment digest of a launch under the
+// selection: the selection's model, its effort as requested, and the native
+// effort the adapter sends as effective, harness_default when it sends
+// none. Admission and the closure recheck both compute it here, so the two
+// cannot drift.
+func SelectionTreatmentDigest(
+	route RouteFragment, adapter AdapterFragment, launchDigest Digest, selection AgentSelection,
+) (Digest, error) {
+	_, nativeEffort := selection.LaunchValues(adapter.ClientKind)
+	effective := nativeEffort
+	if effective == "" {
+		effective = string(EffortHarnessDefault)
+	}
+	return ComputeTreatmentDigest(route, adapter.Digest, launchDigest, selection.ModelID, selection.Effort, effective)
+}

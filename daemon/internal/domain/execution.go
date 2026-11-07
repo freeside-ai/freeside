@@ -246,7 +246,11 @@ type AdmissionAgentBinding struct {
 	AgentDigest     Digest `json:"agent_digest"`
 	LaunchDigest    Digest `json:"launch_digest"`
 	TreatmentDigest Digest `json:"treatment_digest"`
-	PricingRevision string `json:"pricing_revision"`
+	// PricingRevision is the offer's pricing revision on a binding admitted
+	// under an agent, and absent on one admitted under a selection
+	// (SelectionAdmitted), which no offer prices. It is omitted when empty;
+	// every binding that carries one keeps its bytes and id.
+	PricingRevision string `json:"pricing_revision,omitempty"`
 	// LineupRevision is the control-plane revision whose lineup (or recorded
 	// alternate-agent card) named the agent digest for the role.
 	LineupRevision       Digest             `json:"lineup_revision"`
@@ -264,11 +268,14 @@ type AdmissionAgentBinding struct {
 	// over.
 	LegacyAttended *bool `json:"attended,omitempty"`
 	// RouteModelID, RequestedEffort, and NativeEffort are the model and
-	// effort the launch passes (DeriveAgentLaunchSelection), recorded so
+	// effort the launch passes (DeriveAgentLaunchSelection under an agent,
+	// AgentSelection.LaunchValues under a selection), recorded so
 	// exec.StartSpecFromAdmission can carry them without a closure lookup.
 	// Each is omitted when empty, so a binding that passes neither keeps the
-	// bytes and id it had before these fields existed. The two effort fields
-	// are present together or not at all.
+	// bytes and id it had before these fields existed. Under an agent the two
+	// effort fields are present together or not at all; under a selection
+	// RequestedEffort is absent, because a selection names a harness effort
+	// string and no Freeside level.
 	RouteModelID    string      `json:"route_model_id,omitempty"`
 	RequestedEffort EffortLevel `json:"requested_effort,omitempty"`
 	NativeEffort    string      `json:"native_effort,omitempty"`
@@ -284,12 +291,15 @@ type AdmissionAgentBinding struct {
 	// catalog model id, and its harness effort string. They are present
 	// together on every binding admitted since and absent together on one
 	// admitted before, each omitted when empty so that binding keeps its
-	// bytes and id.
+	// bytes and id. Since #2734 admission resolves the selection itself and
+	// records its digest as AgentDigest too (SelectionAdmitted); a binding
+	// whose AgentDigest names an agent keeps it and is never re-resolved.
 	SelectionDigest  Digest `json:"selection_digest,omitempty"`
 	SelectionModelID string `json:"selection_model_id,omitempty"`
 	SelectionEffort  string `json:"selection_effort,omitempty"`
 	// HarnessClient, LineageGroup, and CostOwner are the adapter's client,
-	// the offer's lineage group, and the identity's cost owner at admission
+	// the lineage group (the offer's under an agent, LineageGroupOf's under a
+	// selection), and the identity's cost owner at admission
 	// (§5.4, §7), recorded so a run's facts are read from the admission and
 	// never re-derived from a tree or identity that has since moved. Each is
 	// omitted when empty, so a binding admitted before they existed keeps its
@@ -312,9 +322,6 @@ func (b AdmissionAgentBinding) Validate() error {
 			return fmt.Errorf("admission agent binding %s %q: %w", field, digest, ErrInvalidDigest)
 		}
 	}
-	if b.PricingRevision == "" {
-		return fmt.Errorf("admission agent binding pricing_revision: %w", ErrEmptyField)
-	}
 	if b.EnrollmentID == "" {
 		return fmt.Errorf("admission agent binding enrollment_id: %w", ErrEmptyID)
 	}
@@ -334,10 +341,6 @@ func (b AdmissionAgentBinding) Validate() error {
 				authority, ErrKeysNotCanonical)
 		}
 	}
-	if (b.RequestedEffort == "") != (b.NativeEffort == "") {
-		return fmt.Errorf("admission agent binding requested_effort %q with native_effort %q: %w",
-			b.RequestedEffort, b.NativeEffort, ErrEmptyField)
-	}
 	// harness_default sends nothing, so it is recorded as the absence of
 	// both fields, never as a requested value.
 	if b.RequestedEffort != "" && (!b.RequestedEffort.valid() || b.RequestedEffort == EffortHarnessDefault) {
@@ -351,7 +354,45 @@ func (b AdmissionAgentBinding) Validate() error {
 	if err := b.validateSelectionTuple(); err != nil {
 		return err
 	}
+	if err := b.validateAdmittedUnder(); err != nil {
+		return err
+	}
 	return b.validateSelection()
+}
+
+// SelectionAdmitted reports whether admission resolved the binding's
+// selection itself (#2734), so its agent digest is the selection digest, as
+// opposed to a binding admitted under an agent document, whose agent digest
+// names that agent.
+func (b AdmissionAgentBinding) SelectionAdmitted() bool {
+	return b.SelectionDigest != "" && b.AgentDigest == b.SelectionDigest
+}
+
+// validateAdmittedUnder holds the fields that differ between the two kinds
+// of binding to their kind: one admitted under an agent carries the offer's
+// pricing revision and its two effort fields together, and one admitted
+// under a selection carries neither a pricing revision nor a requested
+// effort level.
+func (b AdmissionAgentBinding) validateAdmittedUnder() error {
+	if b.SelectionAdmitted() {
+		if b.PricingRevision != "" {
+			return fmt.Errorf("admission agent binding pricing_revision %q under a selection: %w",
+				b.PricingRevision, ErrSelectionBindingInconsistent)
+		}
+		if b.RequestedEffort != "" {
+			return fmt.Errorf("admission agent binding requested_effort %q under a selection: %w",
+				b.RequestedEffort, ErrSelectionBindingInconsistent)
+		}
+		return nil
+	}
+	if b.PricingRevision == "" {
+		return fmt.Errorf("admission agent binding pricing_revision: %w", ErrEmptyField)
+	}
+	if (b.RequestedEffort == "") != (b.NativeEffort == "") {
+		return fmt.Errorf("admission agent binding requested_effort %q with native_effort %q: %w",
+			b.RequestedEffort, b.NativeEffort, ErrEmptyField)
+	}
+	return nil
 }
 
 // validateSelectionTuple reports whether the recorded selection is whole or
@@ -1371,6 +1412,164 @@ func checkBindingSelection(
 	if binding.RouteModelID != model || binding.NativeEffort != nativeEffort {
 		return fail("binding passes model %q effort %q, the selection passes %q %q",
 			binding.RouteModelID, binding.NativeEffort, model, nativeEffort)
+	}
+	return nil
+}
+
+// ValidateAdmissionSelectionDerivations rechecks a v4 admission whose binding
+// was admitted under a selection (SelectionAdmitted) against the closure the
+// selection names, as ValidateAdmissionAgentDerivations does for a binding
+// admitted under an agent: the selection, the adapter it pins, the route the
+// enrollment's route name resolved to, the stage's launch with the role the
+// admission's stage resolves to, and the enrollment, generation, and identity
+// records. Beyond the joins validateSelectionClosure shares with review
+// admission, the launch must require nothing beyond the adapter's declared
+// capabilities, the admitted identity and credential mode must be the
+// enrollment's, the egress must stay within the route's authorities, and the
+// instruction-delivery vendor must be the adapter's. The route fragment
+// carries no name, so that the route is the enrollment's is the resolver's
+// join (tree facts outside every digest), as it is under an agent.
+func ValidateAdmissionSelectionDerivations(
+	a ExecutionAdmission, selection AgentSelection, adapter AdapterFragment,
+	route RouteFragment, launch LaunchSpec, role StageName,
+	enrollment ClientEnrollment, generation EnrollmentGeneration, identity AuthIdentity,
+) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	fail := func(format string, args ...any) error {
+		detail := fmt.Sprintf(format, args...)
+		return fmt.Errorf("execution admission %s: %s: %w",
+			a.InvocationID, detail, ErrAdmissionDerivationMismatch)
+	}
+	binding := a.AgentBinding
+	if binding == nil {
+		return fail("no agent binding to recheck")
+	}
+	if err := validateSelectionClosure(
+		fail, *binding, selection, adapter, route, launch, role, enrollment, generation, identity,
+	); err != nil {
+		return err
+	}
+	if missing := MissingLaunchCapabilities(adapter.LaunchCapabilities, launch.RequiredCapabilities()); len(missing) > 0 {
+		return fail("launch requires %v beyond the adapter's declared capabilities", missing)
+	}
+	if a.AuthIdentityID == nil || *a.AuthIdentityID != enrollment.AuthIdentityID {
+		return fail("admitted identity disagrees with enrollment identity %s", enrollment.AuthIdentityID)
+	}
+	if a.CredentialMode != enrollment.CredentialMode {
+		return fail("credential mode %q, enrollment carries %q", a.CredentialMode, enrollment.CredentialMode)
+	}
+	for _, authority := range binding.EffectiveEgress {
+		if !slices.Contains(route.InferenceAuthorities, authority) {
+			return fail("effective egress authority %q is outside the route's authorities", authority)
+		}
+	}
+	if a.StageInputs.VendorInstructions.Vendor != adapter.Vendor {
+		return fail("instruction delivery vendor %q, adapter derives %q",
+			a.StageInputs.VendorInstructions.Vendor, adapter.Vendor)
+	}
+	return nil
+}
+
+// validateSelectionClosure re-runs the joins a selection-admitted binding
+// shares between an execution admission and a review admission: the records
+// are well-formed and authentic, the binding names the selection as its
+// agent digest and records its model and effort, the selection pins the
+// adapter, which drives the enrollment's client and can send the effort, the
+// launch is the one the binding names and is for the role's stage, the model
+// and effort the launch passes are the selection's LaunchValues, the
+// treatment digest is the one the closure computes, the enrollment and
+// generation are the ones the binding names, and the recorded harness,
+// lineage group, and cost owner are the adapter's, LineageGroupOf's, and the
+// identity's. Whether the model is in the enrollment's catalog is
+// ResolveAgentSelection's question at admission: a record of a past
+// selection is not invalidated by a catalog that has since moved.
+func validateSelectionClosure(
+	fail func(format string, args ...any) error, binding AdmissionAgentBinding,
+	selection AgentSelection, adapter AdapterFragment, route RouteFragment,
+	launch LaunchSpec, role StageName, enrollment ClientEnrollment, generation EnrollmentGeneration,
+	identity AuthIdentity,
+) error {
+	if err := selection.Validate(); err != nil {
+		return err
+	}
+	if err := adapter.Validate(); err != nil {
+		return err
+	}
+	if err := route.Validate(); err != nil {
+		return err
+	}
+	if err := launch.Validate(); err != nil {
+		return err
+	}
+	if !role.valid() {
+		return fmt.Errorf("admitted selection binding stage role %q: %w", role, ErrInvalidStageName)
+	}
+	if err := enrollment.Validate(); err != nil {
+		return err
+	}
+	if err := ValidateEnrollmentGenerationBinding(enrollment, generation); err != nil {
+		return err
+	}
+	if !binding.SelectionAdmitted() {
+		return fail("binding names agent %s, not a selection", binding.AgentDigest)
+	}
+	if binding.SelectionDigest != selection.Digest {
+		return fail("binding records selection %s, closure resolves %s", binding.SelectionDigest, selection.Digest)
+	}
+	if binding.SelectionModelID != selection.ModelID || binding.SelectionEffort != selection.Effort {
+		return fail("binding records selection model %q effort %q, closure resolves %q %q",
+			binding.SelectionModelID, binding.SelectionEffort, selection.ModelID, selection.Effort)
+	}
+	if selection.AdapterDigest != adapter.Digest {
+		return fail("selection pins adapter %s, closure supplies %s", selection.AdapterDigest, adapter.Digest)
+	}
+	if enrollment.HarnessClient != adapter.ClientKind {
+		return fail("enrollment binds client %q, adapter drives %q", enrollment.HarnessClient, adapter.ClientKind)
+	}
+	if !sendsEffort(adapter, selection.Effort) {
+		return fail("effort %q is not sendable by the selection's adapter", selection.Effort)
+	}
+	if binding.LaunchDigest != launch.Digest {
+		return fail("binding names launch %s, closure resolves %s", binding.LaunchDigest, launch.Digest)
+	}
+	if launch.Stage != role {
+		return fail("launch is for stage %q, the admission's stage resolves to %q", launch.Stage, role)
+	}
+	model, nativeEffort := selection.LaunchValues(adapter.ClientKind)
+	if binding.RouteModelID != model || binding.NativeEffort != nativeEffort || binding.RequestedEffort != "" {
+		return fail("binding passes model %q effort %q/%q, the selection passes %q %q",
+			binding.RouteModelID, binding.RequestedEffort, binding.NativeEffort, model, nativeEffort)
+	}
+	treatment, err := SelectionTreatmentDigest(route, adapter, launch.Digest, selection)
+	if err != nil {
+		return fail("treatment: %v", err)
+	}
+	if binding.TreatmentDigest != treatment {
+		return fail("binding records treatment %s, closure computes %s", binding.TreatmentDigest, treatment)
+	}
+	if selection.EnrollmentID != binding.EnrollmentID || enrollment.ID != binding.EnrollmentID {
+		return fail("enrollment %s disagrees with binding %s", enrollment.ID, binding.EnrollmentID)
+	}
+	if generation.Ordinal != binding.EnrollmentGeneration {
+		return fail("generation ordinal %d, binding names %d", generation.Ordinal, binding.EnrollmentGeneration)
+	}
+	if generation.StoreManifestDigest != binding.StoreManifestDigest {
+		return fail("store manifest %s, binding names %s",
+			generation.StoreManifestDigest, binding.StoreManifestDigest)
+	}
+	if identity.ID != enrollment.AuthIdentityID {
+		return fail("identity %s is not the enrollment's identity %s", identity.ID, enrollment.AuthIdentityID)
+	}
+	if binding.HarnessClient != adapter.ClientKind {
+		return fail("binding records harness %q, adapter drives %q", binding.HarnessClient, adapter.ClientKind)
+	}
+	if lineage := LineageGroupOf(adapter.ClientKind, selection.ModelID); binding.LineageGroup != lineage {
+		return fail("binding records lineage group %q, the selection derives %q", binding.LineageGroup, lineage)
+	}
+	if binding.CostOwner != identity.CostOwner {
+		return fail("binding records cost owner %q, the identity carries %q", binding.CostOwner, identity.CostOwner)
 	}
 	return nil
 }

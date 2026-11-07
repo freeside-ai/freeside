@@ -207,7 +207,7 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 		// The valid case above carries no selection either: a binding
 		// admitted before the selection existed must keep validating.
 		{"a whole selection", func(b *domain.AdmissionAgentBinding) {
-			b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = manifestDigest, "gpt-5.6-sol", "xhigh"
+			b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = otherSelectionDigest, "gpt-5.6-sol", "xhigh"
 		}, nil},
 		{"a selection digest alone", func(b *domain.AdmissionAgentBinding) {
 			b.SelectionDigest = manifestDigest
@@ -221,6 +221,23 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 		{"a selection digest that is a name", func(b *domain.AdmissionAgentBinding) {
 			b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = "sol-xhigh", "gpt-5.6-sol", "xhigh"
 		}, domain.ErrInvalidDigest},
+		// Admitted under a selection, the agent digest is the selection's,
+		// and neither an offer's pricing nor a Freeside effort level rides it.
+		{"admitted under a selection", func(b *domain.AdmissionAgentBinding) {
+			selectionAdmitted(b)
+		}, nil},
+		{"admitted under a selection with a pricing revision", func(b *domain.AdmissionAgentBinding) {
+			selectionAdmitted(b)
+			b.PricingRevision = "pricing-2026-01"
+		}, domain.ErrSelectionBindingInconsistent},
+		{"admitted under a selection with a requested effort", func(b *domain.AdmissionAgentBinding) {
+			selectionAdmitted(b)
+			b.RequestedEffort = domain.EffortMax
+		}, domain.ErrSelectionBindingInconsistent},
+		{"admitted under a selection at harness_default", func(b *domain.AdmissionAgentBinding) {
+			selectionAdmitted(b)
+			b.NativeEffort = ""
+		}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,6 +248,20 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// otherSelectionDigest is a selection digest that is not agentBinding's
+// agent digest, so the binding reads as admitted under an agent.
+const otherSelectionDigest domain.Digest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+// selectionAdmitted turns agentBinding into a binding admitted under a
+// selection: the agent digest is the selection digest, with a native effort
+// and no requested level or pricing revision.
+func selectionAdmitted(b *domain.AdmissionAgentBinding) {
+	b.SelectionDigest, b.SelectionModelID, b.SelectionEffort = manifestDigest, "gpt-5.6-sol", "xhigh"
+	b.AgentDigest = manifestDigest
+	b.PricingRevision = ""
+	b.RouteModelID, b.NativeEffort = "gpt-5.6-sol", "xhigh"
 }
 
 // TestAdmissionAgentEncoding pins the v4 encoding: an agent-bound admission
@@ -860,6 +891,112 @@ func TestValidateAdmissionAgentRecordedFacts(t *testing.T) {
 			if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 				t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 					err, domain.ErrAdmissionDerivationMismatch)
+			}
+		})
+	}
+}
+
+// selectionClosure builds one coherent selection-admitted closure around the
+// shared agent resolution's enrollment, adapter, and route: the selection
+// resolved under the bridge (no catalog), the stage's launch, and a v4
+// admission whose binding names the selection as its agent digest.
+func selectionClosure(t *testing.T) (
+	domain.ExecutionAdmission, domain.AgentSelection, domain.AdapterFragment, domain.RouteFragment,
+	domain.LaunchSpec, domain.ClientEnrollment, domain.EnrollmentGeneration, domain.AuthIdentity,
+) {
+	t.Helper()
+	resolution := agentResolution(t)
+	selection, err := domain.ResolveAgentSelection(domain.AgentSelectionInput{
+		Names: domain.AgentSelectionNames{
+			Enrollment: string(resolution.Enrollment.ID), Model: resolution.Offer.RouteModelID, Effort: "xhigh",
+		},
+		Identity: resolution.Identity, Enrollment: resolution.Enrollment, Adapter: resolution.Adapter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generationEntry := generation()
+	launch := launchSpec(t)
+	launch.AuxiliaryInference = domain.AuxiliaryObserved
+	launch.Digest = mustComputeDigest(t, launch.ComputeDigest)
+	treatment, err := domain.SelectionTreatmentDigest(resolution.Route, resolution.Adapter, launch.Digest, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, nativeEffort := selection.LaunchValues(resolution.Adapter.ClientKind)
+	in := vendorInstructionInput(t, domain.AgentVendorCodex)
+	identity := domain.AuthIdentityID(resolution.Enrollment.AuthIdentityID)
+	in.AuthIdentityID = &identity
+	in.CredentialMode = resolution.Enrollment.CredentialMode
+	in.AgentBinding = &domain.AdmissionAgentBinding{
+		AgentDigest: selection.Digest, LaunchDigest: launch.Digest, TreatmentDigest: treatment,
+		LineupRevision:       "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		EnrollmentID:         resolution.Enrollment.ID,
+		EnrollmentGeneration: generationEntry.Ordinal,
+		StoreManifestDigest:  generationEntry.StoreManifestDigest,
+		EffectiveEgress:      resolution.Route.InferenceAuthorities,
+		RouteModelID:         model, NativeEffort: nativeEffort,
+		SelectionDigest: selection.Digest, SelectionModelID: selection.ModelID, SelectionEffort: selection.Effort,
+		HarnessClient: resolution.Adapter.ClientKind,
+		LineageGroup:  domain.LineageGroupOf(resolution.Adapter.ClientKind, selection.ModelID),
+		CostOwner:     resolution.Identity.CostOwner,
+	}
+	return mustAdmission(t, in), selection, resolution.Adapter, resolution.Route, launch,
+		resolution.Enrollment, generationEntry, resolution.Identity
+}
+
+// TestValidateAdmissionSelectionDerivations pins the recheck of a binding
+// admitted under a selection: every recorded field must be what the
+// selection's closure derives, and a binding admitted under an agent never
+// passes as one admitted under a selection.
+func TestValidateAdmissionSelectionDerivations(t *testing.T) {
+	admission, selection, adapter, route, launch, enrollment, generationEntry, identity := selectionClosure(t)
+	if err := domain.ValidateAdmissionSelectionDerivations(
+		admission, selection, adapter, route, launch, domain.StageNameReview,
+		enrollment, generationEntry, identity); err != nil {
+		t.Fatalf("coherent closure = %v", err)
+	}
+	if got := admission.AgentBinding.LineageGroup; got != domain.LineageGroupOpenAI {
+		t.Fatalf("derived lineage group %q, want %q", got, domain.LineageGroupOpenAI)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*domain.AdmissionAgentBinding, *domain.ClientEnrollment, *domain.EnrollmentGeneration)
+	}{
+		{"agent digest names an agent", func(b *domain.AdmissionAgentBinding, _ *domain.ClientEnrollment, _ *domain.EnrollmentGeneration) {
+			b.AgentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			b.PricingRevision, b.RequestedEffort = "pricing-2026-01", domain.EffortMax
+		}},
+		{"treatment of another model", func(b *domain.AdmissionAgentBinding, _ *domain.ClientEnrollment, _ *domain.EnrollmentGeneration) {
+			b.TreatmentDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		}},
+		{"launch passes another model", func(b *domain.AdmissionAgentBinding, _ *domain.ClientEnrollment, _ *domain.EnrollmentGeneration) {
+			b.RouteModelID = "gpt-5.7"
+		}},
+		{"guessed lineage group", func(b *domain.AdmissionAgentBinding, _ *domain.ClientEnrollment, _ *domain.EnrollmentGeneration) {
+			b.LineageGroup = domain.LineageGroupAnthropic
+		}},
+		{"egress outside the route", func(b *domain.AdmissionAgentBinding, _ *domain.ClientEnrollment, _ *domain.EnrollmentGeneration) {
+			b.EffectiveEgress = []string{"api.example.com"}
+		}},
+		{"identity disagrees with the enrollment", func(_ *domain.AdmissionAgentBinding, e *domain.ClientEnrollment, _ *domain.EnrollmentGeneration) {
+			e.AuthIdentityID = "auth-2"
+		}},
+		{"generation ordinal disagrees with the binding", func(_ *domain.AdmissionAgentBinding, _ *domain.ClientEnrollment, g *domain.EnrollmentGeneration) {
+			g.Ordinal = 2
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			admission, selection, adapter, route, launch, enrollment, generationEntry, identity := selectionClosure(t)
+			tc.mutate(admission.AgentBinding, &enrollment, &generationEntry)
+			admission.ID = mustComputeDigest(t, admission.ComputeID)
+			err := domain.ValidateAdmissionSelectionDerivations(
+				admission, selection, adapter, route, launch, domain.StageNameReview,
+				enrollment, generationEntry, identity)
+			if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
+				t.Fatalf("ValidateAdmissionSelectionDerivations = %v, want a derivation mismatch", err)
 			}
 		})
 	}
