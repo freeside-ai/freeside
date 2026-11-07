@@ -1593,7 +1593,7 @@ func observeAuthenticatedRun(
 	run domain.Run,
 	items []store.Snapshotted[domain.AttentionItem],
 ) (domain.RunObservation, error) {
-	observation, err := tx.ObserveRun(ctx, run.ID)
+	observation, err := tx.ObserveRun(ctx, run.ID) //nolint:forbidigo // the full authentication pass and the overlay follow
 	if err != nil {
 		return domain.RunObservation{}, err
 	}
@@ -1986,7 +1986,7 @@ func authenticateStatusMilestone(
 func ReadRunObservation(
 	ctx context.Context, tx *store.ReadTx, run domain.Run,
 ) (domain.RunObservation, error) {
-	observation, err := tx.ObserveRun(ctx, run.ID)
+	observation, err := tx.ObserveRun(ctx, run.ID) //nolint:forbidigo // this is the authenticated read the rule points to
 	if err != nil {
 		return domain.RunObservation{}, err
 	}

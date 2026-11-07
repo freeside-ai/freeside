@@ -281,7 +281,7 @@ func readRunObservation(
 ) (domain.RunObservation, *domain.Run, error) {
 	run, err := tx.GetRun(ctx, runID)
 	if errors.Is(err, store.ErrNotFound) {
-		observation, err := tx.ObserveRun(ctx, runID)
+		observation, err := tx.ObserveRun(ctx, runID) //nolint:forbidigo // a legacy run has no Run row to authenticate statuses against
 		return observation, nil, err
 	}
 	if err != nil {

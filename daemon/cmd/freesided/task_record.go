@@ -529,7 +529,7 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 			})
 		}
 	}
-	observation, err := tx.ObserveRun(ctx, runID)
+	observation, err := tx.ObserveRun(ctx, runID) //nolint:forbidigo // the conclusion reads the stored observation, so a status authentication failure leaves it standing
 	if err != nil {
 		// The conclusion is classified from the observation.
 		fail(taskRecordRunObservation, err)
