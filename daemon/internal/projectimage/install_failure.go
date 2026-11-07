@@ -37,6 +37,13 @@ var (
 	// line it is on.
 	goModRefused   = regexp.MustCompile(`^go: (?:errors parsing|error loading) \S*go\.mod:$`)
 	goModLineError = regexp.MustCompile(`^\S*go\.mod:\d+: `)
+	// goModRemovedGodebug is Go's error for a godebug line that sets a
+	// setting Go has removed to the old value it no longer supports. It
+	// names the setting's documentation, not a fetch. The setting and value
+	// are the candidate's, quoted by Go, so neither can hold a quote or
+	// space, and a candidate's text can't extend the line to name a URL.
+	goModRemovedGodebug = regexp.MustCompile(`^\S*go\.mod:\d+: removed GODEBUG "[^"\s]+" ` +
+		`set to old value "[^"\s]*" \(https://go\.dev/doc/godebug#go-1\d+\)$`)
 )
 
 // goProxyNotFoundSuffix is how Go ends an error for a module version the
@@ -106,10 +113,11 @@ func installFailure(output []byte) (string, bool) {
 //     go.mod or a dependency requires, which the proxy does not serve. Go's
 //     "requires" chain leads to it and its indented server response follows.
 //   - Go's refusal of the main module's go.mod, for an argument the rebuild
-//     gate leaves to Go, such as a godebug setting Go does not know. Go
-//     resolves a version it reads as a query through the proxy while it
-//     reads go.mod, so an error line naming any URL but such a 404 or 410 is
-//     a fetch that failed, and the whole refusal stays a host fault.
+//     gate leaves to Go, such as a godebug setting Go does not know or has
+//     removed. Go resolves a version it reads as a query through the proxy
+//     while it reads go.mod, so an error line naming any URL but such a 404
+//     or 410, or the documentation link of a removed godebug setting, is a
+//     fetch that failed, and the whole refusal stays a host fault.
 //
 // A connection, proxy, or name-resolution failure returns false. Go writes
 // these lines itself, and every module path and version it names has passed
@@ -163,7 +171,7 @@ func goRequiresChainStart(lines []string, end int) int {
 // goModRefusal returns the error lines Go wrote under its refusal of go.mod,
 // with their indented continuations, and whether every one is the
 // candidate's: no error line names a URL unless it ends in the pinned
-// proxy's 404 or 410.
+// proxy's 404 or 410 or is Go's refusal of a removed godebug setting.
 func goModRefusal(lines []string) ([]string, bool) {
 	var detail []string
 	for _, line := range lines {
@@ -171,7 +179,7 @@ func goModRefusal(lines []string) ([]string, bool) {
 			break
 		}
 		if !strings.HasPrefix(line, "\t") && strings.Contains(line, "://") &&
-			!goProxyNotFoundEnd.MatchString(line) {
+			!goProxyNotFoundEnd.MatchString(line) && !goModRemovedGodebug.MatchString(line) {
 			return nil, false
 		}
 		detail = append(detail, line)
