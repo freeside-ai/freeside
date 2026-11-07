@@ -302,11 +302,13 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 // workspace volume, and the trusted base tip moves between submissions), and
 // the composition, not the engine, knows the ward's workspace naming scheme
 // and how the operator resolves a base (#237). The engine replaces the
-// derived base commit in two cases: a maintenance task runs at its refusal's
-// tip (repairTaskRefusal), and a handoff conflict's remediation at the tip
-// its sealed authority names (handoffConflictAdmission). Each tip is read
-// from an immutable record, so every attempt derives the same base without
-// the Run carrying one.
+// derived base commit in three cases: a maintenance task runs at its
+// refusal's tip (repairTaskRefusal), a handoff conflict's remediation at the
+// tip its sealed authority names (handoffConflictAdmission), and a later
+// return to the agent or remediation at that tip when its candidate was
+// written there (handoffConflictTipAdmission). Each tip is read from an
+// immutable record, so every attempt derives the same base without the Run
+// carrying one.
 type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
 
 // WithAdmissionDerivation configures per-attempt workspace and base
@@ -504,11 +506,21 @@ func (e *Engine) admitAttempt(
 	}
 	// A remediation under a handoff conflict's authority runs at the tip that
 	// authority sealed (issue #2646), so its writer is seeded there and its
-	// export, verification, and review follow that base.
-	if tip, conflict, err := handoffConflictAdmission(ctx, e.store, binding.run.ID, invocationID); err != nil {
+	// export, verification, and review follow that base. A later cycle whose
+	// candidate was written on that tip, such as a return to the agent on
+	// the item the conflict's cycle published, runs there too (issue #2699).
+	tip, atTip, err := handoffConflictAdmission(ctx, e.store, binding.run.ID, invocationID)
+	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf(
 			"admit invocation %q: read handoff conflict authority: %w", invocationID, err)
-	} else if conflict {
+	}
+	if !atTip {
+		if tip, atTip, err = handoffConflictTipAdmission(ctx, e.store, binding.run.ID, stage, invocationID); err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: read handoff conflict tip: %w", invocationID, err)
+		}
+	}
+	if atTip {
 		if env.Base.Repo != tip.Repo || env.Base.RepositoryID != tip.RepositoryID || env.Base.BaseRef != tip.BaseRef {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: base %s#%d@%s, the run was admitted at %s#%d@%s: %w",
@@ -1078,4 +1090,97 @@ func handoffConflictAdmission(
 		return nil
 	})
 	return base, conflict, err
+}
+
+// handoffConflictTipAdmission returns the base an operator-feedback
+// invocation or a remediation not under a handoff conflict's authority is
+// admitted at when its candidate was written on a tip such an authority
+// sealed, and false for every other invocation (issue #2699). The commit is
+// the one the invocation's request names: for feedback, the returned
+// published candidate's base, read through FeedbackPublicationParent's
+// retry and answer ancestry; for a remediation, its request's base. The
+// request only selects the tip. What admits it is a handoff_conflict
+// authority in the run's successor chain that names that same tip, read
+// through the store's gate (PublicationSuccessorChain), which re-proves each
+// authority against its sealed handoff check. A request naming any other
+// commit keeps the derived base. The repository coordinates are the run's
+// production admission's, as for handoffConflictAdmission.
+//
+// Every attempt derives the same base: the request is immutable, and a
+// candidate is written on a sealed tip only after the authority naming it
+// sealed, so the chain already holds that authority when the request is
+// written and keeps it.
+func handoffConflictTipAdmission(
+	ctx context.Context, st *store.Store, runID domain.RunID, stage domain.Stage, invocationID domain.InvocationID,
+) (domain.BaseRevision, bool, error) {
+	_, remediation := remediationRoundForInvocation(runID, invocationID)
+	// The stage, not the prefix alone, makes an operator-feedback writer: a
+	// specification discussion's ID can carry the same prefix.
+	feedback := strings.HasPrefix(string(invocationID), "inv-operator-feedback-") &&
+		stage.ID == operatorFeedbackStageID(invocationID) && stage.Name == productionStageName
+	if !remediation && !feedback {
+		return domain.BaseRevision{}, false, nil
+	}
+	var (
+		base  domain.BaseRevision
+		atTip bool
+	)
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var requested string
+		if feedback {
+			// As for a remediation below, a feedback without an intent names
+			// no candidate.
+			if _, err := tx.GetOutbox(ctx, string(invocationID)); errors.Is(err, store.ErrNotFound) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			returned, _, found, err := tx.FeedbackPublicationParent(ctx, invocationID)
+			// A question answered before publication returns no candidate.
+			if err != nil || !found {
+				return err
+			}
+			if returned.RunID != runID {
+				return domain.ErrParentKeyMismatch
+			}
+			requested = returned.BaseSHA
+		} else {
+			entry, err := tx.GetOutbox(ctx, string(invocationID))
+			// The dispatch lane admits a remediation only from its intent,
+			// so, as in handoffConflictAdmission, one without an intent
+			// names no candidate.
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			request, err := decodeRemediationRequest(entry)
+			if err != nil {
+				return err
+			}
+			requested = request.BaseSHA
+		}
+		if requested == "" {
+			return nil
+		}
+		chain, err := tx.PublicationSuccessorChain(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(chain, func(s domain.PublicationSuccessor) bool {
+			return s.RemediatesHandoffConflict() && s.Reentry.BaseSHA == requested
+		}) {
+			return nil
+		}
+		production, err := tx.GetExecutionAdmissionRecord(ctx, productionInvocationID(runID))
+		if err != nil {
+			return err
+		}
+		base = production.Base
+		base.BaseSHA = requested
+		atTip = true
+		return nil
+	})
+	return base, atTip, err
 }
