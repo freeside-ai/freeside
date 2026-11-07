@@ -218,11 +218,19 @@ func adoptEscalatedArgs() []string {
 // remediator shares the implementer's agent.
 func adoptWriterLines() []string {
 	return []string{
-		"specifier=" + agentbaseline.WriterAgentName(domain.RoleSpecifier),
-		"implementer=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
-		"remediator=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
+		"specifier=" + adoptClaudeEnrollment + "/" + adoptSpecifierModel + "/high",
+		"implementer=" + adoptClaudeEnrollment + "/" + adoptImplementerModel + "/high",
+		"remediator=" + adoptClaudeEnrollment + "/" + adoptImplementerModel + "/high",
 	}
 }
+
+// adoptClaudeEnrollment is the writer identity's enrollment, which every
+// writer and judgment line selects.
+const adoptClaudeEnrollment = "claude-main/claude_code"
+
+// adoptCodexReviewLine is the reviewer line adoption emits for the Codex
+// review identity.
+const adoptCodexReviewLine = "reviewer=codex-review/codex_cli/gpt-fixture-1/high"
 
 // args is the adoption of both identities with the shadow arm off; extra
 // flags append, and a later flag overrides an earlier one.
@@ -311,7 +319,7 @@ func loadAdoptedPatch(t *testing.T, patch []byte) agenttree.Tree {
 func lineupRoles(tree agenttree.Tree) []string {
 	var roles []string
 	for _, line := range tree.Lineup {
-		roles = append(roles, line.Key+"="+line.Selection.AgentName)
+		roles = append(roles, line.Key+"="+line.Selection.TaskLineSelection().Text())
 	}
 	return roles
 }
@@ -322,7 +330,7 @@ func judgmentLines() []string {
 	var lines []string
 	for _, role := range agentbaseline.JudgmentRoles() {
 		if role != domain.RolePublicationAuthor {
-			lines = append(lines, string(role)+"="+agentbaseline.ClaudeCallAgentName)
+			lines = append(lines, string(role)+"="+adoptClaudeEnrollment+"/"+adoptJudgmentModel+"/medium")
 		}
 	}
 	return lines
@@ -394,7 +402,7 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 	}
 
 	tree := loadAdoptedPatch(t, patch)
-	wantRoles := append(adoptWriterLines(), "reviewer="+agentbaseline.CodexReviewAgentName)
+	wantRoles := append(adoptWriterLines(), adoptCodexReviewLine)
 	wantRoles = append(wantRoles, judgmentLines()...)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)
@@ -566,7 +574,7 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 	tree := loadAdoptedPatch(t, patch)
 	roles := lineupRoles(tree)
 	if len(roles) != 5+len(judgmentLines()) ||
-		roles[4] != "shadow_reviewer="+agentbaseline.ClaudeShadowReviewAgentName {
+		roles[4] != "shadow_reviewer="+adoptClaudeEnrollment+"/claude-opus/high" {
 		t.Fatalf("lineup = %v", roles)
 	}
 	// The shadow reviewer's agent names the model and effort adoption was
@@ -603,8 +611,10 @@ func TestAuthAdoptEscalatedSpecifier(t *testing.T) {
 	tree := loadAdoptedPatch(t, patch)
 	specifier := agentbaseline.WriterAgentName(domain.RoleSpecifier)
 	roles := lineupRoles(tree)
-	if len(roles) < 2 || roles[0] != "specifier="+specifier ||
-		roles[1] != "specifier.escalated."+specifier+"="+agentbaseline.ClaudeSpecifierEscalatedAgentName {
+	// The escalated line is keyed by the enrollment it escalates on and
+	// moves only the model and effort.
+	if len(roles) < 2 || roles[0] != adoptWriterLines()[0] ||
+		roles[1] != "specifier.escalated."+adoptClaudeEnrollment+"="+adoptClaudeEnrollment+"/claude-specifier-escalated/max" {
 		t.Fatalf("lineup = %v", roles)
 	}
 	agent, ok := tree.Agent(agentbaseline.ClaudeSpecifierEscalatedAgentName)
@@ -834,9 +844,13 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	callSelection, err := tree.SelectionOfAgent(agentbaseline.ClaudeCallAgentName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, role := range agentbaseline.JudgmentRoles() {
 		line, ok := lineup.Line(role)
-		if !ok || line.AgentName != agentbaseline.ClaudeCallAgentName {
+		if !ok || line.Names != callSelection.Names() {
 			t.Fatalf("line for %s = %+v, %v", role, line, ok)
 		}
 		want, owned := inference.CodeOwnedRolePrompt(role)
@@ -869,7 +883,7 @@ func TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines(t *testing.T) {
 			t.Fatalf("call offer without -judgment-model: %+v", offer)
 		}
 	}
-	want := append(adoptWriterLines(), "reviewer="+agentbaseline.CodexReviewAgentName)
+	want := append(adoptWriterLines(), adoptCodexReviewLine)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, want) {
 		t.Fatalf("lineup = %v, want %v", got, want)
 	}
@@ -1317,12 +1331,8 @@ func TestAuthAdoptClaudeReviewer(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	wantRoles := append([]string{
-		"specifier=" + agentbaseline.WriterAgentName(domain.RoleSpecifier),
-		"implementer=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
-		"remediator=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
-		"reviewer=" + agentbaseline.ClaudeReviewAgentName,
-	}, judgmentLines()...)
+	wantRoles := append(adoptWriterLines(), "reviewer=claude-review/claude_code/"+adoptClaudeReviewModel+"/high")
+	wantRoles = append(wantRoles, judgmentLines()...)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)
 	}
@@ -1384,7 +1394,7 @@ func TestAuthAdoptOneIdentityClaudeReviewer(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	if roles := lineupRoles(tree); !slices.Contains(roles, "reviewer="+agentbaseline.ClaudeReviewAgentName) {
+	if roles := lineupRoles(tree); !slices.Contains(roles, "reviewer="+adoptClaudeEnrollment+"/"+adoptClaudeReviewModel+"/high") {
 		t.Fatalf("lineup = %v", roles)
 	}
 	snap := f.snapshot(t)
@@ -1495,15 +1505,16 @@ func TestAuthAdoptSecondWriter(t *testing.T) {
 		t.Fatalf("lineup = %v, want the one-writer lineup %v", got, want)
 	}
 	f.withStore(t, func(st *store.Store) {
+		// The second writer's agents run its enrollment, and that
+		// enrollment mounts the second identity's volume.
 		for _, role := range []domain.RoleName{domain.RoleSpecifier, domain.RoleImplementer} {
 			name := agentbaseline.WriterAgentName(role) + agentbaseline.SecondWriterAgentSuffix
-			agent, err := engine.ResolveAgent(ctx, st, tree, name)
-			if err != nil {
-				t.Fatalf("resolve %s: %v", name, err)
+			if agent, ok := tree.Agent(name); !ok || agent.Enrollment != "claude-second/claude_code" {
+				t.Fatalf("%s = %+v, %v; want it on the second writer's enrollment", name, agent, ok)
 			}
-			if agent.Identity.ID != "claude-second" || agent.Generation.AuthStoreVolume != adoptSecondVolume {
-				t.Fatalf("%s runs %s on %s", name, agent.Identity.ID, agent.Generation.AuthStoreVolume)
-			}
+		}
+		if volume, err := resolvePreflightSecondWriter(ctx, st, "claude-second"); err != nil || volume != adoptSecondVolume {
+			t.Fatalf("second writer volume = %q, %v; want %q", volume, err, adoptSecondVolume)
 		}
 	})
 

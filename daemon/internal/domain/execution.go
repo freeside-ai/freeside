@@ -238,7 +238,9 @@ type ExecutionAdmission struct {
 // generation, store bytes, and egress the attempt was admitted with. The
 // existing fields (identity, credential mode, endpoints, instruction
 // delivery) become derivations of these; the ones the pure closure expresses
-// are rechecked at reconstruction (ValidateAdmissionAgentDerivations), while
+// are rechecked by the admission that records them
+// (ValidateAdmissionSelectionDerivations, or ValidateAdmissionAgentDerivations
+// for a binding admitted under an agent), while
 // the image's build-to-image binding is the #867 resolver's, since no
 // closure fragment carries an image reference. This value is the authority
 // the derivations flow from.
@@ -1200,7 +1202,11 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 }
 
 // ValidateAdmissionAgentDerivations rechecks a v4 admission's derived fields
-// against the closure its agent binding names (§5.4 admission step 5:
+// against the closure its agent binding names. Since #2734 every admission
+// is under a selection (ValidateAdmissionSelectionDerivations), so no
+// production path produces a binding this checks; it stays, with its tests,
+// as the rule a recorded agent binding was admitted under, until #2599
+// removes the agent documents. It checks (§5.4 admission step 5:
 // "Reconstruction reads by digest and rechecks the derivations"). The caller
 // supplies the closure it resolved by digest — the agent, its adapter,
 // route, and offer fragments, the stage's launch with the role the

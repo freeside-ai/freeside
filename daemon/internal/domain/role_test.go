@@ -66,7 +66,7 @@ func TestRoleShapeAndPlace(t *testing.T) {
 	}
 	if lineup, err := domain.ResolveLineup([]domain.PolicyKey{lineupKey("lineup.role.triager")}); err != nil {
 		t.Fatalf("a triager lineup line = %v", err)
-	} else if line, present := lineup.Line(domain.RoleTriager); !present || line.AgentName == "" {
+	} else if line, present := lineup.Line(domain.RoleTriager); !present || line.Names.Enrollment == "" {
 		t.Fatalf("the triager's line did not resolve: %+v, %t", line, present)
 	}
 	for _, notRole := range []domain.RoleName{"", "verification", "researcher", "implementation"} {

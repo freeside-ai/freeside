@@ -133,13 +133,7 @@ func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	}
 	regate := func(record domain.AlternateAgentRetry, agent string) error {
 		return f.store.Read(ctx, func(tx *store.ReadTx) error {
-			resolved, err := resolveAgent(ctx, tx, f.selection.Tree, agent)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := resolved.readGeneration(ctx, tx); err != nil {
-				t.Fatal(err)
-			}
+			resolved := cardRoleAgent(t, ctx, tx, f.selection.Tree, agent)
 			return regateCardAgent(ctx, tx, f.selection.Tree, record, resolved)
 		})
 	}
@@ -147,12 +141,16 @@ func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	if err := regate(chosen, agentTestSecondAgent); err != nil {
 		t.Fatalf("the chosen agent was refused: %v", err)
 	}
+	// Admission resolves the agent the record names, so a record that chose
+	// the failed agent resolves to it.
+	failedAgent := chosen
+	failedAgent.Agent = agentTestWriterAgent
 	for name, tc := range map[string]struct {
 		record domain.AlternateAgentRetry
 		agent  string
 		want   string
 	}{
-		"the failed agent": {chosen, agentTestWriterAgent, "chose the agent that failed"},
+		"the failed agent": {failedAgent, agentTestWriterAgent, "chose the agent that failed"},
 		"another pool": {
 			record(routerMainPool, domain.AlternateAgentDifferentPool), agentTestSecondAgent, "another pool",
 		},
@@ -418,16 +416,29 @@ func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = f.store.Read(ctx, func(tx *store.ReadTx) error {
-		sibling, err := resolveAgent(ctx, tx, f.selection.Tree, agentTestSiblingAgent)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := sibling.readGeneration(ctx, tx); err != nil {
-			t.Fatal(err)
-		}
+		sibling := cardRoleAgent(t, ctx, tx, f.selection.Tree, agentTestSiblingAgent)
 		return regateCardAgent(ctx, tx, f.selection.Tree, record, sibling)
 	})
 	if err == nil || !strings.Contains(err.Error(), "no longer escapes") {
 		t.Fatalf("regate of the sibling = %v, want it refused", err)
 	}
+}
+
+// cardRoleAgent resolves the selection a card record's tree agent reduces
+// to, with its generation, as resolveCardAgent does before it re-gates the
+// record.
+func cardRoleAgent(t *testing.T, ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, name string) RoleAgent {
+	t.Helper()
+	selection, err := tree.SelectionOfAgent(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := resolveNames(ctx, tx, tree, selection.Names(), &name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.readGeneration(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	return agent
 }

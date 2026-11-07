@@ -172,81 +172,30 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 	})
 }
 
-// treeAdoptedBeforeReviewAgentsNamedALaunch rewrites an adopted tree's review
-// agents into the shape adoption wrote before they named a model and an
-// effort: the reviewer on codex_review_v1 asking harness_default from an
-// offer that allows only that, and the shadow reviewer line on the writer
-// agent of that era, `claude-code-default` on the offer that names no model,
-// put back here because the baseline no longer emits it. Every digest and
-// lineup line follows, so the only thing wrong with the tree is what it
-// lacks.
-func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree) agenttree.Tree {
+// treeWithReviewLinesNamingNoLaunch rewrites an adopted tree's review lines
+// to name what their launch would not pass: the reviewer line asking
+// harness_default, which sends no effort, and the shadow reviewer line on
+// the native-default model id, which names no model. Adoption no longer
+// writes either, but a hand-edited lineup can, so the only thing wrong with
+// the tree is what its lines lack.
+func treeWithReviewLinesNamingNoLaunch(t *testing.T, tree agenttree.Tree) agenttree.Tree {
 	t.Helper()
 	old := tree
-	old.Agents, old.Offers = slices.Clone(tree.Agents), slices.Clone(tree.Offers)
 	old.Lineup = slices.Clone(tree.Lineup)
-	v1, err := agentbaseline.CodexReviewAdapterV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	old.Adapters = append(slices.Clone(tree.Adapters),
-		agenttree.Adapter{Name: agentbaseline.CodexReviewAdapterV1Build, Fragment: v1})
-	for i := range old.Agents {
-		if old.Agents[i].Name == agentbaseline.CodexReviewAgentName {
-			old.Agents[i].Adapter, old.Agents[i].Effort = agentbaseline.CodexReviewAdapterV1Build, domain.EffortHarnessDefault
-		}
-	}
-	for i := range old.Offers {
-		if old.Offers[i].Name != agentbaseline.CodexOfferName {
-			continue
-		}
-		old.Offers[i].Fragment.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
-		if old.Offers[i].Fragment.Digest, err = old.Offers[i].Fragment.ComputeDigest(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writer := agentbaseline.WriterAgentName(domain.RoleImplementer)
-	for _, offer := range tree.Offers {
-		if offer.Name != writer {
-			continue
-		}
-		native := offer
-		native.Name = agentbaseline.ClaudeOfferName
-		native.Fragment.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID
-		native.Fragment.IdentityStability = domain.IdentityOpaque
-		native.Fragment.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
-		if native.Fragment.Digest, err = native.Fragment.ComputeDigest(); err != nil {
-			t.Fatal(err)
-		}
-		old.Offers = append(old.Offers, native)
-	}
-	for _, agent := range tree.Agents {
-		if agent.Name != writer {
-			continue
-		}
-		agent.Name, agent.Offer, agent.Effort = agentbaseline.ClaudeAgentName, agentbaseline.ClaudeOfferName, domain.EffortHarnessDefault
-		old.Agents = append(old.Agents, agent)
-	}
-	old.Sort()
 	for i := range old.Lineup {
-		line := &old.Lineup[i].Selection
-		switch domain.RoleName(old.Lineup[i].Key) {
-		case domain.RoleReviewer:
-		case domain.RoleShadowReviewer:
-			line.AgentName = agentbaseline.ClaudeAgentName
-		default:
-			continue
-		}
-		if line.AgentDigest, err = old.AgentDigest(line.AgentName); err != nil {
-			t.Fatal(err)
+		names := &old.Lineup[i].Selection.Names
+		if role := domain.RoleName(old.Lineup[i].Key); role == domain.RoleReviewer {
+			names.Effort = string(domain.EffortHarnessDefault)
+		} else if role == domain.RoleShadowReviewer {
+			names.Model = domain.ClaudeCodeNativeDefaultRouteModelID
 		}
 	}
 	return old
 }
 
-// TestReviewRoleNeedsAModelAndAnEffort runs this build on a tree adopted
-// before the review agents named what their launch passes. Each review role
-// is refused by name with what its agent lacks, at startup, in preflight,
+// TestReviewRoleNeedsAModelAndAnEffort runs this build on a tree whose
+// review lines name no model or no effort for the launch to pass. Each
+// review role is refused by name with what its line lacks, at startup, in preflight,
 // and before a review, instead of launching on the harness's own defaults.
 func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 	t.Parallel()
@@ -257,43 +206,72 @@ func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
-	old := treeAdoptedBeforeReviewAgentsNamedALaunch(t, loadAdoptedPatch(t, patch))
+	old := treeWithReviewLinesNamingNoLaunch(t, loadAdoptedPatch(t, patch))
 	f.withStore(t, func(st *store.Store) {
 		for role, lacks := range map[domain.RoleName]string{
-			domain.RoleReviewer:       "asks effort harness_default, which sends none",
-			domain.RoleShadowReviewer: "is on an offer that names no model",
+			domain.RoleReviewer:       "names the harness-default effort, which sends none",
+			domain.RoleShadowReviewer: "names the native-default model",
 		} {
 			_, err := reviewRoleAgent(ctx, st, old, role, now)
 			var failure *roleAdmissionError
 			if !errors.As(err, &failure) || failure.Role != role || !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), "role "+string(role)) || !strings.Contains(err.Error(), lacks) {
-				t.Fatalf("%s on the earlier tree = %v, want it refused because its agent %s", role, err, lacks)
+				t.Fatalf("%s on the edited tree = %v, want it refused because its line %s", role, err, lacks)
 			}
-			// The identity is never compared: the agent is refused first, so
-			// the refusal has to name what the agent lacks.
+			// The identity is never compared: the line is refused first, so
+			// the refusal has to name what the line lacks.
 			admit := reviewAdmission(st, old, testReviewRole(role, nil), time.Now)
 			if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), lacks) {
-				t.Fatalf("%s review admission on the earlier tree = %v, want it refused because its agent %s", role, err, lacks)
+				t.Fatalf("%s review admission on the edited tree = %v, want it refused because its line %s", role, err, lacks)
 			}
 		}
 		var failure *roleAdmissionError
 		if _, err := resolveReviewSelection(ctx, st, old, flagEraReviewConfig(), now); !errors.As(err, &failure) ||
 			failure.Role != domain.RoleReviewer {
-			t.Fatalf("startup selection on the earlier tree = %v", err)
+			t.Fatalf("startup selection on the edited tree = %v", err)
 		}
 		_, err := resolvePreflightAgents(ctx, st, old, domain.Digest("sha256:"+strings.Repeat("4", 64)), ward.CodexAuthSubscription, true, now)
 		if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer {
-			t.Fatalf("preflight agents on the earlier tree = %v", err)
+			t.Fatalf("preflight agents on the edited tree = %v", err)
+		}
+	})
+}
+
+// TestPreflightResolvesAWriterLinesSelection edits a writer line to an effort
+// no Claude ward adapter sends: preflight refuses the role by name, rather
+// than passing a line the daemon's startup check would hold.
+func TestPreflightResolvesAWriterLinesSelection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	tree.Lineup = slices.Clone(tree.Lineup)
+	for i := range tree.Lineup {
+		if domain.RoleName(tree.Lineup[i].Key) == domain.RoleRemediator {
+			tree.Lineup[i].Selection.Names.Effort = "no-such-effort"
+		}
+	}
+	f.withStore(t, func(st *store.Store) {
+		_, err := resolvePreflightAgents(ctx, st, tree, domain.Digest("sha256:"+strings.Repeat("4", 64)),
+			ward.CodexAuthSubscription, false, time.Now().UTC())
+		var failure *roleAdmissionError
+		if !errors.As(err, &failure) || failure.Role != domain.RoleRemediator || !strings.Contains(err.Error(), "no-such-effort") {
+			t.Fatalf("preflight agents with an unsendable remediator effort = %v", err)
 		}
 	})
 }
 
 // TestReviewRoleRefusesAModelTheLaunchCannotPass hand-authors each review
-// agent's offer with a model that is no single argument: a comma, which the
-// review launch's own rule refuses, and a leading dash, which a CLI would
-// read as another option. Adoption refuses both as flags; a committed offer
-// is held to the same rule.
+// line with a model that is no single argument: a comma, which the review
+// launch's own rule refuses, and a leading dash, which a CLI would read as
+// another option and the lineup's launch-option rule refuses when the role
+// reads its line.
+// Adoption refuses both as flags; a committed line is held to the same rule.
 func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -305,42 +283,27 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 	}
 	adopted := loadAdoptedPatch(t, patch)
 	for _, tc := range []struct {
-		role         domain.RoleName
-		agent, offer string
-		model        string
+		role  domain.RoleName
+		model string
+		want  string
 	}{
-		{domain.RoleReviewer, agentbaseline.CodexReviewAgentName, agentbaseline.CodexOfferName, "gpt,fixture"},
-		{
-			domain.RoleShadowReviewer, agentbaseline.ClaudeShadowReviewAgentName,
-			agentbaseline.ClaudeShadowReviewOfferName, "--dangerously-skip-permissions",
-		},
+		{domain.RoleReviewer, "gpt,fixture", "cannot pass as one argument"},
+		{domain.RoleShadowReviewer, "--dangerously-skip-permissions", "each one launch option value"},
 	} {
 		t.Run(string(tc.role), func(t *testing.T) {
 			tree := adopted
-			tree.Offers, tree.Lineup = slices.Clone(adopted.Offers), slices.Clone(adopted.Lineup)
-			offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool { return o.Name == tc.offer })
-			if offer < 0 {
-				t.Fatalf("adopted tree has no offer %s", tc.offer)
-			}
-			tree.Offers[offer].Fragment.RouteModelID = tc.model
-			if tree.Offers[offer].Fragment.Digest, err = tree.Offers[offer].Fragment.ComputeDigest(); err != nil {
-				t.Fatal(err)
-			}
-			digest, err := tree.AgentDigest(tc.agent)
-			if err != nil {
-				t.Fatal(err)
-			}
+			tree.Lineup = slices.Clone(adopted.Lineup)
 			for i := range tree.Lineup {
 				if domain.RoleName(tree.Lineup[i].Key) == tc.role {
-					tree.Lineup[i].Selection.AgentDigest = digest
+					tree.Lineup[i].Selection.Names.Model = tc.model
 				}
 			}
 			f.withStore(t, func(st *store.Store) {
 				_, err := reviewRoleAgent(ctx, st, tree, tc.role, now)
 				var failure *roleAdmissionError
 				if !errors.As(err, &failure) || failure.Role != tc.role || !errors.Is(err, engine.ErrAgentNotAdmissible) ||
-					!strings.Contains(err.Error(), "cannot pass as one argument") {
-					t.Fatalf("%s on an offer naming %q = %v, want it refused for the model's shape", tc.role, tc.model, err)
+					!strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("%s on a line naming %q = %v, want it refused for the model's shape", tc.role, tc.model, err)
 				}
 			})
 		})
@@ -350,8 +313,9 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 // TestReviewSelectionFailsClosed covers the review roles' startup and
 // per-review checks: a lineup with no reviewer line refuses and names the
 // role, an attended daemon resolves no review role, an offer past its
-// not_after refuses, and a source composed under an identity refuses its
-// next review once the identity is disabled.
+// not_after no longer refuses (a selection names no offer), and a source
+// composed under an identity refuses its next review once the identity is
+// disabled.
 func TestReviewSelectionFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -396,7 +360,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		})
 	})
 
-	t.Run("offer past its not_after", func(t *testing.T) {
+	t.Run("offer past its not_after admits", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
 		_, patch, err := f.run(t, f.shadowArgs())
 		if err != nil {
@@ -409,21 +373,19 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 			}
 		}
 		f.withStore(t, func(st *store.Store) {
+			// The review agents' offers still sit in the tree for the wire's
+			// name translation, but admission reads the line's selection, so
+			// a moment past every offer's not_after admits.
+			var expired time.Time
+			for _, offer := range tree.Offers {
+				if offer.Fragment.NotAfter.After(expired) {
+					expired = offer.Fragment.NotAfter
+				}
+			}
+			expired = expired.Add(time.Second)
 			for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleShadowReviewer} {
-				agent, err := reviewRoleAgent(ctx, st, tree, role, now)
-				if err != nil {
-					t.Fatalf("%s before the offer's not_after: %v", role, err)
-				}
-				expired := agent.Resolved.Offer.NotAfter.Add(time.Second)
-				_, err = reviewRoleAgent(ctx, st, tree, role, expired)
-				var failure *roleAdmissionError
-				if !errors.As(err, &failure) || failure.Role != role ||
-					!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "not_after") {
-					t.Fatalf("%s after the offer's not_after = %v", role, err)
-				}
-				admit := reviewAdmission(st, tree, testReviewRole(role, nil), func() time.Time { return expired })
-				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
-					t.Fatalf("%s review admission after the offer's not_after = %v", role, err)
+				if _, err := reviewRoleAgent(ctx, st, tree, role, expired); err != nil {
+					t.Fatalf("%s after the offer's not_after = %v, want it admitted", role, err)
 				}
 			}
 		})
@@ -619,10 +581,12 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 				if err != nil {
 					t.Fatalf("admit the %s invocation: %v", role, err)
 				}
-				definition, offer := arm.agent.Resolved.Definition, arm.agent.Resolved.Offer
+				selection := arm.agent.Selection
+				lineage := domain.LineageGroupOf(arm.agent.Adapter.ClientKind, selection.ModelID)
 				if admitted.InvocationID != id || admitted.RunID != run.ID || admitted.Role != role ||
-					admitted.AuthIdentityID != arm.agent.Identity.ID || admitted.LineageGroup != offer.LineageGroup ||
-					admitted.AgentBinding.AgentDigest != definition.Digest ||
+					admitted.AuthIdentityID != arm.agent.Identity.ID || admitted.LineageGroup != lineage || lineage == "" ||
+					admitted.AgentBinding.AgentDigest != selection.Digest ||
+					admitted.AgentBinding.SelectionDigest != selection.Digest ||
 					admitted.AgentBinding.LineupRevision != revision ||
 					admitted.ProviderLabel() != arm.provider ||
 					admitted.ModelConfiguration() != arm.agent.Model+"/"+arm.agent.NativeEffort ||
@@ -637,7 +601,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// The reviewer line of this task names an agent on another
 			// harness: the engine refuses the invocation before any snapshot
 			// exists. The shadow reviewer reads no line.
-			submitReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName)
+			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleShadowReviewer))
 			var failure *roleAdmissionError
 			if _, err := admitter(ctx, domain.RoleReviewer, run.ID, "review-admitted-refused", now); !errors.As(err, &failure) ||
 				failure.Role != domain.RoleReviewer || !errors.Is(err, engine.ErrAgentNotAdmissible) {
@@ -650,7 +614,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 
 		t.Run("the line names the agent the source runs", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-same-agent")
-			submitReviewedRunLine(t, st, run, domain.RoleReviewer, reviewer.Line.AgentName)
+			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer))
 			if err := admit(ctx, admittedReviewRequest(t, st, tree, domain.RoleReviewer, run.ID)); err != nil {
 				t.Fatalf("review admission with a line naming the composed agent: %v", err)
 			}
@@ -686,10 +650,10 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// The other agent is a real one that passes every admission step
 			// for its own role: the refusal is the source's harness, not the
 			// agent.
-			if shadow.Line.AgentName == reviewer.Line.AgentName {
+			if lineupAgent(t, tree, domain.RoleShadowReviewer) == lineupAgent(t, tree, domain.RoleReviewer) {
 				t.Fatal("the fixture's two review roles share an agent")
 			}
-			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName)
+			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleShadowReviewer))
 			req := exec.ReviewRequest{RunID: run.ID}
 			refused(t, req, string(line.ID))
 			refused(t, req, "harness client")
@@ -716,15 +680,15 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		t.Run("the line does not hold against its command", func(t *testing.T) {
 			// Each line names the composed agent, so only the anchor refuses.
 			unrecorded := seedReviewedRun(t, st, "run-unrecorded")
-			setReviewedRunLine(t, st, unrecorded, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-never-recorded", 0)
+			setReviewedRunLine(t, st, unrecorded, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer), "cmd-never-recorded", 0)
 			refused(t, exec.ReviewRequest{RunID: unrecorded.ID}, "cmd-never-recorded")
 
 			borrowed := seedReviewedRun(t, st, "run-borrowed")
-			setReviewedRunLine(t, st, borrowed, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-run-same-agent", 0)
+			setReviewedRunLine(t, st, borrowed, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer), "cmd-run-same-agent", 0)
 			refused(t, exec.ReviewRequest{RunID: borrowed.ID}, "that command created task")
 
 			late := seedReviewedRun(t, st, "run-late")
-			setReviewedRunLine(t, st, late, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-run-late", time.Second)
+			setReviewedRunLine(t, st, late, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer), "cmd-run-late", time.Second)
 			refused(t, exec.ReviewRequest{RunID: late.ID}, "its task was created at")
 		})
 
@@ -774,19 +738,17 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 			},
 			want: "this daemon reviews with",
 		},
-		"the line selects an agent on the other harness": {
+		"the line selects a selection on the other harness": {
 			breakIt: func(_ *testing.T, f *fixture, role domain.RoleName, _ engine.ReviewRoleAgent) {
-				theirs := lineOf(f.tree, other[role])
-				mine := lineOf(f.tree, role)
-				mine.AgentName, mine.AgentDigest = theirs.AgentName, theirs.AgentDigest
+				lineOf(f.tree, role).Names = lineOf(f.tree, other[role]).Names
 			},
 			want: "runs harness client",
 		},
-		"the offer is past its not_after": {
-			breakIt: func(_ *testing.T, f *fixture, _ domain.RoleName, agent engine.ReviewRoleAgent) {
-				f.at = agent.Resolved.Offer.NotAfter.Add(time.Second)
+		"the line names an enrollment the store lacks": {
+			breakIt: func(_ *testing.T, f *fixture, role domain.RoleName, _ engine.ReviewRoleAgent) {
+				lineOf(f.tree, role).Names.Enrollment = "absent-identity/claude_code"
 			},
-			want: "not_after",
+			want: "its enrollment cannot be read",
 		},
 		"the identity holds no current credential": {
 			breakIt: func(t *testing.T, f *fixture, _ domain.RoleName, agent engine.ReviewRoleAgent) {
@@ -798,7 +760,7 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 		"the task's line names an agent on another harness": {
 			roles: []domain.RoleName{domain.RoleReviewer},
 			breakIt: func(t *testing.T, f *fixture, role domain.RoleName, _ engine.ReviewRoleAgent) {
-				submitReviewedRunLine(t, f.st, f.run, role, lineOf(f.tree, other[role]).AgentName)
+				submitReviewedRunLine(t, f.st, f.run, role, lineupAgent(t, f.tree, other[role]))
 			},
 			want: "harness client",
 		},
@@ -1030,18 +992,18 @@ func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 			t.Fatal(err)
 		}
 		name := agentbaseline.WriterAgentName(domain.RoleImplementer)
+		moved, err := tree.SelectionOfAgent(name)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for i := range tree.Agents {
 			if tree.Agents[i].Name == name {
 				tree.Agents[i].Enrollment = string(enrollment.ID)
 			}
 		}
-		digest, err := tree.AgentDigest(name)
-		if err != nil {
-			t.Fatal(err)
-		}
 		for i := range tree.Lineup {
-			if tree.Lineup[i].Selection.AgentName == name {
-				tree.Lineup[i].Selection.AgentDigest = digest
+			if tree.Lineup[i].Selection.Names == moved.Names() {
+				tree.Lineup[i].Selection.Names.Enrollment = string(enrollment.ID)
 			}
 		}
 		revision, err := treeRevision(tree)
@@ -1431,12 +1393,18 @@ func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
 	})
 }
 
-// lineupAgent is the agent the tree's lineup line for role names.
+// lineupAgent is the tree agent that runs the selection the tree's lineup
+// line for role names (the first of twins), for a task line that names an
+// agent on the wire.
 func lineupAgent(t *testing.T, tree agenttree.Tree, role domain.RoleName) string {
 	t.Helper()
 	for _, line := range tree.Lineup {
 		if domain.RoleName(line.Key) == role {
-			return line.Selection.AgentName
+			name, err := tree.AgentForSelection(role, line.Selection.TaskLineSelection())
+			if err != nil {
+				t.Fatalf("no tree agent runs the %s line: %v", role, err)
+			}
+			return name
 		}
 	}
 	t.Fatalf("the tree has no %s line", role)

@@ -1,5 +1,5 @@
 {
-  "id": "sha256:4fd2eb7f3f950e71943463f30ba17acce2786ff18646b67e113d38c2de4ac9c1",
+  "id": "sha256:d37113f737c80fcfd8200bae07f80cf05aaff67449f6c4ae78ca25e84656674e",
   "invocation_id": "inv-5",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -47,10 +47,9 @@
   "trust_profile_digest": null,
   "backup_encryption_waiver": null,
   "agent_binding": {
-    "agent_digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a",
+    "agent_digest": "sha256:9e51a0466655d03f5b0fab46b5ef0778d26237ee3dec99fc7bf91f45038f97e9",
     "launch_digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc",
-    "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "pricing_revision": "2026-08",
+    "treatment_digest": "sha256:3ada6d79d803c01007e9d7c3c23bab49f5f22ac2c19c94e424eb1cf84c971f62",
     "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "enrollment_id": "enroll-openai-A-codex",
     "enrollment_generation": 2,
@@ -62,7 +61,9 @@
     "selection_record_id": "sha256:a99eb0f058e945b3b19ed29013787a28c3e3bf385cfb73479dd0dab6b481c74e",
     "selection_digest": "sha256:9e51a0466655d03f5b0fab46b5ef0778d26237ee3dec99fc7bf91f45038f97e9",
     "selection_model_id": "gpt-5.6-sol",
-    "selection_effort": "xhigh"
+    "selection_effort": "xhigh",
+    "harness_client": "codex_cli",
+    "lineage_group": "openai"
   },
   "admitted_at": "2026-01-02T03:04:05Z"
 }

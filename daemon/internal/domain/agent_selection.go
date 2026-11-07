@@ -330,8 +330,8 @@ func ReduceAgentSelection(agent AgentDefinition, adapter AdapterFragment, offer 
 // tree order. The effort is part of the choice because a tree may keep a
 // retired adapter beside its successor (codex_review_v1, which sends only
 // harness_default, beside codex_review_v2); the selection's effort tells them
-// apart. This is stage shape only: the call launch and the judgment roles
-// keep their agent's adapter.
+// apart. This is stage shape only: a judgment call picks its adapter with
+// SelectAdapterForCall.
 func SelectAdapterForLaunch(
 	adapters []AdapterFragment, client HarnessClientKind, launch LaunchSpec, effort string,
 	waived ...LaunchCapability,
@@ -364,6 +364,36 @@ func SelectAdapterForLaunch(
 	}
 	return AdapterFragment{}, fmt.Errorf("client %s, stage %s, effort %s: %d adapters: %w",
 		client, launch.Stage, effort, len(covering), ErrAmbiguousAdapterForLaunch)
+}
+
+// SelectAdapterForCall picks, among adapters, the call adapter for the
+// client kind that can send the selection's native effort: one that gives
+// the harness no tools, which is the wardless launch shape (plan §5.4). The
+// caller passes only the adapters whose call launch is proved. No adapter
+// fails with ErrNoAdapterForLaunch and more than one with
+// ErrAmbiguousAdapterForLaunch; the choice is never left to tree order.
+func SelectAdapterForCall(
+	adapters []AdapterFragment, client HarnessClientKind, effort string,
+) (AdapterFragment, error) {
+	var covering []AdapterFragment
+	for _, adapter := range adapters {
+		if err := adapter.Validate(); err != nil {
+			return AdapterFragment{}, err
+		}
+		caps := adapter.LaunchCapabilities
+		if adapter.ClientKind == client && sendsEffort(adapter, effort) &&
+			!caps.Has(LaunchCapReadTools) && !caps.Has(LaunchCapMutationTools) {
+			covering = append(covering, adapter)
+		}
+	}
+	switch len(covering) {
+	case 0:
+		return AdapterFragment{}, fmt.Errorf("client %s call, effort %s: %w", client, effort, ErrNoAdapterForLaunch)
+	case 1:
+		return covering[0], nil
+	}
+	return AdapterFragment{}, fmt.Errorf("client %s call, effort %s: %d adapters: %w",
+		client, effort, len(covering), ErrAmbiguousAdapterForLaunch)
 }
 
 // sendsEffort reports whether the adapter can send the native effort: some

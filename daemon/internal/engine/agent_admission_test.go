@@ -74,6 +74,13 @@ func agentTestWriters() map[domain.RoleName]agentbaseline.Selection {
 
 var agentTestWriterAgent = agentbaseline.WriterAgentName(domain.RoleImplementer)
 
+// agentTestWriterLine is the implementer lineup line's selection as a stored
+// refusal records it: the lineup's own text, which is printable.
+const agentTestWriterLine = agentTestEnrollment + "/claude-implementer-test/high"
+
+// agentTestEnrollment is the fixture's writer enrollment.
+const agentTestEnrollment = "claude-main/claude_code"
+
 // newAgentAdmissionFixture seeds an adopted Claude identity whose generation
 // mounts a volume other than the identity's interim one, the baseline tree
 // over it, and the baseline conformance records, and returns an engine that
@@ -105,7 +112,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 		},
 	}
 	f.enrollment = domain.ClientEnrollment{
-		ID: "claude-main/claude_code", AuthIdentityID: f.identity.ID,
+		ID: agentTestEnrollment, AuthIdentityID: f.identity.ID,
 		HarnessClient: domain.HarnessClientClaudeCode, Route: "anthropic-subscription",
 		AuthMethod: domain.AuthMethodSetupToken, CredentialMode: domain.CredentialSubscriptionContained,
 		RefreshStrategy: domain.RefreshExternal, AccountBinding: f.identity.AccountBinding,
@@ -283,11 +290,14 @@ func TestLineupAdmissionBindsTheRolesAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.AgentDigest != line.AgentDigest || binding.LaunchDigest != launch.Digest ||
+	// A selection admission records the selection as its agent digest and
+	// no pricing revision: the selection names no offer to price it.
+	if !binding.SelectionAdmitted() || binding.SelectionModelID != line.Names.Model ||
+		binding.LaunchDigest != launch.Digest ||
 		binding.LineupRevision != f.selection.LineupRevision ||
 		binding.EnrollmentID != f.enrollment.ID || binding.EnrollmentGeneration != f.generation.Ordinal ||
 		binding.StoreManifestDigest != f.generation.StoreManifestDigest ||
-		binding.PricingRevision != "pricing-2026-08" ||
+		binding.PricingRevision != "" ||
 		!slices.Equal(binding.EffectiveEgress, agentTestEgress) {
 		t.Fatalf("agent binding = %+v", *binding)
 	}
@@ -474,12 +484,6 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			check: domain.AdmissionCheckAgentResolution,
 		},
 		{
-			name:  "the offer lapses before the attempt's deadline",
-			at:    agentTestAt.Add(30 * 24 * time.Hour),
-			want:  "not_after precedes the attempt deadline",
-			check: domain.AdmissionCheckAgentOfferDeadline, named: true,
-		},
-		{
 			name: "a provider endpoint outside the route",
 			mutate: func(_ *testing.T, _ *agentAdmissionFixture, selection *AgentSelection) {
 				selection.EffectiveEgress = []string{"api.anthropic.com:443", "example.com:443"}
@@ -488,15 +492,15 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			check: domain.AdmissionCheckAgentEgressAuthority, named: true,
 		},
 		{
-			name: "the line names an agent digest the tree no longer resolves",
+			name: "the line names an enrollment the store lacks",
 			mutate: func(_ *testing.T, _ *agentAdmissionFixture, selection *AgentSelection) {
 				lineup := slices.Clone(selection.Tree.Lineup)
 				for i := range lineup {
-					lineup[i].Selection.AgentDigest = agentTestDigest("e")
+					lineup[i].Selection.Names.Enrollment = "absent/claude_code"
 				}
 				selection.Tree.Lineup = lineup
 			},
-			want:  "the lineup selects agent digest",
+			want:  "its enrollment cannot be read",
 			check: domain.AdmissionCheckAgentResolution,
 		},
 		{
@@ -530,7 +534,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			}
 			agent, launch := "", (*domain.LaunchSpec)(nil)
 			if tc.named {
-				agent, launch = agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer)
+				agent, launch = agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer)
 			} else if tc.check != domain.AdmissionCheckAgentLaunch {
 				launch = agentTestLaunch(t, f, domain.RoleImplementer)
 			}
@@ -617,7 +621,7 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 		t.Fatalf("resolve after a failed conformance pass = %v", err)
 	}
 	assertAdmissionDetail(t, err, domain.AdmissionCheckAgentLaunchCoverage,
-		agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer))
+		agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer))
 }
 
 func TestWithAdmissionRefusesAgentSelectionBesideAnIdentity(t *testing.T) {
@@ -895,6 +899,8 @@ func TestReviewCheckRefusesAMarkedGenerationAfterOtherChecks(t *testing.T) {
 	}
 	badPrompt := spec
 	badPrompt.PromptDigest = agentTestDigest("9")
+	otherClient := spec
+	otherClient.HarnessClient = domain.HarnessClientCodexCLI
 	for name, tc := range map[string]struct {
 		spec   ReviewRole
 		launch func(domain.RoleName) (domain.LaunchSpec, error)
@@ -902,7 +908,7 @@ func TestReviewCheckRefusesAMarkedGenerationAfterOtherChecks(t *testing.T) {
 		want   string
 	}{
 		"prompt": {badPrompt, agentbaseline.RoleLaunch, agentTestAt, "this daemon reviews with"},
-		"offer":  {spec, agentbaseline.RoleLaunch, agentTestAt.Add(25 * time.Hour), "not_after"},
+		"client": {otherClient, agentbaseline.RoleLaunch, agentTestAt, "runs harness client"},
 		"launch": {spec, func(domain.RoleName) (domain.LaunchSpec, error) {
 			return domain.LaunchSpec{}, errors.New("launch unavailable")
 		}, agentTestAt, "launch unavailable"},
@@ -958,45 +964,6 @@ func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
 	}
 	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
 		t.Fatalf("hold reason = %q, %t, want %q", reason, ok, domain.HoldAdmissionPolicyRefused)
-	}
-}
-
-// ResolveAgent resolves an agent by name, with no role line in view, to the
-// generation its enrollment would mount, and refuses a marked generation and
-// a name the tree lacks as not admissible.
-func TestResolveAgentByName(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	f := newAgentAdmissionFixture(t)
-	line, err := lineupLine(f.selection.Tree, domain.RoleImplementer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent, err := ResolveAgent(ctx, f.store, f.selection.Tree, line.AgentName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent.Identity.ID != f.identity.ID || agent.Enrollment.ID != f.enrollment.ID ||
-		agent.Generation.Ordinal != f.generation.Ordinal ||
-		agent.Generation.AuthStoreVolume != agentTestGenerationVolume ||
-		agent.Resolved.Definition.Digest != line.AgentDigest {
-		t.Fatalf("ResolveAgent = %+v", agent)
-	}
-	if _, err := ResolveAgent(ctx, f.store, f.selection.Tree, "agent-the-tree-lacks"); !errors.Is(err, ErrAgentNotAdmissible) {
-		t.Fatalf("ResolveAgent of an unknown agent = %v, want %v", err, ErrAgentNotAdmissible)
-	}
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordGenerationIntegrityMark(ctx, domain.GenerationIntegrityMark{
-			EnrollmentID: f.enrollment.ID, Ordinal: f.generation.Ordinal,
-			Finding: domain.AllCredentialIntegrityFindings[0], ObservedAt: agentTestAt.Add(-30 * time.Second),
-		})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_, err = ResolveAgent(ctx, f.store, f.selection.Tree, line.AgentName)
-	if !errors.Is(err, ErrAgentNotAdmissible) || !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
-		t.Fatalf("ResolveAgent of a marked generation = %v", err)
 	}
 }
 

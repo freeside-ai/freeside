@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
@@ -29,15 +28,14 @@ type ReviewRole struct {
 	ValidModel      func(string) bool
 }
 
-// ReviewRoleAgent is a review role's resolved agent with what its launch
-// passes: the offer's model and the effort as the harness names it.
+// ReviewRoleAgent is a review role's resolved selection with what its
+// launch passes: the selection's model as the launch names it and the effort
+// as the harness names it.
 type ReviewRoleAgent struct {
 	RoleAgent
 	Model, NativeEffort string
 
-	launch    domain.LaunchSpec
-	passes    domain.AgentLaunchSelection
-	selection domain.AgentSelection
+	launch domain.LaunchSpec
 }
 
 // ReviewAdmitter resolves the snapshot one review invocation is admitted
@@ -51,28 +49,30 @@ type ReviewAdmitter func(
 
 // CheckReviewRole runs the review admission steps for one role (plan §5.4
 // steps 1, 2, and 4): the role's line, the task's or else the lineup's,
-// resolves to an agent whose fragments,
-// enrollment, and enabled identity join; the line selects that agent's
-// current digest and the code-owned review prompt; the agent's harness is the
-// one the role's source drives and its adapter is that source's vendor; the
-// offer is still on sale and the enrollment
-// holds a current credential at now; and the agent names a model and an
-// effort the launch can pass.
+// names an enrollment whose enabled identity and route join; the line names
+// the code-owned review prompt; the enrollment's harness is the one the
+// role's source drives, and the adapter the review launch shape picks for it
+// is that source's vendor; the line's model and effort resolve against the
+// enrollment's catalog under that adapter; the enrollment holds a current
+// credential at now; and the selection names a model and an effort the
+// launch can pass.
 //
 // Step 3, launch coverage, is not enforced for the review roles: the review
 // launch forbids auxiliary inference and no review adapter declares that
-// control yet (#1980). A review has no attempt budget, so the offer and the
-// credential are held to the instant of the check.
+// control yet (#1980), so the launch shape waives it when it picks the
+// adapter. A review has no attempt budget, so the credential is held to the
+// instant of the check. A selection names no offer, so no offer deadline is
+// checked.
 //
 // runID names the run a review is about to be requested for; it is empty at
 // startup and preflight, where no task is in view. A task line for the role
-// selects the agent the way it does for a writer (resolveAttemptRole): the
+// selects what runs the way it does for a writer (resolveAttemptRole): the
 // prompt stays the lineup line's, and a line that fails any step refuses the
-// review and never falls back to the lineup's agent. So is a line that does
+// review and never falls back to the lineup's line. So is a line that does
 // not hold against the command that set it. The line selects within the
-// source the daemon composed: the harness and vendor checks refuse an agent
-// the role's source does not drive (#397). The shadow reviewer takes no task
-// line and is not checked for one.
+// source the daemon composed: the harness and vendor checks refuse a
+// selection the role's source does not drive (#397). The shadow reviewer
+// takes no task line and is not checked for one.
 //
 // The generation's integrity mark is read in the same transaction as the
 // rest but reported after every other step. Any non-nil error refuses
@@ -96,11 +96,10 @@ func CheckReviewRole(
 		return refuse("role %s is not a review role", role)
 	}
 	var (
-		agent   ReviewRoleAgent
-		line    domain.TaskLine
-		found   bool
-		marked  error
-		catalog *domain.DiscoveredModelCatalog
+		agent  ReviewRoleAgent
+		line   domain.TaskLine
+		found  bool
+		marked error
 	)
 	// One read transaction, so the task's line, the enrollment, its
 	// identity, its current generation, its mark, and its catalog are one
@@ -127,17 +126,14 @@ func CheckReviewRole(
 			}
 			marked = fmt.Errorf("role %s: %w", role, err)
 		}
-		if catalog, err = readCatalog(ctx, tx, agent.Enrollment.ID); err != nil {
-			return fmt.Errorf("role %s: %w", role, err)
-		}
 		return nil
 	})
 	if err != nil {
 		return ReviewRoleAgent{}, errors.Join(ErrAgentNotAdmissible, err)
 	}
 	if found {
-		// Every later refusal names the line that selected the agent. The
-		// agent's name is the tree's own by now, so it may be printed.
+		// Every later refusal names the line that selected the selection.
+		// What it names is printed only as describe allows.
 		refuseRole := refuse
 		refuse = func(format string, args ...any) (ReviewRoleAgent, error) {
 			return refuseRole("task line %s: "+format, append([]any{line.ID}, args...)...)
@@ -148,15 +144,8 @@ func CheckReviewRole(
 			agent.Line.PromptName, agent.Line.PromptDigest, spec.PromptName, spec.PromptDigest)
 	}
 	if agent.Enrollment.HarnessClient != spec.HarnessClient {
-		return refuse("agent %s runs harness client %s, the %s source drives %s",
-			agent.Line.AgentName, agent.Enrollment.HarnessClient, role, spec.HarnessClient)
-	}
-	if agent.Resolved.Adapter.Vendor != spec.Vendor {
-		return refuse("agent %s is on a %s adapter, the %s source consumes %s instructions",
-			agent.Line.AgentName, agent.Resolved.Adapter.Vendor, role, spec.Vendor)
-	}
-	if err := domain.ValidateOfferCoversDeadline(agent.Resolved.Offer, now); err != nil {
-		return refuse("%v", err)
+		return refuse("%s runs harness client %s, the %s source drives %s",
+			agent.describe(), agent.Enrollment.HarnessClient, role, spec.HarnessClient)
 	}
 	// A store the review source refreshes under its lease has no expiry to
 	// hold it to here; any other observable expiry must not have passed.
@@ -168,38 +157,38 @@ func CheckReviewRole(
 	if agent.launch, err = launch(role); err != nil {
 		return refuse("launch: %v", err)
 	}
-	// Every review launch passes a model and an effort, and the approved
-	// review configuration digest covers both. An agent that names neither
-	// would be a launch nobody approved, so it is refused, not run on the
-	// harness's own defaults.
-	agent.passes, err = domain.DeriveAgentLaunchSelection(
-		agent.Resolved.Definition, agent.Resolved.Adapter, agent.Resolved.Offer)
+	// The adapter the review launch shape picks for the enrollment's client
+	// and the line's effort. The shape waives auxiliary-inference control,
+	// for the reason review admission skips step 3 (the doc comment above).
+	adapter, err := tree.AdapterForLaunch(
+		agent.Enrollment.HarnessClient, agent.launch, agent.Line.Names.Effort,
+		domain.LaunchCapAuxiliaryInferenceControl,
+	)
 	if err != nil {
+		return refuse("%v", hideCause(agent.label, "no one adapter launches its selection", err))
+	}
+	if adapter.Vendor != spec.Vendor {
+		return refuse("%s launches on a %s adapter, the %s source consumes %s instructions",
+			agent.describe(), adapter.Vendor, role, spec.Vendor)
+	}
+	if agent.RoleAgent, err = agent.Select(adapter); err != nil {
 		return refuse("%v", err)
 	}
-	if agent.passes.RouteModelID == "" {
-		return refuse("agent %s is on an offer that names no model, and a review launch always passes one",
-			agent.Line.AgentName)
+	// Every review launch passes a model and an effort, and the approved
+	// review configuration digest covers both. A selection that names
+	// neither would be a launch nobody approved, so it is refused, not run on
+	// the harness's own defaults.
+	agent.Model, agent.NativeEffort = agent.Selection.LaunchValues(adapter.ClientKind)
+	if agent.Model == "" {
+		return refuse("%s names the native-default model, and a review launch always passes one", agent.describe())
 	}
-	if agent.passes.NativeEffort == "" {
-		return refuse("agent %s asks effort %s, which sends none, and a review launch always passes one",
-			agent.Line.AgentName, agent.Resolved.Definition.Effort)
+	if agent.NativeEffort == "" {
+		return refuse("%s names the harness-default effort, which sends none, and a review launch always passes one",
+			agent.describe())
 	}
-	if spec.ValidModel != nil && !spec.ValidModel(agent.passes.RouteModelID) {
-		return refuse("agent %s is on an offer whose model the review launch cannot pass as one argument",
-			agent.Line.AgentName)
+	if spec.ValidModel != nil && !spec.ValidModel(agent.Model) {
+		return refuse("%s names a model the review launch cannot pass as one argument", agent.describe())
 	}
-	// The selection the agent stands for, after the checks above so their
-	// refusals keep their own words, with the adapter the review launch
-	// shape picks. The shape waives auxiliary-inference control, which the
-	// review launch forbids and no review adapter declares yet (#1980), for
-	// the reason review admission skips step 3 (the doc comment above).
-	if agent.selection, err = admitSelection(
-		tree, agent.RoleAgent, catalog, agent.launch, domain.LaunchCapAuxiliaryInferenceControl,
-	); err != nil {
-		return refuse("%v", err)
-	}
-	agent.Model, agent.NativeEffort = agent.passes.RouteModelID, agent.passes.NativeEffort
 	if marked != nil {
 		return agent, errors.Join(ErrAgentNotAdmissible, marked)
 	}
@@ -209,8 +198,9 @@ func CheckReviewRole(
 // AdmitReview resolves the snapshot one review invocation is admitted under
 // (plan §5.4 step 5): CheckReviewRole's checks for the invocation's run at
 // admittedAt, then the binding an execution admission records, built the same
-// way and citing the task line that chose the agent, with the offer's lineage
-// group and the identity the enrollment belongs to. The caller stores it once and never resolves the invocation again.
+// way and citing the task line that chose the selection, with the lineage
+// group its client and model derive and the identity the enrollment belongs
+// to. The caller stores it once and never resolves the invocation again.
 func (s AgentSelection) AdmitReview(
 	ctx context.Context, st *store.Store, spec ReviewRole, runID domain.RunID,
 	invocationID domain.InvocationID, admittedAt time.Time,
@@ -231,37 +221,14 @@ func (s AgentSelection) AdmitReview(
 	if err != nil {
 		return domain.ReviewAdmission{}, err
 	}
-	resolved, definition := agent.Resolved, agent.Resolved.Definition
-	source, record := agent.Selection()
-	effort, err := domain.TranslateEffort(resolved.Adapter.ClientKind, definition.Effort)
-	if err != nil {
-		return refuse(err)
-	}
-	treatment, err := domain.ComputeTreatmentDigest(
-		resolved.Route, resolved.Adapter.Digest, agent.launch.Digest, resolved.Offer.RouteModelID,
-		string(definition.Effort), effort.Effective(),
-	)
+	binding, err := selectionBinding(agent.RoleAgent, agent.launch, s.LineupRevision, spec.EffectiveEgress)
 	if err != nil {
 		return refuse(err)
 	}
 	admission, err := domain.NewReviewAdmission(domain.ReviewAdmission{
 		InvocationID: invocationID, RunID: runID, Role: spec.Role,
-		AuthIdentityID: agent.Identity.ID, LineageGroup: resolved.Offer.LineageGroup,
-		AgentBinding: domain.AdmissionAgentBinding{
-			AgentDigest: definition.Digest, LaunchDigest: agent.launch.Digest, TreatmentDigest: treatment,
-			PricingRevision: resolved.Offer.PricingRevision, LineupRevision: s.LineupRevision,
-			EnrollmentID: agent.Enrollment.ID, EnrollmentGeneration: agent.Generation.Ordinal,
-			StoreManifestDigest: agent.Generation.StoreManifestDigest,
-			EffectiveEgress:     slices.Clone(spec.EffectiveEgress),
-			RouteModelID:        agent.passes.RouteModelID, RequestedEffort: agent.passes.RequestedEffort,
-			NativeEffort:    agent.passes.NativeEffort,
-			SelectionSource: source, SelectionRecordID: record,
-			SelectionDigest: agent.selection.Digest, SelectionModelID: agent.selection.ModelID,
-			SelectionEffort: agent.selection.Effort,
-			HarnessClient:   resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
-			CostOwner: agent.Identity.CostOwner,
-		},
-		AdmittedAt: admittedAt,
+		AuthIdentityID: agent.Identity.ID, LineageGroup: binding.LineageGroup,
+		AgentBinding: binding, AdmittedAt: admittedAt,
 	})
 	if err != nil {
 		return refuse(err)
@@ -269,7 +236,7 @@ func (s AgentSelection) AdmitReview(
 	// The closure recheck, so a resolver bug cannot store a snapshot the
 	// domain would refuse.
 	if err := domain.ValidateReviewAdmissionDerivations(
-		admission, definition, resolved.Adapter, resolved.Route, resolved.Offer, agent.launch,
+		admission, agent.Selection, agent.Adapter, agent.Route, agent.launch,
 		agent.Enrollment, agent.Generation, agent.Identity,
 	); err != nil {
 		return refuse(err)

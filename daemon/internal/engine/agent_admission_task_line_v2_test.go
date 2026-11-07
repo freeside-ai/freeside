@@ -117,10 +117,10 @@ func TestV2TaskLineAdmitsTheAgentItSelects(t *testing.T) {
 	}
 }
 
-// TestV2TaskLineAdmissionRefusals: a v2 line runs only the one agent its
-// selection maps to. A selection no agent runs, or two do, refuses without
-// falling back to the lineup, and so does a router or move line whose
-// selection is not the agent its record or policy chose.
+// TestV2TaskLineAdmissionRefusals: a v2 line runs its selection against the
+// enrollment it names. A selection on an enrollment the store lacks refuses
+// without falling back to the lineup, and so does a router or move line
+// whose selection is not the agent its record or policy chose.
 func TestV2TaskLineAdmissionRefusals(t *testing.T) {
 	t.Parallel()
 	foreign := &domain.TaskLineSelection{EnrollmentID: "enroll-foreign", ModelID: "model-foreign", Effort: "high"}
@@ -130,20 +130,11 @@ func TestV2TaskLineAdmissionRefusals(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "no tree agent runs the selection",
+			name: "the selection names an enrollment the store lacks",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.submitLineSelection(t, domain.RoleImplementer, foreign)
 			},
-			want: agenttree.ErrNoAgentForSelection.Error(),
-		},
-		{
-			name: "two tree definitions run the selection",
-			setup: func(t *testing.T, f *agentAdmissionFixture) {
-				f.addSecondAgent(t)
-				f.addTwinOf(t, agentTestSecondAgent, "claude-second-twin", true)
-				f.submitLineV2(t, domain.RoleImplementer, agentTestSecondAgent)
-			},
-			want: agenttree.ErrAmbiguousAgentForSelection.Error(),
+			want: "its enrollment cannot be read",
 		},
 		{
 			name: "a router line selects what no tree agent runs",
@@ -157,6 +148,8 @@ func TestV2TaskLineAdmissionRefusals(t *testing.T) {
 					Provenance: policyOrder(policy.Revision, routerSecondPool),
 				}, agentTestAt.Add(-time.Minute))
 			},
+			// The router's anchor reads the routing policy's agent names
+			// until #2736.
 			want: agenttree.ErrNoAgentForSelection.Error(),
 		},
 		{
@@ -193,7 +186,8 @@ func TestV2TaskLineAdmissionRefusals(t *testing.T) {
 
 // TestV2TaskLineTwinsAreOneAgent: names that share a definition are one
 // agent to a v2 line. An operator's line selecting it admits, and so does a
-// router line the policy chose by the other name.
+// router line the policy chose by the other name. Admission reads no agent,
+// so two definitions that run one selection admit too.
 func TestV2TaskLineTwinsAreOneAgent(t *testing.T) {
 	t.Parallel()
 	t.Run("operator line", func(t *testing.T) {
@@ -201,6 +195,17 @@ func TestV2TaskLineTwinsAreOneAgent(t *testing.T) {
 		_, enrollment := f.addSecondAgent(t)
 		f.addTwinOf(t, agentTestSecondAgent, "claude-second-twin", false)
 		line := f.submitLineV2(t, domain.RoleImplementer, "claude-second-twin")
+		admission, admitted, err := f.admit(t)
+		if err != nil || !admitted {
+			t.Fatalf("admitAttempt = %t, %v", admitted, err)
+		}
+		wantCites(t, admission, line, enrollment.ID)
+	})
+	t.Run("two definitions of one selection", func(t *testing.T) {
+		f := newAgentAdmissionFixture(t)
+		_, enrollment := f.addSecondAgent(t)
+		f.addTwinOf(t, agentTestSecondAgent, "claude-second-twin", true)
+		line := f.submitLineSelection(t, domain.RoleImplementer, f.lineSelection(t, agentTestSecondAgent))
 		admission, admitted, err := f.admit(t)
 		if err != nil || !admitted {
 			t.Fatalf("admitAttempt = %t, %v", admitted, err)

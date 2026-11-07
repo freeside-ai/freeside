@@ -148,6 +148,16 @@ func (f *agentAdmissionFixture) triageState(t *testing.T) (*domain.TaskTriage, [
 	return record, lines
 }
 
+// bindingRuns reports whether binding was admitted on the selection the
+// tree agent name reduces to: a selection admission names no agent, so the
+// agent a test means is the one whose enrollment, model, and effort it ran.
+func (f *agentAdmissionFixture) bindingRuns(t *testing.T, binding *domain.AdmissionAgentBinding, name string) bool {
+	t.Helper()
+	return binding != nil && binding.SelectionAdmitted() && *f.lineSelection(t, name) == (domain.TaskLineSelection{
+		EnrollmentID: binding.EnrollmentID, ModelID: binding.SelectionModelID, Effort: binding.SelectionEffort,
+	})
+}
+
 func (f *agentAdmissionFixture) agentDigest(t *testing.T, name string) domain.Digest {
 	t.Helper()
 	digest, err := f.selection.Tree.AgentDigest(name)
@@ -175,9 +185,8 @@ func TestTriageStandardKeepsTheLineupSpecifier(t *testing.T) {
 	if len(lines) != 0 {
 		t.Fatalf("lines = %+v, want none", lines)
 	}
-	specifier := f.agentDigest(t, agentbaseline.WriterAgentName(domain.RoleSpecifier))
 	if admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceLineup ||
-		admission.AgentBinding.AgentDigest != specifier {
+		!f.bindingRuns(t, admission.AgentBinding, agentbaseline.WriterAgentName(domain.RoleSpecifier)) {
 		t.Fatalf("binding = %+v, want the lineup's specifier", admission.AgentBinding)
 	}
 	if _, err := f.admitSpecifier(t, "inv-specification-2"); err != nil {
@@ -205,8 +214,18 @@ func TestTriageEscalatedAdmitsTheCounterpart(t *testing.T) {
 		f.lineAgent(lines[0]) != agentTestEscalatedAgent || !lines[0].SetAt.Equal(record.RecordedAt) {
 		t.Fatalf("lines = %+v, want one triage line on %s", lines, agentTestEscalatedAgent)
 	}
+	// Escalation moves the model and never the credential: the line keeps
+	// the specifier's enrollment and effort and takes the escalated model.
+	specifier, err := lineupLine(f.selection.Tree, domain.RoleSpecifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lines[0].Selection; got == nil || string(got.EnrollmentID) != specifier.Names.Enrollment ||
+		got.ModelID != agentTestEscalatedModel || got.Effort != specifier.Names.Effort {
+		t.Fatalf("triage line selection = %+v, want %s on the escalated model", got, specifier.Names.Enrollment)
+	}
 	if admission.AgentBinding.SelectionRecordID != lines[0].ID ||
-		admission.AgentBinding.AgentDigest != f.agentDigest(t, agentTestEscalatedAgent) {
+		!f.bindingRuns(t, admission.AgentBinding, agentTestEscalatedAgent) {
 		t.Fatalf("binding = %+v, want the triage line on the counterpart", admission.AgentBinding)
 	}
 	// The fixture task has no source to read: the call names the project.
@@ -241,7 +260,7 @@ func TestTriageEscalatesToTheImplementersSelection(t *testing.T) {
 		t.Fatalf("lines = %+v, want one triage line on the implementer's selection", lines)
 	}
 	if admission.AgentBinding.SelectionRecordID != lines[0].ID ||
-		admission.AgentBinding.AgentDigest != f.agentDigest(t, agentTestEscalatedAgent) {
+		!f.bindingRuns(t, admission.AgentBinding, agentTestEscalatedAgent) {
 		t.Fatalf("binding = %+v, want the triage line on the counterpart", admission.AgentBinding)
 	}
 }
@@ -411,7 +430,7 @@ func TestTaskLineChangeSupersedesTriage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if admission.AgentBinding.SelectionRecordID != line.ID ||
-		admission.AgentBinding.AgentDigest != f.agentDigest(t, specifier) {
+		!f.bindingRuns(t, admission.AgentBinding, specifier) {
 		t.Fatalf("binding = %+v, want the operator's line", admission.AgentBinding)
 	}
 }
@@ -448,7 +467,7 @@ func (f *agentAdmissionFixture) recordSpecificationAdmission(t *testing.T) {
 // line.
 func escalatedSpecifierKey(t *testing.T) string {
 	t.Helper()
-	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, agentbaseline.WriterAgentName(domain.RoleSpecifier))
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, agentTestEnrollment)
 	if err != nil {
 		t.Fatal(err)
 	}

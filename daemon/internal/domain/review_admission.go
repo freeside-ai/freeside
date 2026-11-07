@@ -188,11 +188,13 @@ func detachedReviewAdmission(admission *ReviewAdmission) *ReviewAdmission {
 }
 
 // ValidateReviewAdmissionDerivations re-runs the closure joins a review
-// snapshot rests on, as ValidateAdmissionAgentDerivations does for an
-// execution admission: the binding against the agent, its fragments, the
-// launch for the role's stage, and the enrollment, generation, and identity
-// records, plus the admitted identity against the enrollment and the lineage
-// group against the offer. The resolver runs it before it returns a snapshot, so a resolver
+// snapshot rests on, as ValidateAdmissionSelectionDerivations does for an
+// execution admission: the binding against the selection, its adapter, the
+// enrollment's route, the launch for the role's stage, and the enrollment,
+// generation, and identity records, plus the admitted identity against the
+// enrollment and the lineage group against LineageGroupOf. Only the resolver
+// calls it, before a snapshot is stored, so it reads only bindings admitted
+// under a selection. The resolver runs it before it returns a snapshot, so a resolver
 // bug cannot store one this check would refuse.
 //
 // Two joins of the execution check are left out, and each is a recorded gap,
@@ -205,8 +207,8 @@ func detachedReviewAdmission(admission *ReviewAdmission) *ReviewAdmission {
 //     credential is admitted as an enrollment (#1677). The snapshot records
 //     the allowlist the review proxy admits either way.
 func ValidateReviewAdmissionDerivations(
-	a ReviewAdmission, agent AgentDefinition, adapter AdapterFragment,
-	route RouteFragment, offer OfferFragment, launch LaunchSpec,
+	a ReviewAdmission, selection AgentSelection, adapter AdapterFragment,
+	route RouteFragment, launch LaunchSpec,
 	enrollment ClientEnrollment, generation EnrollmentGeneration, identity AuthIdentity,
 ) error {
 	if err := a.Validate(); err != nil {
@@ -220,16 +222,16 @@ func ValidateReviewAdmissionDerivations(
 	if !ok {
 		return fail("role %q runs in no ward stage", a.Role)
 	}
-	if err := validateBindingClosure(
-		fail, a.AgentBinding, agent, adapter, route, offer, launch, stage, enrollment, generation, identity,
+	if err := validateSelectionClosure(
+		fail, a.AgentBinding, selection, adapter, route, launch, stage, enrollment, generation, identity,
 	); err != nil {
 		return err
 	}
 	if a.AuthIdentityID != enrollment.AuthIdentityID {
 		return fail("admitted identity disagrees with enrollment identity %s", enrollment.AuthIdentityID)
 	}
-	if a.LineageGroup != offer.LineageGroup {
-		return fail("lineage group %q, the offer carries %q", a.LineageGroup, offer.LineageGroup)
+	if lineage := LineageGroupOf(adapter.ClientKind, selection.ModelID); a.LineageGroup != lineage {
+		return fail("lineage group %q, the selection derives %q", a.LineageGroup, lineage)
 	}
 	return nil
 }

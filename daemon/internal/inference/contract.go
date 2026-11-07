@@ -559,13 +559,15 @@ type RoleSource interface {
 type RoleCall struct {
 	Line           domain.LineupSelection
 	LineupRevision domain.Digest
-	Agent          domain.AgentDefinition
-	Route          domain.RouteFragment
-	Adapter        domain.AdapterFragment
-	Offer          domain.OfferFragment
-	Enrollment     domain.ClientEnrollment
-	Generation     domain.EnrollmentGeneration
-	ExpiryMargin   time.Duration
+	// Selection is the line's selection resolved under Adapter, the call
+	// adapter for the enrollment's client, and Route is the route the
+	// enrollment is enrolled through. No agent document is in the call.
+	Selection    domain.AgentSelection
+	Route        domain.RouteFragment
+	Adapter      domain.AdapterFragment
+	Enrollment   domain.ClientEnrollment
+	Generation   domain.EnrollmentGeneration
+	ExpiryMargin time.Duration
 	// LaunchProof is the deployment's record of the call launch's audit.
 	// The source reads it from that record and never builds it from Adapter
 	// (domain.WardlessAdmissionInput.LaunchProof).
@@ -574,8 +576,9 @@ type RoleCall struct {
 	// its bytes to its digest and its name and digest to the line.
 	Prompt RolePrompt
 	// WriterLineage maps each writing role (domain.WritingRoles) to the
-	// lineage group of the offer its own line selects. A role with no
-	// resolvable line is absent, and a judging call records it as unknown.
+	// lineage group its own line's client and model derive
+	// (domain.LineageGroupOf). A role with no resolvable line is absent, and
+	// a judging call records it as unknown.
 	WriterLineage map[domain.RoleName]string
 
 	Driver           Driver

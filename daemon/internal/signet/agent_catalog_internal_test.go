@@ -72,9 +72,13 @@ func catalogFixtureTree(t *testing.T) agenttree.Tree {
 		},
 	}
 	line := func(role domain.RoleName, agentName string) agenttree.LineupLine {
+		selection, err := tree.SelectionOfAgent(agentName)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return agenttree.LineupLine{Key: string(role), Selection: domain.LineupSelection{
-			AgentName: agentName, AgentDigest: fixtureDigest(t)(tree.AgentDigest(agentName)),
-			PromptName: string(role), PromptDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+			Names: selection.Names(), PromptName: string(role),
+			PromptDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		}}
 	}
 	// Authored reviewer first: the catalog lists the lineup in TaskLineRole

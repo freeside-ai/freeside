@@ -317,10 +317,8 @@ func TestAgentNameValidation(t *testing.T) {
 			_, err = domain.DecodeAgentDefinition(body)
 			assertAgentNameError(t, "DecodeAgentDefinition", err, tc.wantErr)
 
-			// The prompt half follows the same name rule as the agent half.
-			_, err = domain.ParseLineupSelection(tc.name + "@" + lineupAgentDigest + "/role-prompt@" + lineupPromptDigest)
-			assertAgentNameError(t, "ParseLineupSelection agent", err, tc.wantErr)
-			_, err = domain.ParseLineupSelection("sol@" + lineupAgentDigest + "/" + tc.name + "@" + lineupPromptDigest)
+			// A lineup line's prompt name follows the agent name rule.
+			_, err = domain.ParseLineupSelection(lineupSelection + "/" + tc.name + "@" + lineupPromptDigest)
 			assertAgentNameError(t, "ParseLineupSelection prompt", err, tc.wantErr)
 		})
 	}
@@ -370,9 +368,10 @@ func TestValidateOfferCoversDeadline(t *testing.T) {
 }
 
 const (
-	lineupAgentDigest  = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lineupEnrollment   = "claude-a/claude_code"
+	lineupSelection    = lineupEnrollment + "/claude-sonnet-4-5/high"
 	lineupPromptDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	lineupValue        = "sol-via-codex@" + lineupAgentDigest + "/role-prompt@" + lineupPromptDigest
+	lineupValue        = lineupSelection + "/role-prompt@" + lineupPromptDigest
 )
 
 func lineupKey(key string) domain.PolicyKey {
@@ -385,23 +384,34 @@ func lineupKey(key string) domain.PolicyKey {
 func TestParseLineupSelection(t *testing.T) {
 	selection, err := domain.ParseLineupSelection(lineupValue)
 	want := domain.LineupSelection{
-		AgentName: "sol-via-codex", AgentDigest: lineupAgentDigest,
+		Names:      domain.AgentSelectionNames{Enrollment: lineupEnrollment, Model: "claude-sonnet-4-5", Effort: "high"},
 		PromptName: "role-prompt", PromptDigest: lineupPromptDigest,
 	}
 	if err != nil || selection != want {
 		t.Fatalf("ParseLineupSelection = %+v, %v", selection, err)
 	}
-	agent, prompt := "sol@"+lineupAgentDigest, "role-prompt@"+lineupPromptDigest
-	for _, bad := range []string{"Sol@" + lineupAgentDigest + "/" + prompt, agent + "/Role@" + lineupPromptDigest} {
-		if _, err := domain.ParseLineupSelection(bad); !errors.Is(err, domain.ErrInvalidAgentName) {
-			t.Fatalf("ParseLineupSelection(%q) = %v, want %v", bad, err, domain.ErrInvalidAgentName)
-		}
+	if got := selection.TaskLineSelection().Text(); got != lineupSelection {
+		t.Fatalf("TaskLineSelection().Text() = %q, want %q", got, lineupSelection)
+	}
+	// A model id may carry an '@' of its own: only the last one starts the
+	// prompt digest.
+	pinned, err := domain.ParseLineupSelection(lineupEnrollment + "/claude-opus-4-1@20250805/max/role-prompt@" + lineupPromptDigest)
+	if err != nil || pinned.Names.Model != "claude-opus-4-1@20250805" {
+		t.Fatalf("model with an @ = %+v, %v", pinned, err)
+	}
+	prompt := "role-prompt@" + lineupPromptDigest
+	if _, err := domain.ParseLineupSelection(lineupSelection + "/Role@" + lineupPromptDigest); !errors.Is(err, domain.ErrInvalidAgentName) {
+		t.Fatalf("prompt name that fails the name rule = %v, want %v", err, domain.ErrInvalidAgentName)
 	}
 	for _, bad := range []string{
-		"", "sol", agent, agent + "/", "/" + prompt, agent + "/role-prompt",
-		"sol/" + prompt, "@" + lineupAgentDigest + "/" + prompt, agent + "/@" + lineupPromptDigest,
-		"sol@not-a-digest/" + prompt, agent + "/role-prompt@not-a-digest",
-		agent + "/" + prompt + "/" + prompt,
+		"", "sol", prompt, "/" + prompt, lineupSelection, lineupSelection + "/",
+		// The old agent-and-prompt value names an agent where the selection
+		// belongs.
+		"sol-via-codex@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/" + prompt,
+		"claude-sonnet-4-5/high/" + prompt, "high/" + prompt,
+		"/claude-sonnet-4-5/high/" + prompt, lineupEnrollment + "//high/" + prompt, lineupEnrollment + "/claude-sonnet-4-5//" + prompt,
+		lineupSelection + "/role-prompt", lineupSelection + "/role-prompt@", lineupSelection + "/role-prompt@not-a-digest",
+		lineupEnrollment + "/claude sonnet/high/" + prompt, lineupEnrollment + "/-claude/high/" + prompt,
 	} {
 		if _, err := domain.ParseLineupSelection(bad); !errors.Is(err, domain.ErrInvalidLineupKey) {
 			t.Fatalf("ParseLineupSelection(%q) = %v, want %v", bad, err, domain.ErrInvalidLineupKey)
@@ -428,7 +438,7 @@ func TestLineupPolicyKeys(t *testing.T) {
 		t.Fatalf("ValidateLineupPolicyKeys(every role) = %v", err)
 	}
 	for _, role := range domain.AllRoleNames {
-		if line, bound := lineup.Line(role); !bound || line.AgentDigest != lineupAgentDigest || line.PromptDigest != lineupPromptDigest {
+		if line, bound := lineup.Line(role); !bound || line.Names.Enrollment != lineupEnrollment || line.PromptDigest != lineupPromptDigest {
 			t.Fatalf("Line(%s) = %+v, %t", role, line, bound)
 		}
 	}
@@ -441,7 +451,7 @@ func TestLineupPolicyKeys(t *testing.T) {
 		}
 	}
 	missingPrompt := lineupKey("lineup.role.reviewer")
-	missingPrompt.Value = "claude-reviewer@" + lineupAgentDigest
+	missingPrompt.Value = lineupSelection
 	missingAgent := lineupKey("lineup.role.reviewer")
 	missingAgent.Value = "/role-prompt@" + lineupPromptDigest
 	cases := []struct {
@@ -552,7 +562,7 @@ func TestLineupShadowLines(t *testing.T) {
 		}
 	}
 	badValue := lineupKey("lineup.role.task_namer.shadow.candidate")
-	badValue.Value = "sol-via-codex@" + lineupAgentDigest
+	badValue.Value = lineupSelection
 	cases := []struct {
 		name    string
 		keys    []domain.PolicyKey
@@ -594,52 +604,64 @@ func TestLineupShadowLines(t *testing.T) {
 	}
 }
 
-const (
-	escalatedAgentDigest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	escalatedPromptDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-)
+const escalatedPromptDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 
-// escalatedKey is the specifier's escalated line for agent naming
-// counterpart, with the prompt lineupValue's primary line carries.
-func escalatedKey(agent, counterpart string) domain.PolicyKey {
-	key := lineupKey("lineup.role.specifier.escalated." + agent)
-	key.Value = counterpart + "@" + escalatedAgentDigest + "/role-prompt@" + lineupPromptDigest
+// escalatedKey is the specifier's escalated line for the enrollment, keyed
+// by keyEnrollment and escalating to model at effort on valueEnrollment, with
+// the prompt lineupValue's primary line carries.
+func escalatedKey(keyEnrollment, valueEnrollment, model, effort string) domain.PolicyKey {
+	key := lineupKey("lineup.role.specifier.escalated." + keyEnrollment)
+	key.Value = valueEnrollment + "/" + model + "/" + effort + "/role-prompt@" + lineupPromptDigest
 	return key
 }
 
 func TestLineupEscalatedLines(t *testing.T) {
-	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, "sol-via-codex")
-	if err != nil || key != "lineup.role.specifier.escalated.sol-via-codex" {
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, lineupEnrollment)
+	if err != nil || key != "lineup.role.specifier.escalated."+lineupEnrollment {
 		t.Fatalf("LineupEscalatedKey = %q, %v", key, err)
 	}
-	if _, err := domain.LineupEscalatedKey(domain.RoleImplementer, "sol-via-codex"); !errors.Is(err, domain.ErrLineupEscalatedRole) {
+	if _, err := domain.LineupEscalatedKey(domain.RoleImplementer, lineupEnrollment); !errors.Is(err, domain.ErrLineupEscalatedRole) {
 		t.Fatalf("escalated key on the implementer = %v", err)
 	}
-	if _, err := domain.LineupEscalatedKey(domain.RoleSpecifier, "a.b"); !errors.Is(err, domain.ErrInvalidAgentName) {
-		t.Fatalf("escalated key with a dotted name = %v", err)
+	for _, bad := range []string{"", "a b", "-a"} {
+		if _, err := domain.LineupEscalatedKey(domain.RoleSpecifier, bad); !errors.Is(err, domain.ErrInvalidLineupKey) {
+			t.Fatalf("escalated key for enrollment %q = %v", bad, err)
+		}
 	}
 
-	lineup, err := domain.ResolveLineup([]domain.PolicyKey{
-		lineupKey("lineup.role.specifier"), escalatedKey("sol-via-codex", "sol-high"),
-	})
+	opus := escalatedKey(lineupEnrollment, lineupEnrollment, "claude-opus-4-5", "max")
+	lineup, err := domain.ResolveLineup([]domain.PolicyKey{lineupKey("lineup.role.specifier"), opus})
 	if err != nil {
 		t.Fatalf("specifier with one escalated line = %v", err)
 	}
-	counterpart, present := lineup.EscalatedCounterpart(domain.RoleSpecifier, "sol-via-codex")
-	if !present || counterpart.AgentName != "sol-high" || counterpart.AgentDigest != escalatedAgentDigest {
+	counterpart, present := lineup.EscalatedCounterpart(domain.RoleSpecifier, lineupEnrollment)
+	want := domain.AgentSelectionNames{Enrollment: lineupEnrollment, Model: "claude-opus-4-5", Effort: "max"}
+	if !present || counterpart.Names != want {
 		t.Fatalf("EscalatedCounterpart = %+v, %t", counterpart, present)
 	}
-	if _, present := lineup.EscalatedCounterpart(domain.RoleSpecifier, "sol-high"); present {
-		t.Fatal("the counterpart has an escalated line of its own")
+	if _, present := lineup.EscalatedCounterpart(domain.RoleSpecifier, "claude-b/claude_code"); present {
+		t.Fatal("another enrollment has an escalated line")
 	}
-	if line, _ := lineup.Line(domain.RoleSpecifier); line.AgentName != "sol-via-codex" {
+	if line, _ := lineup.Line(domain.RoleSpecifier); line.Names.Model != "claude-sonnet-4-5" {
 		t.Fatalf("an escalated line replaced the specifier's line: %+v", line)
 	}
+	// A second enrollment escalates on its own line, to the same model the
+	// first does: the key, not the value's model, tells them apart.
+	second := escalatedKey("claude-b/claude_code", "claude-b/claude_code", "claude-opus-4-5", "max")
+	if _, err := domain.ResolveLineup([]domain.PolicyKey{lineupKey("lineup.role.specifier"), opus, second}); err != nil {
+		t.Fatalf("two enrollments' escalated lines = %v", err)
+	}
+	// An effort change alone is an escalation.
+	if _, err := domain.ResolveLineup([]domain.PolicyKey{
+		lineupKey("lineup.role.specifier"), escalatedKey(lineupEnrollment, lineupEnrollment, "claude-sonnet-4-5", "max"),
+	}); err != nil {
+		t.Fatalf("effort-only escalation = %v", err)
+	}
 
-	otherPrompt := escalatedKey("sol-via-codex", "sol-high")
-	otherPrompt.Value = "sol-high@" + escalatedAgentDigest + "/role-prompt@" + escalatedPromptDigest
-	renamedPrompt := escalatedKey("sol-via-codex", "sol-high")
-	renamedPrompt.Value = "sol-high@" + escalatedAgentDigest + "/other-prompt@" + lineupPromptDigest
+	otherPrompt := opus
+	otherPrompt.Value = lineupEnrollment + "/claude-opus-4-5/max/role-prompt@" + escalatedPromptDigest
+	renamedPrompt := opus
+	renamedPrompt.Value = lineupEnrollment + "/claude-opus-4-5/max/other-prompt@" + lineupPromptDigest
 	cases := []struct {
 		name    string
 		keys    []domain.PolicyKey
@@ -647,88 +669,43 @@ func TestLineupEscalatedLines(t *testing.T) {
 	}{
 		{
 			"escalated on the implementer",
-			[]domain.PolicyKey{lineupKey("lineup.role.implementer"), lineupKey("lineup.role.implementer.escalated.sol-via-codex")},
+			[]domain.PolicyKey{lineupKey("lineup.role.implementer"), lineupKey("lineup.role.implementer.escalated." + lineupEnrollment)},
 			domain.ErrLineupEscalatedRole,
 		},
 		{
 			"escalated on a wardless role",
-			[]domain.PolicyKey{lineupKey("lineup.role.task_namer"), lineupKey("lineup.role.task_namer.escalated.sol-via-codex")},
+			[]domain.PolicyKey{lineupKey("lineup.role.task_namer"), lineupKey("lineup.role.task_namer.escalated." + lineupEnrollment)},
 			domain.ErrLineupEscalatedRole,
 		},
+		{"prompt digest differs", []domain.PolicyKey{lineupKey("lineup.role.specifier"), otherPrompt}, domain.ErrLineupEscalatedPrompt},
+		{"prompt name differs", []domain.PolicyKey{lineupKey("lineup.role.specifier"), renamedPrompt}, domain.ErrLineupEscalatedPrompt},
+		{"no specifier line", []domain.PolicyKey{opus}, domain.ErrLineupEscalatedPrompt},
 		{
-			"prompt digest differs",
-			[]domain.PolicyKey{lineupKey("lineup.role.specifier"), otherPrompt},
-			domain.ErrLineupEscalatedPrompt,
-		},
-		{
-			"prompt name differs",
-			[]domain.PolicyKey{lineupKey("lineup.role.specifier"), renamedPrompt},
-			domain.ErrLineupEscalatedPrompt,
-		},
-		{
-			"no specifier line",
-			[]domain.PolicyKey{escalatedKey("sol-via-codex", "sol-high")},
-			domain.ErrLineupEscalatedPrompt,
-		},
-		{
-			"second key for one agent",
+			"second line for one enrollment",
 			[]domain.PolicyKey{
-				lineupKey("lineup.role.specifier"),
-				escalatedKey("sol-via-codex", "sol-high"), escalatedKey("sol-via-codex", "sol-max"),
+				lineupKey("lineup.role.specifier"), opus,
+				escalatedKey(lineupEnrollment, lineupEnrollment, "claude-opus-4-5", "high"),
 			},
 			domain.ErrDuplicate,
 		},
-		{"escalated with no agent", []domain.PolicyKey{lineupKey("lineup.role.specifier.escalated")}, domain.ErrInvalidLineupKey},
-		{"escalated with a dotted agent", []domain.PolicyKey{lineupKey("lineup.role.specifier.escalated.a.b")}, domain.ErrInvalidLineupKey},
+		// Escalation changes the model and effort, never the credential.
+		{
+			"key names another enrollment than its value",
+			[]domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey(lineupEnrollment, "claude-b/claude_code", "claude-opus-4-5", "max")},
+			domain.ErrLineupEscalatedPair,
+		},
+		{
+			"escalates to the specifier's own line",
+			[]domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey(lineupEnrollment, lineupEnrollment, "claude-sonnet-4-5", "high")},
+			domain.ErrLineupEscalatedPair,
+		},
+		{"escalated with no enrollment", []domain.PolicyKey{lineupKey("lineup.role.specifier.escalated")}, domain.ErrInvalidLineupKey},
+		{"escalated with an empty enrollment", []domain.PolicyKey{lineupKey("lineup.role.specifier.escalated.")}, domain.ErrInvalidLineupKey},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := domain.ResolveLineup(tc.keys); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("ResolveLineup = %v, want %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// The pairing rule reads the agents from what lookup supplies, never from
-// the keys: the same escalated key passes or fails by its agents' enrollment
-// and adapter, whichever agent the primary line names.
-func TestLineupEscalatedPairs(t *testing.T) {
-	agents := map[string]domain.AgentSource{
-		"sol-via-codex": {Name: "sol-via-codex", Enrollment: "claude-a/claude_code", Adapter: "claude_code_ward_v1"},
-		"sol-high":      {Name: "sol-high", Enrollment: "claude-a/claude_code", Adapter: "claude_code_ward_v1"},
-		"other-account": {Name: "other-account", Enrollment: "claude-b/claude_code", Adapter: "claude_code_ward_v1"},
-		"other-adapter": {Name: "other-adapter", Enrollment: "claude-a/claude_code", Adapter: "claude_code_ward_v2"},
-	}
-	lookup := func(name string) (domain.AgentSource, bool) {
-		agent, ok := agents[name]
-		return agent, ok
-	}
-	otherPrimary := lineupKey("lineup.role.specifier")
-	otherPrimary.Value = "other-adapter@" + lineupAgentDigest + "/role-prompt@" + lineupPromptDigest
-	cases := []struct {
-		name    string
-		keys    []domain.PolicyKey
-		wantErr error
-	}{
-		{"same enrollment and adapter", []domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey("sol-via-codex", "sol-high")}, nil},
-		// The primary line names another agent; the pair under the key is
-		// still the one checked.
-		{"beside another primary agent", []domain.PolicyKey{otherPrimary, escalatedKey("sol-via-codex", "sol-high")}, nil},
-		{"beside another primary agent, bad pair", []domain.PolicyKey{otherPrimary, escalatedKey("sol-via-codex", "other-account")}, domain.ErrLineupEscalatedPair},
-		{"counterpart on another enrollment", []domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey("sol-via-codex", "other-account")}, domain.ErrLineupEscalatedPair},
-		{"counterpart on another adapter", []domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey("sol-via-codex", "other-adapter")}, domain.ErrLineupEscalatedPair},
-		{"agent the tree lacks", []domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey("missing", "sol-high")}, domain.ErrLineupEscalatedPair},
-		{"counterpart the tree lacks", []domain.PolicyKey{lineupKey("lineup.role.specifier"), escalatedKey("sol-via-codex", "missing")}, domain.ErrLineupEscalatedPair},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			lineup, err := domain.ResolveLineup(tc.keys)
-			if err != nil {
-				t.Fatalf("ResolveLineup = %v", err)
-			}
-			if err := lineup.CheckEscalatedPairs(lookup); !errors.Is(err, tc.wantErr) {
-				t.Fatalf("CheckEscalatedPairs = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}

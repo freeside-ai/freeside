@@ -137,13 +137,31 @@ func proveClaudeAdapter(ctx context.Context, st *store.Store, backend *ward.Back
 		return recordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
 	agent, err := engine.ResolveRole(ctx, st, selection.Tree, domain.RoleImplementer)
+	if err == nil {
+		agent, err = selectForLaunch(*selection, domain.RoleImplementer, agent)
+	}
 	if err != nil {
 		slog.Warn("cannot resolve implementer for Claude adapter conformance", "error", err)
 		return recordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
-	return proveResolvedClaudeAdapter(ctx, st, agent.Resolved.Adapter.Digest, func() (domain.LaunchCapabilitySet, error) {
+	return proveResolvedClaudeAdapter(ctx, st, agent.Adapter.Digest, func() (domain.LaunchCapabilitySet, error) {
 		return observeClaudeAdapter(ctx, backend, cfg, leaser, agent)
 	})
+}
+
+// selectForLaunch resolves the selection the role's resolved line names
+// under the adapter the role's launch shape picks for its enrollment's
+// client and effort, as stage admission does.
+func selectForLaunch(selection engine.AgentSelection, role domain.RoleName, agent engine.RoleAgent) (engine.RoleAgent, error) {
+	launch, err := selection.Launch(role)
+	if err != nil {
+		return engine.RoleAgent{}, err
+	}
+	adapter, err := selection.Tree.AdapterForLaunch(agent.Enrollment.HarnessClient, launch, agent.Line.Names.Effort)
+	if err != nil {
+		return engine.RoleAgent{}, err
+	}
+	return agent.Select(adapter)
 }
 
 func proveResolvedClaudeAdapter(ctx context.Context, st *store.Store, digest domain.Digest, observe func() (domain.LaunchCapabilitySet, error)) error {
@@ -170,10 +188,7 @@ func proveResolvedClaudeAdapter(ctx context.Context, st *store.Store, digest dom
 }
 
 func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg claudeDriverConfig, leaser *adapterConformanceLeaser, agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
-	launch, err := domain.DeriveAgentLaunchSelection(agent.Resolved.Definition, agent.Resolved.Adapter, agent.Resolved.Offer)
-	if err != nil {
-		return nil, err
-	}
+	model, nativeEffort := agent.Selection.LaunchValues(agent.Adapter.ClientKind)
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
@@ -203,7 +218,7 @@ func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg claude
 	image, _ := backend.ConformanceIdentity()
 	input := claude.ConformanceInput{
 		Task: task, InvocationID: id, Image: domain.ImageRef(image), Identity: agent.Identity.ID,
-		RouteModelID: launch.RouteModelID, NativeEffort: launch.NativeEffort, Volumes: leaser,
+		RouteModelID: model, NativeEffort: nativeEffort, Volumes: leaser,
 	}
 	spec, err := claude.ConformanceHandoff(ctx, input)
 	if err != nil {
@@ -222,7 +237,7 @@ func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg claude
 		return nil, err
 	}
 	retained = true
-	observed, runErr := runAdapterConformance(ctx, backend, input, agent.Resolved.Route.InferenceAuthorities)
+	observed, runErr := runAdapterConformance(ctx, backend, input, agent.Route.InferenceAuthorities)
 	if err := retireAdapterConformance(ctx, backend, intent, path); err != nil {
 		return nil, &adapterRecoveryPending{errors.Join(runErr, err)}
 	}

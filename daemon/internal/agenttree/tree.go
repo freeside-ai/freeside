@@ -249,9 +249,9 @@ func (t Tree) Agent(name string) (domain.AgentSource, bool) {
 	return domain.AgentSource{}, false
 }
 
-// ResolveLineup applies the lineup contract's key rules to the lineup file,
-// then holds every escalated line to the pairing rule against this tree's
-// agents.
+// ResolveLineup applies the lineup contract's key rules, the escalated
+// pairing rule among them, to the lineup file. It reads no agent: a line's
+// selection resolves at admission against the enrollment's catalog.
 func (t Tree) ResolveLineup() (domain.Lineup, error) {
 	keys := make([]domain.PolicyKey, 0, len(t.Lineup))
 	for _, line := range t.Lineup {
@@ -260,13 +260,20 @@ func (t Tree) ResolveLineup() (domain.Lineup, error) {
 		})
 	}
 	lineup, err := domain.ResolveLineup(keys)
-	if err == nil {
-		err = lineup.CheckEscalatedPairs(t.Agent)
-	}
 	if err != nil {
 		return domain.Lineup{}, fmt.Errorf("lineup: %w", errors.Join(ErrMalformed, err))
 	}
 	return lineup, nil
+}
+
+// Route returns the named route's fragment. Admission reads the route an
+// enrollment's Route field names this way, with no agent in the path.
+func (t Tree) Route(name string) (domain.RouteFragment, bool) {
+	i := slices.IndexFunc(t.Routes, func(r Route) bool { return r.Name == name })
+	if i < 0 {
+		return domain.RouteFragment{}, false
+	}
+	return t.Routes[i].Fragment, true
 }
 
 // agentClosure is the fragments an agent's lines name.
@@ -282,11 +289,11 @@ func (t Tree) closure(agent domain.AgentSource) (agentClosure, error) {
 		return agentClosure{}, fmt.Errorf("agent %s names %s %q, which the tree lacks: %w",
 			agent.Name, kind, name, ErrMalformed)
 	}
-	route := slices.IndexFunc(t.Routes, func(r Route) bool { return r.Name == agent.Route })
-	if route < 0 {
+	route, ok := t.Route(agent.Route)
+	if !ok {
 		return missing("route", agent.Route)
 	}
-	closure.route = t.Routes[route].Fragment
+	closure.route = route
 	adapter := slices.IndexFunc(t.Adapters, func(a Adapter) bool { return a.Name == agent.Adapter })
 	if adapter < 0 {
 		return missing("adapter", agent.Adapter)

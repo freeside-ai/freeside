@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
@@ -391,8 +392,7 @@ func evaluatePrelaunch(ctx context.Context, cfg prelaunchConfig, paths deputyPat
 
 	tree, treeMissing, treeErr := checkPrelaunchAgentTree(ctx, &record, settings, paths)
 	inputs := checkPrelaunchInputs(ctx, &record, cfg, settings)
-	checkPrelaunchTaskLines(&record, cfg.TaskLines, tree, treeErr)
-	state := checkPrelaunchState(ctx, &record, settings, paths, inputs)
+	state := checkPrelaunchState(ctx, &record, settings, paths, inputs, prelaunchTaskLines{cfg.TaskLines, tree, treeErr})
 
 	var manifest *compositionManifest
 	if preLeaseErr != nil {
@@ -587,40 +587,64 @@ func checkPrelaunchAgentTree(
 	return tree, false, nil
 }
 
-// checkPrelaunchTaskLines checks that exactly one agent of the tree reduces
-// to each task line's selection; admission resolves the line against that
-// tree the same way (agenttree.Tree.LineAgent).
-func checkPrelaunchTaskLines(record *prelaunchRecord, lines []domain.TaskLineChoice, tree agenttree.Tree, treeErr error) {
+// prelaunchTaskLines is what the task-line check reads beside the store: the
+// lines and the agent tree, with the tree's load error.
+type prelaunchTaskLines struct {
+	lines   []domain.TaskLineChoice
+	tree    agenttree.Tree
+	treeErr error
+}
+
+// checkPrelaunchTaskLines checks that each task line's selection resolves
+// as admission resolves it (engine.CheckTaskLineSelection) against the
+// root's store, st, which is nil on a fresh root. A line on an enrollment
+// the store does not hold yet must be one the lineup names: the deputy's
+// start adopts the tree before it admits anything, which enrolls every
+// enrollment the lineup names, and admission resolves the line then.
+func checkPrelaunchTaskLines(ctx context.Context, record *prelaunchRecord, st *store.Store, in prelaunchTaskLines) {
+	const name = "task_lines"
 	switch {
-	case len(lines) == 0:
-		record.pass(prelaunchGroupInputs, "task_lines", "no task lines")
+	case len(in.lines) == 0:
+		record.pass(prelaunchGroupInputs, name, "no task lines")
 		return
-	case treeErr != nil:
-		record.skip(prelaunchGroupInputs, "task_lines", "the agent tree must be readable first")
+	case in.treeErr != nil:
+		record.skip(prelaunchGroupInputs, name, "the agent tree must be readable first")
 		return
 	}
-	var unknown []string
-	for _, line := range lines {
-		if _, err := tree.AgentForSelection(line.Role, *line.Selection); err != nil {
-			unknown = append(unknown, string(line.Role)+"="+string(line.Selection.EnrollmentID)+"/"+
-				line.Selection.ModelID+"/"+line.Selection.Effort)
+	adopted := map[string]bool{}
+	for _, line := range in.tree.Lineup {
+		adopted[line.Selection.Names.Enrollment] = true
+	}
+	var refused []string
+	for _, line := range in.lines {
+		text := string(line.Role) + "=" + line.Selection.Text()
+		var err error
+		if st != nil {
+			err = engine.CheckTaskLineSelection(ctx, st, in.tree, agentbaseline.RoleLaunch, line.Role, *line.Selection)
+		}
+		switch {
+		case (st == nil || errors.Is(err, store.ErrNotFound)) && adopted[string(line.Selection.EnrollmentID)]:
+		case st == nil || errors.Is(err, store.ErrNotFound):
+			refused = append(refused, text+" (no enrollment the store holds or the lineup names)")
+		case err != nil:
+			refused = append(refused, text+" ("+err.Error()+")")
 		}
 	}
-	if len(unknown) != 0 {
-		record.fail(prelaunchGroupInputs, "task_lines", "the agent tree has no one agent for "+strings.Join(unknown, ", "),
-			"select what exactly one agent of the tree at agent_tree.commit runs, or adopt and commit one that does")
+	if len(refused) != 0 {
+		record.fail(prelaunchGroupInputs, name, "task lines that do not resolve: "+strings.Join(refused, ", "),
+			"select an enrollment the lineup at agent_tree.commit names, and a model and effort it offers")
 		return
 	}
-	record.pass(prelaunchGroupInputs, "task_lines", fmt.Sprintf("the tree selects one agent for each of %d task lines", len(lines)))
+	record.pass(prelaunchGroupInputs, name, fmt.Sprintf("each of %d task lines resolves or is on an enrollment the lineup names", len(in.lines)))
 }
 
 // checkPrelaunchState reads the root's database read-only, never migrating
 // it, under the daemon lock so no daemon writes it meanwhile.
 func checkPrelaunchState(
 	ctx context.Context, record *prelaunchRecord, settings loadedDeputySettings, paths deputyPaths,
-	inputs *prelaunchInputs,
+	inputs *prelaunchInputs, taskLines prelaunchTaskLines,
 ) prelaunchState {
-	skipRest := func(why string) {
+	skipState := func(why string) {
 		record.skip(prelaunchGroupState, "system_health", why)
 		record.skip(prelaunchGroupState, "identities", why)
 		if inputs == nil {
@@ -628,9 +652,22 @@ func checkPrelaunchState(
 		}
 		record.skip(prelaunchGroupInputs, "duplicate_source", why)
 	}
+	// A root whose database does not open checks no task line: the
+	// enrollments its lines name cannot be read.
+	skipRest := func(why string) {
+		if len(taskLines.lines) != 0 && taskLines.treeErr == nil {
+			record.skip(prelaunchGroupInputs, "task_lines", "the database must open first")
+		} else {
+			checkPrelaunchTaskLines(ctx, record, nil, taskLines)
+		}
+		skipState(why)
+	}
 	if _, err := os.Stat(paths.DB); errors.Is(err, fs.ErrNotExist) {
 		record.skip(prelaunchGroupState, "state_database", "fresh root; the deputy's first start creates the database")
-		skipRest("fresh root; no task holds the source")
+		// A fresh root holds no enrollment: each line is checked against
+		// the lineup the deputy's start adopts.
+		checkPrelaunchTaskLines(ctx, record, nil, taskLines)
+		skipState("fresh root; no task holds the source")
 		return prelaunchState{}
 	}
 	state := prelaunchState{present: true}
@@ -661,6 +698,7 @@ func checkPrelaunchState(
 	defer func() { _ = st.Close() }() // Read-only: nothing to flush.
 	record.pass(prelaunchGroupState, "state_database", "opened read-only at this build's schema")
 	state.read = true
+	checkPrelaunchTaskLines(ctx, record, st, taskLines)
 	checkPrelaunchHealth(ctx, record, st)
 	checkPrelaunchIdentities(ctx, record, st, settings, &state)
 	checkPrelaunchDuplicateSource(ctx, record, st, settings.Repository.Project, inputs)

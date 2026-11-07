@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -227,11 +228,12 @@ func (s AgentSelection) MoveParkedTaskTx(
 }
 
 // movedPastMark names the agent a move leaves and the mark it was parked on:
-// the refused invocation's agent, with the parked run's hold's pool and
-// mark. It is nil when the run holds no quota window, when the tree no
-// longer carries the refused agent, or when the policy orders that agent for
-// no role, since a line's anchor holds its passed-over agent to the policy
-// it cites (anchorLinePolicy).
+// the first agent, in tree order, that ran the refused invocation
+// (failedAlternateFacts) and that the policy orders for some role, with the
+// parked run's hold's pool and mark. It is nil when the run holds no quota
+// window, when the tree no longer carries an agent that ran it, or when the
+// policy orders none of them for any role, since a line's anchor holds its
+// passed-over agent to the policy it cites (anchorLinePolicy).
 func (s AgentSelection) movedPastMark(
 	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, runID domain.RunID,
 	refused domain.InvocationID,
@@ -241,17 +243,20 @@ func (s AgentSelection) movedPastMark(
 		return nil, err
 	}
 	failed, found, err := readFailedAlternateFacts(ctx, tx, s.Tree, refused)
-	if err != nil || !found || failed.name == "" {
+	if err != nil || !found {
 		return nil, err
 	}
-	if !slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
-		return slices.Contains(role.Agents, failed.name)
-	}) {
+	index := slices.IndexFunc(failed.names, func(name string) bool {
+		return slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
+			return slices.Contains(role.Agents, name)
+		})
+	})
+	if index < 0 {
 		return nil, nil
 	}
 	mark := hold.QuotaWindow
 	return &domain.TaskLinePassedOverMark{
-		Agent: failed.name, Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
+		Agent: failed.names[index], Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
 		MarkedAt: mark.SetAt.UTC(), ResetsAt: utcPtr(mark.ResetsAt),
 	}, nil
 }
@@ -329,6 +334,24 @@ func (s AgentSelection) moveLines(
 	return inputs, nil
 }
 
+// escalatedAgent is the tree agent that runs the escalated line the lineup
+// names for the specifier agent name's enrollment, or false when the agent
+// does not resolve to a selection, its enrollment has no escalated line, or
+// no one agent runs that line's selection. The routing policy still names
+// agents (#2736), so the line maps back to one through the bridge.
+func escalatedAgent(tree agenttree.Tree, lineup domain.Lineup, name string) (string, bool) {
+	selection, err := tree.SelectionOfAgent(name)
+	if err != nil {
+		return "", false
+	}
+	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(selection.EnrollmentID))
+	if !ok {
+		return "", false
+	}
+	escalated, err := tree.AgentForSelection(domain.RoleSpecifier, counterpart.TaskLineSelection())
+	return escalated, err == nil
+}
+
 // poolCounterpart returns the escalated counterpart the lineup names for the
 // first agent of the policy's specifier order on pool (by pools, which holds
 // only resolvable agents) that has one resolving on the same pool, or empty
@@ -345,16 +368,16 @@ func (s AgentSelection) poolCounterpart(
 		if agentPool, ok := pools[name]; !ok || agentPool != pool {
 			continue
 		}
-		counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, name)
+		escalated, ok := escalatedAgent(s.Tree, lineup, name)
 		if !ok {
 			continue
 		}
-		candidate, ok, err := s.routeCandidate(ctx, tx, counterpart.AgentName)
+		candidate, ok, err := s.routeCandidate(ctx, tx, escalated)
 		if err != nil {
 			return "", err
 		}
 		if ok && candidate.pool == pool {
-			return counterpart.AgentName, nil
+			return escalated, nil
 		}
 	}
 	return "", nil

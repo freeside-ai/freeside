@@ -67,37 +67,77 @@ func addRepriced(t *testing.T, tree *agenttree.Tree, name string) {
 	tree.Agents = append(tree.Agents, agent)
 }
 
-// One definition under two names is one agent: the role's lineup names it
-// when the lineup holds one of the names, and the first name stands for it
-// otherwise.
+// addCallAgent adds an agent named name with the fixture agent's selection
+// on a call adapter, which gives the harness no tools: the wardless launch
+// shape.
+func addCallAgent(t *testing.T, tree *agenttree.Tree, name string) {
+	t.Helper()
+	adapter := tree.Adapters[0]
+	adapter.Name = "codex_call_v1"
+	adapter.Fragment.AdapterBuild = "codex_call_v1@build-7"
+	adapter.Fragment.LaunchCapabilities = domain.NewLaunchCapabilitySet(
+		domain.LaunchCapInstructionDelivery, domain.LaunchCapStructuredOutput,
+	)
+	adapter.Fragment.Digest = must(adapter.Fragment.ComputeDigest())
+	tree.Adapters = append(tree.Adapters, adapter)
+	agent := tree.Agents[0]
+	agent.Name, agent.Adapter = name, adapter.Name
+	tree.Agents = append(tree.Agents, agent)
+}
+
+// One definition under two names is one agent, and its first name stands
+// for it for every role.
 func TestAgentForSelectionTwins(t *testing.T) {
 	tree := fixtureTree(t)
 	selection := must(tree.SelectionOfAgent(agentName))
 	addTwin(&tree, "a-sol-twin")
-	if got := must(tree.AgentForSelection(domain.RoleReviewer, selection)); got != agentName {
-		t.Fatalf("reviewer agent = %q, want the lineup's %q", got, agentName)
-	}
-	if got := must(tree.AgentForSelection(domain.RoleImplementer, selection)); got != "a-sol-twin" {
-		t.Fatalf("implementer agent = %q, want the first name", got)
+	for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleImplementer} {
+		if got := must(tree.AgentForSelection(role, selection)); got != "a-sol-twin" {
+			t.Fatalf("%s agent = %q, want the first name", role, got)
+		}
 	}
 }
 
-// Two definitions with one selection: the role's lineup settles it, and
-// with no lineup agent among them it refuses, never by tree order.
+// Two definitions with one selection and one launch shape refuse, never by
+// tree order.
 func TestAgentForSelectionSplitDefinitions(t *testing.T) {
 	tree := fixtureTree(t)
 	selection := must(tree.SelectionOfAgent(agentName))
 	addRepriced(t, &tree, "a-sol-repriced")
-	if got := must(tree.AgentForSelection(domain.RoleReviewer, selection)); got != agentName {
-		t.Fatalf("reviewer agent = %q, want the lineup's %q", got, agentName)
-	}
-	if _, err := tree.AgentForSelection(domain.RoleImplementer, selection); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
-		t.Fatalf("implementer agent of two definitions = %v", err)
+	for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleImplementer} {
+		if _, err := tree.AgentForSelection(role, selection); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
+			t.Fatalf("%s agent of two definitions = %v", role, err)
+		}
 	}
 	// An agent the tree cannot close reduces to nothing, so it is skipped.
 	tree.Agents[len(tree.Agents)-1].Offer = "missing"
 	if got := must(tree.AgentForSelection(domain.RoleImplementer, selection)); got != agentName {
 		t.Fatalf("agent past a broken twin = %q", got)
+	}
+}
+
+// A ward agent and a call agent on one selection never compete: a ward role
+// runs the agent whose adapter gives read tools, a wardless role the one
+// whose adapter gives none, and an invalid role neither.
+func TestAgentForSelectionFollowsLaunchShape(t *testing.T) {
+	tree := fixtureTree(t)
+	selection := must(tree.SelectionOfAgent(agentName))
+	addCallAgent(t, &tree, "a-sol-call")
+	for _, tc := range []struct {
+		role domain.RoleName
+		want string
+	}{
+		{domain.RoleReviewer, agentName},
+		{domain.RoleImplementer, agentName},
+		{domain.RoleTaskNamer, "a-sol-call"},
+		{domain.RoleFindingAdjudicator, "a-sol-call"},
+	} {
+		if got := must(tree.AgentForSelection(tc.role, selection)); got != tc.want {
+			t.Errorf("%s agent = %q, want %q", tc.role, got, tc.want)
+		}
+	}
+	if _, err := tree.AgentForSelection("critic", selection); !errors.Is(err, agenttree.ErrNoAgentForSelection) {
+		t.Fatalf("agent for an invalid role = %v", err)
 	}
 }
 
@@ -126,8 +166,8 @@ func TestLineAgent(t *testing.T) {
 func TestLineRuns(t *testing.T) {
 	tree := fixtureTree(t)
 	selection := must(tree.SelectionOfAgent(agentName))
-	addTwin(&tree, "a-sol-twin")
-	addRepriced(t, &tree, "z-sol-repriced")
+	addTwin(&tree, "z-sol-twin")
+	addCallAgent(t, &tree, "z-sol-call")
 	v1 := domain.TaskLine{Encoding: domain.TaskLineEncodingV1, Role: domain.RoleImplementer, Agent: agentName}
 	v2 := domain.TaskLine{Encoding: domain.TaskLineEncodingV2, Role: domain.RoleReviewer, Selection: &selection}
 	cleared := domain.TaskLine{Encoding: domain.TaskLineEncodingV2, Role: domain.RoleReviewer, Cleared: true}
@@ -137,10 +177,10 @@ func TestLineRuns(t *testing.T) {
 		want bool
 	}{
 		{v1, agentName, true},
-		{v1, "a-sol-twin", false},
+		{v1, "z-sol-twin", false},
 		{v2, agentName, true},
-		{v2, "a-sol-twin", true},
-		{v2, "z-sol-repriced", false},
+		{v2, "z-sol-twin", true},
+		{v2, "z-sol-call", false},
 		{v2, "ghost", false},
 		{cleared, agentName, false},
 	} {
@@ -148,9 +188,8 @@ func TestLineRuns(t *testing.T) {
 			t.Errorf("%s line runs %s = %t, want %t", tc.line.Encoding, tc.name, got, tc.want)
 		}
 	}
-	implementer := v2
-	implementer.Role = domain.RoleImplementer
-	if _, err := tree.LineRuns(implementer, agentName); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
+	addRepriced(t, &tree, "z-sol-repriced")
+	if _, err := tree.LineRuns(v2, agentName); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
 		t.Fatalf("a line two definitions share = %v", err)
 	}
 }
@@ -164,20 +203,16 @@ func TestLineSelection(t *testing.T) {
 	if got := must(tree.LineSelection(domain.RoleImplementer, agentName)); got != selection {
 		t.Fatalf("selection of a twin = %+v, want %+v", got, selection)
 	}
-	addRepriced(t, &tree, "z-sol-repriced")
-	if got := must(tree.LineSelection(domain.RoleReviewer, agentName)); got != selection {
-		t.Fatalf("selection the lineup settles = %+v", got)
+	addCallAgent(t, &tree, "z-sol-call")
+	if got := must(tree.LineSelection(domain.RoleTaskNamer, "z-sol-call")); got != selection {
+		t.Fatalf("selection of the call agent for a wardless role = %+v", got)
 	}
-	for _, tc := range []struct {
-		role domain.RoleName
-		name string
-	}{
-		{domain.RoleReviewer, "z-sol-repriced"},
-		{domain.RoleImplementer, agentName},
-	} {
-		if _, err := tree.LineSelection(tc.role, tc.name); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
-			t.Errorf("%s selection of %s = %v, want ambiguous", tc.role, tc.name, err)
-		}
+	if _, err := tree.LineSelection(domain.RoleReviewer, "z-sol-call"); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
+		t.Fatalf("selection of the call agent for a ward role = %v, want ambiguous", err)
+	}
+	addRepriced(t, &tree, "z-sol-repriced")
+	if _, err := tree.LineSelection(domain.RoleReviewer, agentName); !errors.Is(err, agenttree.ErrAmbiguousAgentForSelection) {
+		t.Fatalf("selection two definitions share = %v, want ambiguous", err)
 	}
 	if _, err := tree.LineSelection(domain.RoleReviewer, "ghost"); !errors.Is(err, agenttree.ErrUnknownAgent) {
 		t.Fatalf("unknown agent = %v", err)

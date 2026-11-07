@@ -1717,39 +1717,49 @@ func (productionPreflightEnvironment) ResolveAgentSelection(
 		return selection, err
 	}
 	selection.SecondAuthVolume, selection.SecondAuthError = resolvePreflightSecondWriter(
-		ctx, st, agents.Tree, cfg.SecondAuthIdentityID)
+		ctx, st, cfg.SecondAuthIdentityID)
 	return selection, nil
 }
 
-// resolvePreflightSecondWriter resolves every tree agent on the second writer
-// identity's claude_code enrollment, which adoption names
-// <identity>/claude_code, and returns the one volume they all mount. Those
-// agents have no lineup line for resolvePreflightAgents to reach. A tree with
-// none, or with two volumes among them, is refused: preflight probes one
-// second volume.
+// resolvePreflightSecondWriter reads the second writer identity's
+// claude_code enrollment, which adoption names <identity>/claude_code, and
+// returns the volume its current generation mounts. No lineup line reaches
+// that enrollment for resolvePreflightAgents to check: the routing policy
+// orders it. The enrollment must be bound to the enabled identity and hold
+// a current, unmarked store generation, read in one transaction. Admission
+// still runs every step for a launch.
 func resolvePreflightSecondWriter(
-	ctx context.Context, st *store.Store, tree agenttree.Tree, identity domain.AuthIdentityID,
+	ctx context.Context, st *store.Store, identity domain.AuthIdentityID,
 ) (string, error) {
-	enrollment := string(identity) + "/" + string(domain.HarnessClientClaudeCode)
+	id := domain.ClientEnrollmentID(string(identity) + "/" + string(domain.HarnessClientClaudeCode))
 	var volume string
-	for _, source := range tree.Agents {
-		if source.Enrollment != enrollment {
-			continue
-		}
-		agent, err := engine.ResolveAgent(ctx, st, tree, source.Name)
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		enrollment, err := tx.GetClientEnrollment(ctx, id)
 		if err != nil {
-			return "", err
+			return err
 		}
-		if volume == "" {
-			volume = agent.Generation.AuthStoreVolume
+		owner, err := tx.GetAuthIdentity(ctx, enrollment.AuthIdentityID)
+		if err != nil {
+			return err
 		}
-		if agent.Generation.AuthStoreVolume != volume {
-			return "", fmt.Errorf("agent %s mounts another credential volume than the second writer's other agents",
-				source.Name)
+		if err := domain.ValidateEnrollmentIdentityBinding(owner, enrollment); err != nil {
+			return err
 		}
-	}
-	if volume == "" {
-		return "", fmt.Errorf("the agent tree has no agent on enrollment %s", enrollment)
+		if owner.ID != identity || !owner.Enabled {
+			return fmt.Errorf("identity %s is not enabled: %w", identity, domain.ErrAgentJoinInvalid)
+		}
+		generation, err := tx.CurrentEnrollmentGeneration(ctx, id)
+		if err != nil {
+			return fmt.Errorf("enrollment holds no store generation: %w", err)
+		}
+		if err := tx.RequireGenerationUnmarked(ctx, id, generation.Ordinal); err != nil {
+			return err
+		}
+		volume = generation.AuthStoreVolume
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("second writer enrollment %s: %w", id, errors.Join(engine.ErrAgentNotAdmissible, err))
 	}
 	return volume, nil
 }
@@ -1836,12 +1846,28 @@ func evaluateJudgmentRoles(manifest *compositionManifest, checks []inference.Rol
 	passCheck(manifest, "judgment_roles", evidence)
 }
 
+// selectWriterLaunch resolves a writer line's selection through the adapter
+// the role's launch picks for its enrollment's client and effort, as the
+// daemon's startup check does.
+func selectWriterLaunch(tree agenttree.Tree, role domain.RoleName, agent engine.RoleAgent) (engine.RoleAgent, error) {
+	launch, err := agentbaseline.RoleLaunch(role)
+	if err != nil {
+		return engine.RoleAgent{}, err
+	}
+	adapter, err := tree.AdapterForLaunch(agent.Enrollment.HarnessClient, launch, agent.Line.Names.Effort)
+	if err != nil {
+		return engine.RoleAgent{}, err
+	}
+	return agent.Select(adapter)
+}
+
 // resolvePreflightAgents resolves the composition's roles. The writer roles
 // must share one credential volume, because preflight probes exactly one.
-// A writer role is resolved, not admitted: preflight takes no prompt package,
-// operating mode, or attempt budget, so the prompt digest, launch coverage,
-// expiry, and egress steps run only in the daemon's startup check, which
-// holds admission when one fails.
+// A writer role is resolved, not admitted: its line's selection must resolve
+// against its enrollment and catalog through the adapter its launch picks,
+// but preflight takes no prompt package, operating mode, or attempt budget,
+// so the prompt digest, expiry, and egress steps run only in the daemon's
+// startup check, which holds admission when one fails.
 func resolvePreflightAgents(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, revision domain.Digest,
 	reviewAuthMode ward.CodexAuthMode, shadow bool, now time.Time,
@@ -1849,6 +1875,9 @@ func resolvePreflightAgents(
 	selection := preflightAgentSelection{LineupRevision: revision}
 	for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleSpecifier, domain.RoleRemediator} {
 		agent, err := engine.ResolveRole(ctx, st, tree, role)
+		if err == nil {
+			agent, err = selectWriterLaunch(tree, role, agent)
+		}
 		if err != nil {
 			return preflightAgentSelection{}, &roleAdmissionError{Role: role, Err: err}
 		}

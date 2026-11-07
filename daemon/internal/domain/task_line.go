@@ -65,6 +65,18 @@ func (s TaskLineSelection) Validate() error {
 	return nil
 }
 
+// Text is the selection as `freesided submit --task-line` takes it and as
+// a refusal or a prelaunch record prints it: enrollment/model/effort.
+func (s TaskLineSelection) Text() string {
+	return string(s.EnrollmentID) + "/" + s.ModelID + "/" + s.Effort
+}
+
+// Names is the selection as the names admission resolves
+// (ResolveAgentSelection).
+func (s TaskLineSelection) Names() AgentSelectionNames {
+	return AgentSelectionNames{Enrollment: string(s.EnrollmentID), Model: s.ModelID, Effort: s.Effort}
+}
+
 // TaskLineSource is the path that set a task line (plan §5.4, Admitted
 // Agents). Every member but the router and the triager is an authenticated
 // operator action; the router chooses only among agents the committed lineup

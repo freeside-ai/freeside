@@ -239,15 +239,16 @@ func TestClientAdmitsWhatTheSourceReturns(t *testing.T) {
 		{"prompt bytes differ from their digest", func(call *inference.RoleCall) { call.Prompt.Body = []byte("swapped") }},
 		{"line names another prompt name", func(call *inference.RoleCall) { call.Line.PromptName = "another" }},
 		{"line names another prompt digest", func(call *inference.RoleCall) { call.Line.PromptDigest = other }},
-		{"line names another agent", func(call *inference.RoleCall) { call.Line.AgentDigest = other }},
+		{"line names another model", func(call *inference.RoleCall) { call.Line.Names.Model = "another" }},
 		{"no launch proof", func(call *inference.RoleCall) { call.LaunchProof = nil }},
 		{"launch proof for another adapter", func(call *inference.RoleCall) {
 			audit := *call.LaunchProof
 			audit.AdapterDigest = other
 			call.LaunchProof = &audit
 		}},
-		{"offer edited after sealing", func(call *inference.RoleCall) { call.Offer.RouteModelID = "swapped" }},
-		{"agent pins another offer", func(call *inference.RoleCall) { call.Agent.OfferDigest = other }},
+		{"selection edited after sealing", func(call *inference.RoleCall) { call.Selection.ModelID = "swapped" }},
+		{"route edited after sealing", func(call *inference.RoleCall) { call.Route.ServiceOperator = "swapped" }},
+		{"adapter of another selection", func(call *inference.RoleCall) { call.Adapter.Digest = other }},
 		{"generation never persisted", func(call *inference.RoleCall) { call.Generation.Ordinal = 0 }},
 		{"generation of another enrollment", func(call *inference.RoleCall) { call.Generation.EnrollmentID = "another" }},
 		{"lineup revision malformed", func(call *inference.RoleCall) { call.LineupRevision = "sha256:short" }},
@@ -286,7 +287,7 @@ func TestCallRecordGolden(t *testing.T) {
 		Observed: inference.Observed{ModelID: "observed-model", OutputTokens: 4},
 	}})
 	roles := fake.Roles{
-		Provider: "fake", Model: "test", Credential: "token-value", Driver: driver, LineageGroup: "anthropic",
+		Provider: "fake", Model: "claude-test", Credential: "token-value", Driver: driver,
 		WriterLineage: map[domain.RoleName]string{domain.RoleImplementer: "anthropic"},
 	}
 	site := inference.AdjudicatorSite(testBudget(10))
@@ -607,8 +608,8 @@ func TestAnOfferThatNamesNoModelLeavesTheRoleUnbound(t *testing.T) {
 	if len(driver.Requests()) != 0 || len(ledgerCalls(t, statePath)) != 0 {
 		t.Fatal("a line on the native-default offer reached the driver or the ledger")
 	}
-	if reason := health.unbound[domain.RoleFindingClassifier]; !strings.Contains(reason, "offer names no model") {
-		t.Fatalf("reported reason = %q, want it to say the offer names no model", reason)
+	if reason := health.unbound[domain.RoleFindingClassifier]; !strings.Contains(reason, "names the native-default model") {
+		t.Fatalf("reported reason = %q, want it to say the line names the native-default model", reason)
 	}
 }
 
@@ -704,7 +705,7 @@ func TestIndependenceIsRecordedAndNeverGates(t *testing.T) {
 		t.Helper()
 		driver := fake.New()
 		client, statePath := lookupClient(t, fake.Roles{
-			Provider: "fake", Model: "test", Driver: driver, LineageGroup: "anthropic", WriterLineage: writers,
+			Provider: "fake", Model: "claude-test", Driver: driver, WriterLineage: writers,
 		}, nil, []inference.Site{site})
 		if _, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site)); err != nil {
 			t.Fatal(err)
@@ -733,7 +734,7 @@ func TestIndependenceIsRecordedAndNeverGates(t *testing.T) {
 		if same.CredentialSource != "enrollment" {
 			t.Fatalf("%s credential_source = %q", site.ID, same.CredentialSource)
 		}
-		// A writing role the lineup does not name, or whose offer has no
+		// A writing role the lineup does not name, or whose model has no
 		// lineage group, is unknown.
 		if got := lineages(record(site, map[domain.RoleName]string{domain.RoleRemediator: ""})); got != "implementer=unknown,remediator=unknown" {
 			t.Fatalf("%s independence with no writer lineage = %q", site.ID, got)

@@ -37,53 +37,32 @@ func claudeCallAdapter(t *testing.T, mutate func(*domain.AdapterFragment)) domai
 	return f
 }
 
-func wardlessOffer(t *testing.T, lineage string) domain.OfferFragment {
-	t.Helper()
-	f := offerFragment(t)
-	f.RouteModelID, f.LineageGroup = "claude-judge", lineage
-	digest, err := f.ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Digest = digest
-	return f
-}
+// wardlessModel is the model validWardlessInput's selection names. Its
+// "claude-" prefix makes LineageGroupOf name the anthropic group.
+const wardlessModel = "claude-judge"
 
 // wardlessInput is a valid admission of the task namer under the audited
-// Claude call adapter. The enrollment authenticates with a setup token, so
-// its generation records no expiry.
-func wardlessInput(t *testing.T, adapter domain.AdapterFragment, offer domain.OfferFragment) domain.WardlessAdmissionInput {
-	t.Helper()
-	return wardlessInputAtEffort(t, adapter, offer, domain.EffortHigh)
-}
-
-func wardlessInputAtEffort(
-	t *testing.T, adapter domain.AdapterFragment, offer domain.OfferFragment, effort domain.EffortLevel,
-) domain.WardlessAdmissionInput {
+// Claude call adapter, on a selection of model at effort. The enrollment
+// authenticates with a setup token, so its generation records no expiry.
+func wardlessInput(t *testing.T, adapter domain.AdapterFragment, model, effort string) domain.WardlessAdmissionInput {
 	t.Helper()
 	e := enrollment()
 	e.HarnessClient, e.Route, e.AuthMethod = adapter.ClientKind, "anthropic_subscription", domain.AuthMethodSetupToken
 	g := generation()
 	g.TokenExpiry = nil
-	route := routeFragment(t)
-	agent := domain.AgentDefinition{
-		Name: "haiku-judge", EncodingVersion: domain.AgentEncodingVersion,
-		EnrollmentID: e.ID, RouteDigest: route.Digest,
-		AdapterDigest: adapter.Digest, OfferDigest: offer.Digest, Effort: effort,
+	selection := domain.AgentSelection{
+		EncodingVersion: domain.AgentSelectionEncodingVersion, EnrollmentID: e.ID,
+		ModelID: model, Effort: effort, AdapterDigest: adapter.Digest,
 	}
-	digest, err := agent.ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent.Digest = digest
+	selection.Digest = mustComputeDigest(t, selection.ComputeDigest)
 	return domain.WardlessAdmissionInput{
 		Role: domain.RoleTaskNamer,
 		Line: domain.LineupSelection{
-			AgentName: agent.Name, AgentDigest: agent.Digest,
+			Names:      domain.AgentSelectionNames{Enrollment: string(e.ID), Model: model, Effort: effort},
 			PromptName: "task-namer", PromptDigest: wardlessPromptDigest,
 		},
 		LineupRevision: wardlessLineupRevision,
-		Agent:          agent, Route: route, Adapter: adapter, Offer: offer,
+		Selection:      selection, Route: routeFragment(t), Adapter: adapter,
 		PromptDigest: wardlessPromptDigest,
 		Enrollment:   e, Generation: g,
 		Deadline:     time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
@@ -96,7 +75,7 @@ func wardlessInputAtEffort(
 
 func validWardlessInput(t *testing.T) domain.WardlessAdmissionInput {
 	t.Helper()
-	return wardlessInput(t, claudeCallAdapter(t, nil), wardlessOffer(t, "anthropic"))
+	return wardlessInput(t, claudeCallAdapter(t, nil), wardlessModel, "high")
 }
 
 func TestAdmitWardlessRole(t *testing.T) {
@@ -106,7 +85,7 @@ func TestAdmitWardlessRole(t *testing.T) {
 		t.Fatalf("AdmitWardlessRole = %v", err)
 	}
 	want := domain.WardlessAdmission{
-		Role: domain.RoleTaskNamer, AgentDigest: in.Agent.Digest, PromptDigest: wardlessPromptDigest,
+		Role: domain.RoleTaskNamer, AgentDigest: in.Selection.Digest, PromptDigest: wardlessPromptDigest,
 		LineupRevision: wardlessLineupRevision, EnrollmentID: "enroll-1", EnrollmentGeneration: 1,
 		InterimLaunchAudit: *in.LaunchProof,
 	}
@@ -162,7 +141,7 @@ func TestAdmitWardlessRoleFailsClosed(t *testing.T) {
 		{"adapter moved to another harness build", func(t *testing.T) domain.WardlessAdmissionInput {
 			audited := claudeCallAdapter(t, nil)
 			moved := claudeCallAdapter(t, func(f *domain.AdapterFragment) { f.HarnessBuild = "claude-code 2.1.286" })
-			in := wardlessInput(t, moved, wardlessOffer(t, "anthropic"))
+			in := wardlessInput(t, moved, wardlessModel, "high")
 			in.LaunchProof = &domain.InterimCallLaunchAudit{
 				AdapterDigest: audited.Digest, HarnessBuild: audited.HarnessBuild, AuditedOn: "2026-09-09",
 			}
@@ -174,16 +153,26 @@ func TestAdmitWardlessRoleFailsClosed(t *testing.T) {
 			codex := claudeCallAdapter(t, func(f *domain.AdapterFragment) {
 				f.ClientKind, f.Vendor = domain.HarnessClientCodexCLI, domain.AgentVendorCodex
 			})
-			return wardlessInput(t, codex, wardlessOffer(t, "openai"))
+			return wardlessInput(t, codex, "gpt-judge", "high")
 		}, domain.ErrCallLaunchUnproved},
 		{"malformed audit date", func(t *testing.T) domain.WardlessAdmissionInput {
 			in := validWardlessInput(t)
 			in.LaunchProof.AuditedOn = "last month"
 			return in
 		}, domain.ErrMissingTimestamp},
-		{"line names another agent", func(t *testing.T) domain.WardlessAdmissionInput {
+		{"line names another model", func(t *testing.T) domain.WardlessAdmissionInput {
 			in := validWardlessInput(t)
-			in.Line.AgentDigest = otherDigest
+			in.Line.Names.Model = "claude-other"
+			return in
+		}, domain.ErrLineupSelectionMismatch},
+		{"line names another effort", func(t *testing.T) domain.WardlessAdmissionInput {
+			in := validWardlessInput(t)
+			in.Line.Names.Effort = "max"
+			return in
+		}, domain.ErrLineupSelectionMismatch},
+		{"line names another enrollment", func(t *testing.T) domain.WardlessAdmissionInput {
+			in := validWardlessInput(t)
+			in.Line.Names.Enrollment = "enroll-2"
 			return in
 		}, domain.ErrLineupSelectionMismatch},
 		{"line names another prompt", func(t *testing.T) domain.WardlessAdmissionInput {
@@ -201,46 +190,26 @@ func TestAdmitWardlessRoleFailsClosed(t *testing.T) {
 			in.LineupRevision = ""
 			return in
 		}, domain.ErrInvalidDigest},
-		{"agent digest forged", func(t *testing.T) domain.WardlessAdmissionInput {
+		{"selection digest forged", func(t *testing.T) domain.WardlessAdmissionInput {
 			in := validWardlessInput(t)
-			in.Agent.Effort = domain.EffortMax
+			in.Selection.Effort = "max"
+			in.Line.Names.Effort = "max"
 			return in
 		}, domain.ErrAgentDigestMismatch},
-		{"route is not the agent's", func(t *testing.T) domain.WardlessAdmissionInput {
+		{"route fragment malformed", func(t *testing.T) domain.WardlessAdmissionInput {
 			in := validWardlessInput(t)
 			in.Route.TermsBasisDate = "2026-09-01"
-			digest, err := in.Route.ComputeDigest()
-			if err != nil {
-				t.Fatal(err)
-			}
-			in.Route.Digest = digest
 			return in
-		}, domain.ErrAdmissionDerivationMismatch},
-		{"effort the offer does not allow", func(t *testing.T) domain.WardlessAdmissionInput {
-			adapter := claudeCallAdapter(t, func(f *domain.AdapterFragment) {
-				f.SendableEfforts = []domain.EffortLevel{domain.EffortLow, domain.EffortHigh}
-			})
-			return wardlessInputAtEffort(t, adapter, wardlessOffer(t, "anthropic"), domain.EffortLow)
-		}, domain.ErrAgentJoinInvalid},
+		}, domain.ErrAgentDigestMismatch},
 		{"effort the adapter cannot send", func(t *testing.T) domain.WardlessAdmissionInput {
-			return wardlessInputAtEffort(t, claudeCallAdapter(t, nil), wardlessOffer(t, "anthropic"), domain.EffortMax)
+			return wardlessInput(t, claudeCallAdapter(t, nil), wardlessModel, "max")
 		}, domain.ErrAgentJoinInvalid},
-		{"adapter is not the agent's", func(t *testing.T) domain.WardlessAdmissionInput {
+		{"adapter is not the selection's", func(t *testing.T) domain.WardlessAdmissionInput {
 			in := validWardlessInput(t)
 			in.Adapter = claudeCallAdapter(t, func(f *domain.AdapterFragment) { f.AdapterBuild = "claude_call_v1@build-4" })
 			return in
 		}, domain.ErrAdmissionDerivationMismatch},
-		{"offer is not the agent's", func(t *testing.T) domain.WardlessAdmissionInput {
-			in := validWardlessInput(t)
-			in.Offer = wardlessOffer(t, "other")
-			return in
-		}, domain.ErrAdmissionDerivationMismatch},
-		{"expired offer", func(t *testing.T) domain.WardlessAdmissionInput {
-			in := validWardlessInput(t)
-			in.Deadline = in.Offer.NotAfter.Add(time.Hour)
-			return in
-		}, domain.ErrOfferExpired},
-		{"enrollment is not the agent's", func(t *testing.T) domain.WardlessAdmissionInput {
+		{"enrollment is not the selection's", func(t *testing.T) domain.WardlessAdmissionInput {
 			in := validWardlessInput(t)
 			in.Enrollment.ID, in.Generation.EnrollmentID = "enroll-2", "enroll-2"
 			return in
@@ -300,7 +269,7 @@ func TestWardlessShadowAdmissionIsItsOwn(t *testing.T) {
 	primaryIn := validWardlessInput(t)
 	shadowPrompt := "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	value := func(prompt string) string {
-		return primaryIn.Agent.Name + "@" + string(primaryIn.Agent.Digest) + "/task-namer@" + prompt
+		return primaryIn.Line.TaskLineSelection().Text() + "/task-namer@" + prompt
 	}
 	lineup, err := domain.ResolveLineup([]domain.PolicyKey{
 		{Key: "lineup.role.task_namer", Value: value(string(wardlessPromptDigest))},
@@ -348,16 +317,15 @@ func TestWardlessShadowAdmissionIsItsOwn(t *testing.T) {
 }
 
 // TestWardlessAdmissionRecordsLineageWithoutGating proves review independence
-// is not an admission gate (plan revision 65): a judging role admits on the
-// same lineage group as a writing role's agent, and on an unknown (empty)
-// lineage group.
+// is not an admission gate (plan revision 65): a judging role admits on a
+// model of a known lineage group and on one LineageGroupOf leaves unknown.
 func TestWardlessAdmissionRecordsLineageWithoutGating(t *testing.T) {
-	writerLineage := offerFragment(t).LineageGroup
-	for _, lineage := range []string{writerLineage, ""} {
-		in := wardlessInput(t, claudeCallAdapter(t, nil), wardlessOffer(t, lineage))
+	for _, model := range []string{wardlessModel, "judge"} {
+		in := wardlessInput(t, claudeCallAdapter(t, nil), model, "high")
 		in.Role = domain.RoleFindingAdjudicator
 		if _, err := domain.AdmitWardlessRole(in); err != nil {
-			t.Fatalf("adjudicator on lineage %q = %v", lineage, err)
+			t.Fatalf("adjudicator on model %q (lineage %q) = %v",
+				model, domain.LineageGroupOf(domain.HarnessClientClaudeCode, model), err)
 		}
 	}
 	// The lineup validator sees no lineage at all: one agent on a writing

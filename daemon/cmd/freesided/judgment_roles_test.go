@@ -473,57 +473,31 @@ func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
 	})
 }
 
-// adoptedBeforeTheCallOffer returns the tree as a deployment adopted before
-// the call offer existed holds it: the call agent on the native-default
-// offer, which names no model, and every judgment line naming that agent.
-// The baseline no longer emits that offer, so it is put back here, shaped
-// as adoption once wrote it.
-func adoptedBeforeTheCallOffer(t *testing.T, tree agenttree.Tree) agenttree.Tree {
+// callLinesNamingNoModel returns the tree with every judgment line on the
+// native-default model id at harness_default, the shape a deployment adopted
+// before the call offer ran on, now written as a line's selection.
+func callLinesNamingNoModel(t *testing.T, tree agenttree.Tree) agenttree.Tree {
 	t.Helper()
-	tree.Agents, tree.Offers = slices.Clone(tree.Agents), slices.Clone(tree.Offers)
-	for i, agent := range tree.Agents {
-		if agent.Name == agentbaseline.ClaudeCallAgentName {
-			tree.Agents[i].Offer, tree.Agents[i].Effort = agentbaseline.ClaudeOfferName, domain.EffortHarnessDefault
-		}
-	}
-	call := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool {
-		return o.Name == agentbaseline.ClaudeCallOfferName
-	})
-	if call < 0 {
-		t.Fatal("the adopted tree has no call offer")
-	}
-	native := tree.Offers[call]
-	native.Name = agentbaseline.ClaudeOfferName
-	native.Fragment.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID
-	native.Fragment.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
-	var err error
-	if native.Fragment.Digest, err = native.Fragment.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	tree.Offers = append(tree.Offers, native)
-	tree.Sort()
-	digest, err := tree.AgentDigest(agentbaseline.ClaudeCallAgentName)
-	if err != nil {
-		t.Fatal(err)
-	}
 	tree.Lineup = slices.Clone(tree.Lineup)
+	moved := false
 	for i, line := range tree.Lineup {
-		if line.Selection.AgentName == agentbaseline.ClaudeCallAgentName {
-			tree.Lineup[i].Selection.AgentDigest = digest
+		if slices.Contains(agentbaseline.JudgmentRoles(), domain.RoleName(line.Key)) {
+			names := &tree.Lineup[i].Selection.Names
+			names.Model, names.Effort = domain.ClaudeCodeNativeDefaultRouteModelID, string(domain.EffortHarnessDefault)
+			moved = true
 		}
 	}
-	if _, err := agenttree.Render(tree); err != nil {
-		t.Fatalf("the earlier tree does not render: %v", err)
+	if !moved {
+		t.Fatal("the adopted lineup has no judgment line")
 	}
 	return tree
 }
 
-// A judgment line whose offer names no model leaves its role unbound: the
-// site returns its fail-safe, nothing reaches the driver, and the role's item
-// says the offer names no model. That is every judgment role of a deployment
-// adopted before the call offer, until the operator applies a fresh patch,
-// and the drift auditor's item blocks unattended admission meanwhile.
-func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
+// A judgment line on the native-default model id leaves its role unbound:
+// the site returns its fail-safe, nothing reaches the driver, and the role's
+// item says the line names the native-default model. The drift auditor's
+// item blocks unattended admission meanwhile.
+func TestJudgmentLineOnTheNativeDefaultModelIsUnbound(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
@@ -531,7 +505,7 @@ func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
-	tree := adoptedBeforeTheCallOffer(t, loadAdoptedPatch(t, patch))
+	tree := callLinesNamingNoModel(t, loadAdoptedPatch(t, patch))
 	f.withStore(t, func(st *store.Store) {
 		now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
 		driver := inferencefake.New()
@@ -563,18 +537,18 @@ func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
 			}
 			result, err := client.Call(ctx, site.ID, "project-1", "run-1", fields)
 			if err != nil || !result.Fallback || result.Identity != nil || string(result.Output) != site.FailSafe {
-				t.Fatalf("%s on an offer that names no model = %+v, %v", site.ID, result, err)
+				t.Fatalf("%s on the native-default model = %+v, %v", site.ID, result, err)
 			}
 		}
 		if requests := driver.Requests(); len(requests) != 0 {
-			t.Fatalf("a line on an offer that names no model reached the driver: %+v", requests)
+			t.Fatalf("a line on the native-default model reached the driver: %+v", requests)
 		}
 		items := judgmentRoleItems(t, st)
 		if len(items) != len(asked) {
 			t.Fatalf("items = %+v, want one for each of %v", items, asked)
 		}
 		for role, item := range items {
-			if !asked[role] || !strings.Contains(item.Reason, "offer names no model") {
+			if !asked[role] || !strings.Contains(item.Reason, "names the native-default model") {
 				t.Fatalf("item for %s = %+v", role, item)
 			}
 			if blocking := *item.Posture == domain.HealthPostureBlocking; blocking != (role == domain.RoleDriftAuditor) {
@@ -584,11 +558,71 @@ func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
 	})
 }
 
-// One daemon admits a line on each audited call adapter and hands each call
-// its own agent's model and effort. A line on the earlier adapter keeps
-// admitting under the earlier audit; a call adapter no record names is
-// refused for want of a launch proof, whatever else about it matches.
-func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
+// A judgment line's adapter is the tree's audited call adapter that sends
+// its effort. An adapter no audit names is no candidate, so a tree whose
+// only call adapter is unaudited admits nothing; the earlier adapter sends
+// only harness_default; and two audited adapters that both send the effort
+// refuse as ambiguous rather than leave the choice to tree order.
+func TestJudgmentCallAdapterIsTheAuditedOneThatSendsTheEffort(t *testing.T) {
+	t.Parallel()
+	v1, err := agentbaseline.ClaudeCallAdapterV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := agentbaseline.ClaudeCallAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The v2 launch under a build id no audit covers.
+	unaudited := v2
+	unaudited.AdapterBuild = "claude_code_call_v3"
+	if unaudited.Digest, err = unaudited.ComputeDigest(); err != nil {
+		t.Fatal(err)
+	}
+	ward, err := agentbaseline.ClaudeWardAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	treeOf := func(adapters ...domain.AdapterFragment) agenttree.Tree {
+		var tree agenttree.Tree
+		for _, adapter := range adapters {
+			tree.Adapters = append(tree.Adapters, agenttree.Adapter{Name: adapter.AdapterBuild, Fragment: adapter})
+		}
+		return tree
+	}
+	harnessDefault := string(domain.EffortHarnessDefault)
+	for name, tc := range map[string]struct {
+		tree   agenttree.Tree
+		effort string
+		want   domain.Digest
+		err    error
+	}{
+		"v2 at harness_default":               {treeOf(ward, v2), harnessDefault, v2.Digest, nil},
+		"v2 at high":                          {treeOf(ward, v2), "high", v2.Digest, nil},
+		"v1 at harness_default":               {treeOf(ward, v1), harnessDefault, v1.Digest, nil},
+		"v1 at high":                          {treeOf(ward, v1), "high", "", domain.ErrNoAdapterForLaunch},
+		"v1 and v2 at high":                   {treeOf(v1, v2), "high", v2.Digest, nil},
+		"v1 and v2 at harness_default":        {treeOf(v1, v2), harnessDefault, "", domain.ErrAmbiguousAdapterForLaunch},
+		"an unaudited adapter only":           {treeOf(ward, unaudited), harnessDefault, "", domain.ErrNoAdapterForLaunch},
+		"an unaudited adapter beside v2":      {treeOf(unaudited, v2), harnessDefault, v2.Digest, nil},
+		"the ward adapter is no call adapter": {treeOf(ward), harnessDefault, "", domain.ErrNoAdapterForLaunch},
+	} {
+		adapter, err := judgmentCallAdapter(tc.tree, domain.HarnessClientClaudeCode, tc.effort)
+		if tc.err != nil {
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("%s = %+v, %v; want %v", name, adapter, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || adapter.Digest != tc.want {
+			t.Fatalf("%s = %s, %v; want %s", name, adapter.Digest, err, tc.want)
+		}
+	}
+}
+
+// One daemon admits a line of each model and effort and hands each call its
+// own line's model and the effort the harness names for it.
+func TestJudgmentLinesLaunchTheirOwnModelAndEffort(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
@@ -597,77 +631,18 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	baseline, ok := tree.Agent(agentbaseline.ClaudeCallAgentName)
-	if !ok {
-		t.Fatal("the adopted tree has no call agent")
-	}
-	v1, err := agentbaseline.ClaudeCallAdapterV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The v2 launch under a build id no audit covers.
-	unaudited, err := agentbaseline.ClaudeCallAdapter()
-	if err != nil {
-		t.Fatal(err)
-	}
-	unaudited.AdapterBuild = "claude_code_call_v3"
-	if unaudited.Digest, err = unaudited.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	const explicitModel, explicitOffer = "claude-explicit-1", "explicit-high"
-	var explicit domain.OfferFragment
-	for _, offer := range tree.Offers {
-		if offer.Route == baseline.Route && offer.Name == baseline.Offer {
-			explicit = offer.Fragment
-		}
-	}
-	explicit.RouteModelID, explicit.AllowedEfforts = explicitModel, []domain.EffortLevel{domain.EffortHigh}
-	if explicit.Digest, err = explicit.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	tree.Adapters = append(slices.Clone(tree.Adapters),
-		agenttree.Adapter{Name: agentbaseline.ClaudeCallAdapterV1Build, Fragment: v1},
-		agenttree.Adapter{Name: unaudited.AdapterBuild, Fragment: unaudited})
-	// The v1 adapter sends harness_default only, which the adopted call
-	// offer no longer allows, so the v1 and unaudited agents sit on an
-	// offer of the adopted model that allows it.
-	const harnessOffer = "call-harness-default"
-	harness := explicit
-	harness.RouteModelID, harness.AllowedEfforts = adoptJudgmentModel, []domain.EffortLevel{domain.EffortHarnessDefault}
-	if harness.Digest, err = harness.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	tree.Offers = append(slices.Clone(tree.Offers),
-		agenttree.Offer{Route: baseline.Route, Name: explicitOffer, Fragment: explicit},
-		agenttree.Offer{Route: baseline.Route, Name: harnessOffer, Fragment: harness})
-	agent := func(name, adapter, offer string, effort domain.EffortLevel) domain.AgentSource {
-		source := baseline
-		source.Name, source.Adapter, source.Offer, source.Effort = name, adapter, offer, effort
-		return source
-	}
-	const onV1, onV2, onUnaudited = "call-on-v1", "call-explicit-high", "call-unaudited"
-	tree.Agents = append(slices.Clone(tree.Agents),
-		agent(onV1, agentbaseline.ClaudeCallAdapterV1Build, harnessOffer, domain.EffortHarnessDefault),
-		agent(onV2, agentbaseline.ClaudeCallAdapterName, explicitOffer, domain.EffortHigh),
-		agent(onUnaudited, unaudited.AdapterBuild, harnessOffer, domain.EffortHarnessDefault))
-	agents := map[domain.RoleName]string{
-		domain.RoleFindingClassifier: onV1, domain.RoleFindingAdjudicator: onV2, domain.RoleDiagnostic: onUnaudited,
+	const explicitModel = "claude-explicit-1"
+	edits := map[domain.RoleName]func(*domain.AgentSelectionNames){
+		domain.RoleFindingClassifier: func(n *domain.AgentSelectionNames) {
+			n.Effort = string(domain.EffortHarnessDefault)
+		},
+		domain.RoleFindingAdjudicator: func(n *domain.AgentSelectionNames) { n.Model, n.Effort = explicitModel, "high" },
 	}
 	tree.Lineup = slices.Clone(tree.Lineup)
 	for i, line := range tree.Lineup {
-		name, moved := agents[domain.RoleName(line.Key)]
-		if !moved {
-			continue
+		if edit, ok := edits[domain.RoleName(line.Key)]; ok {
+			edit(&tree.Lineup[i].Selection.Names)
 		}
-		digest, err := tree.AgentDigest(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tree.Lineup[i].Selection.AgentName, tree.Lineup[i].Selection.AgentDigest = name, digest
-	}
-	tree.Sort()
-	if _, err := agenttree.Render(tree); err != nil {
-		t.Fatalf("the edited tree does not render: %v", err)
 	}
 
 	f.withStore(t, func(st *store.Store) {
@@ -687,13 +662,9 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, check := range client.CheckRoles(ctx) {
-			unbound := check.Role == domain.RoleDiagnostic
 			// The fixture configures no publication author prompt.
-			if check.Off != (check.Role == domain.RolePublicationAuthor) || (check.Err != nil) != unbound {
+			if check.Off != (check.Role == domain.RolePublicationAuthor) || check.Err != nil {
 				t.Fatalf("role %s = %+v", check.Role, check)
-			}
-			if unbound && !strings.Contains(check.Err.Error(), "launch proof") {
-				t.Fatalf("role on an unaudited call adapter was refused for another reason: %v", check.Err)
 			}
 		}
 		type launch struct{ model, effort string }
@@ -704,7 +675,7 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 		}
 		for _, site := range sites {
 			role, _ := domain.RoleForSite(site.ID)
-			if _, called := want[role]; !called && role != domain.RoleDiagnostic {
+			if _, called := want[role]; !called {
 				continue
 			}
 			fields := map[string]inference.InputField{}
@@ -717,12 +688,6 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 				t.Fatal(err)
 			}
 			requests := driver.Requests()
-			if role == domain.RoleDiagnostic {
-				if !result.Fallback || result.Identity != nil || len(requests) != before {
-					t.Fatalf("%s on an unaudited call adapter = %+v", site.ID, result)
-				}
-				continue
-			}
 			if result.Identity == nil || len(requests) != before+1 {
 				t.Fatalf("%s = %+v after %d driver calls", site.ID, result, len(requests)-before)
 			}
@@ -864,45 +829,64 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 	}
 }
 
-// A writing role's lineage is read from the tree alone, so it is known
-// whatever the state of the writer's enrollment, and unknown only when the
-// lineup does not name an agent the tree holds.
-func TestWriterLineageReadsTheTreeAlone(t *testing.T) {
+// A writing role's lineage derives from its line's enrollment's client kind
+// and its model, so it is known whatever the state of the writer's
+// credential, and unknown when the lineup has no line for the role, the
+// line's enrollment is not in the store, or the model's lineage is not
+// known.
+func TestWriterLineageDerivesFromTheLinesEnrollmentAndModel(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	adopted := loadAdoptedPatch(t, patch)
-	want := ""
-	for _, offer := range adopted.Offers {
-		if offer.Name == agentbaseline.WriterAgentName(domain.RoleImplementer) {
-			want = offer.Fragment.LineageGroup
+	edited := func(edit func(*domain.AgentSelectionNames)) agenttree.Tree {
+		tree := adopted
+		tree.Lineup = slices.Clone(adopted.Lineup)
+		for i := range tree.Lineup {
+			if domain.RoleName(tree.Lineup[i].Key) == domain.RoleImplementer {
+				edit(&tree.Lineup[i].Selection.Names)
+			}
 		}
+		return tree
 	}
-	for _, writer := range domain.WritingRoles {
-		if got := writerLineage(adopted, writer); got == "" || got != want {
-			t.Fatalf("%s lineage = %q, want %q", writer, got, want)
+	f.withStore(t, func(st *store.Store) {
+		lineages, err := writerLineages(ctx, st, adopted)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	unlined := adopted
-	unlined.Lineup = slices.DeleteFunc(slices.Clone(adopted.Lineup), func(line agenttree.LineupLine) bool {
-		return domain.RoleName(line.Key) == domain.RoleImplementer
+		for _, writer := range domain.WritingRoles {
+			if got := lineages[writer]; got != "anthropic" {
+				t.Fatalf("%s lineage = %q, want anthropic", writer, got)
+			}
+		}
+		// The writer's identity disabled: the line still wrote on its
+		// lineage.
+		setIdentityEnabled(t, st, "claude-main", false)
+		if lineages, err := writerLineages(ctx, st, adopted); err != nil || lineages[domain.RoleImplementer] != "anthropic" {
+			t.Fatalf("lineage with the writer disabled = %v, %v", lineages, err)
+		}
+		unlined := adopted
+		unlined.Lineup = slices.DeleteFunc(slices.Clone(adopted.Lineup), func(line agenttree.LineupLine) bool {
+			return domain.RoleName(line.Key) == domain.RoleImplementer
+		})
+		for name, tree := range map[string]agenttree.Tree{
+			"no implementer line":   unlined,
+			"an absent enrollment":  edited(func(n *domain.AgentSelectionNames) { n.Enrollment = "absent/claude_code" }),
+			"a model of no lineage": edited(func(n *domain.AgentSelectionNames) { n.Model = "gpt-5.6-sol" }),
+		} {
+			lineages, err := writerLineages(ctx, st, tree)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := lineages[domain.RoleImplementer]; !ok || got != "" {
+				t.Fatalf("lineage with %s = %q, %v; want unknown", name, got, ok)
+			}
+		}
 	})
-	if got := writerLineage(unlined, domain.RoleImplementer); got != "" {
-		t.Fatalf("lineage with no implementer line = %q", got)
-	}
-	other := adopted
-	other.Lineup = slices.Clone(adopted.Lineup)
-	for i := range other.Lineup {
-		if domain.RoleName(other.Lineup[i].Key) == domain.RoleImplementer {
-			other.Lineup[i].Selection.AgentDigest = domain.Digest("sha256:" + strings.Repeat("0", 64))
-		}
-	}
-	if got := writerLineage(other, domain.RoleImplementer); got != "" {
-		t.Fatalf("lineage with a line naming another agent digest = %q", got)
-	}
 }
 
 // A disabled inference ledger raises one blocking system_health item that

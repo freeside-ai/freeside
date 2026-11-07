@@ -327,6 +327,55 @@ func TestSelectAdapterForLaunch(t *testing.T) {
 	}
 }
 
+// A call adapter gives the harness no tools; SelectAdapterForCall takes
+// the one for the client that sends the effort, and never a stage adapter.
+func TestSelectAdapterForCall(t *testing.T) {
+	t.Parallel()
+	seal := func(t *testing.T, f domain.AdapterFragment) domain.AdapterFragment {
+		t.Helper()
+		digest, err := f.ComputeDigest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Digest = digest
+		return f
+	}
+	stage := adapterFragment(t)
+	stage.ClientKind, stage.Vendor = domain.HarnessClientClaudeCode, domain.AgentVendorClaude
+	stage = seal(t, stage)
+	call := stage
+	call.AdapterBuild = "claude_code_call_v2@build-1"
+	call.LaunchCapabilities = domain.NewLaunchCapabilitySet(
+		domain.LaunchCapInstructionDelivery, domain.LaunchCapStructuredOutput,
+	)
+	call.SendableEfforts = []domain.EffortLevel{domain.EffortHarnessDefault, domain.EffortHigh}
+	call = seal(t, call)
+	retired := call
+	retired.AdapterBuild, retired.SendableEfforts = "claude_code_call_v1@build-1", []domain.EffortLevel{domain.EffortHarnessDefault}
+	retired = seal(t, retired)
+
+	got, err := domain.SelectAdapterForCall(
+		[]domain.AdapterFragment{stage, retired, call}, domain.HarnessClientClaudeCode, "high")
+	if err != nil || got.Digest != call.Digest {
+		t.Fatalf("call at high = %v %v, want the adapter that sends it", got.AdapterBuild, err)
+	}
+	if _, err := domain.SelectAdapterForCall(
+		[]domain.AdapterFragment{stage}, domain.HarnessClientClaudeCode, "high",
+	); !errors.Is(err, domain.ErrNoAdapterForLaunch) {
+		t.Fatalf("only a stage adapter = %v, want ErrNoAdapterForLaunch", err)
+	}
+	if _, err := domain.SelectAdapterForCall(
+		[]domain.AdapterFragment{call}, domain.HarnessClientCodexCLI, "high",
+	); !errors.Is(err, domain.ErrNoAdapterForLaunch) {
+		t.Fatalf("another client = %v, want ErrNoAdapterForLaunch", err)
+	}
+	if _, err := domain.SelectAdapterForCall(
+		[]domain.AdapterFragment{retired, call}, domain.HarnessClientClaudeCode, "harness_default",
+	); !errors.Is(err, domain.ErrAmbiguousAdapterForLaunch) {
+		t.Fatalf("two call adapters that send the effort = %v, want ErrAmbiguousAdapterForLaunch", err)
+	}
+}
+
 func sealedLaunch(t *testing.T, l domain.LaunchSpec) domain.LaunchSpec {
 	t.Helper()
 	digest, err := l.ComputeDigest()

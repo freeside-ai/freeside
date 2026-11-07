@@ -477,7 +477,7 @@ var (
 	ErrLineupEscalatedPrompt = errors.New(
 		"lineup escalated line's prompt is not its role's line's prompt")
 	ErrLineupEscalatedPair = errors.New(
-		"lineup escalated line does not pair two tree agents on one enrollment and adapter")
+		"lineup escalated line does not escalate its key's enrollment to another model or effort on that enrollment")
 	ErrRoleNotWardless = errors.New(
 		"role is not a wardless role")
 	ErrLineupSelectionMismatch = errors.New(

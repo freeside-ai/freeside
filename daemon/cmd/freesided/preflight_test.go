@@ -1308,31 +1308,30 @@ func TestPreflightChecksTheSecondWriterVolume(t *testing.T) {
 }
 
 // TestProductionPreflightResolvesTheAdoptedSecondWriter runs the production
-// second-writer path against an adopted two-writer tree and its store: the
-// second identity's agents resolve to its own volume, an identity with no
-// agent in the tree is refused, and the database inspection fails when the
-// resolved volume is not the configured one or the identity is unknown.
+// second-writer path against an adopted two-writer store: the second
+// identity's enrollment resolves to its own volume with no agent document
+// read, an identity with no enrollment is refused, and the database
+// inspection fails when the resolved volume is not the configured one or the
+// identity is unknown.
 func TestProductionPreflightResolvesTheAdoptedSecondWriter(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	f := newAuthAdoptFixture(t)
 	f.recordSecondWriter(t, adoptSecondVolume)
-	_, patch, err := f.run(t, f.secondWriterArgs())
-	if err != nil {
+	if _, _, err := f.run(t, f.secondWriterArgs()); err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
-	tree := loadAdoptedPatch(t, patch)
 	f.withStore(t, func(st *store.Store) {
 		for identity, want := range map[domain.AuthIdentityID]string{
 			"claude-second": adoptSecondVolume, "claude-main": adoptClaudeVolume,
 		} {
-			if volume, err := resolvePreflightSecondWriter(ctx, st, tree, identity); err != nil || volume != want {
+			if volume, err := resolvePreflightSecondWriter(ctx, st, identity); err != nil || volume != want {
 				t.Fatalf("%s resolves to %q, %v; want %s", identity, volume, err, want)
 			}
 		}
-		if _, err := resolvePreflightSecondWriter(ctx, st, tree, "claude-absent"); err == nil ||
-			!strings.Contains(err.Error(), "the agent tree has no agent on enrollment claude-absent/claude_code") {
-			t.Fatalf("an identity with no agent: %v", err)
+		if _, err := resolvePreflightSecondWriter(ctx, st, "claude-absent"); err == nil ||
+			!strings.Contains(err.Error(), "second writer enrollment claude-absent/claude_code") {
+			t.Fatalf("an identity with no enrollment: %v", err)
 		}
 	})
 	for name, tc := range map[string]struct {

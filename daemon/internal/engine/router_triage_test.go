@@ -42,11 +42,10 @@ func (f *agentAdmissionFixture) addSecondEscalated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line.AgentName = agentTestSecondEscalatedAgent
-	if line.AgentDigest, err = tree.AgentDigest(agentTestSecondEscalatedAgent); err != nil {
-		t.Fatal(err)
-	}
-	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, agentTestSecondAgent)
+	// The second enrollment's counterpart: the escalated model on the second
+	// agent's enrollment.
+	line.Names.Enrollment, line.Names.Model = second.Enrollment, agentTestEscalatedModel
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second.Enrollment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,21 +268,23 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.escalate(t)
 				routed(t, f, domain.RoleSpecifier, agentTestSecondEscalatedAgent, provenance(t, f, routerSecondPool))
-				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, agentTestSecondAgent)
+				second, _ := f.selection.Tree.Agent(agentTestSecondAgent)
+				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second.Enrollment)
 				if err != nil {
 					t.Fatal(err)
 				}
 				f.useTree(t, withoutLineupLine(t, f.selection.Tree, strings.TrimPrefix(key, domain.LineupRoleKeyPrefix)))
 			},
-			want: "an agent other than " + agentTestEscalatedAgent,
+			want: "it selects other than",
 		},
 		{
-			name: "a stale counterpart digest", role: domain.RoleSpecifier,
+			name: "a counterpart the lineup moved", role: domain.RoleSpecifier,
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.escalate(t)
 				routed(t, f, domain.RoleSpecifier, agentTestSecondEscalatedAgent, provenance(t, f, routerSecondPool))
 				tree := f.selection.Tree
-				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, agentTestSecondAgent)
+				second, _ := tree.Agent(agentTestSecondAgent)
+				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second.Enrollment)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -291,12 +292,10 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				i := slices.IndexFunc(tree.Lineup, func(l agenttree.LineupLine) bool {
 					return l.Key == strings.TrimPrefix(key, domain.LineupRoleKeyPrefix)
 				})
-				if tree.Lineup[i].Selection.AgentDigest, err = tree.AgentDigest(agentTestSecondAgent); err != nil {
-					t.Fatal(err)
-				}
+				tree.Lineup[i].Selection.Names.Model = agentTestOtherEscalatedModel
 				f.useTree(t, tree)
 			},
-			want: "the escalated line selects agent digest",
+			want: "it selects other than",
 		},
 		{
 			name: "a second version over an operator's line", role: domain.RoleSpecifier,

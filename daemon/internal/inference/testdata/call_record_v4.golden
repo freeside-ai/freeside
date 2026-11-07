@@ -3,7 +3,7 @@
   "site": "finding_adjudicator",
   "project": "project-1",
   "root_lineage": "run-1",
-  "producer": "fake/test",
+  "producer": "fake/claude-test",
   "input_digest": "sha256:264b51b327a0222bb577adf02570c113be34417480a9363e8a17280f07648a9e",
   "called_at": "1970-01-01T00:01:40Z",
   "retain_until": "1970-01-31T00:01:40Z",
@@ -14,7 +14,7 @@
   "identity": {
     "admission": {
       "role": "finding_adjudicator",
-      "agent_digest": "sha256:f5ee1dd518b54138ccf3ce3b3954ff45b71f5e1c29fc71020aca1f889c4c7598",
+      "agent_digest": "sha256:b59499fcb22f0debb407005e483a8e1d740b72ed19db8aa1c39435f070b83ac6",
       "prompt_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "lineup_revision": "sha256:50553131c846469aeebbb5ec42d910da0aa50e9567650a2a1124d85d0b81cef7",
       "enrollment_id": "fake-a/claude_code",
@@ -25,10 +25,10 @@
         "audited_on": "2026-09-09"
       }
     },
-    "treatment_digest": "sha256:ae63f5bf103d306d479e312bbacea8ab8729061cc89da3127ac7b8cca11d293e",
+    "treatment_digest": "sha256:fc485d945a78b5fb468f8b3845b899bf36eff27f005740b9c666f91d37894ac5",
     "site_contract_digest": "sha256:8965930eebde706b73366d39b1ffca028ee240c933712f1b0144976f44c77cd3",
     "credential_source": "enrollment",
-    "requested_model_id": "test",
+    "requested_model_id": "claude-test",
     "requested_effort": "harness_default",
     "effective_effort": "harness_default",
     "observed": {

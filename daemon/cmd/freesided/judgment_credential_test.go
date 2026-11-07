@@ -355,18 +355,11 @@ func TestJudgmentCallsCarryTheirEnrollmentsToken(t *testing.T) {
 			domain.Digest(contentaddr.Sum([]byte(judgmentSecondToken))))
 		r.stores(second, judgmentSecondToken)
 		tree := r.tree
-		agent, _ := tree.Agent(agentbaseline.ClaudeCallAgentName)
-		agent.Name, agent.Enrollment = "claude-call-second", string(second)
-		tree.Agents = append(slices.Clone(tree.Agents), agent)
-		digest, err := tree.AgentDigest(agent.Name)
-		if err != nil {
-			t.Fatal(err)
-		}
 		tree.Lineup = slices.Clone(tree.Lineup)
 		moved := false
 		for i, line := range tree.Lineup {
 			if domain.RoleName(line.Key) == domain.RoleTaskNamer {
-				tree.Lineup[i].Selection.AgentName, tree.Lineup[i].Selection.AgentDigest = agent.Name, digest
+				tree.Lineup[i].Selection.Names.Enrollment = string(second)
 				moved = true
 			}
 		}
