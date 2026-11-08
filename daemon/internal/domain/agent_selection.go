@@ -241,33 +241,58 @@ func ResolveAgentSelection(in AgentSelectionInput) (AgentSelection, error) {
 			return fail("the catalog is enrollment %s's", in.Catalog.EnrollmentID)
 		}
 	}
-	switch {
+	switch err := SelectionServed(client, in.Catalog, in.Names.Model, in.Names.Effort); {
+	case err == nil:
+	case errors.Is(err, errNativeDefaultReserved):
+		return fail("the native-default model id is reserved for claude_code, the enrollment binds %q", client)
 	case in.Names.Model == ClaudeCodeNativeDefaultRouteModelID:
-		if client != HarnessClientClaudeCode {
-			return fail("the native-default model id is reserved for claude_code, the enrollment binds %q", client)
-		}
-		if !slices.Contains(nativeEfforts(client), in.Names.Effort) {
-			return fail("the effort has no claude_code native value")
-		}
+		return fail("the effort has no claude_code native value")
 	case in.Catalog == nil:
-		// The bridge: the model as named, an effort the table produces.
-		if !slices.Contains(nativeEfforts(client), in.Names.Effort) {
-			return fail("enrollment %s records no catalog, and the effort has no %s native value",
-				in.Enrollment.ID, client)
-		}
+		return fail("enrollment %s records no catalog, and the effort has no %s native value",
+			in.Enrollment.ID, client)
+	case errors.Is(err, ErrDiscoveredModelUnserved):
+		return fail("the model is not in enrollment %s's discovered catalog", in.Enrollment.ID)
 	default:
-		switch err := in.Catalog.Serves(in.Names.Model, in.Names.Effort); {
-		case errors.Is(err, ErrDiscoveredModelUnserved):
-			return fail("the model is not in enrollment %s's discovered catalog", in.Enrollment.ID)
-		case err != nil:
-			return fail("the effort is not one the model reports in enrollment %s's discovered catalog",
-				in.Enrollment.ID)
-		}
+		return fail("the effort is not one the model reports in enrollment %s's discovered catalog",
+			in.Enrollment.ID)
 	}
 	return sealAgentSelection(AgentSelection{
 		EncodingVersion: AgentSelectionEncodingVersion, EnrollmentID: in.Enrollment.ID,
 		ModelID: in.Names.Model, Effort: in.Names.Effort, AdapterDigest: in.Adapter.Digest,
 	})
+}
+
+// errNativeDefaultReserved marks the native-default model id on a client
+// other than claude_code; it wraps ErrDiscoveredModelUnserved.
+var errNativeDefaultReserved = fmt.Errorf("the native-default model id is reserved for claude_code: %w",
+	ErrDiscoveredModelUnserved)
+
+// SelectionServed is the served-tuple rule ResolveAgentSelection applies,
+// for a caller that has the client and catalog but no adapter: whether an
+// enrollment binding client, with catalog (nil when none is recorded), serves
+// model at effort. The reserved ClaudeCodeNativeDefaultRouteModelID is
+// served only on claude_code with a native effort; with no catalog (the
+// bridge) the model is taken as named with a native effort; otherwise the
+// catalog decides (DiscoveredModelCatalog.Serves). The error wraps
+// ErrDiscoveredModelUnserved or ErrDiscoveredEffortUnserved, so a refusal
+// can name the field, and never quotes either value.
+func SelectionServed(client HarnessClientKind, catalog *DiscoveredModelCatalog, model, effort string) error {
+	switch {
+	case model == ClaudeCodeNativeDefaultRouteModelID:
+		if client != HarnessClientClaudeCode {
+			return errNativeDefaultReserved
+		}
+		if !slices.Contains(nativeEfforts(client), effort) {
+			return ErrDiscoveredEffortUnserved
+		}
+	case catalog == nil:
+		if !slices.Contains(nativeEfforts(client), effort) {
+			return ErrDiscoveredEffortUnserved
+		}
+	default:
+		return catalog.Serves(model, effort)
+	}
+	return nil
 }
 
 // catalogEntries is the catalog entry whose id is model or, when none is,
