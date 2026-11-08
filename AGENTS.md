@@ -649,7 +649,9 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Migrations that rewrite data:** `internal/store/migrate.go`,
   `internal/store/migration_*.go`, and any `migrations/*.sql` file that
   updates, moves, or drops existing rows or rebuilds a table. A migration
-  that only adds a table, column, or index is Tier B.
+  that only adds a table, column, or index is Tier B. The engine's
+  `internal/engine/legacy_fake_publication.go` joins them (converges
+  pre-August fake-lane runs to a resolved policy, rewriting stored runs).
 
 ### Worked Examples
 
