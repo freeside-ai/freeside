@@ -559,7 +559,9 @@ directory named before it in the same bullet. All under `daemon/`:
   authored prose).
 - **Import and handoff:** `internal/importer/`,
   `internal/store/handoff_journal.go`, `internal/exportscan/` (the export
-  credential scan that refuses a handoff), `internal/exec/stage/state.go`
+  credential scan that refuses a handoff), `internal/credentialpattern/`
+  (the credential rules both the export scan and the importer apply),
+  `internal/exec/stage/state.go`
   (the restart reconstruction gate on a decoded intent), and
   `internal/exec/stage/pipeline.go` (released-export authentication and
   what restart recovery holds, quarantines, or adopts).

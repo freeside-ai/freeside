@@ -62,6 +62,44 @@ func TestScanTextAnthropicTokenWithoutWordBoundaries(t *testing.T) {
 	}
 }
 
+// TestGitHubTokenWithoutWordBoundaries pins the shared GitHub token rule on
+// the importer's screens: the importer's own rule once required word
+// boundaries and 36 characters, so these three shapes passed
+// ContainsSecret while the export scan refused them.
+func TestGitHubTokenWithoutWordBoundaries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"preceded by a word byte", "GH_TOKEN_ghp_" + strings.Repeat("E", 36)},
+		{"followed by an underscore", "ghs_" + strings.Repeat("F", 36) + "_x"},
+		{"sixteen characters", "gho_" + strings.Repeat("G", 16)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !ContainsSecret([]byte(tc.content)) {
+				t.Error("ContainsSecret must report a boundary-adjacent or short GitHub token")
+			}
+			findings := scanText("config.txt", []byte(tc.content))
+			if len(findings) != 1 || findings[0].Rule != "github_token" {
+				t.Fatalf("boundary-adjacent or short GitHub token must be found: %+v", findings)
+			}
+		})
+	}
+}
+
+// TestShortGitHubTokenPrefixPasses keeps the rule's floor: a bare prefix
+// or a run under 16 characters is a mention, not a token.
+func TestShortGitHubTokenPrefixPasses(t *testing.T) {
+	t.Parallel()
+	for _, content := range []string{"ghp_", "ghp_" + strings.Repeat("H", 15)} {
+		if ContainsSecret([]byte(content)) {
+			t.Errorf("ContainsSecret(%q) = true, want false", content)
+		}
+	}
+}
+
 // TestScanTextLongLine is the Codex P2 regression: a token on a line
 // far longer than any scanner buffer must still be found, not silently
 // dropped at ErrTooLong.

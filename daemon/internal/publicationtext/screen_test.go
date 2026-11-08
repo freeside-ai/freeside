@@ -19,7 +19,7 @@ func TestScreenCategories(t *testing.T) {
 		{"ci", "[skip ci]", "message_rules", 100},
 		{"trailer", "Reviewed-by: someone", "message_rules", 100},
 		{"secret", "ghp_" + strings.Repeat("x", 36), "secret_detection", 100},
-		{"spliced", "ghp_" + strings.Repeat("x", 18) + "**xx**" + strings.Repeat("x", 16), "secret_detection", 100},
+		{"spliced", "ghp_" + strings.Repeat("x", 8) + "**xx**" + strings.Repeat("x", 6), "secret_detection", 100},
 		{"reserved", "## Verification", "candidate_body_size_or_reserved_section", 100},
 		{"source reference heading", "## Source Issue", "candidate_body_size_or_reserved_section", 100},
 		{"legacy source reference heading", "## Source issue", "candidate_body_size_or_reserved_section", 100},

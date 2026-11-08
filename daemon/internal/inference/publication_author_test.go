@@ -197,7 +197,7 @@ func TestAuthorPublicationCitesUnsuppliedID(t *testing.T) {
 
 func TestAuthorOutputRefusalsBeforeAudit(t *testing.T) {
 	secret := "ghp_" + strings.Repeat("x", 36)
-	spliced := "ghp_" + strings.Repeat("x", 18) + "**xx**" + strings.Repeat("x", 16)
+	spliced := "ghp_" + strings.Repeat("x", 8) + "**xx**" + strings.Repeat("x", 6)
 	for _, field := range []string{"title", "body", "reviewer_notes", "outcome_summary"} {
 		for _, tc := range []struct{ name, text, category string }{
 			{"secret", secret, "secret_detection"},

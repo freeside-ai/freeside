@@ -1,37 +1,20 @@
 package exportscan
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 
+	"github.com/freeside-ai/freeside/daemon/internal/credentialpattern"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// credentialPatterns are shapes that are credential material wherever they
-// appear. Each is anchored on a vendor-issued prefix or an armored header
-// rather than a generic word, so ordinary prose and code do not trip it.
-var credentialPatterns = []*regexp.Regexp{
-	// Anthropic API keys and OAuth/setup tokens.
-	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{16,}`),
-	// GitHub tokens: personal, OAuth, user-to-server, server-to-server, refresh.
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{16,}`),
-	// GitHub fine-grained personal access tokens.
-	regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`),
-	// Slack app, bot, user, refresh, and service tokens.
-	regexp.MustCompile(`\bxox[abprs]-[0-9A-Za-z-]{10,}\b`),
-	// PEM private keys of any flavour.
-	regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----`),
-	// AWS access key ids.
-	regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`),
-	// GCP service-account private key identifiers.
-	regexp.MustCompile(`"private_key_id"\s*:\s*"[0-9a-f]{40}"`),
-}
+// credentialRules is the shared credential rule list
+// (internal/credentialpattern), the same list the importer applies.
+var credentialRules = credentialpattern.All()
 
 // scanChunkBytes is how much of a file is held in memory at once. Files are
 // streamed in overlapping chunks rather than truncated: the export's largest
@@ -66,11 +49,11 @@ func (Scanner) Scan(ctx context.Context, dir string) error {
 		if !entry.Type().IsRegular() {
 			return nil
 		}
-		matched, err := scanFile(ctx, path)
+		rule, matched, err := scanFile(ctx, path)
 		if err != nil {
 			return err
 		}
-		if matched != nil {
+		if matched {
 			// The match itself is never reported: naming the pattern locates
 			// the leak without copying the secret into a log, an attention
 			// item, or an error a client can read.
@@ -79,19 +62,19 @@ func (Scanner) Scan(ctx context.Context, dir string) error {
 				rel = filepath.Base(path)
 			}
 			return fmt.Errorf("%w: credential material matching %s found in exported %s",
-				ward.ErrOutputScanRefused, patternName(matched), rel)
+				ward.ErrOutputScanRefused, rule.Name, rel)
 		}
 		return nil
 	})
 }
 
-// scanFile streams one file through the pattern set, returning the first
-// pattern that matched or nil. The whole file is examined regardless of its
-// size; only the working set is bounded.
-func scanFile(ctx context.Context, path string) (*regexp.Regexp, error) {
+// scanFile streams one file through the rule set, returning the first rule
+// that matched and true, or false when none did. The whole file is examined
+// regardless of its size; only the working set is bounded.
+func scanFile(ctx context.Context, path string) (credentialpattern.Rule, bool, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: gate-extracted export path handed to this scanner
 	if err != nil {
-		return nil, fmt.Errorf("scan export file: %w", err)
+		return credentialpattern.Rule{}, false, fmt.Errorf("scan export file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -99,14 +82,14 @@ func scanFile(ctx context.Context, path string) (*regexp.Regexp, error) {
 	chunk := make([]byte, scanChunkBytes)
 	for {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return credentialpattern.Rule{}, false, ctxErr
 		}
 		n, readErr := f.Read(chunk)
 		if n > 0 {
 			buf = append(buf, chunk[:n]...)
-			for _, pattern := range credentialPatterns {
-				if pattern.Match(buf) {
-					return pattern, nil
+			for _, rule := range credentialRules {
+				if rule.Pattern.Match(buf) {
+					return rule, true, nil
 				}
 			}
 			// Carry the tail forward so a pattern split across this boundary
@@ -117,28 +100,9 @@ func scanFile(ctx context.Context, path string) (*regexp.Regexp, error) {
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return nil, nil
+				return credentialpattern.Rule{}, false, nil
 			}
-			return nil, fmt.Errorf("scan export file: %w", readErr)
+			return credentialpattern.Rule{}, false, fmt.Errorf("scan export file: %w", readErr)
 		}
-	}
-}
-
-// patternName describes a matched pattern without echoing the match.
-func patternName(pattern *regexp.Regexp) string {
-	switch {
-	case bytes.Contains([]byte(pattern.String()), []byte("sk-ant")):
-		return "an Anthropic key or token"
-	case bytes.Contains([]byte(pattern.String()), []byte("gh[pousr]")) ||
-		bytes.Contains([]byte(pattern.String()), []byte("github_pat")):
-		return "a GitHub token"
-	case bytes.Contains([]byte(pattern.String()), []byte("xox")):
-		return "a Slack token"
-	case bytes.Contains([]byte(pattern.String()), []byte("PRIVATE KEY")):
-		return "a PEM private key"
-	case bytes.Contains([]byte(pattern.String()), []byte("private_key_id")):
-		return "a GCP service-account key id"
-	default:
-		return "an AWS access key id"
 	}
 }
