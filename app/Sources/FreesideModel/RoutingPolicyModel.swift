@@ -218,9 +218,18 @@ package final class RoutingPolicyModel {
         return orders.allSatisfy { $0 == orders.first } ? orders.first : nil
     }
 
-    /// The agent the lineup runs the role with when the policy leaves it out.
-    package func lineupAgent(for role: RoutingPolicyDraft.Role) -> String? {
-        catalog?.lineup.first { $0.role == role }?.agent
+    /// The selection the lineup runs the role with when the policy leaves it
+    /// out; nil without a catalog or when the lineup binds nothing to it.
+    package func lineupSelection(for role: RoutingPolicyDraft.Role) -> Components.Schemas.TaskLineSelection? {
+        catalog?.lineup.first { $0.role == role }?.selection
+    }
+
+    /// The one lineup selection every role of the popup sits on, nil when
+    /// they differ or any role has none. Roles compare by selection because
+    /// a lineup line names no agent.
+    package func sharedLineupSelection(_ popup: RoutingPopup) -> Components.Schemas.TaskLineSelection? {
+        let selections = popup.roles.map(lineupSelection(for:))
+        return Set(selections).count == 1 ? selections.first ?? nil : nil
     }
 
     /// Why the policy can't be changed now, or nil when it can.

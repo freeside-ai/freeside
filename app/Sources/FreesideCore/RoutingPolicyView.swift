@@ -160,10 +160,7 @@ struct RoutingPolicyView: View {
     private func popupText(_ popup: RoutingPopup, shared: [String]?) -> String {
         guard let shared else { return "Differs by role" }
         guard shared.isEmpty else { return Self.orderText(shared) }
-        // The roles may sit on different lineup agents; name one only when
-        // they share it.
-        let lineups = Set(popup.roles.map(model.lineupAgent(for:)))
-        return Self.lineupText(lineups.count == 1 ? lineups.first ?? nil : nil)
+        return Self.lineupText(model.sharedLineupSelection(popup))
     }
 
     /// Writer's dim line names its roles, or each role's order when they
@@ -174,7 +171,7 @@ struct RoutingPolicyView: View {
             guard shared == nil else { return "Specifies, implements and remediates." }
             return popup.roles.map { role in
                 let order = model.policy?.roles.first { $0.role == role }?.agents ?? []
-                let text = order.isEmpty ? Self.lineupText(model.lineupAgent(for: role)) : Self.orderText(order)
+                let text = order.isEmpty ? Self.lineupText(model.lineupSelection(for: role)) : Self.orderText(order)
                 return "\(Self.roleName(role)) · \(text)"
             }
             .joined(separator: "\n")
@@ -244,10 +241,11 @@ struct RoutingPolicyView: View {
         role.rawValue.prefix(1).uppercased() + role.rawValue.dropFirst()
     }
 
-    /// A role the policy leaves out runs on the lineup's agent; without a
-    /// catalog, or when the lineup binds no agent to it, the name is unknown.
-    static func lineupText(_ agent: String?) -> String {
-        agent.map { "Lineup: \($0)" } ?? "Lineup"
+    /// A role the policy leaves out runs on the lineup's selection; it reads
+    /// `Lineup` alone without a catalog, when the lineup binds nothing to the
+    /// role, or when a popup's roles sit on different selections.
+    static func lineupText(_ selection: Components.Schemas.TaskLineSelection?) -> String {
+        selection.map { "Lineup: \(AgentChoiceDisplay.selectionLabel($0))" } ?? "Lineup"
     }
 
     /// Who set the policy: a paired device by its name, `freesided routing
@@ -472,7 +470,7 @@ struct RoutingPolicyEditor: View {
     }
 
     private func lineupLine(_ role: RoutingPolicyDraft.Role) -> some View {
-        Text(RoutingPolicyView.lineupText(model.lineupAgent(for: role)))
+        Text(RoutingPolicyView.lineupText(model.lineupSelection(for: role)))
             .font(FreesideFont.monoValue)
             .foregroundStyle(Color.inkDim)
     }

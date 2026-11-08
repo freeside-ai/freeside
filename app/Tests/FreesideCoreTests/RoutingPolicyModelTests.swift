@@ -42,12 +42,21 @@ import Testing
         #expect(restored.routingPolicy == first.routingPolicy)
     }
 
-    @Test func aRoleThePolicyLeavesOutReadsAsItsLineupAgent() async throws {
+    @Test func aRoleThePolicyLeavesOutReadsAsItsLineupSelection() async throws {
         let coordinator = await coordinator()
         let model = RoutingPolicyModel(coordinator: coordinator)
-        #expect(model.lineupAgent(for: .reviewer) == "codex-primary")
-        #expect(RoutingPolicyView.lineupText(model.lineupAgent(for: .reviewer)) == "Lineup: codex-primary")
+        let codex = UsageFixtures.agentSelection("codex-primary")
+        #expect(model.lineupSelection(for: .reviewer) == codex)
+        #expect(
+            RoutingPolicyView.lineupText(model.lineupSelection(for: .reviewer))
+                == "Lineup: \(UsageFixtures.unsupportedCollectorID) · gpt-codex · harness_default")
         #expect(RoutingPolicyView.lineupText(nil) == "Lineup")
+        // A popup names the selection its roles share: Reviewer has one
+        // role; Writer's remediator sits on claude-secondary while its
+        // specifier and implementer sit on claude-primary.
+        #expect(model.sharedLineupSelection(.reviewer) == codex)
+        #expect(model.sharedLineupSelection(.writer) == nil)
+        #expect(RoutingPolicyView.lineupText(model.sharedLineupSelection(.writer)) == "Lineup")
     }
 
     @Test func setByNamesAPairedDeviceOrTheHost() {
