@@ -16,7 +16,9 @@ import (
 // (FindingKind.blocksCommit); an empty Findings list with a set
 // CommitSHA is a clean import. Claims carries the §5.15 rule-2 agent
 // artifacts (empty when the handoff has no evidence channel); they never
-// enter an item's evidence snapshot and are never auto-uploaded.
+// enter an item's evidence snapshot and are never auto-uploaded. A review
+// guide claim is head-bound to CommitSHA when the import built a commit and
+// head-independent otherwise.
 type Result struct {
 	CommitSHA string              `json:"commit_sha,omitempty"`
 	TreeSHA   string              `json:"tree_sha,omitempty"`
@@ -164,8 +166,7 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 			if err != nil {
 				return Result{}, err
 			}
-			result.TreeSHA, result.CommitSHA = tree, commit
-			return result, nil
+			return withCommit(result, tree, commit)
 		}
 		if !planPresent {
 			setPlanNotice(&result, domain.CommitPlanNoticeAbsent)
@@ -182,8 +183,7 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 					if err != nil {
 						return Result{}, err
 					}
-					result.TreeSHA, result.CommitSHA = tree, commit
-					return result, nil
+					return withCommit(result, tree, commit)
 				}
 				setPlanNotice(&result, domain.CommitPlanNoticeScreening)
 			} else if errors.Is(planErr, errPlanStructural) {
@@ -197,7 +197,16 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	if err != nil {
 		return Result{}, err
 	}
+	return withCommit(result, tree, commit)
+}
+
+// withCommit records the built commit on the result and binds the claims
+// that name it. Every path that builds a commit returns through here.
+func withCommit(result Result, tree, commit string) (Result, error) {
 	result.TreeSHA, result.CommitSHA = tree, commit
+	if err := bindReviewGuideClaim(&result); err != nil {
+		return Result{}, err
+	}
 	return result, nil
 }
 
