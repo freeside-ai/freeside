@@ -410,7 +410,9 @@ struct NewTaskSheet: View {
             let defaultLabel = AgentChoiceDisplay.defaultLabel(
                 role: role, policy: model.routingPolicy, catalog: catalog)
             Menu {
-                roleMenu(role, chosen: chosen, defaultLabel: defaultLabel)
+                RoleSelectionMenu(
+                    offer: Self.roleMenuOffer(role, choices: choices, model: model), lineupLabel: defaultLabel
+                ) { choices[role] = $0 }
             } label: {
                 chip
             }
@@ -424,101 +426,12 @@ struct NewTaskSheet: View {
         }
     }
 
-    /// A role's menu: Default and the enrollments, then, once an enrollment
-    /// is chosen, its models and the chosen model's efforts, and a footnote
-    /// naming the harness build that reported them. Each pick closes the
-    /// menu; reopening it shows the sections for the new choice. A model or
-    /// effort a newer catalog dropped keeps a disabled entry tagged with
-    /// it, so its picker still shows it chosen.
-    @ViewBuilder private func roleMenu(
-        _ role: Role, chosen: AgentChoiceDisplay.Selection?, defaultLabel: String
-    ) -> some View {
-        let catalog = model.agentCatalog
-        let now = Date()
-        let dropped = chosen.flatMap { AgentChoiceDisplay.droppedPart($0, catalog: catalog) }
-        Picker("\(AgentChoiceDisplay.title(for: role)) enrollment", selection: enrollmentChoice(for: role)) {
-            Text(defaultLabel).tag(String?.none)
-            ForEach(AgentChoiceDisplay.enrollments(catalog, pools: model.usagePools, now: now)) { enrollment in
-                Text(enrollment.label).tag(Optional(enrollment.id)).disabled(!enrollment.isPickable)
-            }
-            if let chosen, dropped == .enrollment {
-                Text("\(chosen.enrollment_id) · no longer offered").tag(Optional(chosen.enrollment_id))
-                    .disabled(true)
-            }
-        }
-        .pickerStyle(.inline)
-        if let chosen, dropped != .enrollment {
-            let option = AgentChoiceDisplay.modelOption(for: chosen, catalog: catalog)
-            Section("Model") {
-                Picker("Model", selection: modelChoice(for: role)) {
-                    ForEach(AgentChoiceDisplay.models(on: chosen.enrollment_id, catalog: catalog)) { model in
-                        Text(model.name).tag(model.id)
-                    }
-                    if option == nil {
-                        Text("\(chosen.model_id) · no longer offered").tag(chosen.model_id).disabled(true)
-                    }
-                }
-                .pickerStyle(.inline)
-            }
-            if let option {
-                Section("Effort") {
-                    Picker("Effort", selection: effortChoice(for: role)) {
-                        ForEach(option.efforts, id: \.self) { effort in
-                            Text(AgentChoiceDisplay.effortLabel(effort)).tag(effort)
-                        }
-                        if dropped == .effort {
-                            Text("\(AgentChoiceDisplay.effortLabel(chosen.effort)) · no longer offered")
-                                .tag(chosen.effort).disabled(true)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                }
-            }
-            if let note = AgentChoiceDisplay.discoveryNote(on: chosen.enrollment_id, catalog: catalog, now: now) {
-                Text(note)
-            }
-        }
-    }
-
-    /// The chosen enrollment, nil for Default. Picking another enrollment
-    /// resets the model and effort (`AgentChoiceDisplay.choosing`); picking
-    /// the chosen one again changes nothing.
-    private func enrollmentChoice(for role: Role) -> Binding<String?> {
-        Binding(
-            get: { choices[role]?.enrollment_id },
-            set: { enrollment in
-                guard let enrollment else {
-                    choices[role] = nil
-                    return
-                }
-                guard enrollment != choices[role]?.enrollment_id else { return }
-                choices[role] = AgentChoiceDisplay.choosing(
-                    enrollment: enrollment, role: role, catalog: model.agentCatalog)
-            })
-    }
-
-    /// The chosen model as its menu entry's id, which differs from the
-    /// recorded id when the tree names the model the entry resolves to.
-    private func modelChoice(for role: Role) -> Binding<String> {
-        Binding(
-            get: {
-                choices[role].map {
-                    AgentChoiceDisplay.modelOption(for: $0, catalog: model.agentCatalog)?.id ?? $0.model_id
-                } ?? ""
-            },
-            set: { modelID in
-                guard let current = choices[role] else { return }
-                choices[role] = AgentChoiceDisplay.choosing(model: modelID, from: current, catalog: model.agentCatalog)
-            })
-    }
-
-    private func effortChoice(for role: Role) -> Binding<String> {
-        Binding(
-            get: { choices[role]?.effort ?? "" },
-            set: { effort in
-                guard let current = choices[role] else { return }
-                choices[role] = .init(enrollment_id: current.enrollment_id, model_id: current.model_id, effort: effort)
-            })
+    /// What a role chip's menu offers: the synced catalog and usage pools,
+    /// with the role's choice chosen.
+    static func roleMenuOffer(
+        _ role: Role, choices: [Role: AgentChoiceDisplay.Selection], model: TaskSubmissionModel
+    ) -> RoleSelectionMenu.Offer {
+        .init(role: role, catalog: model.agentCatalog, pools: model.usagePools, current: choices[role])
     }
 
     /// Why a stale choice blocks Submit, one sentence per selection the

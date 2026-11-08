@@ -201,6 +201,36 @@ public enum AgentChoiceDisplay {
         return Selection(enrollment_id: current.enrollment_id, model_id: modelID, effort: effort)
     }
 
+    /// One pick in a role's menu.
+    public enum Pick: Equatable, Sendable {
+        /// An enrollment, or nil for the entry that leaves the role to the
+        /// lineup (New Task's Default, the task page's Clear).
+        case enrollment(String?)
+        case model(String)
+        case effort(String)
+    }
+
+    /// The selection a role holds after `pick`, from `current`. Another
+    /// enrollment resets the model and effort (`choosing(enrollment:)`), a
+    /// model keeps an effort it reports (`choosing(model:)`), and an effort
+    /// replaces the effort alone. Returns `current` for a pick that changes
+    /// nothing: the value already chosen, a model or effort with no
+    /// selection, or an enrollment that offers no model. Both role menus,
+    /// New Task's and the task page's, pick through this one rule.
+    public static func picking(_ pick: Pick, from current: Selection?, role: Role, catalog: Catalog?) -> Selection? {
+        switch pick {
+        case .enrollment(nil):
+            return nil
+        case .enrollment(let enrollmentID?):
+            guard enrollmentID != current?.enrollment_id else { return current }
+            return choosing(enrollment: enrollmentID, role: role, catalog: catalog) ?? current
+        case .model(let modelID):
+            return current.map { choosing(model: modelID, from: $0, catalog: catalog) }
+        case .effort(let effort):
+            return current.map { Selection(enrollment_id: $0.enrollment_id, model_id: $0.model_id, effort: effort) }
+        }
+    }
+
     private static func resetEffort(_ model: ModelOption) -> String {
         model.efforts.contains(harnessDefault) ? harnessDefault : model.efforts.first ?? harnessDefault
     }
