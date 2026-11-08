@@ -383,75 +383,25 @@ func (b *Backend) seedVendorInstructions(
 	}
 
 	spec := buildInstructionSeederSpec(b.cfg, hs, names, st.ownershipLabel)
-	st.instructionSeeder.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"create vendor-instruction seeder: %v", err)
-	}
-	st.instructionSeeder.owned = true
-	rep, err := b.rt.Inspect(ctx, names.InstructionSeeder)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"inspect vendor-instruction seeder before execution: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep,
-		spec,
-		names.Instructions,
-		instructionVolumeTarget,
-		CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	st.instructionSeeder.fingerprint, err = ownedFingerprint(
-		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
-	)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"vendor-instruction seeder %q: %v", names.InstructionSeeder, err)
-	}
-	if err := b.rt.StartContainer(ctx, names.InstructionSeeder); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"start vendor-instruction seeder: %v", err)
-	}
-	if err := b.copyInstructionInput(
-		ctx, names.InstructionSeeder, snapshot, instructionStageDir,
-	); err != nil {
-		return err
-	}
-	if err := b.copyInstructionInput(
-		ctx, names.InstructionSeeder, readyDir, instructionReadyDir,
-	); err != nil {
-		return err
-	}
-	if err := b.waitStopped(
-		ctx,
-		names.InstructionSeeder,
-		st.instructionSeeder,
-		st.ownershipLabel,
-		b.cfg.SeedTimeout,
-	); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"vendor-instruction seeder: %v", err)
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.InstructionSeeder); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, names.InstructionSeeder); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"delete stopped vendor-instruction seeder: %v", err)
-	}
-	if err := b.verifyContainerAbsent(
-		ctx,
-		names.InstructionSeeder,
-		st.instructionSeeder,
-		st.ownershipLabel,
-		CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	st.instructionSeeder = objectClaim{}
-	return nil
+	return b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "vendor-instruction seeder", claim: &st.instructionSeeder, owner: st.ownershipLabel,
+		check: CheckControlPlaneIsolation, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(
+				rep, spec, names.Instructions, instructionVolumeTarget, CheckControlPlaneIsolation,
+			)
+		},
+		afterStart: func(ctx context.Context) error {
+			if err := b.copyInstructionInput(
+				ctx, names.InstructionSeeder, snapshot, instructionStageDir,
+			); err != nil {
+				return err
+			}
+			return b.copyInstructionInput(
+				ctx, names.InstructionSeeder, readyDir, instructionReadyDir,
+			)
+		},
+	})
 }
 
 func (b *Backend) copyInstructionInput(
@@ -474,85 +424,40 @@ func (b *Backend) observeVendorInstructions(
 	ctx context.Context, hs HandoffSpec, names handoffNames, st *runState,
 ) error {
 	spec := buildInstructionObserverSpec(b.cfg, hs, names, st.ownershipLabel)
-	st.instructionObserver.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"create vendor-instruction observer: %v", err)
-	}
-	st.instructionObserver.owned = true
-	rep, err := b.rt.Inspect(ctx, names.InstructionObserver)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"inspect vendor-instruction observer before execution: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep,
-		spec,
-		names.Instructions,
-		instructionVolumeTarget,
-		CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	st.instructionObserver.fingerprint, err = ownedFingerprint(
-		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
-	)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"vendor-instruction observer %q: %v", names.InstructionObserver, err)
-	}
-	if err := b.rt.StartContainer(ctx, names.InstructionObserver); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"start vendor-instruction observer: %v", err)
-	}
-	if err := b.waitStopped(
-		ctx,
-		names.InstructionObserver,
-		st.instructionObserver,
-		st.ownershipLabel,
-		b.cfg.SeedTimeout,
-	); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"vendor-instruction observer: %v", err)
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.InstructionObserver); err != nil {
-		return err
-	}
-	proof, err := b.readInstructionProof(ctx, hs.RunID, names.InstructionObserver, st)
-	if err != nil {
-		return err
-	}
-	if err := verifyInstructionProof(
-		proof, st.ownershipLabel.Value, expectedInstructions(hs, st),
-	); err != nil {
-		return err
-	}
-	if st.preparedInstructions != nil && st.journalOpen {
-		if err := b.cfg.Journal.MarkInstructionsPrepared(
-			ctx, hs.RunID, *st.preparedInstructions,
-		); err != nil {
-			return failw(
-				CheckControlPlaneIsolation, err,
-				"journal prepared instructions: %v",
-				err,
+	return b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "vendor-instruction observer", claim: &st.instructionObserver, owner: st.ownershipLabel,
+		check: CheckControlPlaneIsolation, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(
+				rep, spec, names.Instructions, instructionVolumeTarget, CheckControlPlaneIsolation,
 			)
-		}
-	}
-	if err := b.rt.DeleteContainer(ctx, names.InstructionObserver); err != nil {
-		return failw(CheckControlPlaneIsolation, err,
-			"delete stopped vendor-instruction observer: %v", err)
-	}
-	if err := b.verifyContainerAbsent(
-		ctx,
-		names.InstructionObserver,
-		st.instructionObserver,
-		st.ownershipLabel,
-		CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	st.instructionObserver = objectClaim{}
-	return nil
+		},
+		readProof: func(ctx context.Context) ([]byte, error) {
+			return b.readInstructionProof(ctx, hs.RunID, names.InstructionObserver, st)
+		},
+		// The journal write stays ahead of the delete, as the proof that
+		// earns it is read from the stopped observer.
+		checkProof: func(proof []byte) error {
+			if err := verifyInstructionProof(
+				proof, st.ownershipLabel.Value, expectedInstructions(hs, st),
+			); err != nil {
+				return err
+			}
+			if st.preparedInstructions == nil || !st.journalOpen {
+				return nil
+			}
+			if err := b.cfg.Journal.MarkInstructionsPrepared(
+				ctx, hs.RunID, *st.preparedInstructions,
+			); err != nil {
+				return failw(
+					CheckControlPlaneIsolation, err,
+					"journal prepared instructions: %v",
+					err,
+				)
+			}
+			return nil
+		},
+	})
 }
 
 func expectedInstructions(hs HandoffSpec, st *runState) VendorInstructions {
