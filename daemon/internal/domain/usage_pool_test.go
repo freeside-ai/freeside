@@ -22,7 +22,7 @@ func TestEffectiveUsagePool(t *testing.T) {
 
 func TestUsagePoolValidate(t *testing.T) {
 	t.Parallel()
-	valid := domain.UsagePool{ID: "pool-1", Provider: "claude", MaxParallelExecutions: 1}
+	valid := domain.UsagePool{ID: "pool-1", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 1}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid pool: %v", err)
 	}
@@ -30,9 +30,10 @@ func TestUsagePoolValidate(t *testing.T) {
 		mutate  func(*domain.UsagePool)
 		wantErr error
 	}{
-		"no id":       {func(p *domain.UsagePool) { p.ID = "" }, domain.ErrEmptyID},
-		"no provider": {func(p *domain.UsagePool) { p.Provider = "" }, domain.ErrEmptyField},
-		"zero limit":  {func(p *domain.UsagePool) { p.MaxParallelExecutions = 0 }, domain.ErrNonPositive},
+		"no id":            {func(p *domain.UsagePool) { p.ID = "" }, domain.ErrEmptyID},
+		"no provider":      {func(p *domain.UsagePool) { p.Provider = "" }, domain.ErrInvalidAuthProvider},
+		"unknown provider": {func(p *domain.UsagePool) { p.Provider = "anthropic" }, domain.ErrInvalidAuthProvider},
+		"zero limit":       {func(p *domain.UsagePool) { p.MaxParallelExecutions = 0 }, domain.ErrNonPositive},
 	} {
 		pool := valid
 		tc.mutate(&pool)
@@ -44,7 +45,7 @@ func TestUsagePoolValidate(t *testing.T) {
 
 func TestValidateUsagePoolTransition(t *testing.T) {
 	t.Parallel()
-	old := domain.UsagePool{ID: "pool-1", Provider: "claude", MaxParallelExecutions: 2}
+	old := domain.UsagePool{ID: "pool-1", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 2}
 	for name, tc := range map[string]struct {
 		mutate  func(*domain.UsagePool)
 		wantErr error
@@ -52,7 +53,7 @@ func TestValidateUsagePoolTransition(t *testing.T) {
 		"raised limit":   {func(p *domain.UsagePool) { p.MaxParallelExecutions = 8 }, nil},
 		"lowered limit":  {func(p *domain.UsagePool) { p.MaxParallelExecutions = 1 }, nil},
 		"other pool":     {func(p *domain.UsagePool) { p.ID = "pool-2" }, domain.ErrImmutableTransition},
-		"other provider": {func(p *domain.UsagePool) { p.Provider = "openai" }, domain.ErrImmutableTransition},
+		"other provider": {func(p *domain.UsagePool) { p.Provider = domain.AuthProviderOpenAI }, domain.ErrImmutableTransition},
 	} {
 		updated := old
 		tc.mutate(&updated)

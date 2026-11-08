@@ -41,7 +41,7 @@ func TestProductionReviewInvocationKeepsItsFirstAdmission(t *testing.T) {
 		return admission, nil
 	}
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
-		return tx.RecordAuthIdentity(p.ctx, domain.AuthIdentity{ID: "review-identity-1", Provider: "fake"}, p.now)
+		return tx.RecordAuthIdentity(p.ctx, domain.AuthIdentity{ID: "review-identity-1", Provider: domain.AuthProviderOpenAI}, p.now)
 	}); err != nil {
 		t.Fatal(err)
 	}

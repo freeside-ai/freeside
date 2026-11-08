@@ -2218,6 +2218,30 @@ func (s RefreshStrategy) valid() bool {
 	}
 }
 
+// AuthProvider is the provider an AuthIdentity, and the UsagePool it draws
+// on, belongs to (plan §5.4). The string values are what the auth_identities
+// and usage_pools rows store, in the provider column and the body, so a
+// member's value never changes. Widening the vocabulary is a kind:contract
+// change.
+type AuthProvider string
+
+const (
+	AuthProviderClaude AuthProvider = "claude"
+	AuthProviderOpenAI AuthProvider = "openai"
+)
+
+// AllAuthProviders lists every valid AuthProvider.
+var AllAuthProviders = []AuthProvider{AuthProviderClaude, AuthProviderOpenAI}
+
+func (p AuthProvider) valid() bool {
+	switch p {
+	case AuthProviderClaude, AuthProviderOpenAI:
+		return true
+	default:
+		return false
+	}
+}
+
 // IntakeOccurrenceState is the observed presence/lifecycle of one labeled-issue
 // intake occurrence (plan §5.12 label intake). present and absent are the
 // label's observed presence; closed is the issue's terminal close. The zero

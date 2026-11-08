@@ -159,9 +159,9 @@ func (f *fixture) enroll(
 		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		AccountBinding: account,
 	}
-	provider := "openai"
+	provider := domain.AuthProviderOpenAI
 	if harness == domain.HarnessClientClaudeCode {
-		provider = "anthropic"
+		provider = domain.AuthProviderClaude
 		record.Route, record.AuthMethod, record.RefreshStrategy = "anthropic-subscription", domain.AuthMethodSetupToken, domain.RefreshExternal
 	}
 	if err := f.st.Write(ctx, func(tx *store.WriteTx) error {

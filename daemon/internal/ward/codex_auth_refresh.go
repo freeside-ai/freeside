@@ -298,7 +298,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 		)
 	}
 	if err := identity.Validate(); err != nil || identity.ID != launch.AuthIdentityID ||
-		identity.Provider != "openai" ||
+		identity.Provider != domain.AuthProviderOpenAI ||
 		!identity.AuthStoreMutationLease || !identity.Interim.SupportsReadOnlyAuthSnapshot {
 		return nil, fmt.Errorf(
 			"%w: Codex auth identity %q cannot support lease-held snapshot refresh",

@@ -66,6 +66,7 @@ var (
 	ErrInvalidEgressProfile             = errors.New("invalid egress profile")
 	ErrInvalidWorkspaceHydration        = errors.New("invalid workspace hydration")
 	ErrInvalidRefreshStrategy           = errors.New("invalid refresh strategy")
+	ErrInvalidAuthProvider              = errors.New("invalid auth provider")
 	ErrInvalidBackupHealthStatus        = errors.New("invalid backup health status")
 	ErrInvalidExecOutcome               = errors.New("invalid execution outcome status")
 	ErrInvalidRunMilestoneKind          = errors.New("invalid run milestone kind")

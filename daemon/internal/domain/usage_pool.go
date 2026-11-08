@@ -13,8 +13,8 @@ type UsagePoolID string
 // daemon instance counts only its own slots: instances that draw on one pool
 // split its limit between them.
 type UsagePool struct {
-	ID       UsagePoolID `json:"id"`
-	Provider string      `json:"provider"`
+	ID       UsagePoolID  `json:"id"`
+	Provider AuthProvider `json:"provider"`
 	// MaxParallelExecutions is how many ward launches may hold a slot on this
 	// pool at once. It is at least one, since a pool that can run nothing
 	// would hold its work forever.
@@ -26,8 +26,8 @@ func (p UsagePool) Validate() error {
 	if p.ID == "" {
 		return fmt.Errorf("usage pool id: %w", ErrEmptyID)
 	}
-	if p.Provider == "" {
-		return fmt.Errorf("usage pool %s provider: %w", p.ID, ErrEmptyField)
+	if !p.Provider.valid() {
+		return fmt.Errorf("usage pool %s provider %q: %w", p.ID, p.Provider, ErrInvalidAuthProvider)
 	}
 	if p.MaxParallelExecutions < 1 {
 		return fmt.Errorf("usage pool %s max_parallel_executions %d: %w",

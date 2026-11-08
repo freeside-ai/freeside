@@ -10,7 +10,7 @@ import (
 
 func authIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
-		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
+		ID: "auth-1", Provider: domain.AuthProviderClaude, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 }
@@ -23,7 +23,8 @@ func TestAuthIdentityValidate(t *testing.T) {
 	}{
 		{"valid", func(*domain.AuthIdentity) {}, nil},
 		{"no id", func(i *domain.AuthIdentity) { i.ID = "" }, domain.ErrEmptyID},
-		{"no provider", func(i *domain.AuthIdentity) { i.Provider = "" }, domain.ErrEmptyField},
+		{"no provider", func(i *domain.AuthIdentity) { i.Provider = "" }, domain.ErrInvalidAuthProvider},
+		{"unknown provider", func(i *domain.AuthIdentity) { i.Provider = "codex" }, domain.ErrInvalidAuthProvider},
 		{"leased without auth-store volume", func(i *domain.AuthIdentity) {
 			i.Interim.AuthStoreVolume = ""
 		}, domain.ErrEmptyField},
@@ -65,7 +66,7 @@ func TestValidateAuthIdentityTransition(t *testing.T) {
 		{"gained snapshot support", func(i *domain.AuthIdentity) { i.Interim.SupportsReadOnlyAuthSnapshot = true }, domain.ErrImmutableTransition},
 		{"restrategized refresh", func(i *domain.AuthIdentity) { i.Interim.RefreshStrategy = domain.RefreshExternal }, domain.ErrImmutableTransition},
 		{"other identity", func(i *domain.AuthIdentity) { i.ID = "auth-2" }, domain.ErrImmutableTransition},
-		{"other provider", func(i *domain.AuthIdentity) { i.Provider = "openai" }, domain.ErrImmutableTransition},
+		{"other provider", func(i *domain.AuthIdentity) { i.Provider = domain.AuthProviderOpenAI }, domain.ErrImmutableTransition},
 		{"other auth-store volume", func(i *domain.AuthIdentity) {
 			i.Interim.AuthStoreVolume = "other-provider-cred"
 		}, domain.ErrImmutableTransition},

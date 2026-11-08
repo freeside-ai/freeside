@@ -111,7 +111,7 @@ func readAuthList(ctx context.Context, tx *store.ReadTx) (authListOutput, error)
 			return authListOutput{}, err
 		}
 		listed := authListIdentity{
-			ID: identity.ID, Provider: identity.Provider,
+			ID: identity.ID, Provider: string(identity.Provider),
 			Label:   maskAccountBinding(identity.AccountBinding),
 			Enabled: identity.Enabled, CostOwner: identity.CostOwner, UsagePool: pool.ID,
 			MaxParallelExecutions: pool.MaxParallelExecutions,

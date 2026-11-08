@@ -52,7 +52,7 @@ func TestBuildersAreValid(t *testing.T) {
 
 		{"auth identity default", domaintest.AuthIdentity()},
 		{"auth identity codex disabled", domaintest.AuthIdentity(func(i *domain.AuthIdentity) {
-			i.ID, i.Provider, i.Enabled = "auth-codex-owner", "codex", false
+			i.ID, i.Provider, i.Enabled = "auth-codex-owner", "openai", false
 		})},
 		{"auth identity without interim facts", domaintest.AuthIdentity(func(i *domain.AuthIdentity) {
 			i.AuthStoreMutationLease, i.Interim = false, domain.InterimClientFacts{}

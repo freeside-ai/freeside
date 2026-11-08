@@ -166,7 +166,7 @@ func EnrollCodexAuth(
 		return CodexAuthEnrollmentResult{}, err
 	}
 	identity := domain.AuthIdentity{
-		ID: cfg.AuthIdentityID, Provider: "openai", AuthStoreMutationLease: true,
+		ID: cfg.AuthIdentityID, Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 		Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: storePath, RefreshStrategy: domain.RefreshOnDemand,

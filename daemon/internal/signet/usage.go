@@ -159,7 +159,7 @@ func projectUsagePool(in usagePoolInput, revision int64, refreshAge time.Duratio
 	snapshot := UsagePoolSnapshot{
 		AsOfRevision: revision,
 		Pool: UsagePoolUsage{
-			ID: in.pool.ID, Provider: in.pool.Provider, MaxParallelExecutions: in.pool.MaxParallelExecutions,
+			ID: in.pool.ID, Provider: string(in.pool.Provider), MaxParallelExecutions: in.pool.MaxParallelExecutions,
 			Collector:   in.defaultCollector,
 			Enrollments: []UsagePoolEnrollment{}, ModelWindows: []domain.ModelWindow{},
 			Windows: []UsageWindowReading{}, RecordedExhaustedMarks: []domain.ExhaustedMark{},

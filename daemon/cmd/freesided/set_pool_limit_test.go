@@ -16,7 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
-func setPoolLimitIdentity(id domain.AuthIdentityID, provider string) domain.AuthIdentity {
+func setPoolLimitIdentity(id domain.AuthIdentityID, provider domain.AuthProvider) domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: id, Provider: provider, AuthStoreMutationLease: true,
 		// Non-zero operator fields, so a revision that touched any of them

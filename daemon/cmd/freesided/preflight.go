@@ -1946,7 +1946,7 @@ func (productionPreflightEnvironment) InspectDatabase(
 		// is checked against the generation the lineup resolves, not against
 		// the identity's interim binding.
 		identity, err := tx.GetAuthIdentity(ctx, cfg.Agents.AuthIdentityID)
-		if err != nil || identity.Provider != "claude" || cfg.Agents.AuthVolume != cfg.AuthVolume ||
+		if err != nil || identity.Provider != domain.AuthProviderClaude || cfg.Agents.AuthVolume != cfg.AuthVolume ||
 			!identity.AuthStoreMutationLease {
 			inspection.CredentialError = errors.Join(err, errors.New("identity cannot support the leased Claude auth store"))
 		}
@@ -1954,7 +1954,7 @@ func (productionPreflightEnvironment) InspectDatabase(
 		// agents' generation mounts.
 		if cfg.SecondAuthIdentityID != "" {
 			second, err := tx.GetAuthIdentity(ctx, cfg.SecondAuthIdentityID)
-			if err != nil || second.Provider != "claude" || cfg.Agents.SecondAuthVolume != cfg.SecondAuthVolume ||
+			if err != nil || second.Provider != domain.AuthProviderClaude || cfg.Agents.SecondAuthVolume != cfg.SecondAuthVolume ||
 				!second.AuthStoreMutationLease {
 				inspection.SecondCredentialError = errors.Join(
 					err, errors.New("second writer identity cannot support the leased Claude auth store"))
@@ -1966,7 +1966,7 @@ func (productionPreflightEnvironment) InspectDatabase(
 			inspection.ReviewAuthStoreVolume = reviewIdentity.Interim.AuthStoreVolume
 			inspection.ReviewRefreshStrategy = reviewIdentity.Interim.RefreshStrategy
 			if err != nil || reviewIdentity.ID != cfg.Agents.ReviewAuthIdentityID ||
-				reviewIdentity.Provider != "openai" || !reviewIdentity.AuthStoreMutationLease ||
+				reviewIdentity.Provider != domain.AuthProviderOpenAI || !reviewIdentity.AuthStoreMutationLease ||
 				!reviewIdentity.Interim.SupportsReadOnlyAuthSnapshot {
 				inspection.ReviewCredentialError = errors.Join(
 					err, errors.New("identity cannot support lease-held Codex auth snapshot refresh"),
@@ -1975,7 +1975,7 @@ func (productionPreflightEnvironment) InspectDatabase(
 		case ward.CodexAuthSetupToken:
 			reviewIdentity, err := tx.GetAuthIdentity(ctx, cfg.Agents.ReviewAuthIdentityID)
 			if err != nil || reviewIdentity.ID != cfg.Agents.ReviewAuthIdentityID ||
-				reviewIdentity.Provider != "claude" || !reviewIdentity.AuthStoreMutationLease {
+				reviewIdentity.Provider != domain.AuthProviderClaude || !reviewIdentity.AuthStoreMutationLease {
 				inspection.ReviewCredentialError = errors.Join(
 					err, errors.New("identity is not a lease-enabled Claude identity"),
 				)

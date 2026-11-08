@@ -669,7 +669,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
+		ID: "codex-primary", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
@@ -812,7 +812,7 @@ func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-failed", Provider: "codex", AuthStoreMutationLease: true,
+		ID: "codex-failed", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth-failed", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
@@ -871,7 +871,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-occurrence", Provider: "codex", AuthStoreMutationLease: true,
+		ID: "codex-occurrence", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth-occurrence", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
