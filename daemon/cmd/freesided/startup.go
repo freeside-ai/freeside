@@ -352,15 +352,14 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, err
 	}
-	engineOptions := []engine.Option{
-		engine.WithDaemonLock(lock),
-		engine.WithMachineCapacity(bound),
-		engine.WithAdmission(claudeWiring.backend, admissionFloor(cfg.Claude.OperatingMode),
-			claudeWiring.env, func() time.Time { return time.Now().UTC() }),
-		engine.WithAdmissionDerivation(claudeWiring.derive),
-	}
-	if claudeWiring.selectImage != nil {
-		engineOptions = append(engineOptions, engine.WithAdmissionImageSelection(claudeWiring.selectImage))
+	production := productionEngine{
+		Lock: lock, Bound: bound,
+		Backend: claudeWiring.backend, AdmissionFloor: admissionFloor(cfg.Claude.OperatingMode),
+		Admission: claudeWiring.env, AdmissionNow: func() time.Time { return time.Now().UTC() },
+		Derive:      claudeWiring.derive,
+		SelectImage: claudeWiring.selectImage,
+		Logger:      cfg.Logger,
+		UsageSink:   claudeUsageCaptures,
 	}
 	judgmentBudget := inference.Budget{
 		Window: 24 * time.Hour,
@@ -414,7 +413,7 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, fmt.Errorf("compose inference boundary: %w", err)
 	}
-	engineOptions = append(engineOptions, engine.WithInference(judgments))
+	production.Inference = judgments
 	researchFetcher, err := specify.NewFetcherWithIssueTokens(st, blobs, nil, claudeWiring.issueReadTokens)
 	if err != nil {
 		return nil, fmt.Errorf("compose research fetcher: %w", err)
@@ -423,14 +422,12 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, fmt.Errorf("compose specification delivery validator: %w", err)
 	}
-	engineOptions = append(engineOptions, engine.WithProductionDeliveryValidation(
-		productionImplementationDeliveryValidator(deliveryMaterializer),
-	))
-	engineOptions = append(engineOptions, engine.WithSpecification(engine.SpecificationConfig{
+	production.DeliveryValidation = productionImplementationDeliveryValidator(deliveryMaterializer)
+	production.Specification = engine.SpecificationConfig{
 		Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
 		PromptPackageDigest: claudeWiring.specificationPromptPackage,
 		ValidateDelivery:    productionSpecificationDeliveryValidator(deliveryMaterializer),
-	}))
+	}
 	var shadowReviewFailure func(domain.RunID, int, domain.ReviewFailureClass, error)
 	if claudeWiring.shadowReviewSource != nil {
 		shadowReviewFailure = func(runID domain.RunID, round int, class domain.ReviewFailureClass, err error) {
@@ -449,7 +446,7 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, err
 	}
-	engineOptions = append(engineOptions, engine.WithTaskCancellationRuntime(engine.TaskCancellationRuntime{
+	production.Cancellation = engine.TaskCancellationRuntime{
 		Timeout: 2 * time.Minute,
 		StopRun: func(stopCtx context.Context, run domain.Run, reviews []domain.ReviewRequestRecord) error {
 			var joined error
@@ -493,7 +490,7 @@ func composeClaudeWorkflow(
 		Unprovable: func(ctx context.Context, task domain.TaskID) (string, error) {
 			return unprovableTaskStop(ctx, st, coverage, task)
 		},
-	}))
+	}
 	rebuild, err := newProjectImageRebuild(*cfg.Claude, st)
 	if err != nil {
 		return nil, err
@@ -507,7 +504,7 @@ func composeClaudeWorkflow(
 	if claudeWiring.bindImageUpkeep != nil {
 		claudeWiring.bindImageUpkeep(imageUpkeep.PendingResolution)
 	}
-	engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
+	production.Publication = engine.ProductionPublicationConfig{
 		WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 		Transport: claudeWiring.publicationTransport,
 		Publisher: claudeWiring.publisher, Artifacts: blobs,
@@ -540,29 +537,21 @@ func composeClaudeWorkflow(
 			}
 			return room, nil
 		},
-	}))
+	}
 	if cfg.Claude.OperatingMode == domain.ModeUnattended {
-		engineOptions = append(engineOptions, engine.WithUnattendedHealthRefresh(
-			func(refreshCtx context.Context) error {
-				doctorConvergenceLock.Lock()
-				defer doctorConvergenceLock.Unlock()
-				return (operations.Doctor{
-					Store: st, Attention: attention,
-					ProjectID:                 domain.ProjectID("project-system"),
-					ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
-					Mode:                      domain.ModeUnattended,
-					Now:                       cfg.now,
-				}).ConvergeReviewConfiguration(refreshCtx)
-			},
-		))
+		production.HealthRefresh = func(refreshCtx context.Context) error {
+			doctorConvergenceLock.Lock()
+			defer doctorConvergenceLock.Unlock()
+			return (operations.Doctor{
+				Store: st, Attention: attention,
+				ProjectID:                 domain.ProjectID("project-system"),
+				ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+				Mode:                      domain.ModeUnattended,
+				Now:                       cfg.now,
+			}).ConvergeReviewConfiguration(refreshCtx)
+		}
 	}
-	if cfg.Logger != nil {
-		engineOptions = append(engineOptions, engine.WithLogger(cfg.Logger))
-	}
-	if claudeUsageCaptures != nil {
-		engineOptions = append(engineOptions, engine.WithClaudeUsageSink(claudeUsageCaptures))
-	}
-	workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
+	workflow, err = engine.New(st, attention, stageDriver, production.options()...)
 	if err != nil {
 		return nil, err
 	}
