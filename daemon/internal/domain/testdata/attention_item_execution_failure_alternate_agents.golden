@@ -55,17 +55,17 @@
   "review_guide": null,
   "alternate_agents": [
     {
-      "agent": "claude-b",
+      "enrollment": "claude-max-b/claude_code",
       "pool": "claude-max-b",
       "harness": "claude_code",
       "model": "claude-opus-4-1",
       "qualification": "different_pool"
     },
     {
-      "agent": "codex-a",
-      "pool": "chatgpt-pro-a",
-      "harness": "codex_cli",
-      "model": "gpt-5-codex",
+      "enrollment": "claude-max-c/claude_code",
+      "pool": "claude-max-c",
+      "harness": "claude_code",
+      "model": "claude-opus-4-1",
       "qualification": "different_pool"
     }
   ],

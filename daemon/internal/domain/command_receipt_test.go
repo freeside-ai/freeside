@@ -48,16 +48,50 @@ func receiptPolicy(t *testing.T, revision int) domain.RoutingPolicy {
 	return policy
 }
 
-// receiptParkedTaskMove is a move of task-1's implementer to claude-b on
-// pool-b, with the record and line it wrote.
+// receiptParkedTaskMove is a move of task-1's implementer to claude-b's
+// selection on pool-b, with the record and line it wrote.
 func receiptParkedTaskMove(t *testing.T) domain.CommandReceipt {
 	t.Helper()
+	selection := &domain.TaskLineSelection{EnrollmentID: "claude-b/claude_code", ModelID: "claude-opus-4-5", Effort: "high"}
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
-		CommandID: "cmd-move", Agent: "claude-b", Pool: "pool-b",
+		CommandID: "cmd-move", Selection: selection, Pool: "pool-b",
 		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: receiptAt,
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selection,
+		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{},
+		},
+	}, 1, nil, receiptAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.CommandReceipt{ParkedTaskMove: &domain.ParkedTaskMoveReceipt{
+		ParkedTaskMoveRequest: domain.ParkedTaskMoveRequest{
+			CommandIdentity: receiptIdentity("cmd-move"), TaskID: "task-1", Agent: "claude-b", Selection: selection,
+		},
+		Retry: record, Lines: []domain.TaskLine{line},
+	}}
+}
+
+// receiptParkedTaskMoveV1 is the move as stored before #2735: its record
+// names the tree agent, and its request carries no selection. No writer
+// builds one now, so the fixture computes the record's id itself.
+func receiptParkedTaskMoveV1(t *testing.T) domain.CommandReceipt {
+	t.Helper()
+	record := domain.AlternateAgentRetry{
+		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
+		CommandID: "cmd-move", Agent: "claude-b", Pool: "pool-b",
+		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: receiptAt,
+	}
+	var err error
+	if record.ID, err = record.ComputeID(); err != nil {
 		t.Fatal(err)
 	}
 	line, err := domain.NewTaskLine(domain.TaskLineInput{
@@ -133,7 +167,8 @@ func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 			},
 			Recorded: true,
 		}},
-		"parked_task_move_receipt": receiptParkedTaskMove(t),
+		"parked_task_move_receipt":    receiptParkedTaskMove(t),
+		"parked_task_move_receipt_v1": receiptParkedTaskMoveV1(t),
 		"routing_policy_change_receipt": {RoutingPolicyChange: &domain.RoutingPolicyChangeReceipt{
 			RoutingPolicyChangeRequest: domain.RoutingPolicyChangeRequest{
 				CommandIdentity: receiptIdentity("cmd-policy"), ExpectedRevision: new(1),

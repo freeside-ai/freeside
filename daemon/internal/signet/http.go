@@ -568,7 +568,7 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 		Payload:               payload,
 	})
 	if err != nil {
-		writeCommandError(w, h.service.blobs, err)
+		writeCommandError(w, h.service, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
@@ -589,7 +589,7 @@ func (h httpHandler) stopTaskCommand(w http.ResponseWriter, r *http.Request, req
 	}
 	result, err := h.service.Submit(r.Context(), ClientCommand{CommandID: request.CommandID, DeviceID: request.DeviceID, Kind: domain.CommandKindStopTask, ExpectedEntityVersion: *request.ExpectedEntityVersion, StopTask: arm.StopTaskPayload})
 	if err != nil {
-		writeCommandError(w, h.service.blobs, err)
+		writeCommandError(w, h.service, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -639,7 +639,7 @@ func (h httpHandler) submitTaskCommand(w http.ResponseWriter, r *http.Request, r
 		},
 	})
 	if err != nil {
-		writeCommandError(w, h.service.blobs, err)
+		writeCommandError(w, h.service, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
@@ -696,7 +696,7 @@ func (h httpHandler) operatorCommand(
 	}
 	result, err := h.service.Submit(r.Context(), in)
 	if err != nil {
-		writeCommandError(w, h.service.blobs, err)
+		writeCommandError(w, h.service, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -942,7 +942,7 @@ type errorResponse struct {
 	Message string `json:"message"`
 }
 
-func writeCommandError(w http.ResponseWriter, blobs *BlobStore, err error) {
+func writeCommandError(w http.ResponseWriter, service *Service, err error) {
 	var roleRunning *TaskLineChangeRejectionError
 	if errors.As(err, &roleRunning) {
 		writeJSON(w, http.StatusConflict, struct {
@@ -970,21 +970,21 @@ func writeCommandError(w http.ResponseWriter, blobs *BlobStore, err error) {
 	var stale *StaleVersionError
 	if errors.As(err, &stale) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
-			Message: err.Error(), ReplacementItem: itemSnapshot(stale.Replacement, stale.Snapshot, blobs),
+			Message: err.Error(), ReplacementItem: service.itemSnapshot(stale.Replacement, stale.Snapshot),
 		})
 		return
 	}
 	var closed *ClosedItemError
 	if errors.As(err, &closed) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
-			Message: err.Error(), ReplacementItem: itemSnapshot(closed.Item, closed.Snapshot, blobs),
+			Message: err.Error(), ReplacementItem: service.itemSnapshot(closed.Item, closed.Snapshot),
 		})
 		return
 	}
 	var pending *AgentPendingError
 	if errors.As(err, &pending) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
-			Message: err.Error(), ReplacementItem: itemSnapshot(pending.Item, pending.Snapshot, blobs),
+			Message: err.Error(), ReplacementItem: service.itemSnapshot(pending.Item, pending.Snapshot),
 		})
 		return
 	}
@@ -1011,7 +1011,7 @@ func isCommandRequestError(err error) bool {
 		ErrInvalidReviewDisputeDecisionPayload, ErrFindingRouteNotOffered, ErrFindingRoutesIncomplete,
 		ErrFindingRouteReasonInvalid, ErrFindingRouteReasonUnpublishable,
 		ErrCapabilityManifestNotOffered,
-		ErrInvalidAlternateAgentDecisionPayload, ErrAlternateAgentNotOffered,
+		ErrInvalidAlternateAgentDecisionPayload, ErrAlternateAgentNotOffered, ErrAlternateAgentSelectionUnserved,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAnswerRouteRequired, ErrAttachmentNotStored,
 		// A referenced action surface that does not match the command is
 		// deterministic invalid client input (a foreign/stale/unknown surface),

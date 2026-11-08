@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -131,22 +132,51 @@ func moveCommand(id string, task domain.TaskID, agent string) signet.ClientComma
 	return in
 }
 
+// moveTree is a baseline tree with one writer agent, which it returns the
+// name of, that reduces to a selection, so the move handler can translate
+// the name the wire carries (#2735).
+func moveTree(t *testing.T) (*agenttree.Tree, string) {
+	t.Helper()
+	digest := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	writer := agentbaseline.Selection{Model: "claude-move-test", Effort: domain.EffortHigh}
+	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
+		ClaudeEnrollment: domain.ClientEnrollment{
+			ID: "move-claude/claude_code", AuthIdentityID: "move-claude", HarnessClient: domain.HarnessClientClaudeCode,
+			Route: "anthropic-subscription", AuthMethod: domain.AuthMethodSetupToken,
+			CredentialMode: domain.CredentialSubscriptionContained, RefreshStrategy: domain.RefreshExternal,
+			AccountBinding: "acct-move",
+		},
+		Writers: map[domain.RoleName]agentbaseline.Selection{
+			domain.RoleSpecifier: writer, domain.RoleImplementer: writer, domain.RoleRemediator: writer,
+		},
+		TermsBasisDate: "2026-08-01", PricingRevision: "pricing-2026-08", OfferNotAfter: operatorAt.Add(30 * 24 * time.Hour),
+		Prompts: map[domain.RoleName]agentbaseline.Prompt{domain.RoleImplementer: {Name: "implementer", Digest: digest}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Agents) != 1 {
+		t.Fatalf("move tree agents = %+v, want one writer", tree.Agents)
+	}
+	return &tree, tree.Agents[0].Name
+}
+
 // fakeParkedTaskMover answers a move with the receipt a move to the request's
-// agent on pool-b would record, writing nothing: the engine's move has its
-// own tests, and these exercise only the command's envelope.
+// selection on pool-b would record, writing nothing: the engine's move has
+// its own tests, and these exercise only the command's envelope.
 func fakeParkedTaskMover(
 	_ context.Context, _ *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 ) (domain.ParkedTaskMoveReceipt, error) {
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: request.TaskID, Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
-		CommandID: request.CommandID, Agent: request.Agent, Pool: "pool-b",
+		CommandID: request.CommandID, Selection: request.Selection, Pool: "pool-b",
 		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: now,
 	})
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
 	line, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: request.TaskID, Role: domain.RoleImplementer, Agent: request.Agent,
+		TaskID: request.TaskID, Role: domain.RoleImplementer, Selection: request.Selection,
 		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",

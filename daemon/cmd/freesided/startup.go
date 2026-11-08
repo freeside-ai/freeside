@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -246,6 +247,14 @@ func newAttentionService(
 		// fake-driver and scenario compositions that load no tree, clients
 		// see null.
 		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.agentCatalog }),
+		// The wire names alternate agents by tree agent until #2808; they
+		// translate through the same committed tree, nil until then.
+		signet.WithAgentTree(func() *agenttree.Tree {
+			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
+				return nil
+			}
+			return &late.claudeWiring.env.Agents.Tree
+		}),
 		signet.WithUsageRefreshAge(usageRefreshAge),
 		// A client's refresh or reassignment starts its collection only after
 		// the command commits.

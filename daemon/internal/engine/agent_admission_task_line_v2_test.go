@@ -230,16 +230,18 @@ func TestV2TaskLineTwinsAreOneAgent(t *testing.T) {
 	})
 }
 
-// TestMovedV2LineRefusesAnotherAgent: a moved line's selection must still map
-// to the agent its record moved the role to. A tree that has since renamed
-// that agent maps it to another name, and the anchor refuses.
-func TestMovedV2LineRefusesAnotherAgent(t *testing.T) {
+// TestMovedV2LineAnchorsToThePolicyOrder: a v2 move's record holds the
+// selection it moved the role to (#2735), so a renamed agent no longer
+// breaks the record's own match. The cited policy still names agents until
+// #2736, though, and once the tree renames the agent it ordered, that policy
+// orders no agent on the line's enrollment, so the anchor refuses.
+func TestMovedV2LineAnchorsToThePolicyOrder(t *testing.T) {
 	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
 		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
-	line := f.moveTask(t, policy, nil, false)
+	line := f.moveTask(t, policy, nil, false)[domain.RoleImplementer]
 	if line.Encoding != domain.TaskLineEncodingV2 || f.lineAgent(line) != agentTestSecondAgent {
 		t.Fatalf("moved line = %+v", line)
 	}
@@ -251,7 +253,7 @@ func TestMovedV2LineRefusesAnotherAgent(t *testing.T) {
 		}
 	})
 	admission, err := f.admitRun(t, f.run, agentTestAt.Add(time.Minute))
-	if err == nil || !strings.Contains(err.Error(), "its record moved the role to another agent") {
-		t.Fatalf("admission of a move the tree renamed = %+v, %v; want its anchor refused", admission.AgentBinding, err)
+	if err == nil || !strings.Contains(err.Error(), "does not order the line's enrollment") {
+		t.Fatalf("admission of a move the tree renamed = %+v, %v; want its policy anchor refused", admission.AgentBinding, err)
 	}
 }

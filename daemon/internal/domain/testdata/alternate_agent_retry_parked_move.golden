@@ -1,11 +1,15 @@
 {
-  "id": "sha256:a522335cbe5b428841b0e8c9bfffc0a34067c0e2fd73db986640b2c90eaf6683",
+  "id": "sha256:ff9957f1d0f642661de0d7194ef6578a534ced669a486379bf2c8484e9340abe",
   "task_id": "task-1",
   "role": "implementer",
   "failed_invocation_id": "inv-implementation-1",
   "item_id": "",
   "command_id": "cmd-move-1",
-  "agent": "claude-b",
+  "selection": {
+    "enrollment_id": "claude-max-b/claude_code",
+    "model_id": "claude-sonnet-4-5",
+    "effort": "medium"
+  },
   "pool": "claude-max-b",
   "qualification": "different_pool",
   "recorded_at": "2026-01-02T03:04:05Z"

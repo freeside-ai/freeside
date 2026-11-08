@@ -74,6 +74,13 @@ func (s *Service) GetTaskTimeline(ctx context.Context, id domain.TaskID) (TaskTi
 	if err != nil {
 		return TaskTimeline{}, fmt.Errorf("get task %q timeline: %w", id, err)
 	}
+	// The wire names a hold's offers by tree agent until #2808 (#2735).
+	names := s.agentNames()
+	for i := range out.Sections {
+		for j := range out.Sections[i].Runs {
+			out.Sections[i].Runs[j].Hold = names.renderHold(out.Sections[i].Runs[j].Hold)
+		}
+	}
 	return out, nil
 }
 

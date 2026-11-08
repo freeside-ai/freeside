@@ -130,10 +130,11 @@ func quotaParkHold(
 	return &domain.QuotaWindowHold{Pool: pool, ExhaustedMark: mark, AlternateAgents: offers}, nil
 }
 
-// parkedTaskOffers returns the agents a task parked on its implementer's
-// quota refusal may move to, nil when there is no agent selection or none
-// qualifies. Only a routing policy's agents are offered: a move re-pins the
-// task's lines as the router would (moveParkedTask).
+// parkedTaskOffers returns the enrollments a task parked on its
+// implementer's quota refusal may move to, nil when there is no agent
+// selection or none qualifies. Only enrollments the routing policy in effect
+// orders for the implementer are offered: a move re-pins the task's lines as
+// the router would (MoveParkedTaskTx).
 func parkedTaskOffers(
 	ctx context.Context, tx *store.ReadTx, selection *AgentSelection, taskID domain.TaskID,
 	refused domain.InvocationID, now time.Time,
@@ -267,9 +268,9 @@ func (e *Engine) requireQuotaWindowReset(
 }
 
 // implementerMovedOffPool reports whether the run's current implementer line
-// names an agent that resolves to a pool other than refused. No selection, no
-// line, a line that fails its anchor, or an agent that no longer resolves
-// reports false: the park holds, and admission refuses a bad line when the
+// selects a credential on a pool other than refused (linePool). No selection,
+// no line, a line that fails its anchor, or a selection that no longer
+// resolves reports false: the park holds, and admission refuses a bad line when the
 // window resets.
 func implementerMovedOffPool(
 	ctx context.Context, tx *store.ReadTx, selection *AgentSelection, runID domain.RunID, refused domain.UsagePoolID,
@@ -281,15 +282,11 @@ func implementerMovedOffPool(
 	if err != nil || !found {
 		return false, nil
 	}
-	agent, err := selection.Tree.LineAgent(line)
-	if err != nil {
-		return false, nil
-	}
-	candidate, ok, err := selection.routeCandidate(ctx, tx, agent)
+	pool, _, ok, err := selection.linePool(ctx, tx, line)
 	if err != nil || !ok {
 		return false, err
 	}
-	return candidate.pool != refused, nil
+	return pool != refused, nil
 }
 
 // agentSelection is the engine's agent selection, nil when it admits under

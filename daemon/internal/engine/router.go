@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -237,6 +238,24 @@ func (s AgentSelection) escalatedOrder(
 		counterparts = append(counterparts, counterpart)
 	}
 	return counterparts, nil
+}
+
+// escalatedAgent is the tree agent that runs the escalated line the lineup
+// names for the specifier agent name's enrollment, or false when the agent
+// does not resolve to a selection, its enrollment has no escalated line, or
+// no one agent runs that line's selection. The routing policy still names
+// agents (#2736), so the line maps back to one through the bridge.
+func escalatedAgent(tree agenttree.Tree, lineup domain.Lineup, name string) (string, bool) {
+	selection, err := tree.SelectionOfAgent(name)
+	if err != nil {
+		return "", false
+	}
+	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(selection.EnrollmentID))
+	if !ok {
+		return "", false
+	}
+	escalated, err := tree.AgentForSelection(domain.RoleSpecifier, counterpart.TaskLineSelection())
+	return escalated, err == nil
 }
 
 // policyInEffect returns the revision in effect at now: the current one, or,
@@ -623,7 +642,7 @@ func routerLinesForPool(
 
 // requireRoutedPoolOpen holds a role whose current line the router or a
 // parked task's move set while that line's pool still marks a window for the
-// agent's model with a reset ahead. The hold names the mark that resets last (heldUntil). The router
+// line's model with a reset ahead (linePool). The hold names the mark that resets last (heldUntil). The router
 // never reroutes the role.
 //
 // A line that fails its anchor, or an agent that no longer resolves, passes
@@ -640,15 +659,11 @@ func (s AgentSelection) requireRoutedPoolOpen(
 			// An unreadable or unanchored line is admission's to refuse.
 			return nil
 		}
-		agent, err := s.Tree.LineAgent(line)
-		if err != nil {
-			return nil
-		}
-		candidate, ok, err := s.routeCandidate(ctx, tx, agent)
+		pool, model, ok, err := s.linePool(ctx, tx, line)
 		if err != nil || !ok {
 			return err
 		}
-		marks, err := poolMarks(ctx, tx, candidate.pool, candidate.model, now)
+		marks, err := poolMarks(ctx, tx, pool, model, now)
 		if err != nil {
 			return err
 		}
@@ -657,6 +672,39 @@ func (s AgentSelection) requireRoutedPoolOpen(
 			return nil
 		}
 		return fmt.Errorf("task line %s: %w", line.ID,
-			&QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{Pool: candidate.pool, ExhaustedMark: mark}})
+			&QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{Pool: pool, ExhaustedMark: mark}})
 	})
+}
+
+// linePool is the pool a line's credential draws on and the model it runs,
+// or false when what it selects no longer resolves (its enrollment or
+// identity gone, or the identity disabled), which admission refuses. A v2
+// line's enrollment names both, whether or not a tree agent maps to it; a v1
+// line's agent resolves through the tree (routeCandidate).
+func (s AgentSelection) linePool(
+	ctx context.Context, tx *store.ReadTx, line domain.TaskLine,
+) (domain.UsagePoolID, string, bool, error) {
+	if line.Selection == nil {
+		agent, err := s.Tree.LineAgent(line)
+		if err != nil {
+			return "", "", false, nil
+		}
+		candidate, ok, err := s.routeCandidate(ctx, tx, agent)
+		return candidate.pool, candidate.model, ok, err
+	}
+	enrollment, err := tx.GetClientEnrollment(ctx, line.Selection.EnrollmentID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	identity, err := tx.GetAuthIdentity(ctx, enrollment.AuthIdentityID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", "", false, nil
+	}
+	if err != nil || !identity.Enabled {
+		return "", "", false, err
+	}
+	return identity.EffectiveUsagePool(), line.Selection.ModelID, true, nil
 }

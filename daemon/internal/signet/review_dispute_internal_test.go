@@ -133,7 +133,7 @@ func TestReviewDisputeDecisionRequiresReasonOnExternalReplies(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			message, err := decisionMessage(DecisionPayload{
 				Action: domain.ActionAdjudicateFindings, FindingRoutes: []FindingRouteChoice{tc.external, tc.internal},
-			})
+			}, agentNames{})
 			if err == nil {
 				var command domain.Command
 				command, err = domain.NewCommand(domain.CommandInput{
@@ -173,7 +173,7 @@ func TestFindingRoutesKeepTheReasonlessMessage(t *testing.T) {
 		FindingRoutes: []FindingRouteChoice{
 			{FindingID: "b", Route: domain.RouteDecline}, {FindingID: "a", Route: domain.RouteRemediate},
 		},
-	})
+	}, agentNames{})
 	if err != nil || message != reasonless {
 		t.Fatalf("message = %s, %v", message, err)
 	}

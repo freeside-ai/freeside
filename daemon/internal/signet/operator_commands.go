@@ -447,16 +447,23 @@ func sameRevision(current *domain.RoutingPolicy, expected *int) bool {
 
 func (s *Service) moveParkedTask(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	p := in.MoveParkedTask
-	request := domain.ParkedTaskMoveRequest{
-		CommandIdentity: domain.CommandIdentity{CommandID: in.CommandID, DeviceID: in.DeviceID},
-		TaskID:          p.TaskID, Agent: p.Agent,
-	}
 	if !in.operatorArmOnly() || p.TaskID == "" || p.Agent == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
+	// The wire names a tree agent until #2808; the move chooses the
+	// selection it reduces to. A name the tree does not reduce is not one
+	// the park offers, and the refusal never repeats it.
+	selection, ok := s.agentNames().selection(p.Agent)
+	if !ok {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrAlternateAgentNotQualified)
+	}
+	request := domain.ParkedTaskMoveRequest{
+		CommandIdentity: domain.CommandIdentity{CommandID: in.CommandID, DeviceID: in.DeviceID},
+		TaskID:          p.TaskID, Agent: p.Agent, Selection: &selection,
+	}
 	return s.commitReceipt(ctx, in,
 		func(old domain.CommandReceipt) bool {
-			return old.ParkedTaskMove != nil && old.ParkedTaskMove.ParkedTaskMoveRequest == request
+			return old.ParkedTaskMove != nil && old.ParkedTaskMove.Same(request)
 		},
 		func(tx *store.WriteTx, now time.Time) (domain.CommandReceipt, error) {
 			if s.parkedTaskMover == nil {
