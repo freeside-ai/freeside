@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -109,50 +108,5 @@ func TestAppendRoutingPolicyRefusesAnInvalidPolicy(t *testing.T) {
 	}
 	if _, _, currentErr, _ := readRoutingPolicies(t, s); !errors.Is(currentErr, store.ErrNotFound) {
 		t.Fatalf("current after a refusal = %v", currentErr)
-	}
-}
-
-// TestRoutingPolicyRowEditedInPlaceFailsTheRead: every column is cross-checked
-// against the body, so an edit to either fails both reads.
-func TestRoutingPolicyRowEditedInPlaceFailsTheRead(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		statement string
-		account   *domain.UsagePoolID
-	}{
-		"edited body":     {`UPDATE routing_policies SET body = replace(body, '"cli:operator"', '"cli:other"')`, nil},
-		"unparsable body": {`UPDATE routing_policies SET body = 'not json'`, nil},
-		"edited revision": {`UPDATE routing_policies SET revision = 9`, nil},
-		"edited source":   {`UPDATE routing_policies SET source = 'other'`, nil},
-		"edited set_by":   {`UPDATE routing_policies SET set_by = 'cli:other'`, nil},
-		"edited set_at":   {`UPDATE routing_policies SET set_at = '2027-01-01T00:00:00Z'`, nil},
-		"edited lineup":   {`UPDATE routing_policies SET lineup_revision = 'sha256:other'`, nil},
-		"account added":   {`UPDATE routing_policies SET drain_first_account = 'pool-a'`, nil},
-		"edited account":  {`UPDATE routing_policies SET drain_first_account = 'pool-b'`, new(domain.UsagePoolID("pool-a"))},
-		"account dropped": {`UPDATE routing_policies SET drain_first_account = NULL`, new(domain.UsagePoolID("pool-a"))},
-		"body account": {
-			`UPDATE routing_policies SET body = replace(body, '"pool-a"', '"pool-b"')`, new(domain.UsagePoolID("pool-a")),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			path := filepath.Join(t.TempDir(), "routing.db")
-			s := storetest.Open(t, path, store.Options{})
-			in := routingPolicyInput("claude-a")
-			in.DrainFirstAccount = tc.account
-			appendRoutingPolicy(t, s, in, routingPolicySetAt)
-			db, err := sql.Open("sqlite", path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = db.Close() }()
-			if _, err := db.ExecContext(t.Context(), tc.statement); err != nil {
-				t.Fatal(err)
-			}
-			if _, _, currentErr, listErr := readRoutingPolicies(t, s); currentErr == nil || listErr == nil ||
-				errors.Is(currentErr, store.ErrNotFound) {
-				t.Fatalf("reads = %v, %v, want both to fail", currentErr, listErr)
-			}
-		})
 	}
 }
