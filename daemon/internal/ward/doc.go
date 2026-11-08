@@ -224,6 +224,8 @@
 //     roles' allowlist, and the seeded-base proof
 //   - handoff.go       the gate lifecycle: seeding, checks 3-5 sequencing,
 //     the lease lifecycle and credential-store observation, and teardown
+//   - handoff_roles.go handoffRoles, the one ordered table of handoff roles
+//     that names, binds, tears down, and recovers each run object
 //   - state.go         per-launch state volumes (config root, continuity,
 //     scratch): creation, seeding, and the observed proof
 //   - prompt.go        PromptFile, the bounded user prompt delivered as a file

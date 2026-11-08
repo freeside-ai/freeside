@@ -652,16 +652,14 @@ func (s *Suite) conformanceName(role string) string {
 // caller binds this complete namespace before Full can make its first runtime
 // call, so a crashed suite cannot outlive the production rig's global gate.
 func FullConformanceRuntimeResourceNamesFor(runID, registryRunID string) RuntimeResourceNames {
+	// The synthetic handoffs enable no spec feature, so they create only the
+	// roles every handoff has.
+	always := slices.DeleteFunc(slices.Clone(handoffRoles), func(r handoffRole) bool {
+		return r.feature != featureAlways
+	})
 	var resources RuntimeResourceNames
 	for _, handoffRunID := range []string{runID, registryRunID} {
-		handoff := namesFor(handoffRunID)
-		resources.Containers = append(resources.Containers,
-			handoff.Seeder, handoff.Observer,
-			handoff.InstructionSeeder, handoff.InstructionObserver,
-			handoff.Agent, handoff.WriterObserver, handoff.Exporter,
-		)
-		resources.Volumes = append(resources.Volumes, handoff.Workspace, handoff.Instructions)
-		resources.Networks = append(resources.Networks, handoff.Network)
+		resources = appendRuntimeNames(resources, namesFor(handoffRunID), always)
 	}
 	for _, role := range []string{
 		wardname.Liveness, wardname.Seed, wardname.Audit, wardname.ExclWriter, wardname.ExclSecond,

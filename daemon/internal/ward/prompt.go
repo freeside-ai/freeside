@@ -136,14 +136,3 @@ func clonePromptSpec(hs HandoffSpec) HandoffSpec {
 	}
 	return hs
 }
-
-// promptResourceNames is included only where the current invocation may use
-// file delivery; historical conformance fixtures retain their old namespace.
-// The operator input directory rides only on file delivery, so its objects
-// join the same namespace.
-func promptResourceNames(names handoffNames, resources RuntimeResourceNames) RuntimeResourceNames {
-	resources.Containers = append(slices.Clone(resources.Containers),
-		names.PromptSeeder, names.PromptObserver, names.InputsSeeder, names.InputsObserver)
-	resources.Volumes = append(slices.Clone(resources.Volumes), names.Prompt, names.Inputs)
-	return resources
-}
