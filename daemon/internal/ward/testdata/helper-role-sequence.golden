@@ -1,0 +1,224 @@
+# Successful handoff: runtime and journal calls in order.
+journal-begin golden-run
+create-volume freeside-handoff-golden-run-ws
+inspect-volume freeside-handoff-golden-run-ws
+create-volume freeside-handoff-golden-run-ins
+inspect-volume freeside-handoff-golden-run-ins
+create-container freeside-handoff-golden-run-seeder
+inspect freeside-handoff-golden-run-seeder
+start-container freeside-handoff-golden-run-seeder
+copy freeside-handoff-golden-run-seeder <host-dir> /seed
+copy freeside-handoff-golden-run-seeder <host-dir> /seed-ready
+inspect freeside-handoff-golden-run-seeder
+inspect freeside-handoff-golden-run-seeder
+delete-container freeside-handoff-golden-run-seeder
+list-containers
+create-container freeside-handoff-golden-run-observer
+inspect freeside-handoff-golden-run-observer
+start-container freeside-handoff-golden-run-observer
+inspect freeside-handoff-golden-run-observer
+inspect freeside-handoff-golden-run-observer
+export freeside-handoff-golden-run-observer
+delete-container freeside-handoff-golden-run-observer
+list-containers
+journal-seed-observed golden-run
+create-container freeside-handoff-golden-run-ins-seed
+inspect freeside-handoff-golden-run-ins-seed
+start-container freeside-handoff-golden-run-ins-seed
+copy freeside-handoff-golden-run-ins-seed <host-dir> /instruction-seed
+copy freeside-handoff-golden-run-ins-seed <host-dir> /instruction-ready
+inspect freeside-handoff-golden-run-ins-seed
+inspect freeside-handoff-golden-run-ins-seed
+delete-container freeside-handoff-golden-run-ins-seed
+list-containers
+create-container freeside-handoff-golden-run-ins-check
+inspect freeside-handoff-golden-run-ins-check
+start-container freeside-handoff-golden-run-ins-check
+inspect freeside-handoff-golden-run-ins-check
+inspect freeside-handoff-golden-run-ins-check
+export freeside-handoff-golden-run-ins-check
+journal-instructions-prepared golden-run
+delete-container freeside-handoff-golden-run-ins-check
+list-containers
+create-volume freeside-handoff-golden-run-prompt
+inspect-volume freeside-handoff-golden-run-prompt
+create-container freeside-handoff-golden-run-prompt-seed
+inspect freeside-handoff-golden-run-prompt-seed
+start-container freeside-handoff-golden-run-prompt-seed
+copy freeside-handoff-golden-run-prompt-seed <host-dir> /prompt-input
+copy freeside-handoff-golden-run-prompt-seed <host-dir> /prompt-ready
+inspect freeside-handoff-golden-run-prompt-seed
+inspect freeside-handoff-golden-run-prompt-seed
+delete-container freeside-handoff-golden-run-prompt-seed
+list-containers
+create-container freeside-handoff-golden-run-prompt-check
+inspect freeside-handoff-golden-run-prompt-check
+start-container freeside-handoff-golden-run-prompt-check
+inspect freeside-handoff-golden-run-prompt-check
+inspect freeside-handoff-golden-run-prompt-check
+export freeside-handoff-golden-run-prompt-check
+delete-container freeside-handoff-golden-run-prompt-check
+list-containers
+create-volume freeside-handoff-golden-run-inputs
+inspect-volume freeside-handoff-golden-run-inputs
+create-container freeside-handoff-golden-run-inputs-seed
+inspect freeside-handoff-golden-run-inputs-seed
+start-container freeside-handoff-golden-run-inputs-seed
+copy freeside-handoff-golden-run-inputs-seed <host-dir> /inputs-input
+copy freeside-handoff-golden-run-inputs-seed <host-dir> /inputs-ready
+inspect freeside-handoff-golden-run-inputs-seed
+inspect freeside-handoff-golden-run-inputs-seed
+delete-container freeside-handoff-golden-run-inputs-seed
+list-containers
+create-container freeside-handoff-golden-run-inputs-check
+inspect freeside-handoff-golden-run-inputs-check
+start-container freeside-handoff-golden-run-inputs-check
+inspect freeside-handoff-golden-run-inputs-check
+inspect freeside-handoff-golden-run-inputs-check
+export freeside-handoff-golden-run-inputs-check
+delete-container freeside-handoff-golden-run-inputs-check
+list-containers
+create-volume freeside-handoff-golden-run-cfg
+inspect-volume freeside-handoff-golden-run-cfg
+create-volume freeside-handoff-golden-run-projects
+inspect-volume freeside-handoff-golden-run-projects
+create-volume freeside-handoff-golden-run-session-env
+inspect-volume freeside-handoff-golden-run-session-env
+create-container freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+start-container freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+delete-container freeside-handoff-golden-run-cfg-seed
+list-containers
+create-container freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+start-container freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+delete-container freeside-handoff-golden-run-cfg-seed
+list-containers
+create-container freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+start-container freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+inspect freeside-handoff-golden-run-cfg-seed
+delete-container freeside-handoff-golden-run-cfg-seed
+list-containers
+create-container freeside-handoff-golden-run-cfg-check
+inspect freeside-handoff-golden-run-cfg-check
+start-container freeside-handoff-golden-run-cfg-check
+inspect freeside-handoff-golden-run-cfg-check
+inspect freeside-handoff-golden-run-cfg-check
+export freeside-handoff-golden-run-cfg-check
+delete-container freeside-handoff-golden-run-cfg-check
+list-containers
+create-container freeside-handoff-golden-run-projects-check
+inspect freeside-handoff-golden-run-projects-check
+start-container freeside-handoff-golden-run-projects-check
+inspect freeside-handoff-golden-run-projects-check
+inspect freeside-handoff-golden-run-projects-check
+export freeside-handoff-golden-run-projects-check
+delete-container freeside-handoff-golden-run-projects-check
+list-containers
+create-container freeside-handoff-golden-run-sess-check
+inspect freeside-handoff-golden-run-sess-check
+start-container freeside-handoff-golden-run-sess-check
+inspect freeside-handoff-golden-run-sess-check
+inspect freeside-handoff-golden-run-sess-check
+export freeside-handoff-golden-run-sess-check
+delete-container freeside-handoff-golden-run-sess-check
+list-containers
+journal-state-prepared golden-run
+create-network freeside-handoff-golden-run-egress
+inspect-network freeside-handoff-golden-run-egress
+create-container freeside-handoff-golden-run-agent
+inspect freeside-handoff-golden-run-agent
+inspect-network freeside-handoff-golden-run-egress
+journal-get golden-run
+inspect-volume freeside-handoff-golden-run-cfg
+inspect-volume freeside-handoff-golden-run-projects
+inspect-volume freeside-handoff-golden-run-session-env
+inspect-volume freeside-handoff-golden-run-prompt
+inspect-volume freeside-handoff-golden-run-inputs
+start-container freeside-handoff-golden-run-agent
+inspect freeside-handoff-golden-run-agent
+inspect freeside-handoff-golden-run-agent
+delete-container freeside-handoff-golden-run-agent
+list-containers
+journal-writer-complete golden-run
+create-container freeside-handoff-golden-run-exporter
+inspect freeside-handoff-golden-run-exporter
+start-container freeside-handoff-golden-run-exporter
+inspect freeside-handoff-golden-run-exporter
+inspect freeside-handoff-golden-run-exporter
+export freeside-handoff-golden-run-exporter
+journal-export-materialized golden-run
+list-containers
+delete-container freeside-handoff-golden-run-exporter
+list-volumes
+delete-volume freeside-handoff-golden-run-prompt
+delete-volume freeside-handoff-golden-run-inputs
+delete-volume freeside-handoff-golden-run-ws
+delete-volume freeside-handoff-golden-run-ins
+delete-volume freeside-handoff-golden-run-cfg
+delete-volume freeside-handoff-golden-run-projects
+delete-volume freeside-handoff-golden-run-session-env
+list-networks
+delete-network freeside-handoff-golden-run-egress
+list-networks
+list-containers
+list-volumes
+journal-close golden-run completed
+
+# Injected failures: role, step, error class, content evidence, teardown.
+prompt-seeder create conformance:control_plane_isolation no-evidence reaped
+prompt-seeder inspect conformance:control_plane_isolation no-evidence reaped
+prompt-seeder allowlist conformance:control_plane_isolation no-evidence reaped
+prompt-seeder start conformance:control_plane_isolation no-evidence reaped
+prompt-seeder stopped conformance:control_plane_isolation no-evidence reaped
+prompt-observer create conformance:control_plane_isolation no-evidence reaped
+prompt-observer inspect conformance:control_plane_isolation no-evidence reaped
+prompt-observer allowlist conformance:control_plane_isolation no-evidence reaped
+prompt-observer start conformance:control_plane_isolation no-evidence reaped
+prompt-observer stopped conformance:control_plane_isolation no-evidence reaped
+inputs-seeder create conformance:control_plane_isolation no-evidence reaped
+inputs-seeder inspect conformance:control_plane_isolation no-evidence reaped
+inputs-seeder allowlist conformance:control_plane_isolation no-evidence reaped
+inputs-seeder start conformance:control_plane_isolation no-evidence reaped
+inputs-seeder stopped conformance:control_plane_isolation no-evidence reaped
+inputs-observer create conformance:control_plane_isolation no-evidence reaped
+inputs-observer inspect conformance:control_plane_isolation no-evidence reaped
+inputs-observer allowlist conformance:control_plane_isolation no-evidence reaped
+inputs-observer start conformance:control_plane_isolation no-evidence reaped
+inputs-observer stopped conformance:control_plane_isolation no-evidence reaped
+instruction-seeder create conformance:control_plane_isolation no-evidence reaped
+instruction-seeder inspect conformance:control_plane_isolation no-evidence reaped
+instruction-seeder allowlist conformance:control_plane_isolation no-evidence reaped
+instruction-seeder start conformance:control_plane_isolation no-evidence reaped
+instruction-seeder stopped conformance:control_plane_isolation no-evidence reaped
+instruction-observer create conformance:control_plane_isolation no-evidence reaped
+instruction-observer inspect conformance:control_plane_isolation no-evidence reaped
+instruction-observer allowlist conformance:control_plane_isolation no-evidence reaped
+instruction-observer start conformance:control_plane_isolation no-evidence reaped
+instruction-observer stopped conformance:control_plane_isolation no-evidence reaped
+launch-state-seeder create conformance:control_plane_isolation no-evidence reaped
+launch-state-seeder inspect conformance:control_plane_isolation no-evidence reaped
+launch-state-seeder allowlist conformance:control_plane_isolation no-evidence reaped
+launch-state-seeder start conformance:control_plane_isolation no-evidence reaped
+launch-state-seeder stopped conformance:control_plane_isolation no-evidence reaped
+config-root-observer create conformance:control_plane_isolation no-evidence reaped
+config-root-observer inspect conformance:control_plane_isolation no-evidence reaped
+config-root-observer allowlist conformance:control_plane_isolation no-evidence reaped
+config-root-observer start conformance:control_plane_isolation no-evidence reaped
+config-root-observer stopped conformance:control_plane_isolation no-evidence reaped
+continuity-observer create conformance:control_plane_isolation no-evidence reaped
+continuity-observer inspect conformance:control_plane_isolation no-evidence reaped
+continuity-observer allowlist conformance:control_plane_isolation no-evidence reaped
+continuity-observer start conformance:control_plane_isolation no-evidence reaped
+continuity-observer stopped conformance:control_plane_isolation no-evidence reaped
+scratch-observer create conformance:control_plane_isolation no-evidence reaped
+scratch-observer inspect conformance:control_plane_isolation no-evidence reaped
+scratch-observer allowlist conformance:control_plane_isolation no-evidence reaped
+scratch-observer start conformance:control_plane_isolation no-evidence reaped
+scratch-observer stopped conformance:control_plane_isolation no-evidence reaped

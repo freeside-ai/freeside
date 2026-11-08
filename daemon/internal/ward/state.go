@@ -169,50 +169,13 @@ func (b *Backend) seedLaunchStateVolume(
 		Labels: append(runLabels(runID), st.ownershipLabel),
 		Size:   size,
 	}
-	st.configRootSeeder.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "create launch-state seeder: %v", err)
-	}
-	st.configRootSeeder.owned = true
-	rep, err := b.rt.Inspect(ctx, seederName)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err, "inspect launch-state seeder: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep, spec, volume, target,
-		CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	st.configRootSeeder.fingerprint, err = ownedFingerprint(
-		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
-	)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err, "launch-state seeder ownership: %v", err)
-	}
-	if err := b.rt.StartContainer(ctx, seederName); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "start launch-state seeder: %v", err)
-	}
-	if err := b.waitStopped(
-		ctx, seederName, st.configRootSeeder,
-		st.ownershipLabel, b.cfg.SeedTimeout,
-	); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "launch-state seeder: %v", err)
-	}
-	if err := b.helperStopped(ctx, class, size, seederName); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, seederName); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "delete launch-state seeder: %v", err)
-	}
-	if err := b.verifyContainerAbsent(
-		ctx, seederName, st.configRootSeeder,
-		st.ownershipLabel, CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	st.configRootSeeder = objectClaim{}
-	return nil
+	return b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "launch-state seeder", claim: &st.configRootSeeder, owner: st.ownershipLabel,
+		check: CheckControlPlaneIsolation, class: class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, volume, target, CheckControlPlaneIsolation)
+		},
+	})
 }
 
 func stateSeederScript(target string, kind stateManifestKind) string {
@@ -297,54 +260,25 @@ func (b *Backend) observeStateVolume(
 	spec := buildStateObserverSpec(
 		b.cfg, runID, size, name, volume, kind, st.ownershipLabel,
 	)
-	claim.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return "", failw(CheckControlPlaneIsolation, err, "create state observer: %v", err)
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, name)
-	if err != nil {
-		return "", failw(CheckControlPlaneIsolation, err, "inspect state observer: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep, spec, volume, stateObserverVolumeTarget, CheckControlPlaneIsolation,
-	); err != nil {
-		return "", err
-	}
-	claim.fingerprint, err = ownedFingerprint(
-		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
-	)
-	if err != nil {
-		return "", failw(CheckControlPlaneIsolation, err, "state observer ownership: %v", err)
-	}
-	if err := b.rt.StartContainer(ctx, name); err != nil {
-		return "", failw(CheckControlPlaneIsolation, err, "start state observer: %v", err)
-	}
-	if err := b.waitStopped(
-		ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout,
-	); err != nil {
-		return "", failw(CheckControlPlaneIsolation, err, "state observer: %v", err)
-	}
-	if err := b.helperStopped(ctx, class, size, name); err != nil {
-		return "", err
-	}
-	proof, err := b.readStateProof(ctx, runID, name, st)
+	var digest string
+	err := b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "state observer", claim: claim, owner: st.ownershipLabel,
+		check: CheckControlPlaneIsolation, class: class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, volume, stateObserverVolumeTarget, CheckControlPlaneIsolation)
+		},
+		readProof: func(ctx context.Context) ([]byte, error) {
+			return b.readStateProof(ctx, runID, name, st)
+		},
+		checkProof: func(proof []byte) error {
+			var err error
+			digest, err = verifyStateProof(proof, st.ownershipLabel.Value, kind)
+			return err
+		},
+	})
 	if err != nil {
 		return "", err
 	}
-	digest, err := verifyStateProof(proof, st.ownershipLabel.Value, kind)
-	if err != nil {
-		return "", err
-	}
-	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return "", failw(CheckControlPlaneIsolation, err, "delete state observer: %v", err)
-	}
-	if err := b.verifyContainerAbsent(
-		ctx, name, *claim, st.ownershipLabel, CheckControlPlaneIsolation,
-	); err != nil {
-		return "", err
-	}
-	*claim = objectClaim{}
 	return digest, nil
 }
 
