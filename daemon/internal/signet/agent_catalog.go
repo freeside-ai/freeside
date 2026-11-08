@@ -61,11 +61,11 @@ type AgentCatalogEntry struct {
 	Selection    domain.TaskLineSelection `json:"selection"`
 }
 
-// AgentCatalogLineupLine is the agent the lineup binds to one task-line role
-// and that agent's selection.
+// AgentCatalogLineupLine is the selection the lineup binds to one task-line
+// role. It names no agent: a lineup line binds a selection, which need not be
+// any tree agent's.
 type AgentCatalogLineupLine struct {
 	Role      domain.RoleName          `json:"role"`
-	Agent     string                   `json:"agent"`
 	Selection domain.TaskLineSelection `json:"selection"`
 }
 
@@ -125,9 +125,7 @@ func AgentCatalogOf(tree agenttree.Tree, revision domain.Digest) (AgentCatalog, 
 		if err != nil {
 			return AgentCatalog{}, fmt.Errorf("agent catalog: %w", err)
 		}
-		catalog.Lineup = append(catalog.Lineup, AgentCatalogLineupLine{
-			Role: role, Agent: bound.AgentName, Selection: selection,
-		})
+		catalog.Lineup = append(catalog.Lineup, AgentCatalogLineupLine{Role: role, Selection: selection})
 	}
 	return catalog, nil
 }

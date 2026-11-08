@@ -139,8 +139,8 @@ func TestAgentCatalogOf(t *testing.T) {
 			},
 		},
 		Lineup: []AgentCatalogLineupLine{
-			{Role: domain.RoleImplementer, Agent: "claude-a", Selection: claudeA},
-			{Role: domain.RoleReviewer, Agent: "claude-c", Selection: claudeC},
+			{Role: domain.RoleImplementer, Selection: claudeA},
+			{Role: domain.RoleReviewer, Selection: claudeC},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

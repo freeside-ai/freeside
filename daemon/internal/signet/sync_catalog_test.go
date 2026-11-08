@@ -57,7 +57,7 @@ func TestSyncServesComposedAgentCatalog(t *testing.T) {
 			Name: "claude-a", EnrollmentID: "anthropic-a/claude_code",
 			Model: "claude-opus-5-5", Effort: domain.EffortHigh, Selection: selection,
 		}},
-		Lineup: []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Agent: "claude-a", Selection: selection}},
+		Lineup: []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Selection: selection}},
 	}
 	seedLineEnrollments(t, st)
 	discovered := lineSelectionOf("codex")

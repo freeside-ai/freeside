@@ -1681,7 +1681,6 @@ components:
               effort: "high"
         lineup:
           - role: implementer
-            agent: "claude-a"
             selection:
               enrollment_id: "anthropic-a/claude_code"
               model_id: "claude-opus-5-5"
@@ -1795,17 +1794,12 @@ components:
 
     AgentCatalogLineupLine:
       type: object
-      description: The agent the lineup binds to one role, and that agent's selection.
+      description: The selection the lineup binds to one role.
       additionalProperties: false
-      required: [role, agent, selection]
+      required: [role, selection]
       properties:
         role:
           $ref: "#/components/schemas/TaskLineRole"
-        agent:
-          type: string
-          minLength: 1
-          maxLength: 246
-          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
         selection:
           $ref: "#/components/schemas/TaskLineSelection"
 

@@ -145,18 +145,18 @@ import Testing
 
     @Test func defaultLabelSaysWhatPicksTheRolesAgent() {
         let policy = UsageFixtures.defaultRoutingPolicy()
-        let codex = AgentChoiceDisplay.selectionLabel(selection("codex-primary"))
         let claude = AgentChoiceDisplay.selectionLabel(selection("claude-primary"))
         let secondary = AgentChoiceDisplay.selectionLabel(selection("claude-secondary"))
+        // The lineup's selection, with no agent name.
         #expect(
             AgentChoiceDisplay.defaultLabel(role: .reviewer, policy: policy, catalog: catalog)
-                == "Default · lineup codex-primary (\(codex))")
+                == "Default · lineup \(UsageFixtures.unsupportedCollectorID) · gpt-codex · harness_default")
         #expect(
             AgentChoiceDisplay.defaultLabel(role: .implementer, policy: policy, catalog: catalog)
-                == "Default · lineup claude-primary (\(claude)) or routing policy")
+                == "Default · lineup \(claude) or routing policy")
         #expect(
             AgentChoiceDisplay.defaultLabel(role: .remediator, policy: nil, catalog: catalog)
-                == "Default · lineup claude-secondary (\(secondary))")
+                == "Default · lineup \(secondary)")
         #expect(AgentChoiceDisplay.defaultLabel(role: .reviewer, policy: nil, catalog: nil) == "Default · lineup")
         #expect(
             AgentChoiceDisplay.defaultLabel(

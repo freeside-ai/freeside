@@ -9,8 +9,8 @@ import FreesideAPI
 /// selection (enrollment, model, effort): that is what a line records, so a
 /// later tree edit never changes what a chosen line runs.
 ///
-/// A role the operator leaves unchosen gets no line, so the daemon picks its
-/// agent at first admission. Today that is the lineup's agent; once the
+/// A role the operator leaves unchosen gets no line, so the daemon picks what
+/// runs it at first admission. Today that is the lineup's selection; once the
 /// daemon routes by policy (#2393) it may be any agent the routing policy
 /// orders for the role.
 public enum AgentChoiceDisplay {
@@ -92,15 +92,13 @@ public enum AgentChoiceDisplay {
     }
 
     /// The default entry's label: what picks the agent when the operator
-    /// chooses none for `role`. The lineup names its agent for the role and
-    /// the selection it runs; "or routing policy" follows when the policy
-    /// lists the role.
+    /// chooses none for `role`. The lineup names the selection it runs for
+    /// the role; "or routing policy" follows when the policy lists the role.
     public static func defaultLabel(
         role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Components.Schemas.AgentCatalog?
     ) -> String {
         let lineup =
-            catalog?.lineup.first { $0.role == role }.map { "lineup \($0.agent) (\(selectionLabel($0.selection)))" }
-            ?? "lineup"
+            catalog?.lineup.first { $0.role == role }.map { "lineup \(selectionLabel($0.selection))" } ?? "lineup"
         let policyListsTheRole = policy?.roles.contains { $0.role == role } == true
         return "Default · \(lineup)" + (policyListsTheRole ? " or routing policy" : "")
     }

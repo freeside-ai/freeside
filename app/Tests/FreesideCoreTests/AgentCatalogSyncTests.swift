@@ -23,9 +23,7 @@ struct AgentCatalogSyncTests {
         catalog.agents.removeAll { $0.name == "codex-primary" }
         catalog.lineup = catalog.lineup.map {
             $0.role == .reviewer
-                ? .init(
-                    role: .reviewer, agent: "claude-secondary",
-                    selection: UsageFixtures.agentSelection("claude-secondary"))
+                ? .init(role: .reviewer, selection: UsageFixtures.agentSelection("claude-secondary"))
                 : $0
         }
         return catalog
