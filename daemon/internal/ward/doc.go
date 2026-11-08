@@ -205,6 +205,8 @@
 //     verification_room.go)
 //   - runtime_ops.go   runtimeOps, the runtime and configuration primitives
 //     the handoff gate and the review lifecycle share
+//   - helper_role.go   runHelperRole, the one create-to-absence sequence a
+//     short-lived seeder or observer runs
 //   - launch_record.go the one structured record per launch that sizes are
 //     tuned from, how the launch ended, memory-limit kill detection, and the
 //     stopped-helper check
