@@ -518,7 +518,12 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/engine/alternate_agent_retry.go` (records the choice and
   re-pins a moved task's lines), `internal/store/alternate_agent_retry.go`,
   and `internal/store/production_attempt.go` (authenticates the record an
-  attempt cites).
+  attempt cites). Retry admission joins them:
+  `internal/engine/production_attempt.go` (admits a retry only over a
+  final parent run and writes the retry choice an attempt cites) and
+  `internal/engine/production_workflow.go` (re-checks that final parent
+  and the specification grant at submission, and authenticates a run's
+  terminal).
 - **GitHub publish, app keys, tokens, and janitor deletes:**
   `internal/publish/`.
 - **Publication decisions in the engine:**
@@ -586,7 +591,9 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/domain/closure_approval.go`,
   `internal/domain/agent_decision.go`, `internal/domain/authorization.go`,
   `internal/signet/alternate_agent_retry.go` (binds the decision to an
-  offered agent),
+  offered agent), `internal/signet/publication_reevaluation.go` (binds a
+  rerun-trust-evaluation decision to the latest trust profile and decides
+  whether a blocked run's conclusion is final),
   `internal/domain/trust_profile.go`,
   `internal/domain/shadow_review_configuration.go`,
   `cmd/freesided/approve_shadow_review.go`,
