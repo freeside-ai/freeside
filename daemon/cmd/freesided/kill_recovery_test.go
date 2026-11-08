@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -46,7 +47,7 @@ var killTestInvocationID = domain.InvocationID("inv-" + killTestCommandID)
 type processFixture struct {
 	cmd    *osexec.Cmd
 	stderr bytes.Buffer
-	ready  Readiness
+	ready  daemonshell.Readiness
 	done   chan struct{}
 
 	waitErr error
@@ -130,7 +131,7 @@ func waitForDurableStop(t *testing.T, root string) {
 					return err
 				}
 				for _, item := range items {
-					if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
+					if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 						found = true
 						return nil
 					}
@@ -310,12 +311,12 @@ func startProcessFixture(
 	})
 
 	type readyResult struct {
-		value Readiness
+		value daemonshell.Readiness
 		err   error
 	}
 	result := make(chan readyResult, 1)
 	go func() {
-		var ready Readiness
+		var ready daemonshell.Readiness
 		err := json.NewDecoder(stdout).Decode(&ready)
 		result <- readyResult{value: ready, err: err}
 	}()
@@ -362,7 +363,7 @@ type processClient struct {
 	client   *http.Client
 }
 
-func pairProcessDevice(t *testing.T, ready Readiness) *processClient {
+func pairProcessDevice(t *testing.T, ready daemonshell.Readiness) *processClient {
 	t.Helper()
 	body, err := json.Marshal(map[string]string{
 		"pairing_code": ready.PairingCode,

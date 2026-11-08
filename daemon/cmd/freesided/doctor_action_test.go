@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -34,7 +35,7 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 		}
 	})
 	// ComponentExited returns once the durable stop is recorded.
-	h.ComponentExited(ctx, ctx, ComponentScheduler, errors.New("prior diagnostic scheduler stopped"))
+	h.ComponentExited(ctx, ctx, daemonshell.ComponentScheduler, errors.New("prior diagnostic scheduler stopped"))
 	now := time.Now().UTC()
 	next := now.Add(time.Hour)
 	seconds := int64(3600)
@@ -61,7 +62,7 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 		}
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				itemID = item.ID
 			}
 		}

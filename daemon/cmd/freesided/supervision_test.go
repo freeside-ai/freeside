@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -34,40 +34,6 @@ func TestBuildVersionPrefersStampedValue(t *testing.T) {
 	version = ""
 	if got := buildVersion(); got == "" {
 		t.Fatal("buildVersion fallback is empty")
-	}
-}
-
-func TestExitClassificationIsComplete(t *testing.T) {
-	t.Parallel()
-	want := map[ComponentKind]exitDisposition{
-		ComponentHTTP:                  exitRestartSafe,
-		ComponentPairingControl:        exitRestartSafe,
-		ComponentWorkflow:              exitDurableStop,
-		ComponentLocalBackups:          exitDurableStop,
-		ComponentScheduler:             exitDurableStop,
-		ComponentProductionPublication: exitDurableStop,
-		ComponentActiveResource:        exitDurableStop,
-		ComponentLabelIntake:           exitDurableStop,
-		ComponentFollowUpFiling:        exitDurableStop,
-		ComponentReviewReplies:         exitDurableStop,
-		ComponentAttentionDeliveries:   exitDurableStop,
-		ComponentPanic:                 exitInvoluntary,
-	}
-	if len(want) != len(AllComponentKinds) {
-		t.Fatalf("classification table has %d entries, want %d", len(want), len(AllComponentKinds))
-	}
-	for _, kind := range AllComponentKinds {
-		if !kind.valid() {
-			t.Fatalf("registered component kind %q is invalid", kind)
-		}
-		if got := classifyComponentExit(kind); got != want[kind] {
-			t.Errorf("classifyComponentExit(%s) = %s, want %s", kind, got, want[kind])
-		}
-	}
-	for _, disposition := range AllExitDispositions {
-		if !disposition.valid() {
-			t.Fatalf("registered exit disposition %q is invalid", disposition)
-		}
 	}
 }
 
@@ -131,22 +97,6 @@ func TestScheduledFailureClassificationFailsClosed(t *testing.T) {
 
 var runIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// The readiness shape is a daemon-local handshake the app parses with an
-// exact key set (#1504), so its keys are pinned here.
-func TestReadinessGolden(t *testing.T) {
-	t.Parallel()
-	got, err := json.MarshalIndent(Readiness{
-		APIURL:      "http://127.0.0.1:8421",
-		PairingCode: "ABCD-2345",
-		Environment: "dev",
-		RunID:       "0123456789abcdef0123456789abcdef",
-	}, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	golden.Assert(t, "readiness", append(got, '\n'))
-}
-
 func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
@@ -184,7 +134,7 @@ func TestRunRejectsAMissingEnvironment(t *testing.T) {
 	if !strings.Contains(err.Error(), "environment") {
 		t.Fatalf("run error = %v, want an environment refusal", err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, ReadinessFileName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(stateDir, daemonshell.ReadinessFileName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("readiness file stat = %v, want no file published", err)
 	}
 }
@@ -230,7 +180,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 		}
 	})
 
-	path := filepath.Join(stateDir, ReadinessFileName)
+	path := filepath.Join(stateDir, daemonshell.ReadinessFileName)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat readiness file: %v", err)
@@ -242,7 +192,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read readiness: %v", err)
 	}
-	var ready Readiness
+	var ready daemonshell.Readiness
 	if err := json.Unmarshal(body, &ready); err != nil {
 		t.Fatalf("decode readiness: %v", err)
 	}
@@ -297,7 +247,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		cancelLifetime()
 		t.Fatalf("run: %v", err)
 	}
-	h.ComponentExited(lifetime, context.Background(), ComponentWorkflow,
+	h.ComponentExited(lifetime, context.Background(), daemonshell.ComponentWorkflow,
 		errors.New("injected durable store failure"))
 
 	response, err := http.Get(h.Readiness().APIURL + "/health")
@@ -320,7 +270,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 			return err
 		}
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				durableStop = item
 				if item.Offers(domain.ActionResumeUnattended) {
 					t.Errorf("fresh durable-stop item actions = %v, must not offer resume_unattended", item.RequestedDecision)
@@ -348,7 +298,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	}); !errors.Is(err, domain.ErrBlockingSystemHealth) {
 		t.Fatalf("admission after reopen = %v, want blocking system health", err)
 	}
-	restarted := New(Parts{Store: reopened, Logger: slog.New(slog.DiscardHandler)})
+	restarted := daemonshell.New(daemonshell.Parts{Store: reopened, Logger: slog.New(slog.DiscardHandler)})
 	if err := restarted.EnableDurableStopRecovery(context.Background()); err != nil {
 		t.Fatalf("enable durable-stop recovery after reopen: %v", err)
 	}
@@ -365,7 +315,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		t.Fatalf("read recovered durable-stop item: %v", err)
 	}
 	// ComponentExited returns once the durable stop is recorded.
-	restarted.ComponentExited(context.Background(), context.Background(), ComponentWorkflow,
+	restarted.ComponentExited(context.Background(), context.Background(), daemonshell.ComponentWorkflow,
 		errors.New("second durable-stop cause"))
 	if err := reopened.Read(context.Background(), func(tx *store.ReadTx) error {
 		item, err := tx.GetAttentionItem(context.Background(), durableStop.ID)
@@ -384,7 +334,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		}
 		stops := 0
 		for _, item := range items {
-			if !strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
+			if !strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				continue
 			}
 			stops++
@@ -403,19 +353,8 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 
 // waitBriefly returns a component exit the shell has already reported, or
 // nil when none arrives within a short bound.
-func waitBriefly(s *Shell) error {
+func waitBriefly(s *daemonshell.Shell) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	return s.Wait(ctx)
-}
-
-func TestDurableStopReasonExplainsRecovery(t *testing.T) {
-	t.Parallel()
-	want := "The daemon stopped unattended operation after a health failure requiring a durable stop: janitor failed. " +
-		"Acknowledge and Run Doctor leave unattended admission closed. " +
-		"Restart the daemon, then choose Resume Unattended on each durable-stop item to reopen admission. " +
-		"A restart alone does not reopen it."
-	if got := durableStopReason(errors.New("janitor failed")); got != want {
-		t.Fatalf("reason = %q", got)
-	}
 }

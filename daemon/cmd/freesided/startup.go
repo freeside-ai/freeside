@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -720,14 +721,14 @@ func (d *daemon) startServing(
 	d.StartServers(parent, ctx)
 	if workflow != nil {
 		d.Go(func() {
-			d.ComponentExited(parent, ctx, ComponentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
+			d.ComponentExited(parent, ctx, daemonshell.ComponentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
 		})
 		d.Go(func() {
-			d.ComponentExited(parent, ctx, ComponentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
+			d.ComponentExited(parent, ctx, daemonshell.ComponentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
 		})
 	}
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, ComponentLocalBackups, localBackups.Run(ctx))
+		d.ComponentExited(parent, ctx, daemonshell.ComponentLocalBackups, localBackups.Run(ctx))
 	})
 	if cfg.AttentionDeliveryInterval > 0 {
 		d.Go(func() {
@@ -743,7 +744,7 @@ func (d *daemon) startServing(
 				}
 				return
 			}
-			d.ComponentExited(parent, ctx, ComponentAttentionDeliveries, err)
+			d.ComponentExited(parent, ctx, daemonshell.ComponentAttentionDeliveries, err)
 		})
 	}
 }
@@ -765,7 +766,7 @@ func (d *daemon) startClaudeLoops(
 				cfg.Logger.Error("follow-up filing pass failed", "error", err)
 			}
 		})
-		d.ComponentExited(parent, ctx, ComponentFollowUpFiling, err)
+		d.ComponentExited(parent, ctx, daemonshell.ComponentFollowUpFiling, err)
 	})
 	doctorAvailable.Store(true)
 	d.Go(func() {
@@ -774,7 +775,7 @@ func (d *daemon) startClaudeLoops(
 				cfg.Logger.Warn("external review reply sweep", "error", err)
 			}
 		})
-		d.ComponentExited(parent, ctx, ComponentReviewReplies, err)
+		d.ComponentExited(parent, ctx, daemonshell.ComponentReviewReplies, err)
 	})
 
 	// The production publication lane gets its own loop: one task holds a
@@ -782,22 +783,22 @@ func (d *daemon) startClaudeLoops(
 	// which inside the reconcile loop would stall every other run,
 	// invocation, and attention item for that whole span (issue #425).
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, ComponentProductionPublication,
+		d.ComponentExited(parent, ctx, daemonshell.ComponentProductionPublication,
 			workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
 	})
 	d.Go(func() {
 		err := claudeSched.Run(ctx, cfg.SchedulerInterval)
 		doctorAvailable.Store(false)
-		d.ComponentExited(parent, ctx, ComponentScheduler, err)
+		d.ComponentExited(parent, ctx, daemonshell.ComponentScheduler, err)
 	})
 	d.Go(func() {
 		err := activeReconciler.Run(ctx,
 			defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
-		d.ComponentExited(parent, ctx, ComponentActiveResource, err)
+		d.ComponentExited(parent, ctx, daemonshell.ComponentActiveResource, err)
 	})
 	d.Go(func() {
 		err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
-		d.ComponentExited(parent, ctx, ComponentLabelIntake, err)
+		d.ComponentExited(parent, ctx, daemonshell.ComponentLabelIntake, err)
 	})
 	// The start and tip-advance triggers: an upgrade's rebuild can take
 	// an hour, so start does not wait for it.
@@ -816,14 +817,14 @@ func (d *daemon) startScenarioLoops(
 	// watches. The forge is an HTTP server like the API, so its exit is
 	// the same component failure.
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, ComponentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
+		d.ComponentExited(parent, ctx, daemonshell.ComponentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
 	})
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, ComponentProductionPublication,
+		d.ComponentExited(parent, ctx, daemonshell.ComponentProductionPublication,
 			workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
 	})
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, ComponentScheduler,
+		d.ComponentExited(parent, ctx, daemonshell.ComponentScheduler,
 			scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
 	})
 }

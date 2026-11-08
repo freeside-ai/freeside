@@ -18,6 +18,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
@@ -648,7 +649,7 @@ func TestDeputyDaemonSettingsMatchesDownstreamRefusals(t *testing.T) {
 		return err
 	}
 	listener := func(s loadedDeputySettings, _ deputyPaths) error {
-		_, err := ResolveListenAddress(s.Listen, noTailscale)
+		_, err := daemonshell.ResolveListenAddress(s.Listen, noTailscale)
 		return err
 	}
 	claudeConfig := func(s loadedDeputySettings, paths deputyPaths) error {

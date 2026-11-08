@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -48,7 +49,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 			}
 		}
 		// ComponentExited returns once the durable stop is recorded.
-		h.ComponentExited(t.Context(), t.Context(), ComponentLocalBackups, errors.New(cause))
+		h.ComponentExited(t.Context(), t.Context(), daemonshell.ComponentLocalBackups, errors.New(cause))
 		if err := service.DeliverOwed(t.Context(), func(err error) { t.Errorf("delivery: %v", err) }); err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +58,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		all, err := tx.ListOpenAttentionItems(t.Context(), domain.AttentionSystemHealth)
 		for _, item := range all {
-			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				items = append(items, item)
 			}
 		}
@@ -82,7 +83,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	_, clicks := sink.published()
 	stopNotifications := 0
 	for _, click := range clicks {
-		if strings.HasPrefix(click, "freeside://attention/items/"+DurableStopItemPrefix) {
+		if strings.HasPrefix(click, "freeside://attention/items/"+daemonshell.DurableStopItemPrefix) {
 			stopNotifications++
 		}
 	}
@@ -511,7 +512,7 @@ func durableStops(t *testing.T, h *daemon) []domain.AttentionItem {
 	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				stops = append(stops, item)
 			}
 		}
