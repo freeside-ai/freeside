@@ -42,6 +42,23 @@
 #   from the working directory, which go test sets to the package
 #   directory.
 #
+# Go build cache cap:
+#   FREESIDE_GOCACHE_LIMIT_GB  cap on the Go build cache in whole gigabytes
+#                              of 10^9 bytes (default: 40, or 0 when CI is
+#                              non-empty); 0 turns the trim off
+# Go deletes cache entries only after 5 unused days and has no size limit,
+# so once per `check.sh daemon` invocation, before the first step, the cache
+# `go env GOCACHE` names is trimmed by scripts/go-cache-trim.py. It walks the
+# cache at most once an hour (state in
+# ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/go-cache-trim), and over the cap
+# deletes least recently used entries until the cache is at or under 75% of
+# it. It keeps every entry modified in the last 2 hours, which covers every
+# entry used in the last hour (Go refreshes an entry's modification time only
+# once it is an hour old); when only those remain, it warns. It skips an
+# entry it can't delete. A missing python3, no cache directory, or a failed
+# trim prints a notice and the steps run anyway. A bare `go test` gets no
+# cap.
+#
 # Local daemon lint runs:
 #   GOLANGCI_LINT_CACHE  defaults to
 #     ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/golangci-lint<absolute checkout root>
@@ -131,9 +148,9 @@
 # Exit codes:
 #   0  every requested step passed
 #   1  a step failed (its command's output says which)
-#   2  usage error: unknown component or step, malformed daemon test limit
-#      or partition count, or a misplaced `--` (anywhere but after
-#      `daemon test`, with nothing after it, or in a shard run)
+#   2  usage error: unknown component or step, malformed daemon test limit,
+#      partition count, or Go cache limit, or a misplaced `--` (anywhere
+#      but after `daemon test`, with nothing after it, or in a shard run)
 set -euo pipefail
 
 PROG=$(basename "$0")
@@ -472,6 +489,45 @@ daemon_test_read_partitions() {
   daemon_test_partitions=$count
 }
 
+# daemon_gocache_read_limit: sets daemon_gocache_limit, the Go build cache
+# cap in gigabytes, 0 for off. Dispatch calls it before any daemon step, so
+# a bad value stops `check.sh daemon` before go runs.
+daemon_gocache_read_limit() {
+  local limit=${FREESIDE_GOCACHE_LIMIT_GB-40}
+  if [[ ! ${FREESIDE_GOCACHE_LIMIT_GB+x} && -n ${CI:-} ]]; then limit=0; fi
+  if [[ ! $limit =~ ^[0-9]+$ ]]; then
+    echo 'daemon: FREESIDE_GOCACHE_LIMIT_GB must be a non-negative integer' >&2
+    return 2
+  fi
+  # Strip leading zeroes so Bash never treats the limit as octal.
+  limit=${limit#"${limit%%[!0]*}"}
+  daemon_gocache_limit=${limit:-0}
+}
+
+# daemon_trim_go_cache: trims the Go build cache to daemon_gocache_limit
+# (see the header). It is upkeep, not a check, so every failure is a notice
+# and never fails the run.
+daemon_trim_go_cache() {
+  [[ $daemon_gocache_limit != 0 ]] || return 0
+  local cache
+  if ! command -v python3 >/dev/null; then
+    echo 'daemon: python3 unavailable; skipping the Go cache trim' >&2
+    return 0
+  fi
+  if ! cache=$(cd "$ROOT/daemon" && go env GOCACHE) || [[ -z $cache || $cache == off ]] ||
+      [[ ! -d $cache ]]; then
+    echo "daemon: no Go build cache directory (go env GOCACHE: '${cache:-}'); skipping the trim" >&2
+    return 0
+  fi
+  # Nine zeroes appended as text: Bash arithmetic would overflow a large
+  # limit, and Python's integers don't.
+  if ! python3 "$ROOT/scripts/go-cache-trim.py" --cache "$cache" \
+      --limit-bytes "${daemon_gocache_limit}000000000" \
+      --state "${XDG_CACHE_HOME:-$HOME/.cache}/freeside/go-cache-trim"; then
+    echo 'daemon: the Go cache trim failed; continuing' >&2
+  fi
+}
+
 daemon_test() (
   local vars decoy tmp='' rc=0
   daemon_test_slot='' daemon_test_limit=''
@@ -666,6 +722,8 @@ if [ "$component" = daemon ]; then
   case " $* " in
     *' test '*) daemon_test_read_partitions ;;
   esac
+  daemon_gocache_read_limit
+  daemon_trim_go_cache
 fi
 
 for step in "$@"; do
