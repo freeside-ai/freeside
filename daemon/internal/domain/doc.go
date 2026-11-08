@@ -68,6 +68,8 @@
 //   - invocation_intent.go, remediation_intent.go, operator_feedback_intent.go
 //     durable dispatch intents and the retained remediation and operator
 //     feedback contracts
+//   - operator_feedback_identity.go operator feedback invocation and
+//     execution-failure card identities
 //   - invocation_admission_facts.go the admitted facts read back for an
 //     invocation and judging-role independence (§7)
 //   - interpretation_failure.go why a completed invocation's output could not
