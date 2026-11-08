@@ -267,7 +267,7 @@ func newSpecificationFixtureAllowing(t *testing.T, specApproval bool, maxIterati
 		// Revision and restart cases intentionally retain several fake
 		// admissions; capacity itself is covered by integration tests.
 		return storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
-			ID: "auth-1", Provider: "codex", AuthStoreMutationLease: true,
+			ID: "auth-1", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand,
 			},

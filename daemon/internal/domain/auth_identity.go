@@ -28,7 +28,7 @@ import (
 // Interim carries them for a pre-enrollment identity only.
 type AuthIdentity struct {
 	ID       AuthIdentityID `json:"id"`
-	Provider string         `json:"provider"`
+	Provider AuthProvider   `json:"provider"`
 	// AccountBinding is the stable provider-account fingerprint this identity
 	// is bound to, unique across identities (§5.4: one subscription never
 	// holds two leases or two budgets). Empty until enrollment or adoption
@@ -108,8 +108,8 @@ func (i AuthIdentity) Validate() error {
 	if i.ID == "" {
 		return fmt.Errorf("auth identity id: %w", ErrEmptyID)
 	}
-	if i.Provider == "" {
-		return fmt.Errorf("auth identity %s provider: %w", i.ID, ErrEmptyField)
+	if !i.Provider.valid() {
+		return fmt.Errorf("auth identity %s provider %q: %w", i.ID, i.Provider, ErrInvalidAuthProvider)
 	}
 	if i.Budget < 0 {
 		return fmt.Errorf("auth identity %s budget %d: %w", i.ID, i.Budget, ErrNonPositive)

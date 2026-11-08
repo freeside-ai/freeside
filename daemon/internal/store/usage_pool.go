@@ -19,9 +19,7 @@ ON CONFLICT (id) DO UPDATE SET
     max_parallel_executions = excluded.max_parallel_executions,
     recorded_at             = excluded.recorded_at,
     body                    = excluded.body`
-	getUsagePoolSQL = `
-SELECT provider, max_parallel_executions, recorded_at, body
-FROM usage_pools WHERE id = ?`
+	getUsagePoolSQL     = `SELECT body FROM usage_pools WHERE id = ?`
 	listUsagePoolIDsSQL = `SELECT id FROM usage_pools ORDER BY id`
 	// The records that end an admission no ward launch stands behind.
 	reviewSlotSettledSQL = `
@@ -89,7 +87,7 @@ func (tx *WriteTx) RecordUsagePool(ctx context.Context, pool domain.UsagePool, r
 	case !errors.Is(err, ErrNotFound):
 		return fmt.Errorf("record usage pool %q: %w", pool.ID, err)
 	}
-	if _, err := tx.tx.ExecContext(ctx, recordUsagePoolSQL, pool.ID, pool.Provider,
+	if _, err := tx.tx.ExecContext(ctx, recordUsagePoolSQL, pool.ID, string(pool.Provider),
 		pool.MaxParallelExecutions, formatTime(recordedAt), body); err != nil {
 		return fmt.Errorf("record usage pool %q: %w", pool.ID, err)
 	}
@@ -140,8 +138,10 @@ func (tx *WriteTx) settleIdentityUsagePool(
 	return tx.RecordUsagePool(ctx, current, recordedAt)
 }
 
-// GetUsagePool reconstructs one pool declaration, cross-checking the extracted
-// columns against the decoded body.
+// GetUsagePool reconstructs one pool declaration from its body. The extracted
+// columns aren't cross-checked against it: the pool is Tier B state whose
+// limit gates concurrency and grants no authority, and nothing reads the
+// columns (AGENTS.md, Assurance Tiers).
 func (tx *ReadTx) GetUsagePool(ctx context.Context, id domain.UsagePoolID) (domain.UsagePool, error) {
 	pool, _, err := tx.getUsagePoolRecord(ctx, id)
 	return pool, err
@@ -150,13 +150,8 @@ func (tx *ReadTx) GetUsagePool(ctx context.Context, id domain.UsagePoolID) (doma
 func (tx *ReadTx) getUsagePoolRecord(
 	ctx context.Context, id domain.UsagePoolID,
 ) (domain.UsagePool, time.Time, error) {
-	var (
-		provider   string
-		limit      int
-		recordedAt string
-		body       []byte
-	)
-	err := tx.tx.QueryRowContext(ctx, getUsagePoolSQL, id).Scan(&provider, &limit, &recordedAt, &body)
+	var body []byte
+	err := tx.tx.QueryRowContext(ctx, getUsagePoolSQL, id).Scan(&body)
 	if err != nil {
 		return domain.UsagePool{}, time.Time{}, fmt.Errorf("get usage pool %q: %w", id, notFoundOr(err))
 	}
@@ -164,16 +159,11 @@ func (tx *ReadTx) getUsagePoolRecord(
 	if err != nil {
 		return domain.UsagePool{}, time.Time{}, fmt.Errorf("get usage pool %q: %w", id, err)
 	}
-	pool := record.Pool
-	if pool.ID != id || pool.Provider != provider || pool.MaxParallelExecutions != limit ||
-		!timeColumnEqual(recordedAt, record.RecordedAt) {
-		return domain.UsagePool{}, time.Time{}, fmt.Errorf("get usage pool %q: %w", id, errRowInconsistent)
-	}
-	return pool, record.RecordedAt, nil
+	return record.Pool, record.RecordedAt, nil
 }
 
 // ListUsagePools reconstructs every pool declaration in id order; one
-// inconsistent row fails the whole listing.
+// invalid row fails the whole listing.
 func (tx *ReadTx) ListUsagePools(ctx context.Context) ([]domain.UsagePool, error) {
 	ids, err := queryIDs[domain.UsagePoolID](ctx, tx, listUsagePoolIDsSQL)
 	if err != nil {

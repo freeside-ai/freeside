@@ -301,7 +301,7 @@ func seedUsageEnrollment(t *testing.T, st *store.Store, at time.Time) int {
 	var generation domain.EnrollmentGeneration
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordUsagePool(ctx, domain.UsagePool{
-			ID: "pool-idle", Provider: "anthropic", MaxParallelExecutions: 1,
+			ID: "pool-idle", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 1,
 		}, at); err != nil {
 			return err
 		}

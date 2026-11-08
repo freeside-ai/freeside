@@ -106,7 +106,7 @@ func AdoptClaudeAuth(ctx context.Context, cfg ClaudeAuthAdoptionConfig) (AuthAdo
 		return AuthAdoptionResult{}, err
 	}
 	volume := cfg.Identity.Interim.AuthStoreVolume
-	if cfg.Identity.Provider != "claude" || volume == "" || !cfg.Identity.AuthStoreMutationLease {
+	if cfg.Identity.Provider != domain.AuthProviderClaude || volume == "" || !cfg.Identity.AuthStoreMutationLease {
 		return AuthAdoptionResult{}, fmt.Errorf(
 			"auth identity %s is not a leased Claude identity with a credential volume", cfg.Identity.ID)
 	}
@@ -154,7 +154,7 @@ func AdoptCodexAuth(ctx context.Context, cfg CodexAuthAdoptionConfig) (AuthAdopt
 		return AuthAdoptionResult{}, err
 	}
 	interim := cfg.Identity.Interim
-	if cfg.Identity.Provider != "openai" || interim.AuthStoreVolume == "" || !cfg.Identity.AuthStoreMutationLease {
+	if cfg.Identity.Provider != domain.AuthProviderOpenAI || interim.AuthStoreVolume == "" || !cfg.Identity.AuthStoreMutationLease {
 		return AuthAdoptionResult{}, fmt.Errorf(
 			"auth identity %s is not a leased Codex identity with a live store", cfg.Identity.ID)
 	}

@@ -54,8 +54,8 @@ func ReviewAdmission(
 // a workflow composed over the fake must record them.
 func ReviewIdentities() []domain.AuthIdentity {
 	return []domain.AuthIdentity{
-		{ID: "fake-review-identity", Provider: "fake"},
-		{ID: "fake-shadow-identity", Provider: "fake"},
+		{ID: "fake-review-identity", Provider: domain.AuthProviderOpenAI},
+		{ID: "fake-shadow-identity", Provider: domain.AuthProviderOpenAI},
 	}
 }
 

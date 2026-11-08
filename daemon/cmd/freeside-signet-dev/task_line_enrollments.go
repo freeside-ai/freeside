@@ -22,11 +22,11 @@ var convergenceSeededAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 // the harness admits no attempt.
 func seedConvergenceEnrollments(ctx context.Context, st *store.Store) error {
 	claude := domain.AuthIdentity{
-		ID: "convergence-claude", Provider: "claude", AccountBinding: "acct-convergence-claude",
+		ID: "convergence-claude", Provider: domain.AuthProviderClaude, AccountBinding: "acct-convergence-claude",
 		AuthStoreMutationLease: true, Enabled: true,
 	}
 	codex := domain.AuthIdentity{
-		ID: "convergence-codex", Provider: "openai", AccountBinding: "acct-convergence-codex",
+		ID: "convergence-codex", Provider: domain.AuthProviderOpenAI, AccountBinding: "acct-convergence-codex",
 		AuthStoreMutationLease: true, Enabled: true,
 	}
 	enrollments := []domain.ClientEnrollment{{

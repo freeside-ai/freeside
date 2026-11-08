@@ -83,7 +83,7 @@ func RenewCodexAuth(ctx context.Context, cfg CodexAuthRenewalConfig) (_ CodexAut
 		return CodexAuthRenewalResult{}, err
 	}
 	if err := identity.Validate(); err != nil || identity.ID != cfg.AuthIdentityID ||
-		identity.Provider != "openai" || !identity.AuthStoreMutationLease ||
+		identity.Provider != domain.AuthProviderOpenAI || !identity.AuthStoreMutationLease ||
 		!identity.Interim.SupportsReadOnlyAuthSnapshot || identity.Interim.RefreshStrategy != domain.RefreshOnDemand ||
 		identity.Interim.AuthStoreVolume != path {
 		return CodexAuthRenewalResult{}, errors.New("codex identity cannot renew the configured leased auth store; see freesided enroll-codex")

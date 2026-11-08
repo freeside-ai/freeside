@@ -75,7 +75,7 @@ func usageEngineFixtureWith(t *testing.T, cfg usageFixtureConfig) (*Engine, doma
 		AccountBinding: identity.AccountBinding,
 	}
 	if cfg.claude {
-		identity.Provider = "anthropic"
+		identity.Provider = domain.AuthProviderClaude
 		enrollment.HarnessClient, enrollment.Route = domain.HarnessClientClaudeCode, "anthropic-subscription"
 		enrollment.AuthMethod, enrollment.RefreshStrategy = domain.AuthMethodSetupToken, domain.RefreshExternal
 	}

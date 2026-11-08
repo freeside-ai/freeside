@@ -227,7 +227,7 @@ func (tx *WriteTx) RecordAuthIdentity(ctx context.Context, identity domain.AuthI
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
 	if _, err := tx.tx.ExecContext(ctx, recordAuthIdentitySQL,
-		identity.ID, identity.Provider, identity.AccountBinding, identity.UsagePool,
+		identity.ID, string(identity.Provider), identity.AccountBinding, identity.UsagePool,
 		identity.Budget, identity.AuthStoreMutationLease,
 		identity.Interim.AuthStoreVolume,
 		interimRefreshColumn(identity), identity.Interim.SupportsReadOnlyAuthSnapshot,
@@ -388,7 +388,7 @@ func (tx *ReadTx) getAuthIdentityRecord(
 		return domain.AuthIdentity{}, time.Time{}, fmt.Errorf("get auth identity %q: %w", id, err)
 	}
 	identity := record.Identity
-	if identity.ID != id || identity.Provider != provider ||
+	if identity.ID != id || string(identity.Provider) != provider ||
 		identity.AccountBinding != accountBinding ||
 		identity.UsagePool != usagePool ||
 		identity.Budget != budget ||

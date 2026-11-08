@@ -449,7 +449,7 @@ func recordDeputyIdentities(
 			return err
 		}
 		for _, identity := range recorded {
-			if identity.Enabled && identity.Provider == "claude" && identity.Interim.AuthStoreVolume != "" &&
+			if identity.Enabled && identity.Provider == domain.AuthProviderClaude && identity.Interim.AuthStoreVolume != "" &&
 				!named[identity.ID] {
 				return fmt.Errorf("recorded Claude auth identity %s is neither writer nor the reviewer in the settings: "+
 					"name it in agent_tree, or start on a fresh root", identity.ID)
@@ -479,7 +479,7 @@ func recordDeputyIdentities(
 func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, error) {
 	writer := func(id, volume string) domain.AuthIdentity {
 		return domain.AuthIdentity{
-			ID: domain.AuthIdentityID(id), Provider: "claude",
+			ID: domain.AuthIdentityID(id), Provider: domain.AuthProviderClaude,
 			AuthStoreMutationLease: true, Enabled: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: volume, RefreshStrategy: domain.RefreshOnDemand},
 		}
@@ -494,7 +494,7 @@ func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, err
 			return nil, fmt.Errorf("review.auth_snapshot: %w", err)
 		}
 		identities = append(identities, domain.AuthIdentity{
-			ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: "openai",
+			ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: domain.AuthProviderOpenAI,
 			AuthStoreMutationLease: true, Enabled: true,
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: reviewSnapshot, RefreshStrategy: domain.RefreshOnDemand,

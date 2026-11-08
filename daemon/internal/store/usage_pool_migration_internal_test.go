@@ -139,7 +139,7 @@ func TestUsagePoolsMigrationNeverRaisesConcurrency(t *testing.T) {
 				return err
 			}
 			if string(pool.ID) != seed.want || pool.MaxParallelExecutions != seed.wantLimit ||
-				pool.Provider != seed.provider {
+				string(pool.Provider) != seed.provider {
 				t.Errorf("%s pool = %#v, want %s at %d", seed.id, pool, seed.want, seed.wantLimit)
 			}
 			if seed.wantLimit > seed.limit {

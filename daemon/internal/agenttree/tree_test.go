@@ -98,7 +98,7 @@ func fixtureRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
 		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		AccountBinding: "acct-1",
 	}, domain.AuthIdentity{
-		ID: "openai-chatgpt-a", Provider: "codex", AuthStoreMutationLease: true,
+		ID: "openai-chatgpt-a", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 		Enabled: true, AccountBinding: "acct-1", CostOwner: "owner",
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-store", RefreshStrategy: domain.RefreshOnDemand},
 	}

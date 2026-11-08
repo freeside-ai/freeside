@@ -131,7 +131,7 @@ func seedScenarioRecords(
 	ceiling domain.CapabilitySnapshot, now time.Time,
 ) error {
 	identity := domain.AuthIdentity{
-		ID: scenarioIdentityID, Provider: "claude", AuthStoreMutationLease: true,
+		ID: scenarioIdentityID, Provider: domain.AuthProviderClaude, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "scenario-credentials", RefreshStrategy: domain.RefreshOnDemand,
 		},

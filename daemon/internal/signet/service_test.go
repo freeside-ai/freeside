@@ -1122,7 +1122,7 @@ func putTestItem(t *testing.T, f fixture, item domain.AttentionItem) error {
 			return err
 		}
 		if err := storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
-			ID: identityID, Provider: "codex", AuthStoreMutationLease: true,
+			ID: identityID, Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, 8, *f.now); err != nil {
 			return err

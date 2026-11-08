@@ -225,7 +225,7 @@ func (f *agentAdmissionFixture) codexReviewTree(t *testing.T) ReviewRole {
 	t.Helper()
 	ctx := context.Background()
 	identity := domain.AuthIdentity{
-		ID: "codex-review", Provider: "codex", AccountBinding: "acct-fixture-0003",
+		ID: "codex-review", Provider: domain.AuthProviderOpenAI, AccountBinding: "acct-fixture-0003",
 		AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-interim", RefreshStrategy: domain.RefreshOnDemand},
 	}

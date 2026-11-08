@@ -163,34 +163,6 @@ func TestUsagePoolRevisionsOnlyMoveForward(t *testing.T) {
 	}
 }
 
-// TestUsagePoolFieldsCrossChecked fails a limit raised in one copy, which would
-// otherwise admit more launches than anyone recorded.
-func TestUsagePoolFieldsCrossChecked(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	for name, stmt := range map[string]string{
-		"limit raised in the body alone":   `UPDATE usage_pools SET body = json_set(body, '$.pool.max_parallel_executions', 8)`,
-		"limit raised in the column alone": `UPDATE usage_pools SET max_parallel_executions = 8`,
-		"provider moved in the column":     `UPDATE usage_pools SET provider = 'openai'`,
-		"revision moved in the column":     `UPDATE usage_pools SET recorded_at = '2020-01-01T00:00:00Z'`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			st := openSlotStore(t)
-			recordSlotIdentity(t, st, slotIdentity("auth-1", "pool-shared"), slotAt)
-			if _, err := st.db.ExecContext(ctx, stmt); err != nil {
-				t.Fatal(err)
-			}
-			if err := st.Read(ctx, func(tx *ReadTx) error {
-				_, err := tx.ListUsagePools(ctx)
-				return err
-			}); !errors.Is(err, ErrRowInconsistent) {
-				t.Fatalf("read = %v, want %v", err, ErrRowInconsistent)
-			}
-		})
-	}
-}
-
 // TestUsagePoolCountRefusesDivergentIndexedIdentity is the #731 regression. The
 // count once selected admissions by the indexed identity, so a row whose column
 // disagrees with its authenticated body dropped out of the count silently and

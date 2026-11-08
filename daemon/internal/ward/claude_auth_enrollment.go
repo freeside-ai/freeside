@@ -168,7 +168,7 @@ func EnrollClaudeSetupToken(
 	}
 	digest := domain.Digest(contentaddr.Sum(cfg.Token.value))
 	identity := domain.AuthIdentity{
-		ID: cfg.AuthIdentityID, Provider: "claude", AccountBinding: cfg.AccountBinding,
+		ID: cfg.AuthIdentityID, Provider: domain.AuthProviderClaude, AccountBinding: cfg.AccountBinding,
 		AuthStoreMutationLease: true, Enabled: true,
 		CostOwner: cfg.CostOwner,
 		// The interim facts the flag path reads today (-auth-identity with
