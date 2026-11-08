@@ -159,10 +159,12 @@ func TestWalkSymlinkTargetNonUTF8(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	// encoding/json emits the U+FFFD replacement as a six-byte \u escape,
-	// so two distinct invalid targets both encode to this.
-	if !bytes.Contains(body, []byte("\\ufffd")) {
-		t.Error("expected the non-UTF-8 target to fold to U+FFFD in the encoded manifest")
+	// Since Go 1.27, encoding/json writes an invalid byte as the raw
+	// three-byte U+FFFD rune rather than a \u escape. Two distinct invalid
+	// targets still encode to the same bytes, so the manifest stays lossy
+	// for them.
+	if !bytes.Contains(body, []byte("bad\uFFFDtarget")) {
+		t.Errorf("encoded manifest = %q, want the non-UTF-8 target folded to raw U+FFFD", body)
 	}
 }
 

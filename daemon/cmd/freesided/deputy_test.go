@@ -670,7 +670,7 @@ func TestDeputyDaemonSettingsMatchesDownstreamRefusals(t *testing.T) {
 			if err := os.WriteFile(s.ManualSubmissionConfig, []byte("{"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		}, manual, "manual submission config: EOF"},
+		}, manual, "manual submission config: unexpected end of JSON input"},
 		{"missing manual config", func(t *testing.T, s *loadedDeputySettings) {
 			s.ManualSubmissionConfig = filepath.Join(t.TempDir(), "missing.json")
 		}, manual, "no such file"},
