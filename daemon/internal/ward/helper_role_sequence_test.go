@@ -17,12 +17,11 @@ import (
 // which is the stopped wait's first poll.
 var helperRoleSteps = []string{"create", "inspect", "allowlist", "start", "stopped"}
 
-// TestHelperRoleSequence characterizes the handoff's staged-volume,
-// launch-state, and instruction helper roles from the outside, so moving
-// them onto one runner shows every behavior change as a golden diff. It
-// pins the runtime and journal calls of one successful handoff and, for
-// each role and step, the error class, check, content-evidence mark, and
-// whether teardown reaped everything.
+// TestHelperRoleSequence characterizes the handoff's helper roles from the
+// outside, so moving them onto one runner shows every behavior change as a
+// golden diff. It pins the runtime and journal calls of one successful
+// handoff and, for each role and step, the error class, check,
+// content-evidence mark, and whether teardown reaped everything.
 func TestHelperRoleSequence(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
@@ -38,17 +37,27 @@ func TestHelperRoleSequence(t *testing.T) {
 	}
 
 	names := namesFor(hs.RunID)
-	roles := []struct{ label, name string }{
-		{"prompt-seeder", names.PromptSeeder},
-		{"prompt-observer", names.PromptObserver},
-		{"inputs-seeder", names.InputsSeeder},
-		{"inputs-observer", names.InputsObserver},
-		{"instruction-seeder", names.InstructionSeeder},
-		{"instruction-observer", names.InstructionObserver},
-		{"launch-state-seeder", names.ConfigRootSeeder},
-		{"config-root-observer", names.ConfigRootObserver},
-		{"continuity-observer", names.ContinuityObserver},
-		{"scratch-observer", names.ScratchObserver},
+	roles := []struct {
+		label, name string
+		// setup, when set, makes a failure row's handoff run the role; the
+		// successful handoff above runs without it.
+		setup func(*testing.T, *handoffFixture, *HandoffSpec)
+	}{
+		{"prompt-seeder", names.PromptSeeder, nil},
+		{"prompt-observer", names.PromptObserver, nil},
+		{"inputs-seeder", names.InputsSeeder, nil},
+		{"inputs-observer", names.InputsObserver, nil},
+		{"instruction-seeder", names.InstructionSeeder, nil},
+		{"instruction-observer", names.InstructionObserver, nil},
+		{"launch-state-seeder", names.ConfigRootSeeder, nil},
+		{"config-root-observer", names.ConfigRootObserver, nil},
+		{"continuity-observer", names.ContinuityObserver, nil},
+		{"scratch-observer", names.ScratchObserver, nil},
+		{"workspace-seeder", names.Seeder, nil},
+		{"base-observer", names.Observer, nil},
+		{"credential-pre-observer", names.CredObsPre, leaseHelperRoleSequence},
+		{"writer-outcome-observer", names.WriterObserver, markHelperRoleSequenceOutcome},
+		{"credential-post-observer", names.CredObsPost, leaseHelperRoleSequence},
 	}
 	rows := make([]string, 0, len(roles)*len(helperRoleSteps))
 	for _, role := range roles {
@@ -64,7 +73,7 @@ func TestHelperRoleSequence(t *testing.T) {
 				row := &rows[i*len(helperRoleSteps)+j]
 				t.Run(role.label+"/"+step, func(t *testing.T) {
 					t.Parallel()
-					*row += " " + helperRoleFailureRow(t, role.name, step)
+					*row += " " + helperRoleFailureRow(t, role.name, step, role.setup)
 				})
 			}
 		}
@@ -96,11 +105,34 @@ func newHelperRoleSequenceFixture(t *testing.T) (*handoffFixture, HandoffSpec) {
 	return fx, hs
 }
 
+// leaseHelperRoleSequence gives a failure row's handoff the auth-store lease,
+// so the pre- and post-writer credential observers run.
+func leaseHelperRoleSequence(t *testing.T, fx *handoffFixture, hs *HandoffSpec) {
+	t.Helper()
+	leased, _ := fx.leased(t)
+	hs.Agent.CredentialMounts = leased.Agent.CredentialMounts
+	hs.AuthStoreLease = leased.AuthStoreLease
+}
+
+// markHelperRoleSequenceOutcome gives a failure row's writer an outcome
+// marker carrying status 0, so the writer-outcome observer runs.
+func markHelperRoleSequenceOutcome(t *testing.T, fx *handoffFixture, hs *HandoffSpec) {
+	t.Helper()
+	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
+	hs.Agent.Command = []string{"sh", "-c", "printf '%s 0\\n' " + WriterNoncePlaceholder + " > " + hs.Agent.OutcomeMarkerPath}
+}
+
 // helperRoleFailureRow runs one handoff that fails the named role at step
-// and renders the outcome. Each row is a fresh fixture.
-func helperRoleFailureRow(t *testing.T, name, step string) string {
+// and renders the outcome. Each row is a fresh fixture, prepared by setup
+// when the role needs one to run.
+func helperRoleFailureRow(
+	t *testing.T, name, step string, setup func(*testing.T, *handoffFixture, *HandoffSpec),
+) string {
 	t.Helper()
 	fx, hs := newHelperRoleSequenceFixture(t)
+	if setup != nil {
+		setup(t, fx, &hs)
+	}
 	injected := errors.New("injected " + step + " failure")
 	switch step {
 	case "create":
