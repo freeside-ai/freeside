@@ -299,7 +299,8 @@ public enum AttentionFixtures {
                 stops: [
                     .init(
                         title: "Start with the guide's validation",
-                        summary: "Validate enforces every cap the schema cannot express.",
+                        // Backticks pin verbatim drawing: Markdown would set a code span.
+                        summary: "`Validate` enforces every cap the schema cannot express.",
                         attention: .contract,
                         excerpts: [
                             .init(
