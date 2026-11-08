@@ -42,6 +42,36 @@ public enum AgentChoiceDisplay {
         .init(enrollment_id: offer.enrollment)
     }
 
+    /// One alternate-agent offer as the retry dialog and the move menu list
+    /// it.
+    public struct OfferOption: Equatable, Sendable, Identifiable {
+        /// The offer's enrollment.
+        public let id: String
+        /// `offerLabel`, then the enrollment's usage reading when a pool
+        /// lists it.
+        public let label: String
+        /// What picking the entry sends: `choice(offer)`.
+        public let choice: Components.Schemas.AlternateAgentChoice
+    }
+
+    /// The entries for `offers`, one per offer in the daemon's order. The
+    /// reading is looked up by enrollment, as the New Task picker does, so
+    /// one enrollment reads the same on every surface. A reading is shown,
+    /// never weighed: it doesn't reorder, hide, or disable an offer, and
+    /// it doesn't change the choice a pick sends (#1722).
+    public static func offerOptions(
+        _ offers: [Components.Schemas.AlternateAgentOffer], pools: [Components.Schemas.UsagePoolSnapshot],
+        now: Date, locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> [OfferOption] {
+        offers.map { offer in
+            let reading = reading(for: offer.enrollment, pools: pools, now: now, locale: locale, timeZone: timeZone)
+            return OfferOption(
+                id: offer.enrollment,
+                label: ([offerLabel(offer)] + [reading].compactMap(\.self)).joined(separator: " · "),
+                choice: choice(offer))
+        }
+    }
+
     /// The roles in the order the form shows them and a submission sends
     /// their lines. The generated `TaskLineRole` declares the same order;
     /// naming it here keeps the line order explicit.

@@ -144,6 +144,10 @@ struct DecisionDetailView: View {
     /// The tasks a closed card's timeline link resolves its item against.
     private let tasks: [Components.Schemas.TaskSnapshot]
     private let onSelectTask: (String) -> Void
+    /// The synced usage pools the Choose Another Agent dialog reads each
+    /// offer's reading from. The card is built from an `InboxStore`, not
+    /// the sync coordinator, so the pools come in as a value.
+    private let usagePools: [Components.Schemas.UsagePoolSnapshot]
 
     @MainActor
     init(
@@ -170,6 +174,7 @@ struct DecisionDetailView: View {
         onSelectItem: @escaping (String) -> Void = { _ in },
         tasks: [Components.Schemas.TaskSnapshot] = [],
         onSelectTask: @escaping (String) -> Void = { _ in },
+        usagePools: [Components.Schemas.UsagePoolSnapshot] = [],
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in },
         model: DecisionModel? = nil
     ) {
@@ -207,6 +212,7 @@ struct DecisionDetailView: View {
         self.onSelectItem = onSelectItem
         self.tasks = tasks
         self.onSelectTask = onSelectTask
+        self.usagePools = usagePools
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
@@ -394,12 +400,15 @@ struct DecisionDetailView: View {
                 titleVisibility: .visible
             ) {
                 if let reviewedSnapshot = alternateAgentRetrySnapshot {
-                    ForEach(reviewedSnapshot.item.alternate_agents ?? [], id: \.enrollment) { offer in
-                        Button(AgentChoiceDisplay.offerLabel(offer)) {
+                    ForEach(
+                        AgentChoiceDisplay.offerOptions(
+                            reviewedSnapshot.item.alternate_agents ?? [], pools: usagePools, now: Date())
+                    ) { option in
+                        Button(option.label) {
                             alternateAgentRetrySnapshot = nil
                             Task {
                                 await model.submitAlternateAgentRetry(
-                                    choice: AgentChoiceDisplay.choice(offer), reviewedSnapshot: reviewedSnapshot)
+                                    choice: option.choice, reviewedSnapshot: reviewedSnapshot)
                             }
                         }
                     }

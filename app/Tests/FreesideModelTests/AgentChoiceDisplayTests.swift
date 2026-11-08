@@ -252,6 +252,65 @@ import Testing
         #expect(AgentChoiceDisplay.discoveryNote(on: "enrollment-unknown", catalog: catalog, now: now) == nil)
     }
 
+    // MARK: Alternate-agent offers
+
+    /// Offers on the claude pool's second enrollment, the unsupported codex
+    /// enrollment, and one no pool lists, in an order no pool or reading
+    /// gives them.
+    private let offers: [Components.Schemas.AlternateAgentOffer] = [
+        .init(
+            enrollment: UsageFixtures.unsupportedCollectorID, pool: "codex-team-pool", harness: .codex_cli,
+            model: "gpt-codex", qualification: .different_pool),
+        .init(
+            enrollment: "enrollment-unpooled", pool: "spare-pool", harness: .claude_code, model: "claude-opus-5-5",
+            qualification: .different_pool),
+        .init(
+            enrollment: UsageFixtures.readingSecondEnrollmentID, pool: "claude-team-pool", harness: .claude_code,
+            model: "claude-opus-5-5", qualification: .different_pool),
+    ]
+
+    private func offerOptions(
+        pools: [Components.Schemas.UsagePoolSnapshot], at offset: TimeInterval
+    ) -> [AgentChoiceDisplay.OfferOption] {
+        AgentChoiceDisplay.offerOptions(
+            offers, pools: pools, now: Self.base.addingTimeInterval(offset), locale: Self.locale, timeZone: Self.utc)
+    }
+
+    @Test func eachOfferShowsItsEnrollmentsReadingAfterItsLabel() {
+        let pools = UsageFixtures.defaultUsagePools()
+        let current = offerOptions(pools: pools, at: 3_000)
+        #expect(
+            current.map(\.label) == [
+                "\(UsageFixtures.unsupportedCollectorID) · gpt-codex · codex-team-pool · unsupported \(time(1_800))",
+                "enrollment-unpooled · claude-opus-5-5 · spare-pool",
+                "\(UsageFixtures.readingSecondEnrollmentID) · claude-opus-5-5 · claude-team-pool"
+                    + " · Weekly Opus: Used up · read \(time(2_400))",
+            ])
+        let stale = offerOptions(pools: pools, at: 5_000)
+        #expect(
+            stale[2].label
+                == "\(UsageFixtures.readingSecondEnrollmentID) · claude-opus-5-5 · claude-team-pool"
+                + " · Weekly Opus: Used up · stale since \(time(4_200))")
+        // An offer whose enrollment no pool lists reads as the offer alone.
+        #expect(offerOptions(pools: [], at: 3_000).map(\.label) == offers.map(AgentChoiceDisplay.offerLabel))
+    }
+
+    @Test func aUsageReadingNeverReordersDropsOrChangesAnOffersChoice() {
+        let pools = UsageFixtures.defaultUsagePools()
+        for options in [
+            offerOptions(pools: pools, at: 3_000), offerOptions(pools: pools, at: 5_000),
+            offerOptions(pools: [], at: 0),
+        ] {
+            #expect(options.map(\.id) == offers.map(\.enrollment))
+            // The choice is the enrollment alone, so the daemon runs the
+            // lineup's model and effort on it.
+            #expect(
+                options.map(\.choice)
+                    == offers.map { Components.Schemas.AlternateAgentChoice(enrollment_id: $0.enrollment) })
+            #expect(options.allSatisfy { $0.choice.model_id == nil && $0.choice.effort == nil })
+        }
+    }
+
     // MARK: Stale choices
 
     private func missing(
