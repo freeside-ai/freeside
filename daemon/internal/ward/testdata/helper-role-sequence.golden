@@ -173,25 +173,25 @@ journal-close golden-run completed
 
 # Injected failures: role, step, error class, content evidence, teardown.
 prompt-seeder create conformance:control_plane_isolation no-evidence reaped
-prompt-seeder inspect plain no-evidence reaped
+prompt-seeder inspect conformance:control_plane_isolation no-evidence reaped
 prompt-seeder allowlist conformance:control_plane_isolation no-evidence reaped
-prompt-seeder start plain no-evidence reaped
-prompt-seeder stopped plain no-evidence reaped
+prompt-seeder start conformance:control_plane_isolation no-evidence reaped
+prompt-seeder stopped conformance:control_plane_isolation no-evidence reaped
 prompt-observer create conformance:control_plane_isolation no-evidence reaped
-prompt-observer inspect plain no-evidence reaped
+prompt-observer inspect conformance:control_plane_isolation no-evidence reaped
 prompt-observer allowlist conformance:control_plane_isolation no-evidence reaped
-prompt-observer start plain no-evidence reaped
-prompt-observer stopped plain no-evidence reaped
+prompt-observer start conformance:control_plane_isolation no-evidence reaped
+prompt-observer stopped conformance:control_plane_isolation no-evidence reaped
 inputs-seeder create conformance:control_plane_isolation no-evidence reaped
-inputs-seeder inspect plain no-evidence reaped
+inputs-seeder inspect conformance:control_plane_isolation no-evidence reaped
 inputs-seeder allowlist conformance:control_plane_isolation no-evidence reaped
-inputs-seeder start plain no-evidence reaped
-inputs-seeder stopped plain no-evidence reaped
+inputs-seeder start conformance:control_plane_isolation no-evidence reaped
+inputs-seeder stopped conformance:control_plane_isolation no-evidence reaped
 inputs-observer create conformance:control_plane_isolation no-evidence reaped
-inputs-observer inspect plain no-evidence reaped
+inputs-observer inspect conformance:control_plane_isolation no-evidence reaped
 inputs-observer allowlist conformance:control_plane_isolation no-evidence reaped
-inputs-observer start plain no-evidence reaped
-inputs-observer stopped plain no-evidence reaped
+inputs-observer start conformance:control_plane_isolation no-evidence reaped
+inputs-observer stopped conformance:control_plane_isolation no-evidence reaped
 instruction-seeder create conformance:control_plane_isolation no-evidence reaped
 instruction-seeder inspect conformance:control_plane_isolation no-evidence reaped
 instruction-seeder allowlist conformance:control_plane_isolation no-evidence reaped

@@ -53,76 +53,41 @@ func (b *Backend) prepareStagedVolume(ctx context.Context, hs HandoffSpec, sv st
 	if err := os.WriteFile(filepath.Join(ready, seedReadyFile), []byte("ready\n"), 0o600); err != nil {
 		return err
 	}
-	if err := b.startStagedRole(ctx, sv.seeder, sv.volume, sv.volumeTarget, sv.seederClaim, st); err != nil {
-		return err
-	}
-	for _, copy := range []struct{ source, target string }{{input, sv.stageDir}, {ready, sv.readyDir}} {
-		copyCtx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
-		err := b.rt.CopyIntoContainer(copyCtx, sv.seeder.Name, copy.source, copy.target)
-		cancel()
-		if err != nil {
-			return failw(CheckControlPlaneIsolation, err, "copy %s input: %v", sv.label, err)
+	seeder := b.stagedRole(hs, sv, sv.seeder, sv.seederClaim, "seeder", st)
+	seeder.afterStart = func(ctx context.Context) error {
+		for _, copy := range []struct{ source, target string }{{input, sv.stageDir}, {ready, sv.readyDir}} {
+			copyCtx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
+			err := b.rt.CopyIntoContainer(copyCtx, sv.seeder.Name, copy.source, copy.target)
+			cancel()
+			if err != nil {
+				return failw(CheckControlPlaneIsolation, err, "copy %s input: %v", sv.label, err)
+			}
 		}
+		return nil
 	}
-	if err := b.waitStopped(ctx, sv.seeder.Name, *sv.seederClaim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
+	if err := b.runtimeOps.runHelperRole(ctx, seeder); err != nil {
 		return err
 	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, sv.seeder.Name); err != nil {
-		return err
-	}
-	if err := b.removeStagedRole(ctx, sv.seeder.Name, sv.seederClaim, st); err != nil {
-		return err
-	}
-	if err := b.startStagedRole(ctx, sv.observer, sv.volume, sv.volumeTarget, sv.observerClaim, st); err != nil {
-		return err
-	}
-	if err := b.waitStopped(ctx, sv.observer.Name, *sv.observerClaim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return err
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, sv.observer.Name); err != nil {
-		return err
-	}
+	observer := b.stagedRole(hs, sv, sv.observer, sv.observerClaim, "observer", st)
 	// Reuse the bounded rootfs proof reader. The observer exports only its
 	// nonce/digest proof; the content itself lives on the separate volume.
-	proof, err := b.readStateProof(ctx, hs.RunID, sv.observer.Name, st)
-	if err != nil {
-		return err
+	observer.readProof = func(ctx context.Context) ([]byte, error) {
+		return b.readStateProof(ctx, hs.RunID, sv.observer.Name, st)
 	}
-	if err := sv.verify(proof); err != nil {
-		return err
-	}
-	return b.removeStagedRole(ctx, sv.observer.Name, sv.observerClaim, st)
+	observer.checkProof = sv.verify
+	return b.runtimeOps.runHelperRole(ctx, observer)
 }
 
-func (b *Backend) startStagedRole(
-	ctx context.Context, spec ContainerSpec, volume, target string, claim *objectClaim, st *runState,
-) error {
-	claim.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "create staged-volume role: %v", err)
+// stagedRole is the part of a staged volume's seeder or observer the two
+// share: both mount the one volume and pass the seed-role allowlist.
+func (b *Backend) stagedRole(
+	hs HandoffSpec, sv stagedVolume, spec ContainerSpec, claim *objectClaim, role string, st *runState,
+) helperRole {
+	return helperRole{
+		spec: spec, label: sv.label + " " + role, claim: claim, owner: st.ownershipLabel,
+		check: CheckControlPlaneIsolation, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, sv.volume, sv.volumeTarget, CheckControlPlaneIsolation)
+		},
 	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, spec.Name)
-	if err != nil {
-		return err
-	}
-	if err := verifySeedRoleAllowlist(rep, spec, volume, target, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
-	if err != nil {
-		return err
-	}
-	return b.rt.StartContainer(ctx, spec.Name)
-}
-
-func (b *Backend) removeStagedRole(ctx context.Context, name string, claim *objectClaim, st *runState) error {
-	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return err
-	}
-	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	*claim = objectClaim{}
-	return nil
 }
