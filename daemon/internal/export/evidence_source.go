@@ -174,12 +174,12 @@ func (m EvidenceSourceManifest) Validate() error {
 // canonical-or-reject: the descriptor is written by the untrusted agent with
 // arbitrary (still-valid) JSON formatting, not by a trusted Encode, so requiring
 // byte-canonical input would reject legitimate descriptors. Strictness instead
-// comes from a UTF-8 pre-check, DisallowUnknownFields (so a smuggled
-// producer_class, publish_eligible, or verification_recipe_digest is malformed
-// input, not an ignored extra), EOF-after-one-value, and full validation. The
-// decoded value is re-emitted canonically as evidence.json and independently
-// re-gated by the importer's DecodeEvidenceManifest, so a duplicate JSON key
-// collapsing last-wins here cannot smuggle an unvalidated value downstream.
+// comes from a UTF-8 pre-check, a decode that rejects unknown members (so a
+// smuggled producer_class, publish_eligible, or verification_recipe_digest is
+// malformed input, not an ignored extra) and duplicate names,
+// EOF-after-one-value, and full validation. The decoded value is re-emitted
+// canonically as evidence.json and independently re-gated by the importer's
+// DecodeEvidenceManifest.
 func DecodeEvidenceSourceManifest(data []byte) (EvidenceSourceManifest, error) {
 	var m EvidenceSourceManifest
 	if err := strictjson.Decode(data, &m, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {

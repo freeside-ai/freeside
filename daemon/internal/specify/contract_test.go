@@ -157,7 +157,7 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.want != nil && !errors.Is(err, tc.want) &&
-				(tc.name != "unknown" || !strings.Contains(err.Error(), "unknown field")) {
+				(tc.name != "unknown" || !strings.Contains(err.Error(), "unknown object member name")) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
 		})
@@ -307,7 +307,7 @@ func TestDecodeLegacyAddressalOutputBindsAuthenticatedFeedback(t *testing.T) {
 	if _, err := specify.DecodeLegacyAddressalOutput(body, nil); !errors.Is(err, specify.ErrInvalidOutput) {
 		t.Fatalf("unbound legacy output error = %v, want ErrInvalidOutput", err)
 	}
-	if _, err := specify.DecodeOutput(body); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, err := specify.DecodeOutput(body); err == nil || !strings.Contains(err.Error(), "unknown object member name") {
 		t.Fatalf("current decoder accepted legacy output: %v", err)
 	}
 }

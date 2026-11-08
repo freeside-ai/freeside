@@ -56,16 +56,16 @@ func inspectJSONFile(rel string, body []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	findings := jsonV2DecodeFindings(file)
 	jsonPackages, dotImported := encodingJSONPackages(file)
 	if dotImported {
-		return []string{"dot-imports encoding/json"}, nil
+		return append(findings, "dot-imports encoding/json"), nil
 	}
 	if len(jsonPackages) == 0 {
-		return nil, nil
+		return findings, nil
 	}
 	importedPackages := importedPackageNames(file)
 
-	var findings []string
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
 		if !ok || function.Body == nil {
@@ -164,6 +164,68 @@ func encodingJSONPackages(file *ast.File) (map[string]bool, bool) {
 		}
 	}
 	return packages, dotImported
+}
+
+// jsonV2DecodeEntryPoints maps each encoding/json/v2-era package to the
+// names that start a decode. Any reference counts, not only a call, so a
+// function value cannot carry a decode past the scan. The jsontext.Decoder
+// type is listed because a zero Decoder and Reset build one without
+// NewDecoder. v1's json.Unmarshal stays allowed; it has no v2 options to
+// drift from strictjson's.
+var jsonV2DecodeEntryPoints = map[string]map[string]bool{
+	"encoding/json/v2": {
+		"Unmarshal":       true,
+		"UnmarshalDecode": true,
+		"UnmarshalRead":   true,
+	},
+	"encoding/json/jsontext": {
+		"NewDecoder": true,
+		"Decoder":    true,
+	},
+}
+
+// jsonV2DefaultNames are the package names the v2 import paths declare;
+// filepath.Base would name encoding/json/v2 "v2".
+var jsonV2DefaultNames = map[string]string{
+	"encoding/json/v2":       "json",
+	"encoding/json/jsontext": "jsontext",
+}
+
+func jsonV2DecodeFindings(file *ast.File) []string {
+	var findings []string
+	entryPoints := make(map[string]map[string]bool)
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || jsonV2DecodeEntryPoints[path] == nil {
+			continue
+		}
+		name := jsonV2DefaultNames[path]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		switch name {
+		case ".":
+			findings = append(findings, "dot-imports "+path)
+		case "_":
+		default:
+			entryPoints[name] = jsonV2DecodeEntryPoints[path]
+		}
+	}
+	if len(entryPoints) == 0 {
+		return findings
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		qualifier, ok := selector.X.(*ast.Ident)
+		if ok && entryPoints[qualifier.Name][selector.Sel.Name] {
+			findings = append(findings, qualifier.Name+"."+selector.Sel.Name+": encoding/json/v2 decode outside strictjson")
+		}
+		return true
+	})
+	return findings
 }
 
 func jsonDecoderVariables(function *ast.FuncDecl, jsonPackages map[string]bool) map[string]bool {
@@ -277,6 +339,20 @@ func TestForbiddenJSONPatternDetection(t *testing.T) {
 		{"ordinary unmarshal", `package p; import "encoding/json"; func f(b []byte, v any) { _ = json.Unmarshal(b, v) }`, false},
 		{"other decoder package", `package p; type decoder struct{}; func (decoder) Token(){}; func f(d decoder) { d.Token() }`, false},
 		{"dot import", `package p; import . "encoding/json"; func f() { _ = NewDecoder }`, true},
+		{"v2 unmarshal", `package p; import "encoding/json/v2"; func f(b []byte, v any) { _ = json.Unmarshal(b, v) }`, true},
+		{"v2 unmarshal decode", `package p; import "encoding/json/v2"; import "encoding/json/jsontext"; func f(d *jsontext.Decoder, v any) { _ = json.UnmarshalDecode(d, v) }`, true},
+		{"v2 unmarshal read", `package p; import "encoding/json/v2"; import "io"; func f(r io.Reader, v any) { _ = json.UnmarshalRead(r, v) }`, true},
+		{"aliased v2 unmarshal", `package p; import jsonv2 "encoding/json/v2"; func f(b []byte, v any) { _ = jsonv2.Unmarshal(b, v) }`, true},
+		{"v2 unmarshal function value", `package p; import "encoding/json/v2"; var decode = json.Unmarshal`, true},
+		{"jsontext decoder", `package p; import "encoding/json/jsontext"; import "strings"; func f() { _ = jsontext.NewDecoder(strings.NewReader("{}")) }`, true},
+		{"aliased jsontext decoder", `package p; import jt "encoding/json/jsontext"; import "strings"; func f() { _ = jt.NewDecoder(strings.NewReader("{}")) }`, true},
+		{"v2 dot import", `package p; import . "encoding/json/v2"; func f() { _ = Marshal }`, true},
+		{"jsontext dot import", `package p; import . "encoding/json/jsontext"; func f() { _ = NewEncoder }`, true},
+		{"zero jsontext decoder", `package p; import "encoding/json/jsontext"; import "io"; func f(r io.Reader) { var d jsontext.Decoder; d.Reset(r) }`, true},
+		{"jsontext decoder parameter", `package p; import "encoding/json/jsontext"; func f(d *jsontext.Decoder) { _, _ = d.ReadToken() }`, true},
+		{"v1 unmarshal beside v2 marshal", `package p; import jsonv1 "encoding/json"; import "encoding/json/v2"; func f(b []byte, v any) ([]byte, error) { _ = jsonv1.Unmarshal(b, v); return json.Marshal(v) }`, false},
+		{"v2 marshal", `package p; import "encoding/json/v2"; func f(v any) ([]byte, error) { return json.Marshal(v) }`, false},
+		{"jsontext encoder", `package p; import "encoding/json/jsontext"; import "io"; func f(w io.Writer) { _ = jsontext.NewEncoder(w) }`, false},
 	}
 
 	for _, tt := range tests {

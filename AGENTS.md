@@ -591,6 +591,9 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Batch object reads:** `internal/gitrun/objects.go` (carries untrusted
   object bytes into agent-tree admission and the import and verification
   gates).
+- **Strict JSON decoding:** `internal/strictjson/` (the decoder for
+  importer, export, stage, publish, and ward input, so what it accepts
+  decides what reaches those gates).
 - **Verification verdicts, recipe approval, and trusted export:**
   `internal/verify/`, `internal/export/`, `cmd/freeside-export/`,
   `internal/store/entities.go`,

@@ -1,6 +1,9 @@
 package strictjson_test
 
 import (
+	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"math"
@@ -44,13 +47,14 @@ func TestDecodeContract(t *testing.T) {
 		{name: "bare trailing bracket", input: valid + `]`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: strictjson.ErrTrailingData},
 		{name: "bare trailing brace", input: valid + `}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: strictjson.ErrTrailingData},
 		{name: "trailing garbage", input: valid + `xyz`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: strictjson.ErrTrailingData},
-		{name: "unknown field rejected", input: `{"known":"value","extra":true}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: errors.New("json: unknown field")},
+		{name: "unknown field rejected", input: `{"known":"value","extra":true}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: jsonv2.ErrUnknownName},
 		{name: "unknown field allowed", input: `{"known":"value","extra":true}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, allowUnknown: true, want: fixture{Known: "value"}},
 		{name: "reader unknown field allowed", input: `{"known":"value","extra":true}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, allowUnknown: true, reader: true, want: fixture{Known: "value"}},
 		{name: "invalid UTF-8 rejected", input: "{\"known\":\"\xff\"}", policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: strictjson.ErrInvalidUTF8},
 		{name: "invalid UTF-8 tolerated", input: "{\"known\":\"\xff\"}", policy: strictjson.TolerateInvalidUTF8, limit: strictjson.NoLimit, want: fixture{Known: "�"}},
-		{name: "duplicate keys use last value", input: `{"known":"first","known":"last"}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, want: fixture{Known: "last"}},
+		{name: "duplicate keys rejected", input: `{"known":"first","known":"last"}`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: strictjson.ErrDuplicateName},
 		{name: "empty input", input: "", policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: io.EOF},
+		{name: "truncated input", input: `{"known":"value"`, policy: strictjson.RejectInvalidUTF8, limit: strictjson.NoLimit, wantErr: io.ErrUnexpectedEOF},
 		{name: "at byte limit", input: valid, policy: strictjson.RejectInvalidUTF8, limit: strictjson.Limit(len(valid)), want: fixture{Known: "value"}},
 		{name: "over byte limit", input: valid, policy: strictjson.RejectInvalidUTF8, limit: strictjson.Limit(len(valid) - 1), wantErr: strictjson.ErrLimitExceeded},
 		{name: "malformed prefix over byte limit", input: `{not-json`, policy: strictjson.RejectInvalidUTF8, limit: 1, wantErr: strictjson.ErrLimitExceeded},
@@ -89,14 +93,67 @@ func TestDecodeContract(t *testing.T) {
 				}
 				return
 			}
-			if tt.wantErr.Error() == "json: unknown field" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr.Error()) {
-					t.Fatalf("Decode() error = %v, want unknown-field error", err)
-				}
-				return
-			}
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Decode() error = %v, want errors.Is(_, %v)", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// v1 decoded an escaped lone surrogate to U+FFFD under either policy. v2
+// rejects it under RejectInvalidUTF8, which the raw-byte pre-check cannot
+// see, and still replaces it under TolerateInvalidUTF8.
+func TestDecodeEscapedLoneSurrogate(t *testing.T) {
+	input := []byte(`{"known":"\ud800"}`)
+	var rejected fixture
+	err := strictjson.Decode(input, &rejected, strictjson.RejectInvalidUTF8, strictjson.NoLimit)
+	var syntactic *jsontext.SyntacticError
+	if !errors.As(err, &syntactic) {
+		t.Fatalf("Decode(RejectInvalidUTF8) error = %v, want a jsontext.SyntacticError", err)
+	}
+	var tolerated fixture
+	if err := strictjson.Decode(input, &tolerated, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatalf("Decode(TolerateInvalidUTF8) error = %v", err)
+	}
+	if tolerated.Known != "\uFFFD" {
+		t.Fatalf("Decode(TolerateInvalidUTF8) = %q, want U+FFFD", tolerated.Known)
+	}
+}
+
+type duplicateFixture struct {
+	Known string            `json:"known"`
+	Map   map[string]string `json:"map"`
+	Raw   json.RawMessage   `json:"raw"`
+}
+
+func TestDecodeRejectsDuplicateNames(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		allowUnknown bool
+	}{
+		{name: "exact duplicate", input: `{"known":"a","known":"b"}`},
+		{name: "case variant of one field", input: `{"known":"a","Known":"b"}`},
+		// U+212A KELVIN SIGN folds to "k" under v1's case-insensitive matching.
+		{name: "Kelvin-sign variant of one field", input: "{\"known\":\"a\",\"\u212Anown\":\"b\"}"},
+		{name: "duplicate inside a map", input: `{"map":{"a":"1","a":"2"}}`},
+		{name: "duplicate inside a raw message", input: `{"raw":{"a":1,"a":2}}`},
+		{name: "duplicate inside a skipped unknown member", input: `{"known":"a","extra":{"a":1,"a":2}}`, allowUnknown: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got duplicateFixture
+			var err error
+			if tt.allowUnknown {
+				err = strictjson.DecodeAllowingUnknownFields([]byte(tt.input), &got, strictjson.RejectInvalidUTF8, strictjson.NoLimit)
+			} else {
+				err = strictjson.Decode([]byte(tt.input), &got, strictjson.RejectInvalidUTF8, strictjson.NoLimit)
+			}
+			if !errors.Is(err, strictjson.ErrDuplicateName) {
+				t.Fatalf("Decode() error = %v, want errors.Is(_, strictjson.ErrDuplicateName)", err)
+			}
+			if !errors.Is(err, jsontext.ErrDuplicateName) {
+				t.Fatalf("Decode() error = %v, want errors.Is(_, jsontext.ErrDuplicateName)", err)
 			}
 		})
 	}

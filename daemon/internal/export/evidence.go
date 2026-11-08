@@ -235,17 +235,16 @@ func (m EvidenceManifest) Validate() error {
 
 // DecodeEvidenceManifest is the boundary the importer consumes evidence.json
 // through, and it is canonical-or-reject: the only accepted wire form is the
-// exact byte form Encode produces. A strict decode (unknown fields and
-// trailing content are malformed input, never ignored extras, so a manifest
-// smuggling a trust bit like publish_eligible fails here) and full
-// validation come first for precise errors, but the final gate re-encodes
-// the decoded value and requires byte equality with the input, which closes
-// the decoder leniencies no field check can see: invalid UTF-8 laundered to
-// U+FFFD during decode, duplicate keys resolved last-wins, and
-// non-canonical whitespace or ordering. The trusted helper writes this file
-// via Encode, so a mismatch is hostile or corrupt, never legitimate. Size
-// and entry-count caps are importer policy applied before these bytes
-// arrive.
+// exact byte form Encode produces. A strict decode (unknown fields,
+// duplicate names, invalid UTF-8, and trailing content are malformed input,
+// never ignored extras, so a manifest smuggling a trust bit like
+// publish_eligible fails here) and full validation come first for precise
+// errors, but the final gate re-encodes the decoded value and requires byte
+// equality with the input, which closes what the strict decode still
+// accepts: non-canonical whitespace or member order. The trusted helper
+// writes this file via Encode, so a mismatch is hostile or corrupt, never
+// legitimate. Size and entry-count caps are importer policy applied before
+// these bytes arrive.
 func DecodeEvidenceManifest(data []byte) (EvidenceManifest, error) {
 	var m EvidenceManifest
 	if err := strictjson.Decode(data, &m, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {

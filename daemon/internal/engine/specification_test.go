@@ -2385,7 +2385,7 @@ func TestSpecificationUpgradePreservesLegacyAddressalOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := decode(strings.NewReader(transcript)); err == nil ||
-		!strings.Contains(err.Error(), "unknown field") {
+		!strings.Contains(err.Error(), "unknown object member name") {
 		t.Fatalf("current prompt accepted legacy addressal output: %v", err)
 	}
 }
