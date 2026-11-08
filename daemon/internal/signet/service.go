@@ -683,6 +683,19 @@ const (
 	outcomeRunsDoctor
 )
 
+// decisionOutcome resolves an action's outcome with the deciding item's type in
+// hand. Only approve is genuinely type-dependent: on an effect_proposal it
+// records an approval binding through the proposal start path, whereas on every
+// other type it merely concludes the item with no ledger row. Every other
+// action, including approve_with_changes, decline, and snooze, resolves by
+// action alone (approve_with_changes is offered only by effect_proposal).
+func decisionOutcome(itemType domain.AttentionType, action domain.Action) (domain.ItemStatus, outcomeKind) {
+	if itemType == domain.AttentionEffectProposal && action == domain.ActionApprove {
+		return domain.StatusResolved, outcomeStartsProposal
+	}
+	return actionOutcome(action)
+}
+
 // actionOutcome maps an action to what its acceptance does, following plan
 // §4. Concluding actions are the parameterless decisions whose whole accepted
 // effect is the status flip plus the durable record (downstream reactions are
@@ -699,30 +712,11 @@ const (
 // evaluation concludes a definitive publication block and enqueues the
 // command-bound reevaluation intent (issue #419; applyRerunTrustEvaluation).
 // Discuss runs the conversation transaction (plan §5.14
-// discuss semantics; applyDiscuss). Pending actions are rejected before any
-// transaction because their accepted effect cannot be represented yet: snooze
-// needs the timing update; start_with_changes needs the revised proposal
-// artifact and supersede transaction (plan §4); convert_to_policy carries
-// decision parameters DecisionPayload has no
-// field for (a #22 contract widening when its consumer lands); and
-// answer_and_retry, answer_without_retry, and return_to_agent ride the conversation channel but are decisions about a
-// prior agent turn, whose accepted effect (what the workflow does with the
-// answer) is the Wave 2 engine's, not a plain discuss append. Recording any
-// of them today would silently drop the user's data. A behaviour switch, no
+// discuss semantics; applyDiscuss). The only pending action is
+// convert_to_policy: it carries decision parameters DecisionPayload has no
+// field for, so Submit rejects it before any transaction rather than record
+// a command whose effect would be silently dropped. A behaviour switch, no
 // default, so a new Action member must declare its outcome here.
-// decisionOutcome resolves an action's outcome with the deciding item's type in
-// hand. Only approve is genuinely type-dependent: on an effect_proposal it
-// records an approval binding through the proposal start path, whereas on every
-// other type it merely concludes the item with no ledger row. Every other
-// action, including approve_with_changes, decline, and snooze, resolves by
-// action alone (approve_with_changes is offered only by effect_proposal).
-func decisionOutcome(itemType domain.AttentionType, action domain.Action) (domain.ItemStatus, outcomeKind) {
-	if itemType == domain.AttentionEffectProposal && action == domain.ActionApprove {
-		return domain.StatusResolved, outcomeStartsProposal
-	}
-	return actionOutcome(action)
-}
-
 func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	switch action {
 	case domain.ActionDismiss:

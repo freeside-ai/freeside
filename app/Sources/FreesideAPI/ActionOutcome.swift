@@ -1,6 +1,6 @@
 /// What accepting an action does beyond recording the command itself,
 /// mirroring the signet boundary's actionOutcome table
-/// decision-for-decision (daemon/internal/signet/service.go). Concluding
+/// (daemon/internal/signet/service.go) for every action. Concluding
 /// actions flip the item's status in the accepting transaction;
 /// record-only actions leave the item untouched (viewing a PR and
 /// inspect_trust_failure navigate, acknowledge and mark_seen mean seen,
@@ -12,9 +12,10 @@
 /// transition; discuss appends to a conversation without concluding the
 /// item; pending actions are rejected until the unit that owns their
 /// transaction lands: convert_to_policy.
-/// A provisional client mirror
-/// pending a queryable contract representation (#22); no `default`, so a new
-/// Action member must declare its outcome here.
+/// The daemon has more outcome kinds than this enum has cases; the
+/// ActionOutcomeTests mapping says which collapse and why, and checks this
+/// table against daemon/internal/signet/testdata/action-outcomes.golden.
+/// No `default`, so a new Action member must declare its outcome here.
 public enum ActionOutcome: Equatable {
     case concludes(Components.Schemas.ItemStatus)
     case discusses
