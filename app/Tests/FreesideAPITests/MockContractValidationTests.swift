@@ -1207,6 +1207,17 @@ import Testing
         #expect(CommandResultTrust.findingRoutesMessage(routes) == goJSON)
     }
 
+    /// Go's json.Marshal output for this input, captured from go1.26: it
+    /// escapes a `<`, `>`, or `&` even when a combining mark follows, uses
+    /// the short forms for \b and \f, and leaves DEL and non-ASCII raw.
+    @Test func goJSONStringEscapesPerScalarAsGoDoes() {
+        let input = "a<\u{0338}b>\u{0338}&\u{0301} \"q\" \\ / \n\r\t\u{08}\u{0C}\u{01}\u{1F}\u{7F} é \u{2028}\u{2029} 😀"
+        let goJSON =
+            #""a\u003c\#u{0338}b\u003e\#u{0338}\u0026\#u{0301} \"q\" \\ / \n\r\t\b\f\u0001\u001f\#u{7F} é \u2028\u2029 😀""#
+        // Bytes, not String ==, which compares by canonical equivalence.
+        #expect(Array(MockContractValidation.goJSONString(input).utf8) == Array(goJSON.utf8))
+    }
+
     @Test func findingRouteReasonIsSendableOnlyTrimmedAndBounded() {
         typealias Choice = Components.Schemas.FindingRouteChoice
         #expect(Choice.sendableReason("  Out of scope.\n") == "Out of scope.")

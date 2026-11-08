@@ -1811,17 +1811,27 @@ enum MockContractValidation {
         return sha256Digest(of: "[\(body)]")
     }
 
+    /// Go's json.Marshal of a string, byte for byte. It escapes per Unicode
+    /// scalar, not per Character: a `<` that a combining mark follows is one
+    /// Character, and a Character-wise replace would leave it raw where Go
+    /// escapes it.
     static func goJSONString(_ value: String) -> String {
-        guard let encoded = try? JSONEncoder().encode(value) else {
-            preconditionFailure("String JSON encoding cannot fail")
+        var out = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case "\u{08}": out += "\\b"
+            case "\u{0C}": out += "\\f"
+            case "<", ">", "&", "\u{2028}", "\u{2029}", "\u{00}"..."\u{1F}":
+                out += String(format: "\\u%04x", scalar.value)
+            default: out.unicodeScalars.append(scalar)
+            }
         }
-        return String(decoding: encoded, as: UTF8.self)
-            .replacingOccurrences(of: "\\/", with: "/")
-            .replacingOccurrences(of: "<", with: "\\u003c")
-            .replacingOccurrences(of: ">", with: "\\u003e")
-            .replacingOccurrences(of: "&", with: "\\u0026")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        return out + "\""
     }
 
     /// The generated runtime's RFC 3339 decoder accepts whole seconds, which
