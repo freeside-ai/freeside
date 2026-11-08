@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -227,6 +228,10 @@ var handoffCommandCases = []handoffCommandCase{
 	{"file-v6-prepare", stage.PromptFileV6, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
 	{"file-v6-specification", stage.PromptFileV6, nil, deferredStderrRedirect, true},
 	{"file-v6-specification-prepare", stage.PromptFileV6, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
+	{"file-v7", stage.PromptFileV7, nil, deferredStderrRedirect, false},
+	{"file-v7-prepare", stage.PromptFileV7, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
+	{"file-v7-specification", stage.PromptFileV7, nil, deferredStderrRedirect, true},
+	{"file-v7-specification-prepare", stage.PromptFileV7, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
 }
 
 var (
@@ -306,8 +311,9 @@ func TestHandoffSpecSchemaOnlyOnFileV4Specification(t *testing.T) {
 func TestHandoffSpecFileV5DisablesBuiltinInstructions(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
-	// file_v6 keeps file_v5's plugin setting (TestHandoffSpecFileV6AddsOnlyTheUsageDriver).
-	if provider.PromptDelivery() != stage.PromptFileV6 {
+	// file_v6 keeps file_v5's plugin setting (TestHandoffSpecFileV6AddsOnlyTheUsageDriver),
+	// and file_v7 keeps file_v6's (TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource).
+	if provider.PromptDelivery() != stage.PromptFileV7 {
 		t.Fatal("new launches do not select the severed protocol")
 	}
 	const settings = `--settings '{"enabledPlugins":{"agents-md@builtin":false}}' `
@@ -456,6 +462,46 @@ func TestHandoffSpecFileV6AddsOnlyTheUsageDriver(t *testing.T) {
 	}
 }
 
+// TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource proves file_v7 differs
+// from file_v6 on every stage only by declaring the reserved review guide
+// source, with the launcher's fixed label, path, media type, provenance, and
+// sensitivity, behind the same safe-file guard as the other reserved sources.
+func TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	command := func(t *testing.T, tc handoffCommandCase) string {
+		t.Helper()
+		hs, err := provider.HandoffSpec(context.Background(), tc.input())
+		if err != nil {
+			t.Fatalf("HandoffSpec: %v", err)
+		}
+		return hs.Agent.Command[2]
+	}
+	path := export.ReviewGuideEvidencePath
+	declare := "if [ -f '" + path + "' ] && [ ! -L '" + path + "' ]; then sources=\"$sources\"," +
+		shellQuote(evidenceSourceFragment("review-guide", export.EvidenceSource{
+			Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json", Path: path,
+			HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
+			ProducerInvocationID: "inv-provider-spec",
+		})) + "; "
+	for _, specification := range []bool{false, true} {
+		for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
+			v6 := command(t, handoffCommandCase{delivery: stage.PromptFileV6, prepare: prepare, specification: specification})
+			v7 := command(t, handoffCommandCase{delivery: stage.PromptFileV7, prepare: prepare, specification: specification})
+			if strings.Contains(v6, path) {
+				t.Fatal("file_v6 declares the review guide")
+			}
+			if strings.Count(v7, declare) != 1 {
+				t.Fatalf("file_v7 declares the review guide %d times, want once:\n%s", strings.Count(v7, declare), v7)
+			}
+			without := strings.NewReplacer(declare+"declare=1; fi; ", "", declare+"fi; ", "").Replace(v7)
+			if without != v6 {
+				t.Errorf("file_v7 differs from file_v6 beyond the review guide source:\n got %s\nwant %s", without, v6)
+			}
+		}
+	}
+}
+
 // The driver must ask under the request id the transcript reader matches, and
 // the driver path must stay out of the workspace and the root-only launchDir.
 func TestUsageDriverMatchesTheTranscriptReader(t *testing.T) {
@@ -491,7 +537,7 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 		"< "+shellQuote(ward.PromptFilePath), "00000000-0000-4000-8000-000000000000", "inv-headroom",
 		[]string{"/usr/local/bin/freeside-project-prepare"}, strings.Repeat("'", 256), strings.Repeat("'", 64),
 		specify.OutputJSONSchema, `{"enabledPlugins":{"agents-md@builtin":false}}`,
-		launcherFilesDeferredStderr, true)[2]
+		launcherFilesDeferredStderr, true, true)[2]
 	if len(longest) >= linuxMaxArgumentBytes/4 {
 		t.Fatalf("file_v6 command is %d bytes, want under %d", len(longest), linuxMaxArgumentBytes/4)
 	}
@@ -1063,6 +1109,11 @@ func TestFixedSourceDescriptorComposes(t *testing.T) {
 		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivityNormal,
 		ProducerInvocationID: "inv-1",
 	}
+	reviewGuide := export.EvidenceSource{
+		Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json", Path: export.ReviewGuideEvidencePath,
+		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: "inv-1",
+	}
 	for _, sources := range [][]export.EvidenceSource{
 		{transcript, summary},
 		{transcript, blocked},
@@ -1070,6 +1121,8 @@ func TestFixedSourceDescriptorComposes(t *testing.T) {
 		{transcript, publication},
 		{transcript, publication, summary},
 		{transcript, publication, summary, blocked},
+		{transcript, reviewGuide},
+		{transcript, publication, summary, reviewGuide},
 	} {
 		fragments := make([]string, 0, len(sources))
 		for _, source := range sources {
@@ -1116,6 +1169,46 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 		// Agents copied this placeholder verbatim as the PR title (#1464).
 		if bytes.Contains(body, []byte("Outcome title")) {
 			t.Errorf("%s shows a copyable placeholder title", name)
+		}
+	}
+}
+
+// TestReviewGuidePromptContract pins what both prompts tell the agent about
+// the review guide the file_v7 launcher declares: its reserved path, its caps,
+// and an example the importer accepts, so the prompt cannot teach a shape that
+// fails the stage.
+func TestReviewGuidePromptContract(t *testing.T) {
+	t.Parallel()
+	promptDir := phase1APromptDir(t)
+	for _, name := range []string{"implementer.md", "remediator.md"} {
+		body, err := os.ReadFile(filepath.Join(promptDir, name)) //nolint:gosec // fixed prompt fixtures
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, required := range []string{
+			export.ReviewGuideEvidencePath, "never paste it", "at most 80 lines", "`head` means the final workspace",
+			"1 to 12 stops", "at most 4 excerpts per stop", "at most 8 questions", "within 120 characters",
+			"within 2,000", "within 300", "within 500", "under 64 KiB", "A malformed guide fails the stage",
+			"do not commit it",
+		} {
+			if !bytes.Contains(body, []byte(required)) {
+				t.Errorf("%s omits %q", name, required)
+			}
+		}
+		_, rest, ok := bytes.Cut(body, []byte("## Review Guide\n"))
+		if !ok {
+			t.Fatalf("%s has no review guide section", name)
+		}
+		_, example, ok := bytes.Cut(rest, []byte("```json\n"))
+		if !ok {
+			t.Fatalf("%s review guide section has no example", name)
+		}
+		example, _, ok = bytes.Cut(example, []byte("\n```"))
+		if !ok {
+			t.Fatalf("%s review guide example is unterminated", name)
+		}
+		if _, err := importer.DecodeReviewGuide(example); err != nil {
+			t.Errorf("%s review guide example does not decode: %v", name, err)
 		}
 	}
 }

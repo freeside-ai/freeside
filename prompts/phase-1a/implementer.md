@@ -100,6 +100,19 @@ obligation explicit in the summary. Keeping scope does not waive review policy.
 - Keep methodology and supporting detail in retained artifacts and your final report, or below an optional `## Details` heading at the end. Keep concerns in the concise lead even when supporting detail is long.
 - Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from, such as "`go test ./...` passed in my run." Never write a bare verdict such as "all tests pass."
 
+## Review Guide
+
+- Optionally, before finishing a successful run, write `.freeside-evidence/review-guide.json`: the order in which the owner should read your change. Freeside shows it on the ready card. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files.
+- Point at code; never paste it. Each excerpt names a canonical repository-relative path, a side, and a 1-based inclusive line range of at most 80 lines. `head` means the final workspace you leave; `base` means the code before your change. Freeside reads the lines itself, and a pointer that does not resolve shows as unresolved.
+- Every key is required:
+
+```json
+{"stops":[{"title":"Retry state survives restart","summary":"Read this first: it decides what a restart keeps.","attention":"risk","excerpts":[{"path":"internal/retry/store.go","side":"head","start_line":40,"end_line":72,"caption":"The new persistence step"}]}],"questions":["Should retries stop after five attempts?"],"notes":null}
+```
+
+- `attention` is one of `tradeoff`, `contract`, `product`, `risk`, or `accessibility`. Use 1 to 12 stops, at most 4 excerpts per stop, and at most 8 questions. Keep a title within 120 characters, a summary or `notes` within 2,000, a caption within 300, and a question within 500. Keep the file under 64 KiB. `notes` is a string or `null`; `excerpts` and `questions` may be empty lists.
+- Leave the file out rather than guess. A malformed guide fails the stage. Never put a credential in it.
+
 ## Public Pull Request Metadata
 
 - After successful work, write `.freeside-evidence/publication.md`, a separate public-intended account of the entire current change, including prior candidate work in remediation or operator-feedback rounds. Do not copy the private summary. This reserved file is never repository content; do not commit it or add it to ignore files.

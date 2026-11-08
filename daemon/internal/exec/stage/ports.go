@@ -39,6 +39,9 @@ type Provider interface {
 // prompt as PromptFileV5 does and differs only in the Claude launch command
 // off a specification stage: an in-container driver sends the prompt over
 // the CLI's stream-json input and asks for its usage answer after the turn.
+// PromptFileV7 carries the prompt as PromptFileV6 does and differs only in
+// the Claude launch command declaring one more reserved evidence source, the
+// review guide.
 type PromptDelivery string
 
 const (
@@ -49,15 +52,18 @@ const (
 	PromptFileV4   PromptDelivery = "file_v4"
 	PromptFileV5   PromptDelivery = "file_v5"
 	PromptFileV6   PromptDelivery = "file_v6"
+	PromptFileV7   PromptDelivery = "file_v7"
 )
 
 var AllPromptDeliveries = []PromptDelivery{
 	PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6,
+	PromptFileV7,
 }
 
 func (d PromptDelivery) valid() bool {
 	switch d {
-	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6:
+	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6,
+		PromptFileV7:
 		return true
 	default:
 		return false
@@ -68,7 +74,7 @@ func (d PromptDelivery) valid() bool {
 // ward's protected prompt file instead of the launch argv.
 func (d PromptDelivery) usesPromptFile() bool {
 	switch d {
-	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6:
+	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6, PromptFileV7:
 		return true
 	case PromptArgument:
 		return false

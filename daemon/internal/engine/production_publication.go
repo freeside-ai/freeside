@@ -261,6 +261,10 @@ type productionVerificationCheckpoint struct {
 	Authorization domain.CandidateAuthorization `json:"authorization"`
 	Artifacts     []domain.Artifact             `json:"artifacts"`
 	DiffStats     *domain.DiffStats             `json:"diff_stats"`
+	// ReviewGuide is the producing agent's guide resolved against the
+	// imported commit and its base, or nil when the import carries none.
+	// Checkpoints written before it existed decode with it nil.
+	ReviewGuide *domain.ReviewGuide `json:"review_guide"`
 }
 
 type productionPublicationWorkflow struct {
@@ -2771,6 +2775,7 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 		ReadinessDetail:  &readiness.detail,
 		YieldHistory:     &yieldHistory,
 		DiffStats:        checkpoint.DiffStats,
+		ReviewGuide:      checkpoint.ReviewGuide,
 		DisplayNames:     names,
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
 		ScopeDecision:    task.scopeDecision,

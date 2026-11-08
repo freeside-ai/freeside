@@ -61,7 +61,7 @@ const (
 // ReviewGuide), which the launcher declares like the summary: the launcher
 // fixes the label, path, media type, and provenance, and the agent controls
 // only whether the file exists and what it says. The label equals
-// domain.ReviewGuideClaimLabel. Nothing declares it yet; #2750 wires it.
+// domain.ReviewGuideClaimLabel. The file_v7 Claude launch command declares it.
 const (
 	ReviewGuideEvidenceLabel = "freeside.review-guide"
 	ReviewGuideEvidencePath  = EvidenceWorkspaceDir + "/review-guide.json"

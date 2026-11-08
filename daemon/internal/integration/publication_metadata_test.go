@@ -551,7 +551,7 @@ func TestPublicMetadataRemediationUsesNewProducer(t *testing.T) {
 	t.Parallel()
 	p := newPublicMetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, "# Initial candidate\n\nInitial whole change.")
-	testProductionAdjudicatedRemediation(t, p, true)
+	testProductionAdjudicatedRemediation(t, p, true, false)
 }
 
 func TestPublicMetadataFeedbackUsesNewProducer(t *testing.T) {

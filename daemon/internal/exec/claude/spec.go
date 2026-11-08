@@ -100,7 +100,7 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 
 // launchDelivery is the protocol every new Claude launch selects. Stored
 // intents keep the member they were started under.
-const launchDelivery = stage.PromptFileV6
+const launchDelivery = stage.PromptFileV7
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
@@ -240,7 +240,7 @@ func agentCommandWithInput(
 	outputSchema string, files launcherFiles,
 ) []string {
 	return agentCommandWithSettings(
-		promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", files, false)
+		promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", files, false, false)
 }
 
 // Settings are part of the versioned command. Older protocols pass none so
@@ -252,9 +252,13 @@ func agentCommandWithInput(
 // with --input-format stream-json. The driver runs after the drop, so no
 // root process parses agent output; stdin, stdout, and stderr redirect as
 // before. False leaves every older command byte-identical.
+//
+// reviewGuide is file_v7: the descriptor also declares the reserved review
+// guide source when the agent left one. False leaves every older command
+// byte-identical.
 func agentCommandWithSettings(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
-	outputSchema, settings string, files launcherFiles, usageDriver bool,
+	outputSchema, settings string, files launcherFiles, usageDriver, reviewGuide bool,
 ) []string {
 	selection := ""
 	if settings != "" {
@@ -323,6 +327,29 @@ func agentCommandWithSettings(
 		SensitivityClass:     export.EvidenceSensitivityNormal,
 		ProducerInvocationID: string(invocationID),
 	}
+	// The review guide rides inline on the ready card, as the summary does,
+	// so it shares the summary's sensitivity. The launcher declares it
+	// head-independent because no commit exists yet; the importer binds the
+	// claim to the commit it builds.
+	reviewGuideSource := export.EvidenceSource{
+		Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json",
+		Path: export.ReviewGuideEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: string(invocationID),
+	}
+	type reservedSource struct {
+		name   string
+		source export.EvidenceSource
+	}
+	reserved := []reservedSource{
+		{"publication", publicationSource},
+		{"summary", summarySource},
+		{"blocked", blockedSource},
+		{"scope-conflict", scopeConflictSource},
+	}
+	if reviewGuide {
+		reserved = append(reserved, reservedSource{"review-guide", reviewGuideSource})
+	}
 	sourceFragment := evidenceSourceFragment
 	fileExists := func(p string) string {
 		return "[ -f " + shellQuote(p) + " ] && [ ! -L " + shellQuote(p) + " ]"
@@ -334,15 +361,7 @@ func agentCommandWithSettings(
 	// Linux single-argument limit.
 	collectSources := func(afterFirst, onPresent string) string {
 		script := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; " + afterFirst
-		for _, present := range []struct {
-			name   string
-			source export.EvidenceSource
-		}{
-			{"publication", publicationSource},
-			{"summary", summarySource},
-			{"blocked", blockedSource},
-			{"scope-conflict", scopeConflictSource},
-		} {
+		for _, present := range reserved {
 			script += "if " + fileExists(present.source.Path) + "; then " +
 				"sources=\"$sources\"," + shellQuote(sourceFragment(present.name, present.source)) +
 				"; " + onPresent + "fi; "
@@ -607,7 +626,7 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
 	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5,
-		stage.PromptFileV6:
+		stage.PromptFileV6, stage.PromptFileV7:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -741,23 +760,28 @@ func (p claudeProvider) HandoffSpec(
 		specification := spec.StageID == domain.SpecificationStageID(spec.RunID)
 		outputSchema := ""
 		if (in.PromptDelivery == stage.PromptFileV4 || in.PromptDelivery == stage.PromptFileV5 ||
-			in.PromptDelivery == stage.PromptFileV6) && specification {
+			in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7) && specification {
 			outputSchema = specify.OutputJSONSchema
 		}
 		settings := ""
-		if in.PromptDelivery == stage.PromptFileV5 || in.PromptDelivery == stage.PromptFileV6 {
+		if in.PromptDelivery == stage.PromptFileV5 || in.PromptDelivery == stage.PromptFileV6 ||
+			in.PromptDelivery == stage.PromptFileV7 {
 			// The pinned CLI's safe mode excludes installed plugins, but its
 			// bundled agents-md plugin can still load repository instructions.
 			settings = `{"enabledPlugins":{"agents-md@builtin":false}}`
 		}
 		// file_v6 runs the usage driver only off a specification stage, so the
 		// specifier's command, transcript, and structured_output stay file_v5's.
-		usageDriver := in.PromptDelivery == stage.PromptFileV6 && !specification
+		usageDriver := (in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7) &&
+			!specification
+		// file_v7 declares the review guide source on every stage; only the
+		// implementer and remediator prompts ask for the file.
+		reviewGuide := in.PromptDelivery == stage.PromptFileV7
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
 		hs.Agent.Command = agentCommandWithSettings(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
-			spec.RouteModelID, spec.NativeEffort, outputSchema, settings, files, usageDriver)
+			spec.RouteModelID, spec.NativeEffort, outputSchema, settings, files, usageDriver, reviewGuide)
 		return hs, nil
 	}
 	switch in.PromptDelivery {
@@ -770,7 +794,7 @@ func (p claudeProvider) HandoffSpec(
 		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
 		return withPromptFile(launcherFilesDeferred)
-	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6:
+	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7:
 		return withPromptFile(launcherFilesDeferredStderr)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)

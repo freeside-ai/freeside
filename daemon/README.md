@@ -155,7 +155,7 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v6`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v7`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
@@ -186,9 +186,12 @@ on the answer or after 15 seconds, and exits with the CLI's status; the CLI's
 stdout is the transcript, unchanged. The stage pipeline reads the answer from
 the transcript into the stage result's `claude_usage`, nil whenever any part
 of it is in doubt, and nothing about the stage's outcome depends on it. On a
-specification run's stage the command is `file_v5`'s. Conformance launches
-use `file_v6` too. Existing intents retain the protocol they started under:
-`file_v1` through `file_v5` their launch commands, and argument delivery its
+specification run's stage the command is `file_v5`'s. `file_v7` delivers it
+as `file_v6` does and differs only in declaring one more reserved evidence
+source on every stage, the review guide at
+`.freeside-evidence/review-guide.json` (#2750). Conformance launches use
+`file_v7` too. Existing intents retain the protocol they started under:
+`file_v1` through `file_v6` their launch commands, and argument delivery its
 original 31-KiB limit. This changes transport; it neither retries a failed
 invocation nor grants successor publication.
 
@@ -209,8 +212,8 @@ The probe registers one fresh container under the held rig, then verifies
 ownership before cleanup. Do not borrow an active exercise's rig without
 authorization. Its token stays in process memory and must not be printed.
 
-`TestPinnedClaudeUsageDriverLive` runs the production `file_v6` agent line,
-driver included, the same way and under the same variables, with
+`TestPinnedClaudeUsageDriverLive` runs the `file_v6` agent line, which
+`file_v7` changes only in its evidence descriptor, driver included, the same way and under the same variables, with
 `FREESIDE_USAGE_DRIVER_LIVE=1` in place of `FREESIDE_PROMPT_STDIN_LIVE=1`. It
 checks the image's CLI is the pinned build, that the turn makes exactly one
 `POST /v1/messages` with the prompt as one exact user text block, that the

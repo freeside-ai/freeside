@@ -229,6 +229,15 @@ func buildClaims(
 				Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
 			},
 		}
+		// The manifest's labels are unique, so an import carries at most one
+		// guide entry.
+		if e.Label == export.ReviewGuideEvidenceLabel {
+			guideFindings, err := reviewGuideClaim(e, info)
+			if err != nil {
+				return nil, nil, err
+			}
+			findings = append(findings, guideFindings...)
+		}
 		if e.MediaType == "text/markdown" && e.Size <= pol.SecretMaxScanBytes {
 			body, readErr := readScanBlob(info, e.Digest)
 			if readErr != nil {
@@ -254,6 +263,9 @@ func buildClaims(
 			return nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
 		}
 		claims = append(claims, claim)
+	}
+	if err := checkReviewGuideDigestUnique(claims); err != nil {
+		return nil, nil, err
 	}
 	return claims, findings, nil
 }

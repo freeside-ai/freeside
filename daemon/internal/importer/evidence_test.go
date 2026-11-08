@@ -683,3 +683,275 @@ func TestImportEvidenceCrossChannelSubstitution(t *testing.T) {
 		t.Fatalf("cross-channel substitution still produced a commit: %+v", res)
 	}
 }
+
+// reviewGuideFixture returns a valid agent-written review guide as a JSON
+// value, which a tamper case mutates before marshaling.
+func reviewGuideFixture() map[string]any {
+	return map[string]any{
+		"stops": []any{map[string]any{
+			"title": "Start at the gate", "summary": "The import rejects a malformed guide.",
+			"attention": "risk",
+			"excerpts": []any{map[string]any{
+				"path": "a.txt", "side": "head", "start_line": 1, "end_line": 1,
+				"caption": "The changed line.",
+			}},
+		}},
+		"questions": []any{"Is failing closed right here?"},
+		"notes":     nil,
+	}
+}
+
+// guideStop and guideExcerpt reach into a fixture for mutation.
+func guideStop(g map[string]any, i int) map[string]any {
+	return g["stops"].([]any)[i].(map[string]any)
+}
+
+func guideExcerpt(g map[string]any) map[string]any {
+	return guideStop(g, 0)["excerpts"].([]any)[0].(map[string]any)
+}
+
+func marshalGuide(t *testing.T, g map[string]any) string {
+	t.Helper()
+	body, err := json.Marshal(g)
+	if err != nil {
+		t.Fatalf("marshal review guide: %v", err)
+	}
+	return string(body)
+}
+
+// reviewGuideEntry is the entry the launcher declares for the review guide.
+func reviewGuideEntry(content string) export.EvidenceEntry {
+	e := evidenceEntry(export.ReviewGuideEvidenceLabel, "application/json", content)
+	e.Provenance.SensitivityClass = export.EvidenceSensitivitySensitive
+	return e
+}
+
+// importReviewGuide imports a one-change handoff whose evidence channel
+// carries entry over content.
+func importReviewGuide(t *testing.T, entry export.EvidenceEntry, content string, expectNoChanges bool) (Result, error) {
+	t.Helper()
+	workspace := map[string]string{"a.txt": "new\n"}
+	if expectNoChanges {
+		workspace["a.txt"] = "old\n"
+	}
+	clone, base, handoff := evidenceFixture(t, workspace)
+	writeEvidence(t, handoff, rawEvidenceJSON(t, evidenceManifest(entry)), blobFor(content))
+	opts := testImportOptions(base)
+	opts.ExpectNoChanges = expectNoChanges
+	return Import(t.Context(), handoff, clone, opts)
+}
+
+// TestImportReviewGuideBindsTheBuiltCommit: a valid guide becomes one claim
+// without inline text, head-bound to the commit the import built, with the
+// artifact id of that complete provenance.
+func TestImportReviewGuideBindsTheBuiltCommit(t *testing.T) {
+	t.Parallel()
+	content := marshalGuide(t, reviewGuideFixture())
+	res, err := importReviewGuide(t, reviewGuideEntry(content), content, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.CommitSHA == "" || len(res.Findings) != 0 || len(res.Claims) != 1 {
+		t.Fatalf("result = %+v, want a clean commit with one claim", res)
+	}
+	claim := res.Claims[0]
+	if claim.Label != export.ReviewGuideEvidenceLabel || claim.Text != nil ||
+		claim.Metadata.MediaType != domain.EvidenceMediaApplicationJSON {
+		t.Fatalf("guide claim = %+v, want application/json without text", claim)
+	}
+	if claim.Provenance.HeadBinding != domain.HeadBound || claim.Provenance.SourceHeadSHA != res.CommitSHA {
+		t.Fatalf("guide claim provenance = %+v, want head_bound at %s", claim.Provenance, res.CommitSHA)
+	}
+	if want := agentArtifactID(claim.Provenance, export.Digest(claim.Digest)); claim.Artifact != want {
+		t.Fatalf("guide claim artifact = %q, want %q", claim.Artifact, want)
+	}
+	unbound := claim.Provenance
+	unbound.HeadBinding, unbound.SourceHeadSHA = domain.HeadIndependent, ""
+	if claim.Artifact == agentArtifactID(unbound, export.Digest(claim.Digest)) {
+		t.Fatal("guide claim kept its head-independent artifact id")
+	}
+}
+
+// TestImportReviewGuideWithoutCommitStaysUnbound: a blocked-shape import
+// builds no commit, so the guide claim has no head to name.
+func TestImportReviewGuideWithoutCommitStaysUnbound(t *testing.T) {
+	t.Parallel()
+	content := marshalGuide(t, reviewGuideFixture())
+	res, err := importReviewGuide(t, reviewGuideEntry(content), content, true)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.CommitSHA != "" || len(res.Claims) != 1 ||
+		res.Claims[0].Provenance.HeadBinding != domain.HeadIndependent ||
+		res.Claims[0].Provenance.SourceHeadSHA != "" {
+		t.Fatalf("result = %+v, want no commit and a head-independent guide claim", res)
+	}
+}
+
+// TestImportReviewGuideSecretIsAFinding: a credential in the guide's prose,
+// raw or spelled with JSON escapes, is a secret finding the production
+// profile rejects, and the guide claim never carries inline text.
+func TestImportReviewGuideSecretIsAFinding(t *testing.T) {
+	t.Parallel()
+	token := "ghp_" + strings.Repeat("A", 36)
+	for name, place := range map[string]func(map[string]any, string){
+		"stop title": func(g map[string]any, s string) { guideStop(g, 0)["title"] = s },
+		"caption":    func(g map[string]any, s string) { guideExcerpt(g)["caption"] = s },
+		"question":   func(g map[string]any, s string) { g["questions"] = []any{s} },
+		"notes":      func(g map[string]any, s string) { g["notes"] = s },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			g := reviewGuideFixture()
+			place(g, "Token: "+token)
+			content := marshalGuide(t, g)
+			res, err := importReviewGuide(t, reviewGuideEntry(content), content, false)
+			if err != nil {
+				t.Fatalf("Import: %v", err)
+			}
+			if len(res.Findings) != 1 || res.Findings[0].Kind != FindingSecret ||
+				res.Findings[0].Path != export.ReviewGuideEvidenceLabel {
+				t.Fatalf("findings = %+v, want one secret finding on the guide", res.Findings)
+			}
+			if len(res.Claims) != 1 || res.Claims[0].Text != nil {
+				t.Fatalf("claims = %+v, want the guide claim without text", res.Claims)
+			}
+		})
+	}
+	t.Run("escaped", func(t *testing.T) {
+		t.Parallel()
+		// A JSON escape for "A" early in the token, so the raw bytes hold too
+		// short a run for any token rule while the decoded summary holds a
+		// whole token.
+		jsonEscapedA := `\` + "u0041"
+		g := reviewGuideFixture()
+		guideStop(g, 0)["summary"] = "MARKER"
+		content := strings.Replace(marshalGuide(t, g), "MARKER",
+			"ghp_"+strings.Repeat("A", 8)+jsonEscapedA+strings.Repeat("A", 30), 1)
+		res, err := importReviewGuide(t, reviewGuideEntry(content), content, false)
+		if err != nil {
+			t.Fatalf("Import: %v", err)
+		}
+		if len(res.Findings) != 1 || res.Findings[0].Kind != FindingSecret || res.Findings[0].Detail == "" {
+			t.Fatalf("findings = %+v, want one decoded-string secret finding", res.Findings)
+		}
+	})
+}
+
+// TestImportReviewGuideTamperFailsClosed: every malformed guide or forged
+// declaration fails the import with a typed error naming the entry, before
+// any commit is built.
+func TestImportReviewGuideTamperFailsClosed(t *testing.T) {
+	t.Parallel()
+	excerpts := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = map[string]any{"path": "a.txt", "side": "head", "start_line": 1, "end_line": 1, "caption": "c"}
+		}
+		return out
+	}
+	stops := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = map[string]any{"title": "t", "summary": "s", "attention": "risk", "excerpts": []any{}}
+		}
+		return out
+	}
+	guideCases := map[string]func(map[string]any){
+		"dot-dot path":          func(g map[string]any) { guideExcerpt(g)["path"] = "../a.txt" },
+		"absolute path":         func(g map[string]any) { guideExcerpt(g)["path"] = "/etc/passwd" },
+		"non-canonical path":    func(g map[string]any) { guideExcerpt(g)["path"] = "dir//a.txt" },
+		"span over 80 lines":    func(g map[string]any) { guideExcerpt(g)["end_line"] = 81 },
+		"end before start":      func(g map[string]any) { guideExcerpt(g)["start_line"] = 3; guideExcerpt(g)["end_line"] = 2 },
+		"zero start line":       func(g map[string]any) { guideExcerpt(g)["start_line"] = 0 },
+		"no stops":              func(g map[string]any) { g["stops"] = []any{} },
+		"thirteen stops":        func(g map[string]any) { g["stops"] = stops(13) },
+		"five excerpts":         func(g map[string]any) { guideStop(g, 0)["excerpts"] = excerpts(5) },
+		"unknown field":         func(g map[string]any) { g["version"] = "v1" },
+		"daemon text":           func(g map[string]any) { guideExcerpt(g)["text"] = "forged" },
+		"daemon head":           func(g map[string]any) { g["head_sha"] = evidenceSourceHead },
+		"daemon claim digest":   func(g map[string]any) { g["claim_digest"] = "sha256:forged" },
+		"daemon unresolved":     func(g map[string]any) { guideExcerpt(g)["unresolved_reason"] = "binary" },
+		"invalid attention":     func(g map[string]any) { guideStop(g, 0)["attention"] = "vibes" },
+		"invalid side":          func(g map[string]any) { guideExcerpt(g)["side"] = "left" },
+		"missing questions":     func(g map[string]any) { delete(g, "questions") },
+		"missing notes":         func(g map[string]any) { delete(g, "notes") },
+		"missing excerpts":      func(g map[string]any) { delete(guideStop(g, 0), "excerpts") },
+		"empty caption":         func(g map[string]any) { guideExcerpt(g)["caption"] = "" },
+		"title over 120 chars":  func(g map[string]any) { guideStop(g, 0)["title"] = strings.Repeat("é", 121) },
+		"nine questions":        func(g map[string]any) { g["questions"] = []any{"1", "2", "3", "4", "5", "6", "7", "8", "9"} },
+		"fractional start line": func(g map[string]any) { guideExcerpt(g)["start_line"] = 1.5 },
+	}
+	type tamper struct {
+		content string
+		entry   func(content string) export.EvidenceEntry
+		want    error
+	}
+	cases := map[string]tamper{}
+	for name, mutate := range guideCases {
+		g := reviewGuideFixture()
+		mutate(g)
+		cases[name] = tamper{content: marshalGuide(t, g), entry: reviewGuideEntry, want: ErrEvidenceInvalid}
+	}
+	valid := marshalGuide(t, reviewGuideFixture())
+	cases["non-UTF-8 string"] = tamper{
+		content: strings.Replace(valid, "The changed line.", "The \xff line.", 1),
+		entry:   reviewGuideEntry, want: ErrEvidenceMediaMismatch,
+	}
+	cases["over 64 KiB"] = tamper{
+		content: valid[:len(valid)-1] + strings.Repeat(" ", MaxReviewGuideBytes) + "}",
+		entry:   reviewGuideEntry, want: ErrEvidenceInvalid,
+	}
+	for name, forge := range map[string]func(*export.EvidenceEntry){
+		"head-bound declaration": func(e *export.EvidenceEntry) {
+			e.Provenance.HeadBinding = export.EvidenceHeadBound
+			e.Provenance.SourceHeadSHA = evidenceSourceHead
+		},
+		"high-sensitivity declaration": func(e *export.EvidenceEntry) {
+			e.Provenance.SensitivityClass = export.EvidenceSensitivityHigh
+		},
+		"markdown declaration": func(e *export.EvidenceEntry) { e.MediaType = "text/markdown" },
+	} {
+		cases[name] = tamper{
+			content: valid,
+			entry: func(content string) export.EvidenceEntry {
+				e := reviewGuideEntry(content)
+				forge(&e)
+				return e
+			},
+			want: ErrEvidenceInvalid,
+		}
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res, err := importReviewGuide(t, tc.entry(tc.content), tc.content, false)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Import = %v, want %v", err, tc.want)
+			}
+			if !strings.Contains(err.Error(), export.ReviewGuideEvidenceLabel) {
+				t.Fatalf("error %q does not name the evidence entry", err)
+			}
+			if res.CommitSHA != "" || res.Claims != nil {
+				t.Fatalf("tampered import returned a result: %+v", res)
+			}
+		})
+	}
+}
+
+// TestImportReviewGuideSharingADigestFailsClosed: a guide whose bytes equal
+// another entry's would leave the ready item's digest naming two claims, so
+// the import refuses it before anything publishes.
+func TestImportReviewGuideSharingADigestFailsClosed(t *testing.T) {
+	t.Parallel()
+	content := marshalGuide(t, reviewGuideFixture())
+	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
+	summary := evidenceEntry(export.SummaryEvidenceLabel, "text/markdown", content)
+	summary.Provenance.SensitivityClass = export.EvidenceSensitivitySensitive
+	writeEvidence(t, handoff, rawEvidenceJSON(t, evidenceManifest(reviewGuideEntry(content), summary)), blobFor(content))
+	res, err := Import(t.Context(), handoff, clone, testImportOptions(base))
+	if !errors.Is(err, ErrEvidenceInvalid) || !strings.Contains(err.Error(), export.SummaryEvidenceLabel) ||
+		len(res.Claims) != 0 {
+		t.Fatalf("Import = %+v, %v; want ErrEvidenceInvalid naming the summary", res, err)
+	}
+}
