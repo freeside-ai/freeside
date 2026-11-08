@@ -55,7 +55,7 @@ list every client enrollment the daemon holds, each with the models its
 harness last reported (`discovery`), or null when discovery recorded none; a
 new record moves the revision. Its tree part is the committed agent tree's
 agents, each with its enrollment, model, effort, lineage group, and the
-`selection` it runs, and the lineup's agent and selection per bound role;
+`selection` it runs, and the lineup's selection per bound role;
 without a committed tree, `agents` and `lineup` are empty and
 `lineup_revision` is null. A client offers only selections these agents carry
 on a listed enrollment. The heartbeat carries the tree's `lineup_revision`.

@@ -138,10 +138,10 @@ public enum UsageFixtures {
                     effort: .harness_default, lineage_group: nil, selection: codexPrimary),
             ],
             lineup: [
-                .init(role: .specifier, agent: "claude-primary", selection: claudePrimary),
-                .init(role: .implementer, agent: "claude-primary", selection: claudePrimary),
-                .init(role: .remediator, agent: "claude-secondary", selection: claudeSecondary),
-                .init(role: .reviewer, agent: "codex-primary", selection: codexPrimary),
+                .init(role: .specifier, selection: claudePrimary),
+                .init(role: .implementer, selection: claudePrimary),
+                .init(role: .remediator, selection: claudeSecondary),
+                .init(role: .reviewer, selection: codexPrimary),
             ])
     }
 

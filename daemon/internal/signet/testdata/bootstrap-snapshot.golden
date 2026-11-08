@@ -584,7 +584,6 @@
     "lineup": [
       {
         "role": "implementer",
-        "agent": "claude-a",
         "selection": {
           "enrollment_id": "anthropic-a/claude_code",
           "model_id": "claude-opus-5-5",
@@ -593,7 +592,6 @@
       },
       {
         "role": "reviewer",
-        "agent": "claude-c",
         "selection": {
           "enrollment_id": "anthropic-b/claude_code",
           "model_id": "claude-preview",

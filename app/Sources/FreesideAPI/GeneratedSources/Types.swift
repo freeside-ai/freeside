@@ -2512,34 +2512,28 @@ public enum Components {
                 ])
             }
         }
-        /// The agent the lineup binds to one role, and that agent's selection.
+        /// The selection the lineup binds to one role.
         ///
         /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine`.
         public struct AgentCatalogLineupLine: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/role`.
             public var role: Components.Schemas.TaskLineRole
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/agent`.
-            public var agent: Swift.String
             /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/selection`.
             public var selection: Components.Schemas.TaskLineSelection
             /// Creates a new `AgentCatalogLineupLine`.
             ///
             /// - Parameters:
             ///   - role:
-            ///   - agent:
             ///   - selection:
             public init(
                 role: Components.Schemas.TaskLineRole,
-                agent: Swift.String,
                 selection: Components.Schemas.TaskLineSelection
             ) {
                 self.role = role
-                self.agent = agent
                 self.selection = selection
             }
             public enum CodingKeys: String, CodingKey {
                 case role
-                case agent
                 case selection
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -2548,17 +2542,12 @@ public enum Components {
                     Components.Schemas.TaskLineRole.self,
                     forKey: .role
                 )
-                self.agent = try container.decode(
-                    Swift.String.self,
-                    forKey: .agent
-                )
                 self.selection = try container.decode(
                     Components.Schemas.TaskLineSelection.self,
                     forKey: .selection
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "role",
-                    "agent",
                     "selection"
                 ])
             }
