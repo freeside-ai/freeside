@@ -384,9 +384,9 @@ package enum AttentionDisplay {
                 .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ].compactMap { $0 }
-            // The agents Retry With Another Agent offers, so the card names
-            // them before the picker does.
-            let offers = (item.alternate_agents ?? []).map(\.agent)
+            // The enrollments Retry With Another Agent offers, so the card
+            // names them before the picker does.
+            let offers = (item.alternate_agents ?? []).map(\.enrollment)
             let alternates: [FactRow] =
                 offers.isEmpty ? [] : [.init("Other Agents", offers.joined(separator: ", "), monospaced: true)]
             // What ran the failed attempt, as its admission recorded it; an

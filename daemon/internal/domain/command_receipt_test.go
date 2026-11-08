@@ -51,7 +51,8 @@ func receiptPolicy(t *testing.T, revision int) domain.RoutingPolicy {
 }
 
 // receiptParkedTaskMove is a move of task-1's implementer to claude-b's
-// selection on pool-b, with the record and line it wrote.
+// enrollment on pool-b at the lineup's model and effort, with the record and
+// line it wrote.
 func receiptParkedTaskMove(t *testing.T) domain.CommandReceipt {
 	t.Helper()
 	selection := &domain.TaskLineSelection{EnrollmentID: "claude-b/claude_code", ModelID: "claude-opus-4-5", Effort: "high"}
@@ -76,10 +77,20 @@ func receiptParkedTaskMove(t *testing.T) domain.CommandReceipt {
 	}
 	return domain.CommandReceipt{ParkedTaskMove: &domain.ParkedTaskMoveReceipt{
 		ParkedTaskMoveRequest: domain.ParkedTaskMoveRequest{
-			CommandIdentity: receiptIdentity("cmd-move"), TaskID: "task-1", Agent: "claude-b", Selection: selection,
+			CommandIdentity: receiptIdentity("cmd-move"), TaskID: "task-1",
+			Choice: &domain.AlternateAgentChoice{EnrollmentID: "claude-b/claude_code"},
 		},
 		Retry: record, Lines: []domain.TaskLine{line},
 	}}
+}
+
+// receiptParkedTaskMoveAgent is the move as stored under #2735: its request
+// names the tree agent the wire sent and the selection it reduced to.
+func receiptParkedTaskMoveAgent(t *testing.T) domain.CommandReceipt {
+	t.Helper()
+	receipt := *receiptParkedTaskMove(t).ParkedTaskMove
+	receipt.Choice, receipt.Agent, receipt.Selection = nil, "claude-b", receipt.Retry.Selection
+	return domain.CommandReceipt{ParkedTaskMove: &receipt}
 }
 
 // receiptParkedTaskMoveV1 is the move as stored before #2735: its record
@@ -169,8 +180,9 @@ func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 			},
 			Recorded: true,
 		}},
-		"parked_task_move_receipt":    receiptParkedTaskMove(t),
-		"parked_task_move_receipt_v1": receiptParkedTaskMoveV1(t),
+		"parked_task_move_receipt":       receiptParkedTaskMove(t),
+		"parked_task_move_receipt_agent": receiptParkedTaskMoveAgent(t),
+		"parked_task_move_receipt_v1":    receiptParkedTaskMoveV1(t),
 		"routing_policy_change_receipt": {RoutingPolicyChange: &domain.RoutingPolicyChangeReceipt{
 			RoutingPolicyChangeRequest: domain.RoutingPolicyChangeRequest{
 				CommandIdentity: receiptIdentity("cmd-policy"), ExpectedRevision: new(1),

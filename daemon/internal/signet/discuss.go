@@ -98,8 +98,8 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		return nil
 	}
 	if command.Action == domain.ActionRetryWithAlternateAgent {
-		// The message is the chosen agent's tree name; the apply step holds
-		// it to the card's offers.
+		// The message is the choice's canonical JSON (decisionMessage); the
+		// apply step holds it to the card's offers.
 		if command.Message == "" || len(command.Attachments) > 0 {
 			return fmt.Errorf("action %q: %w", command.Action, ErrInvalidAlternateAgentDecisionPayload)
 		}

@@ -736,9 +736,11 @@ enum MockContractValidation {
             guard case .run(let subject) = item.subject, subject.run_id != nil else {
                 return "alternate_agents on a non-run subject"
             }
-            let agents = alternates.map(\.agent)
-            if agents.isEmpty || agents != agents.sorted() || Set(agents).count != agents.count
-                || alternates.contains(where: { !validAgentName($0.agent) || $0.pool.isEmpty || $0.model.isEmpty })
+            let enrollments = alternates.map(\.enrollment)
+            if enrollments.isEmpty || enrollments != enrollments.sorted() || Set(enrollments).count != enrollments.count
+                || alternates.contains(where: {
+                    !validLaunchOptionValue($0.enrollment) || $0.pool.isEmpty || $0.model.isEmpty
+                })
             {
                 return "invalid alternate_agents"
             }
@@ -1297,10 +1299,21 @@ enum MockContractValidation {
     /// at most 256 bytes, with no leading dash, whitespace, or non-graphic
     /// character, since each leg reaches a harness argv.
     static func validLineSelection(_ selection: Components.Schemas.TaskLineSelection) -> Bool {
-        [selection.enrollment_id, selection.model_id, selection.effort].allSatisfy { value in
-            !value.isEmpty && value.utf8.count <= 256 && !value.hasPrefix("-")
-                && !value.unicodeScalars.contains { $0.properties.isWhitespace || !Self.isGraphic($0) }
-        }
+        [selection.enrollment_id, selection.model_id, selection.effort].allSatisfy(validLaunchOptionValue)
+    }
+
+    /// domain.AlternateAgentChoice.Validate: an enrollment, and any model or
+    /// effort it names, is one launch option value.
+    static func validAlternateAgentChoice(_ choice: Components.Schemas.AlternateAgentChoice) -> Bool {
+        validLaunchOptionValue(choice.enrollment_id)
+            && [choice.model_id, choice.effort].allSatisfy { $0.map(validLaunchOptionValue) ?? true }
+    }
+
+    /// domain.ValidLaunchOptionValue: non-empty, at most 256 bytes, not
+    /// starting with "-", with no whitespace or non-graphic character.
+    static func validLaunchOptionValue(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 256 && !value.hasPrefix("-")
+            && !value.unicodeScalars.contains { $0.properties.isWhitespace || !Self.isGraphic($0) }
     }
 
     /// Go's unicode.IsGraphic: letters, marks, numbers, punctuation,
@@ -1428,8 +1441,8 @@ enum MockContractValidation {
                     throw malformed("empty drain_first_account")
                 }
             case .move_parked_task(let payload):
-                guard !payload.task_id.isEmpty, validAgentName(payload.agent) else {
-                    throw malformed("empty task or invalid agent")
+                guard !payload.task_id.isEmpty, validAlternateAgentChoice(payload.choice) else {
+                    throw malformed("empty task or invalid choice")
                 }
             case .decision, .stop_task, .submit_task:
                 break
@@ -1445,8 +1458,8 @@ enum MockContractValidation {
         if payload.action != .adjudicate_findings && payload.finding_routes != nil {
             throw malformed("finding_routes on unrelated action")
         }
-        if payload.action != .retry_with_alternate_agent && payload.alternate_agent != nil {
-            throw malformed("alternate_agent on unrelated action")
+        if payload.action != .retry_with_alternate_agent && payload.alternate_agent_choice != nil {
+            throw malformed("alternate_agent_choice on unrelated action")
         }
         switch payload.action {
         case .adjudicate_findings:
@@ -1480,9 +1493,9 @@ enum MockContractValidation {
                 payload.alternative_choices == nil
             else { throw malformed("invalid capability manifest selection") }
         case .retry_with_alternate_agent:
-            // The daemon's decision message is the agent alone
+            // The daemon's decision message is the choice alone
             // (signet decisionMessage): no other input rides along.
-            guard let agent = payload.alternate_agent, !agent.isEmpty,
+            guard let choice = payload.alternate_agent_choice?.value1, validAlternateAgentChoice(choice),
                 (payload.message ?? "").isEmpty,
                 (payload.attachments ?? []).isEmpty,
                 payload.capability_manifest_digest == nil,
@@ -1811,17 +1824,27 @@ enum MockContractValidation {
         return sha256Digest(of: "[\(body)]")
     }
 
+    /// Go's json.Marshal of a string, byte for byte. It escapes per Unicode
+    /// scalar, not per Character: a `<` that a combining mark follows is one
+    /// Character, and a Character-wise replace would leave it raw where Go
+    /// escapes it.
     static func goJSONString(_ value: String) -> String {
-        guard let encoded = try? JSONEncoder().encode(value) else {
-            preconditionFailure("String JSON encoding cannot fail")
+        var out = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case "\u{08}": out += "\\b"
+            case "\u{0C}": out += "\\f"
+            case "<", ">", "&", "\u{2028}", "\u{2029}", "\u{00}"..."\u{1F}":
+                out += String(format: "\\u%04x", scalar.value)
+            default: out.unicodeScalars.append(scalar)
+            }
         }
-        return String(decoding: encoded, as: UTF8.self)
-            .replacingOccurrences(of: "\\/", with: "/")
-            .replacingOccurrences(of: "<", with: "\\u003c")
-            .replacingOccurrences(of: ">", with: "\\u003e")
-            .replacingOccurrences(of: "&", with: "\\u0026")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        return out + "\""
     }
 
     /// The generated runtime's RFC 3339 decoder accepts whole seconds, which

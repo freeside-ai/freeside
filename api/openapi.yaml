@@ -3783,10 +3783,11 @@ components:
           items:
             $ref: "#/components/schemas/AlternateAgentOffer"
           description: >
-            The agents a move_parked_task may move the task to, sorted by
-            agent: each one the routing policy orders for the implementer,
-            on another pool, that would pass admission when offered. Null
-            when none qualifies or the daemon runs without agent selection.
+            The enrollments a move_parked_task may move the task to, sorted
+            by enrollment: each one the routing policy orders for the
+            implementer, on another pool, that would pass admission when
+            offered. Null when none qualifies or the daemon runs without agent
+            selection.
 
     MachineCapacityHold:
       type: object
@@ -4704,13 +4705,15 @@ components:
       additionalProperties: false
       description: >
         Move a task parked on its implementer's exhausted quota window to
-        another agent (issue #869). agent must be one of the parked attempt's
-        QuotaWindowHold.alternate_agents, and the daemon re-derives that it
-        still qualifies. The move records an AlternateAgentRetry, pins the
-        implementer to agent and every other role the routing policy orders
-        an agent on its pool for (except a role an operator set), and lets the
-        parked attempt start. The new lines' source is alternate_agent_move.
-      required: [kind, task_id, agent]
+        another enrollment (issue #869). choice must name one of the parked
+        attempt's QuotaWindowHold.alternate_agents, and the daemon re-derives
+        that it still qualifies and that its catalog serves the model and
+        effort. The move records an AlternateAgentRetry, pins the implementer
+        to the chosen selection and every other role the routing policy
+        orders the enrollment for (except a role an operator set), and lets
+        the parked attempt start. The new lines' source is
+        alternate_agent_move.
+      required: [kind, task_id, choice]
       properties:
         kind:
           type: string
@@ -4718,11 +4721,8 @@ components:
         task_id:
           type: string
           minLength: 1
-        agent:
-          type: string
-          minLength: 1
-          maxLength: 246
-          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        choice:
+          $ref: "#/components/schemas/AlternateAgentChoice"
 
     UsageRefreshRecord:
       type: object
@@ -4849,7 +4849,7 @@ components:
         The receipt of a parked task's move: the request, the record of the
         operator's choice, and the task lines the move set, each citing the
         record.
-      required: [kind, command_id, device_id, task_id, agent, retry, lines]
+      required: [kind, command_id, device_id, task_id, choice, retry, lines]
       properties:
         kind:
           type: string
@@ -4863,9 +4863,8 @@ components:
         task_id:
           type: string
           minLength: 1
-        agent:
-          type: string
-          minLength: 1
+        choice:
+          $ref: "#/components/schemas/AlternateAgentChoice"
         retry:
           $ref: "#/components/schemas/AlternateAgentRetry"
         lines:
@@ -4878,12 +4877,13 @@ components:
       type: object
       additionalProperties: false
       description: >
-        An operator's choice to run a role under another agent after a quota,
-        credential, or capacity failure (plan §5.4 admission step 5). id is
-        the content address of every other field. item_id is the
+        An operator's choice to run a role under another enrollment after a
+        quota, credential, or capacity failure (plan §5.4 admission step 5):
+        selection is the enrollment, model, and effort the choice resolved
+        to. id is the content address of every other field. item_id is the
         execution-failure card a retry_with_alternate_agent decided, empty for
         a move_parked_task.
-      required: [id, task_id, role, failed_invocation_id, item_id, command_id, agent, pool, qualification, recorded_at]
+      required: [id, task_id, role, failed_invocation_id, item_id, command_id, selection, pool, qualification, recorded_at]
       properties:
         id:
           $ref: "#/components/schemas/Digest"
@@ -4900,9 +4900,8 @@ components:
         command_id:
           type: string
           minLength: 1
-        agent:
-          type: string
-          minLength: 1
+        selection:
+          $ref: "#/components/schemas/TaskLineSelection"
         pool:
           type: string
           minLength: 1
@@ -4924,14 +4923,15 @@ components:
       type: object
       additionalProperties: false
       description: >
-        One agent the daemon offers to run a failed role under: its tree
-        name, the usage pool it draws on, its harness and model, and the rule
-        it escapes the failure under.
-      required: [agent, pool, harness, model, qualification]
+        One enrollment the daemon offers to run a failed role under: its id,
+        the usage pool it draws on, its harness and the implementer lineup's
+        model it was offered at, and the rule it escapes the failure under.
+      required: [enrollment, pool, harness, model, qualification]
       properties:
-        agent:
+        enrollment:
           type: string
           minLength: 1
+          maxLength: 256
         pool:
           type: string
           minLength: 1
@@ -4942,6 +4942,32 @@ components:
           minLength: 1
         qualification:
           $ref: "#/components/schemas/AlternateAgentQualification"
+
+    AlternateAgentChoice:
+      type: object
+      description: >
+        What an operator picks from alternate_agents: an offered enrollment
+        and, optionally, a model id and an effort its catalog serves. A null
+        model_id or effort is the implementer lineup line's; an enrollment
+        with no recorded catalog takes only the lineup's. Each value is a
+        launch option, as in TaskLineSelection.
+      additionalProperties: false
+      required: [enrollment_id, model_id, effort]
+      properties:
+        enrollment_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        model_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          nullable: true
+        effort:
+          type: string
+          minLength: 1
+          maxLength: 256
+          nullable: true
 
     CommandRejection:
       description: A command conflict with the replacement state it was refused against.
@@ -5053,14 +5079,15 @@ components:
             The offered capability manifest selected by
             retry_with_capabilities. Required only for that action; the daemon
             re-derives the manifest from the run's current resolved policy.
-        alternate_agent:
-          type: string
-          minLength: 1
+        alternate_agent_choice:
+          allOf:
+            - $ref: "#/components/schemas/AlternateAgentChoice"
           description: >
-            The agent selected by retry_with_alternate_agent from the item's
+            The choice retry_with_alternate_agent makes from the item's
             alternate_agents. Required only for that action; the daemon
-            re-derives that it still escapes the failure and would pass
-            admission before it records the choice.
+            re-derives that the enrollment still escapes the failure and would
+            pass admission, and that its catalog serves the model and effort,
+            before it records the choice.
         answer_route:
           nullable: true
           allOf:
@@ -7402,10 +7429,10 @@ components:
           items:
             $ref: "#/components/schemas/AlternateAgentOffer"
           description: >
-            The agents an execution_failure item offers to retry the
-            implementer under, sorted by agent, after a quota, credential, or
-            capacity failure (issue #869). Present exactly when the item offers
-            retry_with_alternate_agent; null on every other item.
+            The enrollments an execution_failure item offers to retry the
+            implementer under, sorted by enrollment, after a quota, credential,
+            or capacity failure (issue #869). Present exactly when the item
+            offers retry_with_alternate_agent; null on every other item.
         elapsed_deadlines:
           type: array
           nullable: true

@@ -2,6 +2,7 @@ package signet_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -158,57 +158,35 @@ func lineCommand(id string, task domain.TaskID, name *string) signet.ClientComma
 	return in
 }
 
-func moveCommand(id string, task domain.TaskID, agent string) signet.ClientCommand {
+// moveCommand moves task to enrollment at the lineup's model and effort.
+func moveCommand(id string, task domain.TaskID, enrollment domain.ClientEnrollmentID) signet.ClientCommand {
 	in := operatorCommand(id, domain.CommandKindMoveParkedTask)
-	in.MoveParkedTask = signet.MoveParkedTaskPayload{TaskID: task, Agent: agent}
+	in.MoveParkedTask = signet.MoveParkedTaskPayload{TaskID: task, Choice: &signet.AlternateAgentChoice{EnrollmentID: enrollment}}
 	return in
 }
 
-// moveTree is a baseline tree with one writer agent, which it returns the
-// name of, that reduces to a selection, so the move handler can translate
-// the name the wire carries (#2735).
-func moveTree(t *testing.T) (*agenttree.Tree, string) {
-	t.Helper()
-	digest := domain.Digest("sha256:" + strings.Repeat("c", 64))
-	writer := agentbaseline.Selection{Model: "claude-move-test", Effort: domain.EffortHigh}
-	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
-		ClaudeEnrollment: domain.ClientEnrollment{
-			ID: "move-claude/claude_code", AuthIdentityID: "move-claude", HarnessClient: domain.HarnessClientClaudeCode,
-			Route: "anthropic-subscription", AuthMethod: domain.AuthMethodSetupToken,
-			CredentialMode: domain.CredentialSubscriptionContained, RefreshStrategy: domain.RefreshExternal,
-			AccountBinding: "acct-move",
-		},
-		Writers: map[domain.RoleName]agentbaseline.Selection{
-			domain.RoleSpecifier: writer, domain.RoleImplementer: writer, domain.RoleRemediator: writer,
-		},
-		TermsBasisDate: "2026-08-01", PricingRevision: "pricing-2026-08", OfferNotAfter: operatorAt.Add(30 * 24 * time.Hour),
-		Prompts: map[domain.RoleName]agentbaseline.Prompt{domain.RoleImplementer: {Name: "implementer", Digest: digest}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tree.Agents) != 1 {
-		t.Fatalf("move tree agents = %+v, want one writer", tree.Agents)
-	}
-	return &tree, tree.Agents[0].Name
-}
-
 // fakeParkedTaskMover answers a move with the receipt a move to the request's
-// selection on pool-b would record, writing nothing: the engine's move has
-// its own tests, and these exercise only the command's envelope.
+// choice on pool-b would record, under a lineup of claude-move-test at high
+// effort, writing nothing: the engine's move has its own tests, and these
+// exercise only the command's envelope.
 func fakeParkedTaskMover(
 	_ context.Context, _ *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 ) (domain.ParkedTaskMoveReceipt, error) {
+	selection := &domain.TaskLineSelection{
+		EnrollmentID: request.Choice.EnrollmentID,
+		ModelID:      cmp.Or(request.Choice.ModelID, "claude-move-test"),
+		Effort:       cmp.Or(request.Choice.Effort, "high"),
+	}
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: request.TaskID, Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
-		CommandID: request.CommandID, Selection: request.Selection, Pool: "pool-b",
+		CommandID: request.CommandID, Selection: selection, Pool: "pool-b",
 		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: now,
 	})
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
 	line, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: request.TaskID, Role: domain.RoleImplementer, Selection: request.Selection,
+		TaskID: request.TaskID, Role: domain.RoleImplementer, Selection: selection,
 		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",
@@ -291,10 +269,16 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 			func(domain.TaskID) signet.ClientCommand { return policyCommand("cmd", nil, "codex-primary") },
 			func(domain.TaskID) signet.ClientCommand { return policyCommand("cmd", nil, "claude-primary") },
 		},
+		{
+			domain.CommandKindMoveParkedTask,
+			func(id domain.TaskID) signet.ClientCommand { return moveCommand("cmd", id, "move-claude/claude_code") },
+			func(id domain.TaskID) signet.ClientCommand { return moveCommand("cmd", id, "other-claude/claude_code") },
+		},
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog)
+				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter),
+				withOperatorCatalog, signet.WithParkedTaskMover(fakeParkedTaskMover))
 			before := serverRevision(t, st)
 			result, err := svc.Submit(t.Context(), tc.command(id))
 			if err != nil {
@@ -314,6 +298,36 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 				t.Fatalf("revision %d after replay and conflict, want %d", after, before+1)
 			}
 		})
+	}
+}
+
+// A move's choice is refused before the mover runs when it is missing or
+// malformed; the refusal names the field and never echoes the value.
+func TestMoveParkedTaskRefusesAMalformedChoice(t *testing.T) {
+	t.Parallel()
+	svc, st, id := newOperatorService(t, signet.WithParkedTaskMover(fakeParkedTaskMover))
+	before := serverRevision(t, st)
+	empty, secret := "", "secret text"
+	for name, tc := range map[string]struct {
+		choice *signet.AlternateAgentChoice
+		field  string
+	}{
+		"no choice":        {nil, ""},
+		"no enrollment":    {&signet.AlternateAgentChoice{}, "enrollment_id"},
+		"an empty model":   {&signet.AlternateAgentChoice{EnrollmentID: "move-claude/claude_code", ModelID: &empty}, "model_id"},
+		"an invalid model": {&signet.AlternateAgentChoice{EnrollmentID: "move-claude/claude_code", ModelID: &secret}, "model_id"},
+		"an empty effort":  {&signet.AlternateAgentChoice{EnrollmentID: "move-claude/claude_code", Effort: &empty}, "effort"},
+	} {
+		command := moveCommand("cmd-"+strings.ReplaceAll(name, " ", "-"), id, "")
+		command.MoveParkedTask.Choice = tc.choice
+		_, err := svc.Submit(t.Context(), command)
+		if !errors.Is(err, signet.ErrInvalidOperatorCommandPayload) || !strings.Contains(err.Error(), tc.field) ||
+			strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: error = %v, want invalid naming %q and not the text", name, err, tc.field)
+		}
+	}
+	if serverRevision(t, st) != before {
+		t.Fatal("a malformed move committed")
 	}
 }
 

@@ -1093,7 +1093,7 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
-		observation.Hold = s.agentNames().renderHold(observation.Hold)
+		observation.Hold = renderHold(observation.Hold)
 		out = runTimeline(observation, state.Revision, time.Now().UTC(), facts)
 		return nil
 	})
@@ -1161,10 +1161,10 @@ func validateSnapshot(state store.ServerState, snapshot store.Snapshot) error {
 }
 
 // itemSnapshot is the item as the wire carries it: normalized, its evidence
-// availability re-derived, and its alternate-agent offers named as the wire
-// names them (agentNames.renderItem).
+// availability re-derived, and its alternate-agent offers as the wire carries
+// them (renderItem).
 func (s *Service) itemSnapshot(item domain.AttentionItem, snapshot store.Snapshot) AttentionItemSnapshot {
-	normalized := projectEvidenceAvailability(normalizeAttentionItem(s.agentNames().renderItem(item)), s.blobs)
+	normalized := projectEvidenceAvailability(normalizeAttentionItem(renderItem(item)), s.blobs)
 	return AttentionItemSnapshot{
 		AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion, Item: normalized,
 	}

@@ -2,11 +2,10 @@
   "command_id": "cmd-move",
   "device_id": "device-1",
   "task_id": "task-1",
-  "agent": "claude-b",
-  "selection": {
+  "choice": {
     "enrollment_id": "claude-b/claude_code",
-    "model_id": "claude-opus-4-5",
-    "effort": "high"
+    "model_id": "",
+    "effort": ""
   },
   "retry": {
     "id": "sha256:064d4932a481ca61519dee741c8ee6452b1d4fd5330c3a3881565fb93c22f93a",

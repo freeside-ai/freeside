@@ -27,11 +27,11 @@ public struct PendingParkedTaskMove: Codable, Equatable, Sendable {
 }
 
 /// Sends the operator's move of a task parked on its implementer's exhausted
-/// quota window to an agent the hold offers (`move_parked_task`, issue #869),
+/// quota window to an enrollment the hold offers (`move_parked_task`, issue #869),
 /// modeled on `RoutingPolicyModel`: the command persists before it is sent,
 /// an unanswered send is retried only by an explicit Retry that resends it
 /// unchanged, and the move reads as recorded only once sync shows its
-/// revision. The daemon re-derives that the agent still qualifies, so the
+/// revision. The daemon re-derives that the enrollment still qualifies, so the
 /// hold's offers are a snapshot, never an authority. The saved command,
 /// whether it is being sent, and its refusal live in the coordinator, where a
 /// reopened task page finds them.
@@ -61,11 +61,11 @@ package final class ParkedTaskMoveModel {
 
     package var canMove: Bool { unavailableReason == nil && pending == nil && !sending }
 
-    package func move(taskID: String, to agent: String) async {
+    package func move(taskID: String, to choice: Components.Schemas.AlternateAgentChoice) async {
         guard canMove, let epoch = coordinator.cursors?.syncEpoch else { return }
         let command = Components.Schemas.ClientCommand(
             command_id: UUID().uuidString, device_id: coordinator.store.device.deviceID,
-            payload: .move_parked_task(.init(kind: .move_parked_task, task_id: taskID, agent: agent)))
+            payload: .move_parked_task(.init(kind: .move_parked_task, task_id: taskID, choice: choice)))
         let entry = PendingParkedTaskMove(command: command, syncEpoch: epoch)
         guard coordinator.retainParkedTaskMove(entry) else {
             failure = "The move couldn't be saved on this device. Nothing was sent. Try again."
@@ -106,8 +106,9 @@ package final class ParkedTaskMoveModel {
             case .undocumented(let status, _):
                 switch status {
                 case 400, 404:
-                    // The task is no longer parked, or the agent no longer
-                    // qualifies: the daemon recorded nothing.
+                    // The task is no longer parked, or the enrollment no
+                    // longer qualifies or serves the choice: the daemon
+                    // recorded nothing.
                     coordinator.finishParkedTaskMove()
                     failure = "The daemon refused the move (status \(status)). Nothing was changed."
                     await coordinator.refreshAfterCommit()

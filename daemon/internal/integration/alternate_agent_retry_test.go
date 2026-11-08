@@ -21,8 +21,7 @@ import (
 
 // The issue-#869 scenario: an implementation fails on its agent's expired
 // credential, the engine's failure card offers a second enrollment on its
-// own identity, which the wire still names by its tree agent (#2735), the
-// operator picks it, and the retry attempt runs that agent. The
+// own identity, the operator picks it, and the retry attempt runs it. The
 // proof is the stored admission of the retry under the second agent's
 // enrollment, and an attempt that cites any record but the operator's is
 // refused where it is written.
@@ -167,10 +166,6 @@ func openAlternateAgentFixture(
 		})
 	main.seed(t, f.store)
 	second.seed(t, f.store)
-	// The card is read as the wire carries it, which names offers by tree
-	// agent until #2808 (#2735), so the read service translates through the
-	// tree the engine admits by.
-	f.signet = signet.NewService(f.store, signet.WithBlobStore(f.blobs), signet.WithAgentTree(treeOf(selection)))
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		adapter, err := agentbaseline.ClaudeWardAdapter()
 		if err != nil {
@@ -203,11 +198,6 @@ func openAlternateAgentFixture(
 	return f, selection
 }
 
-// treeOf is the agent tree signet translates the wire's agent names through.
-func treeOf(selection engine.AgentSelection) func() *agenttree.Tree {
-	return func() *agenttree.Tree { return &selection.Tree }
-}
-
 // TestAlternateAgentRetryAdmitsTheChosenAgent is the acceptance proof: the
 // engine's own card offers the second agent under valid_generation, the
 // operator's decision records the choice, and the retry attempt is admitted
@@ -231,7 +221,7 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 	})
 	card := failure.card
 	want := []domain.AlternateAgentOffer{{
-		Agent: alternateRetryAgent, Pool: second.identity.EffectiveUsagePool(),
+		Enrollment: second.enrollment.ID, Pool: second.identity.EffectiveUsagePool(),
 		Harness: domain.HarnessClientClaudeCode, Model: alternateRetryModel,
 		Qualification: domain.AlternateAgentValidGeneration,
 	}}
@@ -242,13 +232,14 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 
 	operator := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return admittedAt.Add(time.Minute) }),
-		signet.WithAlternateAgentRetrier(selection.AcceptAlternateAgentRetryTx), signet.WithAgentTree(treeOf(selection)))
-	agent := alternateRetryAgent
+		signet.WithAlternateAgentRetrier(selection.AcceptAlternateAgentRetryTx))
 	if _, err := operator.Submit(ctx, signet.ClientCommand{
 		CommandID: alternateRetryCommandID, DeviceID: deviceA, ExpectedEntityVersion: card.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: card.Item.ID, Action: domain.ActionRetryWithAlternateAgent,
-			ItemVersion: card.Item.ItemVersion, AlternateAgent: &agent,
+			ItemVersion: card.Item.ItemVersion,
+			// The enrollment alone runs the lineup's model and effort on it.
+			AlternateAgentChoice: &signet.AlternateAgentChoice{EnrollmentID: second.enrollment.ID},
 		},
 	}); err != nil {
 		t.Fatalf("submit retry_with_alternate_agent: %v", err)
@@ -376,7 +367,7 @@ func TestParkedTaskMovesToTheChosenAgent(t *testing.T) {
 	failure, taskID := driveParkedImplementer(t, f, second)
 
 	const moveCommandID = "command-move-parked-task"
-	if _, err := parkedTaskMover(f, selection).Submit(ctx, moveParkedTaskCommand(moveCommandID, taskID)); err != nil {
+	if _, err := parkedTaskMover(f, selection).Submit(ctx, moveParkedTaskCommand(moveCommandID, taskID, second.enrollment.ID)); err != nil {
 		t.Fatalf("submit move_parked_task: %v", err)
 	}
 	var moved domain.TaskLine
@@ -457,7 +448,7 @@ func TestParkedTaskMoveRefusesAStoppedTask(t *testing.T) {
 		t.Fatalf("stop the parked task: %v", err)
 	}
 
-	_, err = parkedTaskMover(f, selection).Submit(ctx, moveParkedTaskCommand("command-move-stopped-task", taskID))
+	_, err = parkedTaskMover(f, selection).Submit(ctx, moveParkedTaskCommand("command-move-stopped-task", taskID, second.enrollment.ID))
 	if !errors.Is(err, signet.ErrTaskNotParked) {
 		t.Fatalf("move of a stopped task = %v, want ErrTaskNotParked", err)
 	}
@@ -483,13 +474,17 @@ func TestParkedTaskMoveRefusesAStoppedTask(t *testing.T) {
 func parkedTaskMover(f *workflowFixture, selection engine.AgentSelection) *signet.Service {
 	return signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return time.Now().UTC() }),
-		signet.WithParkedTaskMover(selection.MoveParkedTaskTx), signet.WithAgentTree(treeOf(selection)))
+		signet.WithParkedTaskMover(selection.MoveParkedTaskTx))
 }
 
-func moveParkedTaskCommand(commandID string, taskID domain.TaskID) signet.ClientCommand {
+// moveParkedTaskCommand moves the task to enrollment at the lineup's model
+// and effort.
+func moveParkedTaskCommand(commandID string, taskID domain.TaskID, enrollment domain.ClientEnrollmentID) signet.ClientCommand {
 	return signet.ClientCommand{
 		CommandID: commandID, DeviceID: deviceA, Kind: domain.CommandKindMoveParkedTask,
-		MoveParkedTask: signet.MoveParkedTaskPayload{TaskID: taskID, Agent: alternateRetryAgent},
+		MoveParkedTask: signet.MoveParkedTaskPayload{
+			TaskID: taskID, Choice: &signet.AlternateAgentChoice{EnrollmentID: enrollment},
+		},
 	}
 }
 
@@ -526,7 +521,6 @@ func driveParkedImplementer(
 		if err != nil {
 			return err
 		}
-		// The hold stores the enrollment; the wire names it by agent.
 		want := []domain.AlternateAgentOffer{{
 			Enrollment: second.enrollment.ID, Pool: second.identity.EffectiveUsagePool(),
 			Harness: domain.HarnessClientClaudeCode, Model: alternateRetryModel,
@@ -540,10 +534,9 @@ func driveParkedImplementer(
 	}); err != nil {
 		t.Fatalf("read the parked run: %v", err)
 	}
-	// Both timelines name the hold's offer by its tree agent, the shape the
-	// API's AlternateAgentOffer still requires.
+	// Both timelines carry the hold's offer as stored.
 	wire := []domain.AlternateAgentOffer{{
-		Agent: alternateRetryAgent, Pool: second.identity.EffectiveUsagePool(),
+		Enrollment: second.enrollment.ID, Pool: second.identity.EffectiveUsagePool(),
 		Harness: domain.HarnessClientClaudeCode, Model: alternateRetryModel,
 		Qualification: domain.AlternateAgentDifferentPool,
 	}}

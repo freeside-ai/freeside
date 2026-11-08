@@ -319,7 +319,7 @@ import Testing
     }
 
     /// domain.validateAlternateAgents: the action and its offers come
-    /// together, sorted by agent, on a run's failure card.
+    /// together, sorted by enrollment, on a run's failure card.
     @Test func alternateAgentOffersComeWithTheirAction() {
         let quota = AttentionFixtures.quotaFailure().item
         #expect(MockContractValidation.itemValidityBreach(quota) == nil)
@@ -332,7 +332,7 @@ import Testing
         var unsorted = quota
         unsorted.alternate_agents?.insert(
             .init(
-                agent: "codex-team", pool: "codex-pool", harness: .codex_cli, model: "gpt-test",
+                enrollment: "enrollment-zzz", pool: "codex-pool", harness: .codex_cli, model: "gpt-test",
                 qualification: .different_pool), at: 0)
         #expect(MockContractValidation.itemValidityBreach(unsorted) == "invalid alternate_agents")
     }
@@ -1207,6 +1207,30 @@ import Testing
         #expect(CommandResultTrust.findingRoutesMessage(routes) == goJSON)
     }
 
+    /// domain.AlternateAgentChoice.Message is Go's json.Marshal of the three
+    /// fields, an empty string for a null model or effort; the daemon refuses
+    /// any other byte form, so the trust gate's must match it.
+    @Test func alternateAgentChoiceMessageMatchesGoBytes() {
+        #expect(
+            CommandResultTrust.alternateAgentChoiceMessage(
+                .init(enrollment_id: "claude-b/claude_code", model_id: "claude-opus-4-5", effort: "high"))
+                == #"{"enrollment_id":"claude-b/claude_code","model_id":"claude-opus-4-5","effort":"high"}"#)
+        #expect(
+            CommandResultTrust.alternateAgentChoiceMessage(.init(enrollment_id: "a<b>&c", model_id: nil, effort: nil))
+                == #"{"enrollment_id":"a\u003cb\u003e\u0026c","model_id":"","effort":""}"#)
+    }
+
+    /// Go's json.Marshal output for this input, captured from go1.26: it
+    /// escapes a `<`, `>`, or `&` even when a combining mark follows, uses
+    /// the short forms for \b and \f, and leaves DEL and non-ASCII raw.
+    @Test func goJSONStringEscapesPerScalarAsGoDoes() {
+        let input = "a<\u{0338}b>\u{0338}&\u{0301} \"q\" \\ / \n\r\t\u{08}\u{0C}\u{01}\u{1F}\u{7F} é \u{2028}\u{2029} 😀"
+        let goJSON =
+            #""a\u003c\#u{0338}b\u003e\#u{0338}\u0026\#u{0301} \"q\" \\ / \n\r\t\b\f\u0001\u001f\#u{7F} é \u2028\u2029 😀""#
+        // Bytes, not String ==, which compares by canonical equivalence.
+        #expect(Array(MockContractValidation.goJSONString(input).utf8) == Array(goJSON.utf8))
+    }
+
     @Test func findingRouteReasonIsSendableOnlyTrimmedAndBounded() {
         typealias Choice = Components.Schemas.FindingRouteChoice
         #expect(Choice.sendableReason("  Out of scope.\n") == "Out of scope.")
@@ -1435,18 +1459,24 @@ import Testing
         }
     }
 
-    /// signet decisionMessage: an alternate-agent retry carries the agent
+    /// signet decisionMessage: an alternate-agent retry carries the choice
     /// alone, and no other action carries one.
-    @Test func alternateAgentInputIsTheAgentAlone() throws {
+    @Test func alternateAgentInputIsTheChoiceAlone() throws {
         let quota = AttentionFixtures.quotaFailure()
         var valid = command(against: quota)
         valid.payload.asDecision.action = .retry_with_alternate_agent
-        valid.payload.asDecision.alternate_agent = "claude-team"
+        valid.payload.asDecision.alternate_agent_choice = .init(
+            value1: .init(enrollment_id: UsageFixtures.readingSecondEnrollmentID, model_id: "claude-opus", effort: nil))
         try MockContractValidation.validateActionInput(valid)
 
         expectMalformed(reason: "invalid alternate agent selection") {
             var c = valid
-            c.payload.asDecision.alternate_agent = nil
+            c.payload.asDecision.alternate_agent_choice = nil
+            return c
+        }
+        expectMalformed(reason: "invalid alternate agent selection") {
+            var c = valid
+            c.payload.asDecision.alternate_agent_choice?.value1.effort = ""
             return c
         }
         expectMalformed(reason: "invalid alternate agent selection") {
@@ -1454,7 +1484,7 @@ import Testing
             c.payload.asDecision.message = "please"
             return c
         }
-        expectMalformed(reason: "alternate_agent on unrelated action") {
+        expectMalformed(reason: "alternate_agent_choice on unrelated action") {
             var c = valid
             c.payload.asDecision.action = .retry
             return c

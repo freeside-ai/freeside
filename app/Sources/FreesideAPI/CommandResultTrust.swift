@@ -70,21 +70,22 @@ public enum CommandResultTrust {
                 && (line.map { $0.task_id == payload.task_id && $0.role == payload.role } ?? true)
                 && (!record.recorded || line.map { $0.source == .client_line_change } ?? true)
         case .move_parked_task(let payload):
-            // The receipt records the move the client asked for: the chosen
-            // agent on the task, a parked move's record (no card), and an
-            // implementer line, every line citing the record. The daemon
-            // records the line as the selection its tree runs that agent with,
-            // so only a legacy name-encoded line can be held to the agent.
+            // The receipt records the move the client asked for: the choice as
+            // sent, a parked move's record (no card) whose selection the choice
+            // picks, and an implementer line on that selection, every line
+            // citing the record.
             guard case .move_parked_task(let record) = result.record else { return false }
             let retry = record.retry
             return record.command_id == command.command_id && record.device_id == command.device_id
-                && record.task_id == payload.task_id && record.agent == payload.agent
+                && record.task_id == payload.task_id && record.choice == payload.choice
                 && retry.command_id == command.command_id && retry.task_id == payload.task_id
-                && retry.agent == payload.agent && retry.item_id.isEmpty && retry.role == .implementer
+                && chose(payload.choice, retry.selection) && retry.item_id.isEmpty && retry.role == .implementer
                 && record.lines.allSatisfy {
                     $0.task_id == payload.task_id && $0.source == .alternate_agent_move && $0.set_by == retry.id
                 }
-                && record.lines.contains { $0.role == .implementer && ($0.agent.map { $0 == payload.agent } ?? true) }
+                && record.lines.contains {
+                    $0.role == .implementer && $0.agent == nil && $0.selection?.value1 == retry.selection
+                }
         case .set_routing_policy(let payload):
             // The policy is the revision current after the change, holding the
             // requested orders and drain-first account: the one after
@@ -103,6 +104,28 @@ public enum CommandResultTrust {
         }
     }
 
+    /// Whether selection is what choice picks: its enrollment and, where the
+    /// choice names them, its model and effort (the daemon's
+    /// AlternateAgentChoice.Chose).
+    static func chose(
+        _ choice: Components.Schemas.AlternateAgentChoice, _ selection: Components.Schemas.TaskLineSelection
+    ) -> Bool {
+        selection.enrollment_id == choice.enrollment_id
+            && (choice.model_id.map { $0 == selection.model_id } ?? true)
+            && (choice.effort.map { $0 == selection.effort } ?? true)
+    }
+
+    /// The one byte form the daemon stores a retry_with_alternate_agent
+    /// choice as (domain.AlternateAgentChoice.Message): Go's json.Marshal of
+    /// the three fields in declaration order, an empty string for a null
+    /// model or effort. The daemon refuses any other form, so the escaping
+    /// follows Go's, which escapes <, >, and & and leaves / alone.
+    static func alternateAgentChoiceMessage(_ choice: Components.Schemas.AlternateAgentChoice) -> String {
+        "{\"enrollment_id\":\(MockContractValidation.goJSONString(choice.enrollment_id)),"
+            + "\"model_id\":\(MockContractValidation.goJSONString(choice.model_id ?? "")),"
+            + "\"effort\":\(MockContractValidation.goJSONString(choice.effort ?? ""))}"
+    }
+
     /// The daemon's durable command-message normalization. Keeping the mock
     /// server and the client-side trust gate on this one implementation makes
     /// typed action replay and result correlation use the same byte form.
@@ -115,7 +138,7 @@ public enum CommandResultTrust {
         case .retry_with_capabilities:
             return payload.capability_manifest_digest?.value1 ?? ""
         case .retry_with_alternate_agent:
-            return payload.alternate_agent ?? ""
+            return payload.alternate_agent_choice.map { alternateAgentChoiceMessage($0.value1) } ?? ""
         case .start_with_changes:
             guard let revision = payload.task_proposal_revision?.value1 else {
                 return payload.message ?? ""

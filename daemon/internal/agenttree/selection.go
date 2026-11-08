@@ -9,8 +9,8 @@ import (
 )
 
 // The document bridge. A v2 task line selects an enrollment, a model, and an
-// effort (domain.TaskLineSelection), while routing policy, the
-// alternate-agent record, and the client wire still name tree agents. These functions translate between the two
+// effort (domain.TaskLineSelection), while routing policy and a v1
+// alternate-agent record still name tree agents. These functions translate between the two
 // from the tree alone, with no store read, so the selection a v2 line holds
 // is the one domain.ReduceAgentSelection gives for the agent it maps to.
 // #2599 removes the bridge when admission resolves a selection without a

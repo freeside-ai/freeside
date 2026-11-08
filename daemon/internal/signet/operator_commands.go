@@ -47,10 +47,11 @@ type SetRoutingPolicyPayload struct {
 }
 
 // MoveParkedTaskPayload mirrors the API's MoveParkedTaskPayload: the task
-// parked on an exhausted quota window and the offered agent to move it to.
+// parked on an exhausted quota window and the choice of an offered
+// enrollment to move it to.
 type MoveParkedTaskPayload struct {
-	TaskID domain.TaskID `json:"task_id"`
-	Agent  string        `json:"agent"`
+	TaskID domain.TaskID         `json:"task_id"`
+	Choice *AlternateAgentChoice `json:"choice"`
 }
 
 // ErrInvalidOperatorCommandPayload rejects a malformed operator command, or
@@ -131,8 +132,10 @@ type RoutingPolicySetter func(ctx context.Context, tx *store.WriteTx, change Rou
 
 // ParkedTaskMover moves a parked task in the accepting transaction
 // (engine.AgentSelection.MoveParkedTaskTx, bound by WithParkedTaskMover). It
-// refuses a task with no parked attempt with ErrTaskNotParked, and an agent
-// the park does not offer now with ErrAlternateAgentNotQualified.
+// refuses a task with no parked attempt with ErrTaskNotParked, an enrollment
+// the park does not offer now with ErrAlternateAgentNotQualified, and a model
+// or effort the enrollment does not serve with
+// ErrAlternateAgentSelectionUnserved.
 type ParkedTaskMover func(
 	ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 ) (domain.ParkedTaskMoveReceipt, error)
@@ -468,19 +471,19 @@ func sameRevision(current *domain.RoutingPolicy, expected *int) bool {
 
 func (s *Service) moveParkedTask(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	p := in.MoveParkedTask
-	if !in.operatorArmOnly() || p.TaskID == "" || p.Agent == "" {
+	if !in.operatorArmOnly() || p.TaskID == "" || p.Choice == nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
-	// The wire names a tree agent until #2808; the move chooses the
-	// selection it reduces to. A name the tree does not reduce is not one
-	// the park offers, and the refusal never repeats it.
-	selection, ok := s.agentNames().selection(p.Agent)
-	if !ok {
-		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrAlternateAgentNotQualified)
+	// Whether the park offers the enrollment and its catalog serves the
+	// model and effort is the mover's to derive, in the command's
+	// transaction.
+	choice, err := p.Choice.choice()
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
 	}
 	request := domain.ParkedTaskMoveRequest{
 		CommandIdentity: domain.CommandIdentity{CommandID: in.CommandID, DeviceID: in.DeviceID},
-		TaskID:          p.TaskID, Agent: p.Agent, Selection: &selection,
+		TaskID:          p.TaskID, Choice: &choice,
 	}
 	return s.commitReceipt(ctx, in,
 		func(old domain.CommandReceipt) bool {

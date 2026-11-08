@@ -261,10 +261,12 @@ public struct DiskCacheStore: CacheStore {
     /// artifact-sourced tasks lack it, and its cursor would skip the
     /// bootstrap that supplies them. 10: the agent catalog gained the
     /// enrollments and each agent's selection (#2598); a format 9 cursor
-    /// would skip the bootstrap that supplies them. A pre-current cache cannot
-    /// claim freshness while durable rows from a newer client surface are
-    /// absent.
-    static let format = 10
+    /// would skip the bootstrap that supplies them. 11: alternate-agent offers
+    /// name enrollments (#2808); a format 10 file's offers named agents, and
+    /// its cursor would skip the bootstrap that restores them. A pre-current
+    /// cache cannot claim freshness while durable rows from a newer client
+    /// surface are absent.
+    static let format = 11
 
     private struct CacheFile: Codable {
         var format: Int
@@ -285,16 +287,17 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4, 5, 6, 7, 8, 9:
-            // Formats 2 to 9 already carried retryable commands, but predate
+        case 2, 3, 4, 5, 6, 7, 8, 9, 10:
+            // Formats 2 to 10 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
             // telemetry queue and its registration (absent before format 4),
             // because a queued event should drain rather than vanish. A
             // format 5 file may also hold unsettled task submissions and
-            // stops, and a format 7 file an unsettled routing change, which
-            // are the same kind of state. Their cursors cannot scope an
+            // stops, a format 7 file an unsettled routing change, and later
+            // files an unsettled usage command, parked move, or line change,
+            // which are the same kind of state. Their cursors cannot scope an
             // incomplete cache.
             return CachedState(
                 cursors: nil,
@@ -306,6 +309,12 @@ public struct DiskCacheStore: CacheStore {
                 stopDaemonID: file.state.stopDaemonID,
                 pendingRoutingPolicyChange: file.state.pendingRoutingPolicyChange,
                 routingDaemonID: file.state.routingDaemonID,
+                pendingUsageCommand: file.state.pendingUsageCommand,
+                usageDaemonID: file.state.usageDaemonID,
+                pendingParkedTaskMove: file.state.pendingParkedTaskMove,
+                moveDaemonID: file.state.moveDaemonID,
+                pendingTaskLineChange: file.state.pendingTaskLineChange,
+                lineChangeDaemonID: file.state.lineChangeDaemonID,
                 comprehensionQueue: file.state.comprehensionQueue,
                 comprehensionSequence: file.state.comprehensionSequence,
                 registeredCapabilityFingerprint: file.state.registeredCapabilityFingerprint,
@@ -367,6 +376,14 @@ public struct DiskCacheStore: CacheStore {
     ///    drop every entry in it; only that entry is dropped, since the
     ///    daemon now refuses a name from a client, so its verbatim retry
     ///    could only be refused.
+    /// 9. Alternate-agent offers and choices name enrollments (#2808). A
+    ///    cached offer naming an agent would throw and discard the cache,
+    ///    ledger included; every offer list holding one is nulled, and the
+    ///    format bump makes the bootstrap restore it. A saved
+    ///    retry_with_alternate_agent decision or parked move naming an agent
+    ///    would fail its section's decode; only that entry is dropped, since
+    ///    the daemon refuses a name now, so its verbatim retry could only be
+    ///    refused.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -497,11 +514,20 @@ public struct DiskCacheStore: CacheStore {
         }
         for section in ["pendingCommands", "pendingTaskSubmissions"] {
             guard let entries = state[section] as? [String: Any] else { continue }
-            let current = entries.filter { !namesAnAgentLine($0.value) }
+            let current = entries.filter { !namesAnAgentLine($0.value) && !namesAnAlternateAgent($0.value) }
             if current.count != entries.count {
                 state[section] = current
                 changed = true
             }
+        }
+        if let move = state["pendingParkedTaskMove"], namesAnAlternateAgent(move) {
+            state.removeValue(forKey: "pendingParkedTaskMove")
+            changed = true
+        }
+        for section in ["attentionItems", "runs", "runTimelines", "tasks", "taskTimelines"] {
+            guard var snapshots = state[section], nullingAgentOffers(&snapshots) else { continue }
+            state[section] = snapshots
+            changed = true
         }
 
         guard changed else { return data }
@@ -514,7 +540,7 @@ public struct DiskCacheStore: CacheStore {
     /// ledger entry wraps its command; a submission is the command. A line
     /// change names its agent on the payload itself; one that cleared the
     /// line omitted `agent` and still decodes as the same clear. A parked
-    /// move's `agent` is current and never matches.
+    /// move's `agent` is translation 9's.
     private static func namesAnAgentLine(_ value: Any) -> Bool {
         guard let object = value as? [String: Any] else { return false }
         let command = object["command"] as? [String: Any] ?? object
@@ -524,6 +550,48 @@ public struct DiskCacheStore: CacheStore {
         }
         guard let lines = payload["task_lines"] as? [[String: Any]] else { return false }
         return lines.contains { $0["agent"] != nil && $0["selection"] == nil }
+    }
+
+    /// Whether a saved command, or a ledger entry wrapping one, chooses an
+    /// alternate by agent name (translation 9): a decision's
+    /// `alternate_agent` or a parked move's `agent`.
+    private static func namesAnAlternateAgent(_ value: Any) -> Bool {
+        guard let object = value as? [String: Any] else { return false }
+        let command = object["command"] as? [String: Any] ?? object
+        guard let payload = command["payload"] as? [String: Any] else { return false }
+        return payload["alternate_agent"] != nil
+            || payload["kind"] as? String == "move_parked_task" && payload["agent"] != nil
+    }
+
+    /// Nulls every `alternate_agents` list under value that holds an offer
+    /// naming an agent (translation 9), reporting whether it did. An offer
+    /// list sits on attention items and on quota-window holds, which runs,
+    /// timelines, and task positions carry at different depths.
+    private static func nullingAgentOffers(_ value: inout Any) -> Bool {
+        var changed = false
+        if var object = value as? [String: Any] {
+            for (key, child) in object {
+                if key == "alternate_agents", let offers = child as? [[String: Any]],
+                    offers.contains(where: { $0["agent"] != nil })
+                {
+                    object[key] = NSNull()
+                    changed = true
+                    continue
+                }
+                var child = child
+                if nullingAgentOffers(&child) {
+                    object[key] = child
+                    changed = true
+                }
+            }
+            if changed { value = object }
+        } else if var array = value as? [Any] {
+            for index in array.indices {
+                if nullingAgentOffers(&array[index]) { changed = true }
+            }
+            if changed { value = array }
+        }
+        return changed
     }
 
     /// Drops a cached hold's detail when it names the retired

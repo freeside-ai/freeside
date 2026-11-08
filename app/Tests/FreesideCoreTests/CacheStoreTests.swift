@@ -640,6 +640,74 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(migrated.pendingTaskSubmissions == ["submission-1": submission("submission-1")])
     }
 
+    @Test func aPreEnrollmentOfferFormatTenCacheDropsOnlyItsAgentChoices() throws {
+        // Format 10 predates offers and choices by enrollment (#2808). A
+        // cached offer naming an agent would throw on decode and discard the
+        // cache, ledger included, and a saved choice naming an agent its
+        // section. The load path nulls such offers and drops only the
+        // entries naming an agent; the format bump discards the snapshots and
+        // cursors so the bootstrap restores the offers.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.attentionItems = [AttentionFixtures.quotaFailure()]
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved),
+            "item-b": .init(command: makeCommand(itemID: "item-b"), state: .unresolved),
+        ]
+        state.pendingParkedTaskMove = .init(
+            command: .init(
+                command_id: "move-1", device_id: "device-1",
+                payload: .move_parked_task(
+                    .init(
+                        kind: .move_parked_task, task_id: "task-1",
+                        choice: .init(enrollment_id: UsageFixtures.readingCollectorID)))),
+            syncEpoch: "epoch-1", receipt: nil)
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        // A format 10 offer named its agent, and a choice was the agent.
+        var items = try #require(legacyState["attentionItems"] as? [[String: Any]])
+        var item = try #require(items.first?["item"] as? [String: Any])
+        var offers = try #require(item["alternate_agents"] as? [[String: Any]])
+        offers[0]["agent"] = "claude-team"
+        offers[0].removeValue(forKey: "enrollment")
+        item["alternate_agents"] = offers
+        items[0]["item"] = item
+        legacyState["attentionItems"] = items
+        var ledger = try #require(legacyState["pendingCommands"] as? [String: Any])
+        var entry = try #require(ledger["item-b"] as? [String: Any])
+        var command = try #require(entry["command"] as? [String: Any])
+        var payload = try #require(command["payload"] as? [String: Any])
+        payload["action"] = "retry_with_alternate_agent"
+        payload["alternate_agent"] = "claude-team"
+        command["payload"] = payload
+        entry["command"] = command
+        ledger["item-b"] = entry
+        legacyState["pendingCommands"] = ledger
+        var move = try #require(legacyState["pendingParkedTaskMove"] as? [String: Any])
+        var moveCommand = try #require(move["command"] as? [String: Any])
+        var movePayload = try #require(moveCommand["payload"] as? [String: Any])
+        movePayload.removeValue(forKey: "choice")
+        movePayload["agent"] = "claude-team"
+        moveCommand["payload"] = movePayload
+        move["command"] = moveCommand
+        legacyState["pendingParkedTaskMove"] = move
+        object["format"] = 10
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.pendingCommands?.keys.sorted() == ["item-a"])
+        #expect(migrated.pendingCommands?["item-a"] == state.pendingCommands?["item-a"])
+        #expect(migrated.pendingParkedTaskMove == nil)
+    }
+
     @Test func aCachedBaseAdvanceWatchIsDroppedAndTheLedgerKept() throws {
         // Plan revision 110 retired the base_advance_watch kind (#2645).
         // A cached schedule of that kind would throw on decode and discard

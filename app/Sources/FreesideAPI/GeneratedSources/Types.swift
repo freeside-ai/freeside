@@ -8024,7 +8024,7 @@ public enum Components {
             public var resets_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/set_at`.
             public var set_at: Foundation.Date
-            /// The agents a move_parked_task may move the task to, sorted by agent: each one the routing policy orders for the implementer, on another pool, that would pass admission when offered. Null when none qualifies or the daemon runs without agent selection.
+            /// The enrollments a move_parked_task may move the task to, sorted by enrollment: each one the routing policy orders for the implementer, on another pool, that would pass admission when offered. Null when none qualifies or the daemon runs without agent selection.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/alternate_agents`.
@@ -8039,7 +8039,7 @@ public enum Components {
             ///   - reading_observed_at: The reading that set the mark; set exactly for usage_reading.
             ///   - resets_at: When the window resets and the parked attempt starts.
             ///   - set_at:
-            ///   - alternate_agents: The agents a move_parked_task may move the task to, sorted by agent: each one the routing policy orders for the implementer, on another pool, that would pass admission when offered. Null when none qualifies or the daemon runs without agent selection.
+            ///   - alternate_agents: The enrollments a move_parked_task may move the task to, sorted by enrollment: each one the routing policy orders for the implementer, on another pool, that would pass admission when offered. Null when none qualifies or the daemon runs without agent selection.
             public init(
                 pool: Swift.String,
                 window: Swift.String,
@@ -10045,7 +10045,7 @@ public enum Components {
                 ])
             }
         }
-        /// Move a task parked on its implementer's exhausted quota window to another agent (issue #869). agent must be one of the parked attempt's QuotaWindowHold.alternate_agents, and the daemon re-derives that it still qualifies. The move records an AlternateAgentRetry, pins the implementer to agent and every other role the routing policy orders an agent on its pool for (except a role an operator set), and lets the parked attempt start. The new lines' source is alternate_agent_move.
+        /// Move a task parked on its implementer's exhausted quota window to another enrollment (issue #869). choice must name one of the parked attempt's QuotaWindowHold.alternate_agents, and the daemon re-derives that it still qualifies and that its catalog serves the model and effort. The move records an AlternateAgentRetry, pins the implementer to the chosen selection and every other role the routing policy orders the enrollment for (except a role an operator set), and lets the parked attempt start. The new lines' source is alternate_agent_move.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload`.
@@ -10058,27 +10058,27 @@ public enum Components {
             public var kind: Components.Schemas.MoveParkedTaskPayload.kindPayload
             /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/task_id`.
             public var task_id: Swift.String
-            /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/agent`.
-            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MoveParkedTaskPayload/choice`.
+            public var choice: Components.Schemas.AlternateAgentChoice
             /// Creates a new `MoveParkedTaskPayload`.
             ///
             /// - Parameters:
             ///   - kind:
             ///   - task_id:
-            ///   - agent:
+            ///   - choice:
             public init(
                 kind: Components.Schemas.MoveParkedTaskPayload.kindPayload,
                 task_id: Swift.String,
-                agent: Swift.String
+                choice: Components.Schemas.AlternateAgentChoice
             ) {
                 self.kind = kind
                 self.task_id = task_id
-                self.agent = agent
+                self.choice = choice
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case task_id
-                case agent
+                case choice
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -10090,14 +10090,14 @@ public enum Components {
                     Swift.String.self,
                     forKey: .task_id
                 )
-                self.agent = try container.decode(
-                    Swift.String.self,
-                    forKey: .agent
+                self.choice = try container.decode(
+                    Components.Schemas.AlternateAgentChoice.self,
+                    forKey: .choice
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "task_id",
-                    "agent"
+                    "choice"
                 ])
             }
         }
@@ -10530,8 +10530,8 @@ public enum Components {
             public var device_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/task_id`.
             public var task_id: Swift.String
-            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/agent`.
-            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/choice`.
+            public var choice: Components.Schemas.AlternateAgentChoice
             /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/retry`.
             public var retry: Components.Schemas.AlternateAgentRetry
             /// - Remark: Generated from `#/components/schemas/ParkedTaskMoveRecord/lines`.
@@ -10543,7 +10543,7 @@ public enum Components {
             ///   - command_id:
             ///   - device_id:
             ///   - task_id:
-            ///   - agent:
+            ///   - choice:
             ///   - retry:
             ///   - lines:
             public init(
@@ -10551,7 +10551,7 @@ public enum Components {
                 command_id: Swift.String,
                 device_id: Swift.String,
                 task_id: Swift.String,
-                agent: Swift.String,
+                choice: Components.Schemas.AlternateAgentChoice,
                 retry: Components.Schemas.AlternateAgentRetry,
                 lines: [Components.Schemas.TaskLine]
             ) {
@@ -10559,7 +10559,7 @@ public enum Components {
                 self.command_id = command_id
                 self.device_id = device_id
                 self.task_id = task_id
-                self.agent = agent
+                self.choice = choice
                 self.retry = retry
                 self.lines = lines
             }
@@ -10568,7 +10568,7 @@ public enum Components {
                 case command_id
                 case device_id
                 case task_id
-                case agent
+                case choice
                 case retry
                 case lines
             }
@@ -10590,9 +10590,9 @@ public enum Components {
                     Swift.String.self,
                     forKey: .task_id
                 )
-                self.agent = try container.decode(
-                    Swift.String.self,
-                    forKey: .agent
+                self.choice = try container.decode(
+                    Components.Schemas.AlternateAgentChoice.self,
+                    forKey: .choice
                 )
                 self.retry = try container.decode(
                     Components.Schemas.AlternateAgentRetry.self,
@@ -10607,13 +10607,13 @@ public enum Components {
                     "command_id",
                     "device_id",
                     "task_id",
-                    "agent",
+                    "choice",
                     "retry",
                     "lines"
                 ])
             }
         }
-        /// An operator's choice to run a role under another agent after a quota, credential, or capacity failure (plan §5.4 admission step 5). id is the content address of every other field. item_id is the execution-failure card a retry_with_alternate_agent decided, empty for a move_parked_task.
+        /// An operator's choice to run a role under another enrollment after a quota, credential, or capacity failure (plan §5.4 admission step 5): selection is the enrollment, model, and effort the choice resolved to. id is the content address of every other field. item_id is the execution-failure card a retry_with_alternate_agent decided, empty for a move_parked_task.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry`.
@@ -10630,8 +10630,8 @@ public enum Components {
             public var item_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/command_id`.
             public var command_id: Swift.String
-            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/agent`.
-            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/selection`.
+            public var selection: Components.Schemas.TaskLineSelection
             /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/pool`.
             public var pool: Swift.String
             /// - Remark: Generated from `#/components/schemas/AlternateAgentRetry/qualification`.
@@ -10647,7 +10647,7 @@ public enum Components {
             ///   - failed_invocation_id:
             ///   - item_id:
             ///   - command_id:
-            ///   - agent:
+            ///   - selection:
             ///   - pool:
             ///   - qualification:
             ///   - recorded_at:
@@ -10658,7 +10658,7 @@ public enum Components {
                 failed_invocation_id: Swift.String,
                 item_id: Swift.String,
                 command_id: Swift.String,
-                agent: Swift.String,
+                selection: Components.Schemas.TaskLineSelection,
                 pool: Swift.String,
                 qualification: Components.Schemas.AlternateAgentQualification,
                 recorded_at: Foundation.Date
@@ -10669,7 +10669,7 @@ public enum Components {
                 self.failed_invocation_id = failed_invocation_id
                 self.item_id = item_id
                 self.command_id = command_id
-                self.agent = agent
+                self.selection = selection
                 self.pool = pool
                 self.qualification = qualification
                 self.recorded_at = recorded_at
@@ -10681,7 +10681,7 @@ public enum Components {
                 case failed_invocation_id
                 case item_id
                 case command_id
-                case agent
+                case selection
                 case pool
                 case qualification
                 case recorded_at
@@ -10712,9 +10712,9 @@ public enum Components {
                     Swift.String.self,
                     forKey: .command_id
                 )
-                self.agent = try container.decode(
-                    Swift.String.self,
-                    forKey: .agent
+                self.selection = try container.decode(
+                    Components.Schemas.TaskLineSelection.self,
+                    forKey: .selection
                 )
                 self.pool = try container.decode(
                     Swift.String.self,
@@ -10735,7 +10735,7 @@ public enum Components {
                     "failed_invocation_id",
                     "item_id",
                     "command_id",
-                    "agent",
+                    "selection",
                     "pool",
                     "qualification",
                     "recorded_at"
@@ -10751,13 +10751,13 @@ public enum Components {
             case valid_generation = "valid_generation"
             case different_route = "different_route"
         }
-        /// One agent the daemon offers to run a failed role under: its tree name, the usage pool it draws on, its harness and model, and the rule it escapes the failure under.
+        /// One enrollment the daemon offers to run a failed role under: its id, the usage pool it draws on, its harness and the implementer lineup's model it was offered at, and the rule it escapes the failure under.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer`.
         public struct AlternateAgentOffer: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/agent`.
-            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/enrollment`.
+            public var enrollment: Swift.String
             /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/pool`.
             public var pool: Swift.String
             /// - Remark: Generated from `#/components/schemas/AlternateAgentOffer/harness`.
@@ -10769,26 +10769,26 @@ public enum Components {
             /// Creates a new `AlternateAgentOffer`.
             ///
             /// - Parameters:
-            ///   - agent:
+            ///   - enrollment:
             ///   - pool:
             ///   - harness:
             ///   - model:
             ///   - qualification:
             public init(
-                agent: Swift.String,
+                enrollment: Swift.String,
                 pool: Swift.String,
                 harness: Components.Schemas.HarnessClientKind,
                 model: Swift.String,
                 qualification: Components.Schemas.AlternateAgentQualification
             ) {
-                self.agent = agent
+                self.enrollment = enrollment
                 self.pool = pool
                 self.harness = harness
                 self.model = model
                 self.qualification = qualification
             }
             public enum CodingKeys: String, CodingKey {
-                case agent
+                case enrollment
                 case pool
                 case harness
                 case model
@@ -10796,9 +10796,9 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.agent = try container.decode(
+                self.enrollment = try container.decode(
                     Swift.String.self,
-                    forKey: .agent
+                    forKey: .enrollment
                 )
                 self.pool = try container.decode(
                     Swift.String.self,
@@ -10817,11 +10817,63 @@ public enum Components {
                     forKey: .qualification
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "agent",
+                    "enrollment",
                     "pool",
                     "harness",
                     "model",
                     "qualification"
+                ])
+            }
+        }
+        /// What an operator picks from alternate_agents: an offered enrollment and, optionally, a model id and an effort its catalog serves. A null model_id or effort is the implementer lineup line's; an enrollment with no recorded catalog takes only the lineup's. Each value is a launch option, as in TaskLineSelection.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AlternateAgentChoice`.
+        public struct AlternateAgentChoice: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentChoice/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentChoice/model_id`.
+            public var model_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AlternateAgentChoice/effort`.
+            public var effort: Swift.String?
+            /// Creates a new `AlternateAgentChoice`.
+            ///
+            /// - Parameters:
+            ///   - enrollment_id:
+            ///   - model_id:
+            ///   - effort:
+            public init(
+                enrollment_id: Swift.String,
+                model_id: Swift.String? = nil,
+                effort: Swift.String? = nil
+            ) {
+                self.enrollment_id = enrollment_id
+                self.model_id = model_id
+                self.effort = effort
+            }
+            public enum CodingKeys: String, CodingKey {
+                case enrollment_id
+                case model_id
+                case effort
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.model_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .model_id
+                )
+                self.effort = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .effort
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "enrollment_id",
+                    "model_id",
+                    "effort"
                 ])
             }
         }
@@ -11121,11 +11173,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/capability_manifest_digest`.
             public var capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload?
-            /// The agent selected by retry_with_alternate_agent from the item's alternate_agents. Required only for that action; the daemon re-derives that it still escapes the failure and would pass admission before it records the choice.
+            /// The choice retry_with_alternate_agent makes from the item's alternate_agents. Required only for that action; the daemon re-derives that the enrollment still escapes the failure and would pass admission, and that its catalog serves the model and effort, before it records the choice.
             ///
             ///
-            /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternate_agent`.
-            public var alternate_agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternate_agent_choice`.
+            public struct alternate_agent_choicePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternate_agent_choice/value1`.
+                public var value1: Components.Schemas.AlternateAgentChoice
+                /// Creates a new `alternate_agent_choicePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AlternateAgentChoice) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The choice retry_with_alternate_agent makes from the item's alternate_agents. Required only for that action; the daemon re-derives that the enrollment still escapes the failure and would pass admission, and that its catalog serves the model and effort, before it records the choice.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternate_agent_choice`.
+            public var alternate_agent_choice: Components.Schemas.DecisionPayload.alternate_agent_choicePayload?
             /// Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///
             ///
@@ -11245,7 +11318,7 @@ public enum Components {
             ///   - artifact_digests: The canonical (sorted, deduplicated) binding set: exactly the digests rendered in the item's evidence_snapshot and agent_claims.
             ///   - message: Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy.
             ///   - capability_manifest_digest: The offered capability manifest selected by retry_with_capabilities. Required only for that action; the daemon re-derives the manifest from the run's current resolved policy.
-            ///   - alternate_agent: The agent selected by retry_with_alternate_agent from the item's alternate_agents. Required only for that action; the daemon re-derives that it still escapes the failure and would pass admission before it records the choice.
+            ///   - alternate_agent_choice: The choice retry_with_alternate_agent makes from the item's alternate_agents. Required only for that action; the daemon re-derives that the enrollment still escapes the failure and would pass admission, and that its catalog serves the model and effort, before it records the choice.
             ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///   - attachments: Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
             ///   - task_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
@@ -11264,7 +11337,7 @@ public enum Components {
                 artifact_digests: [Components.Schemas.Digest],
                 message: Swift.String? = nil,
                 capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload? = nil,
-                alternate_agent: Swift.String? = nil,
+                alternate_agent_choice: Components.Schemas.DecisionPayload.alternate_agent_choicePayload? = nil,
                 answer_route: Components.Schemas.DecisionPayload.answer_routePayload? = nil,
                 attachments: [Components.Schemas.Digest]? = nil,
                 task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload? = nil,
@@ -11283,7 +11356,7 @@ public enum Components {
                 self.artifact_digests = artifact_digests
                 self.message = message
                 self.capability_manifest_digest = capability_manifest_digest
-                self.alternate_agent = alternate_agent
+                self.alternate_agent_choice = alternate_agent_choice
                 self.answer_route = answer_route
                 self.attachments = attachments
                 self.task_proposal_revision = task_proposal_revision
@@ -11303,7 +11376,7 @@ public enum Components {
                 case artifact_digests
                 case message
                 case capability_manifest_digest
-                case alternate_agent
+                case alternate_agent_choice
                 case answer_route
                 case attachments
                 case task_proposal_revision
@@ -11348,9 +11421,9 @@ public enum Components {
                     Components.Schemas.DecisionPayload.capability_manifest_digestPayload.self,
                     forKey: .capability_manifest_digest
                 )
-                self.alternate_agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .alternate_agent
+                self.alternate_agent_choice = try container.decodeIfPresent(
+                    Components.Schemas.DecisionPayload.alternate_agent_choicePayload.self,
+                    forKey: .alternate_agent_choice
                 )
                 self.answer_route = try container.decodeIfPresent(
                     Components.Schemas.DecisionPayload.answer_routePayload.self,
@@ -11397,7 +11470,7 @@ public enum Components {
                     "artifact_digests",
                     "message",
                     "capability_manifest_digest",
-                    "alternate_agent",
+                    "alternate_agent_choice",
                     "answer_route",
                     "attachments",
                     "task_proposal_revision",
@@ -16668,7 +16741,7 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/AttentionItem/execution_failure`.
             public var execution_failure: Components.Schemas.AttentionItem.execution_failurePayload?
-            /// The agents an execution_failure item offers to retry the implementer under, sorted by agent, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
+            /// The enrollments an execution_failure item offers to retry the implementer under, sorted by enrollment, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/alternate_agents`.
@@ -17042,7 +17115,7 @@ public enum Components {
             ///   - display_names: Daemon-authored project and work-unit labels; null on legacy items.
             ///   - billable_cost_so_far: Billable cost observed so far on review_diminishing_returns items.
             ///   - execution_failure:
-            ///   - alternate_agents: The agents an execution_failure item offers to retry the implementer under, sorted by agent, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
+            ///   - alternate_agents: The enrollments an execution_failure item offers to retry the implementer under, sorted by enrollment, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
             ///   - elapsed_deadlines: Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. The daemon reads no GitHub check or review state, so an entry records that the deadline passed, not what the checks or reviewers did.
             ///   - interpretation_failure:
             ///   - publish_block:

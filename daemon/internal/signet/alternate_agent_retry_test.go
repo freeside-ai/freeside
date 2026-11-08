@@ -91,86 +91,94 @@ func TestAlternateAgentRetryAcceptsOnlyAnOfferedEnrollment(t *testing.T) {
 	}
 }
 
-func TestAlternateAgentDecisionPayloadCarriesOnlyTheAgent(t *testing.T) {
+// TestAlternateAgentDecisionPayloadCarriesOnlyTheChoice: the decision's
+// durable message is its choice's canonical message, a null model or effort
+// left to the lineup, and every other content, a missing choice, or an
+// invalid value is refused naming the field and never the text.
+func TestAlternateAgentDecisionPayloadCarriesOnlyTheChoice(t *testing.T) {
 	t.Parallel()
-	tree := catalogFixtureTree(t)
-	names := agentNames{tree: &tree}
-	agent := "claude-a"
-	message, err := decisionMessage(DecisionPayload{
-		Action: domain.ActionRetryWithAlternateAgent, AlternateAgent: &agent,
-	}, names)
-	want := domain.AlternateAgentChoice{
-		EnrollmentID: "anthropic-a/claude_code", ModelID: "claude-opus-5-5", Effort: "high",
-	}.Message()
-	if err != nil || message != want {
-		t.Fatalf("decisionMessage = %q, %v; want the choice %q", message, err, want)
-	}
-	unknown := "claude-unknown"
-	for name, names := range map[string]agentNames{"an unknown agent": names, "no tree": {}} {
-		_, err := decisionMessage(DecisionPayload{
-			Action: domain.ActionRetryWithAlternateAgent, AlternateAgent: &unknown,
-		}, names)
-		if !errors.Is(err, ErrAlternateAgentNotOffered) || strings.Contains(err.Error(), unknown) {
-			t.Errorf("%s: decisionMessage error = %v, want not offered without the name", name, err)
+	model, effort := "claude-opus-5-5", "high"
+	full := &AlternateAgentChoice{EnrollmentID: "anthropic-a/claude_code", ModelID: &model, Effort: &effort}
+	for name, tc := range map[string]struct {
+		choice *AlternateAgentChoice
+		want   domain.AlternateAgentChoice
+	}{
+		"full": {full, domain.AlternateAgentChoice{
+			EnrollmentID: "anthropic-a/claude_code", ModelID: model, Effort: effort,
+		}},
+		"enrollment alone": {
+			&AlternateAgentChoice{EnrollmentID: "anthropic-a/claude_code"},
+			domain.AlternateAgentChoice{EnrollmentID: "anthropic-a/claude_code"},
+		},
+	} {
+		message, err := decisionMessage(DecisionPayload{
+			Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: tc.choice,
+		})
+		if err != nil || message != tc.want.Message() {
+			t.Errorf("%s: decisionMessage = %q, %v; want %q", name, message, err, tc.want.Message())
 		}
 	}
 	digest := domain.Digest("sha256:" + "ab")
-	empty := ""
-	for name, payload := range map[string]DecisionPayload{
-		"no agent":    {Action: domain.ActionRetryWithAlternateAgent},
-		"empty agent": {Action: domain.ActionRetryWithAlternateAgent, AlternateAgent: &empty},
-		"with message": {
-			Action: domain.ActionRetryWithAlternateAgent, AlternateAgent: &agent, Message: "please",
-		},
-		"with manifest": {
-			Action: domain.ActionRetryWithAlternateAgent, AlternateAgent: &agent,
-			CapabilityManifestDigest: &digest,
-		},
-		"agent on another action": {Action: domain.ActionStop, AlternateAgent: &agent},
+	empty, secret := "", "secret text"
+	for name, tc := range map[string]struct {
+		payload DecisionPayload
+		field   string
+	}{
+		"no choice":        {DecisionPayload{Action: domain.ActionRetryWithAlternateAgent}, ""},
+		"no enrollment":    {DecisionPayload{Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: &AlternateAgentChoice{}}, "enrollment_id"},
+		"an empty model":   {DecisionPayload{Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: &AlternateAgentChoice{EnrollmentID: "anthropic-a/claude_code", ModelID: &empty}}, "model_id"},
+		"an invalid model": {DecisionPayload{Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: &AlternateAgentChoice{EnrollmentID: "anthropic-a/claude_code", ModelID: &secret}}, "model_id"},
+		"an empty effort":  {DecisionPayload{Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: &AlternateAgentChoice{EnrollmentID: "anthropic-a/claude_code", Effort: &empty}}, "effort"},
+		"an invalid enrollment": {DecisionPayload{
+			Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: &AlternateAgentChoice{EnrollmentID: domain.ClientEnrollmentID(secret)},
+		}, "enrollment_id"},
+		"with message": {DecisionPayload{
+			Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: full, Message: "please",
+		}, ""},
+		"with manifest": {DecisionPayload{
+			Action: domain.ActionRetryWithAlternateAgent, AlternateAgentChoice: full, CapabilityManifestDigest: &digest,
+		}, ""},
+		"choice on another action": {DecisionPayload{Action: domain.ActionStop, AlternateAgentChoice: full}, ""},
 	} {
-		if _, err := decisionMessage(payload, names); !errors.Is(err, ErrInvalidAlternateAgentDecisionPayload) {
-			t.Errorf("%s: decisionMessage error = %v", name, err)
+		_, err := decisionMessage(tc.payload)
+		if !errors.Is(err, ErrInvalidAlternateAgentDecisionPayload) || !strings.Contains(err.Error(), tc.field) ||
+			strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: decisionMessage error = %v, want invalid naming %q and not the text", name, err, tc.field)
 		}
 	}
 }
 
-// TestAlternateAgentOffersRenderAsAgents: the wire names each enrollment
-// offer by the tree agent that runs the implementer's lineup model and effort
-// on it, drops one no agent maps to, and drops the retry action with the
-// last offer. A v1 offer already names its agent.
-func TestAlternateAgentOffersRenderAsAgents(t *testing.T) {
+// TestAlternateAgentOffersRenderAsEnrollments: the wire carries every
+// enrollment offer and drops a set recorded before #2735, which names tree
+// agents, with the retry action.
+func TestAlternateAgentOffersRenderAsEnrollments(t *testing.T) {
 	t.Parallel()
-	tree := catalogFixtureTree(t)
-	names := agentNames{tree: &tree}
 	a, b := enrollmentOffer("anthropic-a/claude_code"), enrollmentOffer("anthropic-b/claude_code")
-	rendered := names.renderItem(alternateAgentItem(t, a, b))
-	wantOffer := a
-	wantOffer.Agent, wantOffer.Enrollment = "claude-a", ""
-	if !reflect.DeepEqual(rendered.AlternateAgents, []domain.AlternateAgentOffer{wantOffer}) ||
-		!reflect.DeepEqual(rendered.RequestedDecision, []domain.Action{
-			domain.ActionRetryWithAlternateAgent, domain.ActionDiscuss, domain.ActionStop,
-		}) {
-		t.Fatalf("rendered = %+v %v, want only %+v and the action", rendered.AlternateAgents,
-			rendered.RequestedDecision, wantOffer)
-	}
-
-	item := alternateAgentItem(t, b)
-	rendered = names.renderItem(item)
-	if rendered.AlternateAgents != nil ||
-		slices.Contains(rendered.RequestedDecision, domain.ActionRetryWithAlternateAgent) ||
-		!slices.Contains(item.RequestedDecision, domain.ActionRetryWithAlternateAgent) {
-		t.Fatalf("rendered with no agent = %+v %v, want no offers or action and the stored item unchanged",
-			rendered.AlternateAgents, rendered.RequestedDecision)
-	}
-	if rendered := (agentNames{}).renderItem(alternateAgentItem(t, a)); rendered.AlternateAgents != nil {
-		t.Fatalf("rendered with no tree = %+v, want no offers", rendered.AlternateAgents)
-	}
-
 	v1 := domain.AlternateAgentOffer{
 		Agent: "claude-old", Pool: "identity:anthropic-a", Harness: domain.HarnessClientClaudeCode,
 		Model: "claude-opus-5-5", Qualification: domain.AlternateAgentDifferentPool,
 	}
-	if rendered := names.renderItem(alternateAgentItem(t, v1)); !reflect.DeepEqual(rendered.AlternateAgents, []domain.AlternateAgentOffer{v1}) {
-		t.Fatalf("rendered v1 = %+v, want it unchanged", rendered.AlternateAgents)
+	rendered := renderItem(alternateAgentItem(t, a, b))
+	if !reflect.DeepEqual(rendered.AlternateAgents, []domain.AlternateAgentOffer{a, b}) ||
+		!reflect.DeepEqual(rendered.RequestedDecision, []domain.Action{
+			domain.ActionRetryWithAlternateAgent, domain.ActionDiscuss, domain.ActionStop,
+		}) {
+		t.Fatalf("rendered = %+v %v, want both offers and the action", rendered.AlternateAgents,
+			rendered.RequestedDecision)
+	}
+
+	item := alternateAgentItem(t, v1)
+	rendered = renderItem(item)
+	if rendered.AlternateAgents != nil ||
+		slices.Contains(rendered.RequestedDecision, domain.ActionRetryWithAlternateAgent) ||
+		!slices.Contains(item.RequestedDecision, domain.ActionRetryWithAlternateAgent) {
+		t.Fatalf("rendered v1 = %+v %v, want no offers or action and the stored item unchanged",
+			rendered.AlternateAgents, rendered.RequestedDecision)
+	}
+
+	window := domain.QuotaWindowHold{AlternateAgents: []domain.AlternateAgentOffer{v1}}
+	if hold := renderHold(&domain.RunHoldObservation{QuotaWindow: &window}); hold.QuotaWindow.AlternateAgents != nil ||
+		window.AlternateAgents == nil {
+		t.Fatalf("rendered v1 hold = %+v, want no offers and the stored hold unchanged", hold.QuotaWindow)
 	}
 }
