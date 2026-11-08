@@ -209,6 +209,12 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		if backend == nil {
 			return errors.New("with admission: nil runner backend")
 		}
+		// Every stage this admitter places is a ward role, which the host
+		// verification executor never runs (§5.7); it is admitted only
+		// through WithHostVerificationAdmission.
+		if backend.Name() == string(domain.BackendCredentialFreeHostVerification) {
+			return errors.New("with admission: host verification backend cannot admit ward stages")
+		}
 		if now == nil {
 			return errors.New("with admission: nil clock")
 		}

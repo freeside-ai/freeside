@@ -72,6 +72,10 @@ type Engine struct {
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.
 	admission *admitter
+	// hostVerification is the credential-free macOS verification executor
+	// (see WithHostVerificationAdmission); nil means no verification job can
+	// be admitted on the host.
+	hostVerification exec.ConfigurationBoundBackend
 	// derive supplies the per-attempt workspace and base when configured
 	// (see WithAdmissionDerivation); nil keeps the static environment.
 	derive AdmissionDerivation
