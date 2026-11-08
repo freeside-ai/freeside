@@ -772,8 +772,11 @@
             }
             // The agent choices: one writer and a reviewer chosen, so the
             // open composer draws the four role chips; a daemon with no
-            // agent tree, so the Agents chip is disabled; and an implementer
-            // the catalog no longer carries, which blocks Submit.
+            // agent tree, so the Agents chip is disabled; an implementer
+            // whose model and a reviewer whose effort the catalog dropped,
+            // which block Submit; and, closed, a summary that names one
+            // choice by its enrollment alone and another in full, at the
+            // live sheet's 560pt and at the phone's width.
             let writerAndReviewer: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [
                 .specifier: UsageFixtures.agentSelection("claude-secondary"),
                 .implementer: UsageFixtures.agentSelection("claude-secondary"),
@@ -781,7 +784,12 @@
                 .reviewer: UsageFixtures.agentSelection("claude-primary"),
             ]
             let staleImplementer: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [
-                .implementer: UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-retired", "high")
+                .implementer: UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-retired", "high"),
+                .reviewer: UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-sonnet", "max"),
+            ]
+            let mixed: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [
+                .remediator: UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus", "max"),
+                .reviewer: UsageFixtures.selection(UsageFixtures.unsupportedCollectorID, "gpt-mini", "harness_default"),
             ]
             for (name, width, scheme, model, choices, open) in [
                 ("new-task-sheet-agents", CGFloat(380), ColorScheme.light, newTaskModel, writerAndReviewer, true),
@@ -796,6 +804,9 @@
                 ("new-task-sheet-phone-no-catalog", CGFloat(390), ColorScheme.light, noTreeModel, [:], false),
                 ("new-task-sheet-phone-no-catalog-dark", CGFloat(390), ColorScheme.dark, noTreeModel, [:], false),
                 ("new-task-sheet-agent-missing", CGFloat(380), ColorScheme.light, newTaskModel, staleImplementer, true),
+                ("new-task-sheet-agents-mixed", CGFloat(560), ColorScheme.light, newTaskModel, mixed, false),
+                ("new-task-sheet-agents-mixed-dark", CGFloat(560), ColorScheme.dark, newTaskModel, mixed, false),
+                ("new-task-sheet-phone-agents-mixed", CGFloat(390), ColorScheme.light, newTaskModel, mixed, false),
             ]
                 as [(
                     String, CGFloat, ColorScheme, TaskSubmissionModel,

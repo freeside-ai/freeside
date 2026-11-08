@@ -92,6 +92,9 @@ public final class TaskSubmissionModel {
     /// The routing policy, which picks a role's agent when the operator
     /// chooses none and the policy lists the role.
     public var routingPolicy: Components.Schemas.RoutingPolicy? { coordinator.routingPolicy?.policy }
+    /// The usage pools whose readings the agent choices show, observed so a
+    /// new reading reaches an open sheet.
+    public var usagePools: [Components.Schemas.UsagePoolSnapshot] { coordinator.usagePools }
 
     public var pendingSubmissions: [Components.Schemas.ClientCommand] {
         coordinator.pendingTaskSubmissions.values.sorted { $0.command_id < $1.command_id }

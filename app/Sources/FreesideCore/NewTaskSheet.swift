@@ -38,6 +38,7 @@ struct NewTaskSheet: View {
     typealias Role = AgentChoiceDisplay.Role
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The projects the picker offers: the sorted unique ids of the synced
     /// tasks (`TaskDisplay.knownProjects`), the same set the Tasks filter uses.
     let projects: [String]
@@ -178,11 +179,11 @@ struct NewTaskSheet: View {
         !Self.submission(source: source).source.isEmpty && !projectID.isEmpty && projects.contains(projectID)
             && !isSubmitting && !isLost
             && TaskSubmissionModel.canCompose(freshness: model.freshness)
-            && missingSelections.isEmpty
+            && missingChoices.isEmpty
     }
 
-    private var missingSelections: [String] {
-        AgentChoiceDisplay.missingSelections(choices: choices, catalog: model.agentCatalog)
+    private var missingChoices: [AgentChoiceDisplay.MissingChoice] {
+        AgentChoiceDisplay.missingChoices(choices: choices, catalog: model.agentCatalog)
     }
 
     var body: some View {
@@ -399,32 +400,17 @@ struct NewTaskSheet: View {
 
     @ViewBuilder private func roleChip(_ role: Role) -> some View {
         let title = AgentChoiceDisplay.title(for: role)
+        let catalog = model.agentCatalog
         let chosen = choices[role]
-        let chosenLabel = chosen.map { AgentChoiceDisplay.choiceLabel($0, catalog: model.agentCatalog) }
+        let chosenLabel = chosen.map { AgentChoiceDisplay.choiceLabel($0, roles: [role], catalog: catalog) }
         let chip = RoleChip(role: title, value: chosenLabel)
-        // Only the chip is Freeside's; the list stays system chrome, which
+        // Only the chip is Freeside's; the menu stays system chrome, which
         // `ImageRenderer` cannot draw, so the goldens show the chip.
         if rendersInteractiveControls {
-            let catalog = model.agentCatalog
-            let agents = AgentChoiceDisplay.pickable(catalog)
             let defaultLabel = AgentChoiceDisplay.defaultLabel(
                 role: role, policy: model.routingPolicy, catalog: catalog)
             Menu {
-                Picker("\(title) agent", selection: choice(for: role)) {
-                    Text(defaultLabel).tag(AgentChoiceDisplay.Selection?.none)
-                    // An entry names the tree agent and tags its selection,
-                    // which is what the line records.
-                    ForEach(agents, id: \.name) { agent in
-                        Text("\(agent.name) · \(AgentChoiceDisplay.facts(agent))").tag(Optional(agent.selection))
-                    }
-                    // A stale choice keeps a matching tag, so the picker
-                    // shows it selected instead of no entry at all.
-                    if let chosen, !AgentChoiceDisplay.offers(catalog, chosen) {
-                        Text("\(AgentChoiceDisplay.selectionLabel(chosen)) · no longer offered")
-                            .tag(Optional(chosen)).disabled(true)
-                    }
-                }
-                .pickerStyle(.inline)
+                roleMenu(role, chosen: chosen, defaultLabel: defaultLabel)
             } label: {
                 chip
             }
@@ -438,18 +424,112 @@ struct NewTaskSheet: View {
         }
     }
 
-    private func choice(for role: Role) -> Binding<AgentChoiceDisplay.Selection?> {
-        Binding(get: { choices[role] }, set: { choices[role] = $0 })
+    /// A role's menu: Default and the enrollments, then, once an enrollment
+    /// is chosen, its models and the chosen model's efforts, and a footnote
+    /// naming the harness build that reported them. Each pick closes the
+    /// menu; reopening it shows the sections for the new choice. A model or
+    /// effort a newer catalog dropped keeps a disabled entry tagged with
+    /// it, so its picker still shows it chosen.
+    @ViewBuilder private func roleMenu(
+        _ role: Role, chosen: AgentChoiceDisplay.Selection?, defaultLabel: String
+    ) -> some View {
+        let catalog = model.agentCatalog
+        let now = Date()
+        let dropped = chosen.flatMap { AgentChoiceDisplay.droppedPart($0, catalog: catalog) }
+        Picker("\(AgentChoiceDisplay.title(for: role)) enrollment", selection: enrollmentChoice(for: role)) {
+            Text(defaultLabel).tag(String?.none)
+            ForEach(AgentChoiceDisplay.enrollments(catalog, pools: model.usagePools, now: now)) { enrollment in
+                Text(enrollment.label).tag(Optional(enrollment.id)).disabled(!enrollment.isPickable)
+            }
+            if let chosen, dropped == .enrollment {
+                Text("\(chosen.enrollment_id) · no longer offered").tag(Optional(chosen.enrollment_id))
+                    .disabled(true)
+            }
+        }
+        .pickerStyle(.inline)
+        if let chosen, dropped != .enrollment {
+            let option = AgentChoiceDisplay.modelOption(for: chosen, catalog: catalog)
+            Section("Model") {
+                Picker("Model", selection: modelChoice(for: role)) {
+                    ForEach(AgentChoiceDisplay.models(on: chosen.enrollment_id, catalog: catalog)) { model in
+                        Text(model.name).tag(model.id)
+                    }
+                    if option == nil {
+                        Text("\(chosen.model_id) · no longer offered").tag(chosen.model_id).disabled(true)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            if let option {
+                Section("Effort") {
+                    Picker("Effort", selection: effortChoice(for: role)) {
+                        ForEach(option.efforts, id: \.self) { effort in
+                            Text(AgentChoiceDisplay.effortLabel(effort)).tag(effort)
+                        }
+                        if dropped == .effort {
+                            Text("\(AgentChoiceDisplay.effortLabel(chosen.effort)) · no longer offered")
+                                .tag(chosen.effort).disabled(true)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+            }
+            if let note = AgentChoiceDisplay.discoveryNote(on: chosen.enrollment_id, catalog: catalog, now: now) {
+                Text(note)
+            }
+        }
+    }
+
+    /// The chosen enrollment, nil for Default. Picking another enrollment
+    /// resets the model and effort (`AgentChoiceDisplay.choosing`); picking
+    /// the chosen one again changes nothing.
+    private func enrollmentChoice(for role: Role) -> Binding<String?> {
+        Binding(
+            get: { choices[role]?.enrollment_id },
+            set: { enrollment in
+                guard let enrollment else {
+                    choices[role] = nil
+                    return
+                }
+                guard enrollment != choices[role]?.enrollment_id else { return }
+                choices[role] = AgentChoiceDisplay.choosing(
+                    enrollment: enrollment, role: role, catalog: model.agentCatalog)
+            })
+    }
+
+    /// The chosen model as its menu entry's id, which differs from the
+    /// recorded id when the tree names the model the entry resolves to.
+    private func modelChoice(for role: Role) -> Binding<String> {
+        Binding(
+            get: {
+                choices[role].map {
+                    AgentChoiceDisplay.modelOption(for: $0, catalog: model.agentCatalog)?.id ?? $0.model_id
+                } ?? ""
+            },
+            set: { modelID in
+                guard let current = choices[role] else { return }
+                choices[role] = AgentChoiceDisplay.choosing(model: modelID, from: current, catalog: model.agentCatalog)
+            })
+    }
+
+    private func effortChoice(for role: Role) -> Binding<String> {
+        Binding(
+            get: { choices[role]?.effort ?? "" },
+            set: { effort in
+                guard let current = choices[role] else { return }
+                choices[role] = .init(enrollment_id: current.enrollment_id, model_id: current.model_id, effort: effort)
+            })
     }
 
     /// Why a stale choice blocks Submit, one sentence per selection the
-    /// catalog no longer offers. It draws whether or not the role chips show,
-    /// so Submit is never blocked without a reason on screen.
+    /// catalog no longer offers, naming the part it dropped. It draws
+    /// whether or not the role chips show, so Submit is never blocked
+    /// without a reason on screen.
     @ViewBuilder private var missingAgentNotice: some View {
-        if !missingSelections.isEmpty {
+        if !missingChoices.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(missingSelections, id: \.self) { selection in
-                    Text("\(selection) isn't an agent the daemon offers. Choose another agent or Default to submit.")
+                ForEach(missingChoices, id: \.selection) { missing in
+                    Text(missing.sentence)
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.waxText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -715,7 +795,11 @@ struct NewTaskSheet: View {
     }
 
     /// Closed, the chip reads the choices as one sentence; open, it reads
-    /// `Agents` over the role chips. With no catalog there is nothing to
+    /// `Agents` over the role chips. The sentence keeps to one line and
+    /// truncates its tail, since a choice in full can outgrow the sheet;
+    /// the role chips, the accessibility value, and the Mac tooltip carry it
+    /// whole. At the accessibility sizes it wraps instead, where one line
+    /// would leave a word or two. With no catalog there is nothing to
     /// choose, unless a choice made against an earlier catalog is still set:
     /// the chip stays enabled so the operator can see and clear it.
     @ViewBuilder private var agentsChip: some View {
@@ -727,6 +811,7 @@ struct NewTaskSheet: View {
         // tree serves a catalog with no agents, so there is nothing to choose.
         let unavailable = (model.agentCatalog?.agents.isEmpty ?? true) && choices.isEmpty && !agentsOpen
         let chip = ComposerChip(glyph: "◆", text: agentsOpen ? "Agents" : summary, isOpen: agentsOpen)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         if rendersInteractiveControls {
             Button {
                 agentsOpen.toggle()
@@ -735,7 +820,7 @@ struct NewTaskSheet: View {
             }
             .buttonStyle(.plain)
             .disabled(unavailable)
-            .help(unavailable ? Self.noTreeText : "")
+            .help(unavailable ? Self.noTreeText : summary)
             .accessibilityLabel("Agents")
             .accessibilityValue(summary)
             .accessibilityHint(unavailable ? Self.noTreeText : "")

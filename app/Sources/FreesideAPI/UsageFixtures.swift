@@ -93,7 +93,8 @@ public enum UsageFixtures {
     /// offer declares no lineage group, and the lineup binds every task-line
     /// role. Its enrollments are those pools' enrollments, two with a
     /// discovery record and one the daemon hasn't discovered yet, so a
-    /// selection on it passes on shape alone.
+    /// selection on it passes on shape alone. The two discovery records list
+    /// different models, and one model reports no effort levels.
     public static func defaultAgentCatalog() -> Components.Schemas.AgentCatalog {
         let claudePrimary = selection(readingCollectorID, "claude-opus", "high")
         let claudeSecondary = selection(readingSecondEnrollmentID, "claude-opus", "max")
@@ -123,7 +124,10 @@ public enum UsageFixtures {
                             models: [
                                 .init(
                                     id: "gpt-codex", resolved_model: nil, display_name: "GPT Codex",
-                                    effort_levels: ["low", "medium", "high"])
+                                    effort_levels: ["low", "medium", "high"]),
+                                .init(
+                                    id: "gpt-mini", resolved_model: nil, display_name: "GPT Mini",
+                                    effort_levels: []),
                             ]))),
             ],
             agents: [
