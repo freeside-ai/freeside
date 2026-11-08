@@ -2485,10 +2485,10 @@ func TestProductionReviewOverlapGateSurvivesCrashBeforeRecord(t *testing.T) {
 func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
-	testProductionAdjudicatedRemediation(t, p, false)
+	testProductionAdjudicatedRemediation(t, p, false, false)
 }
 
-func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublicationHarness, publicMetadata bool) {
+func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublicationHarness, publicMetadata, reviewGuide bool) {
 	t.Helper()
 	var delivered []exec.StartSpec
 	p.productionDelivery = func(_ context.Context, spec exec.StartSpec) error {
@@ -2640,6 +2640,9 @@ func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublication
 	)
 	if publicMetadata {
 		remediated = withPublicAccount(t, p, remediated, publicAccount)
+	}
+	if reviewGuide {
+		remediated = withReviewGuide(t, p, remediated, remediationReviewGuideContent)
 	}
 	remediationExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
 		InvocationID: remediationID, AdmissionID: admission.ID,

@@ -67,6 +67,8 @@
 //   - summary_claims.go the renderable summary claim of an invocation
 //   - commit_message.go the daemon-authored fallback commit message
 //   - diff_stats.go   diff stats from a stored patch
+//   - review_guide.go the ready item's review guide, resolved from the
+//     producing agent's claim at the verified head and base
 //   - production_review_gate.go whether a reviewed candidate may reach
 //     publication
 //   - shadow_review.go the observation-only shadow review arm

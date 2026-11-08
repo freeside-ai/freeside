@@ -380,12 +380,19 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	if err != nil {
 		return productionVerificationCheckpoint{}, err
 	}
+	reviewGuide, err := resolveReviewGuide(
+		ctx, w.workDir, checkoutDir, w.artifacts, imported.Claims, task.ProducingInvocationID,
+		authorization.BaseSHA, authorization.HeadSHA,
+	)
+	if err != nil {
+		return productionVerificationCheckpoint{}, err
+	}
 	checkpoint := productionVerificationCheckpoint{
 		Version: productionVerificationVersion,
 		TaskKey: task.intentKey(), HeadSHA: task.HeadSHA,
 		ProjectImage: binding.verificationImage().ID,
 		Imported:     imported, Authorization: authorization, Artifacts: artifacts,
-		DiffStats: diffStats,
+		DiffStats: diffStats, ReviewGuide: reviewGuide,
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
@@ -541,6 +548,14 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 				domain.ErrParentKeyMismatch,
 			)
 		}
+	}
+	if checkpoint.ReviewGuide != nil && !reviewGuideMatchesImport(
+		*checkpoint.ReviewGuide, checkpoint.Imported.Claims, authorization.HeadSHA,
+	) {
+		return productionVerificationCheckpoint{}, false, fmt.Errorf(
+			"production verification checkpoint review guide disagrees with authorization: %w",
+			domain.ErrParentKeyMismatch,
+		)
 	}
 	for _, artifact := range checkpoint.Artifacts {
 		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
