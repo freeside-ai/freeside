@@ -89,7 +89,8 @@ jobs:
 
           select_component daemon daemon/ scripts/check.sh \
             scripts/daemon-test-shards.py scripts/daemon-test-shards.json
-          select_component app app/ api/openapi.yaml scripts/check.sh
+          select_component app app/ api/openapi.yaml scripts/check.sh \
+            daemon/internal/signet/testdata/action-outcomes.golden
           select_component api api/ scripts/check.sh scripts/api-contract-digest.sh
           select_component docs docs/plan.md scripts/link-plan-section-refs.sh scripts/check.sh
           select_component scripts scripts/ app/scripts/ .githooks/ \

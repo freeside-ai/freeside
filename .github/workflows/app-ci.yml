@@ -7,6 +7,7 @@ on:
       - "app/**"
       - "api/openapi.yaml"
       - "scripts/check.sh"
+      - "daemon/internal/signet/testdata/action-outcomes.golden"
       - ".github/workflows/app-ci.yml"
   # Pull requests run this through pull-request.yml, which selects it
   # from the changed paths and reports the required check. The macOS
@@ -132,7 +133,8 @@ jobs:
   # restored test bundle with --skip-build instead of compiling app code
   # it did not touch (#2291). The trade, as in daemon-ci.yml's `macos-main`: a
   # checkout and a cache lookup when the entry exists (a push that changes
-  # only api/openapi.yaml, scripts/check.sh, or this file), one macOS build
+  # only api/openapi.yaml, scripts/check.sh, the action-outcome golden the
+  # app tests read at run time, or this file), one macOS build
   # when app/ changed, against the per-PR saving measured on #2291.
   # `cancel-in-progress` may cancel it on a quick second merge; daemon PRs
   # then build as before until the next app-path push saves the entry.

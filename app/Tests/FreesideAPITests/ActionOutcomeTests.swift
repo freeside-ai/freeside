@@ -1,52 +1,125 @@
+import Foundation
 import FreesideAPI
 import Testing
 
+/// Checks `ActionOutcome.of` against the daemon's own outcome table, which
+/// the daemon's TestActionOutcomeVector writes to
+/// daemon/internal/signet/testdata/action-outcomes.golden. CI selects the app
+/// component when that file changes, so a daemon-only change to the table
+/// runs this test.
 @Suite struct ActionOutcomeTests {
-    @Test func phaseOneActionsMirrorDaemonOutcomeTable() {
-        let expected: [Components.Schemas.Action: ActionOutcome] = [
-            .approve: .concludes(.resolved),
-            .request_changes: .concludes(.superseded),
-            .discuss: .discusses,
-            .stop: .concludes(.resolved),
-            .finish_now: .concludes(.resolved),
-            .apply_then_finish: .concludes(.resolved),
-            .continue_under_policy: .concludes(.resolved),
-            .convert_to_policy: .pending,
-            .retry: .concludes(.resolved),
-            .retry_with_capabilities: .concludes(.superseded),
-            .retry_with_alternate_agent: .concludes(.superseded),
-            .answer_and_retry: .concludes(.superseded),
-            .answer_without_retry: .concludes(.resolved),
-            .rerun_trust_evaluation: .concludes(.resolved),
-            .inspect_trust_failure: .records,
-            .open_pr: .records,
-            .return_to_agent: .concludes(.superseded),
-            .mark_seen: .records,
-            .dismiss: .concludes(.dismissed),
-            .start: .concludes(.resolved),
-            .start_with_changes: .revisesProposal,
-            .approve_with_changes: .revisesProposal,
-            .decline: .concludes(.dismissed),
-            .snooze: .snoozesProposal,
-            .acknowledge: .records,
-            .run_doctor: .records,
-            .stop_unattended: .stopsUnattended,
-            .resume_unattended: .resumesUnattended,
-            .recover_review: .recoversReview,
-            .adopt_review_configuration: .adoptsReviewConfiguration,
-            .resolve_reenrollment: .resolvesReenrollment,
-            .accept_recommended_route: .concludes(.resolved),
-            .choose_alternative_route: .concludes(.resolved),
-            .adjudicate_findings: .concludes(.resolved),
-        ]
+    private struct VectorEntry: Decodable {
+        let action: String
+        let status: String
+        let kind: String
+        let byItemType: [ItemTypeOverride]
+    }
 
-        #expect(expected.count == AttentionFixtures.phase1Actions.count)
-        for action in AttentionFixtures.phase1Actions {
-            #expect(ActionOutcome.of(action) == expected[action])
+    private struct ItemTypeOverride: Decodable {
+        let itemType: String
+        let status: String
+        let kind: String
+    }
+
+    private static func loadVector() throws -> [VectorEntry] {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // FreesideAPITests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // app
+            .deletingLastPathComponent()
+        let url = repositoryRoot.appendingPathComponent(
+            "daemon/internal/signet/testdata/action-outcomes.golden")
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode([VectorEntry].self, from: Data(contentsOf: url))
+    }
+
+    /// The client outcome a daemon (status, kind) pair maps to, or nil for a
+    /// pair this mapping has not reviewed. The daemon has more kinds than the
+    /// client has cases: a kind whose whole client-visible effect is the
+    /// status flip collapses into `.concludes(status)`. "" is the daemon's
+    /// "no status change".
+    private static func clientOutcome(status: String, kind: String) -> ActionOutcome? {
+        let concluded = Components.Schemas.ItemStatus(rawValue: status)
+        switch (kind, concluded) {
+        case ("concludes", let status?):
+            return .concludes(status)
+        // Each concludes the item with the daemon's status; the rest of the
+        // transaction (the trust reevaluation intent, the adjudication, the
+        // proposal ledger, the engine's retry) is server-side, and the client
+        // shows only the conclusion. approve on an effect_proposal lands here
+        // as starts_proposal, the outcome start has.
+        case ("reruns_trust_evaluation", let status?),
+            ("accepts_recommended_route", let status?),
+            ("chooses_alternative_route", let status?),
+            ("adjudicates_findings", let status?),
+            ("starts_proposal", let status?),
+            ("declines_proposal", let status?),
+            ("answers_and_retries", let status?),
+            ("returns_to_agent", let status?),
+            ("retries_with_capabilities", let status?),
+            ("retries_with_alternate_agent", let status?):
+            return .concludes(status)
+        // The table says resolved, but the daemon's revise handler
+        // supersedes the item with a revised replacement and starts it;
+        // `.revisesProposal` stands for that whole transaction, which the
+        // mock replays the same way.
+        case ("revises_and_starts_proposal", .resolved?):
+            return .revisesProposal
+        // run_doctor makes the diagnostic due and leaves the item open, which
+        // is what the client's record-only receipt says.
+        case ("runs_doctor", nil):
+            return .records
+        case ("records", nil):
+            return .records
+        case ("discusses", nil):
+            return .discusses
+        case ("pending", nil):
+            return .pending
+        case ("snoozes_proposal", nil):
+            return .snoozesProposal
+        case ("stops_unattended", .resolved?):
+            return .stopsUnattended
+        case ("resumes_unattended", .resolved?):
+            return .resumesUnattended
+        case ("recovers_review", .resolved?):
+            return .recoversReview
+        case ("adopts_review_configuration", .resolved?):
+            return .adoptsReviewConfiguration
+        case ("resolves_reenrollment", .resolved?):
+            return .resolvesReenrollment
+        default:
+            return nil
         }
-        #expect(
-            Set(expected.compactMap { $0.value == .pending ? $0.key : nil }) == [
-                .convert_to_policy
-            ])
+    }
+
+    @Test func outcomeTableMatchesDaemonVector() throws {
+        let vector = try Self.loadVector()
+        for entry in vector {
+            let action = try #require(
+                Components.Schemas.Action(rawValue: entry.action),
+                "daemon action \(entry.action) is not a client Action")
+            let expected = try #require(
+                Self.clientOutcome(status: entry.status, kind: entry.kind),
+                "no client mapping for \(entry.action): (\"\(entry.status)\", \(entry.kind))")
+            #expect(ActionOutcome.of(action) == expected, "action \(entry.action)")
+            // ActionOutcome.of sees only the action, so every item-type
+            // override must map to the same client outcome.
+            for override in entry.byItemType {
+                let typed = try #require(
+                    Self.clientOutcome(status: override.status, kind: override.kind),
+                    """
+                    no client mapping for \(entry.action) on \(override.itemType): \
+                    ("\(override.status)", \(override.kind))
+                    """)
+                #expect(
+                    ActionOutcome.of(action) == typed,
+                    "action \(entry.action) on \(override.itemType)")
+            }
+        }
+        let actions = vector.map(\.action)
+        #expect(actions.count == Set(actions).count)
+        #expect(Set(actions) == Set(Components.Schemas.Action.allCases.map(\.rawValue)))
+        #expect(Set(vector.filter { $0.kind == "pending" }.map(\.action)) == ["convert_to_policy"])
     }
 }
