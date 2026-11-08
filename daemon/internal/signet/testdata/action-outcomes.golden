@@ -1,0 +1,212 @@
+[
+  {
+    "action": "approve",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": [
+      {
+        "item_type": "effect_proposal",
+        "status": "resolved",
+        "kind": "starts_proposal"
+      }
+    ]
+  },
+  {
+    "action": "request_changes",
+    "status": "superseded",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "discuss",
+    "status": "",
+    "kind": "discusses",
+    "by_item_type": []
+  },
+  {
+    "action": "stop",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "finish_now",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "apply_then_finish",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "continue_under_policy",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "convert_to_policy",
+    "status": "",
+    "kind": "pending",
+    "by_item_type": []
+  },
+  {
+    "action": "retry",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "retry_with_capabilities",
+    "status": "superseded",
+    "kind": "retries_with_capabilities",
+    "by_item_type": []
+  },
+  {
+    "action": "answer_and_retry",
+    "status": "superseded",
+    "kind": "answers_and_retries",
+    "by_item_type": []
+  },
+  {
+    "action": "answer_without_retry",
+    "status": "resolved",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "rerun_trust_evaluation",
+    "status": "resolved",
+    "kind": "reruns_trust_evaluation",
+    "by_item_type": []
+  },
+  {
+    "action": "inspect_trust_failure",
+    "status": "",
+    "kind": "records",
+    "by_item_type": []
+  },
+  {
+    "action": "open_pr",
+    "status": "",
+    "kind": "records",
+    "by_item_type": []
+  },
+  {
+    "action": "return_to_agent",
+    "status": "superseded",
+    "kind": "returns_to_agent",
+    "by_item_type": []
+  },
+  {
+    "action": "mark_seen",
+    "status": "",
+    "kind": "records",
+    "by_item_type": []
+  },
+  {
+    "action": "dismiss",
+    "status": "dismissed",
+    "kind": "concludes",
+    "by_item_type": []
+  },
+  {
+    "action": "start",
+    "status": "resolved",
+    "kind": "starts_proposal",
+    "by_item_type": []
+  },
+  {
+    "action": "start_with_changes",
+    "status": "resolved",
+    "kind": "revises_and_starts_proposal",
+    "by_item_type": []
+  },
+  {
+    "action": "approve_with_changes",
+    "status": "resolved",
+    "kind": "revises_and_starts_proposal",
+    "by_item_type": []
+  },
+  {
+    "action": "decline",
+    "status": "dismissed",
+    "kind": "declines_proposal",
+    "by_item_type": []
+  },
+  {
+    "action": "snooze",
+    "status": "",
+    "kind": "snoozes_proposal",
+    "by_item_type": []
+  },
+  {
+    "action": "acknowledge",
+    "status": "",
+    "kind": "records",
+    "by_item_type": []
+  },
+  {
+    "action": "run_doctor",
+    "status": "",
+    "kind": "runs_doctor",
+    "by_item_type": []
+  },
+  {
+    "action": "stop_unattended",
+    "status": "resolved",
+    "kind": "stops_unattended",
+    "by_item_type": []
+  },
+  {
+    "action": "resume_unattended",
+    "status": "resolved",
+    "kind": "resumes_unattended",
+    "by_item_type": []
+  },
+  {
+    "action": "recover_review",
+    "status": "resolved",
+    "kind": "recovers_review",
+    "by_item_type": []
+  },
+  {
+    "action": "adopt_review_configuration",
+    "status": "resolved",
+    "kind": "adopts_review_configuration",
+    "by_item_type": []
+  },
+  {
+    "action": "resolve_reenrollment",
+    "status": "resolved",
+    "kind": "resolves_reenrollment",
+    "by_item_type": []
+  },
+  {
+    "action": "accept_recommended_route",
+    "status": "resolved",
+    "kind": "accepts_recommended_route",
+    "by_item_type": []
+  },
+  {
+    "action": "choose_alternative_route",
+    "status": "resolved",
+    "kind": "chooses_alternative_route",
+    "by_item_type": []
+  },
+  {
+    "action": "adjudicate_findings",
+    "status": "resolved",
+    "kind": "adjudicates_findings",
+    "by_item_type": []
+  },
+  {
+    "action": "retry_with_alternate_agent",
+    "status": "superseded",
+    "kind": "retries_with_alternate_agent",
+    "by_item_type": []
+  }
+]
