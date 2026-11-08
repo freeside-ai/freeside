@@ -15,8 +15,8 @@
       "model": "claude-fable-5-1",
       "requested_effort": "high",
       "native_effort": "high",
-      "pinned_build": "claude-code 2.1.282",
-      "observed_build": "2.1.282 (Claude Code)",
+      "pinned_build": "claude-code 2.1.319",
+      "observed_build": "2.1.319 (Claude Code)",
       "verdict": "pass",
       "refusal": null,
       "usage": {
@@ -36,8 +36,8 @@
       "model": "claude-opus-5-5",
       "requested_effort": "max",
       "native_effort": "max",
-      "pinned_build": "claude-code 2.1.282",
-      "observed_build": "2.1.282 (Claude Code)",
+      "pinned_build": "claude-code 2.1.319",
+      "observed_build": "2.1.319 (Claude Code)",
       "verdict": "pass",
       "refusal": null,
       "usage": {

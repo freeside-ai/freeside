@@ -34,7 +34,7 @@ type heldClaudeUsage struct {
 	capture    exec.ClaudeUsageCapture
 }
 
-// claudeUsageWindowLengths are the windows the pinned CLI (2.1.282) names and
+// claudeUsageWindowLengths are the windows the pinned CLI (2.1.319) names and
 // their lengths. The router reads a seven-day length as weekly
 // (engine.weeklyWindowLength). A name outside this table is left out of the
 // answer, since its length is unknown.

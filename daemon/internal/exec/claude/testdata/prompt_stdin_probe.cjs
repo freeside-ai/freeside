@@ -23,7 +23,7 @@ async function main() {
   assert.notEqual(spawnSync('setpriv', [...drop, 'cat', '/probe/prompt.txt']).status, 0);
   const version = spawnSync('claude', ['--version'], { encoding: 'utf8' });
   assert.equal(version.status, 0);
-  assert.match(version.stdout, /^2\.1\.220\b/);
+  assert.match(version.stdout, /^2\.1\.319\b/);
   let matched = false;
   let requests = 0;
   const auxiliaryRoutes = new Set();

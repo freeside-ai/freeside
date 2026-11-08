@@ -95,7 +95,7 @@ var probeLineupTime = time.Date(2026, 10, 23, 18, 30, 0, 0, time.UTC)
 
 // passingLineupProber answers every call the settings fixture names.
 func passingLineupProber() *fakeLineupProber {
-	claudeVersion := []byte("2.1.282 (Claude Code)\n")
+	claudeVersion := []byte("2.1.319 (Claude Code)\n")
 	return &fakeLineupProber{outputs: map[string]ward.LineupProbeOutput{
 		fakeProbeKey(lineupSurfaceAgentImage, "claude-fable-5-1"): {
 			Version: claudeVersion, Stdout: []byte(probeClaudePass("claude-fable-5-1[1m]")),
@@ -200,11 +200,11 @@ func TestProbeLineupFailsAndNamesEachRefusal(t *testing.T) {
 		{
 			name: "refused effort", key: fakeProbeKey(lineupSurfaceAgentImage, "claude-opus-5-5"),
 			out: ward.LineupProbeOutput{
-				Version: []byte("2.1.282 (Claude Code)\n"), Stdout: []byte(probeClaudeRefusedEffort), ExitStatus: 1,
+				Version: []byte("2.1.319 (Claude Code)\n"), Stdout: []byte(probeClaudeRefusedEffort), ExitStatus: 1,
 			},
 			wantVerdict: lineupVerdictRefused,
 			wantFailLine: `refused [implementer remediator]: model "claude-opus-5-5" at effort "max" (sent "max") ` +
-				"on 2.1.282 (Claude Code): API Error: 400 effort 'max' is not supported by this model",
+				"on 2.1.319 (Claude Code): API Error: 400 effort 'max' is not supported by this model",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
