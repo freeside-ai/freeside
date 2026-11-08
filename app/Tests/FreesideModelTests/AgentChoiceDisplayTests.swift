@@ -142,6 +142,41 @@ import Testing
         #expect(AgentChoiceDisplay.choosing(model: "gpt-codex", from: opusMax, catalog: catalog) == opusMax)
     }
 
+    /// The one rule both role menus pick through: an enrollment resets the
+    /// model and effort, a model keeps an effort it reports, an effort
+    /// replaces the effort alone, and a pick that changes nothing returns the
+    /// current selection, so neither menu writes or sends for it.
+    @Test func aMenuPickFollowsTheChoosingRulesAndAnIdlePickReturnsTheCurrentSelection() {
+        let opusMax = UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus", "max")
+        func pick(_ pick: AgentChoiceDisplay.Pick, from current: Selection?) -> Selection? {
+            AgentChoiceDisplay.picking(pick, from: current, role: .implementer, catalog: catalog)
+        }
+        #expect(
+            pick(.enrollment(UsageFixtures.unsupportedCollectorID), from: opusMax)
+                == AgentChoiceDisplay.choosing(
+                    enrollment: UsageFixtures.unsupportedCollectorID, role: .implementer, catalog: catalog))
+        #expect(
+            pick(.enrollment(UsageFixtures.readingCollectorID), from: nil)
+                == UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus", "harness_default"))
+        #expect(
+            pick(.model("claude-sonnet"), from: opusMax)
+                == AgentChoiceDisplay.choosing(model: "claude-sonnet", from: opusMax, catalog: catalog))
+        #expect(
+            pick(.effort("high"), from: opusMax)
+                == UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus", "high"))
+        #expect(pick(.enrollment(nil), from: opusMax) == nil)
+
+        // Picking the chosen enrollment keeps its model and effort.
+        #expect(pick(.enrollment(UsageFixtures.readingCollectorID), from: opusMax) == opusMax)
+        #expect(pick(.model("claude-opus"), from: opusMax) == opusMax)
+        #expect(pick(.effort("max"), from: opusMax) == opusMax)
+        // A model or effort needs a selection, and an enrollment offering no
+        // model offers nothing to pick.
+        #expect(pick(.model("claude-opus"), from: nil) == nil)
+        #expect(pick(.effort("high"), from: nil) == nil)
+        #expect(pick(.enrollment("enrollment-unknown"), from: opusMax) == opusMax)
+    }
+
     // MARK: Usage readings
 
     private static let base = Date(timeIntervalSince1970: 1_786_502_400)
@@ -350,6 +385,16 @@ import Testing
         #expect(
             AgentChoiceDisplay.defaultLabel(
                 role: .reviewer, policy: nil, catalog: UsageFixtures.treelessAgentCatalog()) == "Default · lineup")
+    }
+
+    /// The task page clears a line where New Task leaves a role unchosen, so
+    /// its entry names the same fallback after Clear.
+    @Test func clearLabelNamesWhatPicksTheAgentOnceTheLineIsCleared() {
+        let policy = UsageFixtures.defaultRoutingPolicy()
+        #expect(
+            AgentChoiceDisplay.clearLabel(role: .implementer, policy: policy, catalog: catalog)
+                == "Clear · lineup \(UsageFixtures.readingCollectorID) · Opus · high or routing policy")
+        #expect(AgentChoiceDisplay.clearLabel(role: .reviewer, policy: nil, catalog: nil) == "Clear · lineup")
     }
 
     @Test func theAgentsPaneFactsNameModelEffortAndLineageGroup() {

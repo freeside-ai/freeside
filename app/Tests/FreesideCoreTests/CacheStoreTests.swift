@@ -139,6 +139,39 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(loaded.attentionItems == state.attentionItems)
     }
 
+    /// The task page's pending line change (#2651) is additive: it round-trips,
+    /// and a cache without it, the shape every earlier cache has, loads its
+    /// rows and no change.
+    @Test func aPendingLineChangeRoundTripsAndAnOlderCacheLoadsWithoutOne() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let older = sampleState()
+        try store.save(older)
+        let file = directory.appendingPathComponent("cache.json")
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let written = try #require(object["state"] as? [String: Any])
+        #expect(written["pendingTaskLineChange"] == nil)
+        let loadedOlder = try #require(store.load())
+        #expect(loadedOlder.pendingTaskLineChange == nil)
+        #expect(loadedOlder.cursors == older.cursors)
+
+        var state = sampleState()
+        state.pendingTaskLineChange = PendingTaskLineChange(
+            command: .init(
+                command_id: "line-1", device_id: "device-1",
+                payload: .change_task_line(
+                    .init(
+                        kind: .change_task_line, task_id: "task-1", role: .reviewer,
+                        selection: .init(value1: UsageFixtures.agentSelection("codex-primary"))))),
+            syncEpoch: "epoch-1")
+        state.lineChangeDaemonID = "mock"
+        try store.save(state)
+        let loaded = try #require(store.load())
+        #expect(loaded.pendingTaskLineChange == state.pendingTaskLineChange)
+        #expect(loaded.lineChangeDaemonID == "mock")
+    }
+
     @Test func roundTripsTheUsagePools() throws {
         let (store, directory) = temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }

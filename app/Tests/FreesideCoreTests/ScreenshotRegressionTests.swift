@@ -2664,6 +2664,54 @@
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(retryTimeline)
                     )))
+            // A line change from the task page (#2651): the saved change the
+            // daemon didn't answer, with its Retry, and a change refused
+            // because the reviewer runs, naming the line it keeps. Each state
+            // has its own coordinator over the same cache, so no other
+            // surface draws it.
+            var linedTask = retryTask
+            let reviewerLine = UsageFixtures.agentSelection("codex-primary")
+            linedTask.task.task_lines = [
+                .init(
+                    id: "sha256:" + String(repeating: "d", count: 64), task_id: retryTask.task.id, role: .reviewer,
+                    agent: nil, selection: .init(value1: reviewerLine), version: 1, predecessor_id: nil,
+                    source: .submit_task, set_by: "command-screenshot", set_at: RunFixtures.screenshotInstant,
+                    provenance: nil)
+            ]
+            var linedState = try #require(cache.load())
+            linedState.tasks = linedState.tasks.map { $0.task.id == retryTask.task.id ? linedTask : $0 }
+            for state in ["unanswered", "refused"] {
+                let lineCache = InMemoryCacheStore()
+                try lineCache.save(linedState)
+                let lineCoordinator = SyncCoordinator(client: client, cache: lineCache)
+                if state == "unanswered" {
+                    let saved = lineCoordinator.retainTaskLineChange(
+                        PendingTaskLineChange(
+                            command: .init(
+                                command_id: "line-change-screenshot", device_id: lineCoordinator.store.device.deviceID,
+                                payload: .change_task_line(
+                                    .init(
+                                        kind: .change_task_line, task_id: retryTask.task.id, role: .reviewer,
+                                        selection: nil))),
+                            syncEpoch: "screenshot-epoch"))
+                    #expect(saved)
+                } else {
+                    lineCoordinator.taskLineChangeFailure = .init(
+                        taskID: retryTask.task.id,
+                        message: TaskLineChangeModel.runningMessage(role: .reviewer, task: linedTask.task))
+                }
+                for width in [CGFloat(820), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "task-page-line-change-\(state)-\(Int(width))-\(scheme)", width: width,
+                                colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    TaskPageView(coordinator: lineCoordinator, snapshot: linedTask, onOpenRun: { _ in })
+                                        .screenshotContent(retryTimeline))))
+                    }
+                }
+            }
             // The page's Identifiers footer expanded (#1379, #2117): the
             // exact task, campaign, and run ids grouped by owner, with their
             // copy controls.

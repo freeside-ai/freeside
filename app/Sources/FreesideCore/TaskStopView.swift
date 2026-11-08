@@ -159,8 +159,9 @@ struct TaskStopView: View {
     }
 }
 
-/// The task's one menu, `Task Actions ▾` (◆B, 4 Nov handoff): the page's own
-/// items, then Stop Task… under a divider. The page pins it in the outline
+/// The task's one menu, `Task Actions ▾` (◆B, 4 Nov handoff): Change Agent
+/// while the task is active (#2651), the page's own items, then Stop Task…
+/// under a divider. The page pins it in the outline
 /// row, or the iPhone's navigation bar, so Stop stays in reach while the page
 /// scrolls; the Stop states it leads to speak in `TaskStopView`, in the body.
 struct TaskActionsMenu: View {
@@ -196,12 +197,18 @@ struct TaskActionsMenu: View {
 
     var stopIsUnavailable: Bool { model.unavailableReason != nil || snapshot == nil }
 
-    /// Whether there is anything to hold: the page's own items or Stop.
-    var drawsMenu: Bool { offersStop || !actions.isEmpty }
+    /// Whether the menu offers Change Agent: while the task is active and
+    /// Stop is on offer, since a task being stopped starts no new attempt.
+    var offersLineChange: Bool { offersStop && TaskLineChangeMenu.offers(snapshot?.task) }
+
+    /// Whether there is anything to hold: Change Agent, the page's own
+    /// items, or Stop.
+    var drawsMenu: Bool { offersStop || !actions.isEmpty || offersLineChange }
 
     /// Disabled, never hidden, while it would hold an unavailable Stop
-    /// alone.
-    var isDisabled: Bool { actions.isEmpty && stopIsUnavailable }
+    /// alone. Change Agent keeps it enabled even when it can't send, so its
+    /// reason, an item in the menu, can be read.
+    var isDisabled: Bool { actions.isEmpty && stopIsUnavailable && !offersLineChange }
 
     /// Stop Task…: prepares the confirmation where the page presents it.
     func requestStop() {
@@ -217,11 +224,15 @@ struct TaskActionsMenu: View {
         if drawsMenu {
             if rendersInteractiveControls {
                 Menu {
+                    if offersLineChange, let task = snapshot?.task {
+                        TaskLineChangeMenu(coordinator: coordinator, task: task)
+                        if !actions.isEmpty { Divider() }
+                    }
                     ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
                         Button(action.title, action: action.perform)
                     }
                     if offersStop {
-                        if !actions.isEmpty { Divider() }
+                        if !actions.isEmpty || offersLineChange { Divider() }
                         Button("Stop Task…", role: .destructive, action: requestStop)
                             .disabled(stopIsUnavailable)
                     }
@@ -254,7 +265,7 @@ struct TaskActionsMenu: View {
 
     private var hint: String {
         let items =
-            actions.map(\.title)
+            (offersLineChange ? ["Change Agent, one role at a time"] : []) + actions.map(\.title)
             + (offersStop ? ["Stop Task, which reviews what stopping this task will do"] : [])
         return "Holds \(items.formatted(.list(type: .and)))"
     }
