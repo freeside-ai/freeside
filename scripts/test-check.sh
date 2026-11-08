@@ -13,6 +13,9 @@ export DAEMON_TEST_MAX_RUNS=0 DAEMON_TEST_STATE_DIR=$TMP/state
 # The daemon test cases run go test ./... whole; the partition cases near the
 # end unset or set this themselves.
 export DAEMON_TEST_INTEGRATION_PARTITIONS=1
+# The Go cache trim asks go for GOCACHE before any daemon step; the other
+# go stand-ins don't answer that. The trim cases at the end set it themselves.
+export FREESIDE_GOCACHE_LIMIT_GB=0
 trap 'rm -rf "$TMP"' EXIT
 
 pass=0
@@ -928,6 +931,113 @@ RUN=$TMP/shard-args PATH=$decoy_path DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence \
 assert_rc 2
 assert_contains "don't apply in shard mode"
 [[ ! -e $TMP/shard-args.args ]] || report_failure 'go ran in shard mode'
+
+# The trim stand-ins append every go call and every python3 call to one
+# record, in order: go answers `env GOCACHE` with FAKE_GOCACHE, and python3
+# records its arguments before running the real interpreter, so a case sees
+# which cache, limit, and state the helper got and that it ran before the
+# step. The limit is whole gigabytes, so these cases never delete anything;
+# test-go-cache-trim.sh covers the helper itself.
+mkdir "$TMP/trim-tools" "$TMP/trim-cache"
+real_python3=$(command -v python3)
+printf '#!/bin/bash\necho Linux\n' >"$TMP/trim-tools/uname"
+cat >"$TMP/trim-tools/go" <<'STUB'
+#!/bin/bash
+if [ "$*" = 'env GOCACHE' ]; then
+  echo 'go env GOCACHE' >>"$TRIM_RECORD"
+  printf '%s\n' "$FAKE_GOCACHE"
+  exit 0
+fi
+echo "go $1" >>"$TRIM_RECORD"
+STUB
+cat >"$TMP/trim-tools/python3" <<STUB
+#!/bin/bash
+echo "python3 \$*" >>"\$TRIM_RECORD"
+exec "$real_python3" "\$@"
+STUB
+chmod +x "$TMP/trim-tools/"*
+trim_path=$TMP/trim-tools:$PATH
+trim_state=$TMP/trim-xdg/freeside/go-cache-trim
+trim_line() { # <limit-bytes>; prints the python3 record of one trim
+  printf 'python3 %s --cache %s --limit-bytes %s --state %s' \
+    "$(dirname "$SCRIPT_DIR")/scripts/go-cache-trim.py" "$TMP/trim-cache" "$1" "$trim_state"
+}
+run_trim_check() { # <env assignments...> -- <check.sh args...>; sets OUT and RC
+  local vars=()
+  while [ "$1" != -- ]; do vars+=("$1"); shift; done
+  shift
+  rm -f "$TMP/trim.record" "$trim_state/last-walk"
+  set +e
+  OUT=$(env -u CI -u FREESIDE_GOCACHE_LIMIT_GB PATH="$trim_path" TRIM_RECORD="$TMP/trim.record" \
+    FAKE_GOCACHE="$TMP/trim-cache" XDG_CACHE_HOME="$TMP/trim-xdg" ${vars[@]+"${vars[@]}"} "$CHECK" "$@" 2>&1)
+  RC=$?
+  set -e
+}
+assert_record() { # <expected record>
+  if [ "$(cat "$TMP/trim.record" 2>/dev/null)" = "$1" ]; then
+    pass=$((pass + 1))
+  else
+    OUT+=$'\n'"record: $(cat "$TMP/trim.record" 2>/dev/null || echo missing)"
+    report_failure "unexpected go and python3 calls"
+  fi
+}
+no_trim=$'go build\ngo build'
+
+begin_case "a daemon step trims the cache go env GOCACHE names, once, before the step"
+run_trim_check -- daemon build
+assert_rc 0
+assert_record "go env GOCACHE"$'\n'"$(trim_line 40000000000)"$'\n'"$no_trim"
+if [[ -e $trim_state/last-walk ]]; then pass=$((pass + 1)); else report_failure 'the trim wrote no stamp'; fi
+
+begin_case "a narrow test run trims before go test"
+run_trim_check -- daemon test -- ./internal/domain/...
+assert_rc 0
+assert_record "go env GOCACHE"$'\n'"$(trim_line 40000000000)"$'\n'"go test"
+
+begin_case "a limit of 0, or CI with the limit unset, turns the trim off"
+run_trim_check FREESIDE_GOCACHE_LIMIT_GB=0 -- daemon build
+assert_rc 0
+assert_record "$no_trim"
+run_trim_check FREESIDE_GOCACHE_LIMIT_GB=000 -- daemon build
+assert_rc 0
+assert_record "$no_trim"
+run_trim_check CI=true -- daemon build
+assert_rc 0
+assert_record "$no_trim"
+if [[ ! -e $trim_state/last-walk ]]; then pass=$((pass + 1)); else report_failure 'an off trim wrote a stamp'; fi
+
+begin_case "an explicit limit under CI turns the trim on, without leading zeroes"
+run_trim_check CI=true FREESIDE_GOCACHE_LIMIT_GB=007 -- daemon build
+assert_rc 0
+assert_record "go env GOCACHE"$'\n'"$(trim_line 7000000000)"$'\n'"$no_trim"
+
+begin_case "a malformed limit is a usage error before any step runs"
+for limit in abc -1 1.5 ''; do
+  run_trim_check FREESIDE_GOCACHE_LIMIT_GB="$limit" -- daemon build
+  assert_rc 2
+  assert_contains 'FREESIDE_GOCACHE_LIMIT_GB must be a non-negative integer'
+  assert_record ''
+done
+
+begin_case "no cache directory skips the trim and runs the step"
+for cache in off '' "$TMP/no-such-cache"; do
+  run_trim_check FAKE_GOCACHE="$cache" -- daemon build
+  assert_rc 0
+  assert_contains 'skipping the trim'
+  assert_record "go env GOCACHE"$'\n'"$no_trim"
+done
+
+begin_case "a failed trim prints a notice and runs the step"
+touch "$TMP/trim-xdg-file"
+run_trim_check XDG_CACHE_HOME="$TMP/trim-xdg-file" -- daemon build
+assert_rc 0
+assert_contains 'the Go cache trim failed; continuing'
+assert_contains 'PASS: daemon build'
+
+begin_case "another component doesn't run the trim"
+run_trim_check -- scripts syntax
+assert_rc 0
+assert_record ''
 
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

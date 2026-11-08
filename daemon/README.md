@@ -906,6 +906,22 @@ or `prompts/` can replay a pass recorded before that file changed. Under
 finds repository files from its working directory, which `go test` sets to
 the package directory.
 
+Go deletes build cache entries only after 5 unused days and has no size
+limit, so many checkouts at different commits can fill the disk inside that
+window. Every `check.sh daemon` run therefore caps the cache `go env GOCACHE`
+names, before its first step, at 40 GB (10^9 bytes each) by default, and not
+at all when `CI` is non-empty. `FREESIDE_GOCACHE_LIMIT_GB` sets the cap in
+whole gigabytes, an explicit value wins under `CI` too, and `0` turns it off.
+The trim walks the cache at most once an hour, keeping its stamp and lock in
+`${XDG_CACHE_HOME:-$HOME/.cache}/freeside/go-cache-trim`, and over the cap
+deletes the least recently used entries until the cache is at or under 75% of
+it. Go refreshes an entry's modification time on use only once it is an hour
+old, so the trim keeps every entry modified in the last 2 hours, which covers
+every entry used in the last hour; when only those remain over the cap, it
+prints a warning. It skips an entry it can't delete, such as one a `sudo go`
+run left, and counts it in its result line. Without Python 3 or a cache
+directory, or when the trim fails, the run prints a notice and continues.
+
 While iterating, run only the packages you're changing, then run the full
 `bash scripts/check.sh daemon` once before push:
 
@@ -920,10 +936,10 @@ the run limit, the git change, and the decoy, and its `PASS:` line names the
 selection. Under the default limit of one it holds the same slot, and so the
 same decoy path, every time, which lets a repeated run reuse Go's cached
 results. A bare `go test` gets none of the git change, the run limit, the
-decoy, the timeout, the `GOMAXPROCS` share, the `.noindex` `TMPDIR`, or
-`-trimpath`; without the flag it shares no daemon package entries
-with `check.sh` runs, and its different `PATH` and `GIT_DIR` can also keep it
-from reusing their results.
+decoy, the timeout, the `GOMAXPROCS` share, the `.noindex` `TMPDIR`,
+`-trimpath`, or the Go cache cap; without `-trimpath` it shares no daemon
+package entries with `check.sh` runs, and its different `PATH` and `GIT_DIR`
+can also keep it from reusing their results.
 
 Other programs on the Mac can send requests to a test's loopback server. T3
 Code (Beta) sent `GET /` with `User-Agent: node` to listening `127.0.0.1`
