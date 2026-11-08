@@ -201,7 +201,7 @@ func TestVerifyEvaluatedMergeInspectsTheMergedTree(t *testing.T) {
 			EvaluatedSHA: commitWithParents(t, dir, mergedTree(t, dir, advanced, head), advanced, head),
 			InvocationID: domain.InvocationID("inv-1"),
 			RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
-			Room:         room,
+			Rooms:        imageRooms(room),
 		}
 		if _, err := Verify(context.Background(), dir, opts); !errors.Is(err, ErrSymlinkEntrypoint) {
 			t.Fatalf("err = %v, want ErrSymlinkEntrypoint for the merge's entrypoint", err)
@@ -244,7 +244,7 @@ func TestVerifyEvaluatedMustBeTheMergeOfHeadIntoBase(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := f.opts
 			room := &recordingRoom{}
-			opts.Room, opts.EvaluatedSHA = room, tc.evaluated
+			opts.Rooms, opts.EvaluatedSHA = imageRooms(room), tc.evaluated
 			res, err := Verify(context.Background(), f.checkout, opts)
 			if !errors.Is(err, ErrEvaluatedMismatch) {
 				t.Fatalf("err = %v, want ErrEvaluatedMismatch", err)
@@ -269,7 +269,7 @@ func TestVerifyEvaluatedMustBeTheMergeOfHeadIntoBase(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := f.opts
 			room := &recordingRoom{}
-			opts.Room, opts.EvaluatedSHA = room, tc.evaluated
+			opts.Rooms, opts.EvaluatedSHA = imageRooms(room), tc.evaluated
 			if _, err := Verify(context.Background(), f.checkout, opts); !errors.Is(err, ErrInvalidOptions) {
 				t.Fatalf("err = %v, want ErrInvalidOptions", err)
 			}

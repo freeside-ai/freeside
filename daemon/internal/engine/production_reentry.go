@@ -864,7 +864,8 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: task.HeadSHA, BaseSHA: baseSHA, EvaluatedSHA: binding.evaluatedSHA,
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
-		RecipePath: verify.DefaultRecipePath, Room: room,
+		RecipePath:      verify.DefaultRecipePath,
+		Rooms:           map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: room},
 		ApprovedRecipes: recipes, Changes: changes,
 		// A stable per-cycle time, as on a first cycle: the evidence is
 		// content-addressed and write-once, so a re-run must reproduce it.

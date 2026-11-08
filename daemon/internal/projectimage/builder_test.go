@@ -649,6 +649,35 @@ func TestBuildProvesCacheIndependentRecipeInFreshMaskedWorkspaces(t *testing.T) 
 	}
 }
 
+// TestBuildProvesOnlyProjectImageCommands pins that the offline proof
+// runs only the recipe's project_image commands: the image never runs a
+// macos_host command, so its argv must not reach the build backend in
+// either the positive or the cache-masked pass.
+func TestBuildProvesOnlyProjectImageCommands(t *testing.T) {
+	t.Parallel()
+	backend := newFakeBackend()
+	backend.negativeErr = nil
+	request := validRequest()
+	request.Recipe = []byte(`{"commands":[["npm","run","lint"],` +
+		`{"argv":["xcodebuild","test"],"room":"macos_host"},["npm","test"]],"capture":"none"}`)
+	if _, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	var recipeRuns [][]string
+	for _, run := range backend.runs {
+		if slices.Contains(run.Argv, "xcodebuild") {
+			t.Fatalf("macos_host command reached the build backend: %+v", run)
+		}
+		if len(run.Argv) > 0 && run.Argv[0] == "npm" && !slices.Equal(run.Argv, []string{"npm", "ci", "--ignore-scripts"}) {
+			recipeRuns = append(recipeRuns, run.Argv)
+		}
+	}
+	want := [][]string{{"npm", "run", "lint"}, {"npm", "test"}, {"npm", "run", "lint"}, {"npm", "test"}}
+	if !slices.EqualFunc(recipeRuns, want, slices.Equal) {
+		t.Fatalf("recipe runs = %q, want the project_image commands in the positive and masked passes %q", recipeRuns, want)
+	}
+}
+
 func TestBuildContextWithRestrictiveUmask(t *testing.T) {
 	if os.Getenv("FREESIDE_TEST_BUILD_CONTEXT_UMASK") == "1" {
 		// The child runs only this test; the test it delegates to calls

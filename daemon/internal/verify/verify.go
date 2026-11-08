@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
@@ -82,6 +83,14 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	recipe, err := ParseRecipe(trusted)
 	if err != nil {
 		return Result{}, err
+	}
+	// Every class the recipe names needs a room before anything is
+	// materialized or run: a command never falls back to another class's
+	// room.
+	for _, cmd := range recipe.Commands {
+		if _, ok := opts.Rooms[cmd.Class]; !ok {
+			return Result{}, fmt.Errorf("recipe names execution class %q with no room: %w", cmd.Class, ErrRoomUnavailable)
+		}
 	}
 	recipeDigest := RecipeDigest(trusted)
 	commandPaths := recipe.CommandPaths()
@@ -202,17 +211,18 @@ func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, s
 	steps := make([]Step, 0, len(recipe.Commands))
 	transcript := procbound.NewTailBuffer(opts.Policy.MaxTranscriptBytes)
 	outcome := OutcomePassed
-	for i, argv := range recipe.Commands {
+	for i, cmd := range recipe.Commands {
 		workspace := filepath.Join(scratch, fmt.Sprintf("workspace-%d", i))
 		if err := g.materialize(ctx, opts.treeSHA(), workspace); err != nil {
 			return nil, nil, "", err
 		}
-		res, err := runStep(ctx, opts, workspace, argv)
+		// Verify checked every class against opts.Rooms before this ran.
+		res, err := runStep(ctx, opts.Rooms[cmd.Class], opts.Policy.CommandTimeout, workspace, cmd.Argv)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("recipe command %q: %w", argv[0], err)
+			return nil, nil, "", fmt.Errorf("recipe command %q: %w", cmd.Argv[0], err)
 		}
-		steps = append(steps, Step{Argv: argv, ExitCode: res.ExitCode, OutputTruncated: res.Truncated})
-		writeTranscriptStep(transcript, argv, res)
+		steps = append(steps, Step{Argv: cmd.Argv, Room: cmd.Class, ExitCode: res.ExitCode, OutputTruncated: res.Truncated})
+		writeTranscriptStep(transcript, cmd.Argv, res)
 		// Remove the used workspace before the next materialization so
 		// the scratch does not hold N full checkouts at once.
 		_ = os.RemoveAll(workspace)
@@ -224,15 +234,16 @@ func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, s
 	return steps, transcript, outcome, nil
 }
 
-// runStep runs one command under the per-command timeout.
-func runStep(ctx context.Context, opts Options, workspace string, argv []string) (StepResult, error) {
+// runStep runs one command in its class's room under the per-command
+// timeout.
+func runStep(ctx context.Context, room Room, timeout time.Duration, workspace string, argv []string) (StepResult, error) {
 	stepCtx := ctx
-	if opts.Policy.CommandTimeout > 0 {
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		stepCtx, cancel = context.WithTimeout(ctx, opts.Policy.CommandTimeout)
+		stepCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	return opts.Room.Run(stepCtx, workspace, argv)
+	return room.Run(stepCtx, workspace, argv)
 }
 
 // writeTranscriptStep appends one step's record to the transcript.

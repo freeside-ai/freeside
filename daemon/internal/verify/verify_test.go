@@ -61,7 +61,7 @@ func verifyFixture(t *testing.T, changes map[string]string, changeList []importe
 		BaseSHA:      heads.base,
 		InvocationID: domain.InvocationID("inv-1"),
 		RecipeSource: BaseCommitRecipe(),
-		Room:         room,
+		Rooms:        imageRooms(room),
 		Changes:      changeList,
 	}, room
 }
@@ -163,13 +163,88 @@ func TestVerifyFailedCommandFailsFast(t *testing.T) {
 func TestVerifyRoomFailureFailsClosed(t *testing.T) {
 	t.Parallel()
 	checkout, opts, _ := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
-	opts.Room = failingRoom{}
+	opts.Rooms = imageRooms(failingRoom{})
 	if _, err := Verify(context.Background(), checkout, opts); err == nil {
 		t.Fatal("room failure did not fail Verify")
 	}
 }
 
 type failingRoom struct{}
+
+// imageRooms supplies one room for the project image, the only class
+// the shared fixture's recipe names.
+func imageRooms(room Room) map[ExecutionClass]Room {
+	return map[ExecutionClass]Room{ClassProjectImage: room}
+}
+
+// mixedRecipeBytes names both classes, interleaved, so a test can tell
+// which room ran which command.
+const mixedRecipeBytes = `{"commands": [` +
+	`["go", "test", "./..."], ` +
+	`{"argv": ["bash", "scripts/check.sh", "app", "test"], "room": "macos_host"}, ` +
+	`["go", "vet", "./..."]` +
+	`], "capture": "none"}`
+
+// TestVerifyRunsEachCommandInItsClassRoom pins that the recipe, not the
+// caller, chooses each command's room: every command reaches exactly
+// its class's room, in recipe order, and each step records the class.
+func TestVerifyRunsEachCommandInItsClassRoom(t *testing.T) {
+	t.Parallel()
+	checkout, opts, image := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
+	mac := &recordingRoom{}
+	opts.RecipeSource = ConfigRecipe([]byte(mixedRecipeBytes))
+	opts.Rooms = map[ExecutionClass]Room{ClassProjectImage: image, ClassMacOSHost: mac}
+	res, err := Verify(context.Background(), checkout, opts)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if want := [][]string{{"go", "test", "./..."}, {"go", "vet", "./..."}}; !reflect.DeepEqual(image.runs, want) {
+		t.Errorf("project_image room ran %v, want %v", image.runs, want)
+	}
+	if want := [][]string{{"bash", "scripts/check.sh", "app", "test"}}; !reflect.DeepEqual(mac.runs, want) {
+		t.Errorf("macos_host room ran %v, want %v", mac.runs, want)
+	}
+	wantRooms := []ExecutionClass{ClassProjectImage, ClassMacOSHost, ClassProjectImage}
+	if len(res.Steps) != len(wantRooms) {
+		t.Fatalf("steps = %v, want %d", res.Steps, len(wantRooms))
+	}
+	for i, step := range res.Steps {
+		if step.Room != wantRooms[i] {
+			t.Errorf("step %d room = %q, want %q", i, step.Room, wantRooms[i])
+		}
+	}
+	rep, err := ParseReport(res.Evidence[0].Content)
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+	if !reflect.DeepEqual(rep.Steps, res.Steps) {
+		t.Errorf("report steps = %v, want %v", rep.Steps, res.Steps)
+	}
+}
+
+// TestVerifyMissingRoomFailsClosed pins that a class with no room stops
+// the verification before anything runs: the typed error names the
+// class, no room runs (the project image room included, though its
+// commands come first), and no Result or evidence is returned.
+func TestVerifyMissingRoomFailsClosed(t *testing.T) {
+	t.Parallel()
+	checkout, opts, image := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
+	image.inspect = func(string) { t.Error("a workspace was materialized for a recipe with a missing room") }
+	opts.RecipeSource = ConfigRecipe([]byte(mixedRecipeBytes))
+	res, err := Verify(context.Background(), checkout, opts)
+	if !errors.Is(err, ErrRoomUnavailable) {
+		t.Fatalf("Verify = %v, want ErrRoomUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), `"macos_host"`) {
+		t.Errorf("error %q does not name the missing class", err)
+	}
+	if len(image.runs) != 0 {
+		t.Errorf("project_image room ran %v before the missing room was found", image.runs)
+	}
+	if !reflect.DeepEqual(res, Result{}) {
+		t.Errorf("Result = %+v, want none", res)
+	}
+}
 
 func (failingRoom) Run(context.Context, string, []string) (StepResult, error) {
 	return StepResult{}, errors.New("room exploded")
@@ -188,7 +263,13 @@ func TestVerifyInvalidOptions(t *testing.T) {
 		{"short base", func(o Options) Options { o.BaseSHA = "abc123"; return o }},
 		{"empty invocation", func(o Options) Options { o.InvocationID = ""; return o }},
 		{"unset recipe source", func(o Options) Options { o.RecipeSource = RecipeSource{}; return o }},
-		{"nil room", func(o Options) Options { o.Room = nil; return o }},
+		{"no rooms", func(o Options) Options { o.Rooms = nil; return o }},
+		{"empty rooms", func(o Options) Options { o.Rooms = map[ExecutionClass]Room{}; return o }},
+		{"nil room", func(o Options) Options { o.Rooms = imageRooms(nil); return o }},
+		{"unknown class room", func(o Options) Options {
+			o.Rooms = map[ExecutionClass]Room{ClassProjectImage: &recordingRoom{}, "linux_vm": &recordingRoom{}}
+			return o
+		}},
 		{"absolute recipe path", func(o Options) Options { o.RecipePath = "/etc/recipe"; return o }},
 		{"dotdot recipe path", func(o Options) Options { o.RecipePath = "../verify.json"; return o }},
 		{"colon recipe path", func(o Options) Options { o.RecipePath = "a:b.json"; return o }},
@@ -360,7 +441,7 @@ func TestVerifyFreshWorkspacePerCommand(t *testing.T) {
 			secondContent = string(b)
 		}
 	}}
-	opts.Room = mutating
+	opts.Rooms = imageRooms(mutating)
 	if _, err := Verify(context.Background(), checkout, opts); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -425,7 +506,7 @@ func TestVerifyRejectsSymlinkEntrypoint(t *testing.T) {
 		InvocationID: domain.InvocationID("inv-1"),
 		// A config recipe whose entrypoint is the repo-local symlink.
 		RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
-		Room:         room,
+		Rooms:        imageRooms(room),
 	}
 	_, err := Verify(context.Background(), dir, opts)
 	if !errors.Is(err, ErrSymlinkEntrypoint) {
@@ -456,7 +537,7 @@ func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
 		HeadSHA: head, BaseSHA: base,
 		InvocationID: domain.InvocationID("inv-1"),
 		RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check/verify.sh"]], "capture": "none"}`)),
-		Room:         room,
+		Rooms:        imageRooms(room),
 	}
 	_, err := Verify(context.Background(), dir, opts)
 	if !errors.Is(err, ErrSymlinkEntrypoint) {
@@ -513,7 +594,7 @@ func TestVerifyOperandWithSymlinkPrefixNotEntrypoint(t *testing.T) {
 		HeadSHA: head, BaseSHA: base,
 		InvocationID: domain.InvocationID("inv-1"),
 		RecipeSource: ConfigRecipe([]byte(`{"commands": [["xcodebuild", "-destination", "generic/platform=iOS Simulator"]], "capture": "none"}`)),
-		Room:         room,
+		Rooms:        imageRooms(room),
 		// A candidate change at the operand path proves the operand is
 		// not treated as a verification-control entrypoint.
 		Changes: []importer.Change{changed(operand)},

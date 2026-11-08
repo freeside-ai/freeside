@@ -20,11 +20,19 @@ func TestParseRecipeGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRecipe: %v", err)
 	}
+	type command struct {
+		Argv []string       `json:"argv"`
+		Room ExecutionClass `json:"room"`
+	}
+	commands := make([]command, 0, len(r.Commands))
+	for _, c := range r.Commands {
+		commands = append(commands, command{c.Argv, c.Class})
+	}
 	doc := struct {
-		Commands [][]string  `json:"commands"`
+		Commands []command   `json:"commands"`
 		Capture  CaptureMode `json:"capture"`
 		Digest   string      `json:"digest"`
-	}{r.Commands, r.Capture, string(RecipeDigest([]byte(trustedRecipeBytes)))}
+	}{commands, r.Capture, string(RecipeDigest([]byte(trustedRecipeBytes)))}
 	got, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -70,6 +78,25 @@ func TestParseRecipeRejects(t *testing.T) {
 		{"null argument token", `{"commands": [["swift", "test", null]], "capture": "none"}`},
 		{"null executable token", `{"commands": [[null]], "capture": "none"}`},
 		{"null command", `{"commands": [null], "capture": "none"}`},
+		{"number command", `{"commands": [7], "capture": "none"}`},
+		// The object form names its argv and room explicitly; nothing
+		// about it is defaulted.
+		{"object unknown room", `{"commands": [{"argv": ["true"], "room": "linux_vm"}], "capture": "none"}`},
+		{"object room case variant", `{"commands": [{"argv": ["true"], "room": "MACOS_HOST"}], "capture": "none"}`},
+		{"object empty room", `{"commands": [{"argv": ["true"], "room": ""}], "capture": "none"}`},
+		{"object missing room", `{"commands": [{"argv": ["true"]}], "capture": "none"}`},
+		{"object null room", `{"commands": [{"argv": ["true"], "room": null}], "capture": "none"}`},
+		{"object room not a string", `{"commands": [{"argv": ["true"], "room": 1}], "capture": "none"}`},
+		{"object missing argv", `{"commands": [{"room": "macos_host"}], "capture": "none"}`},
+		{"object null argv", `{"commands": [{"argv": null, "room": "macos_host"}], "capture": "none"}`},
+		{"object empty argv", `{"commands": [{"argv": [], "room": "macos_host"}], "capture": "none"}`},
+		{"object argv a string", `{"commands": [{"argv": "true", "room": "macos_host"}], "capture": "none"}`},
+		{"object null token", `{"commands": [{"argv": ["swift", null], "room": "macos_host"}], "capture": "none"}`},
+		{"object unknown field", `{"commands": [{"argv": ["true"], "room": "macos_host", "env": {}}], "capture": "none"}`},
+		{"object case-folded duplicate room", `{"commands": [{"argv": ["true"], "room": "project_image", "Room": "macos_host"}], "capture": "none"}`},
+		{"object duplicate room", `{"commands": [{"argv": ["true"], "room": "project_image", "room": "macos_host"}], "capture": "none"}`},
+		{"object shell command string", `{"commands": [{"argv": ["sh", "-c", "true"], "room": "macos_host"}], "capture": "none"}`},
+		{"object dotdot token", `{"commands": [{"argv": ["../escape.sh"], "room": "macos_host"}], "capture": "none"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,8 +125,43 @@ func TestParseRecipeArgvOpaque(t *testing.T) {
 		{"xcodebuild", "-destination", "generic/platform=iOS Simulator"},
 		{"grep", "-E", "a|b > c", "."},
 	}
+	if !reflect.DeepEqual(r.CommandsIn(ClassProjectImage), want) {
+		t.Fatalf("Commands = %#v, want %#v", r.Commands, want)
+	}
+}
+
+// TestParseRecipeExecutionClasses pins the two command forms: a bare
+// argv array runs in the project image, and an object names its room.
+// Whitespace before a command does not change how its form is read.
+func TestParseRecipeExecutionClasses(t *testing.T) {
+	t.Parallel()
+	raw := `{"commands": [` +
+		`["bash", "scripts/check.sh", "app", "linux"], ` +
+		`{"argv": ["bash", "scripts/check.sh", "app", "test"], "room": "macos_host"},` +
+		"\n\t" + `{"room": "project_image", "argv": ["go", "vet", "./..."]}` +
+		`], "capture": "none"}`
+	r, err := ParseRecipe([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseRecipe: %v", err)
+	}
+	want := []Command{
+		{Argv: []string{"bash", "scripts/check.sh", "app", "linux"}, Class: ClassProjectImage},
+		{Argv: []string{"bash", "scripts/check.sh", "app", "test"}, Class: ClassMacOSHost},
+		{Argv: []string{"go", "vet", "./..."}, Class: ClassProjectImage},
+	}
 	if !reflect.DeepEqual(r.Commands, want) {
 		t.Fatalf("Commands = %#v, want %#v", r.Commands, want)
+	}
+	if got := r.CommandsIn(ClassMacOSHost); !reflect.DeepEqual(got, [][]string{want[1].Argv}) {
+		t.Errorf("CommandsIn(macos_host) = %#v", got)
+	}
+	if got := r.CommandsIn(ClassProjectImage); !reflect.DeepEqual(got, [][]string{want[0].Argv, want[2].Argv}) {
+		t.Errorf("CommandsIn(project_image) = %#v", got)
+	}
+	// A macos_host command's script is a verification-control path like
+	// any other: CommandPaths covers every class.
+	if got := r.CommandPaths(); !reflect.DeepEqual(got, []string{"scripts/check.sh"}) {
+		t.Errorf("CommandPaths = %#v", got)
 	}
 }
 
@@ -226,6 +288,28 @@ func TestCaptureModeValidity(t *testing.T) {
 	}
 }
 
+func TestExecutionClassValidity(t *testing.T) {
+	t.Parallel()
+	for _, c := range AllExecutionClasses {
+		if !c.valid() {
+			t.Errorf("registered execution class %q reports invalid", c)
+		}
+	}
+	if ExecutionClass("").valid() {
+		t.Error("zero execution class reports valid")
+	}
+}
+
+// imageRecipe builds a recipe whose commands all run in the project
+// image, the shape every recipe had before execution classes.
+func imageRecipe(argvs [][]string) Recipe {
+	r := Recipe{Capture: CaptureNone}
+	for _, argv := range argvs {
+		r.Commands = append(r.Commands, Command{Argv: argv, Class: ClassProjectImage})
+	}
+	return r
+}
+
 func TestRecipeSourceValidity(t *testing.T) {
 	t.Parallel()
 	if (RecipeSource{}).valid() {
@@ -280,7 +364,7 @@ func TestRecipeCommandPaths(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Recipe{Commands: tc.cmds}.CommandPaths()
+			got := imageRecipe(tc.cmds).CommandPaths()
 			if len(got) != len(tc.want) {
 				t.Fatalf("CommandPaths() = %v, want %v", got, tc.want)
 			}

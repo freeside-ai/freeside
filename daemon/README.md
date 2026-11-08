@@ -2970,6 +2970,25 @@ intent revision and returns `installation_pending`, so the next review carries
 a new approval digest. That is the one Freeside manual review; a GitHub
 organization approval remains a separate native prerequisite.
 
+**Each recipe command names the room that runs it.** A command is one of two
+JSON forms:
+
+- **A bare argv array**, `["go", "test", "./..."]`, runs in the project
+  image (`project_image`). Every recipe written before execution classes
+  uses this form, so its bytes, digest, and approval are unchanged.
+- **An object**, `{"argv": ["bash", "scripts/check.sh", "app", "test"],
+  "room": "macos_host"}`, names its room. Both fields are required, and
+  `room` is `project_image` or `macos_host` (the credential-free macOS
+  verification executor). Any other field or room is refused.
+
+The recipe digest is a hash of the exact bytes, so moving a command to
+another room is a recipe change that needs a fresh approval. The verifier
+runs each command in its class's room and records the class as each step's
+`room` in the verification report. A recipe that names a class with no room
+available fails before any command runs; it never runs the command in
+another room. The project image's offline proof runs only the
+`project_image` commands, because the image never runs the others.
+
 **`-protected-path <class>=<pattern>` widens a protected-path class.** Repeat
 it once per pattern. The class is the trust profile's
 `extra_<class>_patterns` field: `automation_control`, `reviewer_instruction`,
@@ -3390,7 +3409,8 @@ these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs the
-  four commands sized above.
+  four commands sized above, all in the project image; it names no
+  `macos_host` command yet.
 - **Toolchain:** `-go-module-dir daemon`. The root has no `go.mod`.
 - **Protected paths:** exactly these flags, in this order. Quote each
   pattern so the shell does not expand `**`.

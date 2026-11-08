@@ -19,7 +19,8 @@ import (
 // recipe enter evidence_snapshot).
 const (
 	// ArtifactTypeVerificationReport is the canonical JSON account:
-	// head, recipe digest, per-step argv and exit, outcome, findings.
+	// head, recipe digest, per-step argv, room, and exit, outcome,
+	// findings.
 	ArtifactTypeVerificationReport = domain.ArtifactKindVerificationReport
 	// ArtifactTypeCommandTranscript is the bounded combined output of
 	// the recipe's commands.
@@ -61,8 +62,14 @@ func (o Outcome) valid() bool {
 
 // Step is one executed recipe command's account.
 type Step struct {
-	Argv     []string `json:"argv"`
-	ExitCode int      `json:"exit_code"`
+	Argv []string `json:"argv"`
+	// Room is the execution class whose room ran the command. The
+	// verifier always writes it. A report written before the field
+	// existed has none, still parses, and keeps its artifact digest;
+	// ParseReport reads its steps as project_image, the only room
+	// there was.
+	Room     ExecutionClass `json:"room,omitempty"`
+	ExitCode int            `json:"exit_code"`
 	// OutputTruncated reports that this step's output was cut at a
 	// byte cap, so the transcript is honest about being partial.
 	OutputTruncated bool `json:"output_truncated"`
@@ -110,9 +117,12 @@ func ParseReport(raw []byte) (Report, error) {
 	if rep.EvaluatedSHA != "" && (rep.BaseSHA == "" || rep.EvaluatedSHA == rep.HeadSHA || rep.EvaluatedSHA == rep.BaseSHA) {
 		return Report{}, fmt.Errorf("verification report's evaluated commit is not a merge of its head into its base")
 	}
-	for _, step := range rep.Steps {
+	for i, step := range rep.Steps {
 		if len(step.Argv) == 0 || step.Argv[0] == "" {
 			return Report{}, fmt.Errorf("verification report has an empty command")
+		}
+		if step.Room != "" && !step.Room.valid() {
+			return Report{}, fmt.Errorf("verification report step %d names unknown room %q", i, step.Room)
 		}
 	}
 	canonical, err := json.MarshalIndent(rep, "", "  ")
@@ -121,6 +131,13 @@ func ParseReport(raw []byte) (Report, error) {
 	}
 	if !bytes.Equal(append(canonical, '\n'), raw) {
 		return Report{}, fmt.Errorf("verification report is not canonical")
+	}
+	// Read a pre-class step as the project image only after the canonical
+	// check, which must compare the bytes as stored.
+	for i := range rep.Steps {
+		if rep.Steps[i].Room == "" {
+			rep.Steps[i].Room = ClassProjectImage
+		}
 	}
 	return rep, nil
 }
