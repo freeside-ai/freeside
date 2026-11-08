@@ -5300,8 +5300,25 @@ components:
         message:
           type: string
           description: >
-            The conversation message the command carried (discuss); empty
-            for pure decisions. The record always renders both content
+            The command's message, whose content depends on the action.
+            discuss, request_changes, answer_and_retry,
+            answer_without_retry, and return_to_agent carry the human's
+            text. Seven actions carry their decision's canonical parameter
+            here, so a retry under the same command_id meets the same
+            write-once record: adjudicate_findings, the finding routes as
+            JSON sorted by finding id; choose_alternative_route, the
+            alternative choices as JSON sorted by finding id;
+            start_with_changes, the task proposal revision as JSON;
+            approve_with_changes, the effect proposal revision as JSON
+            ({"resolves": <bool>}); snooze, the UTC snooze time in RFC 3339
+            with up to nine fractional digits and trailing zeros trimmed
+            (Go's time.RFC3339Nano); retry_with_capabilities, the chosen
+            capability manifest digest; and retry_with_alternate_agent, the
+            chosen agent's tree name. Every other action,
+            accept_recommended_route included, leaves it empty.
+            decisionMessage in
+            daemon/internal/signet/command.go is the source of truth for
+            each action's byte form. The record always renders both content
             fields, empty or not, so the write-once body has one byte-form.
         attachments:
           type: array

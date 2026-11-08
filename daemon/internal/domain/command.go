@@ -34,13 +34,27 @@ type Command struct {
 	PRHeadSHA       string   `json:"pr_head_sha"`
 	ArtifactDigests []Digest `json:"artifact_digests"`
 	Action          Action   `json:"action"`
-	// Message and Attachments carry conversation content for the actions that
-	// ride the conversation channel (discuss, plan §5.14: the transaction's
-	// first step is "append message"); both are empty for pure decisions.
-	// Unlike ArtifactDigests they are content, not a binding set: attachment
-	// order is authored, so it is preserved, never canonicalized. Which
-	// actions require or forbid them is the acceptance boundary's policy, not
-	// a domain invariant.
+	// Message and Attachments are the command's content. Unlike
+	// ArtifactDigests they are not a binding set: attachment order is
+	// authored, so it is preserved, never canonicalized. Which actions
+	// require or forbid them is the acceptance boundary's policy, not a
+	// domain invariant. Attachments are empty for every action but discuss,
+	// whose message rides the conversation channel (plan §5.14: the
+	// transaction's first step is "append message"). Message carries the
+	// human's text for discuss, request_changes, answer_and_retry,
+	// answer_without_retry, and return_to_agent. For seven parameterized
+	// decisions it carries the decision's canonical parameter instead:
+	// adjudicate_findings and choose_alternative_route their finding choices
+	// as JSON sorted by finding id, start_with_changes and
+	// approve_with_changes their revision as JSON, snooze its UTC time in
+	// time.RFC3339Nano form (trailing fractional zeros trimmed),
+	// retry_with_capabilities the chosen manifest digest, and
+	// retry_with_alternate_agent the chosen agent's tree name. Packing the
+	// parameter here, not in typed fields, keeps a retry under the same
+	// CommandID on the same write-once record
+	// (devlog/2026-09-21-0915-effect-proposal-facts-api.md). Every other
+	// action, accept_recommended_route included, leaves Message empty.
+	// signet.decisionMessage is the source of truth for each byte form.
 	Message     string   `json:"message"`
 	Attachments []Digest `json:"attachments"`
 	// AnswerRoute is set only by answer_and_retry on an implementation-stage
