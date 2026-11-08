@@ -302,6 +302,10 @@ import Testing
         // Sending: the control speaks.
         #expect(coordinator.taskStop.sending.contains(taskID))
         #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
+        // A task being stopped starts no new attempt, so Change Agent goes
+        // with Stop before sync shows the cancellation.
+        #expect(
+            !TaskActionsMenu(coordinator: coordinator, taskID: taskID, confirmation: .constant(nil)).offersLineChange)
         await release.open()
         await sending.value
         // Accepted: the synced cancellation keeps the control speaking.

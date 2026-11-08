@@ -379,11 +379,25 @@ public enum AgentChoiceDisplay {
     public static func defaultLabel(
         role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Catalog?
     ) -> String {
+        "Default · " + lineupLabel(role: role, policy: policy, catalog: catalog)
+    }
+
+    /// The task page's entry that clears a role's line (#2651): what then
+    /// picks the agent, as `defaultLabel` names it, after `Clear`.
+    public static func clearLabel(
+        role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Catalog?
+    ) -> String {
+        "Clear · " + lineupLabel(role: role, policy: policy, catalog: catalog)
+    }
+
+    private static func lineupLabel(
+        role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Catalog?
+    ) -> String {
         let lineup =
             catalog?.lineup.first { $0.role == role }.map { "lineup \(shortLabel($0.selection, catalog: catalog))" }
             ?? "lineup"
         let policyListsTheRole = policy?.roles.contains { $0.role == role } == true
-        return "Default · \(lineup)" + (policyListsTheRole ? " or routing policy" : "")
+        return lineup + (policyListsTheRole ? " or routing policy" : "")
     }
 
     /// One catalog agent's facts as the Agents pane lists them: model,

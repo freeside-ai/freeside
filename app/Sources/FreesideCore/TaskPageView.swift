@@ -290,6 +290,7 @@ struct TaskPageView: View {
             VStack(alignment: .leading, spacing: 22) {
                 attachmentsSection
                 stopStates
+                lineChangeStates
                 // Absent at zero, as Decisions is: the outline drops its
                 // chip then too.
                 if Self.messageCount(conversations) > 0 {
@@ -773,6 +774,14 @@ struct TaskPageView: View {
         let stop = TaskStopView(
             coordinator: coordinator, taskID: snapshot.task.id, explanationExpanded: $showsStopExplanation)
         if !stop.isQuiet { stop }
+    }
+
+    /// What the task's line change says, drawn only while there is
+    /// something to say; the change itself starts from the Task Actions
+    /// menu.
+    @ViewBuilder private var lineChangeStates: some View {
+        let change = TaskLineChangeView(model: coordinator.taskLineChange, taskID: snapshot.task.id)
+        if !change.isQuiet { change }
     }
 
     /// Every conversation the task's items name, read-only: a reply goes

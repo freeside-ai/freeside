@@ -387,6 +387,16 @@ import Testing
                 role: .reviewer, policy: nil, catalog: UsageFixtures.treelessAgentCatalog()) == "Default · lineup")
     }
 
+    /// The task page clears a line where New Task leaves a role unchosen, so
+    /// its entry names the same fallback after Clear.
+    @Test func clearLabelNamesWhatPicksTheAgentOnceTheLineIsCleared() {
+        let policy = UsageFixtures.defaultRoutingPolicy()
+        #expect(
+            AgentChoiceDisplay.clearLabel(role: .implementer, policy: policy, catalog: catalog)
+                == "Clear · lineup \(UsageFixtures.readingCollectorID) · Opus · high or routing policy")
+        #expect(AgentChoiceDisplay.clearLabel(role: .reviewer, policy: nil, catalog: nil) == "Clear · lineup")
+    }
+
     @Test func theAgentsPaneFactsNameModelEffortAndLineageGroup() {
         #expect(AgentChoiceDisplay.facts(catalog.agents[1]) == "claude-opus · Max · anthropic")
         #expect(AgentChoiceDisplay.facts(catalog.agents[2]) == "gpt-codex · Harness default · No lineage group")

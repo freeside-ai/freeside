@@ -8,8 +8,9 @@ import SwiftUI
 /// the harness build that reported them. Each pick closes the menu and goes
 /// through `AgentChoiceDisplay.picking`; a pick that changes nothing calls
 /// nothing. A model or effort a newer catalog dropped keeps a disabled entry
-/// tagged with it, so its picker still shows it chosen. The caller supplies
-/// the menu around it, so only its entries are drawn here.
+/// tagged with it, so its picker still shows it chosen, and so does a line
+/// recorded by agent name before #2597, which any pick replaces. The caller
+/// supplies the menu around it, so only its entries are drawn here.
 struct RoleSelectionMenu: View {
     typealias Role = AgentChoiceDisplay.Role
     typealias Selection = AgentChoiceDisplay.Selection
@@ -24,6 +25,9 @@ struct RoleSelectionMenu: View {
         /// The selection the role holds; nil while it is left to the lineup
         /// or holds a line set by name.
         let current: Selection?
+        /// The agent a line recorded before #2597 names in place of a
+        /// selection. New Task has no such line.
+        var byName: String? = nil
     }
 
     let offer: Offer
@@ -34,6 +38,7 @@ struct RoleSelectionMenu: View {
     /// The tag of an entry in the enrollment picker.
     private enum EnrollmentEntry: Hashable {
         case lineup
+        case byName
         case enrollment(String)
     }
 
@@ -46,6 +51,9 @@ struct RoleSelectionMenu: View {
             Text(lineupLabel).tag(EnrollmentEntry.lineup)
             ForEach(AgentChoiceDisplay.enrollments(catalog, pools: offer.pools, now: now)) { enrollment in
                 Text(enrollment.label).tag(EnrollmentEntry.enrollment(enrollment.id)).disabled(!enrollment.isPickable)
+            }
+            if let agent = offer.byName {
+                Text("\(agent) · set by name").tag(EnrollmentEntry.byName).disabled(true)
             }
             if let chosen, dropped == .enrollment {
                 Text("\(chosen.enrollment_id) · no longer offered")
@@ -86,17 +94,34 @@ struct RoleSelectionMenu: View {
         }
     }
 
-    private func choose(_ pick: AgentChoiceDisplay.Pick) {
+    /// What a pick hands `onChoose`: the role's selection after it.
+    struct Choice: Equatable {
+        let selection: Selection?
+    }
+
+    /// The choice `pick` makes in `offer`, or nil when it changes nothing.
+    /// A line set by name holds no selection, so leaving it for the lineup
+    /// is a change too.
+    static func choice(_ pick: AgentChoiceDisplay.Pick, in offer: Offer) -> Choice? {
         let next = AgentChoiceDisplay.picking(pick, from: offer.current, role: offer.role, catalog: offer.catalog)
-        if next != offer.current { onChoose(next) }
+        guard next != offer.current || (offer.byName != nil && pick == .enrollment(nil)) else { return nil }
+        return Choice(selection: next)
+    }
+
+    private func choose(_ pick: AgentChoiceDisplay.Pick) {
+        if let choice = Self.choice(pick, in: offer) { onChoose(choice.selection) }
     }
 
     private var enrollmentChoice: Binding<EnrollmentEntry> {
         Binding(
-            get: { offer.current.map { .enrollment($0.enrollment_id) } ?? .lineup },
+            get: {
+                if let current = offer.current { return .enrollment(current.enrollment_id) }
+                return offer.byName == nil ? .lineup : .byName
+            },
             set: { entry in
                 switch entry {
                 case .lineup: choose(.enrollment(nil))
+                case .byName: break
                 case .enrollment(let id): choose(.enrollment(id))
                 }
             })
