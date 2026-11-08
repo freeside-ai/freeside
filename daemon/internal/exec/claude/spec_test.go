@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -1168,6 +1169,46 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 		// Agents copied this placeholder verbatim as the PR title (#1464).
 		if bytes.Contains(body, []byte("Outcome title")) {
 			t.Errorf("%s shows a copyable placeholder title", name)
+		}
+	}
+}
+
+// TestReviewGuidePromptContract pins what both prompts tell the agent about
+// the review guide the file_v7 launcher declares: its reserved path, its caps,
+// and an example the importer accepts, so the prompt cannot teach a shape that
+// fails the stage.
+func TestReviewGuidePromptContract(t *testing.T) {
+	t.Parallel()
+	promptDir := phase1APromptDir(t)
+	for _, name := range []string{"implementer.md", "remediator.md"} {
+		body, err := os.ReadFile(filepath.Join(promptDir, name)) //nolint:gosec // fixed prompt fixtures
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, required := range []string{
+			export.ReviewGuideEvidencePath, "never paste it", "at most 80 lines", "`head` means the final workspace",
+			"1 to 12 stops", "at most 4 excerpts per stop", "at most 8 questions", "within 120 characters",
+			"within 2,000", "within 300", "within 500", "under 64 KiB", "A malformed guide fails the stage",
+			"do not commit it",
+		} {
+			if !bytes.Contains(body, []byte(required)) {
+				t.Errorf("%s omits %q", name, required)
+			}
+		}
+		_, rest, ok := bytes.Cut(body, []byte("## Review Guide\n"))
+		if !ok {
+			t.Fatalf("%s has no review guide section", name)
+		}
+		_, example, ok := bytes.Cut(rest, []byte("```json\n"))
+		if !ok {
+			t.Fatalf("%s review guide section has no example", name)
+		}
+		example, _, ok = bytes.Cut(example, []byte("\n```"))
+		if !ok {
+			t.Fatalf("%s review guide example is unterminated", name)
+		}
+		if _, err := importer.DecodeReviewGuide(example); err != nil {
+			t.Errorf("%s review guide example does not decode: %v", name, err)
 		}
 	}
 }
