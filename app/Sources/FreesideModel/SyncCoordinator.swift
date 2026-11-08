@@ -63,6 +63,12 @@ public final class SyncCoordinator {
     package internal(set) var parkedTaskMoveSending = false
     package internal(set) var parkedTaskMoveFailure: String?
     @ObservationIgnored package lazy var parkedTaskMove = ParkedTaskMoveModel(coordinator: self)
+    /// The change of a task's line sent and not yet settled by sync; one at
+    /// a time, so the task page finds it after a relaunch.
+    public private(set) var pendingTaskLineChange: PendingTaskLineChange?
+    package internal(set) var taskLineChangeSending = false
+    package internal(set) var taskLineChangeFailure: TaskLineChangeFailure?
+    @ObservationIgnored package lazy var taskLineChange = TaskLineChangeModel(coordinator: self)
     private let submissionDaemonID: String
     public let promptHistory: TaskPromptHistory
     public private(set) var cursors: SyncCursors?
@@ -243,6 +249,11 @@ public final class SyncCoordinator {
                 entry.isValid(deviceID: device.deviceID)
             {
                 pendingParkedTaskMove = entry
+            }
+            if cached.lineChangeDaemonID == submissionDaemonID, let entry = cached.pendingTaskLineChange,
+                entry.isValid(deviceID: device.deviceID)
+            {
+                pendingTaskLineChange = entry
             }
             if cached.submissionDaemonID == submissionDaemonID {
                 pendingTaskSubmissions = (cached.pendingTaskSubmissions ?? [:]).filter { id, command in
@@ -463,6 +474,7 @@ public final class SyncCoordinator {
                         settleRoutingPolicyChange()
                         settleUsageCommand()
                         settleParkedTaskMove()
+                        settleTaskLineChange()
                     }
                 }
             case .badRequest:
@@ -990,6 +1002,7 @@ public final class SyncCoordinator {
         settleRoutingPolicyChange()
         settleUsageCommand()
         settleParkedTaskMove()
+        settleTaskLineChange()
         persist()
         return true
     }
@@ -1105,7 +1118,7 @@ public final class SyncCoordinator {
         guard
             cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !pendingTaskStops.isEmpty
                 || pendingRoutingPolicyChange != nil || pendingUsageCommand != nil
-                || pendingParkedTaskMove != nil
+                || pendingParkedTaskMove != nil || pendingTaskLineChange != nil
                 || !comprehensionQueue.isEmpty
                 || fingerprint != nil
         else {
@@ -1142,6 +1155,8 @@ public final class SyncCoordinator {
                     usageDaemonID: submissionDaemonID,
                     pendingParkedTaskMove: pendingParkedTaskMove,
                     moveDaemonID: submissionDaemonID,
+                    pendingTaskLineChange: pendingTaskLineChange,
+                    lineChangeDaemonID: submissionDaemonID,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
                     registeredCapabilityFingerprint: fingerprint,
@@ -1372,5 +1387,42 @@ public final class SyncCoordinator {
         }
         guard let receipt = entry.receipt, cursors.lastFullSnapshotRevision >= receipt.revision else { return }
         finishParkedTaskMove()
+    }
+
+    /// Persist the exact command before sending it; a failed write rolls
+    /// back. Holds one change at a time: a different command is refused
+    /// while another is unresolved.
+    func retainTaskLineChange(_ entry: PendingTaskLineChange) -> Bool {
+        guard entry.isValid(deviceID: store.device.deviceID),
+            pendingTaskLineChange == nil || pendingTaskLineChange?.command == entry.command
+        else { return false }
+        let previous = pendingTaskLineChange
+        pendingTaskLineChange = entry
+        guard persist() else {
+            pendingTaskLineChange = previous
+            return false
+        }
+        return true
+    }
+
+    func finishTaskLineChange() {
+        let previous = pendingTaskLineChange
+        pendingTaskLineChange = nil
+        if !persist() { pendingTaskLineChange = previous }
+    }
+
+    /// An accepted change settles once fresh sync's full snapshot is at or
+    /// past the receipt's revision, where the task's new line is recorded. A
+    /// new epoch settles any change, answered or not: the restored daemon's
+    /// lines are what sync now shows, and a resend could change a line the
+    /// operator never saw.
+    func settleTaskLineChange() {
+        guard store.freshness == .fresh, let cursors, let entry = pendingTaskLineChange else { return }
+        if cursors.syncEpoch != entry.syncEpoch {
+            finishTaskLineChange()
+            return
+        }
+        guard let receipt = entry.receipt, cursors.lastFullSnapshotRevision >= receipt.revision else { return }
+        finishTaskLineChange()
     }
 }

@@ -50,6 +50,10 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// kept the same way. Additive: a cache without it loads none.
     public var pendingParkedTaskMove: PendingParkedTaskMove?
     public var moveDaemonID: String?
+    /// The unresolved change of a task's line, and the daemon it was sent
+    /// to, kept the same way. Additive: a cache without it loads none.
+    public var pendingTaskLineChange: PendingTaskLineChange?
+    public var lineChangeDaemonID: String?
     public var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]?
     public var submissionDaemonID: String?
     public var cursors: SyncCursors?
@@ -116,6 +120,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         usageDaemonID: String? = nil,
         pendingParkedTaskMove: PendingParkedTaskMove? = nil,
         moveDaemonID: String? = nil,
+        pendingTaskLineChange: PendingTaskLineChange? = nil,
+        lineChangeDaemonID: String? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
         registeredCapabilityFingerprint: String? = nil,
@@ -144,6 +150,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.usageDaemonID = usageDaemonID
         self.pendingParkedTaskMove = pendingParkedTaskMove
         self.moveDaemonID = moveDaemonID
+        self.pendingTaskLineChange = pendingTaskLineChange
+        self.lineChangeDaemonID = lineChangeDaemonID
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
         self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
@@ -200,6 +208,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         pendingParkedTaskMove = try? container.decodeIfPresent(
             PendingParkedTaskMove.self, forKey: .pendingParkedTaskMove)
         moveDaemonID = try? container.decodeIfPresent(String.self, forKey: .moveDaemonID)
+        pendingTaskLineChange = try? container.decodeIfPresent(
+            PendingTaskLineChange.self, forKey: .pendingTaskLineChange)
+        lineChangeDaemonID = try? container.decodeIfPresent(String.self, forKey: .lineChangeDaemonID)
         // The telemetry queue and its state degrade independently too: an
         // undecodable section loads absent, costing at most queued events.
         comprehensionQueue = try? container.decodeIfPresent(
