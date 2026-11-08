@@ -263,10 +263,15 @@ public struct DiskCacheStore: CacheStore {
     /// enrollments and each agent's selection (#2598); a format 9 cursor
     /// would skip the bootstrap that supplies them. 11: alternate-agent offers
     /// name enrollments (#2808); a format 10 file's offers named agents, and
-    /// its cursor would skip the bootstrap that restores them. A pre-current
-    /// cache cannot claim freshness while durable rows from a newer client
-    /// surface are absent.
-    static let format = 11
+    /// its cursor would skip the bootstrap that restores them. 12: the
+    /// routing policy's roles and passed-over marks gained their enrollment
+    /// form (#2807); an older snapshot holds a policy the interim wire
+    /// rendered as agent names, and its cursor would skip the bootstrap that
+    /// replaces it. An unsettled routing change from before format 12 orders
+    /// names the daemon now refuses, so it fails its own section's decode
+    /// and loads absent. A pre-current cache cannot claim freshness while
+    /// durable rows from a newer client surface are absent.
+    static let format = 12
 
     private struct CacheFile: Codable {
         var format: Int
@@ -287,8 +292,8 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4, 5, 6, 7, 8, 9, 10:
-            // Formats 2 to 10 already carried retryable commands, but predate
+        case 2, 3, 4, 5, 6, 7, 8, 9, 10, 11:
+            // Formats 2 to 11 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
