@@ -17,7 +17,7 @@ linters:
     - depguard # test-only store fixtures stay out of production files
     - errorlint # error-wrapping mistakes (%w vs %v, errors.Is/As misuse)
     - exhaustive # missing enum switch cases (matters once domain lands)
-    - forbidigo # production store opens go through the topic-key helper
+    - forbidigo # store opens and run observation reads go through their helpers
     - gosec # security static checks for a credential-broker daemon
     - misspell # free, deterministic spelling fixes in comments/strings
     - nolintlint # keep //nolint directives specific and explained
@@ -39,12 +39,22 @@ linters:
     # files listed under exclusions. analyze-types matches the
     # package, not the identifier, so an alias or a local variable named
     # store is judged by what it is.
+    #
+    # A raw run observation shows each invocation's paced last look, which
+    # can call a finished invocation running (#2351, #2355), so readers go
+    # through signet's authenticated read (#2777). forbidigo names a method
+    # call by its receiver's type, so the pattern takes any store type: a
+    # call promoted through WriteTx or InternalTx reads as that type. A
+    # remaining raw read carries a nolint reason.
     forbidigo:
       analyze-types: true
       forbid:
         - pattern: ^store\.Open$
           pkg: ^github\.com/freeside-ai/freeside/daemon/internal/store$
           msg: open a production store through openStoreWithTopicKey
+        - pattern: ^store\.\w+\.ObserveRun$
+          pkg: ^github\.com/freeside-ai/freeside/daemon/internal/store$
+          msg: read a run observation through signet.ReadRunObservation, which authenticates invocation statuses
     depguard:
       rules:
         storetest:
@@ -59,6 +69,14 @@ linters:
       # out of production files), and the topic store open a store directly,
       # and so does the store package itself, where Open is unqualified.
       - path: (^cmd/freeside-signet-dev/main\.go|^internal/store/storetest/storetest\.go|^internal/topicstore/topicstore\.go|^internal/store/[^/]+\.go|_test\.go)$
+        linters:
+          - forbidigo
+      # The engine and the start-up completion reconcile read a run's
+      # milestones to decide workflow steps and show nothing, so they keep
+      # the raw observation read. Matching the text leaves the store.Open
+      # rule on for these files.
+      - path: ^(internal/engine/production_attempt\.go|internal/engine/production_workflow\.go|cmd/freesided/completion_reconcile\.go)$
+        text: ObserveRun
         linters:
           - forbidigo
       # Packages whose top-level tests still lack t.Parallel(). This list

@@ -166,7 +166,7 @@ func projectTaskSnapshot(
 		if len(newest.Stages) > 0 {
 			position.Stage = &newest.Stages[len(newest.Stages)-1].Name
 		}
-		observation, err := tx.ObserveRun(ctx, newest.ID)
+		observation, err := tx.ObserveRun(ctx, newest.ID) //nolint:forbidigo // shows only the newest review round number, never an invocation status
 		if err != nil {
 			return TaskSnapshot{}, err
 		}

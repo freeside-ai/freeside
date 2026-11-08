@@ -166,14 +166,10 @@ func loadedTaskTimeline(
 		if err := validateSnapshot(state, run.Snapshot); err != nil {
 			return TaskTimeline{}, err
 		}
-		observation, err := tx.ObserveRun(ctx, runID)
+		observation, err := observeAuthenticatedRun(ctx, tx, state, run.Value, items)
 		if err != nil {
 			return TaskTimeline{}, err
 		}
-		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
-			return TaskTimeline{}, asRunObservationIntegrityError(err)
-		}
-		observation = withAuthoritativeInvocationStatuses(observation)
 		facts, err := runProjectionFactsFor(ctx, tx, run.Value, observation)
 		if err != nil {
 			return TaskTimeline{}, asRunObservationIntegrityError(err)

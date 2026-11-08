@@ -529,7 +529,7 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 			})
 		}
 	}
-	observation, err := tx.ObserveRun(ctx, runID)
+	observation, err := tx.ObserveRun(ctx, runID) //nolint:forbidigo // the conclusion reads the stored observation, so a status authentication failure leaves it standing
 	if err != nil {
 		// The conclusion is classified from the observation.
 		fail(taskRecordRunObservation, err)
@@ -548,14 +548,15 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 	// recorded terminal indefinitely, so the record shows the authenticated
 	// terminal status the app's run views show (#785's authority rule). A
 	// terminal fact that fails authentication blanks this section only.
-	if overlaid, err := signet.AuthoritativeInvocationStatuses(ctx, tx, run, observation); err != nil {
+	if overlaid, err := signet.ReadRunObservation(ctx, tx, run); err != nil {
 		fail(taskRecordRunObservation, err)
 	} else {
 		out.Hold = overlaid.Hold
 		out.Invocations = append([]domain.InvocationObservation{}, overlaid.Invocations...)
 	}
-	// The conclusion reads the store's observation, as `freesided follow`
-	// does, so the two cannot disagree about one run.
+	// The conclusion reads the store's observation, so a status failure
+	// above leaves it standing. It matches `freesided follow`'s, which
+	// reads the overlaid one: the overlay changes no milestone.
 	conclusion, err := authenticatedTaskRecordConclusion(ctx, tx, run, observation)
 	if err != nil {
 		fail(taskRecordRunConclusion, err)

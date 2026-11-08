@@ -1020,18 +1020,14 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err := validateSnapshot(state, value.Snapshot); err != nil {
 			return err
 		}
-		observation, err := tx.ObserveRun(ctx, id)
-		if err != nil {
-			return err
-		}
 		items, err := tx.ListAttentionItems(ctx)
 		if err != nil {
 			return err
 		}
-		if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
-			return asRunObservationIntegrityError(err)
+		observation, err := observeAuthenticatedRun(ctx, tx, state, value.Value, items)
+		if err != nil {
+			return err
 		}
-		observation = withAuthoritativeInvocationStatuses(observation)
 		conclusion, err := AuthenticatedRunConclusion(
 			ctx, tx, value.Value, observation, publicationReadyMilestone(observation),
 		)
@@ -1077,18 +1073,14 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err := validateSnapshot(state, run.Snapshot); err != nil {
 			return err
 		}
-		observation, err := tx.ObserveRun(ctx, id)
-		if err != nil {
-			return err
-		}
 		items, err := tx.ListAttentionItems(ctx)
 		if err != nil {
 			return err
 		}
-		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
-			return asRunObservationIntegrityError(err)
+		observation, err := observeAuthenticatedRun(ctx, tx, state, run.Value, items)
+		if err != nil {
+			return err
 		}
-		observation = withAuthoritativeInvocationStatuses(observation)
 		facts, err := runProjectionFactsFor(ctx, tx, run.Value, observation)
 		if err != nil {
 			return asRunObservationIntegrityError(err)
@@ -1562,14 +1554,10 @@ func projectRunSnapshot(
 	snapshot store.Snapshot,
 	items []store.Snapshotted[domain.AttentionItem],
 ) (RunSnapshot, error) {
-	observation, err := tx.ObserveRun(ctx, run.ID)
+	observation, err := observeAuthenticatedRun(ctx, tx, state, run, items)
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, err)
 	}
-	if err := authenticateRunObservation(ctx, tx, state, run, observation, items); err != nil {
-		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, asRunObservationIntegrityError(err))
-	}
-	observation = withAuthoritativeInvocationStatuses(observation)
 	conclusion, err := AuthenticatedRunConclusion(
 		ctx, tx, run, observation, publicationReadyMilestone(observation),
 	)
@@ -1587,6 +1575,32 @@ func projectRunSnapshot(
 		return RunSnapshot{}, fmt.Errorf("run %q display names: %w", run.ID, err)
 	}
 	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames, facts), nil
+}
+
+// observeAuthenticatedRun is signet's own read of one run's observation for
+// the client run reads: the full authentication pass over every milestone,
+// the hold, and the attention items, then the authenticated status overlay.
+// An authentication failure that is a parent-key mismatch comes back tagged
+// ErrRunObservationIntegrity, so a listing read excludes the run; any other
+// error, a missing record or a failed read, comes back as it is and fails
+// the read whole, as these reads classified it before they shared this one.
+// Readers outside signet, which have neither the server state nor the
+// attention items, use ReadRunObservation.
+func observeAuthenticatedRun(
+	ctx context.Context,
+	tx *store.ReadTx,
+	state store.ServerState,
+	run domain.Run,
+	items []store.Snapshotted[domain.AttentionItem],
+) (domain.RunObservation, error) {
+	observation, err := tx.ObserveRun(ctx, run.ID) //nolint:forbidigo // the full authentication pass and the overlay follow
+	if err != nil {
+		return domain.RunObservation{}, err
+	}
+	if err := authenticateRunObservation(ctx, tx, state, run, observation, items); err != nil {
+		return domain.RunObservation{}, asRunObservationIntegrityError(err)
+	}
+	return withAuthoritativeInvocationStatuses(observation), nil
 }
 
 func publicationReadyMilestone(observation domain.RunObservation) bool {
@@ -1908,7 +1922,7 @@ func authenticateRunObservation(
 // authenticateStatusMilestone binds one status-bearing milestone (an export,
 // an outcome, or a terminal) to the durable record it summarizes and to the
 // run attempt it names. withAuthoritativeInvocationStatuses reads exactly
-// these kinds, so the full observation pass and AuthoritativeInvocationStatuses
+// these kinds, so the full observation pass and ReadRunObservation
 // both go through it and cannot drift apart on which statuses they accept.
 func authenticateStatusMilestone(
 	ctx context.Context,
@@ -1949,26 +1963,40 @@ func authenticateStatusMilestone(
 	return nil
 }
 
-// AuthoritativeInvocationStatuses overlays a run's authenticated terminal
-// facts on its invocation observations, the status rule the client run reads
-// apply (withAuthoritativeInvocationStatuses), for a reader that does not run
-// the full observation pass. It authenticates every status-bearing milestone
-// first, with the checks that pass runs for those kinds, and returns the
-// first failure tagged the way the client reads tag it: a milestone the
-// durable records do not back must fail the read, never print a status.
+// ReadRunObservation is the read a reader outside signet uses for one run's
+// observation. It reads the run's observation in the caller's transaction,
+// authenticates every status-bearing milestone with the checks the full
+// observation pass runs for those kinds, and overlays each invocation's
+// authenticated terminal status (withAuthoritativeInvocationStatuses), the
+// status rule the client run reads apply. It does the read itself so a caller
+// cannot hand it a raw observation or stop before the overlay, which is how
+// `freesided inspect task` and `freesided follow` once showed a finished
+// invocation as running.
+//
+// A status milestone the durable records do not back fails the read with
+// ErrRunObservationIntegrity, whether the record contradicts it or is missing:
+// it must fail the read, never print a status. A failed observation read
+// returns its error untagged.
 //
 // It deliberately checks nothing else. The other milestone kinds, the hold,
 // the invocation rows' run binding, and attention items stay the full pass's
-// job, so a reader can keep a fault there out of the invocations it prints.
-// The returned observation's milestones and hold are the caller's, unchanged.
-func AuthoritativeInvocationStatuses(
-	ctx context.Context, tx *store.ReadTx, run domain.Run, observation domain.RunObservation,
+// job, so one damaged attention item cannot blank every run's invocations
+// (devlog/2026-10-26-1500-task-record-invocation-authority.md). The returned
+// observation's milestones and hold are as stored.
+func ReadRunObservation(
+	ctx context.Context, tx *store.ReadTx, run domain.Run,
 ) (domain.RunObservation, error) {
+	observation, err := tx.ObserveRun(ctx, run.ID) //nolint:forbidigo // this is the authenticated read the rule points to
+	if err != nil {
+		return domain.RunObservation{}, err
+	}
 	attempts := runAttemptBindings(run)
 	for _, milestone := range observation.Milestones {
 		if err := authenticateStatusMilestone(ctx, tx, run.ID, attempts, milestone); err != nil {
-			return domain.RunObservation{}, fmt.Errorf("run %q invocation status: %w",
-				run.ID, asRunObservationIntegrityError(err))
+			if store.IsRowVerdict(err) {
+				err = fmt.Errorf("%w: %w", ErrRunObservationIntegrity, err)
+			}
+			return domain.RunObservation{}, fmt.Errorf("run %q invocation status: %w", run.ID, err)
 		}
 	}
 	return withAuthoritativeInvocationStatuses(observation), nil
