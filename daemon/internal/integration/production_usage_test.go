@@ -203,7 +203,7 @@ func bindProductionWriters(t *testing.T, p *productionPublicationHarness) {
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 }
 
-// loopbackClaudeUsageAt parses the pinned 2.1.282 loopback turn's usage
+// loopbackClaudeUsageAt parses the 2.1.282 loopback turn's usage
 // capture, observed at the export stamp a driver pins it to.
 func loopbackClaudeUsageAt(t *testing.T, observedAt time.Time) *exec.ClaudeUsageCapture {
 	t.Helper()
