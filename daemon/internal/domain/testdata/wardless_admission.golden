@@ -1,6 +1,6 @@
 {
   "role": "task_namer",
-  "agent_digest": "sha256:32e635d8a2accab77dbd56eec55e495f967d4a9136b02475b748c4653de3bf04",
+  "agent_digest": "sha256:63c8ddfa68a6d9ffb1d729c87e8ad195f47e30fca1c9a1a486c214cc5caed460",
   "prompt_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "enrollment_id": "enroll-1",

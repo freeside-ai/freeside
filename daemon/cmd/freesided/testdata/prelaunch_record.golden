@@ -35,7 +35,7 @@
       "group": "agent_tree",
       "name": "agent_tree",
       "status": "passed",
-      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:2f56de11e50ffe5fd2699e8243ea6495deb1e031c6691a2ff9a2dd0fd4bca754 with 4 agents"
+      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:bcdce6e5a4648b2c8b3a71efffbf5b9eda7f0d426ebfe7bbc6c3d38dc3ff0dfd with 4 agents"
     },
     {
       "group": "inputs",
@@ -44,16 +44,16 @@
       "evidence": "the inputs pass submit's checks for a new submission to project project-widgets"
     },
     {
-      "group": "inputs",
-      "name": "task_lines",
-      "status": "passed",
-      "evidence": "no task lines"
-    },
-    {
       "group": "state",
       "name": "state_database",
       "status": "passed",
       "evidence": "opened read-only at this build's schema"
+    },
+    {
+      "group": "inputs",
+      "name": "task_lines",
+      "status": "passed",
+      "evidence": "no task lines"
     },
     {
       "group": "state",

@@ -14,7 +14,7 @@ import (
 // recorded none.
 func TestAdmittedFactsOfReviewIndependence(t *testing.T) {
 	t.Parallel()
-	review, _, _, _, _, _, _, _ := reviewAdmissionClosure(t)
+	review, _, _, _, _, _, _ := reviewAdmissionClosure(t)
 	review.LineageGroup = "openai"
 	cases := []struct {
 		name    string
@@ -71,7 +71,7 @@ func TestAdmittedFactsOfReviewIndependence(t *testing.T) {
 func TestInvocationAdmissionFactsValidate(t *testing.T) {
 	t.Parallel()
 	execution, _, _, _, _, _, _, _ := derivationClosure(t)
-	review, _, _, _, _, _, _, _ := reviewAdmissionClosure(t)
+	review, _, _, _, _, _, _ := reviewAdmissionClosure(t)
 	for _, kind := range domain.AllAdmissionKinds {
 		facts := domain.AdmittedFactsOfExecution(execution, domain.RoleImplementer)
 		if kind == domain.AdmissionKindReview {
@@ -124,7 +124,7 @@ func TestInvocationAdmissionFactsValidate(t *testing.T) {
 func TestExecutionFailureAdmittedFacts(t *testing.T) {
 	t.Parallel()
 	execution, _, _, _, _, _, _, _ := derivationClosure(t)
-	review, _, _, _, _, _, _, _ := reviewAdmissionClosure(t)
+	review, _, _, _, _, _, _ := reviewAdmissionClosure(t)
 	writer := domain.AdmittedFactsOfExecution(execution, domain.RoleImplementer)
 	failure := domain.ExecutionFailureFacts{
 		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseQuota,

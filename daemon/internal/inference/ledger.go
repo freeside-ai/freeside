@@ -74,7 +74,7 @@ type callIdentity struct {
 	// CredentialSource says whose bytes authenticated the call, beside the
 	// enrollment generation the admission names.
 	CredentialSource CredentialSource `json:"credential_source"`
-	// RequestedModelID and RequestedEffort are the admitted agent's, and
+	// RequestedModelID and RequestedEffort are the admitted selection's, and
 	// EffectiveEffort is what its launch sent: the harness-native value, or
 	// harness_default when it sent none, as the treatment digest covers it
 	// (domain.EffortTranslation.Effective). The two efforts differing is a

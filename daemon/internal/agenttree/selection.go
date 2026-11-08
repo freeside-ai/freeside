@@ -9,8 +9,8 @@ import (
 )
 
 // The document bridge. A v2 task line selects an enrollment, a model, and an
-// effort (domain.TaskLineSelection), while admission, routing policy, and the
-// lineup still name tree agents. These functions translate between the two
+// effort (domain.TaskLineSelection), while routing policy, the
+// alternate-agent record, and the client wire still name tree agents. These functions translate between the two
 // from the tree alone, with no store read, so the selection a v2 line holds
 // is the one domain.ReduceAgentSelection gives for the agent it maps to.
 // #2599 removes the bridge when admission resolves a selection without a
@@ -56,20 +56,24 @@ func (t Tree) selectionOf(source domain.AgentSource) (domain.TaskLineSelection, 
 // Agents that reduce to the selection and share an agent digest
 // (AgentDigest) are one definition under several names: they run the same
 // enrollment, route, adapter, offer, and effort, and the baseline tree
-// writes such twins whenever two roles pick one model and effort. Among
-// those reducing to the selection, the role's lineup agent wins, then its
-// escalated counterpart, then the first name of a sole definition. A
-// selection that two definitions share and the lineup does not settle
-// refuses as ambiguous, never by tree order: the definitions could differ
-// in adapter, and so in launch. An agent whose fragments the tree lacks
-// reduces to nothing and is skipped: admission refuses it by name anyway.
-// The errors never repeat the selection, which is operator text.
+// writes such twins whenever two roles pick one model and effort. Only an
+// agent whose adapter fits the role's launch shape counts (fitsLaunchShape),
+// so a ward agent and a call agent on one model and effort never compete.
+// Among those left, the first name of a sole definition wins. A selection
+// that two definitions share refuses as ambiguous, never by tree order: the
+// definitions could differ in adapter, and so in launch. An agent whose
+// fragments the tree lacks reduces to nothing and is skipped: admission
+// refuses it by name anyway. The errors never repeat the selection, which
+// is operator text.
 func (t Tree) AgentForSelection(role domain.RoleName, selection domain.TaskLineSelection) (string, error) {
 	digests := map[string]domain.Digest{}
 	var found []string
 	for _, source := range t.Agents {
 		reduced, err := t.selectionOf(source)
 		if err != nil || reduced != selection {
+			continue
+		}
+		if closure, err := t.closure(source); err != nil || !fitsLaunchShape(role, closure.adapter) {
 			continue
 		}
 		digest, err := t.AgentDigest(source.Name)
@@ -82,9 +86,6 @@ func (t Tree) AgentForSelection(role domain.RoleName, selection domain.TaskLineS
 	if len(found) == 0 {
 		return "", ErrNoAgentForSelection
 	}
-	if preferred, ok := t.lineupAgent(role, digests); ok {
-		return preferred, nil
-	}
 	slices.Sort(found)
 	for _, name := range found[1:] {
 		if digests[name] != digests[found[0]] {
@@ -94,27 +95,20 @@ func (t Tree) AgentForSelection(role domain.RoleName, selection domain.TaskLineS
 	return found[0], nil
 }
 
-// lineupAgent is the role's lineup agent, or else its escalated
-// counterpart, when candidates holds it. A lineup the tree cannot resolve
-// prefers nothing; admission refuses on it separately.
-func (t Tree) lineupAgent(role domain.RoleName, candidates map[string]domain.Digest) (string, bool) {
-	lineup, err := t.ResolveLineup()
-	if err != nil {
-		return "", false
+// fitsLaunchShape reports whether an agent on the adapter can run the role:
+// a ward role's adapter gives the agent read tools, and a wardless role's
+// gives it no tools at all. The lineup line no longer names an agent, so
+// this is what keeps a ward agent and a call agent that reduce to one
+// selection apart. An invalid role fits nothing.
+func fitsLaunchShape(role domain.RoleName, adapter domain.AdapterFragment) bool {
+	caps := adapter.LaunchCapabilities
+	switch role.LaunchShape() {
+	case domain.LaunchShapeWard:
+		return caps.Has(domain.LaunchCapReadTools)
+	case domain.LaunchShapeWardless:
+		return !caps.Has(domain.LaunchCapReadTools) && !caps.Has(domain.LaunchCapMutationTools)
 	}
-	line, ok := lineup.Line(role)
-	if !ok {
-		return "", false
-	}
-	if _, ok := candidates[line.AgentName]; ok {
-		return line.AgentName, true
-	}
-	if counterpart, ok := lineup.EscalatedCounterpart(role, line.AgentName); ok {
-		if _, ok := candidates[counterpart.AgentName]; ok {
-			return counterpart.AgentName, true
-		}
-	}
-	return "", false
+	return false
 }
 
 // LineAgent is the tree agent a task line runs: the name a v1 line holds, or
@@ -164,8 +158,9 @@ func (t Tree) LineRuns(line domain.TaskLine, name string) (bool, error) {
 // agent: its SelectionOfAgent, held to map back to the agent's definition
 // for that role (LineRuns). A writer that chose an agent by name writes
 // through it, so it never stores a line that would run another definition;
-// a selection the lineup settles for another definition, or that two
-// definitions share, refuses as ambiguous.
+// a selection that maps to another agent for role (a call agent's selection
+// on a ward role's line), or that two definitions share, refuses as
+// ambiguous.
 func (t Tree) LineSelection(role domain.RoleName, name string) (domain.TaskLineSelection, error) {
 	selection, err := t.SelectionOfAgent(name)
 	if err != nil {

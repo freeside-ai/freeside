@@ -224,7 +224,7 @@ func admitRole(
 	}
 	admission, err := domain.AdmitWardlessRole(domain.WardlessAdmissionInput{
 		Role: role, Line: resolved.Line, LineupRevision: resolved.LineupRevision,
-		Agent: resolved.Agent, Route: resolved.Route, Adapter: resolved.Adapter, Offer: resolved.Offer,
+		Selection: resolved.Selection, Route: resolved.Route, Adapter: resolved.Adapter,
 		PromptDigest: prompt.Digest, Enrollment: resolved.Enrollment, Generation: resolved.Generation,
 		Deadline: now.UTC().Add(site.Timeout), ExpiryMargin: resolved.ExpiryMargin,
 		LaunchProof: resolved.LaunchProof,
@@ -232,44 +232,48 @@ func admitRole(
 	if err != nil {
 		return admittedCall{}, err
 	}
-	effort, err := domain.TranslateEffort(resolved.Adapter.ClientKind, resolved.Agent.Effort)
-	if err != nil {
-		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
-	}
+	selection, adapter := resolved.Selection, resolved.Adapter
 	// A call's treatment is a run's with the call launch in the launch
-	// position (plan §5.4), so it is the same at every site of an agent.
-	treatment, err := domain.ComputeTreatmentDigest(
-		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer,
-		resolved.Agent.Effort, effort.Effective(),
-	)
+	// position (plan §5.4), so it is the same at every site of a selection.
+	treatment, err := domain.SelectionTreatmentDigest(resolved.Route, adapter, launch.Digest, selection)
 	if err != nil {
 		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
 	// What the launch passes is the ward admission's derivation, so a call
-	// and a run read one effort table and one native-default rule.
-	selection, err := domain.DeriveAgentLaunchSelection(resolved.Agent, resolved.Adapter, resolved.Offer)
-	if err != nil {
-		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
-	}
+	// and a run read one native-default rule.
+	model, nativeEffort := selection.LaunchValues(adapter.ClientKind)
 	// A call launch always passes a model, and nothing in the daemon supplies
-	// one for an offer that names none, which is the native-default offer. A
-	// ward launch on that offer passes no model; a call has no such launch.
-	if selection.RouteModelID == "" {
+	// one for the native-default id. A ward launch on that id passes no
+	// model; a call has no such launch.
+	if model == "" {
 		return admittedCall{}, fmt.Errorf(
-			"role %s: the line's offer names no model, and a judgment call needs an offer that names one", role)
+			"role %s: the line names the native-default model, and a judgment call needs a line that names one", role)
 	}
-	// An offer only has to name a non-empty model. One the launch could not
-	// pass leaves the role unbound here, where it is reported, instead of
-	// failing every call at the driver with nothing said.
-	if !ValidLaunchValue(selection.RouteModelID) || !ValidLaunchValue(selection.NativeEffort) {
+	// The call record names its requested effort as a Freeside level. Every
+	// audited call adapter drives claude_code, whose native efforts carry
+	// the level names, so an effort that names no level has no record.
+	requested := domain.EffortLevel(selection.Effort)
+	if !slices.Contains(domain.AllEffortLevels, requested) {
+		return admittedCall{}, fmt.Errorf("role %s: effort %q names no effort level the call record can carry",
+			role, selection.Effort)
+	}
+	effective := nativeEffort
+	if effective == "" {
+		effective = string(domain.EffortHarnessDefault)
+	}
+	// ResolveAgentSelection held the model and effort to launch option
+	// values; this keeps a role unbound here, where it is reported, instead
+	// of failing every call at the driver with nothing said.
+	if !ValidLaunchValue(model) || !ValidLaunchValue(nativeEffort) {
 		return admittedCall{}, fmt.Errorf("role %s: model %q or effort %q cannot be passed to a launch as one option value",
-			role, selection.RouteModelID, selection.NativeEffort)
+			role, model, nativeEffort)
 	}
+	lineage := domain.LineageGroupOf(adapter.ClientKind, selection.ModelID)
 	identity := callIdentity{
 		Admission: admission, TreatmentDigest: treatment, SiteContractDigest: site.ContractDigest(),
 		CredentialSource: resolved.CredentialSource,
-		RequestedModelID: resolved.Offer.RouteModelID, RequestedEffort: resolved.Agent.Effort,
-		EffectiveEffort: effort.Effective(),
+		RequestedModelID: selection.ModelID, RequestedEffort: requested,
+		EffectiveEffort: effective,
 	}
 	if role.JudgesWrittenWork() {
 		// Recorded, never enforced (plan revision 65): the call runs whatever
@@ -277,14 +281,14 @@ func admitRole(
 		for _, writer := range domain.WritingRoles {
 			identity.Independence = append(identity.Independence, independenceEntry{
 				WritingRole: writer,
-				Lineage:     domain.CompareLineage(resolved.Offer.LineageGroup, resolved.WriterLineage[writer]),
+				Lineage:     domain.CompareLineage(lineage, resolved.WriterLineage[writer]),
 			})
 		}
 	}
 	return admittedCall{
-		identity: identity, producer: resolved.Route.ServiceOperator + "/" + resolved.Offer.RouteModelID,
+		identity: identity, producer: resolved.Route.ServiceOperator + "/" + selection.ModelID,
 		prompt: prompt, driver: resolved.Driver, credential: resolved.Credential,
-		launch: selection,
+		launch: domain.AgentLaunchSelection{RouteModelID: model, RequestedEffort: requested, NativeEffort: nativeEffort},
 	}, nil
 }
 

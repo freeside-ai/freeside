@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,15 +78,18 @@ func fixtureTree(t *testing.T) agenttree.Tree {
 		Adapters: []agenttree.Adapter{{Name: "codex_proto_v1", Fragment: adapter}},
 		Offers:   []agenttree.Offer{{Route: routeName, Name: "gpt-5.6-sol", Fragment: offer}},
 	}
-	agentDigest := must(tree.AgentDigest(agentName))
 	tree.Lineup = []agenttree.LineupLine{{
 		Key: string(domain.RoleReviewer),
 		Selection: domain.LineupSelection{
-			AgentName: agentName, AgentDigest: agentDigest,
+			Names:      namesOf(must(tree.SelectionOfAgent(agentName))),
 			PromptName: "review", PromptDigest: digestOf("prompt"),
 		},
 	}}
 	return tree
+}
+
+func namesOf(s domain.TaskLineSelection) domain.AgentSelectionNames {
+	return domain.AgentSelectionNames{Enrollment: string(s.EnrollmentID), Model: s.ModelID, Effort: s.Effort}
 }
 
 func fixtureRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
@@ -183,7 +185,10 @@ func TestParseFailsClosed(t *testing.T) {
 			f["lineup"] = bytes.Replace(f["lineup"], []byte("reviewer"), []byte("critic"), 1)
 		}, agenttree.ErrMalformed},
 		{"lineup line without a prompt", func(f agenttree.Files) {
-			f["lineup"] = []byte("reviewer " + agentName + "@" + string(digestOf("a")) + "\n")
+			f["lineup"] = []byte("reviewer openai-chatgpt-a/codex_cli/gpt-5.6-sol/xhigh\n")
+		}, domain.ErrInvalidLineupKey},
+		{"lineup line naming an agent", func(f agenttree.Files) {
+			f["lineup"] = []byte("reviewer " + agentName + "@" + string(digestOf("a")) + "/review@" + string(digestOf("p")) + "\n")
 		}, domain.ErrInvalidLineupKey},
 		{"lock missing an entry", func(f agenttree.Files) {
 			f["agents.lock"] = f["agents.lock"][bytes.IndexByte(f["agents.lock"], '\n')+1:]
@@ -209,63 +214,60 @@ func TestParseFailsClosed(t *testing.T) {
 	}
 }
 
-// escalatedTree adds to the fixture a counterpart agent on the given
-// enrollment, a specifier line on the fixture agent, and the escalated line
-// pairing the two.
-func escalatedTree(t *testing.T, counterpartEnrollment string) agenttree.Tree {
+// escalatedTree adds to the fixture a specifier line on the fixture
+// agent's selection and the escalated line under keyEnrollment's key that
+// escalates value to effort.
+func escalatedTree(t *testing.T, keyEnrollment string, value domain.AgentSelectionNames) agenttree.Tree {
 	t.Helper()
 	tree := fixtureTree(t)
-	counterpart := tree.Agents[0]
-	counterpart.Name, counterpart.Enrollment, counterpart.Effort = "sol-high", counterpartEnrollment, domain.EffortHigh
-	tree.Agents = append(tree.Agents, counterpart)
-	slices.SortFunc(tree.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
 	specifier := domain.LineupSelection{
-		AgentName: agentName, AgentDigest: must(tree.AgentDigest(agentName)),
+		Names:      namesOf(must(tree.SelectionOfAgent(agentName))),
 		PromptName: "specifier", PromptDigest: digestOf("specifier"),
 	}
 	escalated := specifier
-	escalated.AgentName, escalated.AgentDigest = "sol-high", must(tree.AgentDigest("sol-high"))
+	escalated.Names = value
 	tree.Lineup = append(tree.Lineup,
 		agenttree.LineupLine{Key: string(domain.RoleSpecifier), Selection: specifier},
-		agenttree.LineupLine{Key: "specifier.escalated." + agentName, Selection: escalated},
+		agenttree.LineupLine{Key: "specifier.escalated." + keyEnrollment, Selection: escalated},
 	)
 	return tree
 }
 
-// An escalated line survives the round trip when its pair shares an
-// enrollment and adapter, and the tree refuses it when the counterpart runs
-// under another enrollment, whether it is rendered that way or the lineup
-// file is edited to name such an agent.
+// An escalated line survives the round trip when it escalates its key's
+// enrollment to another effort on that enrollment, and the tree refuses it,
+// with no agent read, when its value runs another enrollment, whether it is
+// rendered that way or the lineup file is edited to say so, or when it
+// repeats the specifier line.
 func TestEscalatedLineFollowsThePairingRule(t *testing.T) {
-	tree := escalatedTree(t, "openai-chatgpt-a/codex_cli")
+	const enrollment = "openai-chatgpt-a/codex_cli"
+	high := domain.AgentSelectionNames{Enrollment: enrollment, Model: "gpt-5.6-sol", Effort: "high"}
+	tree := escalatedTree(t, enrollment, high)
 	files := must(agenttree.Render(tree))
 	parsed := must(agenttree.Parse(files))
 	if !reflect.DeepEqual(parsed, tree) {
 		t.Fatalf("Parse(Render(tree)) =\n%+v\nwant\n%+v", parsed, tree)
 	}
 	lineup := must(parsed.ResolveLineup())
-	if counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, agentName); !ok || counterpart.AgentName != "sol-high" {
+	if counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, enrollment); !ok || counterpart.Names != high {
 		t.Fatalf("EscalatedCounterpart = %+v, %t", counterpart, ok)
 	}
 
-	if _, err := agenttree.Render(escalatedTree(t, "openai-chatgpt-b/codex_cli")); !errors.Is(err, domain.ErrLineupEscalatedPair) {
-		t.Fatalf("Render with a counterpart on another enrollment = %v", err)
+	elsewhere := high
+	elsewhere.Enrollment = "openai-chatgpt-b/codex_cli"
+	if _, err := agenttree.Render(escalatedTree(t, enrollment, elsewhere)); !errors.Is(err, domain.ErrLineupEscalatedPair) {
+		t.Fatalf("Render with a value on another enrollment = %v", err)
+	}
+	own := namesOf(must(tree.SelectionOfAgent(agentName)))
+	if _, err := agenttree.Render(escalatedTree(t, enrollment, own)); !errors.Is(err, domain.ErrLineupEscalatedPair) {
+		t.Fatalf("Render with the specifier's own line = %v", err)
 	}
 
-	// A tree that holds an agent on another enrollment passes until the
-	// lineup names it as the counterpart.
-	other := escalatedTree(t, "openai-chatgpt-a/codex_cli")
-	stranger := other.Agents[0]
-	stranger.Name, stranger.Enrollment = "sol-elsewhere", "openai-chatgpt-b/codex_cli"
-	other.Agents = append(other.Agents, stranger)
-	slices.SortFunc(other.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
-	edited := must(agenttree.Render(other))
+	edited := must(agenttree.Render(tree))
 	edited["lineup"] = bytes.Replace(edited["lineup"],
-		[]byte(" sol-high@"+string(must(other.AgentDigest("sol-high")))),
-		[]byte(" sol-elsewhere@"+string(must(other.AgentDigest("sol-elsewhere")))), 1)
+		[]byte(" "+enrollment+"/gpt-5.6-sol/high/"), []byte(" "+elsewhere.Enrollment+"/gpt-5.6-sol/high/"), 1)
 	_, err := agenttree.Parse(edited)
 	if !errors.Is(err, domain.ErrLineupEscalatedPair) || !errors.Is(err, agenttree.ErrMalformed) {
-		t.Fatalf("Parse with the counterpart edited onto another enrollment = %v", err)
+		t.Fatalf("Parse with the value edited onto another enrollment = %v", err)
 	}
 }
 
@@ -453,7 +455,7 @@ func TestPatchAppliesAndReadsBackAtTheCommit(t *testing.T) {
 	renamed.Name = "max-via-codex"
 	next.Agents = []domain.AgentSource{renamed}
 	next.Lineup = []agenttree.LineupLine{tree.Lineup[0]}
-	next.Lineup[0].Selection.AgentName = renamed.Name
+	next.Lineup[0].Selection.PromptName = "renamed-review"
 	nextFiles := must(agenttree.Render(next))
 	second := applyAndCommit(t, repo, must(agenttree.Patch(files, nextFiles)))
 	if read := must(agenttree.ReadCommit(ctx, repo, t.TempDir(), second)); !reflect.DeepEqual(read, nextFiles) {

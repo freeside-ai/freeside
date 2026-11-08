@@ -308,29 +308,37 @@ func ValidateOfferCoversDeadline(offer OfferFragment, deadline time.Time) error 
 // project lineup overrides a whole line and never half of one. A wardless
 // role's optional shadow line is a second key under the same role,
 // lineup.role.<role>.shadow.<shadow-name>. The specifier's optional escalated
-// lines are keys lineup.role.specifier.escalated.<agent-name>, one for each
-// agent the specifier may run on that has an escalated counterpart (§5.13,
-// Specifier Triage). One provenance entry per line rides the PolicyKey it
-// lands on.
+// lines are keys lineup.role.specifier.escalated.<enrollment-id>, one for
+// each enrollment the specifier may run on that has an escalated model and
+// effort (§5.13, Specifier Triage). The enrollment id is verbatim: it holds a
+// slash, which a policy key allows and the lineup file never splits on. One
+// provenance entry per line rides the PolicyKey it lands on.
 const LineupRoleKeyPrefix = "lineup.role."
 
 // lineupShadowSegment separates the role from the shadow name in a shadow
 // line's key. Role names carry no '.', so the key parses one way only.
 const lineupShadowSegment = "shadow"
 
-// lineupEscalatedSegment separates the role from the agent name in an
+// lineupEscalatedSegment separates the role from the enrollment id in an
 // escalated line's key.
 const lineupEscalatedSegment = "escalated"
 
-// LineupSelection is one parsed lineup value: the agent and the prompt the
-// line binds for its role, each as a tree name and the exact digest. The
-// digests are what admission step 2 matches; the names are how a human reads
-// the diff.
+// LineupSelection is one parsed lineup value: the selection the line binds
+// for its role (enrollment, model, and effort, resolved at admission against
+// the enrollment's catalog, never at tree load) and the prompt, as a tree name
+// and the exact digest admission matches.
 type LineupSelection struct {
-	AgentName    string
-	AgentDigest  Digest
+	Names        AgentSelectionNames
 	PromptName   string
 	PromptDigest Digest
+}
+
+// TaskLineSelection returns the line's names in the shape a task line and a
+// card move carry, so one comparison reads both.
+func (s LineupSelection) TaskLineSelection() TaskLineSelection {
+	return TaskLineSelection{
+		EnrollmentID: ClientEnrollmentID(s.Names.Enrollment), ModelID: s.Names.Model, Effort: s.Names.Effort,
+	}
 }
 
 // LineupShadowLine is a wardless role's optional shadow line: a second agent
@@ -339,17 +347,6 @@ type LineupSelection struct {
 // without changing a key that already exists.
 type LineupShadowLine struct {
 	Name      string
-	Selection LineupSelection
-}
-
-// LineupEscalatedLine is one of the specifier's optional escalated lines:
-// Agent is an agent the specifier may run on, and Selection names that
-// agent's escalated counterpart with the specifier line's own prompt. The
-// triager escalates a task by moving the specifier from Agent to the
-// counterpart, so the two must share an enrollment and an adapter
-// (Lineup.CheckEscalatedPairs).
-type LineupEscalatedLine struct {
-	Agent     string
 	Selection LineupSelection
 }
 
@@ -380,8 +377,8 @@ func LineupShadowKey(role RoleName, shadowName string) (string, error) {
 }
 
 // LineupEscalatedKey returns the policy key for the escalated line of one
-// agent the role may run on. Only the specifier takes escalated lines.
-func LineupEscalatedKey(role RoleName, agentName string) (string, error) {
+// enrollment the role may run on. Only the specifier takes escalated lines.
+func LineupEscalatedKey(role RoleName, enrollmentID string) (string, error) {
 	key, err := LineupRoleKey(role)
 	if err != nil {
 		return "", err
@@ -389,52 +386,65 @@ func LineupEscalatedKey(role RoleName, agentName string) (string, error) {
 	if role != RoleSpecifier {
 		return "", fmt.Errorf("lineup escalated line for role %q: %w", role, ErrLineupEscalatedRole)
 	}
-	if !validAgentName(agentName) {
-		return "", fmt.Errorf("lineup escalated agent %q: %w", agentName, ErrInvalidAgentName)
+	if enrollmentID == "" || !ValidLaunchOptionValue(enrollmentID) {
+		return "", fmt.Errorf("lineup escalated enrollment: %w", ErrInvalidLineupKey)
 	}
-	return key + "." + lineupEscalatedSegment + "." + agentName, nil
+	return key + "." + lineupEscalatedSegment + "." + enrollmentID, nil
 }
 
 // ParseLineupSelection parses a lineup line's value,
-// "<agent-name>@<agent-digest>/<prompt-name>@<prompt-digest>". Names and
-// digests carry no '/', so the split is unambiguous. Each digest half must be
-// a real content address: a value naming only an agent or a prompt, lacking
-// either half, or carrying a name where a digest belongs is refused, because
-// a line that does not pin both digests could follow a tree edit nobody
-// approved for the role.
+// "<enrollment>/<model>/<effort>/<prompt-name>@<prompt-digest>". It reads
+// from the right: the last '@' starts the digest, and three '/' cuts take
+// the prompt name, the effort, and the model, leaving the enrollment, whose
+// id holds a slash of its own.
+// The prompt digest must be a real content address, because a line that does
+// not pin it could follow a prompt edit nobody approved for the role. Each
+// selection name must be a launch option value; whether the enrollment
+// exists and offers the model and effort is admission's question, not
+// load's.
 func ParseLineupSelection(value string) (LineupSelection, error) {
-	agent, prompt, found := strings.Cut(value, "/")
+	malformed := func(part string) error {
+		return fmt.Errorf("lineup selection %q %s: %w", value, part, ErrInvalidLineupKey)
+	}
+	rest, digest, found := cutLast(value, '@')
 	if !found {
-		return LineupSelection{}, fmt.Errorf("lineup selection %q names no prompt: %w", value, ErrInvalidLineupKey)
-	}
-	agentName, agentDigest, err := parseLineupReference(value, "agent", agent)
-	if err != nil {
-		return LineupSelection{}, err
-	}
-	promptName, promptDigest, err := parseLineupReference(value, "prompt", prompt)
-	if err != nil {
-		return LineupSelection{}, err
-	}
-	return LineupSelection{
-		AgentName: agentName, AgentDigest: agentDigest,
-		PromptName: promptName, PromptDigest: promptDigest,
-	}, nil
-}
-
-// parseLineupReference parses one "<name>@<digest>" half of a lineup value.
-// Prompt names follow the agent name rule.
-func parseLineupReference(value, half, reference string) (string, Digest, error) {
-	name, digest, found := strings.Cut(reference, "@")
-	if !found || name == "" {
-		return "", "", fmt.Errorf("lineup selection %q %s: %w", value, half, ErrInvalidLineupKey)
-	}
-	if !validAgentName(name) {
-		return "", "", fmt.Errorf("lineup selection %q %s name %q: %w", value, half, name, ErrInvalidAgentName)
+		return LineupSelection{}, malformed("names no prompt digest")
 	}
 	if !contentaddr.Valid(digest) {
-		return "", "", fmt.Errorf("lineup selection %q %s digest: %w", value, half, ErrInvalidLineupKey)
+		return LineupSelection{}, malformed("prompt digest")
 	}
-	return name, Digest(digest), nil
+	rest, promptName, found := cutLast(rest, '/')
+	if !found {
+		return LineupSelection{}, malformed("names no selection")
+	}
+	if !validAgentName(promptName) {
+		return LineupSelection{}, fmt.Errorf("lineup selection %q prompt name %q: %w", value, promptName, ErrInvalidAgentName)
+	}
+	rest, effort, found := cutLast(rest, '/')
+	if !found {
+		return LineupSelection{}, malformed("names no effort")
+	}
+	enrollment, model, found := cutLast(rest, '/')
+	if !found {
+		return LineupSelection{}, malformed("names no model")
+	}
+	selection := LineupSelection{
+		Names:      AgentSelectionNames{Enrollment: enrollment, Model: model, Effort: effort},
+		PromptName: promptName, PromptDigest: Digest(digest),
+	}
+	if err := selection.TaskLineSelection().Validate(); err != nil {
+		return LineupSelection{}, fmt.Errorf("lineup selection %q: %w: %w", value, err, ErrInvalidLineupKey)
+	}
+	return selection, nil
+}
+
+// cutLast splits s around the last sep.
+func cutLast(s string, sep byte) (before, after string, found bool) {
+	cut := strings.LastIndexByte(s, sep)
+	if cut < 0 {
+		return s, "", false
+	}
+	return s[:cut], s[cut+1:], true
 }
 
 func validAgentName(name string) bool {
@@ -466,20 +476,21 @@ type Lineup struct {
 // ResolveLineup is the namespaced key validator applied at policy resolution
 // and approval, scoped to the keys this contract adds (no global policy-key
 // registry). Every key under lineup.role. must name a role from the closed
-// list and carry a parseable agent-and-prompt selection. A stage name that is
+// list and carry a parseable selection-and-prompt value. A stage name that is
 // not a role name, "verification", and an unknown role each fail closed; so
 // do a shadow line on a ward role and a second shadow line on one role (one
 // shadow per role is a cost limit, owner decision 2026-09-19). An escalated
 // line fails closed on any role but the specifier, as a second key for one
-// agent, and when its prompt is not its role's line's prompt, name and
-// digest, because escalation changes the agent and keeps the prompt; a role
-// with escalated lines and no line of its own has no prompt to match. Whether
-// an escalated pair shares an enrollment and adapter needs the agents, which
-// the keys don't carry: CheckEscalatedPairs runs that rule where a tree
-// supplies them. Nothing here compares lineage groups: review independence
-// is a recorded fact, never a gate (plan revision 65). Keys outside the
-// namespace pass through untouched, so submit's free-form policy keys keep
-// working.
+// enrollment, when its key's enrollment is not its value's (escalation
+// changes the model and effort and never the credential, #2593), when it
+// names the role's own line again (an escalation that changes nothing), and
+// when its prompt is not its role's line's prompt, name and digest; a role
+// with escalated lines and no line of its own has no prompt to match.
+// Whether the enrollment exists is admission's question, so a line on an
+// enrollment the store lacks loads and refuses when triage reaches it.
+// Nothing here compares lineage groups: review independence is a recorded
+// fact, never a gate (plan revision 65). Keys outside the namespace pass
+// through untouched, so submit's free-form policy keys keep working.
 func ResolveLineup(keys []PolicyKey) (Lineup, error) {
 	lineup := Lineup{
 		lines: map[RoleName]LineupSelection{}, shadows: map[RoleName]LineupShadowLine{},
@@ -507,12 +518,16 @@ func ResolveLineup(keys []PolicyKey) (Lineup, error) {
 			continue
 		}
 		segment, name, _ := strings.Cut(tail, ".")
-		if !validAgentName(name) {
-			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
-		}
 		if segment == lineupEscalatedSegment {
+			if name == "" || !ValidLaunchOptionValue(name) {
+				return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
+			}
 			if role != RoleSpecifier {
 				return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrLineupEscalatedRole)
+			}
+			if name != selection.Names.Enrollment {
+				return Lineup{}, fmt.Errorf("lineup key %q names enrollment %s: %w",
+					key.Key, selection.Names.Enrollment, ErrLineupEscalatedPair)
 			}
 			if _, dup := lineup.escalated[role][name]; dup {
 				return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrDuplicate)
@@ -522,6 +537,9 @@ func ResolveLineup(keys []PolicyKey) (Lineup, error) {
 			}
 			lineup.escalated[role][name] = selection
 			continue
+		}
+		if !validAgentName(name) {
+			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
 		}
 		if segment != lineupShadowSegment {
 			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
@@ -535,42 +553,21 @@ func ResolveLineup(keys []PolicyKey) (Lineup, error) {
 		}
 		lineup.shadows[role] = LineupShadowLine{Name: shadowName, Selection: selection}
 	}
-	for role, escalated := range lineup.escalated {
+	for _, role := range slices.Sorted(maps.Keys(lineup.escalated)) {
 		primary, bound := lineup.lines[role]
-		for agent, selection := range escalated {
+		for _, enrollment := range slices.Sorted(maps.Keys(lineup.escalated[role])) {
+			selection := lineup.escalated[role][enrollment]
 			if !bound || selection.PromptName != primary.PromptName || selection.PromptDigest != primary.PromptDigest {
 				return Lineup{}, fmt.Errorf("lineup escalated line %s for %s prompt %s@%s: %w",
-					agent, role, selection.PromptName, selection.PromptDigest, ErrLineupEscalatedPrompt)
+					enrollment, role, selection.PromptName, selection.PromptDigest, ErrLineupEscalatedPrompt)
+			}
+			if selection.Names == primary.Names {
+				return Lineup{}, fmt.Errorf("lineup escalated line %s for %s names the role's own line: %w",
+					enrollment, role, ErrLineupEscalatedPair)
 			}
 		}
 	}
 	return lineup, nil
-}
-
-// CheckEscalatedPairs holds every escalated line to the pairing rule: the
-// agent its key names and the counterpart its value names are both agents
-// lookup resolves, on one enrollment and one adapter. Escalation moves a task
-// to a stronger model under the same subscription and launch, never to
-// another account or another harness (§5.13). It runs on the whole resolved
-// key set, so whatever layer produced the keys inherits the rule.
-func (l Lineup) CheckEscalatedPairs(lookup func(name string) (AgentSource, bool)) error {
-	for _, role := range slices.Sorted(maps.Keys(l.escalated)) {
-		for _, agentName := range slices.Sorted(maps.Keys(l.escalated[role])) {
-			counterpartName := l.escalated[role][agentName].AgentName
-			agent, agentFound := lookup(agentName)
-			counterpart, counterpartFound := lookup(counterpartName)
-			switch {
-			case !agentFound || !counterpartFound:
-				return fmt.Errorf("lineup escalated line %s for %s names %s, and the tree lacks one of them: %w",
-					agentName, role, counterpartName, ErrLineupEscalatedPair)
-			case agent.Enrollment != counterpart.Enrollment || agent.Adapter != counterpart.Adapter:
-				return fmt.Errorf("lineup escalated line %s for %s names %s on enrollment %s and adapter %s, not %s and %s: %w",
-					agentName, role, counterpartName, counterpart.Enrollment, counterpart.Adapter,
-					agent.Enrollment, agent.Adapter, ErrLineupEscalatedPair)
-			}
-		}
-	}
-	return nil
 }
 
 // ValidateLineupPolicyKeys reports whether the lineup keys resolve; see
@@ -595,10 +592,12 @@ func (l Lineup) ShadowLine(role RoleName) (LineupShadowLine, bool) {
 	return shadow, present
 }
 
-// EscalatedCounterpart returns the escalated counterpart the role's lineup
-// names for one agent it may run on, and whether it names one.
-func (l Lineup) EscalatedCounterpart(role RoleName, agentName string) (LineupSelection, bool) {
-	selection, present := l.escalated[role][agentName]
+// EscalatedCounterpart returns the escalated line the role's lineup names for
+// one enrollment it may run on, and whether it names one. The line's
+// enrollment is that enrollment (ResolveLineup), so escalation moves only the
+// model and effort.
+func (l Lineup) EscalatedCounterpart(role RoleName, enrollmentID string) (LineupSelection, bool) {
+	selection, present := l.escalated[role][enrollmentID]
 	return selection, present
 }
 
@@ -637,16 +636,17 @@ func CanonicalStageRole(name string) (StageName, error) {
 }
 
 // TreatmentEncodingVersion tags the treatment digest's canonical
-// serialization.
-const TreatmentEncodingVersion = 1
+// serialization. Version 2 groups by the selection's model and effort where
+// version 1 grouped by the offer; a binding keeps the digest it was admitted
+// with, so the two versions never meet in one comparison.
+const TreatmentEncodingVersion = 2
 
 // canonicalTreatment is the §5.4/§8 comparison grouping: route behaviour,
-// adapter, launch, offer behaviour, and requested plus effective effort.
-// Excluded by design: enrollment, generation, cost owner, pricing, terms
-// (the route's billing mode and terms basis, the offer's pricing revision),
-// deprecation (the offer's not_after), and labels. Two runs with one
-// treatment digest differ only in things that should not change behaviour;
-// the agent digest stays the audit key.
+// adapter, launch, the model the launch sends, and requested plus effective
+// effort. Excluded by design: enrollment, generation, cost owner, pricing,
+// terms (the route's billing mode and terms basis), and labels. Two runs with
+// one treatment digest differ only in things that should not change
+// behaviour; the agent digest stays the audit key.
 type canonicalTreatment struct {
 	EncodingVersion int `json:"encoding_version"`
 	Route           struct {
@@ -657,14 +657,12 @@ type canonicalTreatment struct {
 	} `json:"route"`
 	AdapterDigest Digest `json:"adapter_digest"`
 	LaunchDigest  Digest `json:"launch_digest"`
-	Offer         struct {
-		RouteModelID      string            `json:"route_model_id"`
-		LineageGroup      string            `json:"lineage_group"`
-		IdentityStability IdentityStability `json:"identity_stability"`
-	} `json:"offer"`
-	RequestedEffort EffortLevel `json:"requested_effort"`
+	RouteModelID  string `json:"route_model_id"`
+	// RequestedEffort is the effort the selection names, in the harness's
+	// own vocabulary.
+	RequestedEffort string `json:"requested_effort"`
 	// EffectiveEffort is the harness-native value the adapter actually sent,
-	// so a clamp (max → xhigh) lands in the grouping explicitly.
+	// so a clamp lands in the grouping explicitly.
 	EffectiveEffort string `json:"effective_effort"`
 }
 
@@ -672,13 +670,10 @@ type canonicalTreatment struct {
 // admitted configuration and observed effective effort.
 func ComputeTreatmentDigest(
 	route RouteFragment, adapterDigest, launchDigest Digest,
-	offer OfferFragment, requestedEffort EffortLevel, effectiveEffort string,
+	routeModelID, requestedEffort, effectiveEffort string,
 ) (Digest, error) {
 	if err := route.Validate(); err != nil {
 		return "", fmt.Errorf("treatment route: %w", err)
-	}
-	if err := offer.Validate(); err != nil {
-		return "", fmt.Errorf("treatment offer: %w", err)
 	}
 	if !contentaddr.Valid(string(adapterDigest)) {
 		return "", fmt.Errorf("treatment adapter_digest %q: %w", adapterDigest, ErrInvalidDigest)
@@ -686,24 +681,22 @@ func ComputeTreatmentDigest(
 	if !contentaddr.Valid(string(launchDigest)) {
 		return "", fmt.Errorf("treatment launch_digest %q: %w", launchDigest, ErrInvalidDigest)
 	}
-	if !requestedEffort.valid() {
-		return "", fmt.Errorf("treatment requested_effort %q: %w", requestedEffort, ErrInvalidEffortLevel)
-	}
-	if effectiveEffort == "" {
-		return "", fmt.Errorf("treatment effective_effort: %w", ErrEmptyField)
+	for _, field := range []struct{ name, value string }{
+		{"route_model_id", routeModelID}, {"requested_effort", requestedEffort}, {"effective_effort", effectiveEffort},
+	} {
+		if field.value == "" {
+			return "", fmt.Errorf("treatment %s: %w", field.name, ErrEmptyField)
+		}
 	}
 	treatment := canonicalTreatment{
 		EncodingVersion: TreatmentEncodingVersion,
-		AdapterDigest:   adapterDigest, LaunchDigest: launchDigest,
+		AdapterDigest:   adapterDigest, LaunchDigest: launchDigest, RouteModelID: routeModelID,
 		RequestedEffort: requestedEffort, EffectiveEffort: effectiveEffort,
 	}
 	treatment.Route.ServiceOperator = route.ServiceOperator
 	treatment.Route.Protocol = route.Protocol
 	treatment.Route.InferenceAuthorities = route.InferenceAuthorities
 	treatment.Route.FallbackPolicy = route.FallbackPolicy
-	treatment.Offer.RouteModelID = offer.RouteModelID
-	treatment.Offer.LineageGroup = offer.LineageGroup
-	treatment.Offer.IdentityStability = offer.IdentityStability
 	body, err := json.Marshal(treatment)
 	if err != nil {
 		return "", fmt.Errorf("treatment canonical encoding: %w", err)

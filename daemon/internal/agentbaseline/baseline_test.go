@@ -164,15 +164,17 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 	}
 
 	lineup := must(parsed.ResolveLineup())
-	want := map[domain.RoleName]domain.Digest{
-		domain.RoleSpecifier: specifier.Definition.Digest, domain.RoleImplementer: claude.Definition.Digest,
-		domain.RoleRemediator: claude.Definition.Digest, domain.RoleReviewer: codex.Definition.Digest,
-		domain.RoleShadowReviewer: shadow.Definition.Digest,
+	// Each line names the selection its role's agent reduces to.
+	want := map[domain.RoleName]string{
+		domain.RoleSpecifier: specifier.Definition.Name, domain.RoleImplementer: claude.Definition.Name,
+		domain.RoleRemediator: claude.Definition.Name, domain.RoleReviewer: codex.Definition.Name,
+		domain.RoleShadowReviewer: shadow.Definition.Name,
 	}
-	for role, digest := range want {
+	for role, agent := range want {
+		selection := must(parsed.SelectionOfAgent(agent))
 		line, ok := lineup.Line(role)
-		if !ok || line.AgentDigest != digest {
-			t.Fatalf("lineup line for %s = %+v, %v; want agent %s", role, line, ok, digest)
+		if !ok || line.Names != selection.Names() {
+			t.Fatalf("lineup line for %s = %+v, %v; want agent %s's selection %+v", role, line, ok, agent, selection)
 		}
 	}
 }
@@ -202,8 +204,8 @@ const escalatedSpecifierModel = "claude-specifier-escalated-test"
 
 // With an escalated specifier pair, adoption adds the escalated agent on the
 // Claude enrollment and ward adapter with a pinned offer of its own, and the
-// escalated line pairing the specifier's agent with it under the specifier's
-// prompt. The rest of the tree is the one adoption emits without the pair.
+// escalated line, keyed by that enrollment, naming the escalated agent's
+// selection under the specifier's prompt. The rest of the tree is the one adoption emits without the pair.
 func TestBaselineTreeEmitsTheEscalatedSpecifier(t *testing.T) {
 	in := input(true)
 	in.SpecifierEscalated = &agentbaseline.Selection{Model: escalatedSpecifierModel, Effort: domain.EffortMax}
@@ -225,10 +227,10 @@ func TestBaselineTreeEmitsTheEscalatedSpecifier(t *testing.T) {
 	}
 	lineup := must(tree.ResolveLineup())
 	line, _ := lineup.Line(domain.RoleSpecifier)
-	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, specifierName)
-	if !ok || counterpart.AgentName != agentbaseline.ClaudeSpecifierEscalatedAgentName ||
-		counterpart.AgentDigest != escalated.Definition.Digest || counterpart.PromptDigest != line.PromptDigest ||
-		line.AgentName != specifierName {
+	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(claudeEnrollment.ID))
+	if !ok || counterpart.Names != must(tree.SelectionOfAgent(agentbaseline.ClaudeSpecifierEscalatedAgentName)).Names() ||
+		counterpart.PromptDigest != line.PromptDigest ||
+		line.Names != must(tree.SelectionOfAgent(specifierName)).Names() {
 		t.Fatalf("escalated line = %+v, %t beside the specifier line %+v", counterpart, ok, line)
 	}
 }
@@ -281,7 +283,7 @@ func TestBaselineTreeSharesAWriterAgentBetweenRolesAskingOnePair(t *testing.T) {
 	for role, agent := range map[domain.RoleName]string{
 		domain.RoleSpecifier: specifier, domain.RoleImplementer: implementer, domain.RoleRemediator: implementer,
 	} {
-		if line, ok := lineup.Line(role); !ok || line.AgentName != agent {
+		if line, ok := lineup.Line(role); !ok || line.Names != must(tree.SelectionOfAgent(agent)).Names() {
 			t.Fatalf("line for %s = %+v, %v; want agent %s", role, line, ok, agent)
 		}
 	}
@@ -564,8 +566,8 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 			}
 			continue
 		}
-		if !ok || line.AgentName != agentbaseline.ClaudeCallAgentName ||
-			line.AgentDigest != call.Definition.Digest || line.PromptName != string(role) {
+		if !ok || line.Names != must(tree.SelectionOfAgent(agentbaseline.ClaudeCallAgentName)).Names() ||
+			line.PromptName != string(role) {
 			t.Fatalf("lineup line for %s = %+v, %v", role, line, ok)
 		}
 	}
@@ -749,7 +751,7 @@ func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 		}
 	}
 	line, ok := must(parsed.ResolveLineup()).Line(domain.RoleReviewer)
-	if !ok || line.AgentName != agentbaseline.ClaudeReviewAgentName || line.AgentDigest != review.Definition.Digest {
+	if !ok || line.Names != must(parsed.SelectionOfAgent(agentbaseline.ClaudeReviewAgentName)).Names() {
 		t.Fatalf("reviewer line = %+v, %v", line, ok)
 	}
 	codexLineup := must(must(agentbaseline.Tree(input(true))).ResolveLineup())
@@ -757,9 +759,8 @@ func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 	for _, role := range agentbaseline.WriterRoles {
 		got, _ := lineup.Line(role)
 		want, _ := codexLineup.Line(role)
-		if got.AgentName != want.AgentName || got.AgentDigest != want.AgentDigest {
-			t.Fatalf("%s line under a Claude reviewer = %s %s, want the Codex reviewer tree's %s %s",
-				role, got.AgentName, got.AgentDigest, want.AgentName, want.AgentDigest)
+		if got != want {
+			t.Fatalf("%s line under a Claude reviewer = %+v, want the Codex reviewer tree's %+v", role, got, want)
 		}
 	}
 
@@ -887,21 +888,21 @@ func TestBaselineTreeAddsTheSecondWriterBesideTheFirst(t *testing.T) {
 			}
 
 			lineup := must(tree.ResolveLineup())
-			secondSpecifier := agentbaseline.WriterAgentName(domain.RoleSpecifier) + agentbaseline.SecondWriterAgentSuffix
-			counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, secondSpecifier)
+			counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(secondEnrollment.ID))
 			if ok != tc.escalated {
 				t.Fatalf("second specifier's escalated counterpart = %+v, %t", counterpart, ok)
 			}
 			if tc.escalated {
 				line, _ := lineup.Line(domain.RoleSpecifier)
-				if counterpart.AgentName != agentbaseline.ClaudeSpecifierEscalatedAgentName+agentbaseline.SecondWriterAgentSuffix ||
+				escalated := agentbaseline.ClaudeSpecifierEscalatedAgentName + agentbaseline.SecondWriterAgentSuffix
+				if counterpart.Names != must(tree.SelectionOfAgent(escalated)).Names() ||
 					counterpart.PromptDigest != line.PromptDigest {
 					t.Fatalf("second escalated line = %+v beside the specifier line %+v", counterpart, line)
 				}
 			}
 			for _, role := range agentbaseline.WriterRoles {
-				if line, _ := lineup.Line(role); strings.HasSuffix(line.AgentName, agentbaseline.SecondWriterAgentSuffix) {
-					t.Fatalf("role %s line names the second writer's agent %s", role, line.AgentName)
+				if line, _ := lineup.Line(role); line.Names.Enrollment == string(secondEnrollment.ID) {
+					t.Fatalf("role %s line names the second writer's enrollment: %+v", role, line)
 				}
 			}
 		})

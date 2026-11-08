@@ -5,10 +5,9 @@
   "auth_identity_id": "auth-openai-A",
   "lineage_group": "openai",
   "agent_binding": {
-    "agent_digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a",
+    "agent_digest": "sha256:cfdb5efcff0bf3134dd83d208db0d4ca5ba21354b7e2f5b078c9d7a41c05bba5",
     "launch_digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc",
-    "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "pricing_revision": "2026-08",
+    "treatment_digest": "sha256:b6bf831de5b830e9ddee0ba79f33b2b5f218b78275ef928df85cf40bef974c33",
     "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "enrollment_id": "enroll-openai-A-codex",
     "enrollment_generation": 2,
@@ -17,12 +16,13 @@
       "chatgpt.com:443"
     ],
     "route_model_id": "gpt-5.2-codex",
-    "requested_effort": "high",
     "native_effort": "high",
     "selection_source": "lineup",
     "selection_digest": "sha256:cfdb5efcff0bf3134dd83d208db0d4ca5ba21354b7e2f5b078c9d7a41c05bba5",
     "selection_model_id": "gpt-5.2-codex",
-    "selection_effort": "high"
+    "selection_effort": "high",
+    "harness_client": "codex_cli",
+    "lineage_group": "openai"
   },
   "admitted_at": "2026-01-02T03:04:05Z"
 }

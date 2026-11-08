@@ -416,13 +416,9 @@ func TestCrossRoleSpecifierLineIsAdmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admission of the cross-role line: %v", err)
 	}
-	digest, err := agents.selection.Tree.AgentDigest(agentTestSecondAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if admission.binding.AgentDigest != digest ||
+	if !agents.bindingRuns(t, &admission.binding, agentTestSecondAgent) ||
 		admission.binding.SelectionSource != domain.AgentSelectionSourceTaskLine {
-		t.Fatalf("agent binding = %+v, want the task line's agent %s", admission.binding, digest)
+		t.Fatalf("agent binding = %+v, want the task line's agent %s", admission.binding, agentTestSecondAgent)
 	}
 }
 

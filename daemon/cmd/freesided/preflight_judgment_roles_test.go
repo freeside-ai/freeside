@@ -168,18 +168,17 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 			t.Fatalf("unlined drift auditor: manifest = %+v", manifest)
 		}
 
-		// A deployment adopted before the call offer has every judgment line
-		// on an offer that names no model. Each such role is unbound, and
-		// the check fails naming it.
-		manifest = evaluate(adoptedBeforeTheCallOffer(t, adopted), judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
+		// Every judgment line on the native-default model id: each such
+		// role is unbound, and the check fails naming it.
+		manifest = evaluate(callLinesNamingNoModel(t, adopted), judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if manifest.Status != compositionFailed || manifest.Checks[0].Status != compositionFailed ||
 			len(manifest.JudgmentRoles) != 8 {
-			t.Fatalf("lines on an offer that names no model: manifest = %+v", manifest)
+			t.Fatalf("lines on the native-default model: manifest = %+v", manifest)
 		}
 		for _, role := range manifest.JudgmentRoles {
-			if role.Status != judgmentRoleUnbound || !strings.Contains(role.Reason, "offer names no model") ||
+			if role.Status != judgmentRoleUnbound || !strings.Contains(role.Reason, "names the native-default model") ||
 				!strings.Contains(manifest.Checks[0].Evidence, string(role.Role)) {
-				t.Fatalf("role on an offer that names no model = %+v", role)
+				t.Fatalf("role on the native-default model = %+v", role)
 			}
 		}
 

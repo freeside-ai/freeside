@@ -121,11 +121,7 @@ func AgentCatalogOf(tree agenttree.Tree, revision domain.Digest) (AgentCatalog, 
 		if !ok {
 			continue
 		}
-		selection, err := tree.SelectionOfAgent(bound.AgentName)
-		if err != nil {
-			return AgentCatalog{}, fmt.Errorf("agent catalog: %w", err)
-		}
-		catalog.Lineup = append(catalog.Lineup, AgentCatalogLineupLine{Role: role, Selection: selection})
+		catalog.Lineup = append(catalog.Lineup, AgentCatalogLineupLine{Role: role, Selection: bound.TaskLineSelection()})
 	}
 	return catalog, nil
 }

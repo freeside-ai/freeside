@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -136,31 +137,53 @@ func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 	if err != nil {
 		return inference.RoleCall{}, err
 	}
+	adapter, err := judgmentCallAdapter(j.tree, agent.Enrollment.HarnessClient, agent.Line.Names.Effort)
+	if err != nil {
+		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
+	}
+	if agent, err = agent.Select(adapter); err != nil {
+		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
+	}
 	credential, err := j.credentials.token(ctx, agent.Enrollment.ID, agent.Generation.Ordinal)
 	if err != nil {
 		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
 	call := inference.RoleCall{
 		Line: agent.Line, LineupRevision: j.revision,
-		Agent: agent.Resolved.Definition, Route: agent.Resolved.Route,
-		Adapter: agent.Resolved.Adapter, Offer: agent.Resolved.Offer,
+		Selection: agent.Selection, Route: agent.Route, Adapter: agent.Adapter,
 		Enrollment: agent.Enrollment, Generation: agent.Generation, ExpiryMargin: agentExpiryMargin,
-		LaunchProof: judgmentCallAuditFor(agent.Resolved.Adapter.Digest), Prompt: prompt,
+		LaunchProof: judgmentCallAuditFor(agent.Adapter.Digest), Prompt: prompt,
 		Driver: j.runtime.Driver, Credential: credential,
 		CredentialSource: inference.CredentialSourceEnrollment,
 	}
 	if role.JudgesWrittenWork() {
-		call.WriterLineage = map[domain.RoleName]string{}
-		for _, writer := range domain.WritingRoles {
-			call.WriterLineage[writer] = writerLineage(j.tree, writer)
+		if call.WriterLineage, err = writerLineages(ctx, j.st, j.tree); err != nil {
+			return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 		}
 	}
 	return call, nil
 }
 
+// judgmentCallAdapter is the tree's call adapter for the client that sends
+// the effort, among the adapters whose call launch an audit proves
+// (judgmentCallAuditFor). An adapter with no audit could not be admitted,
+// so it is no candidate; two audited adapters that both fit refuse as
+// ambiguous rather than leave the choice to tree order.
+func judgmentCallAdapter(
+	tree agenttree.Tree, client domain.HarnessClientKind, effort string,
+) (domain.AdapterFragment, error) {
+	var audited []domain.AdapterFragment
+	for _, adapter := range tree.Adapters {
+		if judgmentCallAuditFor(adapter.Fragment.Digest) != nil {
+			audited = append(audited, adapter.Fragment)
+		}
+	}
+	return domain.SelectAdapterForCall(audited, client, effort)
+}
+
 // triagerAsked reports whether policy asks for the triager's work: whether
-// the specifier's lineup line names an escalated counterpart for its own
-// agent (plan §5.13, Specifier Triage). Without one every task specifies on
+// the lineup names an escalated line for the specifier line's enrollment
+// (plan §5.13, Specifier Triage). Without one every task specifies on
 // the lineup agent and nothing calls the triager, so a tree with no triager
 // line leaves it off, not unbound, and raises no item. A lineup that does not
 // resolve reports true, so the role's resolution reports that error.
@@ -173,35 +196,44 @@ func triagerAsked(tree agenttree.Tree) bool {
 	if !ok {
 		return false
 	}
-	_, escalated := lineup.EscalatedCounterpart(domain.RoleSpecifier, line.AgentName)
+	_, escalated := lineup.EscalatedCounterpart(domain.RoleSpecifier, line.Names.Enrollment)
 	return escalated
 }
 
-// writerLineage is the lineage group of the offer a writing role's line
-// names now, or "" (which the record carries as unknown) when the lineup has
-// no line for the role or the line names another agent than the tree holds.
-// Lineage is a fact of the offer, so it is read from the tree alone: a writer
-// whose enrollment cannot run today still wrote on that lineage.
-func writerLineage(tree agenttree.Tree, role domain.RoleName) string {
+// writerLineages is each writing role's lineage group: the one its lineup
+// line's enrollment's client kind and model derive (domain.LineageGroupOf),
+// or "" (which the record carries as unknown) when the lineup has no line
+// for the role, the line's enrollment is not in the store, or the model's
+// lineage is not known. A writer whose enrollment cannot run today still
+// wrote on that lineage, so only the enrollment's client is read, not its
+// credential. Only a failed store read is an error.
+func writerLineages(ctx context.Context, st *store.Store, tree agenttree.Tree) (map[domain.RoleName]string, error) {
+	lineages := make(map[domain.RoleName]string, len(domain.WritingRoles))
+	for _, writer := range domain.WritingRoles {
+		lineages[writer] = ""
+	}
 	lineup, err := tree.ResolveLineup()
 	if err != nil {
-		return ""
+		return lineages, nil
 	}
-	line, ok := lineup.Line(role)
-	if !ok {
-		return ""
-	}
-	if digest, err := tree.AgentDigest(line.AgentName); err != nil || digest != line.AgentDigest {
-		return ""
-	}
-	agent, _ := tree.Agent(line.AgentName)
-	offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool {
-		return o.Route == agent.Route && o.Name == agent.Offer
+	err = st.Read(ctx, func(tx *store.ReadTx) error {
+		for _, writer := range domain.WritingRoles {
+			line, ok := lineup.Line(writer)
+			if !ok {
+				continue
+			}
+			enrollment, err := tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(line.Names.Enrollment))
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			lineages[writer] = domain.LineageGroupOf(enrollment.HarnessClient, line.Names.Model)
+		}
+		return nil
 	})
-	if offer < 0 {
-		return ""
-	}
-	return tree.Offers[offer].Fragment.LineageGroup
+	return lineages, err
 }
 
 const judgmentRoleItemPrefix = "system-health-judgment-role-"

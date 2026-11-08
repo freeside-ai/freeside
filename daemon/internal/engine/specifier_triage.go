@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -57,22 +56,20 @@ func (e *Engine) triageSpecifier(
 	if !ok {
 		return nil
 	}
-	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, line.AgentName)
+	// Escalation keeps the specifier line's enrollment and changes its
+	// model and effort, so the counterpart is the one the lineup names for
+	// that enrollment.
+	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, line.Names.Enrollment)
 	if !ok {
 		return nil
 	}
 	if needed, err := e.specifierTriageNeeded(ctx, run.TaskID); err != nil || !needed {
 		return err
 	}
-	// The triage line selects what the counterpart runs. A lineup that
-	// resolves closes every agent it names, so only an effort the
-	// counterpart's adapter cannot send, or a selection another definition
-	// holds, fails here, and it fails the admission rather than leave a
-	// complex task on the smaller model.
-	counterpartSelection, err := selection.Tree.LineSelection(domain.RoleSpecifier, counterpart.AgentName)
-	if err != nil {
-		return fmt.Errorf("specifier triage counterpart: %w", err)
-	}
+	// The triage line selects what the counterpart names. Whether it
+	// resolves against the enrollment's catalog is admission's to decide,
+	// which refuses it rather than leave a complex task on the smaller model.
+	counterpartSelection := counterpart.TaskLineSelection()
 	// One triage call at a time: the inference client refuses a second call
 	// at a site while one is in flight, which would escalate a task for no
 	// reason of its own. The check repeats under the lock, so a task another

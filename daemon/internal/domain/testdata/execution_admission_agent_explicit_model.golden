@@ -1,5 +1,5 @@
 {
-  "id": "sha256:2eb9a460663f0889d1708a6a645b0c918d58c36156b8fe0925621d9cdfd5f9ff",
+  "id": "sha256:7fbb57448d4a7b049a31e0d026618379465289079628b0a0d3e57625f9ecd7f2",
   "invocation_id": "inv-4",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -47,10 +47,9 @@
   "trust_profile_digest": null,
   "backup_encryption_waiver": null,
   "agent_binding": {
-    "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "agent_digest": "sha256:1e188081302e14a3d0ddc4bcf615fba8a2ba2633720decf51d2f9f344cdd8833",
     "launch_digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc",
-    "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "pricing_revision": "2026-09",
+    "treatment_digest": "sha256:a8f45dcdaf265c049a721d9fdf638f9b7ee6f5df0c24527e4ca69ef346cbdbcd",
     "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "enrollment_id": "anthropic-A/claude",
     "enrollment_generation": 1,
@@ -59,12 +58,13 @@
       "api.anthropic.com"
     ],
     "route_model_id": "claude-opus-5-5",
-    "requested_effort": "max",
     "native_effort": "max",
     "selection_source": "lineup",
     "selection_digest": "sha256:1e188081302e14a3d0ddc4bcf615fba8a2ba2633720decf51d2f9f344cdd8833",
     "selection_model_id": "claude-opus-5-5",
-    "selection_effort": "max"
+    "selection_effort": "max",
+    "harness_client": "claude_code",
+    "lineage_group": "anthropic"
   },
   "admitted_at": "2026-01-02T03:04:05Z"
 }

@@ -2333,9 +2333,9 @@ it records the same interim facts the deputy checks.
 ### Select Agents Through The Lineup
 
 The daemon reads every identity it runs under from the admitted-agent tree
-([`policy/README.md`](../policy/README.md)): each ward role's lineup line
-selects an agent, and the agent names the enrollment whose identity, cost
-owner, and credential store the role uses. `-driver claude` and `preflight`
+([`policy/README.md`](../policy/README.md)): each role's lineup line
+selects an enrollment, a model, and an effort, and the enrollment is the one
+whose identity, cost owner, and credential store the role uses. `-driver claude` and `preflight`
 require the tree as a checkout and an exact commit:
 
 ```sh
@@ -2348,12 +2348,48 @@ so an uncommitted edit selects nothing. The flags `-auth-identity`,
 `-review-auth-identity`, `-review-cost-owner`, and `-shadow-review-cost-owner`
 are gone from the daemon and from `preflight`, and so are `-judgment-model`,
 `-review-model`, `-review-reasoning-effort`, `-shadow-review-model`, and
-`-shadow-review-reasoning-effort`: each role launches with the model its
-agent's offer names and the effort its agent asks. A review role whose
-agent names no model, or asks `harness_default`, is refused by name: the
-daemon stops at startup and `preflight` fails until the tree names both. A
-writer role on such an agent launches with no `--model` or `--effort`, and
-so runs whatever the Claude CLI defaults to; adoption writes no such agent.
+`-shadow-review-reasoning-effort`: each role launches with the model and
+effort its line selects. A review line that names no model, or
+`harness_default`, is refused by name: the daemon stops at startup and
+`preflight` fails until the line names both. A writer line on
+`claude-code-native-default` or at `harness_default` launches with no
+`--model` or `--effort`, and so runs whatever the Claude CLI defaults to;
+adoption writes no such line.
+
+A line reads `<role> <enrollment-id>/<model-id>/<effort>/<prompt-name>@<prompt-digest>`,
+for example
+`implementer claude-main/claude_code/<exact-Claude-model-id>/high/<prompt-name>@sha256:<digest>`.
+The effort is the harness's own string. The line resolves when a role is
+admitted, against the enrollment and identity the store holds, the adapter
+the role's launch picks, and the enrollment's discovered model catalog. A
+line whose model the harness no longer reports fails that role's admission
+by name and raises the ordinary card; the daemon still starts. The tree's
+agent documents and offers stay for the clients' agent names, the routing
+policy, and the alternate-agent retry; admission reads none of them.
+
+**Upgrade a lineup that names agents.** The new build refuses a lineup line
+in the earlier form, `<agent-name>@<agent-digest>/<prompt-name>@<prompt-digest>`,
+naming the line, so the daemon, `preflight`, and `freesided deputy` stop
+until the lineup changes. Stop the daemon and rewrite `policy/lineup`:
+
+1. On a tree with no hand-authored line, run `freesided auth adopt` again
+   with the original adoption's flags and replace `policy/lineup` with the
+   patch's. The agents, fragments, and `agents.lock` stay as they are,
+   because the lock does not cover the lineup.
+2. Otherwise rewrite each line by hand. The enrollment is the agent's `who`
+   line, the model is its offer's `route_model_id`, and the effort is what
+   the agent's adapter sends for its `asking` effort: the level itself,
+   except that Codex sends `max` as `xhigh`. Keep the prompt as it is. A
+   judgment line at `harness_default` stays unbound while the tree holds
+   both `claude_code_call_v1` and `claude_code_call_v2`, because both send
+   it; give the line the effort its role should run at.
+3. Rekey an escalated line from `specifier.escalated.<specifier-agent>` to
+   `specifier.escalated.<enrollment-id>`, the enrollment of the escalated
+   agent, which is the specifier's.
+4. Commit, pass the commit as `-agent-tree-commit`, and run preflight.
+
+An admission recorded before the upgrade keeps its bytes, its id, and its
+agent digest, and is never re-resolved against the new lineup.
 
 An agent needs no attended mark: plan revision 97 removed the attended
 first run. A tree committed before that may still hold
@@ -2393,7 +2429,8 @@ lists each identity as `adopted`, `reused`, or `unadoptable`; running the
 command again changes nothing. The review and shadow review configuration
 digests are the ones the flags produced, so existing approvals stand.
 
-Each agent names the model and the effort its launch passes:
+Each line names the model and the effort its launch passes, and adoption
+writes an agent beside it for the clients' agent names:
 
 - **`-specifier-model`, `-implementer-model`, `-remediator-model`, and
   their `-effort` flags** are required. Writer roles that ask one model and
@@ -2409,11 +2446,11 @@ Each agent names the model and the effort its launch passes:
   counterpart (plan §5.13, Specifier Triage): an agent
   `claude-code-specifier-escalated` under the implementation identity, on a
   pinned offer of the same name, and the lineup line
-  `lineup.role.specifier.escalated.<specifier-agent>` that names it with the
-  specifier's prompt. The pair must differ from the specifier's own model and
+  `lineup.role.specifier.escalated.<enrollment-id>` that selects its model
+  and effort on that enrollment with the specifier's prompt. The pair must differ from the specifier's own model and
   effort, since an escalation to the same launch would change nothing.
   Without them the tree has no escalated line, so triage never runs and the
-  specifier runs on its lineup agent.
+  specifier runs on its own line.
 - **`-second-auth-identity`, `-second-cost-owner`, and
   `-second-claude-account`** are optional and set together. They adopt a
   second writer subscription over the volume its identity already records,
@@ -2427,7 +2464,7 @@ Each agent names the model and the effort its launch passes:
   `routing set -order implementer=claude-code-implementer,claude-code-implementer-second`
   (Set The Routing Policy). With the escalated pair, the tree also carries
   `claude-code-specifier-escalated-second` on the second enrollment and one
-  added line, `lineup.role.specifier.escalated.claude-code-specifier-second`,
+  added line, `lineup.role.specifier.escalated.<second-enrollment-id>`,
   so a specifier routed to the second identity escalates on it. The second
   identity must differ from both other identities, and its account from
   `-claude-account`. A second identity that records the first's volume is
@@ -2476,7 +2513,7 @@ which only a Codex store uses, and the model `claude-code-native-default`.
   not which account issued it, so give it the token of the account the
   enrollment attests.
 - **The daemon composes one review harness at start.** It reads the
-  `reviewer` line's agent, and preflight fails when `-review-auth-mode` is
+  `reviewer` line's enrollment, and preflight fails when `-review-auth-mode` is
   not one that harness accepts (`subscription` or `api_key` for Codex,
   `setup_token` for Claude). A line moved to the other harness takes effect
   at the next restart; until then every review launch refuses it by name.

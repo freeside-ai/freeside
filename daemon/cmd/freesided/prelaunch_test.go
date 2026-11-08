@@ -49,6 +49,9 @@ type prelaunchFixture struct {
 	issue      prelaunchIssueObservation
 	issueErr   error
 	issueReads []string
+	// adopt is the adoption the tree came from, whose store holds the
+	// enrollments the lineup names.
+	adopt *authAdoptFixture
 }
 
 func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
@@ -67,6 +70,7 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 	}
 
 	adopt := newAuthAdoptFixture(t)
+	f.adopt = adopt
 	// Adoption defaults its offer terms from the wall clock, and the tree's
 	// lineup revision is in the golden record, so the fixture pins them to
 	// what adoption derives at prelaunchTestNow.
@@ -97,7 +101,7 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 	}
 	f.withStore(t, func(tx *store.WriteTx) error {
 		for _, identity := range identities {
-			if err := tx.RecordAuthIdentity(t.Context(), identity, prelaunchTestNow); err != nil {
+			if err := tx.RecordAuthIdentity(t.Context(), identity, prelaunchTestNow.Add(time.Hour)); err != nil {
 				return err
 			}
 		}
@@ -367,7 +371,7 @@ func (f *prelaunchFixture) resetStore(t *testing.T, profile bool, recipe domain.
 	}
 	f.withStore(t, func(tx *store.WriteTx) error {
 		for _, identity := range identities {
-			if err := tx.RecordAuthIdentity(t.Context(), identity, prelaunchTestNow); err != nil {
+			if err := tx.RecordAuthIdentity(t.Context(), identity, prelaunchTestNow.Add(time.Hour)); err != nil {
 				return err
 			}
 		}
@@ -601,16 +605,62 @@ func TestPrelaunchChecksTaskLinesAgainstTheTree(t *testing.T) {
 		!strings.Contains(stderr, "implementer=nobody/none/high") {
 		t.Fatalf("task_lines = %q, stderr %q\n%s", got, stderr, body)
 	}
+	// Before the deputy's start adopts it, the store holds no enrollment: a
+	// line on one the lineup names passes, since admission resolves it once
+	// the start enrolls it.
 	tree := loadAgentTreeAt(t, f.load(t))
-	selection, err := tree.SelectionOfAgent(tree.Agents[0].Name)
-	if err != nil {
-		t.Fatal(err)
+	i := slices.IndexFunc(tree.Lineup, func(l agenttree.LineupLine) bool { return l.Key == string(domain.RoleImplementer) })
+	if i < 0 {
+		t.Fatal("the tree has no implementer line")
 	}
-	chosen := "implementer=" + string(selection.EnrollmentID) + "/" + selection.ModelID + "/" + selection.Effort
+	chosen := "implementer=" + tree.Lineup[i].Selection.TaskLineSelection().Text()
 	record, body, _, err = f.run(t, f.args("-no-live", "--task-line", chosen))
 	if err != nil || findPrelaunchCheck(record, prelaunchGroupInputs, "task_lines").Status != compositionPassed {
-		t.Fatalf("a task line naming %s: %v\n%s", tree.Agents[0].Name, err, body)
+		t.Fatalf("a task line on the lineup's enrollment %s: %v\n%s", chosen, err, body)
 	}
+}
+
+// Against a store that holds the line's enrollment, the check resolves the
+// line as admission resolves it: the lineup's selection passes, an effort
+// the enrollment's client has no value for fails, and a line on an
+// enrollment neither the store nor the lineup holds fails.
+func TestPrelaunchResolvesTaskLinesAgainstTheStore(t *testing.T) {
+	t.Parallel()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	i := slices.IndexFunc(tree.Lineup, func(l agenttree.LineupLine) bool { return l.Key == string(domain.RoleImplementer) })
+	if i < 0 {
+		t.Fatal("the adopted lineup binds no implementer")
+	}
+	line := tree.Lineup[i].Selection
+	unsendable := line.TaskLineSelection()
+	unsendable.Effort = "no-such-effort"
+	absent := line.TaskLineSelection()
+	absent.EnrollmentID = domain.ClientEnrollmentID("absent/claude_code")
+	f.withStore(t, func(st *store.Store) {
+		for name, tc := range map[string]struct {
+			selection domain.TaskLineSelection
+			want      string
+		}{
+			"the lineup's selection":  {line.TaskLineSelection(), ""},
+			"an unsendable effort":    {unsendable, "no-such-effort"},
+			"an unadopted enrollment": {absent, "no enrollment the store holds or the lineup names"},
+		} {
+			var record prelaunchRecord
+			checkPrelaunchTaskLines(t.Context(), &record, st, prelaunchTaskLines{
+				lines: []domain.TaskLineChoice{{Role: domain.RoleImplementer, Selection: &tc.selection}}, tree: tree,
+			})
+			check := findPrelaunchCheck(record, prelaunchGroupInputs, "task_lines")
+			if tc.want == "" && check.Status != compositionPassed ||
+				tc.want != "" && (check.Status != compositionFailed || !strings.Contains(check.Evidence, tc.want)) {
+				t.Errorf("%s: task_lines = %+v", name, check)
+			}
+		}
+	})
 }
 
 func loadAgentTreeAt(t *testing.T, settings loadedDeputySettings) agenttree.Tree {

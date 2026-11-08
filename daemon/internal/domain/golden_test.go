@@ -1633,14 +1633,17 @@ func TestGolden(t *testing.T) {
 	recordedFactsReviewBinding.CostOwner = "platform-team"
 	recordedFactsReview := reviewAdmission
 	recordedFactsReview.AgentBinding = recordedFactsReviewBinding
-	// The selection #2596 records beside a binding: the four admission
-	// goldens carry it, and every fixture derived from those bindings above
-	// keeps the bytes it had before the selection existed.
+	// The binding #2734 admits under a selection: the four admission goldens
+	// carry it, with the selection digest as the agent digest, a treatment
+	// grouped by the launched model and effort, the lineage group derived
+	// from the client and model, and neither an offer's pricing revision
+	// nor a Freeside effort level. Every fixture derived from the agent
+	// bindings above keeps the bytes it had before selections existed.
 	goldenSelection, err := domain.ReduceAgentSelection(goldenAgent, goldenAdapter, goldenOffer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected := func(binding domain.AdmissionAgentBinding, model, effort string) domain.AdmissionAgentBinding {
+	selected := func(binding domain.AdmissionAgentBinding, client domain.HarnessClientKind, model, effort string) domain.AdmissionAgentBinding {
 		t.Helper()
 		selection := domain.AgentSelection{
 			EncodingVersion: domain.AgentSelectionEncodingVersion, EnrollmentID: binding.EnrollmentID,
@@ -1649,25 +1652,40 @@ func TestGolden(t *testing.T) {
 		if selection.Digest, err = selection.ComputeDigest(); err != nil {
 			t.Fatal(err)
 		}
+		if binding.TreatmentDigest, err = domain.SelectionTreatmentDigest(goldenRoute, goldenAdapter, binding.LaunchDigest, selection); err != nil {
+			t.Fatal(err)
+		}
+		binding.AgentDigest = selection.Digest
 		binding.SelectionDigest = selection.Digest
 		binding.SelectionModelID = selection.ModelID
 		binding.SelectionEffort = selection.Effort
+		binding.PricingRevision = ""
+		binding.RequestedEffort = ""
+		binding.HarnessClient = client
+		binding.LineageGroup = domain.LineageGroupOf(client, model)
 		return binding
 	}
-	selectedExecution := func(a domain.ExecutionAdmission, model, effort string) domain.ExecutionAdmission {
+	selectedExecution := func(a domain.ExecutionAdmission, client domain.HarnessClientKind, model, effort string) domain.ExecutionAdmission {
 		t.Helper()
-		binding := selected(*a.AgentBinding, model, effort)
+		binding := selected(*a.AgentBinding, client, model, effort)
 		a.AgentBinding = &binding
 		if a.ID, err = a.ComputeID(); err != nil {
 			t.Fatal(err)
 		}
+		if err := a.Validate(); err != nil {
+			t.Fatal(err)
+		}
 		return a
 	}
-	selectedAgentAdmission := selectedExecution(agentAdmission, goldenSelection.ModelID, goldenSelection.Effort)
-	selectedTaskLineAdmission := selectedExecution(taskLineAdmission, goldenSelection.ModelID, goldenSelection.Effort)
-	selectedClaudeAdmission := selectedExecution(claudeAdmission, "claude-opus-5-5", "max")
+	selectedAgentAdmission := selectedExecution(agentAdmission, goldenAdapter.ClientKind, goldenSelection.ModelID, goldenSelection.Effort)
+	selectedTaskLineAdmission := selectedExecution(taskLineAdmission, goldenAdapter.ClientKind, goldenSelection.ModelID, goldenSelection.Effort)
+	selectedClaudeAdmission := selectedExecution(claudeAdmission, domain.HarnessClientClaudeCode, "claude-opus-5-5", "max")
 	selectedReviewAdmission := reviewAdmission
-	selectedReviewAdmission.AgentBinding = selected(reviewAdmission.AgentBinding, "gpt-5.2-codex", "high")
+	selectedReviewAdmission.AgentBinding = selected(reviewAdmission.AgentBinding, domain.HarnessClientCodexCLI, "gpt-5.2-codex", "high")
+	selectedReviewAdmission.LineageGroup = selectedReviewAdmission.AgentBinding.LineageGroup
+	if err := selectedReviewAdmission.Validate(); err != nil {
+		t.Fatal(err)
+	}
 
 	// The facts each kind of admission projects: a writer with every fact
 	// recorded, a binding from before #979 (no harness, lineage, or cost
@@ -1679,7 +1697,7 @@ func TestGolden(t *testing.T) {
 	// A writer admitted since #2596 also carries its selection; every facts
 	// fixture above predates it and keeps the four selection fields null.
 	selectedWriterFacts := domain.AdmittedFactsOfExecution(
-		selectedExecution(recordedFactsAdmission, "claude-opus-5-5", "max"), domain.RoleImplementer)
+		selectedExecution(recordedFactsAdmission, domain.HarnessClientClaudeCode, "claude-opus-5-5", "max"), domain.RoleImplementer)
 	reviewerFacts := domain.AdmittedFactsOfReview(recordedFactsReview, map[domain.RoleName]string{
 		domain.RoleImplementer: "anthropic",
 	})

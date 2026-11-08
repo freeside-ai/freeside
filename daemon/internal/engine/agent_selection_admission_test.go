@@ -50,13 +50,13 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 		t.Helper()
 		binding := admitted.binding
 		if binding.SelectionModelID != "claude-implementer-test" || binding.SelectionEffort != "high" ||
-			binding.SelectionDigest != admitted.resolved.Selection.Digest {
-			t.Fatalf("binding selection = %s %s %s, want the agent's reduction %+v",
-				binding.SelectionDigest, binding.SelectionModelID, binding.SelectionEffort, admitted.resolved.Selection)
+			binding.SelectionDigest != admitted.selection.Digest || !binding.SelectionAdmitted() {
+			t.Fatalf("binding selection = %s %s %s, want the line's selection %+v",
+				binding.SelectionDigest, binding.SelectionModelID, binding.SelectionEffort, admitted.selection)
 		}
-		if admitted.resolved.Selection.AdapterDigest != admitted.resolved.Adapter.Digest ||
-			admitted.resolved.Selection.EnrollmentID != f.enrollment.ID {
-			t.Fatalf("selection = %+v, want the agent's adapter and enrollment", admitted.resolved.Selection)
+		if admitted.selection.AdapterDigest != admitted.adapter.Digest ||
+			admitted.selection.EnrollmentID != f.enrollment.ID {
+			t.Fatalf("selection = %+v, want the launch's adapter and the line's enrollment", admitted.selection)
 		}
 	}
 
@@ -104,7 +104,7 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
 			}
 			assertAdmissionDetail(t, err, domain.AdmissionCheckAgentResolution,
-				agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer))
+				agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer))
 		})
 	}
 
@@ -126,7 +126,7 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 			t.Fatalf("resolve = %v, want an ambiguous-adapter refusal", err)
 		}
 		assertAdmissionDetail(t, err, domain.AdmissionCheckAgentResolution,
-			agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer))
+			agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer))
 	})
 	t.Run("a full model id an alias resolves to admits", func(t *testing.T) {
 		t.Parallel()

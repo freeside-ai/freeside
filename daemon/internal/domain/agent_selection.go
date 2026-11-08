@@ -330,8 +330,8 @@ func ReduceAgentSelection(agent AgentDefinition, adapter AdapterFragment, offer 
 // tree order. The effort is part of the choice because a tree may keep a
 // retired adapter beside its successor (codex_review_v1, which sends only
 // harness_default, beside codex_review_v2); the selection's effort tells them
-// apart. This is stage shape only: the call launch and the judgment roles
-// keep their agent's adapter.
+// apart. This is stage shape only: a judgment call picks its adapter with
+// SelectAdapterForCall.
 func SelectAdapterForLaunch(
 	adapters []AdapterFragment, client HarnessClientKind, launch LaunchSpec, effort string,
 	waived ...LaunchCapability,
@@ -366,6 +366,36 @@ func SelectAdapterForLaunch(
 		client, launch.Stage, effort, len(covering), ErrAmbiguousAdapterForLaunch)
 }
 
+// SelectAdapterForCall picks, among adapters, the call adapter for the
+// client kind that can send the selection's native effort: one that gives
+// the harness no tools, which is the wardless launch shape (plan §5.4). The
+// caller passes only the adapters whose call launch is proved. No adapter
+// fails with ErrNoAdapterForLaunch and more than one with
+// ErrAmbiguousAdapterForLaunch; the choice is never left to tree order.
+func SelectAdapterForCall(
+	adapters []AdapterFragment, client HarnessClientKind, effort string,
+) (AdapterFragment, error) {
+	var covering []AdapterFragment
+	for _, adapter := range adapters {
+		if err := adapter.Validate(); err != nil {
+			return AdapterFragment{}, err
+		}
+		caps := adapter.LaunchCapabilities
+		if adapter.ClientKind == client && sendsEffort(adapter, effort) &&
+			!caps.Has(LaunchCapReadTools) && !caps.Has(LaunchCapMutationTools) {
+			covering = append(covering, adapter)
+		}
+	}
+	switch len(covering) {
+	case 0:
+		return AdapterFragment{}, fmt.Errorf("client %s call, effort %s: %w", client, effort, ErrNoAdapterForLaunch)
+	case 1:
+		return covering[0], nil
+	}
+	return AdapterFragment{}, fmt.Errorf("client %s call, effort %s: %d adapters: %w",
+		client, effort, len(covering), ErrAmbiguousAdapterForLaunch)
+}
+
 // sendsEffort reports whether the adapter can send the native effort: some
 // level it declares sendable translates to it.
 func sendsEffort(adapter AdapterFragment, effort string) bool {
@@ -373,4 +403,50 @@ func sendsEffort(adapter AdapterFragment, effort string) bool {
 		translation, err := TranslateEffort(adapter.ClientKind, level)
 		return err == nil && translation.Effective() == effort
 	})
+}
+
+// Lineage groups LineageGroupOf derives. They are the values the tree's
+// offers carry, so a binding admitted under a selection records the same
+// group one admitted under an agent did.
+const (
+	LineageGroupAnthropic = "anthropic"
+	LineageGroupOpenAI    = "openai"
+)
+
+// LineageGroupOf derives a selection's lineage group from the client that
+// launches it and the model it names (§5.4: lineage is a recorded fact,
+// never a gate). It is conservative: a group is named only when the
+// client's vendor owns the model id by its naming (a claude_code launch of a
+// "claude-" model, which covers ClaudeCodeNativeDefaultRouteModelID, or a
+// codex_cli launch of a "gpt-" or "codex-" model), and anything else, an
+// alias included, returns the empty group,
+// which CompareLineage reads as unknown, never as a difference.
+func LineageGroupOf(client HarnessClientKind, model string) string {
+	switch client {
+	case HarnessClientClaudeCode:
+		if strings.HasPrefix(model, "claude-") {
+			return LineageGroupAnthropic
+		}
+	case HarnessClientCodexCLI:
+		if strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "codex-") {
+			return LineageGroupOpenAI
+		}
+	}
+	return ""
+}
+
+// SelectionTreatmentDigest is the treatment digest of a launch under the
+// selection: the selection's model, its effort as requested, and the native
+// effort the adapter sends as effective, harness_default when it sends
+// none. Admission and the closure recheck both compute it here, so the two
+// cannot drift.
+func SelectionTreatmentDigest(
+	route RouteFragment, adapter AdapterFragment, launchDigest Digest, selection AgentSelection,
+) (Digest, error) {
+	_, nativeEffort := selection.LaunchValues(adapter.ClientKind)
+	effective := nativeEffort
+	if effective == "" {
+		effective = string(EffortHarnessDefault)
+	}
+	return ComputeTreatmentDigest(route, adapter.Digest, launchDigest, selection.ModelID, selection.Effort, effective)
 }

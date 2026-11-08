@@ -36,24 +36,80 @@ type alternateAgentFailure struct {
 	policyOnly bool
 }
 
-// failedAlternateFacts is what the failed invocation ran on: the agent's
-// digest, its tree name (empty when the tree no longer carries that digest),
+// failedAlternateFacts is what the failed invocation ran on: the tree agents
+// that ran it (ranFailedBinding; none when the tree no longer carries one),
 // the enrollment generation its credential came from, and the route and pool
 // QualifyAlternate compares an alternate's to.
 type failedAlternateFacts struct {
-	agent      domain.Digest
-	name       string
+	names      []string
 	enrollment domain.ClientEnrollmentID
 	generation int
 	facts      domain.FailureFacts
 }
 
-// freshCredential reports whether agent's credential is another than the one
+// ran reports whether the tree agent name is one that ran the failed
+// invocation.
+func (f failedAlternateFacts) ran(name string) bool {
+	return slices.Contains(f.names, name)
+}
+
+// freshCredential reports whether a credential is another than the one
 // that failed: another enrollment, or a later generation of the same one. A
 // second agent on the failed generation would run the expired or revoked
 // credential again, so it does not escape a credential failure.
-func (f failedAlternateFacts) freshCredential(agent RoleAgent) bool {
-	return agent.Enrollment.ID != f.enrollment || agent.Generation.Ordinal != f.generation
+func (f failedAlternateFacts) freshCredential(
+	enrollment domain.ClientEnrollmentID, generation domain.EnrollmentGeneration,
+) bool {
+	return enrollment != f.enrollment || generation.Ordinal != f.generation
+}
+
+// ranFailedBinding reports whether the tree agent source ran what binding
+// records. A binding admitted under an agent names its definition digest, so
+// the agents at that digest ran it; one admitted under a selection names no
+// agent, so every agent that reduces to the selection's enrollment, model,
+// and effort ran it, since each would run the same credential and model.
+// Twins (one definition under several names) all count either way.
+func ranFailedBinding(tree agenttree.Tree, source domain.AgentSource, binding *domain.AdmissionAgentBinding) bool {
+	if !binding.SelectionAdmitted() {
+		digest, err := tree.AgentDigest(source.Name)
+		return err == nil && digest == binding.AgentDigest
+	}
+	selection, err := tree.SelectionOfAgent(source.Name)
+	return err == nil && selection == (domain.TaskLineSelection{
+		EnrollmentID: binding.EnrollmentID, ModelID: binding.SelectionModelID, Effort: binding.SelectionEffort,
+	})
+}
+
+// treeAgent is a tree agent's closure under its enrollment's records, which
+// the offers read until the alternate-agent record names a selection
+// (#2735). Admission does not resolve agents; only the offers do.
+type treeAgent struct {
+	resolved   agenttree.ResolvedAgent
+	enrollment domain.ClientEnrollment
+	identity   domain.AuthIdentity
+}
+
+// resolveTreeAgent resolves the tree agent name and its fragments against
+// its enrollment and identity; it refuses a disabled identity.
+func resolveTreeAgent(ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, name string) (treeAgent, error) {
+	source, ok := tree.Agent(name)
+	if !ok {
+		return treeAgent{}, fmt.Errorf("agent %q: %w", name, agenttree.ErrUnknownAgent)
+	}
+	var (
+		agent treeAgent
+		err   error
+	)
+	if agent.enrollment, err = tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(source.Enrollment)); err != nil {
+		return treeAgent{}, fmt.Errorf("enrollment %s: %w", source.Enrollment, err)
+	}
+	if agent.identity, err = tx.GetAuthIdentity(ctx, agent.enrollment.AuthIdentityID); err != nil {
+		return treeAgent{}, fmt.Errorf("auth identity %s: %w", agent.enrollment.AuthIdentityID, err)
+	}
+	if agent.resolved, err = tree.ResolveAgent(name, agent.enrollment, agent.identity); err != nil {
+		return treeAgent{}, err
+	}
+	return agent, nil
 }
 
 // readFailedAlternateFacts reads the failed invocation's admission. found is
@@ -76,9 +132,7 @@ func readFailedAlternateFacts(
 		return failedAlternateFacts{}, false, nil
 	}
 	binding := admission.AgentBinding
-	failed := failedAlternateFacts{
-		agent: binding.AgentDigest, enrollment: binding.EnrollmentID, generation: binding.EnrollmentGeneration,
-	}
+	failed := failedAlternateFacts{enrollment: binding.EnrollmentID, generation: binding.EnrollmentGeneration}
 	pool, found, err := quotaRefusalPool(ctx, tx, invocationID)
 	if err != nil {
 		return failedAlternateFacts{}, false, err
@@ -87,16 +141,19 @@ func readFailedAlternateFacts(
 		failed.facts.UsagePool = string(pool)
 	}
 	for _, source := range tree.Agents {
-		digest, err := tree.AgentDigest(source.Name)
-		if err != nil || digest != failed.agent {
+		if !ranFailedBinding(tree, source, binding) {
 			continue
 		}
-		failed.name = source.Name
-		agent, err := resolveAgent(ctx, tx, tree, source.Name)
-		if err == nil {
-			failed.facts.Route = string(agent.Resolved.Route.Digest)
+		failed.names = append(failed.names, source.Name)
+		if failed.facts.Route != "" {
+			continue
 		}
-		break
+		// Every agent that ran the binding runs its enrollment, and an
+		// agent's route is its enrollment's, so the first that resolves
+		// names the route.
+		if agent, err := resolveTreeAgent(ctx, tx, tree, source.Name); err == nil {
+			failed.facts.Route = string(agent.resolved.Route.Digest)
+		}
 	}
 	return failed, true, nil
 }
@@ -152,8 +209,12 @@ func (s AgentSelection) alternateCandidates(
 		names = append(names, routingOrder(policy, failure.role)...)
 	}
 	if !failure.policyOnly {
+		// A lineup line names a selection; the agents that reduce to it
+		// for the role are candidates under their tree names.
 		if line, err := lineupLine(s.Tree, failure.role); err == nil {
-			names = append(names, line.AgentName)
+			if name, err := s.Tree.AgentForSelection(failure.role, line.TaskLineSelection()); err == nil {
+				names = append(names, name)
+			}
 		}
 	}
 	seen := map[string]bool{}
@@ -170,34 +231,40 @@ func (s AgentSelection) alternateOffer(
 	ctx context.Context, tx *store.ReadTx, name string, cause domain.FailureCause,
 	failed failedAlternateFacts, now time.Time,
 ) (domain.AlternateAgentOffer, bool, error) {
-	agent, err := resolveAgent(ctx, tx, s.Tree, name)
-	if err != nil || agent.Resolved.Definition.Digest == failed.agent {
+	if failed.ran(name) {
+		return domain.AlternateAgentOffer{}, false, nil
+	}
+	agent, err := resolveTreeAgent(ctx, tx, s.Tree, name)
+	if err != nil {
 		// An agent that no longer resolves is not one admission would run.
 		return domain.AlternateAgentOffer{}, false, nil
 	}
-	if err := agent.readGeneration(ctx, tx); err != nil {
+	generation, err := tx.CurrentEnrollmentGeneration(ctx, agent.enrollment.ID)
+	if err != nil {
 		return domain.AlternateAgentOffer{}, false, nil
 	}
-	if err := agent.requireUnmarked(ctx, tx); errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+	if err := tx.RequireGenerationUnmarked(
+		ctx, agent.enrollment.ID, generation.Ordinal,
+	); errors.Is(err, domain.ErrGenerationIntegrityMarked) {
 		return domain.AlternateAgentOffer{}, false, nil
 	} else if err != nil {
 		return domain.AlternateAgentOffer{}, false, err
 	}
 	deadline := now.Add(s.AttemptBudget)
-	if domain.ValidateGenerationExpiryMargin(agent.Enrollment, agent.Generation, deadline, s.ExpiryMargin) != nil ||
-		domain.ValidateOfferCoversDeadline(agent.Resolved.Offer, deadline) != nil {
+	if domain.ValidateGenerationExpiryMargin(agent.enrollment, generation, deadline, s.ExpiryMargin) != nil ||
+		domain.ValidateOfferCoversDeadline(agent.resolved.Offer, deadline) != nil {
 		return domain.AlternateAgentOffer{}, false, nil
 	}
 	for _, authority := range s.EffectiveEgress {
-		if !slices.Contains(agent.Resolved.Route.InferenceAuthorities, authority) {
+		if !slices.Contains(agent.resolved.Route.InferenceAuthorities, authority) {
 			return domain.AlternateAgentOffer{}, false, nil
 		}
 	}
-	passes, err := domain.DeriveAgentLaunchSelection(agent.Resolved.Definition, agent.Resolved.Adapter, agent.Resolved.Offer)
+	passes, err := domain.DeriveAgentLaunchSelection(agent.resolved.Definition, agent.resolved.Adapter, agent.resolved.Offer)
 	if err != nil {
 		return domain.AlternateAgentOffer{}, false, nil
 	}
-	pool := agent.Identity.EffectiveUsagePool()
+	pool := agent.identity.EffectiveUsagePool()
 	marks, err := poolMarks(ctx, tx, pool, passes.RouteModelID, now)
 	if err != nil {
 		return domain.AlternateAgentOffer{}, false, err
@@ -206,14 +273,14 @@ func (s AgentSelection) alternateOffer(
 		return domain.AlternateAgentOffer{}, false, nil
 	}
 	qualification, ok := domain.QualifyAlternate(cause, failed.facts, domain.FailureAlternate{
-		Agent: agent.Resolved.Definition.Digest, Route: string(agent.Resolved.Route.Digest),
-		UsagePool: string(pool), GenerationValid: failed.freshCredential(agent),
+		Agent: agent.resolved.Definition.Digest, Route: string(agent.resolved.Route.Digest),
+		UsagePool: string(pool), GenerationValid: failed.freshCredential(agent.enrollment.ID, generation),
 	})
 	if !ok {
 		return domain.AlternateAgentOffer{}, false, nil
 	}
 	offer := domain.AlternateAgentOffer{
-		Agent: name, Pool: pool, Harness: agent.Resolved.Adapter.ClientKind,
+		Agent: name, Pool: pool, Harness: agent.resolved.Adapter.ClientKind,
 		Model: passes.RouteModelID, Qualification: qualification,
 	}
 	if err := offer.Validate(); err != nil {
@@ -272,8 +339,9 @@ func attemptCard(
 	return record, true, nil
 }
 
-// regateCardAgent re-derives a card's rule for the agent admission resolved
-// (plan §5.4 admission step 5): it is not the agent that failed, it draws on
+// regateCardAgent re-derives a card's rule for the agent the record names,
+// as admission resolved it (plan §5.4 admission step 5): it is not an agent
+// that ran the failed invocation (failedAlternateFacts.ran), it draws on
 // the pool the operator chose, and against the failed invocation's recorded
 // cause and facts it still escapes what failed under the rule the record
 // names. agent's generation must already be read: it counts as valid here
@@ -295,16 +363,20 @@ func regateCardAgent(
 	if err != nil {
 		return fmt.Errorf("its failed invocation's outcome: %w", err)
 	}
-	if agent.Resolved.Definition.Digest == failed.agent {
+	if failed.ran(record.Agent) {
 		return errors.New("it chose the agent that failed")
+	}
+	digest, err := tree.AgentDigest(record.Agent)
+	if err != nil {
+		return err
 	}
 	pool := agent.Identity.EffectiveUsagePool()
 	if pool != record.Pool {
 		return errors.New("the agent draws on another pool than the one chosen")
 	}
 	qualification, ok := domain.QualifyAlternate(outcome.Cause, failed.facts, domain.FailureAlternate{
-		Agent: agent.Resolved.Definition.Digest, Route: string(agent.Resolved.Route.Digest),
-		UsagePool: string(pool), GenerationValid: failed.freshCredential(agent),
+		Agent: digest, Route: string(agent.Route.Digest),
+		UsagePool: string(pool), GenerationValid: failed.freshCredential(agent.Enrollment.ID, agent.Generation),
 	})
 	if !ok || qualification != record.Qualification {
 		return fmt.Errorf("the agent no longer escapes the failure under %s", record.Qualification)

@@ -733,9 +733,9 @@ func (e *Engine) admitAttempt(
 		// The record is rechecked against the closure it names before it is
 		// stored, so a resolver bug cannot persist a binding reconstruction
 		// would refuse.
-		if err := domain.ValidateAdmissionAgentDerivations(
-			admission, agent.resolved.Definition, agent.resolved.Adapter, agent.resolved.Route,
-			agent.resolved.Offer, agent.launch, agent.stage, agent.enrollment, agent.generation, agent.identity,
+		if err := domain.ValidateAdmissionSelectionDerivations(
+			admission, agent.selection, agent.adapter, agent.route,
+			agent.launch, agent.stage, agent.enrollment, agent.generation, agent.identity,
 		); err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 		}

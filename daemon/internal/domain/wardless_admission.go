@@ -2,7 +2,6 @@ package domain
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -53,9 +52,10 @@ func (a InterimCallLaunchAudit) Validate() error {
 // from. The caller (the per-site lookup, #1425) supplies records it has
 // already rebuilt through their own gates, all resolved against the one
 // control-plane revision LineupRevision names. Tree facts outside every
-// digest (the route names the offer and the enrollment are authored under)
-// and whether the identity is enabled stay the caller's resolution to
-// establish, as they do for a stage.
+// digest (the route the enrollment's route name resolves to, the adapter the
+// call shape picked) and whether the identity is enabled and the selection
+// in the enrollment's catalog (ResolveAgentSelection) stay the caller's
+// resolution to establish, as they do for a stage.
 type WardlessAdmissionInput struct {
 	Role RoleName
 	// Line is the role's own lineup line, primary or shadow. A shadow line
@@ -63,10 +63,11 @@ type WardlessAdmissionInput struct {
 	// touches the primary line's result.
 	Line           LineupSelection
 	LineupRevision Digest
-	Agent          AgentDefinition
-	Route          RouteFragment
-	Adapter        AdapterFragment
-	Offer          OfferFragment
+	// Selection is what the caller resolved the line's names to, Adapter
+	// the call adapter it pins, and Route the enrollment's route.
+	Selection AgentSelection
+	Route     RouteFragment
+	Adapter   AdapterFragment
 	// PromptDigest is the digest the line's prompt name resolves to in the
 	// same revision.
 	PromptDigest Digest
@@ -90,12 +91,14 @@ type WardlessAdmissionInput struct {
 }
 
 // WardlessAdmission is the admission result a call record snapshots in the
-// place of ExecutionAdmission (§5.4): the role, the agent and prompt it was
-// admitted with, the lineup revision that named them, the enrollment
+// place of ExecutionAdmission (§5.4): the role, the selection and prompt it
+// was admitted with, the lineup revision that named them, the enrollment
 // generation the call draws its credential from, and the proof it was
-// admitted under. It carries no model or effort; a consumer derives them
-// from the admitted agent (DeriveAgentLaunchSelection). Which of the lineup
-// or an alternate-agent card selected the agent arrives with the card (#869).
+// admitted under. AgentDigest is the selection digest on an admission since
+// #2734 and the agent's digest on one recorded before. It carries no model
+// or effort; a consumer derives them from the admitted selection
+// (AgentSelection.LaunchValues). Which of the lineup or an alternate-agent
+// card selected the agent arrives with the card (#869).
 type WardlessAdmission struct {
 	Role                 RoleName               `json:"role"`
 	AgentDigest          Digest                 `json:"agent_digest"`
@@ -135,7 +138,7 @@ func (a WardlessAdmission) Validate() error {
 	return nil
 }
 
-// AdmitWardlessRole admits one wardless role from its agent, its prompt
+// AdmitWardlessRole admits one wardless role from its selection, its prompt
 // digest, and its launch proof, failing closed at the first step that does
 // not hold. A missing or failed admission is what makes a site return its
 // fail-safe (#1425 wires that). Nothing here compares lineage groups: review
@@ -159,7 +162,7 @@ func AdmitWardlessRole(in WardlessAdmissionInput) (WardlessAdmission, error) {
 	if !contentaddr.Valid(string(in.LineupRevision)) {
 		return fail(ErrInvalidDigest, "lineup_revision %q", in.LineupRevision)
 	}
-	if err := in.Agent.Validate(); err != nil {
+	if err := in.Selection.Validate(); err != nil {
 		return WardlessAdmission{}, fmt.Errorf("wardless admission %s: %w", in.Role, err)
 	}
 	if err := in.Route.Validate(); err != nil {
@@ -168,40 +171,26 @@ func AdmitWardlessRole(in WardlessAdmissionInput) (WardlessAdmission, error) {
 	if err := in.Adapter.Validate(); err != nil {
 		return WardlessAdmission{}, fmt.Errorf("wardless admission %s: %w", in.Role, err)
 	}
-	if err := in.Offer.Validate(); err != nil {
-		return WardlessAdmission{}, fmt.Errorf("wardless admission %s: %w", in.Role, err)
-	}
-	if in.Agent.RouteDigest != in.Route.Digest {
+	if in.Selection.AdapterDigest != in.Adapter.Digest {
 		return fail(ErrAdmissionDerivationMismatch,
-			"agent pins route %s, closure supplies %s", in.Agent.RouteDigest, in.Route.Digest)
+			"selection pins adapter %s, closure supplies %s", in.Selection.AdapterDigest, in.Adapter.Digest)
 	}
-	if in.Agent.AdapterDigest != in.Adapter.Digest {
-		return fail(ErrAdmissionDerivationMismatch,
-			"agent pins adapter %s, closure supplies %s", in.Agent.AdapterDigest, in.Adapter.Digest)
-	}
-	if in.Agent.OfferDigest != in.Offer.Digest {
-		return fail(ErrAdmissionDerivationMismatch,
-			"agent pins offer %s, closure supplies %s", in.Agent.OfferDigest, in.Offer.Digest)
-	}
-	// The join's effort legs, re-run as the stage recheck re-runs them: the
-	// agent digest covers the effort but not whether the offer allows it.
-	if !slices.Contains(in.Offer.AllowedEfforts, in.Agent.Effort) {
-		return fail(ErrAgentJoinInvalid, "effort %q is not allowed by the agent's offer", in.Agent.Effort)
-	}
-	if !slices.Contains(in.Adapter.SendableEfforts, in.Agent.Effort) {
-		return fail(ErrAgentJoinInvalid, "effort %q is not sendable by the agent's adapter", in.Agent.Effort)
+	// The join's effort leg, re-run as the stage recheck re-runs it: the
+	// selection digest covers the effort but not whether the adapter sends it.
+	if !sendsEffort(in.Adapter, in.Selection.Effort) {
+		return fail(ErrAgentJoinInvalid, "effort %q is not sendable by the selection's adapter", in.Selection.Effort)
 	}
 	if !contentaddr.Valid(string(in.PromptDigest)) {
 		return fail(ErrInvalidDigest, "prompt digest %q", in.PromptDigest)
 	}
-	if err := ValidateOfferCoversDeadline(in.Offer, in.Deadline); err != nil {
-		return WardlessAdmission{}, fmt.Errorf("wardless admission %s: %w", in.Role, err)
-	}
 
-	// Selected: the line names exactly this agent and this prompt.
-	if in.Line.AgentDigest != in.Agent.Digest {
-		return fail(ErrLineupSelectionMismatch,
-			"line names agent %s, revision resolves %s", in.Line.AgentDigest, in.Agent.Digest)
+	// Selected: the line names exactly this selection and this prompt.
+	if in.Line.TaskLineSelection() != (TaskLineSelection{
+		EnrollmentID: in.Selection.EnrollmentID, ModelID: in.Selection.ModelID, Effort: in.Selection.Effort,
+	}) {
+		return fail(ErrLineupSelectionMismatch, "line names %s, the selection is %s/%s/%s",
+			in.Line.TaskLineSelection().Text(),
+			in.Selection.EnrollmentID, in.Selection.ModelID, in.Selection.Effort)
 	}
 	if in.Line.PromptDigest != in.PromptDigest {
 		return fail(ErrLineupSelectionMismatch,
@@ -223,7 +212,7 @@ func AdmitWardlessRole(in WardlessAdmissionInput) (WardlessAdmission, error) {
 	}
 	if proof.AdapterDigest != in.Adapter.Digest {
 		return fail(ErrCallLaunchUnproved,
-			"audit covers adapter %s, agent runs %s", proof.AdapterDigest, in.Adapter.Digest)
+			"audit covers adapter %s, selection runs %s", proof.AdapterDigest, in.Adapter.Digest)
 	}
 	if proof.HarnessBuild != in.Adapter.HarnessBuild {
 		return fail(ErrCallLaunchUnproved,
@@ -237,9 +226,9 @@ func AdmitWardlessRole(in WardlessAdmissionInput) (WardlessAdmission, error) {
 	if err := in.Generation.Validate(); err != nil {
 		return WardlessAdmission{}, fmt.Errorf("wardless admission %s: %w", in.Role, err)
 	}
-	if in.Agent.EnrollmentID != in.Enrollment.ID {
+	if in.Selection.EnrollmentID != in.Enrollment.ID {
 		return fail(ErrAdmissionDerivationMismatch,
-			"agent names enrollment %s, closure supplies %s", in.Agent.EnrollmentID, in.Enrollment.ID)
+			"selection names enrollment %s, closure supplies %s", in.Selection.EnrollmentID, in.Enrollment.ID)
 	}
 	if in.Enrollment.HarnessClient != in.Adapter.ClientKind {
 		return fail(ErrAdmissionDerivationMismatch,
@@ -254,7 +243,7 @@ func AdmitWardlessRole(in WardlessAdmissionInput) (WardlessAdmission, error) {
 
 	// Snapshot.
 	admission := WardlessAdmission{
-		Role: in.Role, AgentDigest: in.Agent.Digest, PromptDigest: in.PromptDigest,
+		Role: in.Role, AgentDigest: in.Selection.Digest, PromptDigest: in.PromptDigest,
 		LineupRevision: in.LineupRevision,
 		EnrollmentID:   in.Enrollment.ID, EnrollmentGeneration: in.Generation.Ordinal,
 		InterimLaunchAudit: proof,

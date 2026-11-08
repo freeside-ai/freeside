@@ -218,13 +218,15 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 			return agenttree.Tree{}, err
 		}
 	}
-	digests := map[string]domain.Digest{}
+	// A lineup line names the selection an agent reduces to; the agents stay
+	// in the tree for the wire's name translation and the routing policy.
+	names := map[string]domain.AgentSelectionNames{}
 	for _, agent := range tree.Agents {
-		digest, err := tree.AgentDigest(agent.Name)
+		selection, err := tree.SelectionOfAgent(agent.Name)
 		if err != nil {
-			return agenttree.Tree{}, err
+			return agenttree.Tree{}, fmt.Errorf("baseline tree: %w", err)
 		}
-		digests[agent.Name] = digest
+		names[agent.Name] = selection.Names()
 	}
 	for _, entry := range wardRoleAgents {
 		prompt, ok := in.Prompts[entry.role]
@@ -235,7 +237,7 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		if entry.role == domain.RoleReviewer {
 			agent = reviewerAgent(in)
 		}
-		digest, ok := digests[agent]
+		selection, ok := names[agent]
 		if !ok {
 			return agenttree.Tree{}, fmt.Errorf("baseline tree: role %s has a prompt but agent %s was not adopted",
 				entry.role, agent)
@@ -243,18 +245,18 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		tree.Lineup = append(tree.Lineup, agenttree.LineupLine{
 			Key: string(entry.role),
 			Selection: domain.LineupSelection{
-				AgentName: agent, AgentDigest: digest, PromptName: prompt.Name, PromptDigest: prompt.Digest,
+				Names: selection, PromptName: prompt.Name, PromptDigest: prompt.Digest,
 			},
 		})
 		if entry.role == domain.RoleSpecifier && in.SpecifierEscalated != nil {
-			line, err := escalatedSpecifierLine(agent, ClaudeSpecifierEscalatedAgentName, digests, prompt)
+			line, err := escalatedSpecifierLine(ClaudeSpecifierEscalatedAgentName, names, prompt)
 			if err != nil {
 				return agenttree.Tree{}, err
 			}
 			tree.Lineup = append(tree.Lineup, line)
 			if secondSpecifier != "" {
-				line, err := escalatedSpecifierLine(secondSpecifier,
-					ClaudeSpecifierEscalatedAgentName+SecondWriterAgentSuffix, digests, prompt)
+				line, err := escalatedSpecifierLine(
+					ClaudeSpecifierEscalatedAgentName+SecondWriterAgentSuffix, names, prompt)
 				if err != nil {
 					return agenttree.Tree{}, err
 				}
@@ -272,7 +274,7 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		if !ok {
 			continue
 		}
-		digest, ok := digests[ClaudeCallAgentName]
+		selection, ok := names[ClaudeCallAgentName]
 		if !ok {
 			return agenttree.Tree{}, fmt.Errorf(
 				"baseline tree: role %s has a prompt but agent %s was not adopted: it needs a judgment model",
@@ -281,8 +283,7 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		tree.Lineup = append(tree.Lineup, agenttree.LineupLine{
 			Key: string(role),
 			Selection: domain.LineupSelection{
-				AgentName: ClaudeCallAgentName, AgentDigest: digest,
-				PromptName: prompt.Name, PromptDigest: prompt.Digest,
+				Names: selection, PromptName: prompt.Name, PromptDigest: prompt.Digest,
 			},
 		})
 	}
@@ -408,20 +409,25 @@ func addClaudeSpecifierEscalated(
 	return nil
 }
 
-// escalatedSpecifierLine is the lineup row pairing the specifier's agent with
-// its escalated counterpart, under the specifier line's prompt.
+// escalatedSpecifierLine is the lineup row naming the model and effort the
+// specifier escalates to on the escalated agent's enrollment, keyed by that
+// enrollment, under the specifier line's prompt. The escalated agent shares
+// its specifier's enrollment, so escalation never changes the credential.
 func escalatedSpecifierLine(
-	specifierAgent, escalatedAgent string, digests map[string]domain.Digest, prompt Prompt,
+	escalatedAgent string, names map[string]domain.AgentSelectionNames, prompt Prompt,
 ) (agenttree.LineupLine, error) {
-	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
+	selection, ok := names[escalatedAgent]
+	if !ok {
+		return agenttree.LineupLine{}, fmt.Errorf("baseline tree: escalated agent %s was not adopted", escalatedAgent)
+	}
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, selection.Enrollment)
 	if err != nil {
 		return agenttree.LineupLine{}, err
 	}
 	return agenttree.LineupLine{
 		Key: strings.TrimPrefix(key, domain.LineupRoleKeyPrefix),
 		Selection: domain.LineupSelection{
-			AgentName: escalatedAgent, AgentDigest: digests[escalatedAgent],
-			PromptName: prompt.Name, PromptDigest: prompt.Digest,
+			Names: selection, PromptName: prompt.Name, PromptDigest: prompt.Digest,
 		},
 	}, nil
 }

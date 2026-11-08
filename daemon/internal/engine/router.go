@@ -204,9 +204,10 @@ func taskEscalated(ctx context.Context, tx *store.ReadTx, taskID domain.TaskID) 
 }
 
 // escalatedOrder is an escalated specifier's order (plan §5.13, Specifier
-// Triage): the escalated counterpart the lineup names for each agent of the
-// policy's specifier order, in that order. An agent with no counterpart, a
-// counterpart that does not resolve, and a repeat are skipped; each
+// Triage): for each agent of the policy's specifier order, in that order,
+// the agent that runs the escalated line the lineup names for its
+// enrollment (escalatedAgent). An agent with no counterpart, a counterpart
+// that does not resolve, and a repeat are skipped; each
 // resolvable counterpart joins candidates, so its pool's windows for the
 // escalated model rank it. A lineup that does not resolve has none, and
 // admission refuses it.
@@ -219,21 +220,21 @@ func (s AgentSelection) escalatedOrder(
 	}
 	var counterparts []string
 	for _, name := range order {
-		counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, name)
-		if !ok || slices.Contains(counterparts, counterpart.AgentName) {
+		counterpart, ok := escalatedAgent(s.Tree, lineup, name)
+		if !ok || slices.Contains(counterparts, counterpart) {
 			continue
 		}
-		if _, ok := candidates[counterpart.AgentName]; !ok {
-			candidate, ok, err := s.routeCandidate(ctx, tx, counterpart.AgentName)
+		if _, ok := candidates[counterpart]; !ok {
+			candidate, ok, err := s.routeCandidate(ctx, tx, counterpart)
 			if err != nil {
 				return nil, err
 			}
 			if !ok {
 				continue
 			}
-			candidates[counterpart.AgentName] = candidate
+			candidates[counterpart] = candidate
 		}
-		counterparts = append(counterparts, counterpart.AgentName)
+		counterparts = append(counterparts, counterpart)
 	}
 	return counterparts, nil
 }

@@ -111,7 +111,7 @@ func renderAgent(source domain.AgentSource) ([]byte, error) {
 
 // parseLineup reads the lineup file: one "<key> <selection>" line for each
 // role, where the key is the role name (or "<role>.shadow.<name>", or
-// "specifier.escalated.<agent>") and the
+// "specifier.escalated.<enrollment-id>") and the
 // selection is the lineup contract's value. Which keys are legal is
 // domain.ResolveLineup's rule, applied once the tree is whole.
 func parseLineup(body []byte) ([]LineupLine, error) {
@@ -135,7 +135,8 @@ func parseLineup(body []byte) ([]LineupLine, error) {
 }
 
 func renderSelection(s domain.LineupSelection) string {
-	return fmt.Sprintf("%s@%s/%s@%s", s.AgentName, s.AgentDigest, s.PromptName, s.PromptDigest)
+	n := s.Names
+	return fmt.Sprintf("%s/%s/%s/%s@%s", n.Enrollment, n.Model, n.Effort, s.PromptName, s.PromptDigest)
 }
 
 func renderLineup(lineup []LineupLine) []byte {

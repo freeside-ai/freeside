@@ -232,7 +232,7 @@ func TestTaskLineAdmissionBindsTheLinesAgent(t *testing.T) {
 	if binding.SelectionSource != domain.AgentSelectionSourceTaskLine || binding.SelectionRecordID != line.ID {
 		t.Fatalf("selection = %q %q, want the task line %s", binding.SelectionSource, binding.SelectionRecordID, line.ID)
 	}
-	digest, err := f.selection.Tree.AgentDigest(agentTestSecondAgent)
+	selection, err := f.selection.Tree.SelectionOfAgent(agentTestSecondAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,9 +241,10 @@ func TestTaskLineAdmissionBindsTheLinesAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	lineupLine, _ := lineup.Line(domain.RoleImplementer)
-	if binding.AgentDigest != digest || binding.AgentDigest == lineupLine.AgentDigest ||
-		binding.EnrollmentID != enrollment.ID || binding.LineupRevision != f.selection.LineupRevision {
-		t.Fatalf("agent binding = %+v, want the second agent %s on %s", *binding, digest, enrollment.ID)
+	if !binding.SelectionAdmitted() || binding.SelectionModelID != selection.ModelID ||
+		binding.EnrollmentID != enrollment.ID || binding.EnrollmentID == domain.ClientEnrollmentID(lineupLine.Names.Enrollment) ||
+		binding.LineupRevision != f.selection.LineupRevision {
+		t.Fatalf("agent binding = %+v, want the second agent's selection %s on %s", *binding, selection.Text(), enrollment.ID)
 	}
 	if admission.AuthIdentityID == nil || *admission.AuthIdentityID != identity.ID {
 		t.Fatalf("admitted identity = %v, want %s", admission.AuthIdentityID, identity.ID)
@@ -908,7 +909,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		f.submitLine(t, role, agentTestSecondAgent)
 	}
 	tree := f.selection.Tree
-	digest, err := tree.AgentDigest(agentTestWriterAgent)
+	writer, err := tree.SelectionOfAgent(agentTestWriterAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -918,8 +919,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		tree.Lineup = append(tree.Lineup, agenttree.LineupLine{
 			Key: string(role),
 			Selection: domain.LineupSelection{
-				AgentName: agentTestWriterAgent, AgentDigest: digest,
-				PromptName: "lineup-only", PromptDigest: prompt,
+				Names: writer.Names(), PromptName: "lineup-only", PromptDigest: prompt,
 			},
 		})
 	}
@@ -928,31 +928,37 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolveRole(%s) = %v", role, err)
 		}
-		if agent.TaskLine != nil || agent.Line.AgentName != agentTestWriterAgent ||
+		if agent.TaskLine != nil || agent.Line.Names != writer.Names() ||
 			agent.Enrollment.ID != f.enrollment.ID {
 			t.Fatalf("%s resolved %+v under %s, want the lineup's agent", role, agent.Line, agent.Enrollment.ID)
 		}
 	}
 
-	// The wardless admission takes its agent from the line it is handed, and
-	// the lineup's is the only one a caller can resolve for it.
+	// The wardless admission takes its selection from the line it is
+	// handed, and the lineup's is the only one a caller can resolve for it.
 	namer, err := ResolveRole(ctx, f.store, tree, domain.RoleTaskNamer)
 	if err != nil {
 		t.Fatal(err)
 	}
+	callAdapter, err := agentbaseline.ClaudeCallAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if namer, err = namer.Select(callAdapter); err != nil {
+		t.Fatal(err)
+	}
 	wardless, err := domain.AdmitWardlessRole(domain.WardlessAdmissionInput{
 		Role: domain.RoleTaskNamer, Line: namer.Line, LineupRevision: f.selection.LineupRevision,
-		Agent: namer.Resolved.Definition, Route: namer.Resolved.Route,
-		Adapter: namer.Resolved.Adapter, Offer: namer.Resolved.Offer,
+		Selection: namer.Selection, Route: namer.Route, Adapter: namer.Adapter,
 		PromptDigest: prompt, Enrollment: namer.Enrollment, Generation: namer.Generation,
 		Deadline: agentTestAt.Add(time.Hour), ExpiryMargin: time.Minute,
 		LaunchProof: &domain.InterimCallLaunchAudit{
-			AdapterDigest: namer.Resolved.Adapter.Digest, HarnessBuild: namer.Resolved.Adapter.HarnessBuild,
+			AdapterDigest: namer.Adapter.Digest, HarnessBuild: namer.Adapter.HarnessBuild,
 			AuditedOn: "2026-09-01",
 		},
 	})
-	if err != nil || wardless.AgentDigest != digest || wardless.EnrollmentID != f.enrollment.ID {
-		t.Fatalf("AdmitWardlessRole = %+v, %v; want the lineup's agent %s", wardless, err, digest)
+	if err != nil || wardless.AgentDigest != namer.Selection.Digest || wardless.EnrollmentID != f.enrollment.ID {
+		t.Fatalf("AdmitWardlessRole = %+v, %v; want the lineup's selection %s", wardless, err, namer.Selection.Digest)
 	}
 
 	binding, err := f.selection.CheckRole(ctx, f.store, domain.RoleImplementer,
@@ -1033,11 +1039,10 @@ func (f *agentAdmissionFixture) addEscalatedSpecifierOn(t *testing.T, withLine b
 		if err != nil {
 			t.Fatal(err)
 		}
-		line.AgentName = agentTestEscalatedAgent
-		if line.AgentDigest, err = tree.AgentDigest(agentTestEscalatedAgent); err != nil {
-			t.Fatal(err)
-		}
-		key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
+		// The counterpart runs the escalated agent's model on the
+		// specifier's own enrollment and effort.
+		line.Names.Model = model
+		key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, line.Names.Enrollment)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1048,18 +1053,20 @@ func (f *agentAdmissionFixture) addEscalatedSpecifierOn(t *testing.T, withLine b
 	f.useTree(t, tree)
 }
 
-// staleEscalatedDigest repins the escalated line to the specifier agent's
-// digest, as if the counterpart's definition changed after the line pinned
-// it. The tree still parses: nothing but admission compares the two.
-func (f *agentAdmissionFixture) staleEscalatedDigest(t *testing.T) {
+// agentTestOtherEscalatedModel is a model an edited escalated line moves to.
+const agentTestOtherEscalatedModel = "claude-escalated-other"
+
+// staleEscalatedModel moves the escalated line to another model, as if the
+// lineup changed after a line was written for the old counterpart. The tree
+// still parses: nothing but admission compares the two.
+func (f *agentAdmissionFixture) staleEscalatedModel(t *testing.T) {
 	t.Helper()
 	tree := f.selection.Tree
-	specifierAgent := agentbaseline.WriterAgentName(domain.RoleSpecifier)
-	stale, err := tree.AgentDigest(specifierAgent)
+	specifier, err := lineupLine(tree, domain.RoleSpecifier)
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifier.Names.Enrollment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1070,7 +1077,7 @@ func (f *agentAdmissionFixture) staleEscalatedDigest(t *testing.T) {
 	if i < 0 {
 		t.Fatal("the tree has no escalated line")
 	}
-	tree.Lineup[i].Selection.AgentDigest = stale
+	tree.Lineup[i].Selection.Names.Model = agentTestOtherEscalatedModel
 	f.useTree(t, tree)
 }
 
@@ -1127,14 +1134,10 @@ func TestTriageTaskLineAdmitsTheEscalatedSpecifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := f.selection.Tree.AgentDigest(agentTestEscalatedAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	binding := admission.binding
 	if binding.SelectionSource != domain.AgentSelectionSourceTaskLine || binding.SelectionRecordID != line.ID ||
-		binding.AgentDigest != digest || binding.EnrollmentID != f.enrollment.ID {
-		t.Fatalf("binding = %+v, want the triage line on %s under %s", binding, digest, f.enrollment.ID)
+		!f.bindingRuns(t, &binding, agentTestEscalatedAgent) || binding.EnrollmentID != f.enrollment.ID {
+		t.Fatalf("binding = %+v, want the triage line on %s under %s", binding, agentTestEscalatedAgent, f.enrollment.ID)
 	}
 }
 
@@ -1176,15 +1179,15 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 		},
 		{
 			name: "not the counterpart", role: domain.RoleSpecifier, agent: agentTestSecondAgent, record: &escalated,
-			want: "an agent other than " + agentTestEscalatedAgent,
+			want: "it selects other than",
 		},
 		{
 			name: "no escalated line", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent, record: &escalated,
 			noLine: true, want: "no escalated counterpart",
 		},
 		{
-			name: "stale counterpart digest", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
-			record: &escalated, stale: true, want: "the escalated line selects agent digest",
+			name: "a counterpart the lineup moved", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
+			record: &escalated, stale: true, want: "it selects other than",
 		},
 		{
 			name: "not the first version", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
@@ -1200,7 +1203,7 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 			f.addSecondAgent(t)
 			f.addEscalatedSpecifier(t, !tc.noLine)
 			if tc.stale {
-				f.staleEscalatedDigest(t)
+				f.staleEscalatedModel(t)
 			}
 			task := f.task(t, f.run.ID)
 			if tc.record != nil {
@@ -1255,11 +1258,7 @@ func TestOperatorLineEscalatesTheSpecifierByHand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := f.selection.Tree.AgentDigest(agentTestEscalatedAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if admission.binding.SelectionRecordID != line.ID || admission.binding.AgentDigest != digest {
+	if admission.binding.SelectionRecordID != line.ID || !f.bindingRuns(t, &admission.binding, agentTestEscalatedAgent) {
 		t.Fatalf("binding = %+v, want the operator's line on the escalated agent", admission.binding)
 	}
 }

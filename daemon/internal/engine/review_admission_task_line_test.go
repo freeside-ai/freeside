@@ -95,7 +95,11 @@ func TestReviewerLineSelectsTheReviewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checked.TaskLine == nil || checked.TaskLine.ID != line.ID || checked.Line.AgentName != agentTestSecondAgent ||
+	second, err := f.selection.Tree.SelectionOfAgent(agentTestSecondAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.TaskLine == nil || checked.TaskLine.ID != line.ID || checked.Line.Names != second.Names() ||
 		checked.Line.PromptName != routed.PromptName {
 		t.Fatalf("checked review agent = %+v, want the line's agent on the lineup's prompt", checked.RoleAgent)
 	}
@@ -107,8 +111,8 @@ func TestReviewerLineSelectsTheReviewAgent(t *testing.T) {
 		t.Errorf("identity = %s, want claude-second", admission.AuthIdentityID)
 	case binding.EnrollmentID != checked.Enrollment.ID || binding.EnrollmentGeneration != checked.Generation.Ordinal:
 		t.Errorf("enrollment = %s@%d, want the second agent's", binding.EnrollmentID, binding.EnrollmentGeneration)
-	case binding.AgentDigest != checked.Resolved.Definition.Digest:
-		t.Errorf("agent digest = %s, want %s", binding.AgentDigest, checked.Resolved.Definition.Digest)
+	case binding.AgentDigest != checked.Selection.Digest || !binding.SelectionAdmitted():
+		t.Errorf("agent digest = %s, want the selection %s", binding.AgentDigest, checked.Selection.Digest)
 	case binding.RouteModelID != "claude-implementer-test":
 		t.Errorf("model = %s, want the second agent's offer model", binding.RouteModelID)
 	case binding.NativeEffort == "":

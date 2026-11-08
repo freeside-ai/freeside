@@ -466,6 +466,8 @@ var (
 		"agent selection source is not lineup, task_line, or card")
 	ErrAgentSelectionInconsistent = errors.New(
 		"agent selection record id does not fit its selection source")
+	ErrSelectionBindingInconsistent = errors.New(
+		"admission agent binding admitted under a selection carries an offer's pricing revision or an effort level")
 	ErrLineupShadowOnWardRole = errors.New(
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(
@@ -475,7 +477,7 @@ var (
 	ErrLineupEscalatedPrompt = errors.New(
 		"lineup escalated line's prompt is not its role's line's prompt")
 	ErrLineupEscalatedPair = errors.New(
-		"lineup escalated line does not pair two tree agents on one enrollment and adapter")
+		"lineup escalated line does not escalate its key's enrollment to another model or effort on that enrollment")
 	ErrRoleNotWardless = errors.New(
 		"role is not a wardless role")
 	ErrLineupSelectionMismatch = errors.New(

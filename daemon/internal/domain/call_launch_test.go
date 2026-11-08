@@ -73,7 +73,7 @@ func TestCallTreatmentDiffersFromWardTreatmentByLaunchOnly(t *testing.T) {
 	digest := func(launch domain.Digest) domain.Digest {
 		t.Helper()
 		got, err := domain.ComputeTreatmentDigest(
-			route, adapter.Digest, launch, offer, domain.EffortHarnessDefault, string(domain.EffortHarnessDefault))
+			route, adapter.Digest, launch, offer.RouteModelID, string(domain.EffortHarnessDefault), string(domain.EffortHarnessDefault))
 		if err != nil {
 			t.Fatal(err)
 		}

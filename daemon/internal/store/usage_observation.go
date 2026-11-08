@@ -193,7 +193,7 @@ func (tx *WriteTx) AppendUsageObservations(
 			AgentDigest:     binding.AgentDigest,
 			LaunchDigest:    binding.LaunchDigest,
 			TreatmentDigest: binding.TreatmentDigest,
-			PricingRevision: binding.PricingRevision,
+			PricingRevision: observationPricingRevision(binding),
 			Source:          measurement.Source,
 			Kind:            measurement.Kind,
 			Metric:          measurement.Metric,
@@ -335,4 +335,19 @@ func scanUsageObservation(row scanner) (domain.UsageObservation, error) {
 		return domain.UsageObservation{}, err
 	}
 	return observation, nil
+}
+
+// unpricedRevision is what an observation records for a binding admitted
+// under a selection, which carries no pricing revision because no offer
+// prices it. The column is NOT NULL and non-empty (migrations 0061 and
+// 0102), and rebuilding the table to relax that is out of scope for #2734,
+// so the literal stands for the absence; usage grouping reads it as one
+// revision like any other, and nothing prices by it.
+const unpricedRevision = "none"
+
+func observationPricingRevision(binding domain.AdmissionAgentBinding) string {
+	if binding.PricingRevision == "" {
+		return unpricedRevision
+	}
+	return binding.PricingRevision
 }
