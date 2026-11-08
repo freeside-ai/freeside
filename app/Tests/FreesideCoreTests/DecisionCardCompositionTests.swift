@@ -63,7 +63,7 @@ import Testing
             Set(DecisionCardComposition.sharedModuleSet) == [
                 .facts, .foldedFacts, .agentQuestion, .specRevision, .specification, .factBlock,
                 .findingFacts, .recommendation, .stopCause, .checklist, .stageRail, .comparison,
-                .yieldChart, .summary, .claims, .evidence, .details,
+                .yieldChart, .summary, .reviewGuide, .claims, .evidence, .details,
             ])
     }
 
@@ -124,12 +124,13 @@ import Testing
 
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
         // Plan §9 and survey card 4b (R10): the labeled change summary,
-        // then the diff and the verdict reached on it, and the review yield
-        // follows the actions.
+        // then the agent's reading order (revision 112), then the diff and
+        // the verdict reached on it, and the review yield follows the
+        // actions.
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .summary, .facts, .checklist, .factBlock, .yieldChart, .claims,
-                .evidence, .details,
+                .recommendation, .summary, .reviewGuide, .facts, .checklist, .factBlock, .yieldChart,
+                .claims, .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
@@ -155,6 +156,11 @@ import Testing
         // actions, and View PR follows the verdict it rests on instead of
         // closing the card.
         #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .yieldChart))
+        #expect(ready.actionInsertionIndex == 6)
+        #expect(ready.reviewingActionInsertionIndex == 5)
+        #expect(
+            try #require(ready.modules.firstIndex(of: .reviewGuide))
+                == #require(ready.modules.firstIndex(of: .summary)) + 1)
         #expect(try #require(ready.modules.firstIndex(of: .summary)) < ready.actionInsertionIndex)
         #expect(
             try #require(ready.modules.firstIndex(of: .evidence)) < #require(ready.modules.firstIndex(of: .details)))
@@ -1982,5 +1988,123 @@ import Testing
             #expect(!snapshot.item.requested_decision.isEmpty, "\(snapshot.item.id)")
             #expect(!DecisionDetailView.drawsControlGroup(snapshot.item), "\(snapshot.item.id)")
         }
+    }
+
+    // MARK: Review Guide (#2751)
+
+    /// The guide fixture's item, and the same item with its guide removed.
+    private static func guidedReady() -> (
+        guided: Components.Schemas.AttentionItem, unguided: Components.Schemas.AttentionItem
+    ) {
+        let guided = AttentionFixtures.readyWithReviewGuide().item
+        var unguided = guided
+        unguided.review_guide = nil
+        return (guided, unguided)
+    }
+
+    @Test func reviewGuideClaimIsListedOnlyWhenTheModuleDoesNotDrawIt() throws {
+        let (guided, unguided) = Self.guidedReady()
+        let composition = DecisionCardComposition.forType(.ready_for_final_review)
+        let isGuideClaim = { (claim: Components.Schemas.AgentClaim) in
+            claim.label == AgentClaimLabels.reviewGuide
+        }
+        // The fixture's guide claim has no inline text, so without the
+        // module it is an attachment claim in the foot and the Evidence fold.
+        #expect(guided.agent_claims.contains(where: isGuideClaim))
+        for platform in DecisionCardComposition.UnverifiedContext.Platform.allCases {
+            let drawn = DecisionCardComposition.listedClaims(guided)
+            #expect(!composition.footClaims(from: drawn, prominentClaimIndex: nil).contains(where: isGuideClaim))
+            #expect(
+                !composition.evidenceClaims(from: drawn, prominentClaimIndex: nil, on: platform)
+                    .contains(where: isGuideClaim))
+            let listed = DecisionCardComposition.listedClaims(unguided)
+            #expect(composition.footClaims(from: listed, prominentClaimIndex: nil).contains(where: isGuideClaim))
+            #expect(
+                composition.evidenceClaims(from: listed, prominentClaimIndex: nil, on: platform)
+                    .contains(where: isGuideClaim))
+        }
+        // Only the claim the guide names leaves the lists: one with the
+        // guide's label and another digest is still listed.
+        var stray = guided
+        var other = try #require(guided.agent_claims.first(where: isGuideClaim))
+        other.digest = "sha256:another-guide"
+        stray.agent_claims.append(other)
+        #expect(DecisionCardComposition.listedClaims(stray).filter(isGuideClaim) == [other])
+        // Its digest stays in Identifiers.
+        let digest = try #require(guided.review_guide?.value1.claim_digest)
+        #expect(
+            DecisionDetailView.identifierRows(guided, proposalFacts: nil, effectProposalFacts: nil)
+                .contains { $0.value == digest })
+    }
+
+    @Test func reviewGuideNamesItsProducerFromTheClaimItCites() throws {
+        let (guided, unguided) = Self.guidedReady()
+        let claim = try #require(DecisionCardComposition.reviewGuideClaim(guided))
+        #expect(claim.digest == guided.review_guide?.value1.claim_digest)
+        #expect(DecisionCardComposition.reviewGuideClaim(unguided) == nil)
+    }
+
+    @Test func reviewGuideKeywordCarriesTheUnverifiedRegisterOnlyWithAGuide() {
+        let (guided, unguided) = Self.guidedReady()
+        let composition = DecisionCardComposition.forType(.ready_for_final_review)
+        let guideSlot = DecisionCardComposition.UnverifiedSlot.module(
+            composition.modules.firstIndex(of: .reviewGuide)!)
+        for platform in DecisionCardComposition.UnverifiedContext.Platform.allCases {
+            let context = DecisionCardComposition.UnverifiedContext(platform: platform)
+            #expect(composition.unverifiedSlots(for: guided, in: context).contains(guideSlot))
+            #expect(!composition.unverifiedSlots(for: unguided, in: context).contains(guideSlot))
+            // The summary comes first, so it keeps the card's one control.
+            #expect(composition.infoSlot(for: guided, in: context) != guideSlot)
+        }
+    }
+
+    @Test func reviewStopsOpenOnlyWhereOpenPRIsServedAndTheItemIsCurrent() throws {
+        let guided = AttentionFixtures.readyWithReviewGuide().item
+        let offered = DecisionActionRanking(
+            requested: guided.requested_decision, servedActions: guided.requested_decision)
+        #expect(guided.requested_decision.contains(.open_pr))
+        #expect(DecisionCardComposition.opensReviewStops(guided, ranking: offered))
+        let withheld = DecisionActionRanking(
+            requested: guided.requested_decision,
+            servedActions: guided.requested_decision.filter { $0 != .open_pr })
+        #expect(!DecisionCardComposition.opensReviewStops(guided, ranking: withheld))
+        // A recommended View PR leaves the ranking's other slots, and is
+        // still served.
+        let recommended = DecisionActionRanking(
+            requested: guided.requested_decision, recommendedAction: .open_pr,
+            servedActions: guided.requested_decision)
+        #expect(recommended.recommended == .open_pr)
+        #expect(DecisionCardComposition.opensReviewStops(guided, ranking: recommended))
+        // A stale item's head no longer holds the code a stop points at.
+        var stale = AttentionFixtures.staleReady().item
+        stale.review_guide = guided.review_guide
+        #expect(DecisionCardComposition.isStale(stale))
+        #expect(
+            !DecisionCardComposition.opensReviewStops(
+                stale,
+                ranking: DecisionActionRanking(
+                    requested: stale.requested_decision, servedActions: stale.requested_decision)))
+    }
+
+    @Test func aStopOpensAtItsFirstResolvedHeadExcerpt() throws {
+        let guide = try #require(AttentionFixtures.readyWithReviewGuide().item.review_guide?.value1)
+        let resolved = try #require(DecisionCardComposition.openingExcerpt(guide.stops[0]))
+        #expect(resolved.path == "daemon/internal/domain/review_guide.go")
+        #expect(resolved.start_line == 10)
+        // An unresolved base excerpt is nothing to open.
+        #expect(DecisionCardComposition.openingExcerpt(guide.stops[1]) == nil)
+        var unresolvedHead = guide.stops[0]
+        unresolvedHead.excerpts[0].text = nil
+        unresolvedHead.excerpts[0].unresolved_reason = .init(value1: .path_missing)
+        #expect(DecisionCardComposition.openingExcerpt(unresolvedHead) == nil)
+    }
+
+    @Test func excerptTextSplitsIntoNumberableLines() {
+        #expect(DecisionReviewGuideView.lines("a\n\tb\n") == ["a", "\tb"])
+        #expect(DecisionReviewGuideView.lines("a\n\nb") == ["a", "", "b"])
+        #expect(DecisionReviewGuideView.lines("only") == ["only"])
+        #expect(DecisionReviewGuideView.lines("\n") == [""])
+        // A CRLF file: Swift reads "\r\n" as one character.
+        #expect(DecisionReviewGuideView.lines("a\r\nb\r\n") == ["a", "b"])
     }
 }

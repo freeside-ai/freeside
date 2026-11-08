@@ -705,7 +705,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         let item = modules.item
         let evidenceClaims = modules.composition.evidenceClaims(
-            from: item.agent_claims, prominentClaimIndex: graphics.prominentClaimIndex,
+            from: DecisionCardComposition.listedClaims(item), prominentClaimIndex: graphics.prominentClaimIndex,
             on: DecisionCardComposition.UnverifiedContext.currentPlatform)
         let identifierRows = Self.identifierRows(
             item, proposalFacts: modules.proposalFacts,
@@ -1158,13 +1158,27 @@ struct DecisionDetailView: View {
             factBlocks(item, register: register)
         case .summary:
             agentSummary(item, register: register)
+        case .reviewGuide:
+            if let guide = item.review_guide?.value1 {
+                DecisionReviewGuideView(
+                    guide: guide,
+                    producerInvocationID: DecisionCardComposition.reviewGuideClaim(item)
+                        .map(Self.producerInvocationID),
+                    carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: rendersInteractiveControls,
+                    openAtStop: DecisionCardComposition.opensReviewStops(
+                        item, ranking: actionRanking(item))
+                        ? { path, line in Task { await model.openPullRequest(at: path, line: line) } }
+                        : nil,
+                    actionsEnabled: model.actionsEnabled && model.isSubmittable(.open_pr))
+            }
         case .claims:
             // A claims module under the actions lists its claims in the
             // Evidence fold instead (`evidenceClaims`).
             if composition.claimsAreProminent(at: moduleIndex) {
                 claims(
                     composition.claimsInCard(
-                        from: item.agent_claims,
+                        from: DecisionCardComposition.listedClaims(item),
                         at: moduleIndex,
                         prominentClaimIndex: graphics.prominentClaimIndex,
                         on: DecisionCardComposition.UnverifiedContext.currentPlatform),

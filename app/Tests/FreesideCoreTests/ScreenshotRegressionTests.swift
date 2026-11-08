@@ -1819,6 +1819,20 @@
                                     detail.screenshotCard(
                                         deadline, at: dynamicTypeSize, compactLayout: width != nil))))
                     }
+                    // A review guide (#2751): the agent's stops, after the
+                    // summary and ahead of the facts, with a resolved head
+                    // excerpt that opens at its line and an unresolved base
+                    // excerpt that says why, on the Mac and on the phone.
+                    let guided = AttentionFixtures.readyWithReviewGuide().item
+                    for (suffix, width) in [("", CGFloat?.none), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-ready_for_final_review-guide\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        guided, at: dynamicTypeSize, compactLayout: width != nil))))
+                    }
                 }
 
                 if snapshot.item._type == .publish_blocked {
