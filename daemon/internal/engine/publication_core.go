@@ -22,6 +22,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -446,12 +447,16 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	return err == nil || (current.Conclusion == nil && errors.Is(err, domain.ErrConclusionMissing))
 }
 
+// readyItemID and blockedItemID keep production's ready and blocked items in
+// the fake-publication-ready- and fake-publication-blocked- namespaces the
+// retired fake lane introduced: every stored production item already carries
+// those IDs, so changing the derivation would orphan them.
 func readyItemID(runID domain.RunID) domain.ItemID {
-	return FakePublicationReadyItemID(runID)
+	return fakepublication.ReadyItemID(runID)
 }
 
 func blockedItemID(runID domain.RunID) domain.ItemID {
-	return FakePublicationBlockedItemID(runID)
+	return fakepublication.BlockedItemID(runID)
 }
 
 func candidateFindings(

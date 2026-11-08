@@ -20,26 +20,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
-func TestFakePublicationTerminalItemIDsUseWorkflowNamespace(t *testing.T) {
-	t.Parallel()
-	ids := []domain.ItemID{
-		FakePublicationReadyItemID("run-1"),
-		FakePublicationBlockedItemID("run-1"),
-		FakePublicationReadyItemID("run-2"),
-		FakePublicationBlockedItemID("run-2"),
-	}
-	seen := map[domain.ItemID]bool{}
-	for _, id := range ids {
-		if !strings.HasPrefix(string(id), "fake-publication-") {
-			t.Fatalf("terminal item id %q is outside workflow namespace", id)
-		}
-		if seen[id] {
-			t.Fatalf("terminal item id collision: %q", id)
-		}
-		seen[id] = true
-	}
-}
-
 type fakePublicationReconciliationFixture struct {
 	run     domain.Run
 	policy  domain.ResolvedPolicy

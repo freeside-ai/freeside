@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -56,5 +57,25 @@ func TestReadinessReentryExhaustionItemIDSeparatesCyclesAndNamespaces(t *testing
 				t.Fatalf("readiness exhaustion identity %q collides for run %q", itemID, runID)
 			}
 		}
+	}
+}
+
+func TestFakePublicationTerminalItemIDsUseWorkflowNamespace(t *testing.T) {
+	t.Parallel()
+	ids := []domain.ItemID{
+		readyItemID("run-1"),
+		blockedItemID("run-1"),
+		readyItemID("run-2"),
+		blockedItemID("run-2"),
+	}
+	seen := map[domain.ItemID]bool{}
+	for _, id := range ids {
+		if !strings.HasPrefix(string(id), "fake-publication-") {
+			t.Fatalf("terminal item id %q is outside workflow namespace", id)
+		}
+		if seen[id] {
+			t.Fatalf("terminal item id collision: %q", id)
+		}
+		seen[id] = true
 	}
 }
