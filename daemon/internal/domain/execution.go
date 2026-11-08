@@ -892,7 +892,11 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 	// durable BackendConformance record, while this re-gate keeps a snapshot
 	// honest about *policy drift* without turning recorded history unreadable
 	// when conformance later lapses.
-	if missing := MissingCapabilities(a.Capabilities, RequiredCapabilities(a.OperatingMode, floor)); len(missing) > 0 {
+	required, err := RequiredCapabilities(a.OperatingMode, RunnerBackendClass(a.Backend), floor)
+	if err != nil {
+		return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+	}
+	if missing := MissingCapabilities(a.Capabilities, required); len(missing) > 0 {
 		return fmt.Errorf("execution admission %s lacks %v: %w", a.InvocationID, missing, ErrCapabilityBelowFloor)
 	}
 	// §5.7 requires an approved credential mode of an unattended run.
@@ -935,20 +939,43 @@ func waiverConfiguredFor(repositoryID int64, policy AdmissionPolicy) bool {
 	return configured != nil && *configured == repositoryID
 }
 
-// RequiredCapabilities returns the floor a mode must clear: the configured
-// floor plus the capabilities the plan itself requires of the mode.
-// Unattended running demands the networkless-export proof and the enforced
-// provider-egress proof (§5.7), so a misconfigured floor cannot admit an
-// unattended record without them. The switch omits default so a new mode
-// decides its own plan-mandated minimum.
-func RequiredCapabilities(mode OperatingMode, floor CapabilitySnapshot) []RunnerCapability {
+// RequiredCapabilities returns the floor a backend class must clear under a
+// mode: the configured floor plus the capabilities the plan itself requires.
+// The minimum is per class because §5.7 admits one host-side class under
+// unattended, the credential-free macOS verification executor, under its own
+// declaration rather than the ward's proofs, which it can never earn.
+//
+// Under unattended the ward class must clear the configured floor plus the
+// networkless-export and enforced provider-egress proofs, so a misconfigured
+// floor cannot admit an unattended record without them; the executor class
+// must clear exactly its own declaration, since the configured floor is the
+// ward's; and any other class is refused, so an unregistered backend can
+// never run unattended. Under attended_dev the configured floor applies as it
+// always has, except that the executor class has none: §5.7 lets that mode
+// use a weaker class, and the admission records what was declared.
+//
+// The switches omit default so a new mode, or a new class under unattended,
+// decides its own minimum.
+func RequiredCapabilities(mode OperatingMode, class RunnerBackendClass, floor CapabilitySnapshot) ([]RunnerCapability, error) {
 	switch mode {
 	case ModeUnattended:
-		return append(floor.Clone(), CapNetworklessExport, CapEnforcedProviderEgress)
+		switch class {
+		case BackendFreshVMReadOnlyVolumeHandoff:
+			return append(floor.Clone(), CapNetworklessExport, CapEnforcedProviderEgress), nil
+		case BackendCredentialFreeHostVerification:
+			return []RunnerCapability{CapCredentialFreeHostVerification}, nil
+		}
+		return nil, fmt.Errorf("unattended backend class %q: %w", class, ErrInvalidRunnerBackendClass)
 	case ModeAttendedDev:
-		return floor
+		// Attended records may name test backends outside the registered
+		// classes, which no conformance gate reads, so every class but the
+		// executor keeps the configured floor rather than failing.
+		if class == BackendCredentialFreeHostVerification {
+			return nil, nil
+		}
+		return floor, nil
 	}
-	return floor
+	return floor, nil
 }
 
 // ExecutionExport is the durable, write-once record of what one admitted

@@ -168,14 +168,18 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	baseConformant := found && conformance.Outcome == domain.ConformancePassed &&
 		conformance.ConfigurationBound() &&
 		conformance.ConfigurationDigest == d.ConfigurationDigest
-	requiredCapabilities := domain.RequiredCapabilities(
+	requiredCapabilities, err := domain.RequiredCapabilities(
 		d.Mode,
+		d.Backend,
 		domain.NewCapabilitySnapshot(
 			domain.CapDetachableWorkspace,
 			domain.CapPostExitExport,
 			domain.CapReadOnlyRemount,
 		),
 	)
+	if err != nil {
+		return DoctorReport{}, fmt.Errorf("doctor: %w", err)
+	}
 	var missingCapabilities []domain.RunnerCapability
 	if baseConformant {
 		missingCapabilities = domain.MissingCapabilities(
