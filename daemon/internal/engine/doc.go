@@ -12,8 +12,10 @@
 // Layout, by concept:
 //
 //   - engine.go       Engine, its options, and the Reconcile and Run loops
-//   - fake_workflow.go, fake_publication.go
-//     the 1A.0 walking skeleton and the 1A.1 fake-candidate publication workflow
+//   - fake_workflow.go the 1A.0 walking skeleton
+//   - legacy_fake_publication.go what outlives the retired 1A.1 fake-candidate
+//     publication lane: its outbox codecs, backup extractors, and the legacy
+//     run-policy converge
 //   - invocation.go   dispatch of committed outbox requests into durable
 //     invocations
 //   - hold_classification.go the one table that classifies a dispatch error

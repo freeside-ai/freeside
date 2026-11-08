@@ -545,8 +545,8 @@ directory named before it in the same bullet. All under `daemon/`:
   helpers). The commands that open the keystore and build the minter,
   janitor, or token source a component gets join them:
   `cmd/freesided/onboard.go`, `cmd/freesided/setup.go` (also hands the
-  registration code to the exchange for the App key),
-  `cmd/freesided/preflight.go`, and `cmd/freesided/fake_publication.go`.
+  registration code to the exchange for the App key), and
+  `cmd/freesided/preflight.go`.
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
@@ -562,9 +562,6 @@ directory named before it in the same bullet. All under `daemon/`:
   recipe, runs verification, and stores its verdict),
   `internal/engine/production_remediation_source.go` (authenticates the
   remediation source tree),
-  `internal/engine/fake_publication.go` (the attended fake-candidate
-  workflow: exports a handoff, verifies it, and pushes it through the
-  publish gate),
   `internal/engine/production_review_gate.go` (decides whether a reviewed
   candidate may reach publication),
   `internal/engine/production_reentry*.go` (re-earn readiness against a
@@ -649,7 +646,9 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Migrations that rewrite data:** `internal/store/migrate.go`,
   `internal/store/migration_*.go`, and any `migrations/*.sql` file that
   updates, moves, or drops existing rows or rebuilds a table. A migration
-  that only adds a table, column, or index is Tier B.
+  that only adds a table, column, or index is Tier B. The engine's
+  `internal/engine/legacy_fake_publication.go` joins them (converges
+  pre-August fake-lane runs to a resolved policy, rewriting stored runs).
 
 ### Worked Examples
 

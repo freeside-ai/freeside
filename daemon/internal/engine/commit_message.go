@@ -35,23 +35,6 @@ func FallbackCommitMessage(in FallbackCommitMessageInput) string {
 	)
 }
 
-func fallbackCommitMessageFromApprovedTitle(
-	title string,
-	boundIssue *int,
-	runID domain.RunID,
-	specDigest domain.Digest,
-	policy importer.Policy,
-) string {
-	title = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(title), "."))
-	failure := ""
-	if title == "" {
-		failure = "approved title is absent"
-	}
-	return fallbackCommitMessageFromTitle(
-		title, failure, boundIssue, runID, specDigest, policy,
-	)
-}
-
 func fallbackCommitMessageFromTitle(
 	title, failure string,
 	boundIssue *int,

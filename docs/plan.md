@@ -6429,8 +6429,8 @@ stay with that run.
   it holds the lease and enables execution only when `prod` reports
   `disabled` over its control socket or is not running; a `prod` that does
   not answer that read fails the check. A `prod` that starts while a
-  production rig lease, live or stale, exists refuses `-driver fake`,
-  `-driver claude`, and the one-shot fake publication. The supervised `dev`
+  production rig lease, live or stale, exists refuses `-driver fake` and
+  `-driver claude`. The supervised `dev`
   label is unaffected. A real-work build must read and write the authority
   and janitor journal formats that the installed `prod` build accepts. The
   daemon enforces the exception (#1583): its `-prod-app-authority` flag

@@ -527,7 +527,7 @@ func requireOneProdRoot(home, accountHome string) error {
 // without a driver never opens it, so the authority keeps one writer. The
 // deputy checks a prod already running once it holds the lease; this is the
 // other side, for a prod that starts later (#2080).
-func checkProdDriverUnderLease(leaseRoot string, execution executionMode, fakePublication bool) error {
+func checkProdDriverUnderLease(leaseRoot string, execution executionMode) error {
 	present, err := daemonlock.RigManifestPresent(leaseRoot)
 	if err != nil {
 		return fmt.Errorf("check for a production rig lease under %q: %w", leaseRoot, err)
@@ -535,14 +535,8 @@ func checkProdDriverUnderLease(leaseRoot string, execution executionMode, fakePu
 	if !present {
 		return nil
 	}
-	var refused string
-	switch {
-	case fakePublication:
-		refused = "-fake-publication"
-	case execution != executionDisabled:
-		refused = "-driver " + string(execution)
-	default:
+	if execution == executionDisabled {
 		return nil
 	}
-	return fmt.Errorf("a production rig lease (live or stale) exists under %q, so prod may run only with -driver disabled and refuses %s until the real-work run releases the lease or freesided rig recover clears a stale one", leaseRoot, refused)
+	return fmt.Errorf("a production rig lease (live or stale) exists under %q, so prod may run only with -driver disabled and refuses -driver %s until the real-work run releases the lease or freesided rig recover clears a stale one", leaseRoot, execution)
 }

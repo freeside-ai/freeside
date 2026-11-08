@@ -64,6 +64,13 @@ const defaultSchedulerInterval = time.Second
 const defaultAttentionDeliveryInterval = 5 * time.Second
 
 const (
+	defaultGitHubAPIBase       = "https://api.github.com"
+	defaultGitHubRemoteBase    = "https://github.com"
+	defaultJanitorInterval     = 30 * time.Second
+	defaultJanitorRemovalBound = 10
+)
+
+const (
 	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
 	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
 )
@@ -247,21 +254,8 @@ func main() {
 	logLevel := flags.String("log-level", defaultLogLevel,
 		"loop log severity: debug, info, warn, or error (debug adds a record per loop iteration)")
 	interval := flags.Duration("reconcile-interval", defaultReconcileInterval, "workflow reconciliation interval")
-	fakePublication := flags.Bool("fake-publication", false, "run one explicit attended fake-candidate publication")
 	publicationStateDir := flags.String("publication-state-dir", "", "GitHub App authority state directory")
 	publicationCredentialsDir := flags.String("publication-credentials-dir", "", "GitHub App credential directory")
-	publicationWorkDir := flags.String("publication-work-dir", "", "durable publication handoff directory")
-	publicationWorkspace := flags.String("publication-workspace", "", "fake candidate workspace to export")
-	publicationRecipe := flags.String("publication-recipe", "", "trusted JSON verification recipe")
-	publicationRecipePath := flags.String("publication-recipe-path", verify.DefaultRecipePath, "repository-relative verification recipe path")
-	publicationRepo := flags.String("publication-repo", "", "managed owner/name repository")
-	publicationBaseRef := flags.String("publication-base-ref", "", "managed repository base branch")
-	publicationBaseSHA := flags.String("publication-base-sha", "", "exact 40-character base commit")
-	publicationAllowedPaths := flags.String("publication-allowed-paths", "**", "comma-separated candidate path allowlist")
-	publicationRunID := flags.String("publication-run-id", "run-fake-publication", "durable publication run id")
-	publicationProjectID := flags.String("publication-project-id", "project-fake-publication", "publication project id")
-	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
-	publicationBody := flags.String("publication-body", "", "pull request body")
 	driverMode := flags.String("driver", "disabled",
 		"execution: disabled (setup only), fake (explicit demo), claude (real agents), "+
 			"or scenario (a scripted run on the production pipeline; ephemeral only)")
@@ -430,7 +424,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}
-		if err := checkProdDriverUnderLease(leaseRoot, execution, *fakePublication); err != nil {
+		if err := checkProdDriverUnderLease(leaseRoot, execution); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}
@@ -439,29 +433,6 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if *fakePublication {
-		result, err := runFakePublicationCommand(ctx, fakePublicationCommandConfig{
-			DBPath: *dbPath, FakeDriverDir: *driverDir,
-			StateDir: *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
-			WorkDir: *publicationWorkDir, WorkspaceDir: *publicationWorkspace,
-			RecipeFile: *publicationRecipe, RecipeRepoPath: *publicationRecipePath,
-			Repo:    *publicationRepo,
-			BaseRef: *publicationBaseRef, BaseSHA: *publicationBaseSHA,
-			AllowedPaths: strings.Split(*publicationAllowedPaths, ","),
-			RunID:        domain.RunID(*publicationRunID), ProjectID: domain.ProjectID(*publicationProjectID),
-			Title: *publicationTitle, Body: *publicationBody,
-			ReconcileInterval: *interval,
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "freesided:", err)
-			os.Exit(1)
-		}
-		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
-			fmt.Fprintln(os.Stderr, "freesided:", err)
-			os.Exit(1)
-		}
-		return
-	}
 	daemonConfig := config{
 		Environment:                env,
 		ManualSubmissionConfigPath: *manualSubmissionConfigPath,
