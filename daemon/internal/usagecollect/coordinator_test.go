@@ -143,18 +143,15 @@ func TestCollectsOnceAfterAWindowReset(t *testing.T) {
 		f.refresh(sharedPool)
 		f.collector.set(reports("five_hour"))
 
-		time.Sleep(time.Hour - time.Second)
-		synctest.Wait()
+		synctest.Sleep(time.Hour - time.Second)
 		if calls := len(f.collector.requests()); calls != 1 {
 			t.Fatalf("collected %d times before the reset, want 1", calls)
 		}
-		time.Sleep(2 * time.Second)
-		synctest.Wait()
+		synctest.Sleep(2 * time.Second)
 		if calls := len(f.collector.requests()); calls != 2 {
 			t.Fatalf("collected %d times after the reset, want 2", calls)
 		}
-		time.Sleep(24 * time.Hour)
-		synctest.Wait()
+		synctest.Sleep(24 * time.Hour)
 		if calls := len(f.collector.requests()); calls != 2 {
 			t.Fatalf("collected %d times a day later, want 2", calls)
 		}
@@ -165,8 +162,7 @@ func TestCollectsOnceAfterAWindowReset(t *testing.T) {
 		f.collector.set(reports("five_hour"))
 		f.stop()
 		f.start()
-		time.Sleep(time.Hour + time.Second)
-		synctest.Wait()
+		synctest.Sleep(time.Hour + time.Second)
 		if calls := len(f.collector.requests()); calls != 4 {
 			t.Fatalf("collected %d times after the restarted reset, want 4", calls)
 		}
@@ -512,8 +508,7 @@ func TestReassignmentDuringACollectionDiscardsIt(t *testing.T) {
 		if report := <-done; report.Outcome != OutcomeDiscarded {
 			t.Fatalf("outcome = %s, want discarded", report.Outcome)
 		}
-		time.Sleep(2 * time.Second)
-		synctest.Wait()
+		synctest.Sleep(2 * time.Second)
 		requests := f.collector.requests()
 		if len(requests) != 2 || requests[1].Enrollment.ID != enrollSecond {
 			t.Fatalf("requests = %+v", requests)
@@ -640,8 +635,7 @@ func TestResetDuringACollectionCollectsAgain(t *testing.T) {
 		time.Sleep(59 * time.Minute)
 		gate := f.collector.block()
 		f.coord.RateLimitEvent(sharedPool)
-		time.Sleep(2 * time.Minute)
-		synctest.Wait()
+		synctest.Sleep(2 * time.Minute)
 		close(gate)
 		synctest.Wait()
 		if calls := len(f.collector.requests()); calls != 3 {
@@ -664,13 +658,11 @@ func TestResetDuringBackoffCollectsWhenItEnds(t *testing.T) {
 		})
 		f.refresh(sharedPool)
 		f.collector.set(reports("five_hour"))
-		time.Sleep(25 * time.Minute)
-		synctest.Wait()
+		synctest.Sleep(25 * time.Minute)
 		if calls := len(f.collector.requests()); calls != 2 {
 			t.Fatalf("collected %d times during the backoff, want 2", calls)
 		}
-		time.Sleep(10 * time.Minute)
-		synctest.Wait()
+		synctest.Sleep(10 * time.Minute)
 		if calls := len(f.collector.requests()); calls != 3 {
 			t.Fatalf("collected %d times after the backoff, want the reset's collection", calls)
 		}
@@ -717,16 +709,14 @@ func TestFailedRerunAfterAResetCollectsWhenTheBackoffEnds(t *testing.T) {
 		})
 		gate := f.collector.block()
 		f.coord.RateLimitEvent(sharedPool)
-		time.Sleep(2 * time.Minute)
-		synctest.Wait()
+		synctest.Sleep(2 * time.Minute)
 		f.collector.set(reports("five_hour"))
 		close(gate)
 		synctest.Wait()
 		if calls := len(f.collector.requests()); calls != 2 {
 			t.Fatalf("collected %d times during the backoff, want 2", calls)
 		}
-		time.Sleep(DefaultBackoffBase + time.Minute)
-		synctest.Wait()
+		synctest.Sleep(DefaultBackoffBase + time.Minute)
 		if calls := len(f.collector.requests()); calls != 3 {
 			t.Fatalf("collected %d times after the backoff, want the owed reset's collection", calls)
 		}
@@ -750,13 +740,11 @@ func TestDiscardedResetCollectionRetries(t *testing.T) {
 			}
 			return reports("five_hour")(request)
 		})
-		time.Sleep(time.Hour + time.Minute)
-		synctest.Wait()
+		synctest.Sleep(time.Hour + time.Minute)
 		if calls := len(f.collector.requests()); calls != 2 {
 			t.Fatalf("collected %d times at the reset, want 2", calls)
 		}
-		time.Sleep(DefaultBackoffBase)
-		synctest.Wait()
+		synctest.Sleep(DefaultBackoffBase)
 		requests := f.collector.requests()
 		if len(requests) != 3 || requests[2].Generation != 2 {
 			t.Fatalf("requests = %+v, want a retry under generation 2", requests)

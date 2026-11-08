@@ -103,12 +103,10 @@ func TestRevisionAfterAnswersUnchangedStateAtTheBound(t *testing.T) {
 		start := currentRevision(t, f.service)
 
 		done := startRevisionAfter(context.Background(), f.service, start.Revision)
-		time.Sleep(signet.RevisionWaitBound - time.Nanosecond)
-		synctest.Wait()
+		synctest.Sleep(signet.RevisionWaitBound - time.Nanosecond)
 		requireWaiting(t, done, "just before the bound")
 
-		time.Sleep(time.Nanosecond)
-		synctest.Wait()
+		synctest.Sleep(time.Nanosecond)
 		if got := requireAnswered(t, done, "at the bound"); got.Revision != start.Revision || got.SyncEpoch != start.SyncEpoch {
 			t.Fatalf("answer = %+v, want the unchanged %+v", got, start)
 		}
@@ -215,8 +213,7 @@ func TestRevisionAfterCarriesAVerdictChangeAtTheBound(t *testing.T) {
 		synctest.Wait()
 		requireWaiting(t, done, "after a verdict-only change")
 
-		time.Sleep(signet.RevisionWaitBound)
-		synctest.Wait()
+		synctest.Sleep(signet.RevisionWaitBound)
 		got := requireAnswered(t, done, "at the bound")
 		stops := got.UnattendedOperation.Stops
 		if got.Revision != start.Revision || got.UnattendedOperation.Admission != domain.UnattendedAdmissionStopped ||

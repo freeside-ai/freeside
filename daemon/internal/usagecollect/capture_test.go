@@ -116,8 +116,7 @@ func TestCaptureDuringAFailingCollectionCollectsAgain(t *testing.T) {
 		f.collector.gate = nil
 		f.collector.mu.Unlock()
 		close(gate)
-		time.Sleep(2 * time.Minute)
-		synctest.Wait()
+		synctest.Sleep(2 * time.Minute)
 
 		if calls := len(f.collector.requests()); calls != 2 {
 			t.Fatalf("collector called %d times, want one more after the failed one", calls)

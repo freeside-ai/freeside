@@ -1068,8 +1068,7 @@ func TestExternalReviewReplierRun(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- h.r.Run(ctx, time.Minute, func(err error) { t.Error(err) }) }()
 		synctest.Wait()
-		time.Sleep(time.Minute)
-		synctest.Wait()
+		synctest.Sleep(time.Minute)
 		cancel()
 		synctest.Wait()
 		if err := <-done; err != nil {

@@ -459,8 +459,7 @@ func TestRunDeliveriesTickerCadence(t *testing.T) {
 			})
 		}()
 
-		time.Sleep(3*5*time.Second + time.Second)
-		synctest.Wait()
+		synctest.Sleep(3*5*time.Second + time.Second)
 		if got := passes.Load(); got != 4 {
 			t.Fatalf("passes after the immediate one and 3 ticks = %d, want 4", got)
 		}
