@@ -484,3 +484,70 @@ func TestLatestBackendConformanceAbsence(t *testing.T) {
 		t.Fatalf("LatestBackendConformance: %v", err)
 	}
 }
+
+// TestRequireHostVerificationConformant gates the executor's declaration
+// against its own class's record with the ward mint gate's refusals: no
+// record, a failed record, another configuration, and a claim beyond the
+// recorded pass each refuse, and a ward pass never stands in for it.
+func TestRequireHostVerificationConformant(t *testing.T) {
+	t.Parallel()
+	const (
+		bound = domain.Digest("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+		other = domain.Digest("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+	)
+	declared := domain.NewCapabilitySnapshot(domain.CapCredentialFreeHostVerification)
+	hostRecord := func(outcome domain.ConformanceOutcome, caps domain.CapabilitySnapshot, at time.Time) domain.BackendConformance {
+		t.Helper()
+		record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+			Backend: domain.BackendCredentialFreeHostVerification, Outcome: outcome,
+			ConfigurationDigest: bound, Capabilities: caps, ProvedAt: at,
+		})
+		if err != nil {
+			t.Fatalf("NewBackendConformance: %v", err)
+		}
+		return record
+	}
+	require := func(s *store.Store, digest domain.Digest, caps domain.CapabilitySnapshot) error {
+		return s.Read(context.Background(), func(tx *store.ReadTx) error {
+			return tx.RequireHostVerificationConformant(context.Background(), digest, caps)
+		})
+	}
+
+	s, _ := openUnattendedNoConformance(t)
+	if err := require(s, bound, declared); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("no record = %v, want ErrBackendNotConformant", err)
+	}
+	// A ward pass is another class's record and admits nothing here.
+	wardCeiling, _ := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, wardCeiling, admissionEpoch))
+	if err := require(s, bound, declared); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("ward pass only = %v, want ErrBackendNotConformant", err)
+	}
+
+	recordConformance(t, s, hostRecord(domain.ConformanceFailed, nil, admissionEpoch))
+	if err := require(s, bound, declared); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("failed record = %v, want ErrBackendNotConformant", err)
+	}
+
+	recordConformance(t, s, hostRecord(domain.ConformancePassed, declared, admissionEpoch.Add(time.Minute)))
+	if err := require(s, bound, declared); err != nil {
+		t.Fatalf("passed record for the bound digest = %v, want admitted", err)
+	}
+	if err := require(s, bound, nil); err != nil {
+		t.Fatalf("empty declaration under a pass = %v, want admitted (the floor is the engine's)", err)
+	}
+	if err := require(s, other, declared); !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
+		t.Fatalf("other digest = %v, want ErrAdmissionConfigurationMismatch", err)
+	}
+	overclaim := domain.NewCapabilitySnapshot(domain.CapCredentialFreeHostVerification, domain.CapNetworklessExport)
+	if err := require(s, bound, overclaim); !errors.Is(err, domain.ErrAdmissionExceedsConformance) {
+		t.Fatalf("ward capability claim = %v, want ErrAdmissionExceedsConformance", err)
+	}
+
+	// A recheck that begins supersedes the pass; the mint gate holds out the
+	// window rather than recovering the superseded proof.
+	recordConformance(t, s, hostRecord(domain.ConformanceSuperseded, nil, admissionEpoch.Add(2*time.Minute)))
+	if err := require(s, bound, declared); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("pending recheck = %v, want ErrBackendNotConformant", err)
+	}
+}
