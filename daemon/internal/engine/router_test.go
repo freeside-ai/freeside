@@ -3,6 +3,8 @@ package engine
 import (
 	"cmp"
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -53,8 +55,11 @@ func (f *agentAdmissionFixture) setDrainingPolicy(
 	return policy
 }
 
-func order(role domain.RoleName, agents ...string) domain.RoutingPolicyRole {
-	return domain.RoutingPolicyRole{Role: role, Agents: agents}
+// agentTestSecondEnrollment is the enrollment addSecondAgent seeds.
+const agentTestSecondEnrollment domain.ClientEnrollmentID = "claude-second/claude_code"
+
+func order(role domain.RoleName, enrollments ...domain.ClientEnrollmentID) domain.RoutingPolicyRole {
+	return domain.RoutingPolicyRole{Role: role, Enrollments: enrollments}
 }
 
 // routerLine appends an implementer router line naming the second agent.
@@ -75,29 +80,25 @@ func policyOrder(revision int, pool domain.UsagePoolID) *domain.TaskLineProvenan
 	}
 }
 
-// passedOver is the provenance's record of agent on pool passed over for mark.
-func passedOver(agent string, pool domain.UsagePoolID, mark domain.ExhaustedMark) *domain.TaskLinePassedOverMark {
+// passedOver is the provenance's record of enrollment on pool passed over for
+// mark.
+func passedOver(
+	enrollment domain.ClientEnrollmentID, pool domain.UsagePoolID, mark domain.ExhaustedMark,
+) *domain.TaskLinePassedOverMark {
 	return &domain.TaskLinePassedOverMark{
-		Agent: agent, Pool: pool, Window: mark.Window, Source: mark.Source, MarkedAt: mark.SetAt, ResetsAt: mark.ResetsAt,
+		Enrollment: enrollment, Pool: pool, Window: mark.Window, Source: mark.Source, MarkedAt: mark.SetAt, ResetsAt: mark.ResetsAt,
 	}
 }
 
-// routeModel returns the route model id the agent's offer passes.
+// routeModel returns the route model id the agent's selection runs, whose
+// windows mark its pool.
 func (f *agentAdmissionFixture) routeModel(t *testing.T, agent string) string {
 	t.Helper()
-	ctx := context.Background()
-	var candidate routeCandidate
-	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
-		var ok bool
-		var err error
-		if candidate, ok, err = f.selection.routeCandidate(ctx, tx, agent); err == nil && !ok {
-			t.Fatalf("agent %s does not resolve", agent)
-		}
-		return err
-	}); err != nil {
+	selection, err := f.selection.Tree.SelectionOfAgent(agent)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return candidate.model
+	return selection.ModelID
 }
 
 // updatePoolUsage rewrites the pool's usage record at at, starting one under
@@ -305,9 +306,9 @@ func TestRouterPinsEveryRoleToOnePool(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleSpecifier, agentTestSecondAgent),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
-		order(domain.RoleRemediator, agentTestSecondAgent, agentTestWriterAgent))
+		order(domain.RoleSpecifier, agentTestSecondEnrollment),
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleRemediator, agentTestSecondEnrollment, agentTestEnrollment))
 	before := f.taskRevision(t)
 
 	admission, err := f.admitRun(t, f.run, agentTestAt)
@@ -324,7 +325,7 @@ func TestRouterPinsEveryRoleToOnePool(t *testing.T) {
 
 	routed := f.taskLines(t, f.run.ID)
 	f.setRoutingPolicy(t, agentTestAt.Add(time.Minute),
-		order(domain.RoleImplementer, agentTestSecondAgent, agentTestWriterAgent))
+		order(domain.RoleImplementer, agentTestSecondEnrollment, agentTestEnrollment))
 	again, err := f.admitRun(t, f.run, agentTestAt.Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -346,8 +347,8 @@ func TestRouterPassesOverAMarkedPool(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	_, second := f.addSecondAgent(t)
 	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
-		order(domain.RoleRemediator, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleRemediator, agentTestEnrollment, agentTestSecondEnrollment))
 	model := f.routeModel(t, agentTestWriterAgent)
 	reset := agentTestAt.Add(time.Hour)
 	mark := f.markPool(t, routerMainPool, model, &reset, agentTestAt.Add(-time.Minute))
@@ -357,7 +358,7 @@ func TestRouterPassesOverAMarkedPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	provenance := policyOrder(1, routerSecondPool)
-	provenance.PassedOver = passedOver(agentTestWriterAgent, routerMainPool, mark)
+	provenance.PassedOver = passedOver(agentTestEnrollment, routerMainPool, mark)
 	lines := wantRouterLines(t, f, f.run.ID, provenance, agentTestAt, map[domain.RoleName]string{
 		domain.RoleImplementer: agentTestSecondAgent, domain.RoleRemediator: agentTestSecondAgent,
 	})
@@ -414,10 +415,10 @@ func TestRouterLeavesOperatorLinesAlone(t *testing.T) {
 	f.submitLine(t, domain.RoleRemediator, agentTestSecondAgent)
 	f.changeLine(t, domain.RoleRemediator, "", true)
 	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleSpecifier, agentbaseline.WriterAgentName(domain.RoleSpecifier)),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
-		order(domain.RoleRemediator, agentTestSecondAgent),
-		order(domain.RoleReviewer, agentTestWriterAgent))
+		order(domain.RoleSpecifier, agentTestEnrollment),
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleRemediator, agentTestSecondEnrollment),
+		order(domain.RoleReviewer, agentTestEnrollment))
 	reset := agentTestAt.Add(time.Hour)
 	mark := f.markPool(t, routerMainPool, f.routeModel(t, agentTestWriterAgent), &reset, agentTestAt.Add(-time.Minute))
 
@@ -426,7 +427,7 @@ func TestRouterLeavesOperatorLinesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	provenance := policyOrder(1, routerSecondPool)
-	provenance.PassedOver = passedOver(agentTestWriterAgent, routerMainPool, mark)
+	provenance.PassedOver = passedOver(agentTestEnrollment, routerMainPool, mark)
 	lines := wantRouterLines(t, f, f.run.ID, provenance, agentTestAt,
 		map[domain.RoleName]string{domain.RoleImplementer: agentTestSecondAgent})
 	wantCites(t, admission, lines[domain.RoleImplementer], second.ID)
@@ -453,7 +454,7 @@ func TestRouterLeavesALineupTaskOnTheLineup(t *testing.T) {
 	for name, setup := range map[string]func(t *testing.T, f *agentAdmissionFixture){
 		"no policy": func(*testing.T, *agentAdmissionFixture) {},
 		"the policy doesn't order the role": func(t *testing.T, f *agentAdmissionFixture) {
-			f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleReviewer, agentTestSecondAgent))
+			f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleReviewer, agentTestSecondEnrollment))
 		},
 		"the lineup admitted the task before a policy existed": func(t *testing.T, f *agentAdmissionFixture) {
 			admission, err := f.admitRun(t, f.run, agentTestAt.Add(-time.Minute))
@@ -462,7 +463,7 @@ func TestRouterLeavesALineupTaskOnTheLineup(t *testing.T) {
 			}
 			f.record(t, admission)
 			f.setRoutingPolicy(t, agentTestAt.Add(-time.Second),
-				order(domain.RoleImplementer, agentTestSecondAgent))
+				order(domain.RoleImplementer, agentTestSecondEnrollment))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -493,7 +494,7 @@ func TestRouterHoldsWhenEveryPoolIsMarked(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, second := f.addSecondAgent(t)
 		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+			order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 		model := f.routeModel(t, agentTestWriterAgent)
 		mainReset, secondReset := agentTestAt.Add(3*time.Hour), agentTestAt.Add(time.Hour)
 		mainMark := f.markPool(t, routerMainPool, model, &mainReset, agentTestAt.Add(-time.Minute))
@@ -520,7 +521,7 @@ func TestRouterHoldsWhenEveryPoolIsMarked(t *testing.T) {
 			t.Fatal(err)
 		}
 		provenance := policyOrder(1, routerSecondPool)
-		provenance.PassedOver = passedOver(agentTestWriterAgent, routerMainPool, mainMark)
+		provenance.PassedOver = passedOver(agentTestEnrollment, routerMainPool, mainMark)
 		lines := wantRouterLines(t, f, f.run.ID, provenance, freed,
 			map[domain.RoleName]string{domain.RoleImplementer: agentTestSecondAgent})
 		wantCites(t, admission, lines[domain.RoleImplementer], second.ID)
@@ -531,7 +532,7 @@ func TestRouterHoldsWhenEveryPoolIsMarked(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		f.addSecondAgent(t)
 		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+			order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 		model := f.routeModel(t, agentTestWriterAgent)
 		reset := agentTestAt.Add(3 * time.Hour)
 		f.markWindow(t, routerMainPool, model, "weekly", nil, agentTestAt.Add(-2*time.Minute))
@@ -552,7 +553,7 @@ func TestRouterHoldsWhenEveryPoolIsMarked(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		f.addSecondAgent(t)
 		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+			order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 		model := f.routeModel(t, agentTestWriterAgent)
 		f.markPool(t, routerMainPool, model, nil, agentTestAt.Add(-time.Minute))
 		f.markPool(t, routerSecondPool, model, nil, agentTestAt.Add(-time.Minute))
@@ -580,8 +581,8 @@ func TestRoutedLaterRoleHoldsOnItsPool(t *testing.T) {
 		selection := f.selection
 		f.engine.admission.environment.Agents = &selection
 		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
-			order(domain.RoleReviewer, agentbaseline.ClaudeReviewAgentName, agentTestSecondAgent))
+			order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment),
+			order(domain.RoleReviewer, agentTestEnrollment, agentTestSecondEnrollment))
 		return f, routed
 	}
 	reset := agentTestAt.Add(time.Hour)
@@ -669,7 +670,7 @@ func TestRouterWritesOnlyWhenItRoutes(t *testing.T) {
 	}
 
 	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 	model := f.routeModel(t, agentTestWriterAgent)
 	reset := agentTestAt.Add(time.Hour)
 	f.markPool(t, routerMainPool, model, &reset, agentTestAt.Add(-time.Minute))
@@ -696,8 +697,8 @@ func TestRouterCitesThePolicyInEffect(t *testing.T) {
 	t.Run("an earlier revision", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		f.addSecondAgent(t)
-		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleImplementer, agentTestWriterAgent))
-		f.setRoutingPolicy(t, agentTestAt.Add(time.Minute), order(domain.RoleImplementer, agentTestSecondAgent))
+		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleImplementer, agentTestEnrollment))
+		f.setRoutingPolicy(t, agentTestAt.Add(time.Minute), order(domain.RoleImplementer, agentTestSecondEnrollment))
 
 		admission, err := f.admitRun(t, f.run, agentTestAt)
 		if err != nil {
@@ -710,7 +711,7 @@ func TestRouterCitesThePolicyInEffect(t *testing.T) {
 	t.Run("none yet", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		f.addSecondAgent(t)
-		f.setRoutingPolicy(t, agentTestAt.Add(time.Minute), order(domain.RoleImplementer, agentTestSecondAgent))
+		f.setRoutingPolicy(t, agentTestAt.Add(time.Minute), order(domain.RoleImplementer, agentTestSecondEnrollment))
 
 		if _, err := f.admitRun(t, f.run, agentTestAt); err != nil {
 			t.Fatal(err)
@@ -797,7 +798,7 @@ func TestRouterRanksPoolsByTier(t *testing.T) {
 				reset := agentTestAt.Add(time.Hour)
 				mark := f.markPool(t, routerSecondPool, model, &reset, observed.Add(time.Second))
 				provenance := soonest(routerMainPool, second, main)
-				provenance.PassedOver = passedOver(agentTestSecondAgent, routerSecondPool, mark)
+				provenance.PassedOver = passedOver(agentTestSecondEnrollment, routerSecondPool, mark)
 				return agentTestWriterAgent, provenance
 			},
 		},
@@ -821,7 +822,7 @@ func TestRouterRanksPoolsByTier(t *testing.T) {
 				reset := agentTestAt.Add(time.Hour)
 				mark := f.markPool(t, routerSecondPool, model, &reset, observed)
 				provenance := policyOrder(1, routerMainPool)
-				provenance.PassedOver = passedOver(agentTestSecondAgent, routerSecondPool, mark)
+				provenance.PassedOver = passedOver(agentTestSecondEnrollment, routerSecondPool, mark)
 				return agentTestWriterAgent, provenance
 			},
 		},
@@ -839,7 +840,7 @@ func TestRouterRanksPoolsByTier(t *testing.T) {
 			f := newAgentAdmissionFixture(t)
 			f.addSecondAgent(t)
 			f.setDrainingPolicy(t, agentTestAt.Add(-time.Hour), tc.drain,
-				order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+				order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 			agent, provenance := tc.setup(t, f, f.routeModel(t, agentTestWriterAgent))
 
 			if _, err := f.admitRun(t, f.run, agentTestAt); err != nil {
@@ -848,4 +849,83 @@ func TestRouterRanksPoolsByTier(t *testing.T) {
 			wantRouterLines(t, f, f.run.ID, provenance, agentTestAt, map[domain.RoleName]string{domain.RoleImplementer: agent})
 		})
 	}
+}
+
+// setPreUnitPolicy stores routing policy revision 1 as a daemon before #2736
+// wrote it: the role's order in agent names. No current write path produces
+// the form, so the row goes in by hand.
+func (f *agentAdmissionFixture) setPreUnitPolicy(t *testing.T, role domain.RoleName, agents ...string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"revision": 1, "roles": []map[string]any{{"role": role, "agents": agents}},
+		"source": domain.RoutingPolicySourceCLISet, "set_by": "cli:operator", "set_at": "2026-09-01T11:00:00Z",
+		"lineup_revision": f.selection.LineupRevision, "drain_first_account": nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", f.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(t.Context(), `
+INSERT INTO routing_policies (revision, source, set_by, set_at, lineup_revision, drain_first_account, body)
+VALUES (1, 'cli_routing_set', 'cli:operator', '2026-09-01T11:00:00Z', ?, NULL, ?)`,
+		f.selection.LineupRevision, string(body)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A revision stored before #2736 orders agent names. The router reads each
+// name as the enrollment its agent runs and routes it on the lineup's model
+// and effort, and the anchor admits both that line and a v1 router line a
+// pre-unit daemon wrote naming the agent.
+func TestRouterReadsAPreEnrollmentRevision(t *testing.T) {
+	t.Parallel()
+	t.Run("routes the order", func(t *testing.T) {
+		t.Parallel()
+		f := newAgentAdmissionFixture(t)
+		_, second := f.addSecondAgent(t)
+		f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestSecondAgent, agentTestWriterAgent)
+		admission, err := f.admitRun(t, f.run, agentTestAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := wantRouterLines(t, f, f.run.ID, policyOrder(1, routerSecondPool), agentTestAt,
+			map[domain.RoleName]string{domain.RoleImplementer: agentTestSecondAgent})
+		wantCites(t, admission, lines[domain.RoleImplementer], second.ID)
+	})
+	t.Run("admits a pre-unit router line", func(t *testing.T) {
+		t.Parallel()
+		f := newAgentAdmissionFixture(t)
+		_, second := f.addSecondAgent(t)
+		f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent)
+		routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), policyOrder(1, routerSecondPool), agentTestAt.Add(-time.Minute))
+		admission, err := f.admitRun(t, f.run, agentTestAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line := f.taskLines(t, f.run.ID)[0]
+		wantCites(t, admission, line, second.ID)
+	})
+}
+
+// An enrollment whose recorded catalog does not serve the role's lineup
+// model is not a candidate: the router routes to the next one, and since no
+// mark decided it, the provenance passes nothing over.
+func TestRouterSkipsAnEnrollmentThatCannotServeTheLineup(t *testing.T) {
+	t.Parallel()
+	f := newAgentAdmissionFixture(t)
+	_, second := f.addSecondAgent(t)
+	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
+	f.recordCatalog(t, agentTestEnrollment, "claude-other-test", "high")
+	admission, err := f.admitRun(t, f.run, agentTestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := wantRouterLines(t, f, f.run.ID, policyOrder(1, routerSecondPool), agentTestAt,
+		map[domain.RoleName]string{domain.RoleImplementer: agentTestSecondAgent})
+	wantCites(t, admission, lines[domain.RoleImplementer], second.ID)
 }

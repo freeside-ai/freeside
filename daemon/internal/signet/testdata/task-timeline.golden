@@ -236,7 +236,7 @@
       "verification": null,
       "external_review": null,
       "line": {
-        "line_id": "sha256:b556aff69bdaae25e55a428ca8e12e984a6127ba29c833be9157b5e26b67081a",
+        "line_id": "sha256:56c5b9dbd639e69e70fcf22f6a567876627c3b7dfec6c88e28bb464e8dfbbd0d",
         "role": "implementer",
         "agent": "claude-b",
         "selection": null,
@@ -263,7 +263,7 @@
             }
           ],
           "passed_over": {
-            "agent": "claude-a",
+            "agent": "claude-a/claude_code",
             "pool": "pool-a",
             "window": "five_hour",
             "source": "provider_refusal",

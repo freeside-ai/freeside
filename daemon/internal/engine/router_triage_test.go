@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // An escalated task's specifier routes among the counterparts of its order
@@ -66,9 +68,9 @@ func escalatedRoutingFixture(t *testing.T) (*agentAdmissionFixture, domain.Routi
 	f.addEscalatedSpecifier(t, true)
 	f.addSecondEscalated(t)
 	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleSpecifier, agentTestSpecifierAgent, agentTestSecondAgent),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
-		order(domain.RoleRemediator, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleSpecifier, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleRemediator, agentTestEnrollment, agentTestSecondEnrollment))
 	return f, policy, second
 }
 
@@ -121,7 +123,7 @@ func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
 		}
 		provenance := specifier.Provenance
 		if provenance == nil || provenance.Pool != routerSecondPool || provenance.PassedOver == nil ||
-			provenance.PassedOver.Agent != agentTestEscalatedAgent || provenance.PassedOver.Window != mark.Window {
+			provenance.PassedOver.Enrollment != agentTestEnrollment || provenance.PassedOver.Window != mark.Window {
 			t.Fatalf("provenance = %+v, want the main counterpart passed over", provenance)
 		}
 		for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleRemediator} {
@@ -130,8 +132,8 @@ func TestRouterRoutesAnEscalatedSpecifierAmongCounterparts(t *testing.T) {
 			}
 		}
 		wantCites(t, admission, specifier, second.ID)
-		// The implementer's line names the passed-over counterpart, which the
-		// policy orders for no role; the escalated task's anchor accepts it.
+		// The implementer's line names the passed-over counterpart's
+		// enrollment, which the policy orders, so its anchor accepts it.
 		implementer, err := f.admitRole(t, domain.RoleImplementer)
 		if err != nil || implementer.binding.SelectionRecordID != heads[domain.RoleImplementer].ID {
 			t.Fatalf("implementer admission = %+v, %v; want its router line", implementer.binding, err)
@@ -185,8 +187,8 @@ func TestRouterLeavesAnEscalatedSpecifierWithNoCounterpartOnTriage(t *testing.T)
 	f.addSecondAgent(t)
 	f.addEscalatedSpecifier(t, true)
 	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleSpecifier, agentTestSecondAgent),
-		order(domain.RoleImplementer, agentTestSecondAgent))
+		order(domain.RoleSpecifier, agentTestSecondEnrollment),
+		order(domain.RoleImplementer, agentTestSecondEnrollment))
 	triage := f.escalate(t)
 	f.engine.admission.now = func() time.Time { return agentTestAt.Add(time.Minute) }
 	admission, err := f.admitSpecifier(t, "inv-specification-1")
@@ -213,7 +215,7 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 	provenance := func(t *testing.T, f *agentAdmissionFixture, pool domain.UsagePoolID) *domain.TaskLineProvenance {
 		p := policyOrder(1, pool)
 		p.PassedOver = &domain.TaskLinePassedOverMark{
-			Agent: agentTestEscalatedAgent, Pool: routerMainPool, Window: "five_hour",
+			Enrollment: agentTestEnrollment, Pool: routerMainPool, Window: "five_hour",
 			Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: agentTestAt.Add(-time.Minute),
 		}
 		return p
@@ -243,7 +245,7 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				f.escalate(t)
 				routed(t, f, domain.RoleImplementer, agentTestSecondEscalatedAgent, policyOrder(1, routerSecondPool))
 			},
-			want: "does not order the line's agent",
+			want: "does not order the line's selection",
 		},
 		{
 			name: "a task that did not escalate", role: domain.RoleSpecifier,
@@ -254,14 +256,16 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				})
 				routed(t, f, domain.RoleSpecifier, agentTestSecondEscalatedAgent, policyOrder(1, routerSecondPool))
 			},
-			want: "does not order the line's agent",
+			want: "does not order the line's selection",
 		},
 		{
-			name: "a passed-over counterpart on a task that did not escalate", role: domain.RoleImplementer,
+			name: "a passed-over enrollment the policy does not order", role: domain.RoleImplementer,
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
-				routed(t, f, domain.RoleImplementer, agentTestSecondAgent, provenance(t, f, routerSecondPool))
+				p := provenance(t, f, routerSecondPool)
+				p.PassedOver.Enrollment = "claude-unordered/claude_code"
+				routed(t, f, domain.RoleImplementer, agentTestSecondAgent, p)
 			},
-			want: "orders no agent the line passed over",
+			want: "orders nothing the line passed over",
 		},
 		{
 			name: "a counterpart the lineup no longer names", role: domain.RoleSpecifier,
@@ -275,7 +279,7 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				}
 				f.useTree(t, withoutLineupLine(t, f.selection.Tree, strings.TrimPrefix(key, domain.LineupRoleKeyPrefix)))
 			},
-			want: "it selects other than",
+			want: "does not order the line's selection",
 		},
 		{
 			name: "a counterpart the lineup moved", role: domain.RoleSpecifier,
@@ -295,7 +299,7 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				tree.Lineup[i].Selection.Names.Model = agentTestOtherEscalatedModel
 				f.useTree(t, tree)
 			},
-			want: "it selects other than",
+			want: "does not order the line's selection",
 		},
 		{
 			name: "a second version over an operator's line", role: domain.RoleSpecifier,
@@ -334,5 +338,60 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				t.Fatalf("admission = %+v, %v; want refusal naming %q", admission.binding, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestAPreUnitEscalatedSpecifierLineNeedsItsOrder: under a revision stored
+// before #2736, an escalated specifier's router line is ordered only while an
+// agent the revision orders for the specifier still resolves in the tree, and
+// its counterpart check then takes that agent's enrollment as its base. With
+// no such agent, or with an empty tree, the anchor refuses the line, and the
+// counterpart check has no base to accept it under.
+func TestAPreUnitEscalatedSpecifierLineNeedsItsOrder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		agent     string
+		emptyTree bool
+		ordered   bool
+	}{
+		"an ordered agent resolves": {agent: agentTestSpecifierAgent, ordered: true},
+		"no ordered agent resolves": {agent: "claude-gone"},
+		"the tree is empty":         {agent: agentTestSpecifierAgent, emptyTree: true},
+	} {
+		f := newAgentAdmissionFixture(t)
+		f.addEscalatedSpecifier(t, true)
+		triage := f.escalate(t)
+		f.setPreUnitPolicy(t, domain.RoleSpecifier, tc.agent)
+		line := domain.TaskLine{
+			TaskID: triage.TaskID, Role: domain.RoleSpecifier, Version: 2, Encoding: domain.TaskLineEncodingV2,
+			Selection: f.lineSelection(t, agentTestEscalatedAgent), Source: domain.TaskLineSourceRouter,
+			SetAt: agentTestAt.Add(time.Minute), Provenance: &domain.TaskLineProvenance{
+				PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: routerMainPool,
+				RankedBy: []domain.TaskLineRankingReading{},
+			},
+		}
+		tree := f.selection.Tree
+		if tc.emptyTree {
+			tree = agenttree.Tree{}
+		}
+		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			if err := anchorLinePolicy(ctx, tx, tree, line); (err == nil) != tc.ordered {
+				t.Errorf("%s: anchor = %v, want ordered %t", name, err, tc.ordered)
+			}
+			if tc.emptyTree {
+				return nil
+			}
+			bases, _, err := counterpartBases(ctx, tx, tree, domain.LineupSelection{}, line)
+			if err != nil {
+				return err
+			}
+			if bases == nil || (len(bases) > 0) != tc.ordered {
+				t.Errorf("%s: counterpart bases = %#v, want a required set, non-empty %t", name, bases, tc.ordered)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

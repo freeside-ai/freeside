@@ -15,6 +15,15 @@ var (
 	routingPolicyRevision = domain.Digest("sha256:" + strings.Repeat("a", 64))
 )
 
+// enrollments is an order over enrollment ids.
+func enrollments(ids ...string) []domain.ClientEnrollmentID {
+	order := make([]domain.ClientEnrollmentID, len(ids))
+	for i, id := range ids {
+		order[i] = domain.ClientEnrollmentID(id)
+	}
+	return order
+}
+
 func routingPolicyInput(roles ...domain.RoutingPolicyRole) domain.RoutingPolicyInput {
 	return domain.RoutingPolicyInput{
 		Roles: roles, Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator",
@@ -24,17 +33,17 @@ func routingPolicyInput(roles ...domain.RoutingPolicyRole) domain.RoutingPolicyI
 
 func TestNewRoutingPolicyCanonicalizes(t *testing.T) {
 	t.Parallel()
-	order := []string{"claude-a", "claude-b"}
+	order := enrollments("claude-a/claude_code", "claude-b/claude_code")
 	policy, err := domain.NewRoutingPolicy(routingPolicyInput(
-		domain.RoutingPolicyRole{Role: domain.RoleReviewer, Agents: []string{"codex"}},
-		domain.RoutingPolicyRole{Role: domain.RoleSpecifier, Agents: order},
+		domain.RoutingPolicyRole{Role: domain.RoleReviewer, Enrollments: enrollments("codex-a/codex")},
+		domain.RoutingPolicyRole{Role: domain.RoleSpecifier, Enrollments: order},
 	), 1, routingPolicyAt.In(time.FixedZone("elsewhere", 3600)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []domain.RoutingPolicyRole{
-		{Role: domain.RoleSpecifier, Agents: []string{"claude-a", "claude-b"}},
-		{Role: domain.RoleReviewer, Agents: []string{"codex"}},
+		{Role: domain.RoleSpecifier, Enrollments: enrollments("claude-a/claude_code", "claude-b/claude_code")},
+		{Role: domain.RoleReviewer, Enrollments: enrollments("codex-a/codex")},
 	}
 	if !reflect.DeepEqual(policy.Roles, want) {
 		t.Fatalf("roles = %+v, want %+v", policy.Roles, want)
@@ -44,7 +53,7 @@ func TestNewRoutingPolicyCanonicalizes(t *testing.T) {
 	}
 	// A revision is never edited, so it must not share the caller's slice.
 	order[0] = "edited"
-	if policy.Roles[0].Agents[0] != "claude-a" {
+	if policy.Roles[0].Enrollments[0] != "claude-a/claude_code" {
 		t.Fatalf("roles alias the input: %+v", policy.Roles)
 	}
 	if policy.DrainFirstAccount != nil {
@@ -52,7 +61,7 @@ func TestNewRoutingPolicyCanonicalizes(t *testing.T) {
 	}
 
 	account := domain.UsagePoolID("pool-a")
-	in := routingPolicyInput(domain.RoutingPolicyRole{Role: domain.RoleImplementer, Agents: []string{"claude-a"}})
+	in := routingPolicyInput(domain.RoutingPolicyRole{Role: domain.RoleImplementer, Enrollments: enrollments("claude-a/claude_code")})
 	in.DrainFirstAccount = &account
 	drained, err := domain.NewRoutingPolicy(in, 2, routingPolicyAt)
 	if err != nil {
@@ -67,7 +76,7 @@ func TestNewRoutingPolicyCanonicalizes(t *testing.T) {
 func TestRoutingPolicySources(t *testing.T) {
 	t.Parallel()
 	for _, source := range domain.AllRoutingPolicySources {
-		in := routingPolicyInput(domain.RoutingPolicyRole{Role: domain.RoleImplementer, Agents: []string{"claude-a"}})
+		in := routingPolicyInput(domain.RoutingPolicyRole{Role: domain.RoleImplementer, Enrollments: enrollments("claude-a/claude_code")})
 		in.Source = source
 		if _, err := domain.NewRoutingPolicy(in, 1, routingPolicyAt); err != nil {
 			t.Errorf("%s: %v", source, err)
@@ -75,28 +84,35 @@ func TestRoutingPolicySources(t *testing.T) {
 	}
 }
 
-// TestRoutingPolicyRefusals pins each refusal. A refused role or agent is
-// request text, so the error must not repeat it.
+// TestRoutingPolicyRefusals pins each refusal. A refused role or enrollment
+// is request text, so the error must not repeat it.
 func TestRoutingPolicyRefusals(t *testing.T) {
 	t.Parallel()
 	const pasted = "SECRET-TOKEN"
-	implementer := func(agents ...string) domain.RoutingPolicyRole {
-		return domain.RoutingPolicyRole{Role: domain.RoleImplementer, Agents: agents}
+	implementer := func(ids ...string) domain.RoutingPolicyRole {
+		return domain.RoutingPolicyRole{Role: domain.RoleImplementer, Enrollments: enrollments(ids...)}
 	}
 	for name, tc := range map[string]struct {
 		roles []domain.RoutingPolicyRole
 		want  error
 	}{
-		"no roles":        {nil, domain.ErrRoutingPolicyNoRoles},
-		"shadow reviewer": {[]domain.RoutingPolicyRole{{Role: domain.RoleShadowReviewer, Agents: []string{"a"}}}, domain.ErrTaskLineRoleIneligible},
-		"wardless role":   {[]domain.RoutingPolicyRole{{Role: domain.RoleBriefer, Agents: []string{"a"}}}, domain.ErrTaskLineRoleIneligible},
-		"refused role":    {[]domain.RoutingPolicyRole{{Role: pasted, Agents: []string{"a"}}}, domain.ErrTaskLineRoleIneligible},
-		"repeated role":   {[]domain.RoutingPolicyRole{implementer("a"), implementer("b")}, domain.ErrRoutingPolicyRoleRepeated},
-		"nil order":       {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer}}, domain.ErrRoutingPolicyOrderEmpty},
-		"empty order":     {[]domain.RoutingPolicyRole{implementer()}, domain.ErrRoutingPolicyOrderEmpty},
-		"repeated agent":  {[]domain.RoutingPolicyRole{implementer("a", "b", "a")}, domain.ErrRoutingPolicyAgentRepeated},
-		"empty agent":     {[]domain.RoutingPolicyRole{implementer("")}, domain.ErrInvalidAgentName},
-		"refused agent":   {[]domain.RoutingPolicyRole{implementer("a", pasted)}, domain.ErrInvalidAgentName},
+		"no roles":            {nil, domain.ErrRoutingPolicyNoRoles},
+		"shadow reviewer":     {[]domain.RoutingPolicyRole{{Role: domain.RoleShadowReviewer, Enrollments: enrollments("a")}}, domain.ErrTaskLineRoleIneligible},
+		"wardless role":       {[]domain.RoutingPolicyRole{{Role: domain.RoleBriefer, Enrollments: enrollments("a")}}, domain.ErrTaskLineRoleIneligible},
+		"refused role":        {[]domain.RoutingPolicyRole{{Role: pasted, Enrollments: enrollments("a")}}, domain.ErrTaskLineRoleIneligible},
+		"repeated role":       {[]domain.RoutingPolicyRole{implementer("a"), implementer("b")}, domain.ErrRoutingPolicyRoleRepeated},
+		"nil order":           {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer}}, domain.ErrRoutingPolicyOrderEmpty},
+		"empty order":         {[]domain.RoutingPolicyRole{implementer()}, domain.ErrRoutingPolicyOrderEmpty},
+		"repeated enrollment": {[]domain.RoutingPolicyRole{implementer("a", "b", "a")}, domain.ErrRoutingPolicyEnrollmentRepeated},
+		"empty enrollment":    {[]domain.RoutingPolicyRole{implementer("")}, domain.ErrInvalidRoutingPolicyEnrollment},
+		"refused enrollment":  {[]domain.RoutingPolicyRole{implementer("a", "-"+pasted)}, domain.ErrInvalidRoutingPolicyEnrollment},
+		"spaced enrollment":   {[]domain.RoutingPolicyRole{implementer("a", pasted+" x")}, domain.ErrInvalidRoutingPolicyEnrollment},
+		// A new revision orders enrollments; the agents form is one only a
+		// stored revision may hold.
+		"agents form": {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-a"}}}, domain.ErrRoutingPolicyAgentsForm},
+		"mixed form": {[]domain.RoutingPolicyRole{{
+			Role: domain.RoleImplementer, Enrollments: enrollments("a"), Agents: []string{"claude-a"},
+		}}, domain.ErrRoutingPolicyFormMixed},
 	} {
 		_, err := domain.NewRoutingPolicy(routingPolicyInput(tc.roles...), 1, routingPolicyAt)
 		if !errors.Is(err, tc.want) {
@@ -116,8 +132,8 @@ func TestRoutingPolicyValidateRefusesDecodedShapes(t *testing.T) {
 		return domain.RoutingPolicy{
 			Revision: 1,
 			Roles: []domain.RoutingPolicyRole{
-				{Role: domain.RoleSpecifier, Agents: []string{"claude-a"}},
-				{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
+				{Role: domain.RoleSpecifier, Enrollments: enrollments("claude-a/claude_code")},
+				{Role: domain.RoleImplementer, Enrollments: enrollments("claude-a/claude_code", "claude-b/claude_code")},
 			},
 			Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator", SetAt: routingPolicyAt,
 			LineupRevision: routingPolicyRevision,
@@ -126,10 +142,27 @@ func TestRoutingPolicyValidateRefusesDecodedShapes(t *testing.T) {
 	if err := valid().Validate(); err != nil {
 		t.Fatal(err)
 	}
+	// A revision stored before enrollments holds the agents form, and the
+	// store re-runs Validate on its decode.
+	legacy := valid()
+	legacy.Roles = []domain.RoutingPolicyRole{
+		{Role: domain.RoleSpecifier, Agents: []string{"claude-a"}},
+		{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("a pre-enrollment revision: %v", err)
+	}
 	for name, tc := range map[string]struct {
 		edit func(*domain.RoutingPolicy)
 		want error
 	}{
+		"mixed form": {func(p *domain.RoutingPolicy) { p.Roles[0].Agents = []string{"claude-a"} }, domain.ErrRoutingPolicyFormMixed},
+		"repeated agent": {func(p *domain.RoutingPolicy) {
+			p.Roles[0] = domain.RoutingPolicyRole{Role: domain.RoleSpecifier, Agents: []string{"claude-a", "claude-a"}}
+		}, domain.ErrRoutingPolicyAgentRepeated},
+		"bad agent": {func(p *domain.RoutingPolicy) {
+			p.Roles[0] = domain.RoutingPolicyRole{Role: domain.RoleSpecifier, Agents: []string{"Claude A"}}
+		}, domain.ErrInvalidAgentName},
 		"revision zero":   {func(p *domain.RoutingPolicy) { p.Revision = 0 }, domain.ErrNonPositive},
 		"revision below":  {func(p *domain.RoutingPolicy) { p.Revision = -1 }, domain.ErrNonPositive},
 		"no roles":        {func(p *domain.RoutingPolicy) { p.Roles = nil }, domain.ErrRoutingPolicyNoRoles},
@@ -153,25 +186,25 @@ func TestRoutingPolicyValidateRefusesDecodedShapes(t *testing.T) {
 func TestRoutingPolicySameRule(t *testing.T) {
 	t.Parallel()
 	in := routingPolicyInput(
-		domain.RoutingPolicyRole{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
+		domain.RoutingPolicyRole{Role: domain.RoleImplementer, Enrollments: enrollments("claude-a/claude_code", "claude-b/claude_code")},
 	)
 	in.DrainFirstAccount = new(domain.UsagePoolID("pool-a"))
 	policy, err := domain.NewRoutingPolicy(in, 3, routingPolicyAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	same := []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}}}
+	same := []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Enrollments: enrollments("claude-a/claude_code", "claude-b/claude_code")}}
 	for name, tc := range map[string]struct {
 		roles   []domain.RoutingPolicyRole
 		account *domain.UsagePoolID
 		want    bool
 	}{
-		"same":           {same, new(domain.UsagePoolID("pool-a")), true},
-		"swapped agents": {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-b", "claude-a"}}}, new(domain.UsagePoolID("pool-a")), false},
-		"another role":   {[]domain.RoutingPolicyRole{{Role: domain.RoleSpecifier, Agents: []string{"claude-a", "claude-b"}}}, new(domain.UsagePoolID("pool-a")), false},
+		"same":          {same, new(domain.UsagePoolID("pool-a")), true},
+		"swapped order": {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Enrollments: enrollments("claude-b/claude_code", "claude-a/claude_code")}}, new(domain.UsagePoolID("pool-a")), false},
+		"another role":  {[]domain.RoutingPolicyRole{{Role: domain.RoleSpecifier, Enrollments: enrollments("claude-a/claude_code", "claude-b/claude_code")}}, new(domain.UsagePoolID("pool-a")), false},
 		"added role": {[]domain.RoutingPolicyRole{
-			{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
-			{Role: domain.RoleReviewer, Agents: []string{"codex"}},
+			{Role: domain.RoleImplementer, Enrollments: enrollments("claude-a/claude_code", "claude-b/claude_code")},
+			{Role: domain.RoleReviewer, Enrollments: enrollments("codex-a/codex")},
 		}, new(domain.UsagePoolID("pool-a")), false},
 		// The account is part of the rule: the same orders with another
 		// account, or with none, are a change.

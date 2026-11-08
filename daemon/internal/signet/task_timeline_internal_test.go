@@ -56,7 +56,7 @@ func taskTimelineFixtureLines(t *testing.T, task domain.Task) []domain.TaskLine 
 				{Pool: "pool-b", Window: "seven_day", ResetsAt: task.CreatedAt.Add(48 * time.Hour), ObservedAt: task.CreatedAt.Add(-time.Hour)},
 			},
 			PassedOver: &domain.TaskLinePassedOverMark{
-				Agent: "claude-a", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+				Enrollment: "claude-a/claude_code", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
 				MarkedAt: task.CreatedAt.Add(-30 * time.Minute), ResetsAt: new(task.CreatedAt.Add(2 * time.Hour)),
 			},
 		},

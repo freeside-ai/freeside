@@ -371,7 +371,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return err
 		}
-		routingPolicy, err := currentRoutingPolicySnapshot(ctx, tx, state)
+		routingPolicy, err := currentRoutingPolicySnapshot(ctx, tx, state, s.agentCatalog())
 		if err != nil {
 			return err
 		}

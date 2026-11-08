@@ -105,7 +105,7 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 				tree, moveAgent := moveTree(t)
 				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
 					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
-					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), signet.WithParkedTaskMover(fakeParkedTaskMover),
+					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog, signet.WithParkedTaskMover(fakeParkedTaskMover),
 					signet.WithAgentTree(func() *agenttree.Tree { return tree }))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {

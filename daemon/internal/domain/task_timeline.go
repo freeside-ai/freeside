@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -136,6 +137,16 @@ type TaskEventTaskLine struct {
 	SupersededAgent     *string             `json:"superseded_agent"`
 	SupersededSelection *TaskLineSelection  `json:"superseded_selection"`
 	Provenance          *TaskLineProvenance `json:"provenance"`
+}
+
+// MarshalJSON writes the provenance as the client wire carries it
+// (TaskLineProvenance.Wire): the timeline is a projection, never stored.
+func (l TaskEventTaskLine) MarshalJSON() ([]byte, error) {
+	type plain TaskEventTaskLine
+	return json.Marshal(struct {
+		plain
+		Provenance *TaskLineProvenanceWire `json:"provenance"`
+	}{plain(l), l.Provenance.Wire()})
 }
 
 func (l TaskEventTaskLine) validate() error {

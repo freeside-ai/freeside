@@ -1950,14 +1950,15 @@ freesided auth seed-exhausted \
   -db <state-root>/daemon/freeside.db \
   -pool <usage_pool from freesided auth list> \
   -window <provider window, such as five_hour> \
-  -model <route model id of the policy's first agent> \
+  -model <route model id of the role's lineup model> \
   -resets-at 2026-11-03T18:00:00Z
 ```
 
-- **Seed the first-ranked agent's pool.** With no drain-first account and
-  no known weekly reset, that is the agent first in the role's order. Mark
-  its window, then submit the next task promptly. The router passes that
-  agent over and records its mark in the line's provenance (`passed_over`).
+- **Seed the first-ranked enrollment's pool.** With no drain-first account
+  and no known weekly reset, that is the enrollment first in the role's
+  order. Mark its window, then submit the next task promptly. The router
+  passes that enrollment over and records its mark in the line's provenance
+  (`passed_over`).
 - **A collection replaces the reading.** The next collection of that pool
   writes what the provider actually reports, which clears the seeded mark.
 - **The reset must be in the future.** A reset at or before now is refused,
@@ -2038,8 +2039,9 @@ either all of `-enrollment`, `-model`, and `-effort`, or `-clear`.
 ### Set The Routing Policy
 
 `freesided routing` sets and shows the deployment's routing policy: for each
-role, the agents that may take a new task when no task line chose one, in
-fallback order, and optionally a drain-first account, the usage pool that
+role, the enrollments that may take a new task when no task line chose one,
+in fallback order, each running the model and effort the tree's lineup binds
+the role to, and optionally a drain-first account, the usage pool that
 takes every new task ahead of reset order (`docs/plan.md` §5.4, revision
 107). The router reads the current revision at a task's first admission
 (Route A Task To One Pool). A new revision changes only tasks the router
@@ -2050,19 +2052,22 @@ daemon, which holds the store. Both print JSON.
 ```sh
 freesided routing set -db "$DB" \
   -agent-tree "$CHECKOUT" -agent-tree-commit "$COMMIT" \
-  -order implementer=claude-a,claude-b -order reviewer=claude-b \
-  -drain-first claude-owner-subscription
+  -order implementer=claude-a/claude_code,claude-b/claude_code \
+  -order reviewer=codex-review/codex_cli \
+  -drain-first identity:claude-a
 freesided routing show -db "$DB"
 freesided routing show -db "$DB" -revisions
 ```
 
-`-order` takes `role=agent1,agent2`, one per role, first choice first; a role
-is `specifier`, `implementer`, `remediator`, or `reviewer`. `-agent-tree` is
-an absolute path to a checkout holding the tree under `policy/`, because a
-running daemon resolves it from its own working directory, and that daemon's
-account must be able to read it. `-agent-tree-commit` is the full commit id.
-`-drain-first` is optional and takes a usage pool id, as `freesided auth list`
-prints it.
+`-order` takes `role=enrollment1,enrollment2`, one per role, first choice
+first; an enrollment is a client enrollment id, as `freesided auth list`
+prints it, and a role is `specifier`, `implementer`, `remediator`, or
+`reviewer`. `-agent-tree` is an absolute path to a checkout holding the tree
+under `policy/`, because a running daemon resolves it from its own working
+directory, and that daemon's account must be able to read it. The tree's
+lineup supplies each role's model and effort and the revision the policy
+records. `-agent-tree-commit` is the full commit id. `-drain-first` is
+optional and takes a usage pool id, as `freesided auth list` prints it.
 
 - **Each `set` replaces the whole policy.** A role left out of it keeps
   lineup behaviour, and a `set` without `-drain-first` clears the account,
@@ -2072,25 +2077,43 @@ prints it.
   and leaves earlier ones alone. A revision records the orders, the
   drain-first account or `null`, who set it and when, and the tree revision
   it was checked against.
-- **Every agent must be in the tree.** `set` reads the tree at that commit
-  through git, never the working tree, and refuses an agent the tree doesn't
-  carry, naming the role and the agent. It exits non-zero and records nothing.
-  The check is membership only: an agent the tree carries but can't run, or
-  one a later commit drops, is the router's to handle at admission.
-- **The drain-first account must be an agent's pool.** `set` refuses an
-  account that isn't the usage pool of at least one agent of the tree,
-  through that agent's enrollment and identity in the store; it exits
-  non-zero and records nothing. The account need not hold an agent for every
-  ordered role: the router skips it for a role whose order has no agent on
-  it.
+- **Every enrollment must be able to run the role.** `set` reads the tree
+  at that commit through git, never the working tree, and refuses a role the
+  lineup leaves unbound, an enrollment the store lacks, one whose identity is
+  disabled, and one that can't run the role's lineup model and effort, as
+  admission judges it: its discovered model catalog must list them, and an
+  enrollment with no catalog yet needs only an effort its client produces.
+  The native-default model needs a `claude_code` enrollment. The
+  refusal names the role and the enrollment's position in its order, not the
+  enrollment. It exits non-zero and records nothing. An enrollment that
+  later stops serving the lineup, or a lineup whose model or effort later
+  changes, is the router's to handle at admission: it skips the enrollment.
+- **The drain-first account must be an ordered enrollment's pool.** `set`
+  refuses an account that isn't the usage pool of at least one enrollment
+  the policy orders, through that enrollment's identity in the store; it
+  exits non-zero and records nothing. The account need not hold an
+  enrollment for every ordered role: the router skips it for a role whose
+  order has none on it.
 - **The same rule records nothing.** Setting the orders and account the
   current revision holds prints `"recorded": false` and that revision, even
   from a newer tree. The tree and the account are still checked first.
 - **`show` prints what's set.** It prints the current revision, or `null` when
   none was set. With `-revisions` it prints every revision in order, or `[]`.
+  A revision set before policies ordered enrollments holds `agents` instead
+  of `enrollments`. It is never rewritten: the router reads it by mapping
+  each agent to its enrollment in the daemon's current tree, skipping one
+  the tree no longer carries. A new revision always orders enrollments.
 
 A paired client sets the same policy with the `set_routing_policy` command,
-and changes a task's line with `change_task_line`. The daemon checks the
+and changes a task's line with `change_task_line`. Until the client wire
+moves to enrollments (#2807), the command's `agents` list takes, for each
+entry, an enrollment id or an agent name from the daemon's agent catalog,
+which the daemon maps to that agent's enrollment; two entries on one
+enrollment keep its first position, and an entry that is neither is
+refused. The daemon renders a policy back to the client the same way: each
+enrollment as the catalog agent that runs it on the role's lineup model and
+effort, or as the enrollment id when no agent does, and a line's
+`passed_over` agent as the passed-over enrollment's id. The daemon checks the
 policy against the agent tree its own composition loaded, records the
 revision with source `client_routing_set` and `set_by` `device:<device_id>`,
 and refuses a change prepared against a revision that is no longer current
@@ -2116,38 +2139,45 @@ does for an operator's.
   was set stays on the lineup. A role the policy doesn't order is admitted
   through the lineup, as before.
 - **It ranks the pools in three tiers** (`docs/plan.md` §5.4, revision 107).
-  Agents on the policy's drain-first account come first, when the role's
-  order holds one. Agents on pools whose weekly allowance has a known reset
-  still ahead come next, soonest reset first, equal resets in the policy's
-  order. The rest follow in the policy's order. A reading is weekly when its
-  `length` is seven days, whatever the provider names the window. A pool
-  ranks by the weekly windows that apply to the model of its first agent in
-  the order, the soonest-resetting one when several do. An agent the tree
-  lacks, or one that doesn't resolve to an enrolled identity, is skipped. If
-  no agent in the order resolves, the router writes nothing and the task
+  A candidate is an ordered enrollment running the role's lineup model and
+  effort. Candidates on the policy's drain-first account come first, when
+  the role's order holds one. Candidates on pools whose weekly allowance has
+  a known reset still ahead come next, soonest reset first, equal resets in
+  the policy's order. The rest follow in the policy's order. A reading is
+  weekly when its `length` is seven days, whatever the provider names the
+  window. A pool ranks by the weekly windows that apply to the lineup model,
+  the soonest-resetting one when several do. An enrollment the store lacks,
+  one whose identity is missing or disabled, and one that can't run the
+  lineup model and effort (as `set` judges it) are skipped; so is a
+  pre-unit revision's agent the tree no longer carries (Set The Routing
+  Policy). If no candidate resolves, the router writes nothing and the task
   stays on the lineup.
-- **It takes the first open agent.** It takes the first ranked agent whose
-  pool has no exhausted mark on the window for that agent's model. A mark
+- **It takes the first open candidate.** It takes the first ranked
+  candidate whose pool has no exhausted mark on the window for the lineup
+  model. A mark
   comes from an exhausted reading not yet past its reset, or from a
   provider's quota refusal (Refresh A Usage Pool's Usage Record). A marked
   pool keeps its rank and is passed over.
 - **It pins every role to that pool.** One write records a version-1 line
   for the role being admitted and for every other unlined role the policy
-  orders, each naming that role's first agent on the chosen pool, even one
-  passed over for its own model's marked window, which then holds. A role with
-  no agent on that pool gets no line and runs on the lineup. An operator's
+  orders, each selecting that role's first ordered enrollment on the chosen
+  pool with the role's lineup model and effort, even one passed over for its
+  own model's marked window, which then holds. A role with no candidate on
+  that pool gets no line and runs on the lineup. A line keeps its selection
+  when the lineup later changes: admission refuses a router line whose
+  model or effort the role's lineup line no longer names. An operator's
   line, or a cleared line, is left alone.
 - **It records why.** Every line of the routing carries one provenance: the
   policy revision, the `tier` that chose the pool, the `pool`, the weekly
-  readings that ranked the candidates (`ranked_by`), and, when an agent
-  ranked ahead was passed over, that agent and its mark (`passed_over`). The
+  readings that ranked the candidates (`ranked_by`), and, when a candidate
+  ranked ahead was passed over, its enrollment and its mark (`passed_over`). The
   drain-first tier passes over nothing: the account leads every pool.
-- **Every pool marked holds the task.** When every agent's pool is marked,
+- **Every pool marked holds the task.** When every candidate's pool is marked,
   the attempt or review waits under a `quota_window_exhausted` hold that names
   the pool and window freeing first, and routes again after it. A pool frees
   at the latest reset among its marks; a mark with no reset doesn't hold,
   here or for a later role. When no mark carries a reset, the router picks
-  the first ranked agent and leaves the outcome to the provider.
+  the first ranked candidate and leaves the outcome to the provider.
 - **Later roles hold rather than move.** A role on a router line whose pool's
   window for its model is marked with a future reset waits under the same
   hold, then admits on the same line once the mark clears. Nothing reroutes a
@@ -2158,8 +2188,9 @@ does for an operator's.
   spends no retry budget.
 - **An escalated specifier routes among counterparts.** When triage
   escalated a task (Subscription-Backed Daemon Judgments), its specifier's
-  order is the escalated counterpart the lineup names for each agent of the
-  policy's specifier order, skipping agents with none. Those counterparts'
+  order is the escalated counterpart the lineup names for each enrollment of
+  the policy's specifier order, skipping enrollments with none and
+  counterparts whose catalog doesn't serve them. Those counterparts'
   windows for the escalated model rank and pick the pool, and the
   specifier's router line, version 2 over its triage line, names the chosen
   counterpart. Every other role is pinned to that pool as usual. When every
@@ -2213,7 +2244,7 @@ either path.
   role's lineup model and effort on it, when the enrollment serves them; an
   escalated specifier moves to the enrollment's escalated line, or to its
   standard line when the lineup has none. A role an operator set keeps its
-  line. The lines' provenance names the agent left, with its mark, as
+  line. The lines' provenance names the enrollment left, with its mark, as
   `passed_over` when the policy orders it.
 - **Admission checks the choice again.** Before a card's selection runs,
   admission refuses it unless it runs another credential than the failed
@@ -2342,8 +2373,8 @@ can run.
 `auth add` cannot enroll a Claude identity whose volume already exists;
 `auth adopt` (below) enrolls an identity
 over the volume it already holds. An enrollment runs nothing until an agent in
-the admitted-agent tree names it and a lineup line or the routing policy
-selects that agent.
+the admitted-agent tree names it and a lineup line selects that agent, or
+the routing policy orders the enrollment.
 
 **A second writer subscription.** Create its volume once, with `auth add
 -client claude_code` under its own identity, `-account`, and
@@ -2484,8 +2515,8 @@ writes an agent beside it for the clients' agent names:
   (`claude-code-implementer-second`), each on a pinned offer of the same name
   with the first agent's model, effort, and adapter. The copies get no lineup
   line: the lineup still selects the first identity's agents, and the
-  routing policy reaches the copies, as in
-  `routing set -order implementer=claude-code-implementer,claude-code-implementer-second`
+  routing policy reaches the copies by ordering both enrollments, as in
+  `routing set -order implementer=<first-enrollment-id>,<second-enrollment-id>`
   (Set The Routing Policy). With the escalated pair, the tree also carries
   `claude-code-specifier-escalated-second` on the second enrollment and one
   added line, `lineup.role.specifier.escalated.<second-enrollment-id>`,
@@ -3237,15 +3268,16 @@ for the routing policy's choice at a task's first admission (Route A Task To
 One Pool). Admission holds a router line to the policy it cites: its `set_by`
 is `router:<task_id>`, it is the role's first version, its policy revision
 exists and was set no later than the line, that revision orders the line's
-agent for the role, when the line passed an agent over some role's order
-names that agent, and a line the `drain_first_account` tier chose names the
+enrollment for the role with the role's lineup model and effort (the
+escalated counterpart's for an escalated specifier), when the line passed a
+candidate over some role's order names that enrollment, and a line the `drain_first_account` tier chose names the
 pool that revision drains first. A router line that fails any of these
 refuses the attempt like any other line that can't be honored. A router line
 carries its selection `provenance`: the policy revision, the `tier` that
 chose the pool (`drain_first_account`, `soonest_reset`, or `policy_order`),
 the chosen `pool`, the weekly resets that ranked the candidates
-(`ranked_by`), and the exhausted mark on the first agent ranked ahead of it
-that was passed over (`passed_over`). `GET /tasks/{task_id}/timeline` shows every line version
+(`ranked_by`), and the exhausted mark on the first enrollment ranked ahead
+of it that was passed over (`passed_over`). `GET /tasks/{task_id}/timeline` shows every line version
 as a `task_line_set` event at its `set_at`, and the synced task carries each
 role's current line in `task_lines`. A version from `freesided task-line
 -clear` shows as an event with a null `agent`, and the synced task then

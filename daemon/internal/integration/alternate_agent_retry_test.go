@@ -191,8 +191,8 @@ func openAlternateAgentFixture(
 		}
 		_, err = tx.AppendRoutingPolicy(ctx, domain.RoutingPolicyInput{
 			Roles: []domain.RoutingPolicyRole{{
-				Role:   domain.RoleImplementer,
-				Agents: []string{agentbaseline.WriterAgentName(domain.RoleImplementer), alternateRetryAgent},
+				Role:        domain.RoleImplementer,
+				Enrollments: []domain.ClientEnrollmentID{main.enrollment.ID, second.enrollment.ID},
 			}},
 			Source: domain.RoutingPolicySourceCLISet, SetBy: "operator", LineupRevision: selection.LineupRevision,
 		}, admittedAt.Add(-time.Hour))
@@ -393,7 +393,7 @@ func TestParkedTaskMovesToTheChosenAgent(t *testing.T) {
 		if movedAgent != alternateRetryAgent || moved.Source != domain.TaskLineSourceAlternateAgentMove ||
 			moved.Provenance == nil || moved.Provenance.Pool != second.identity.EffectiveUsagePool() ||
 			moved.Provenance.PassedOver == nil ||
-			moved.Provenance.PassedOver.Agent != agentbaseline.WriterAgentName(domain.RoleImplementer) {
+			moved.Provenance.PassedOver.Enrollment != main.enrollment.ID {
 			t.Fatalf("implementer line after the move = %+v (provenance %+v)", moved, moved.Provenance)
 		}
 		if _, found, err := tx.GetRunHold(ctx, failure.retryRunID); err != nil || found {

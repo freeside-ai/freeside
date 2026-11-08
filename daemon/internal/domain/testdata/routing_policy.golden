@@ -3,15 +3,15 @@
   "roles": [
     {
       "role": "implementer",
-      "agents": [
-        "claude-a",
-        "claude-b"
+      "enrollments": [
+        "claude-max-a",
+        "claude-max-b"
       ]
     },
     {
       "role": "reviewer",
-      "agents": [
-        "claude-b"
+      "enrollments": [
+        "claude-max-b"
       ]
     }
   ],

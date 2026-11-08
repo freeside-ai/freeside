@@ -30,8 +30,8 @@ func TestMoveKeepsAnEscalatedSpecifierEscalated(t *testing.T) {
 				f.addSecondEscalated(t)
 			}
 			policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-				order(domain.RoleSpecifier, agentTestSpecifierAgent, agentTestSecondAgent),
-				order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+				order(domain.RoleSpecifier, agentTestEnrollment, agentTestSecondEnrollment),
+				order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 			triage := f.escalate(t)
 			f.moveTask(t, policy, nil, false)
 			specifier := f.heads(t)[domain.RoleSpecifier]
@@ -62,8 +62,8 @@ func TestOnlyAV2MoveSkipsTheCounterpartCheck(t *testing.T) {
 	f.addEscalatedSpecifier(t, true)
 	f.addSecondEscalated(t)
 	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-		order(domain.RoleSpecifier, agentTestSpecifierAgent, agentTestSecondAgent),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleSpecifier, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 	f.escalate(t)
 	f.moveTask(t, policy, nil, false)
 	v2Line := f.heads(t)[domain.RoleSpecifier]

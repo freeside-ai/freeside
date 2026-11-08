@@ -200,14 +200,20 @@ type TaskLineRankingReading struct {
 }
 
 // TaskLinePassedOverMark is the exhausted mark that made the router pass over
-// an agent ranked ahead of the chosen one: the agent, its pool, and the mark
-// on that pool's window for the agent's model.
+// a candidate ranked ahead of the chosen one: the candidate, its pool, and the
+// mark on that pool's window for the candidate's model.
+//
+// It names what was passed over by exactly one of Agent, the form written
+// before routing policy ordered enrollments (#2736), and Enrollment. Agent
+// keeps its place in the encoding, so a line written before Enrollment
+// existed keeps the id it was stored under.
 type TaskLinePassedOverMark struct {
-	Agent    string              `json:"agent"`
-	Pool     UsagePoolID         `json:"pool"`
-	Window   string              `json:"window"`
-	Source   ExhaustedMarkSource `json:"source"`
-	MarkedAt time.Time           `json:"marked_at"`
+	Agent      string              `json:"agent,omitempty"`
+	Enrollment ClientEnrollmentID  `json:"enrollment,omitempty"`
+	Pool       UsagePoolID         `json:"pool"`
+	Window     string              `json:"window"`
+	Source     ExhaustedMarkSource `json:"source"`
+	MarkedAt   time.Time           `json:"marked_at"`
 	// ResetsAt is when the mark clears, nil when no reset is known.
 	ResetsAt *time.Time `json:"resets_at"`
 }
@@ -227,9 +233,55 @@ type TaskLineProvenance struct {
 	// known and still ahead, in rank order: ascending ResetsAt, ties in the
 	// policy's order. It is empty, never nil, when no reset was known.
 	RankedBy []TaskLineRankingReading `json:"ranked_by"`
-	// PassedOver is the first agent ranked ahead of the chosen pool whose
+	// PassedOver is the first candidate ranked ahead of the chosen pool whose
 	// pool's window was marked exhausted; nil when none was.
 	PassedOver *TaskLinePassedOverMark `json:"passed_over"`
+}
+
+// TaskLineProvenanceWire is a provenance as the client wire carries it until
+// #2807 moves the wire to enrollments. The API requires passed_over.agent, so
+// a mark that names an enrollment carries the enrollment id there, which the
+// API's agent-name pattern does not admit and clients decode as a plain
+// string. It is never stored: a line's id addresses TaskLineProvenance's own
+// encoding.
+type TaskLineProvenanceWire struct {
+	PolicyRevision int                         `json:"policy_revision"`
+	Tier           TaskLineSelectionTier       `json:"tier"`
+	Pool           UsagePoolID                 `json:"pool"`
+	RankedBy       []TaskLineRankingReading    `json:"ranked_by"`
+	PassedOver     *TaskLinePassedOverMarkWire `json:"passed_over"`
+}
+
+// TaskLinePassedOverMarkWire is TaskLinePassedOverMark as
+// TaskLineProvenanceWire carries it.
+type TaskLinePassedOverMarkWire struct {
+	Agent    string              `json:"agent"`
+	Pool     UsagePoolID         `json:"pool"`
+	Window   string              `json:"window"`
+	Source   ExhaustedMarkSource `json:"source"`
+	MarkedAt time.Time           `json:"marked_at"`
+	ResetsAt *time.Time          `json:"resets_at"`
+}
+
+// Wire projects the provenance for the client wire, nil for nil.
+func (p *TaskLineProvenance) Wire() *TaskLineProvenanceWire {
+	if p == nil {
+		return nil
+	}
+	wire := &TaskLineProvenanceWire{
+		PolicyRevision: p.PolicyRevision, Tier: p.Tier, Pool: p.Pool, RankedBy: p.RankedBy,
+	}
+	if mark := p.PassedOver; mark != nil {
+		agent := mark.Agent
+		if agent == "" {
+			agent = string(mark.Enrollment)
+		}
+		wire.PassedOver = &TaskLinePassedOverMarkWire{
+			Agent: agent, Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
+			MarkedAt: mark.MarkedAt, ResetsAt: mark.ResetsAt,
+		}
+	}
+	return wire
 }
 
 // validate checks the provenance's consistency. It does not compare the
@@ -315,8 +367,13 @@ func (r TaskLineRankingReading) validate() error {
 }
 
 func (m TaskLinePassedOverMark) validate() error {
-	if !validAgentName(m.Agent) {
+	switch {
+	case (m.Agent == "") == (m.Enrollment == ""):
+		return fmt.Errorf("names neither or both of an agent and an enrollment: %w", ErrTaskLineProvenanceInconsistent)
+	case m.Agent != "" && !validAgentName(m.Agent):
 		return fmt.Errorf("agent %q: %w", m.Agent, ErrInvalidAgentName)
+	case m.Enrollment != "" && !ValidLaunchOptionValue(string(m.Enrollment)):
+		return fmt.Errorf("enrollment: %w", ErrInvalidTaskLineSelection)
 	}
 	if err := validateProvenanceName("pool", string(m.Pool)); err != nil {
 		return err

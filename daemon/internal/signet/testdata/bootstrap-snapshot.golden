@@ -195,7 +195,7 @@
         "cancellation": null,
         "task_lines": [
           {
-            "id": "sha256:99b0b689507f81b0ff61eec91b1467763114afdf707b617fbf6cc61c858f7a30",
+            "id": "sha256:3138a986b40f0f48f1bde33fb90f22267eb50a6790a998d2a794714986ee9f79",
             "task_id": "task-569",
             "role": "implementer",
             "agent": "claude-b",
@@ -224,7 +224,7 @@
                 }
               ],
               "passed_over": {
-                "agent": "claude-a",
+                "agent": "anthropic-a/claude_code",
                 "pool": "pool-a",
                 "window": "five_hour",
                 "source": "provider_refusal",
@@ -488,14 +488,14 @@
         {
           "role": "implementer",
           "agents": [
-            "claude-b",
+            "anthropic-b/claude_code",
             "claude-a"
           ]
         },
         {
           "role": "reviewer",
           "agents": [
-            "codex-b"
+            "claude-c"
           ]
         }
       ],

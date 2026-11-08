@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,9 @@ func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		_, err := tx.AppendRoutingPolicy(ctx, domain.RoutingPolicyInput{
-			Roles:  []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"codex-primary"}}},
+			Roles: []domain.RoutingPolicyRole{{
+				Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"enrollment-usage-1"},
+			}},
 			Source: domain.RoutingPolicySourceClientSet, SetBy: "device:device-1",
 			LineupRevision: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		}, now)
@@ -107,8 +110,11 @@ func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
 		t.Fatalf("recorded availability = %+v", answer)
 	}
 	policy := after.RoutingPolicy
+	// With no committed tree there is no agent to render the enrollment as,
+	// so the wire carries its id until #2807.
 	if policy == nil || policy.EntityVersion != 1 || policy.AsOfRevision != after.Revision ||
-		policy.Policy.Source != domain.RoutingPolicySourceClientSet {
+		policy.Policy.Source != domain.RoutingPolicySourceClientSet || len(policy.Policy.Roles) != 1 ||
+		!slices.Equal(policy.Policy.Roles[0].Agents, []string{"enrollment-usage-1"}) {
 		t.Fatalf("routing policy = %+v", policy)
 	}
 }

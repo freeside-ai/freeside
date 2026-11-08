@@ -1396,8 +1396,8 @@ func TestGolden(t *testing.T) {
 	}
 	routingPolicy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
 		Roles: []domain.RoutingPolicyRole{
-			{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
-			{Role: domain.RoleReviewer, Agents: []string{"claude-b"}},
+			{Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"claude-max-a", "claude-max-b"}},
+			{Role: domain.RoleReviewer, Enrollments: []domain.ClientEnrollmentID{"claude-max-b"}},
 		},
 		Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator",
 		LineupRevision: domain.Digest("sha256:" + strings.Repeat("a", 64)),
@@ -1409,8 +1409,8 @@ func TestGolden(t *testing.T) {
 	// new task ahead of reset order (revision 107).
 	drainFirstRoutingPolicy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
 		Roles: []domain.RoutingPolicyRole{
-			{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
-			{Role: domain.RoleReviewer, Agents: []string{"claude-b"}},
+			{Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"claude-max-a", "claude-max-b"}},
+			{Role: domain.RoleReviewer, Enrollments: []domain.ClientEnrollmentID{"claude-max-b"}},
 		},
 		Source: domain.RoutingPolicySourceClientSet, SetBy: "device:phone",
 		LineupRevision:    domain.Digest("sha256:" + strings.Repeat("a", 64)),
@@ -1419,8 +1419,9 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No reset is known and the policy's first agent's window is marked, so
-	// the router passes over claude-a and takes the next pool in the order.
+	// No reset is known and the policy's first enrollment's window is marked,
+	// so the router passes over claude-max-a and takes the next pool in the
+	// order.
 	routerPolicyOrderTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionB,
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
@@ -1428,7 +1429,7 @@ func TestGolden(t *testing.T) {
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
 			RankedBy: []domain.TaskLineRankingReading{},
 			PassedOver: &domain.TaskLinePassedOverMark{
-				Agent: "claude-a", Pool: "claude-max-a", Window: "seven_day_opus",
+				Enrollment: "claude-max-a", Pool: "claude-max-a", Window: "seven_day_opus",
 				Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: ts.Add(-time.Hour), ResetsAt: new(ts.Add(50 * time.Hour)),
 			},
 		},
@@ -1446,7 +1447,7 @@ func TestGolden(t *testing.T) {
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
 			RankedBy: []domain.TaskLineRankingReading{},
 			PassedOver: &domain.TaskLinePassedOverMark{
-				Agent: "claude-a", Pool: "claude-max-a", Window: "seven_day_opus",
+				Enrollment: "claude-max-a", Pool: "claude-max-a", Window: "seven_day_opus",
 				Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: ts.Add(-time.Hour), ResetsAt: new(ts.Add(50 * time.Hour)),
 			},
 		},
@@ -1472,8 +1473,18 @@ func TestGolden(t *testing.T) {
 	v1ClearedTaskLine := asV1(clearedTaskLine, "", &v1ChangedTaskLine.ID, string(taskLineClear.ID))
 	v1RouterDrainFirstTaskLine := asV1(routerDrainFirstTaskLine, "claude-a", nil, routerDrainFirstTaskLine.SetBy)
 	v1RouterSoonestResetTaskLine := asV1(routerSoonestResetTaskLine, "claude-b", nil, routerSoonestResetTaskLine.SetBy)
-	v1RouterPolicyOrderTaskLine := asV1(routerPolicyOrderTaskLine, "claude-b", nil, routerPolicyOrderTaskLine.SetBy)
-	v1AlternateAgentMoveTaskLine := asV1(alternateAgentMoveTaskLine, "claude-b",
+	// A line stored before routing policy ordered enrollments names the
+	// agent it passed over.
+	agentMarked := func(line domain.TaskLine) domain.TaskLine {
+		provenance, mark := *line.Provenance, *line.Provenance.PassedOver
+		mark.Agent, mark.Enrollment = "claude-a", ""
+		provenance.PassedOver = &mark
+		line.Provenance = &provenance
+		return line
+	}
+	v1RouterPolicyOrderTaskLine := asV1(agentMarked(routerPolicyOrderTaskLine), "claude-b", nil,
+		routerPolicyOrderTaskLine.SetBy)
+	v1AlternateAgentMoveTaskLine := asV1(agentMarked(alternateAgentMoveTaskLine), "claude-b",
 		&v1RouterPolicyOrderTaskLine.ID, alternateAgentMoveTaskLine.SetBy)
 
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides

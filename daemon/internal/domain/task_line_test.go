@@ -229,10 +229,19 @@ func TestTaskLineProvenanceValidate(t *testing.T) {
 			p.Tier = domain.TaskLineSelectionDrainFirstAccount
 		}, domain.ErrTaskLineProvenanceInconsistent},
 		"bad passed-over agent": {func(p *domain.TaskLineProvenance) { p.PassedOver.Agent = "Bad Agent" }, domain.ErrInvalidAgentName},
-		"empty mark pool":       {func(p *domain.TaskLineProvenance) { p.PassedOver.Pool = "" }, domain.ErrEmptyField},
-		"empty mark window":     {func(p *domain.TaskLineProvenance) { p.PassedOver.Window = "" }, domain.ErrEmptyField},
-		"unknown mark source":   {func(p *domain.TaskLineProvenance) { p.PassedOver.Source = "guess" }, domain.ErrInvalidExhaustedMarkSource},
-		"zero marked_at":        {func(p *domain.TaskLineProvenance) { p.PassedOver.MarkedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		// A mark names an agent (before #2736) or an enrollment, never both
+		// and never neither.
+		"passed over neither": {func(p *domain.TaskLineProvenance) { p.PassedOver.Agent = "" }, domain.ErrTaskLineProvenanceInconsistent},
+		"passed over both": {func(p *domain.TaskLineProvenance) {
+			p.PassedOver.Enrollment = "claude-a/claude_code"
+		}, domain.ErrTaskLineProvenanceInconsistent},
+		"bad passed-over enrollment": {func(p *domain.TaskLineProvenance) {
+			p.PassedOver.Agent, p.PassedOver.Enrollment = "", "claude a"
+		}, domain.ErrInvalidTaskLineSelection},
+		"empty mark pool":     {func(p *domain.TaskLineProvenance) { p.PassedOver.Pool = "" }, domain.ErrEmptyField},
+		"empty mark window":   {func(p *domain.TaskLineProvenance) { p.PassedOver.Window = "" }, domain.ErrEmptyField},
+		"unknown mark source": {func(p *domain.TaskLineProvenance) { p.PassedOver.Source = "guess" }, domain.ErrInvalidExhaustedMarkSource},
+		"zero marked_at":      {func(p *domain.TaskLineProvenance) { p.PassedOver.MarkedAt = time.Time{} }, domain.ErrMissingTimestamp},
 		"non-UTC mark reset": {func(p *domain.TaskLineProvenance) {
 			p.PassedOver.ResetsAt = new(p.PassedOver.ResetsAt.In(elsewhere))
 		}, domain.ErrTimestampNotUTC},

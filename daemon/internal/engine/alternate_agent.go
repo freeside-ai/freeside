@@ -8,7 +8,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -33,7 +32,7 @@ type alternateAgentFailure struct {
 	cause        domain.FailureCause
 	invocationID domain.InvocationID
 	// policyOnly limits the candidates to the enrollments the routing
-	// policy in effect orders for the role (orderedEnrollments). A parked
+	// policy in effect orders for the role (roleOrder). A parked
 	// task's move writes router-shaped lines, whose provenance cites a
 	// policy revision, so only an enrollment a policy orders can be moved to.
 	policyOnly bool
@@ -102,41 +101,6 @@ func failedBinding(
 		return nil, false, err
 	}
 	return admission.AgentBinding, admission.AgentBinding != nil, nil
-}
-
-// ranFailedBinding reports whether the tree agent source ran what binding
-// records. A binding admitted under an agent names its definition digest, so
-// the agents at that digest ran it; one admitted under a selection names no
-// agent, so every agent that reduces to the selection's enrollment, model,
-// and effort ran it, since each would run the same credential and model.
-// Twins (one definition under several names) all count either way. Only the
-// passed-over mark a move writes still names a tree agent (movedPastMark).
-func ranFailedBinding(tree agenttree.Tree, source domain.AgentSource, binding *domain.AdmissionAgentBinding) bool {
-	if !binding.SelectionAdmitted() {
-		digest, err := tree.AgentDigest(source.Name)
-		return err == nil && digest == binding.AgentDigest
-	}
-	selection, err := tree.SelectionOfAgent(source.Name)
-	return err == nil && selection == (domain.TaskLineSelection{
-		EnrollmentID: binding.EnrollmentID, ModelID: binding.SelectionModelID, Effort: binding.SelectionEffort,
-	})
-}
-
-// orderedEnrollments is the enrollments the routing policy orders for role,
-// in the policy's order with none twice. The policy still names tree agents
-// (#2736), so they are the enrollments its agents reduce to through the tree;
-// an agent the tree no longer reduces orders none. This is the only place
-// the move and its offers read the policy's agent names, and #2736 replaces
-// its body with the policy's own enrollments.
-func orderedEnrollments(tree agenttree.Tree, policy domain.RoutingPolicy, role domain.RoleName) []domain.ClientEnrollmentID {
-	var enrollments []domain.ClientEnrollmentID
-	for _, name := range routingOrder(policy, role) {
-		selection, err := tree.SelectionOfAgent(name)
-		if err == nil && !slices.Contains(enrollments, selection.EnrollmentID) {
-			enrollments = append(enrollments, selection.EnrollmentID)
-		}
-	}
-	return enrollments
 }
 
 // lineupServes reports whether an enrollment serves line's model and effort
@@ -234,7 +198,7 @@ func (s AgentSelection) alternateCandidates(
 		if err != nil || !found {
 			return nil, err
 		}
-		ordered = orderedEnrollments(s.Tree, policy, failure.role)
+		ordered = roleOrder(s.Tree, policy, failure.role)
 	}
 	identities, err := tx.ListAuthIdentities(ctx)
 	if err != nil {

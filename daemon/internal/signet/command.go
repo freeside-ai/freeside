@@ -300,6 +300,9 @@ type CommandResult struct {
 	// its arm with the arm's kind.
 	Receipt  *domain.CommandReceipt
 	Revision int64
+	// catalog renders a routing policy receipt's orders for the wire
+	// (renderRoutingPolicy); nil renders enrollment ids.
+	catalog *AgentCatalog
 }
 
 // kindedCommandRecord and kindedSubmissionRecord embed the domain record so its
@@ -330,7 +333,7 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 			domain.StopTaskReceipt
 		}{domain.CommandKindStopTask, *r.Stop}
 	} else if r.Receipt != nil {
-		record, err := kindedReceiptRecord(*r.Receipt)
+		record, err := kindedReceiptRecord(*r.Receipt, r.catalog)
 		if err != nil {
 			return nil, err
 		}
@@ -349,7 +352,7 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 // kindedReceiptRecord flattens a receipt's arm beside its kind, producing the
 // wire UsageRefreshRecord, CollectorReassignmentRecord, TaskLineChangeRecord,
 // RoutingPolicyChangeRecord, or ParkedTaskMoveRecord.
-func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
+func kindedReceiptRecord(receipt domain.CommandReceipt, catalog *AgentCatalog) (any, error) {
 	kind := receipt.Kind()
 	switch kind {
 	case domain.CommandKindRefreshUsage:
@@ -380,7 +383,8 @@ func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 		return struct {
 			Kind domain.CommandKind `json:"kind"`
 			*domain.RoutingPolicyChangeReceipt
-		}{kind, receipt.RoutingPolicyChange}, nil
+			Policy RoutingPolicyWire `json:"policy"`
+		}{kind, receipt.RoutingPolicyChange, renderRoutingPolicy(receipt.RoutingPolicyChange.Policy, catalog)}, nil
 	case domain.CommandKindMoveParkedTask:
 		move := receipt.ParkedTaskMove
 		return struct {

@@ -26,12 +26,16 @@ const routerSetByPrefix = "router:"
 
 func routerSetBy(taskID domain.TaskID) string { return routerSetByPrefix + string(taskID) }
 
-// routeCandidate is a policy agent that resolves in the tree against the
-// store: the pool its identity meters and the route model id its offer passes.
+// routeCandidate is an enrollment a role's order holds that resolves against
+// the store: the pool its identity meters, and the selection a line for the
+// role records on it, which is the role's lineup model and effort on that
+// enrollment, or for an escalated specifier its escalated counterpart's. The
+// selection's model is the route model id whose windows rank and hold the
+// pool.
 type routeCandidate struct {
-	agent string
-	pool  domain.UsagePoolID
-	model string
+	enrollment domain.ClientEnrollmentID
+	pool       domain.UsagePoolID
+	selection  domain.TaskLineSelection
 }
 
 // routeBeforeAdmission runs the router for the role's admission and then the
@@ -74,17 +78,17 @@ func (s AgentSelection) routeBeforeAdmission(
 //
 // The role's order ranks the pools (pickRoute): the drain-first account,
 // then the soonest known weekly reset, then the policy's order. The first
-// ranked agent whose pool's windows for its model carry no exhausted mark
-// takes the task. When every one is marked, it returns a
-// QuotaWindowExhaustedError for the earliest reset to hold the attempt on, or,
-// when no mark gives a reset, picks the first ranked agent and lets the
-// provider decide. With no resolvable agent it writes nothing, and the task
-// stays on the lineup.
+// ranked enrollment whose pool's windows for the role's lineup model carry no
+// exhausted mark takes the task, on that model and effort. When every one is
+// marked, it returns a QuotaWindowExhaustedError for the earliest reset to
+// hold the attempt on, or, when no mark gives a reset, picks the first ranked
+// enrollment and lets the provider decide. With no resolvable enrollment it
+// writes nothing, and the task stays on the lineup.
 //
 // An escalated task's specifier (its head line is the triage line and its
-// record escalated) routes over that line among the counterparts of its
-// order (escalatedOrder), so the counterparts' windows pick the pool, and its
-// router line is version 2. With no resolvable counterpart it writes
+// record escalated) routes over that line among the escalated counterparts of
+// its order (escalatedOrder), so the counterparts' windows pick the pool, and
+// its router line is version 2. With no resolvable counterpart it writes
 // nothing, and the triage line keeps the specifier escalated.
 func (s AgentSelection) routeTask(
 	ctx context.Context, st *store.Store, runID domain.RunID, role domain.RoleName, now time.Time,
@@ -155,8 +159,7 @@ func (s AgentSelection) planRoute(
 	if err != nil || !found {
 		return nil, err
 	}
-	order := routingOrder(policy, role)
-	if order == nil {
+	if _, ordered := policyRole(policy, role); !ordered {
 		return nil, nil
 	}
 	if lineup, err := admittedThroughLineup(ctx, tx, run.TaskID); err != nil || lineup {
@@ -166,31 +169,24 @@ func (s AgentSelection) planRoute(
 	if err != nil {
 		return nil, err
 	}
+	order := candidates[role]
 	if escalated {
-		if order, err = s.escalatedOrder(ctx, tx, order, candidates); err != nil || len(order) == 0 {
+		if order, err = s.escalatedOrder(ctx, tx, roleOrder(s.Tree, policy, role)); err != nil || len(order) == 0 {
 			return nil, err
 		}
 	}
-	choice, err := pickRoute(ctx, tx, policy, order, candidates, now)
+	choice, err := pickRoute(ctx, tx, policy, order, now)
 	if err != nil || choice == nil {
 		return nil, err
 	}
 	provenance := &choice.provenance
 	lined[role] = true
-	pools := make(map[string]domain.UsagePoolID, len(candidates))
-	for name, candidate := range candidates {
-		pools[name] = candidate.pool
-	}
-	choices := append([]domain.TaskLineChoice{{Role: role, Agent: choice.agent.agent}},
-		routerLinesForPool(policy, choice.agent.pool, pools, lined)...)
-	inputs := make([]domain.TaskLineInput, 0, len(choices))
-	for _, line := range choices {
-		selection, err := s.Tree.LineSelection(line.Role, line.Agent)
-		if err != nil {
-			return nil, err
-		}
+	routed := append([]routedLine{{role: role, selection: choice.candidate.selection}},
+		routerLinesForPool(policy, candidates, choice.candidate.pool, lined)...)
+	inputs := make([]domain.TaskLineInput, 0, len(routed))
+	for _, line := range routed {
 		inputs = append(inputs, domain.TaskLineInput{
-			TaskID: run.TaskID, Role: line.Role, Selection: &selection,
+			TaskID: run.TaskID, Role: line.role, Selection: &line.selection,
 			Source: domain.TaskLineSourceRouter, SetBy: routerSetBy(run.TaskID), Provenance: provenance,
 		})
 	}
@@ -205,57 +201,34 @@ func taskEscalated(ctx context.Context, tx *store.ReadTx, taskID domain.TaskID) 
 }
 
 // escalatedOrder is an escalated specifier's order (plan §5.13, Specifier
-// Triage): for each agent of the policy's specifier order, in that order,
-// the agent that runs the escalated line the lineup names for its
-// enrollment (escalatedAgent). An agent with no counterpart, a counterpart
-// that does not resolve, and a repeat are skipped; each
-// resolvable counterpart joins candidates, so its pool's windows for the
-// escalated model rank it. A lineup that does not resolve has none, and
-// admission refuses it.
+// Triage): for each enrollment of the policy's specifier order, in that
+// order, the escalated line the lineup names for that enrollment
+// (domain.Lineup.EscalatedCounterpart), so the counterpart's model ranks the
+// enrollment's pool. An enrollment with no counterpart, or whose
+// counterpart does not resolve, is skipped. A lineup that does not resolve
+// has none, and admission refuses it.
 func (s AgentSelection) escalatedOrder(
-	ctx context.Context, tx *store.ReadTx, order []string, candidates map[string]routeCandidate,
-) ([]string, error) {
+	ctx context.Context, tx *store.ReadTx, order []domain.ClientEnrollmentID,
+) ([]routeCandidate, error) {
 	lineup, err := s.Tree.ResolveLineup()
 	if err != nil {
 		return nil, nil
 	}
-	var counterparts []string
-	for _, name := range order {
-		counterpart, ok := escalatedAgent(s.Tree, lineup, name)
-		if !ok || slices.Contains(counterparts, counterpart) {
+	var counterparts []routeCandidate
+	for _, enrollment := range order {
+		counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(enrollment))
+		if !ok {
 			continue
 		}
-		if _, ok := candidates[counterpart]; !ok {
-			candidate, ok, err := s.routeCandidate(ctx, tx, counterpart)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				continue
-			}
-			candidates[counterpart] = candidate
+		candidate, ok, err := resolveRouteCandidate(ctx, tx, counterpart.TaskLineSelection())
+		if err != nil {
+			return nil, err
 		}
-		counterparts = append(counterparts, counterpart)
+		if ok {
+			counterparts = append(counterparts, candidate)
+		}
 	}
 	return counterparts, nil
-}
-
-// escalatedAgent is the tree agent that runs the escalated line the lineup
-// names for the specifier agent name's enrollment, or false when the agent
-// does not resolve to a selection, its enrollment has no escalated line, or
-// no one agent runs that line's selection. The routing policy still names
-// agents (#2736), so the line maps back to one through the bridge.
-func escalatedAgent(tree agenttree.Tree, lineup domain.Lineup, name string) (string, bool) {
-	selection, err := tree.SelectionOfAgent(name)
-	if err != nil {
-		return "", false
-	}
-	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(selection.EnrollmentID))
-	if !ok {
-		return "", false
-	}
-	escalated, err := tree.AgentForSelection(domain.RoleSpecifier, counterpart.TaskLineSelection())
-	return escalated, err == nil
 }
 
 // policyInEffect returns the revision in effect at now: the current one, or,
@@ -285,14 +258,37 @@ func policyInEffect(ctx context.Context, tx *store.ReadTx, now time.Time) (domai
 	return domain.RoutingPolicy{}, false, nil
 }
 
-// routingOrder returns the policy's agent order for the role, nil when the
-// policy does not order it.
-func routingOrder(policy domain.RoutingPolicy, role domain.RoleName) []string {
+// policyRole returns the policy's order for the role, and whether it orders
+// the role.
+func policyRole(policy domain.RoutingPolicy, role domain.RoleName) (domain.RoutingPolicyRole, bool) {
 	i := slices.IndexFunc(policy.Roles, func(r domain.RoutingPolicyRole) bool { return r.Role == role })
 	if i < 0 {
-		return nil
+		return domain.RoutingPolicyRole{}, false
 	}
-	return policy.Roles[i].Agents
+	return policy.Roles[i], true
+}
+
+// roleOrder returns the enrollments the policy orders for the role, nil when
+// it orders none. A role in the agents form, from a revision stored before
+// routing policy ordered enrollments (#2736), reads each agent's enrollment
+// through tree, the daemon's current one; an agent the tree no longer
+// carries, or that reduces to no selection, is skipped, and an enrollment
+// two agents share keeps its first position. #2599 removes this bridge with
+// the agent documents.
+func roleOrder(tree agenttree.Tree, policy domain.RoutingPolicy, role domain.RoleName) []domain.ClientEnrollmentID {
+	ordered, ok := policyRole(policy, role)
+	if !ok || !ordered.AgentsForm() {
+		return ordered.Enrollments
+	}
+	var enrollments []domain.ClientEnrollmentID
+	for _, name := range ordered.Agents {
+		selection, err := tree.SelectionOfAgent(name)
+		if err != nil || slices.Contains(enrollments, selection.EnrollmentID) {
+			continue
+		}
+		enrollments = append(enrollments, selection.EnrollmentID)
+	}
+	return enrollments
 }
 
 // admittedThroughLineup reports whether any run of the task holds an execution
@@ -331,39 +327,46 @@ func admittedThroughLineup(ctx context.Context, tx *store.ReadTx, taskID domain.
 	return false, nil
 }
 
-// routeCandidates resolves every agent the policy orders. An agent that no
-// longer resolves (dropped from the tree, its enrollment or identity gone, a
-// disabled identity, or a join the tree no longer satisfies) is absent: the
-// router skips it and never cites it. A failed store read fails the routing.
+// routeCandidates resolves, for every role the policy orders, the
+// enrollments of its order (roleOrder) under the role's lineup model and
+// effort, in order. A role the lineup leaves unbound has none: there is no
+// model to route it on, and admission refuses it. An enrollment that does
+// not resolve (resolveRouteCandidate) is absent: the router skips it and
+// never cites it. A failed store read fails the routing.
 func (s AgentSelection) routeCandidates(
 	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy,
-) (map[string]routeCandidate, error) {
-	candidates := map[string]routeCandidate{}
+) (map[domain.RoleName][]routeCandidate, error) {
+	candidates := map[domain.RoleName][]routeCandidate{}
 	for _, role := range policy.Roles {
-		for _, name := range role.Agents {
-			if _, seen := candidates[name]; seen {
-				continue
-			}
-			candidate, ok, err := s.routeCandidate(ctx, tx, name)
+		line, err := lineupLine(s.Tree, role.Role)
+		if err != nil {
+			continue
+		}
+		for _, enrollment := range roleOrder(s.Tree, policy, role.Role) {
+			selection := line.TaskLineSelection()
+			selection.EnrollmentID = enrollment
+			candidate, ok, err := resolveRouteCandidate(ctx, tx, selection)
 			if err != nil {
 				return nil, err
 			}
 			if ok {
-				candidates[name] = candidate
+				candidates[role.Role] = append(candidates[role.Role], candidate)
 			}
 		}
 	}
 	return candidates, nil
 }
 
-func (s AgentSelection) routeCandidate(
-	ctx context.Context, tx *store.ReadTx, name string,
+// resolveRouteCandidate resolves the selection's enrollment against the
+// store: the enrollment and its identity exist, are bound, and the identity
+// is enabled, and the enrollment can run the selection's model and effort
+// (domain.SelectionServed, the legs of admission's resolution that need no
+// adapter). Any failure reports false: such an enrollment is not one
+// admission would resolve.
+func resolveRouteCandidate(
+	ctx context.Context, tx *store.ReadTx, selection domain.TaskLineSelection,
 ) (routeCandidate, bool, error) {
-	source, ok := s.Tree.Agent(name)
-	if !ok {
-		return routeCandidate{}, false, nil
-	}
-	enrollment, err := tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(source.Enrollment))
+	enrollment, err := tx.GetClientEnrollment(ctx, selection.EnrollmentID)
 	if errors.Is(err, store.ErrNotFound) {
 		return routeCandidate{}, false, nil
 	}
@@ -377,16 +380,43 @@ func (s AgentSelection) routeCandidate(
 	if err != nil {
 		return routeCandidate{}, false, err
 	}
-	// The join is pure: an error here is the agent not resolving.
-	resolved, err := s.Tree.ResolveAgent(name, enrollment, identity)
+	if !identity.Enabled || domain.ValidateEnrollmentIdentityBinding(identity, enrollment) != nil {
+		return routeCandidate{}, false, nil
+	}
+	catalog, err := readCatalog(ctx, tx, enrollment.ID)
+	if err != nil {
+		return routeCandidate{}, false, err
+	}
+	if domain.SelectionServed(enrollment.HarnessClient, catalog, selection.ModelID, selection.Effort) != nil {
+		return routeCandidate{}, false, nil
+	}
+	return routeCandidate{enrollment: enrollment.ID, pool: identity.EffectiveUsagePool(), selection: selection}, true, nil
+}
+
+// lineRoute resolves the selection a task line runs (lineSelection) as a
+// route candidate: the pool it meters and the model whose windows hold it.
+// It reports false when the line selects nothing the store resolves.
+func lineRoute(
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, line domain.TaskLine,
+) (routeCandidate, bool, error) {
+	selection, err := lineSelection(tree, line)
 	if err != nil {
 		return routeCandidate{}, false, nil
 	}
-	passes, err := domain.DeriveAgentLaunchSelection(resolved.Definition, resolved.Adapter, resolved.Offer)
-	if err != nil {
-		return routeCandidate{}, false, nil
+	return resolveRouteCandidate(ctx, tx, selection)
+}
+
+// lineSelection is the selection a line runs: the one a v2 line holds, or
+// the one the agent a v1 line names reduces to in tree.
+func lineSelection(tree agenttree.Tree, line domain.TaskLine) (domain.TaskLineSelection, error) {
+	if line.Encoding == domain.TaskLineEncodingV1 {
+		return tree.SelectionOfAgent(line.Agent)
 	}
-	return routeCandidate{agent: name, pool: identity.EffectiveUsagePool(), model: passes.RouteModelID}, true, nil
+	if line.Selection == nil {
+		return domain.TaskLineSelection{}, fmt.Errorf("task line %s selects nothing: %w",
+			line.ID, domain.ErrInvalidTaskLineSelection)
+	}
+	return *line.Selection, nil
 }
 
 // weeklyWindowLength is the length of the windows whose reset ranks a pool
@@ -456,47 +486,43 @@ func weeklyReading(
 	}, true
 }
 
-// rankedAgent is a candidate of the deciding role in rank order: the tier
-// that ranked it and the marks its pool holds for its model at now.
-type rankedAgent struct {
+// rankedCandidate is a candidate of the deciding role in rank order: the
+// tier that ranked it and the marks its pool holds for its model at now.
+type rankedCandidate struct {
 	routeCandidate
 	tier  domain.TaskLineSelectionTier
 	marks []domain.ExhaustedMark
 }
 
-// rankRoute ranks the deciding role's resolvable agents in three tiers (plan
-// §5.4, routing policy; revision 107):
+// rankRoute ranks the deciding role's resolvable candidates, given in the
+// policy's order, in three tiers (plan §5.4, routing policy; revision 107):
 //
-//  1. Agents on the policy's drain-first account, when the order holds one.
-//  2. Agents on pools with a known weekly reset ahead (weeklyReading), soonest
-//     first; equal resets keep the policy's order.
+//  1. Candidates on the policy's drain-first account, when the order holds
+//     one.
+//  2. Candidates on pools with a known weekly reset ahead (weeklyReading),
+//     soonest first; equal resets keep the policy's order.
 //  3. The rest, in the policy's order.
 //
-// Agents of one pool keep the policy's order within it, and the pool's first
-// agent in that order names the model whose windows rank it, so a pool holds
-// one rank. It returns the ranking and the readings that ranked tier 2, in
-// rank order; the drain-first account's own reading ranks nothing.
+// Candidates of one pool keep the policy's order within it, and the pool's
+// first candidate in that order names the model whose windows rank it, so a
+// pool holds one rank. It returns the ranking and the readings that ranked
+// tier 2, in rank order; the drain-first account's own reading ranks nothing.
 func rankRoute(
-	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, order []string,
-	candidates map[string]routeCandidate, now time.Time,
-) ([]rankedAgent, []domain.TaskLineRankingReading, error) {
+	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, order []routeCandidate, now time.Time,
+) ([]rankedCandidate, []domain.TaskLineRankingReading, error) {
 	records := poolRecords{}
 	var (
-		agents []rankedAgent
+		agents []rankedCandidate
 		pools  []domain.UsagePoolID
 	)
-	for _, name := range order {
-		candidate, ok := candidates[name]
-		if !ok {
-			continue
-		}
+	for _, candidate := range order {
 		record, err := records.get(ctx, tx, candidate.pool)
 		if err != nil {
 			return nil, nil, err
 		}
-		agent := rankedAgent{routeCandidate: candidate, tier: domain.TaskLineSelectionPolicyOrder}
+		agent := rankedCandidate{routeCandidate: candidate, tier: domain.TaskLineSelectionPolicyOrder}
 		if record != nil {
-			agent.marks = record.ExhaustedMarksForModel(candidate.model, now)
+			agent.marks = record.ExhaustedMarksForModel(candidate.selection.ModelID, now)
 		}
 		agents = append(agents, agent)
 		if !slices.Contains(pools, candidate.pool) {
@@ -508,15 +534,15 @@ func rankRoute(
 		if policy.DrainFirstAccount != nil && pool == *policy.DrainFirstAccount {
 			continue
 		}
-		first := agents[slices.IndexFunc(agents, func(a rankedAgent) bool { return a.pool == pool })]
-		if reading, ok := weeklyReading(records[pool], first.model, now); ok {
+		first := agents[slices.IndexFunc(agents, func(a rankedCandidate) bool { return a.pool == pool })]
+		if reading, ok := weeklyReading(records[pool], first.selection.ModelID, now); ok {
 			readings = append(readings, reading)
 		}
 	}
 	slices.SortStableFunc(readings, func(a, b domain.TaskLineRankingReading) int {
 		return a.ResetsAt.Compare(b.ResetsAt)
 	})
-	rank := func(agent rankedAgent) int {
+	rank := func(agent rankedCandidate) int {
 		if policy.DrainFirstAccount != nil && agent.pool == *policy.DrainFirstAccount {
 			return -1
 		}
@@ -534,45 +560,45 @@ func rankRoute(
 			agents[i].tier = domain.TaskLineSelectionSoonestReset
 		}
 	}
-	slices.SortStableFunc(agents, func(a, b rankedAgent) int { return rank(a) - rank(b) })
+	slices.SortStableFunc(agents, func(a, b rankedCandidate) int { return rank(a) - rank(b) })
 	return agents, readings, nil
 }
 
-// routeChoice is the agent the ranking picked and the provenance it records.
+// routeChoice is the candidate the ranking picked and the provenance it
+// records.
 type routeChoice struct {
-	agent      routeCandidate
+	candidate  routeCandidate
 	provenance domain.TaskLineProvenance
 }
 
-// pickRoute takes the first ranked agent whose pool holds no mark for its
-// model (rankRoute). It returns nil with no resolvable agent, and a
-// QuotaWindowExhaustedError when every agent is marked and some mark gives a
-// reset. When none gives one, nothing could resume a hold, so the first ranked
-// agent takes the task and the provider decides.
+// pickRoute takes the first ranked candidate whose pool holds no mark for its
+// model (rankRoute). It returns nil with no resolvable candidate, and a
+// QuotaWindowExhaustedError when every candidate is marked and some mark
+// gives a reset. When none gives one, nothing could resume a hold, so the
+// first ranked candidate takes the task and the provider decides.
 func pickRoute(
-	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, order []string,
-	candidates map[string]routeCandidate, now time.Time,
+	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, order []routeCandidate, now time.Time,
 ) (*routeChoice, error) {
-	agents, readings, err := rankRoute(ctx, tx, policy, order, candidates, now)
+	agents, readings, err := rankRoute(ctx, tx, policy, order, now)
 	if err != nil || len(agents) == 0 {
 		return nil, err
 	}
-	choice := func(agent rankedAgent, ahead []rankedAgent) *routeChoice {
-		c := &routeChoice{agent: agent.routeCandidate, provenance: domain.TaskLineProvenance{
+	choice := func(agent rankedCandidate, ahead []rankedCandidate) *routeChoice {
+		c := &routeChoice{candidate: agent.routeCandidate, provenance: domain.TaskLineProvenance{
 			PolicyRevision: policy.Revision, Tier: agent.tier, Pool: agent.pool, RankedBy: readings,
 		}}
 		// The drain-first account leads every pool, so its provenance passes
-		// over nothing, even past a marked agent on the account itself.
+		// over nothing, even past a marked candidate on the account itself.
 		if len(ahead) > 0 && agent.tier != domain.TaskLineSelectionDrainFirstAccount {
 			first, mark := ahead[0], ahead[0].marks[0]
 			c.provenance.PassedOver = &domain.TaskLinePassedOverMark{
-				Agent: first.agent, Pool: first.pool, Window: mark.Window, Source: mark.Source,
+				Enrollment: first.enrollment, Pool: first.pool, Window: mark.Window, Source: mark.Source,
 				MarkedAt: mark.SetAt.UTC(), ResetsAt: utcPtr(mark.ResetsAt),
 			}
 		}
 		return c
 	}
-	// hold is the earliest time a marked agent's windows all reset.
+	// hold is the earliest time a marked candidate's windows all reset.
 	var hold *domain.QuotaWindowHold
 	for i, agent := range agents {
 		if len(agent.marks) == 0 {
@@ -612,29 +638,33 @@ func heldUntil(marks []domain.ExhaustedMark) (domain.ExhaustedMark, bool) {
 // compareResets orders marks that all carry a reset by that reset.
 func compareResets(a, b domain.ExhaustedMark) int { return a.ResetsAt.Compare(*b.ResetsAt) }
 
+// routedLine is one line a routing writes: the role and the selection it
+// runs.
+type routedLine struct {
+	role      domain.RoleName
+	selection domain.TaskLineSelection
+}
+
 // routerLinesForPool derives the lines that pin a task's roles to a pool:
-// for each role the policy orders that skip doesn't hold, the first agent in
-// its order whose pool (by pools, which holds only resolvable agents) is
-// pool. A role whose order holds no agent on the pool gets none and keeps the
-// lineup. An agent the router passed over on this pool for its model's marked
+// for each role the policy orders that skip doesn't hold, the first of its
+// candidates (routeCandidates, which holds only resolvable ones, in order)
+// on pool, running the role's lineup model and effort there. A role whose
+// order holds no candidate on the pool gets none and keeps the lineup. A
+// candidate the router passed over on this pool for its model's marked
 // window still takes its role's line, which holds on that window like any
-// later role: the task stays on one pool. A parked task's move reuses this
-// to re-pin the task to the pool it moves to.
+// later role: the task stays on one pool.
 func routerLinesForPool(
-	policy domain.RoutingPolicy, pool domain.UsagePoolID, pools map[string]domain.UsagePoolID,
+	policy domain.RoutingPolicy, candidates map[domain.RoleName][]routeCandidate, pool domain.UsagePoolID,
 	skip map[domain.RoleName]bool,
-) []domain.TaskLineChoice {
-	var lines []domain.TaskLineChoice
+) []routedLine {
+	var lines []routedLine
 	for _, role := range policy.Roles {
 		if skip[role.Role] {
 			continue
 		}
-		i := slices.IndexFunc(role.Agents, func(name string) bool {
-			agentPool, ok := pools[name]
-			return ok && agentPool == pool
-		})
-		if i >= 0 {
-			lines = append(lines, domain.TaskLineChoice{Role: role.Role, Agent: role.Agents[i]})
+		ordered := candidates[role.Role]
+		if i := slices.IndexFunc(ordered, func(c routeCandidate) bool { return c.pool == pool }); i >= 0 {
+			lines = append(lines, routedLine{role: role.Role, selection: ordered[i].selection})
 		}
 	}
 	return lines
@@ -642,11 +672,11 @@ func routerLinesForPool(
 
 // requireRoutedPoolOpen holds a role whose current line the router or a
 // parked task's move set while that line's pool still marks a window for the
-// line's model with a reset ahead (linePool). The hold names the mark that resets last (heldUntil). The router
-// never reroutes the role.
+// line's model with a reset ahead. The hold names the mark that resets last
+// (heldUntil). The router never reroutes the role.
 //
-// A line that fails its anchor, or an agent that no longer resolves, passes
-// here: admission refuses it with its typed refusal.
+// A line that fails its anchor, or a selection that no longer resolves,
+// passes here: admission refuses it with its typed refusal.
 func (s AgentSelection) requireRoutedPoolOpen(
 	ctx context.Context, st *store.Store, runID domain.RunID, role domain.RoleName, now time.Time,
 ) error {
@@ -659,11 +689,11 @@ func (s AgentSelection) requireRoutedPoolOpen(
 			// An unreadable or unanchored line is admission's to refuse.
 			return nil
 		}
-		pool, model, ok, err := s.linePool(ctx, tx, line)
+		candidate, ok, err := lineRoute(ctx, tx, s.Tree, line)
 		if err != nil || !ok {
 			return err
 		}
-		marks, err := poolMarks(ctx, tx, pool, model, now)
+		marks, err := poolMarks(ctx, tx, candidate.pool, candidate.selection.ModelID, now)
 		if err != nil {
 			return err
 		}
@@ -672,39 +702,6 @@ func (s AgentSelection) requireRoutedPoolOpen(
 			return nil
 		}
 		return fmt.Errorf("task line %s: %w", line.ID,
-			&QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{Pool: pool, ExhaustedMark: mark}})
+			&QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{Pool: candidate.pool, ExhaustedMark: mark}})
 	})
-}
-
-// linePool is the pool a line's credential draws on and the model it runs,
-// or false when what it selects no longer resolves (its enrollment or
-// identity gone, or the identity disabled), which admission refuses. A v2
-// line's enrollment names both, whether or not a tree agent maps to it; a v1
-// line's agent resolves through the tree (routeCandidate).
-func (s AgentSelection) linePool(
-	ctx context.Context, tx *store.ReadTx, line domain.TaskLine,
-) (domain.UsagePoolID, string, bool, error) {
-	if line.Selection == nil {
-		agent, err := s.Tree.LineAgent(line)
-		if err != nil {
-			return "", "", false, nil
-		}
-		candidate, ok, err := s.routeCandidate(ctx, tx, agent)
-		return candidate.pool, candidate.model, ok, err
-	}
-	enrollment, err := tx.GetClientEnrollment(ctx, line.Selection.EnrollmentID)
-	if errors.Is(err, store.ErrNotFound) {
-		return "", "", false, nil
-	}
-	if err != nil {
-		return "", "", false, err
-	}
-	identity, err := tx.GetAuthIdentity(ctx, enrollment.AuthIdentityID)
-	if errors.Is(err, store.ErrNotFound) {
-		return "", "", false, nil
-	}
-	if err != nil || !identity.Enabled {
-		return "", "", false, err
-	}
-	return identity.EffectiveUsagePool(), line.Selection.ModelID, true, nil
 }

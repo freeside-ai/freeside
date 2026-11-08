@@ -8,9 +8,9 @@
     "roles": [
       {
         "role": "implementer",
-        "agents": [
-          "codex-primary",
-          "claude-primary"
+        "enrollments": [
+          "codex-primary/codex",
+          "claude-primary/claude_code"
         ]
       }
     ],
