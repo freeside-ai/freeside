@@ -1,6 +1,15 @@
-// Package publish owns all GitHub credentials (docs/plan.md §5.1): no
-// other component holds, mints, or transports them, and no GitHub
-// write credential ever enters any workspace (§5.4).
+// Package publish owns all GitHub credentials (docs/plan.md §5.1). It
+// alone uses the App private key and mints installation tokens, and a
+// write-scoped token is revealed only inside this package. The Keystore
+// hands decrypted AppCredentials to cmd/freesided, which reads only the
+// App's identity from them to choose a registration. Other packages
+// receive read-scoped tokens through TokenSource and send them only to
+// GitHub: the project-image clone and identity requests
+// (WorkflowAuditPermissions), research issue reads in specify
+// (IssueReadPermissions), and the prelaunch issue read
+// (IssueInspectionPermissions). cmd/freesided composes the Minter and
+// chooses each consumer's source. No GitHub write credential ever
+// enters any workspace (§5.4).
 //
 // This unit (issue #80) is App authentication with contained
 // credentials: registration via the manifest flow (Registrar), with
