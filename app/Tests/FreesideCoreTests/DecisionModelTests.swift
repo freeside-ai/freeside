@@ -70,6 +70,68 @@ import Testing
         #expect(model.actionsEnabled)
     }
 
+    /// The guide fixture's first excerpt, as GitHub's files view anchors
+    /// it: `diff-` and the SHA-256 hex of the path (computed with
+    /// `shasum -a 256`), then the head-side line.
+    private static let reviewStopURL = URL(
+        string: "https://github.com/owner/repo/pull/123/files"
+            + "#diff-d3a83976ee4f29e603a810b2df75a1ffdcef9a3650578149504809186a3fe217R10")!
+
+    @Test func pullRequestFilesURLAnchorsAtTheFileAndLine() throws {
+        let reference = try #require(AttentionFixtures.readyWithReviewGuide().item.pr_reference?.value1)
+        #expect(
+            DecisionModel.pullRequestFilesURL(
+                for: reference, path: "daemon/internal/domain/review_guide.go", line: 10)
+                == Self.reviewStopURL)
+        // The coordinates View PR rejects, it rejects too, and a line or
+        // path the schema forbids.
+        for repo in ["owner", "owner/repo/extra", "../repo", "owner/"] {
+            var bad = reference
+            bad.repo = repo
+            #expect(DecisionModel.pullRequestURL(for: bad) == nil)
+            #expect(DecisionModel.pullRequestFilesURL(for: bad, path: "a.go", line: 1) == nil)
+        }
+        var unnumbered = reference
+        unnumbered.number = 0
+        #expect(DecisionModel.pullRequestFilesURL(for: unnumbered, path: "a.go", line: 1) == nil)
+        #expect(DecisionModel.pullRequestFilesURL(for: reference, path: "a.go", line: 0) == nil)
+        #expect(DecisionModel.pullRequestFilesURL(for: reference, path: "", line: 1) == nil)
+    }
+
+    @Test func openingAReviewStopRecordsViewPRAtTheStopAndLeavesTheItemOpen() async {
+        let guided = AttentionFixtures.readyWithReviewGuide()
+        let store = await makeStore(server: MockServer(items: [guided]))
+        var openedURLs: [URL] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: guided.item.id,
+            openURL: {
+                openedURLs.append($0)
+                return true
+            })
+        await model.validate()
+
+        await model.openPullRequest(at: "daemon/internal/domain/review_guide.go", line: 10)
+
+        #expect(openedURLs == [Self.reviewStopURL])
+        #expect(model.appliedRecord?.action == .open_pr)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.actionsEnabled)
+    }
+
+    @Test func aReviewStopThatCannotOpenRecordsNothing() async {
+        let guided = AttentionFixtures.readyWithReviewGuide()
+        let store = await makeStore(server: MockServer(items: [guided]))
+        let model = DecisionModel(store: store, itemID: guided.item.id, openURL: { _ in false })
+        await model.validate()
+
+        await model.openPullRequest(at: "daemon/internal/domain/review_guide.go", line: 10)
+
+        #expect(model.submissionError == "the pull request could not be opened")
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+    }
+
     @Test func inspectTrustFailureRecordsEngagementAfterDetailsReveal() async {
         let server = MockServer()
         let store = await makeStore(server: server)

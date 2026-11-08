@@ -1411,4 +1411,45 @@ import Testing
             AttentionDisplay.confirmationConsequence(.decline, for: task)
                 == "The proposal is dismissed and no run starts.")
     }
+
+    @Test func everyReviewGuideEnumHasALabel() {
+        #expect(
+            Components.Schemas.ReviewAttention.allCases.map(AttentionDisplay.label)
+                == ["Tradeoff", "Contract", "Product", "Risk", "Accessibility"])
+        #expect(
+            Components.Schemas.ReviewExcerptSide.allCases.map(AttentionDisplay.label) == ["Head", "Base"])
+        let reasons = Components.Schemas.ReviewExcerptUnresolved.allCases
+        #expect(
+            reasons.map { AttentionDisplay.label($0, side: .head) } == [
+                "No such file at the head.", "The lines run past the end of the file.",
+                "The file is binary.", "The lines are too large to show.",
+            ])
+        #expect(AttentionDisplay.label(.path_missing, side: .base) == "No such file at the base.")
+    }
+
+    @Test func excerptRangeNamesTheFileAndItsLines() throws {
+        let guide = try #require(AttentionFixtures.readyWithReviewGuide().item.review_guide?.value1)
+        var excerpt = guide.stops[0].excerpts[0]
+        #expect(AttentionDisplay.excerptRange(excerpt) == "daemon/internal/domain/review_guide.go:10-11")
+        excerpt.end_line = 10
+        #expect(AttentionDisplay.excerptRange(excerpt) == "daemon/internal/domain/review_guide.go:10")
+    }
+
+    @Test func excerptSpokenRangeReadsTheLinesAsWords() throws {
+        let guide = try #require(AttentionFixtures.readyWithReviewGuide().item.review_guide?.value1)
+        var excerpt = guide.stops[0].excerpts[0]
+        #expect(
+            AttentionDisplay.excerptSpokenRange(excerpt)
+                == "daemon/internal/domain/review_guide.go, lines 10 to 11")
+        excerpt.end_line = 10
+        #expect(AttentionDisplay.excerptSpokenRange(excerpt) == "daemon/internal/domain/review_guide.go, line 10")
+    }
+
+    @Test func aReviewStopReadsAsOneElement() throws {
+        let guide = try #require(AttentionFixtures.readyWithReviewGuide().item.review_guide?.value1)
+        #expect(
+            AttentionDisplay.reviewStopAccessibilityLabel(guide.stops[0], number: 1, of: 2)
+                == "Stop 1 of 2, Contract, Start with the guide's validation. "
+                + "`Validate` enforces every cap the schema cannot express.")
+    }
 }

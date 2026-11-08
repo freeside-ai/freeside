@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import FreesideAPI
 import Observation
@@ -113,6 +114,23 @@ public final class DecisionModel {
 
     package static func pullRequestURL(for reference: Components.Schemas.PRReference) -> URL? {
         forgeURL(repo: reference.repo, kind: "pull", number: reference.number)
+    }
+
+    /// The pull request's files view at one line of one file on the head
+    /// side. GitHub anchors a file's diff at `diff-` plus the SHA-256 hex
+    /// of its path, and a head-side line at `R<line>` after it. The anchor
+    /// is GitHub's page convention, not an API: if it changes, the link
+    /// still opens the files view, just not at the file.
+    package static func pullRequestFilesURL(
+        for reference: Components.Schemas.PRReference, path: String, line: Int
+    ) -> URL? {
+        guard line > 0, !path.isEmpty, let pull = pullRequestURL(for: reference),
+            var components = URLComponents(
+                url: pull.appendingPathComponent("files"), resolvingAgainstBaseURL: false)
+        else { return nil }
+        let pathDigest = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+        components.fragment = "diff-\(pathDigest)R\(line)"
+        return components.url
     }
 
     package nonisolated static func issueURL(for issue: Components.Schemas.IssueSubjectRef) -> URL? {
@@ -760,6 +778,20 @@ public final class DecisionModel {
             reviewedSnapshot: nil)
     }
 
+    /// Opens the pull request's files view at one line of one file
+    /// (`pullRequestFilesURL`) through View PR's own command: the same
+    /// capability gate, the same recorded `open_pr`, and the item stays
+    /// open because `open_pr` only records.
+    public func openPullRequest(at path: String, line: Int) async {
+        guard let reference = snapshot?.item.pr_reference?.value1,
+            let url = Self.pullRequestFilesURL(for: reference, path: path, line: line)
+        else {
+            submissionError = "the pull request link is unavailable"
+            return
+        }
+        await submit(.open_pr, pullRequestDestination: url)
+    }
+
     public func submitCapabilityRetry(
         manifestDigest: String,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
@@ -819,7 +851,8 @@ public final class DecisionModel {
         message: String? = nil,
         answerRoute: Components.Schemas.AnswerRoute? = nil,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil,
-        trustDetailsRevealed: Bool = false
+        trustDetailsRevealed: Bool = false,
+        pullRequestDestination: URL? = nil
     ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
         if let reviewedSnapshot {
@@ -832,6 +865,7 @@ public final class DecisionModel {
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil),
             (action == .adjudicate_findings) == (findingRoutes != nil),
+            action == .open_pr || pullRequestDestination == nil,
             ([
                 .discuss, .request_changes, .answer_and_retry, .answer_without_retry,
                 .return_to_agent,
@@ -845,7 +879,9 @@ public final class DecisionModel {
                 submissionError = "the pull request link is unavailable"
                 return
             }
-            urlToOpen = url
+            // A destination inside the pull request (a review stop) opens
+            // in place of its front page; the command is the same.
+            urlToOpen = pullRequestDestination ?? url
         } else {
             urlToOpen = nil
         }

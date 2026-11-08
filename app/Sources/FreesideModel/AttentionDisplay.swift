@@ -1011,6 +1011,68 @@ package enum AttentionDisplay {
         }
     }
 
+    /// A review stop's attention kind, drawn as its keyword.
+    package static func label(_ attention: Components.Schemas.ReviewAttention) -> String {
+        switch attention {
+        case .tradeoff: return "Tradeoff"
+        case .contract: return "Contract"
+        case .product: return "Product"
+        case .risk: return "Risk"
+        case .accessibility: return "Accessibility"
+        }
+    }
+
+    /// The side of the pull request an excerpt was read from. The card
+    /// draws only the base's: the head is what the pull request holds, so
+    /// an unlabeled excerpt reads as the head.
+    package static func label(_ side: Components.Schemas.ReviewExcerptSide) -> String {
+        switch side {
+        case .head: return "Head"
+        case .base: return "Base"
+        }
+    }
+
+    /// Why the daemon could not read an excerpt, said in place of its text
+    /// so a stale or wrong pointer reads as one.
+    package static func label(
+        _ reason: Components.Schemas.ReviewExcerptUnresolved,
+        side: Components.Schemas.ReviewExcerptSide
+    ) -> String {
+        switch reason {
+        case .path_missing:
+            return "No such file at the \(label(side).lowercased())."
+        case .range_out_of_file:
+            return "The lines run past the end of the file."
+        case .binary:
+            return "The file is binary."
+        case .too_large:
+            return "The lines are too large to show."
+        }
+    }
+
+    /// An excerpt's file and lines: `path:10-11`, or `path:10` for one line.
+    package static func excerptRange(_ excerpt: Components.Schemas.ReviewExcerpt) -> String {
+        excerpt.start_line == excerpt.end_line
+            ? "\(excerpt.path):\(excerpt.start_line)"
+            : "\(excerpt.path):\(excerpt.start_line)-\(excerpt.end_line)"
+    }
+
+    /// The same range as VoiceOver reads it, which would otherwise speak
+    /// `10-11` as a subtraction or a dash.
+    package static func excerptSpokenRange(_ excerpt: Components.Schemas.ReviewExcerpt) -> String {
+        excerpt.start_line == excerpt.end_line
+            ? "\(excerpt.path), line \(excerpt.start_line)"
+            : "\(excerpt.path), lines \(excerpt.start_line) to \(excerpt.end_line)"
+    }
+
+    /// A review stop as VoiceOver reads it, as one element: its place in the
+    /// guide, its kind, its title, and the agent's summary.
+    package static func reviewStopAccessibilityLabel(
+        _ stop: Components.Schemas.ReviewStop, number: Int, of count: Int
+    ) -> String {
+        "Stop \(number) of \(count), \(label(stop.attention)), \(stop.title). \(stop.summary)"
+    }
+
     package static func label(_ stage: Components.Schemas.StageName) -> String {
         switch stage {
         case .specification: return "Specification"

@@ -19,6 +19,10 @@ enum DecisionCardModule: String, CaseIterable {
     case comparison
     case yieldChart
     case summary
+    /// The final review's reading order for its pull request (plan §7,
+    /// §9): the agent's stops, each with the daemon's read of the lines it
+    /// points at.
+    case reviewGuide
     case claims
     case evidence
     case details
@@ -689,9 +693,11 @@ struct DecisionCardComposition: Equatable {
             // text, to say the summary is unavailable.
             return item._type == .ready_for_final_review
                 || !summaries(from: item.agent_claims).isEmpty
+        case .reviewGuide:
+            return item.review_guide != nil
         case .claims:
             let drawn = claimsInCard(
-                from: item.agent_claims, at: index,
+                from: Self.listedClaims(item), at: index,
                 prominentClaimIndex: context.prominentClaimIndex, on: context.platform)
             return !drawn.isEmpty
         case .stopCause:
@@ -704,6 +710,51 @@ struct DecisionCardComposition: Equatable {
             .yieldChart, .evidence, .details:
             return false
         }
+    }
+
+    /// The claims a card's claim lists draw from: the item's claims, less
+    /// the guide's claim while the Review Guide module draws it, so the
+    /// guide renders once. Its digest stays in Identifiers. The foot, the
+    /// Evidence fold, and a claims module read from this. The Mac action
+    /// region reads the item's claims directly: it draws only inline claim
+    /// text, and the guide's claim carries none.
+    static func listedClaims(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [Components.Schemas.AgentClaim] {
+        guard let digest = item.review_guide?.value1.claim_digest else { return item.agent_claims }
+        return item.agent_claims.filter {
+            !($0.label == AgentClaimLabels.reviewGuide && $0.digest == digest)
+        }
+    }
+
+    /// The guide's claim, which names the invocation that wrote the guide.
+    static func reviewGuideClaim(
+        _ item: Components.Schemas.AttentionItem
+    ) -> Components.Schemas.AgentClaim? {
+        guard let digest = item.review_guide?.value1.claim_digest else { return nil }
+        return item.agent_claims.first {
+            $0.label == AgentClaimLabels.reviewGuide && $0.digest == digest
+        }
+    }
+
+    /// Whether a review stop offers to open the pull request at its lines.
+    /// It sends View PR's `open_pr`, so it draws only where the surface
+    /// offers that action. A stale item draws none: its pull request's head
+    /// no longer holds the code a stop points at.
+    static func opensReviewStops(
+        _ item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking
+    ) -> Bool {
+        !isStale(item)
+            && ([ranking.recommended, ranking.reviewing].contains(.open_pr)
+                || ranking.principal.contains(.open_pr))
+    }
+
+    /// The excerpt a stop opens the pull request at: its first resolved
+    /// head excerpt. Nil when it has none, and the stop offers no action.
+    static func openingExcerpt(
+        _ stop: Components.Schemas.ReviewStop
+    ) -> Components.Schemas.ReviewExcerpt? {
+        stop.excerpts.first { $0.side == .head && $0.text != nil }
     }
 
     /// Whether a final review's verdict no longer describes what the pull
@@ -819,18 +870,19 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .ready_for_final_review:
             // Plan §9 (revision 78, audit D07) and survey card 4b: what the
-            // agent says changed, then the diff and the daemon's verdict on
-            // it, then View PR, so the supported next step follows what it
-            // rests on. Returning the work sits below any fact block; the
-            // review's round-by-round yield is history, so it folds under
-            // the actions.
+            // agent says changed, then the agent's reading order for the
+            // pull request (plan §9 revision 112), then the diff and the
+            // daemon's verdict on it, then View PR, so the supported next
+            // step follows what it rests on. Returning the work sits below
+            // any fact block; the review's round-by-round yield is history,
+            // so it folds under the actions.
             return .init(
                 modules: [
-                    .recommendation, .summary, .facts, .checklist, .factBlock, .yieldChart,
-                    .claims, .evidence, .details,
+                    .recommendation, .summary, .reviewGuide, .facts, .checklist, .factBlock,
+                    .yieldChart, .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 5,
-                reviewingActionInsertionIndex: 4,
+                actionInsertionIndex: 6,
+                reviewingActionInsertionIndex: 5,
                 foldedModuleCount: 1)
         case .execution_failure:
             // Frame 5.3: what failed, then the agent's account of why, then
