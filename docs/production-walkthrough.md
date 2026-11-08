@@ -76,8 +76,8 @@ so confirm `prod` is running before the start:
 `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon status`
 must exit 0 and print `health=reachable` (app/README.md, Control The
 Supervised Daemon From A Command). And while a production rig lease exists,
-live or stale, `freesided -environment prod` refuses `-driver fake`,
-`-driver claude`, and `-fake-publication`. Choosing **Stop** or **Start**
+live or stale, `freesided -environment prod` refuses `-driver fake` and
+`-driver claude`. Choosing **Stop** or **Start**
 mid-run changes nothing for the run, and the deputy never stops or restarts
 `prod`.
 

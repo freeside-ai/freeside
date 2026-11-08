@@ -1237,8 +1237,8 @@ and ports `7331` and `7332`. The bundled LaunchAgent plist passes
 `__FREESIDE_ENVIRONMENT__` placeholder with the tier. See the
 [environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral).
 
-`-environment prod` refuses `-driver fake`, `-driver claude`, and
-`-fake-publication`, before it opens its database, while a production rig
+`-environment prod` refuses `-driver fake` and `-driver claude`, before it
+opens its database, while a production rig
 manifest exists under `~/.freeside/rig-locks` (the account's passwd home),
 live or stale: an attended real-work run may be using `prod`'s App authority,
 and only a driver would open it. With `-driver disabled`, the installed
@@ -1362,7 +1362,7 @@ existing credentials without matching authority fail closed rather than
 silently authoring an empty destructive installation set.
 
 Every state directory is owner-only, including the corrected
-`<db>.fake-stage-driver` path required by the attended publication bootstrap.
+`<db>.fake-stage-driver` path that `-driver fake` uses.
 The static binary and supervisor may be installed through a one-time narrow
 elevation step, but the stateful daemon always runs as the non-root operator.
 
