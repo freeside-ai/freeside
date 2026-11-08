@@ -35,9 +35,9 @@ func buildVersion() string {
 	return "devel"
 }
 
-const readinessFileName = "readiness.json"
+const ReadinessFileName = "readiness.json"
 
-func publishReadiness(stateDir string, ready readiness) error {
+func publishReadiness(stateDir string, ready Readiness) error {
 	if stateDir == "" {
 		return nil
 	}
@@ -46,60 +46,60 @@ func publishReadiness(stateDir string, ready readiness) error {
 		return fmt.Errorf("encode readiness file: %w", err)
 	}
 	body = append(body, '\n')
-	path := filepath.Join(stateDir, readinessFileName)
+	path := filepath.Join(stateDir, ReadinessFileName)
 	if err := atomicfile.WriteFile(path, body, 0o600); err != nil {
 		return fmt.Errorf("publish readiness file %q: %w", path, err)
 	}
 	return nil
 }
 
-type componentKind string
+type ComponentKind string
 
 const (
-	componentHTTP                  componentKind = "http"
-	componentPairingControl        componentKind = "pairing_control"
-	componentWorkflow              componentKind = "workflow"
-	componentLocalBackups          componentKind = "local_backups"
-	componentScheduler             componentKind = "scheduler"
-	componentProductionPublication componentKind = "production_publication"
-	componentActiveResource        componentKind = "active_resource"
-	componentLabelIntake           componentKind = "label_intake"
-	componentFollowUpFiling        componentKind = "follow_up_filing"
-	componentReviewReplies         componentKind = "review_replies"
-	componentAttentionDeliveries   componentKind = "attention_deliveries"
-	componentPanic                 componentKind = "panic"
+	ComponentHTTP                  ComponentKind = "http"
+	ComponentPairingControl        ComponentKind = "pairing_control"
+	ComponentWorkflow              ComponentKind = "workflow"
+	ComponentLocalBackups          ComponentKind = "local_backups"
+	ComponentScheduler             ComponentKind = "scheduler"
+	ComponentProductionPublication ComponentKind = "production_publication"
+	ComponentActiveResource        ComponentKind = "active_resource"
+	ComponentLabelIntake           ComponentKind = "label_intake"
+	ComponentFollowUpFiling        ComponentKind = "follow_up_filing"
+	ComponentReviewReplies         ComponentKind = "review_replies"
+	ComponentAttentionDeliveries   ComponentKind = "attention_deliveries"
+	ComponentPanic                 ComponentKind = "panic"
 )
 
 // AllComponentKinds is the complete exit-classification registration set.
-var AllComponentKinds = []componentKind{
-	componentHTTP,
-	componentPairingControl,
-	componentWorkflow,
-	componentLocalBackups,
-	componentScheduler,
-	componentProductionPublication,
-	componentActiveResource,
-	componentLabelIntake,
-	componentFollowUpFiling,
-	componentReviewReplies,
-	componentAttentionDeliveries,
-	componentPanic,
+var AllComponentKinds = []ComponentKind{
+	ComponentHTTP,
+	ComponentPairingControl,
+	ComponentWorkflow,
+	ComponentLocalBackups,
+	ComponentScheduler,
+	ComponentProductionPublication,
+	ComponentActiveResource,
+	ComponentLabelIntake,
+	ComponentFollowUpFiling,
+	ComponentReviewReplies,
+	ComponentAttentionDeliveries,
+	ComponentPanic,
 }
 
-func (k componentKind) valid() bool {
+func (k ComponentKind) valid() bool {
 	switch k {
-	case componentHTTP,
-		componentPairingControl,
-		componentWorkflow,
-		componentLocalBackups,
-		componentScheduler,
-		componentProductionPublication,
-		componentActiveResource,
-		componentLabelIntake,
-		componentFollowUpFiling,
-		componentReviewReplies,
-		componentAttentionDeliveries,
-		componentPanic:
+	case ComponentHTTP,
+		ComponentPairingControl,
+		ComponentWorkflow,
+		ComponentLocalBackups,
+		ComponentScheduler,
+		ComponentProductionPublication,
+		ComponentActiveResource,
+		ComponentLabelIntake,
+		ComponentFollowUpFiling,
+		ComponentReviewReplies,
+		ComponentAttentionDeliveries,
+		ComponentPanic:
 		return true
 	default:
 		return false
@@ -130,29 +130,29 @@ func (d exitDisposition) valid() bool {
 	}
 }
 
-func classifyComponentExit(kind componentKind) exitDisposition {
+func classifyComponentExit(kind ComponentKind) exitDisposition {
 	switch kind {
-	case componentWorkflow,
-		componentLocalBackups,
-		componentScheduler,
-		componentProductionPublication,
-		componentActiveResource,
-		componentLabelIntake,
-		componentFollowUpFiling,
-		componentReviewReplies,
-		componentAttentionDeliveries:
+	case ComponentWorkflow,
+		ComponentLocalBackups,
+		ComponentScheduler,
+		ComponentProductionPublication,
+		ComponentActiveResource,
+		ComponentLabelIntake,
+		ComponentFollowUpFiling,
+		ComponentReviewReplies,
+		ComponentAttentionDeliveries:
 		return exitDurableStop
-	case componentHTTP, componentPairingControl:
+	case ComponentHTTP, ComponentPairingControl:
 		return exitRestartSafe
-	case componentPanic:
+	case ComponentPanic:
 		return exitInvoluntary
 	}
 	return exitInvoluntary
 }
 
-func (d *daemon) componentExited(
+func (d *daemon) ComponentExited(
 	lifetimeCtx, workerCtx context.Context,
-	kind componentKind,
+	kind ComponentKind,
 	err error,
 ) {
 	if lifetimeCtx.Err() != nil || workerCtx.Err() != nil {
@@ -172,7 +172,7 @@ func (d *daemon) componentExited(
 	}
 }
 
-const durableStopItemPrefix = "system-health-daemon-stop-"
+const DurableStopItemPrefix = "system-health-daemon-stop-"
 
 func (d *daemon) durableStop(ctx context.Context, cause error) {
 	d.logger.Error("daemon entered a durable stop", "error", cause)
@@ -202,7 +202,7 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 		reason := durableStopReason(cause)
 		alreadyRecorded := false
 		for _, item := range open {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 				alreadyRecorded = alreadyRecorded || item.Reason == reason
 				next := item
 				if item.Offers(domain.ActionResumeUnattended) {
@@ -232,7 +232,7 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 			return err
 		}
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-			ID:        domain.ItemID(fmt.Sprintf("%s%d", durableStopItemPrefix, state.Revision+1)),
+			ID:        domain.ItemID(fmt.Sprintf("%s%d", DurableStopItemPrefix, state.Revision+1)),
 			ProjectID: domain.ProjectID("project-system"),
 			Subject:   subject,
 			Type:      domain.AttentionSystemHealth,
@@ -269,17 +269,17 @@ func durableStopReason(cause error) string {
 	)
 }
 
-// enableDurableStopRecovery offers the explicit operator recovery only after
+// EnableDurableStopRecovery offers the explicit operator recovery only after
 // a fresh daemon start. A same-process recurrence strips the offer again,
 // because the failed loop has returned and is not safe to resume in place.
-func (d *daemon) enableDurableStopRecovery(ctx context.Context) error {
+func (d *daemon) EnableDurableStopRecovery(ctx context.Context) error {
 	return d.store.Write(ctx, func(tx *store.WriteTx) error {
 		open, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
 			return err
 		}
 		for _, item := range open {
-			if !strings.HasPrefix(string(item.ID), durableStopItemPrefix) ||
+			if !strings.HasPrefix(string(item.ID), DurableStopItemPrefix) ||
 				item.Offers(domain.ActionResumeUnattended) {
 				continue
 			}

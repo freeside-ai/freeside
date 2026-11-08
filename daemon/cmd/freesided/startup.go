@@ -695,7 +695,7 @@ func (d *daemon) composeClaudeLoops(
 // control servers, the workflow loops, local backups, and attention
 // deliveries. It cannot fail: run() registers the cleanup that stops
 // these goroutines as soon as it returns, and a component that exits
-// later reports through componentExited.
+// later reports through ComponentExited.
 func (d *daemon) startServing(
 	parent, ctx context.Context, cfg config, st *store.Store, attention *signet.Service,
 	workflow *engine.Engine, claudeWiring *claudeComposition, listener, loopbackTwin net.Listener,
@@ -730,11 +730,11 @@ func (d *daemon) startServing(
 		if errors.Is(err, http.ErrServerClosed) {
 			return
 		}
-		d.componentExited(parent, ctx, componentHTTP, err)
+		d.ComponentExited(parent, ctx, ComponentHTTP, err)
 	}()
 	if loopbackTwin != nil {
 		// The same d.server serves both listeners, so d.server.Shutdown closes
-		// this one too; its exit is the same componentHTTP failure as the primary.
+		// this one too; its exit is the same ComponentHTTP failure as the primary.
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
@@ -742,7 +742,7 @@ func (d *daemon) startServing(
 			if errors.Is(err, http.ErrServerClosed) {
 				return
 			}
-			d.componentExited(parent, ctx, componentHTTP, err)
+			d.ComponentExited(parent, ctx, ComponentHTTP, err)
 		}()
 	}
 	if d.pairing != nil {
@@ -750,7 +750,7 @@ func (d *daemon) startServing(
 		go func() {
 			defer d.wg.Done()
 			if err := d.pairing.Serve(); !errors.Is(err, http.ErrServerClosed) {
-				d.componentExited(parent, ctx, componentPairingControl, err)
+				d.ComponentExited(parent, ctx, ComponentPairingControl, err)
 			}
 		}()
 	}
@@ -758,16 +758,16 @@ func (d *daemon) startServing(
 		d.wg.Add(2)
 		go func() {
 			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
+			d.ComponentExited(parent, ctx, ComponentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
 		}()
 		go func() {
 			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
+			d.ComponentExited(parent, ctx, ComponentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
 		}()
 	}
 	go func() {
 		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentLocalBackups, localBackups.Run(ctx))
+		d.ComponentExited(parent, ctx, ComponentLocalBackups, localBackups.Run(ctx))
 	}()
 	if cfg.AttentionDeliveryInterval > 0 {
 		d.wg.Add(1)
@@ -785,7 +785,7 @@ func (d *daemon) startServing(
 				}
 				return
 			}
-			d.componentExited(parent, ctx, componentAttentionDeliveries, err)
+			d.ComponentExited(parent, ctx, ComponentAttentionDeliveries, err)
 		}()
 	}
 }
@@ -809,7 +809,7 @@ func (d *daemon) startClaudeLoops(
 				cfg.Logger.Error("follow-up filing pass failed", "error", err)
 			}
 		})
-		d.componentExited(parent, ctx, componentFollowUpFiling, err)
+		d.ComponentExited(parent, ctx, ComponentFollowUpFiling, err)
 	}()
 	doctorAvailable.Store(true)
 	go func() {
@@ -819,7 +819,7 @@ func (d *daemon) startClaudeLoops(
 				cfg.Logger.Warn("external review reply sweep", "error", err)
 			}
 		})
-		d.componentExited(parent, ctx, componentReviewReplies, err)
+		d.ComponentExited(parent, ctx, ComponentReviewReplies, err)
 	}()
 
 	// The production publication lane gets its own loop: one task holds a
@@ -828,25 +828,25 @@ func (d *daemon) startClaudeLoops(
 	// invocation, and attention item for that whole span (issue #425).
 	go func() {
 		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentProductionPublication,
+		d.ComponentExited(parent, ctx, ComponentProductionPublication,
 			workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
 	}()
 	go func() {
 		defer d.wg.Done()
 		err := claudeSched.Run(ctx, cfg.SchedulerInterval)
 		doctorAvailable.Store(false)
-		d.componentExited(parent, ctx, componentScheduler, err)
+		d.ComponentExited(parent, ctx, ComponentScheduler, err)
 	}()
 	go func() {
 		defer d.wg.Done()
 		err := activeReconciler.Run(ctx,
 			defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
-		d.componentExited(parent, ctx, componentActiveResource, err)
+		d.ComponentExited(parent, ctx, ComponentActiveResource, err)
 	}()
 	go func() {
 		defer d.wg.Done()
 		err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
-		d.componentExited(parent, ctx, componentLabelIntake, err)
+		d.ComponentExited(parent, ctx, ComponentLabelIntake, err)
 	}()
 	// The start and tip-advance triggers: an upgrade's rebuild can take
 	// an hour, so start does not wait for it.
@@ -869,16 +869,16 @@ func (d *daemon) startScenarioLoops(
 	d.wg.Add(3)
 	go func() {
 		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
+		d.ComponentExited(parent, ctx, ComponentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
 	}()
 	go func() {
 		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentProductionPublication,
+		d.ComponentExited(parent, ctx, ComponentProductionPublication,
 			workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
 	}()
 	go func() {
 		defer d.wg.Done()
-		d.componentExited(parent, ctx, componentScheduler,
+		d.ComponentExited(parent, ctx, ComponentScheduler,
 			scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
 	}()
 }

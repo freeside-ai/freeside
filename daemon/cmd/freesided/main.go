@@ -514,7 +514,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(h.readiness()); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(h.Readiness()); err != nil {
 		// Restore signal disposition before teardown here too, for the reason
 		// serve documents: an unstopped Close keeps absorbing the operator's
 		// SIGTERM, leaving SIGKILL as the only way out of a slow teardown.
@@ -524,13 +524,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := serve(ctx, stop, h); err != nil {
+	if err := Serve(ctx, stop, h); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
 }
 
-// serve runs the daemon until its context ends or a component fails, then
+// Serve runs the daemon until its context ends or a component fails, then
 // tears it down.
 //
 // stop runs before teardown, not after. Until signal disposition is
@@ -545,7 +545,7 @@ func main() {
 // nothing abandons the lease on a timer, and abandoning it is a human
 // decision, taken deliberately, with the process still reporting what it
 // was doing.
-func serve(ctx context.Context, stop func(), h *daemon) error {
+func Serve(ctx context.Context, stop func(), h *daemon) error {
 	waitErr := h.Wait(ctx)
 	stop()
 	return errors.Join(waitErr, h.Close())
@@ -779,7 +779,7 @@ func runScheduledDoctorPass(
 	return errors.Join(conformanceErr, doctorErr)
 }
 
-type readiness struct {
+type Readiness struct {
 	APIURL      string      `json:"api_url"`
 	PairingCode string      `json:"pairing_code"`
 	Environment environment `json:"environment"`
@@ -911,7 +911,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err != nil {
 		return nil, err
 	}
-	listener, err := listenPrivileged(cfg.ListenAddr)
+	listener, err := ListenPrivileged(cfg.ListenAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -930,7 +930,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 		}
 	}()
-	loopbackTwin, err = listenLoopbackTwin(
+	loopbackTwin, err = ListenLoopbackTwin(
 		listener,
 		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
 			return net.ListenTCP(network, resolved)
@@ -943,7 +943,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	// mode the bound listener implies and the host's name as a display label.
 	// Both are read once here; a host that cannot name itself must not pair
 	// devices under an empty name, so that failure is fatal at startup.
-	connectionMode, err := connectionModeOf(listener.Addr())
+	connectionMode, err := ConnectionModeOf(listener.Addr())
 	if err != nil {
 		return nil, err
 	}
@@ -1117,13 +1117,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		},
 	}
 	// Shutdown releases open revision long-polls, so draining the server
-	// stays inside serverShutdownBudget instead of waiting out their bound.
+	// stays inside ServerShutdownBudget instead of waiting out their bound.
 	d.server.RegisterOnShutdown(attention.Shutdown)
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}
 	d.usage = usage
-	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
+	d.pairing.configure(d.Readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
 	// extends with its own recipe, and the recipes adopted for the Claude
 	// driver's repository; with no Claude driver there is none.
@@ -1158,7 +1158,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}
 	if workflow != nil {
-		if err := d.enableDurableStopRecovery(parent); err != nil {
+		if err := d.EnableDurableStopRecovery(parent); err != nil {
 			return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
 		}
 	}
@@ -1185,7 +1185,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
-			d.componentExited(parent, ctx, componentScheduler,
+			d.ComponentExited(parent, ctx, ComponentScheduler,
 				fakeSched.Run(ctx, cfg.SchedulerInterval))
 		}()
 	}
@@ -1337,8 +1337,8 @@ func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.Invocation
 	return inspection, nil
 }
 
-func (d *daemon) readiness() readiness {
-	return readiness{
+func (d *daemon) Readiness() Readiness {
+	return Readiness{
 		APIURL:      "http://" + d.listener.Addr().String(),
 		PairingCode: d.pairingCode,
 		Environment: d.environment,
@@ -1356,8 +1356,8 @@ func newDaemonRunID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func (d *daemon) sameHostReadiness() readiness {
-	ready := d.readiness()
+func (d *daemon) sameHostReadiness() Readiness {
+	ready := d.Readiness()
 	if d.loopbackTwin != nil {
 		ready.APIURL = "http://" + d.loopbackTwin.Addr().String()
 	}
@@ -1399,7 +1399,7 @@ func (d *daemon) Close() error {
 			// close its store or exit while a session still uses its lease.
 			driverErr = d.sessionCloser.Close(context.Background())
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), serverShutdownBudget)
+		ctx, cancel := context.WithTimeout(context.Background(), ServerShutdownBudget)
 		defer cancel()
 		shutdownErr := d.server.Shutdown(ctx)
 		pairingErr := d.pairing.Close()
@@ -1409,11 +1409,11 @@ func (d *daemon) Close() error {
 	return d.closeErr
 }
 
-// serverShutdownBudget bounds draining in-flight HTTP requests. Unlike the
+// ServerShutdownBudget bounds draining in-flight HTTP requests. Unlike the
 // session teardown above, this phase holds no credential lease: the API is
 // a read/write surface over the store, and abandoning a slow request loses
 // nothing durable.
-const serverShutdownBudget = 5 * time.Second
+const ServerShutdownBudget = 5 * time.Second
 
 var (
 	tailscaleIPv4 = netip.MustParsePrefix("100.64.0.0/10")
@@ -1422,13 +1422,13 @@ var (
 
 const tailscaleIPTimeout = 5 * time.Second
 
-func listenPrivileged(addr string) (net.Listener, error) {
+func ListenPrivileged(addr string) (net.Listener, error) {
 	return listenPrivilegedWith(
 		addr,
 		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
 			return net.ListenTCP(network, resolved)
 		},
-		readTailscaleIPs,
+		ReadTailscaleIPs,
 	)
 }
 
@@ -1437,7 +1437,7 @@ func listenPrivilegedWith(
 	bind func(string, *net.TCPAddr) (net.Listener, error),
 	tailscaleIPs func() ([]netip.Addr, error),
 ) (net.Listener, error) {
-	resolved, err := resolveListenAddress(addr, tailscaleIPs)
+	resolved, err := ResolveListenAddress(addr, tailscaleIPs)
 	if err != nil {
 		return nil, err
 	}
@@ -1457,9 +1457,9 @@ func listenPrivilegedWith(
 	return listener, nil
 }
 
-// resolveListenAddress checks listener policy without binding, so deputy
+// ResolveListenAddress checks listener policy without binding, so deputy
 // settings can be refused before taking a production rig lease.
-func resolveListenAddress(addr string, tailscaleIPs func() ([]netip.Addr, error)) (*net.TCPAddr, error) {
+func ResolveListenAddress(addr string, tailscaleIPs func() ([]netip.Addr, error)) (*net.TCPAddr, error) {
 	resolved, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve listen address %q: %w", addr, err)
@@ -1494,14 +1494,14 @@ func loopbackTwinAddr(bound *net.TCPAddr) (*net.TCPAddr, bool) {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: bound.Port}, true
 }
 
-// listenLoopbackTwin opens the loopback companion for a primary bound to a
+// ListenLoopbackTwin opens the loopback companion for a primary bound to a
 // Tailscale-owned address, so a same-host client always has a path a host VPN
 // cannot drop (#1449). It returns a nil listener when the primary is already
 // loopback. It binds after the primary so a :0 primary has its real port. A
 // bind failure, or a bound address that is not loopback at that port, is
 // returned as an error naming the loopback address; startup then fails, which
 // is the contract: the daemon never runs reachable only over Tailscale.
-func listenLoopbackTwin(
+func ListenLoopbackTwin(
 	primary net.Listener,
 	bind func(string, *net.TCPAddr) (net.Listener, error),
 ) (net.Listener, error) {
@@ -1526,11 +1526,11 @@ func listenLoopbackTwin(
 	return listener, nil
 }
 
-// loopbackTwinListenAddress mirrors loopbackTwinAddr for a listen address in
+// LoopbackTwinListenAddress mirrors loopbackTwinAddr for a listen address in
 // host:port text, so the daemon and the rig and preflight probes share one rule
 // for which primary addresses also answer on loopback (#1449). It reports false
 // for a loopback address. The callers pass an IP literal, so no DNS occurs.
-func loopbackTwinListenAddress(address string) (string, bool, error) {
+func LoopbackTwinListenAddress(address string) (string, bool, error) {
 	resolved, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
 		return "", false, fmt.Errorf("resolve listen address %q: %w", address, err)
@@ -1542,12 +1542,12 @@ func loopbackTwinListenAddress(address string) (string, bool, error) {
 	return twin.String(), true, nil
 }
 
-// connectionModeOf names how clients reach a listener listenPrivilegedWith
+// ConnectionModeOf names how clients reach a listener listenPrivilegedWith
 // bound: loopback for a loopback address, tailscale for a Tailscale-owned
 // one. Those are the only two addresses it admits, so any other bound
 // address is a composition defect, not a third mode; a relay mode arrives
 // with the §5.19 relay.
-func connectionModeOf(bound net.Addr) (domain.ConnectionMode, error) {
+func ConnectionModeOf(bound net.Addr) (domain.ConnectionMode, error) {
 	tcp, ok := bound.(*net.TCPAddr)
 	if !ok {
 		return "", fmt.Errorf("listener address %q is not a TCP address", bound)
@@ -1569,7 +1569,7 @@ func isTailscaleIP(ip net.IP) bool {
 	return isTailscaleAddr(addr)
 }
 
-func readTailscaleIPs() ([]netip.Addr, error) {
+func ReadTailscaleIPs() ([]netip.Addr, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), tailscaleIPTimeout)
 	defer cancel()
 

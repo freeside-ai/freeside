@@ -177,7 +177,7 @@ func runWedgedTeardownHelper(t *testing.T) {
 		select {}
 	}))
 	fmt.Println(teardownReadyMarker)
-	_ = serve(ctx, stop, d)
+	_ = Serve(ctx, stop, d)
 	// Only reachable if the wedged teardown somehow returned, which would
 	// mean the parent's second signal proved nothing.
 	fmt.Println(teardownDoneMarker)

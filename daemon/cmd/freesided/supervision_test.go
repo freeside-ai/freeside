@@ -38,19 +38,19 @@ func TestBuildVersionPrefersStampedValue(t *testing.T) {
 
 func TestExitClassificationIsComplete(t *testing.T) {
 	t.Parallel()
-	want := map[componentKind]exitDisposition{
-		componentHTTP:                  exitRestartSafe,
-		componentPairingControl:        exitRestartSafe,
-		componentWorkflow:              exitDurableStop,
-		componentLocalBackups:          exitDurableStop,
-		componentScheduler:             exitDurableStop,
-		componentProductionPublication: exitDurableStop,
-		componentActiveResource:        exitDurableStop,
-		componentLabelIntake:           exitDurableStop,
-		componentFollowUpFiling:        exitDurableStop,
-		componentReviewReplies:         exitDurableStop,
-		componentAttentionDeliveries:   exitDurableStop,
-		componentPanic:                 exitInvoluntary,
+	want := map[ComponentKind]exitDisposition{
+		ComponentHTTP:                  exitRestartSafe,
+		ComponentPairingControl:        exitRestartSafe,
+		ComponentWorkflow:              exitDurableStop,
+		ComponentLocalBackups:          exitDurableStop,
+		ComponentScheduler:             exitDurableStop,
+		ComponentProductionPublication: exitDurableStop,
+		ComponentActiveResource:        exitDurableStop,
+		ComponentLabelIntake:           exitDurableStop,
+		ComponentFollowUpFiling:        exitDurableStop,
+		ComponentReviewReplies:         exitDurableStop,
+		ComponentAttentionDeliveries:   exitDurableStop,
+		ComponentPanic:                 exitInvoluntary,
 	}
 	if len(want) != len(AllComponentKinds) {
 		t.Fatalf("classification table has %d entries, want %d", len(want), len(AllComponentKinds))
@@ -134,7 +134,7 @@ var runIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // exact key set (#1504), so its keys are pinned here.
 func TestReadinessGolden(t *testing.T) {
 	t.Parallel()
-	got, err := json.MarshalIndent(readiness{
+	got, err := json.MarshalIndent(Readiness{
 		APIURL:      "http://127.0.0.1:8421",
 		PairingCode: "ABCD-2345",
 		Environment: environmentDev,
@@ -156,7 +156,7 @@ func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
-		ready := h.readiness()
+		ready := h.Readiness()
 		if err := h.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
@@ -183,7 +183,7 @@ func TestRunRejectsAMissingEnvironment(t *testing.T) {
 	if !strings.Contains(err.Error(), "environment") {
 		t.Fatalf("run error = %v, want an environment refusal", err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, readinessFileName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(stateDir, ReadinessFileName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("readiness file stat = %v, want no file published", err)
 	}
 }
@@ -229,7 +229,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 		}
 	})
 
-	path := filepath.Join(stateDir, readinessFileName)
+	path := filepath.Join(stateDir, ReadinessFileName)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat readiness file: %v", err)
@@ -241,12 +241,12 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read readiness: %v", err)
 	}
-	var ready readiness
+	var ready Readiness
 	if err := json.Unmarshal(body, &ready); err != nil {
 		t.Fatalf("decode readiness: %v", err)
 	}
-	if ready != h.readiness() || ready.APIURL == "" || ready.PairingCode == "" {
-		t.Fatalf("readiness = %+v, want %+v", ready, h.readiness())
+	if ready != h.Readiness() || ready.APIURL == "" || ready.PairingCode == "" {
+		t.Fatalf("readiness = %+v, want %+v", ready, h.Readiness())
 	}
 	if ready.Environment != environmentDev {
 		t.Fatalf("readiness environment = %q, want %q", ready.Environment, environmentDev)
@@ -296,10 +296,10 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		cancelLifetime()
 		t.Fatalf("run: %v", err)
 	}
-	h.componentExited(lifetime, context.Background(), componentWorkflow,
+	h.ComponentExited(lifetime, context.Background(), ComponentWorkflow,
 		errors.New("injected durable store failure"))
 
-	response, err := http.Get(h.readiness().APIURL + "/health")
+	response, err := http.Get(h.Readiness().APIURL + "/health")
 	if err != nil {
 		t.Fatalf("GET /health after durable stop: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 			return err
 		}
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 				durableStop = item
 				if item.Offers(domain.ActionResumeUnattended) {
 					t.Errorf("fresh durable-stop item actions = %v, must not offer resume_unattended", item.RequestedDecision)
@@ -350,7 +350,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		t.Fatalf("admission after reopen = %v, want blocking system health", err)
 	}
 	restarted := &daemon{store: reopened}
-	if err := restarted.enableDurableStopRecovery(context.Background()); err != nil {
+	if err := restarted.EnableDurableStopRecovery(context.Background()); err != nil {
 		t.Fatalf("enable durable-stop recovery after reopen: %v", err)
 	}
 	if err := reopened.Read(context.Background(), func(tx *store.ReadTx) error {
@@ -385,7 +385,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		}
 		stops := 0
 		for _, item := range items {
-			if !strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if !strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 				continue
 			}
 			stops++

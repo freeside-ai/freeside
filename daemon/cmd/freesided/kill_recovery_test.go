@@ -46,7 +46,7 @@ var killTestInvocationID = domain.InvocationID("inv-" + killTestCommandID)
 type processFixture struct {
 	cmd    *osexec.Cmd
 	stderr bytes.Buffer
-	ready  readiness
+	ready  Readiness
 	done   chan struct{}
 
 	waitErr error
@@ -130,7 +130,7 @@ func waitForDurableStop(t *testing.T, root string) {
 					return err
 				}
 				for _, item := range items {
-					if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+					if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 						found = true
 						return nil
 					}
@@ -310,12 +310,12 @@ func startProcessFixture(
 	})
 
 	type readyResult struct {
-		value readiness
+		value Readiness
 		err   error
 	}
 	result := make(chan readyResult, 1)
 	go func() {
-		var ready readiness
+		var ready Readiness
 		err := json.NewDecoder(stdout).Decode(&ready)
 		result <- readyResult{value: ready, err: err}
 	}()
@@ -362,7 +362,7 @@ type processClient struct {
 	client   *http.Client
 }
 
-func pairProcessDevice(t *testing.T, ready readiness) *processClient {
+func pairProcessDevice(t *testing.T, ready Readiness) *processClient {
 	t.Helper()
 	body, err := json.Marshal(map[string]string{
 		"pairing_code": ready.PairingCode,

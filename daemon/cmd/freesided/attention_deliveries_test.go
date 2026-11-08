@@ -43,7 +43,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	}
 	for index, cause := range []string{"janitor stopped", "backup stopped", "backup stopped"} {
 		if index == 2 {
-			if err := h.enableDurableStopRecovery(t.Context()); err != nil {
+			if err := h.EnableDurableStopRecovery(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -58,7 +58,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		all, err := tx.ListOpenAttentionItems(t.Context(), domain.AttentionSystemHealth)
 		for _, item := range all {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 				items = append(items, item)
 			}
 		}
@@ -83,7 +83,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	_, clicks := sink.published()
 	stopNotifications := 0
 	for _, click := range clicks {
-		if strings.HasPrefix(click, "freeside://attention/items/"+durableStopItemPrefix) {
+		if strings.HasPrefix(click, "freeside://attention/items/"+DurableStopItemPrefix) {
 			stopNotifications++
 		}
 	}
@@ -488,7 +488,7 @@ func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 
 func assertDaemonHealthy(t *testing.T, h *daemon) {
 	t.Helper()
-	response, err := http.Get(h.readiness().APIURL + "/health")
+	response, err := http.Get(h.Readiness().APIURL + "/health")
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
@@ -514,7 +514,7 @@ func durableStops(t *testing.T, h *daemon) []domain.AttentionItem {
 	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 				stops = append(stops, item)
 			}
 		}

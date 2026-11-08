@@ -276,7 +276,7 @@ func (c *scenarioComposition) serveForge(ctx context.Context, logger *slog.Logge
 	case err := <-served:
 		return fmt.Errorf("scenario forge: %w", err)
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownBudget)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), ServerShutdownBudget)
 		defer cancel()
 		if err := c.forge.Shutdown(shutdownCtx); err != nil && logger != nil {
 			logger.Warn("scenario forge shutdown", "error", err)

@@ -511,7 +511,7 @@ func proveRigIdle(ctx context.Context, host rigHost, resources daemonlock.RigRes
 	// A Tailscale-bound daemon also serves the loopback twin (#1449), so a
 	// process squatting that loopback port would collide at startup: refuse the
 	// lease now, naming the loopback address.
-	if twin, ok, err := loopbackTwinListenAddress(canonicalListen); err != nil {
+	if twin, ok, err := LoopbackTwinListenAddress(canonicalListen); err != nil {
 		return err
 	} else if ok {
 		if description, live, err := host.ProbeDaemon(ctx, twin); err != nil {

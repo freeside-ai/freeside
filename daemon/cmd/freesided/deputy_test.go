@@ -648,7 +648,7 @@ func TestDeputyDaemonSettingsMatchesDownstreamRefusals(t *testing.T) {
 		return err
 	}
 	listener := func(s loadedDeputySettings, _ deputyPaths) error {
-		_, err := resolveListenAddress(s.Listen, noTailscale)
+		_, err := ResolveListenAddress(s.Listen, noTailscale)
 		return err
 	}
 	claudeConfig := func(s loadedDeputySettings, paths deputyPaths) error {

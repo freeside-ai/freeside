@@ -62,7 +62,7 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 		}
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), DurableStopItemPrefix) {
 				itemID = item.ID
 			}
 		}

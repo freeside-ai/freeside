@@ -148,7 +148,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 	if !errors.Is(err, startupErr) {
 		t.Fatalf("run error = %v, want %v", err, startupErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, readinessFileName)); !errors.Is(statErr, fs.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, ReadinessFileName)); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("readiness after failed startup = %v, want absent", statErr)
 	}
 	if !strings.Contains(logsAtStoreClose, "reconcile loop stopped") {
@@ -238,7 +238,7 @@ func TestRunServesSignetAndStops(t *testing.T) {
 	})
 
 	client := &http.Client{Timeout: time.Second}
-	response, err := client.Get(h.readiness().APIURL + "/sync/revision")
+	response, err := client.Get(h.Readiness().APIURL + "/sync/revision")
 	if err != nil {
 		t.Fatalf("GET /sync/revision: %v", err)
 	}
@@ -695,7 +695,7 @@ func TestRunPairsFreshDevice(t *testing.T) {
 		}
 	})
 
-	ready := h.readiness()
+	ready := h.Readiness()
 	if ready.PairingCode == "" {
 		t.Fatal("readiness carried no startup pairing code")
 	}
@@ -1148,9 +1148,9 @@ func waitForItem(t *testing.T, attention *signet.Service, id domain.ItemID) sign
 
 func TestListenPrivileged(t *testing.T) {
 	t.Parallel()
-	listener, err := listenPrivileged("127.0.0.1:0")
+	listener, err := ListenPrivileged("127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listenPrivileged(loopback): %v", err)
+		t.Fatalf("ListenPrivileged(loopback): %v", err)
 	}
 	if err := listener.Close(); err != nil {
 		t.Fatalf("close loopback listener: %v", err)
@@ -1158,9 +1158,9 @@ func TestListenPrivileged(t *testing.T) {
 
 	for _, addr := range []string{":0", "0.0.0.0:0", "[::]:0", "192.0.2.1:0"} {
 		t.Run(addr, func(t *testing.T) {
-			if listener, err := listenPrivileged(addr); err == nil {
+			if listener, err := ListenPrivileged(addr); err == nil {
 				_ = listener.Close()
-				t.Fatalf("listenPrivileged(%q) accepted a wildcard or arbitrary non-loopback address", addr)
+				t.Fatalf("ListenPrivileged(%q) accepted a wildcard or arbitrary non-loopback address", addr)
 			}
 		})
 	}
@@ -1208,23 +1208,23 @@ func TestConnectionModeOfBoundListener(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := connectionModeOf(resolved)
+			got, err := ConnectionModeOf(resolved)
 			if tc.want == "" {
 				if err == nil {
-					t.Fatalf("connectionModeOf(%q) = %q, want an error", tc.addr, got)
+					t.Fatalf("ConnectionModeOf(%q) = %q, want an error", tc.addr, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("connectionModeOf(%q): %v", tc.addr, err)
+				t.Fatalf("ConnectionModeOf(%q): %v", tc.addr, err)
 			}
 			if got != tc.want {
-				t.Errorf("connectionModeOf(%q) = %q, want %q", tc.addr, got, tc.want)
+				t.Errorf("ConnectionModeOf(%q) = %q, want %q", tc.addr, got, tc.want)
 			}
 		})
 	}
-	if _, err := connectionModeOf(&net.UnixAddr{Name: "/tmp/sock", Net: "unix"}); err == nil {
-		t.Fatal("connectionModeOf accepted a non-TCP address")
+	if _, err := ConnectionModeOf(&net.UnixAddr{Name: "/tmp/sock", Net: "unix"}); err == nil {
+		t.Fatal("ConnectionModeOf accepted a non-TCP address")
 	}
 }
 
@@ -1265,18 +1265,18 @@ func TestSameHostReadinessFile(t *testing.T) {
 				}
 				d.loopbackTwin = &listenerStub{addr: twin}
 			}
-			if got := d.readiness().APIURL; got != tc.wantPrimaryURL {
+			if got := d.Readiness().APIURL; got != tc.wantPrimaryURL {
 				t.Fatalf("primary readiness URL = %q, want %q", got, tc.wantPrimaryURL)
 			}
 			stateDir := t.TempDir()
 			if err := publishReadiness(stateDir, d.sameHostReadiness()); err != nil {
 				t.Fatal(err)
 			}
-			body, err := os.ReadFile(filepath.Join(stateDir, readinessFileName)) //nolint:gosec // test-owned temporary path
+			body, err := os.ReadFile(filepath.Join(stateDir, ReadinessFileName)) //nolint:gosec // test-owned temporary path
 			if err != nil {
 				t.Fatal(err)
 			}
-			var ready readiness
+			var ready Readiness
 			if err := json.Unmarshal(body, &ready); err != nil {
 				t.Fatal(err)
 			}
@@ -1391,7 +1391,7 @@ func TestLoopbackTwinAddr(t *testing.T) {
 func TestListenLoopbackTwin(t *testing.T) {
 	t.Parallel()
 	// A loopback primary needs no twin, and the binder is never called.
-	twin, err := listenLoopbackTwin(
+	twin, err := ListenLoopbackTwin(
 		&listenerStub{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8443}},
 		func(string, *net.TCPAddr) (net.Listener, error) {
 			t.Fatal("loopback primary tried to bind a twin")
@@ -1399,7 +1399,7 @@ func TestListenLoopbackTwin(t *testing.T) {
 		},
 	)
 	if err != nil || twin != nil {
-		t.Fatalf("listenLoopbackTwin(loopback) = (%v, %v), want (nil, nil)", twin, err)
+		t.Fatalf("ListenLoopbackTwin(loopback) = (%v, %v), want (nil, nil)", twin, err)
 	}
 
 	// A Tailscale primary (v4 and v6) twins onto 127.0.0.1 at the primary's
@@ -1414,7 +1414,7 @@ func TestListenLoopbackTwin(t *testing.T) {
 			var boundNetwork string
 			var boundAddr *net.TCPAddr
 			bound := &listenerStub{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: resolved.Port}}
-			twin, err := listenLoopbackTwin(
+			twin, err := ListenLoopbackTwin(
 				&listenerStub{addr: resolved},
 				func(network string, addr *net.TCPAddr) (net.Listener, error) {
 					boundNetwork, boundAddr = network, addr
@@ -1422,10 +1422,10 @@ func TestListenLoopbackTwin(t *testing.T) {
 				},
 			)
 			if err != nil {
-				t.Fatalf("listenLoopbackTwin(%q): %v", primary, err)
+				t.Fatalf("ListenLoopbackTwin(%q): %v", primary, err)
 			}
 			if twin != bound {
-				t.Fatalf("listenLoopbackTwin(%q) returned a different listener", primary)
+				t.Fatalf("ListenLoopbackTwin(%q) returned a different listener", primary)
 			}
 			if boundNetwork != "tcp4" || boundAddr.String() != "127.0.0.1:8443" {
 				t.Fatalf("bound %q on %q, want 127.0.0.1:8443 on tcp4", boundAddr, boundNetwork)
@@ -1435,7 +1435,7 @@ func TestListenLoopbackTwin(t *testing.T) {
 
 	// A bind failure is returned with the loopback address named, so startup
 	// fails rather than run reachable only over Tailscale.
-	_, err = listenLoopbackTwin(
+	_, err = ListenLoopbackTwin(
 		&listenerStub{addr: &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}},
 		func(string, *net.TCPAddr) (net.Listener, error) {
 			return nil, errors.New("address already in use")
@@ -1453,12 +1453,12 @@ func TestListenLoopbackTwin(t *testing.T) {
 				wrong = &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}
 			}
 			stub := &listenerStub{addr: wrong}
-			_, err := listenLoopbackTwin(
+			_, err := ListenLoopbackTwin(
 				&listenerStub{addr: &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}},
 				func(string, *net.TCPAddr) (net.Listener, error) { return stub, nil },
 			)
 			if err == nil {
-				t.Fatalf("listenLoopbackTwin accepted a twin bound to %q", wrong)
+				t.Fatalf("ListenLoopbackTwin accepted a twin bound to %q", wrong)
 			}
 			if !stub.closed {
 				t.Fatal("refused twin listener was not closed")
