@@ -116,11 +116,18 @@ func TestAlternateAgentRetryMigrationKeepsTaskLines(t *testing.T) {
 	}
 }
 
+// moveSelection stands in for a chosen enrollment and its served tuple.
+func moveSelection(agent string) *domain.TaskLineSelection {
+	return &domain.TaskLineSelection{
+		EnrollmentID: domain.ClientEnrollmentID("enrollment-" + agent), ModelID: "model-" + agent, Effort: "high",
+	}
+}
+
 func seedParkedMove(t *testing.T, taskID domain.TaskID, at time.Time) domain.AlternateAgentRetry {
 	t.Helper()
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: taskID, Role: domain.RoleImplementer, FailedInvocationID: "inv-1",
-		CommandID: "cmd-move", Agent: "claude-b", Pool: "pool-b",
+		CommandID: "cmd-move", Selection: moveSelection("claude-b"), Pool: "pool-b",
 		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: at,
 	})
 	if err != nil {
@@ -144,7 +151,7 @@ func TestAlternateAgentRetryRecord(t *testing.T) {
 		}
 	}
 	other := record
-	other.Agent = "claude-c"
+	other.Selection = moveSelection("claude-c")
 	other, err := domain.NewAlternateAgentRetry(other)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +176,7 @@ func TestAlternateAgentRetryRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.db.ExecContext(ctx, `UPDATE alternate_agent_retries
-		SET body = json_set(body, '$.agent', 'claude-c') WHERE id = ?`, record.ID); err != nil {
+		SET body = json_set(body, '$.selection.enrollment_id', 'enrollment-claude-c') WHERE id = ?`, record.ID); err != nil {
 		t.Fatal(err)
 	}
 	err = st.Read(ctx, func(tx *ReadTx) error {
@@ -183,7 +190,7 @@ func TestAlternateAgentRetryRecord(t *testing.T) {
 
 // TestAlternateAgentMoveLines: a move supersedes the role's router line with
 // a cited version, refuses lines that do not cite a stored parked move, and
-// requires the record's own role to move to its agent.
+// requires the record's own role to move to its selection.
 func TestAlternateAgentMoveLines(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -191,12 +198,6 @@ func TestAlternateAgentMoveLines(t *testing.T) {
 	taskID, _ := seedOriginTestTarget(t, ctx, st)
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	record := seedParkedMove(t, taskID, at.Add(time.Hour))
-	// moveSelection stands in for the tree: the selection an agent reduces to.
-	moveSelection := func(agent string) *domain.TaskLineSelection {
-		return &domain.TaskLineSelection{
-			EnrollmentID: domain.ClientEnrollmentID("enrollment-" + agent), ModelID: "model-" + agent, Effort: "high",
-		}
-	}
 	move := func(role domain.RoleName, agent, setBy string) domain.TaskLineInput {
 		return domain.TaskLineInput{
 			TaskID: taskID, Role: role, Selection: moveSelection(agent), Source: domain.TaskLineSourceAlternateAgentMove,
@@ -207,7 +208,7 @@ func TestAlternateAgentMoveLines(t *testing.T) {
 		var lines []domain.TaskLine
 		err := st.Write(ctx, func(tx *WriteTx) error {
 			var err error
-			lines, err = tx.RecordAlternateAgentMoveLines(ctx, record, *moveSelection(record.Agent), inputs)
+			lines, err = tx.RecordAlternateAgentMoveLines(ctx, record, inputs)
 			return err
 		})
 		return lines, err
@@ -258,7 +259,7 @@ func TestRunHoldQuotaWindowOffersRoundTrip(t *testing.T) {
 	st := openTemplateStoreAt(t, t.TempDir()+"/run-hold-offers.db", Options{})
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	offers := []domain.AlternateAgentOffer{{
-		Agent: "claude-b", Pool: "pool-b", Harness: domain.HarnessClientClaudeCode,
+		Enrollment: "enrollment-b", Pool: "pool-b", Harness: domain.HarnessClientClaudeCode,
 		Model: "claude-opus-4-1", Qualification: domain.AlternateAgentDifferentPool,
 	}}
 	want := domain.RunHoldObservation{

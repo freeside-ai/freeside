@@ -304,7 +304,7 @@ func resolveRoleLine(
 // resolveAttemptRole is the one point that selects what a role runs in an
 // attempt (plan §5.4). The precedence is the alternate-agent card for this
 // one attempt, then the task's line for the role, then the lineup. A card's
-// agent is re-gated against the failure it answered (regateCardAgent).
+// selection is re-gated against the failure it answered (regateCardAgent).
 //
 // A task line picks the selection only. The prompt stays the one the role's
 // lineup line names, so a role with no lineup line is still refused. A line
@@ -420,13 +420,14 @@ func lineRuns(tree agenttree.Tree, line domain.TaskLine) func(agent string) bool
 	}
 }
 
-// resolveCardAgent is resolveLineAgent for the agent a card record chose:
-// the prompt stays the lineup line's, the names are the ones the record's
-// tree agent reduces to (agenttree.Tree.SelectionOfAgent; #2735 moves the
-// record onto a selection), and the rule the record names is re-derived for
-// it. It runs without the generation's integrity mark, which the caller
-// reads in the same transaction. A record that fails any step refuses the
-// attempt, never falling back to the task's line or the lineup.
+// resolveCardAgent is resolveLineAgent for what a card record chose: the
+// prompt stays the lineup line's, the names are the record's selection (or,
+// on a v1 record, the ones its tree agent reduces to through
+// agenttree.Tree.SelectionOfAgent until #2599), and the rule the record names
+// is re-derived for them. It runs without the generation's integrity mark,
+// which the caller reads in the same transaction. A record that fails any
+// step refuses the attempt, never falling back to the task's line or the
+// lineup.
 func resolveCardAgent(
 	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName, card domain.AlternateAgentRetry,
 ) (RoleAgent, error) {
@@ -434,27 +435,42 @@ func resolveCardAgent(
 	if err != nil {
 		return RoleAgent{}, err
 	}
-	if _, ok := tree.Agent(card.Agent); !ok {
-		return RoleAgent{}, fmt.Errorf("card record %s names an agent the tree lacks", card.ID)
-	}
-	selection, err := tree.SelectionOfAgent(card.Agent)
+	names, label, err := cardNames(tree, card)
 	if err != nil {
-		return RoleAgent{}, fmt.Errorf("card record %s: %w", card.ID, err)
+		return RoleAgent{}, err
 	}
-	name := card.Agent
-	agent, err := resolveNames(ctx, tx, tree, selection.Names(), &name)
+	agent, err := resolveNames(ctx, tx, tree, names, label)
 	if err != nil {
 		return RoleAgent{}, fmt.Errorf("card record %s: %w", card.ID, err)
 	}
 	if err := agent.readGeneration(ctx, tx); err != nil {
 		return RoleAgent{}, err
 	}
-	if err := regateCardAgent(ctx, tx, tree, card, agent); err != nil {
+	if err := regateCardAgent(ctx, tx, card, agent); err != nil {
 		return RoleAgent{}, fmt.Errorf("card record %s: %w", card.ID, err)
 	}
-	line.Names = selection.Names()
+	line.Names = names
 	agent.Line, agent.Card = line, &card
 	return agent, nil
+}
+
+// cardNames is the names a card record chose and what a refusal may print
+// for them, as taskLineNames is for a line: a v2 record's selection, which
+// the operator chose and so is not printed until a recorded catalog matches
+// it, or the names a v1 record's tree agent reduces to, under its name.
+func cardNames(tree agenttree.Tree, card domain.AlternateAgentRetry) (domain.AgentSelectionNames, *string, error) {
+	if card.Selection != nil {
+		return card.Selection.Names(), nil, nil
+	}
+	if _, ok := tree.Agent(card.Agent); !ok {
+		return domain.AgentSelectionNames{}, nil, fmt.Errorf("card record %s names an agent the tree lacks", card.ID)
+	}
+	selection, err := tree.SelectionOfAgent(card.Agent)
+	if err != nil {
+		return domain.AgentSelectionNames{}, nil, fmt.Errorf("card record %s: %w", card.ID, err)
+	}
+	name := card.Agent
+	return selection.Names(), &name, nil
 }
 
 // counterpartBases returns the enrollments whose escalated counterpart a
@@ -464,8 +480,13 @@ func resolveCardAgent(
 // move line whose agent its cited revision does not order runs the
 // counterpart of the enrollment of an agent that revision orders for the
 // specifier: the router routes an escalated specifier among those
-// (escalatedOrder), and a move re-pins it the same way. anchorLinePolicy
-// admits such a line only for a task whose triage record escalated.
+// (escalatedOrder). anchorLinePolicy admits such a line only for a task
+// whose triage record escalated. A v2 record's move line needs no
+// counterpart here when the revision orders its enrollment for the specifier
+// (orderedEnrollments): a move re-pins the specifier on the record's
+// enrollment, and its anchor holds the line to that enrollment's standard or
+// escalated lineup tuple (anchorAlternateAgentMoveLine). A v1 record's line
+// keeps the counterpart check.
 func counterpartBases(
 	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, line domain.LineupSelection, taskLine domain.TaskLine,
 ) ([]string, string, error) {
@@ -478,6 +499,21 @@ func counterpartBases(
 	policy, err := routingPolicyRevision(ctx, tx, taskLine.Provenance.PolicyRevision)
 	if err != nil {
 		return nil, "", err
+	}
+	if taskLine.Source == domain.TaskLineSourceAlternateAgentMove {
+		record, err := tx.GetAlternateAgentRetry(ctx, domain.Digest(taskLine.SetBy))
+		if err != nil {
+			return nil, "", err
+		}
+		if record.Selection != nil {
+			enrollment, err := lineEnrollment(tree, taskLine)
+			if err != nil {
+				return nil, "", err
+			}
+			if slices.Contains(orderedEnrollments(tree, policy, taskLine.Role), enrollment) {
+				return nil, "", nil
+			}
+		}
 	}
 	order := routingOrder(policy, taskLine.Role)
 	if slices.ContainsFunc(order, lineRuns(tree, taskLine)) {
@@ -494,6 +530,19 @@ func counterpartBases(
 		}
 	}
 	return enrollments, fmt.Sprintf("an agent routing policy revision %d orders", policy.Revision), nil
+}
+
+// lineEnrollment is the enrollment a line runs: a v2 line's selection's, or
+// the one a v1 line's tree agent reduces to.
+func lineEnrollment(tree agenttree.Tree, line domain.TaskLine) (domain.ClientEnrollmentID, error) {
+	if line.Selection != nil {
+		return line.Selection.EnrollmentID, nil
+	}
+	selection, err := tree.SelectionOfAgent(line.Agent)
+	if err != nil {
+		return "", fmt.Errorf("task line %s: %w", line.ID, err)
+	}
+	return selection.EnrollmentID, nil
 }
 
 // escalatedCounterpart is the Tier A half of an escalated line's anchor that
@@ -811,9 +860,13 @@ func anchorRouterLine(ctx context.Context, tx *store.ReadTx, tree agenttree.Tree
 // anchorAlternateAgentMoveLine holds a moved line to the operator's move that
 // set it: the record it cites is a parked move of its own task, made by a
 // command whose receipt records that move, and the line was set at the
-// record's instant on the record's pool. The record's role moves to the
-// record's agent; every line holds to its policy revision (anchorLinePolicy),
-// since a move re-pins the task as the router would. Any version may be a
+// record's instant on the record's pool. Under a v2 record the line holds a
+// selection on the record's enrollment: the record's selection for the
+// record's role, and for every other role its lineup model and effort, or
+// for an escalated task's specifier the escalated line's (moveLineTuple);
+// it holds to its policy revision as a move (anchorMovePolicy). Under a v1
+// record the record's role runs the record's agent and every line holds to
+// its policy as the router's would (anchorLinePolicy). Any version may be a
 // move: it supersedes whatever the role held.
 func anchorAlternateAgentMoveLine(ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, line domain.TaskLine) error {
 	record, err := tx.GetAlternateAgentRetry(ctx, domain.Digest(line.SetBy))
@@ -833,16 +886,98 @@ func anchorAlternateAgentMoveLine(ctx context.Context, tx *store.ReadTx, tree ag
 	if !line.SetAt.Equal(record.RecordedAt) || line.Provenance.Pool != record.Pool {
 		return errors.New("it was not set at its record's instant on its record's pool")
 	}
+	if record.Selection == nil {
+		if line.Role == record.Role {
+			runs, err := tree.LineRuns(line, record.Agent)
+			if err != nil {
+				return err
+			}
+			if !runs {
+				return errors.New("its record moved the role to another agent")
+			}
+		}
+		return anchorLinePolicy(ctx, tx, tree, line)
+	}
+	if line.Selection == nil || line.Selection.EnrollmentID != record.Selection.EnrollmentID {
+		return errors.New("it selects another enrollment than its record moved the task to")
+	}
 	if line.Role == record.Role {
-		runs, err := tree.LineRuns(line, record.Agent)
+		if *line.Selection != *record.Selection {
+			return errors.New("its record moved the role to another selection")
+		}
+	} else if err := moveLineTuple(ctx, tx, tree, line); err != nil {
+		return err
+	}
+	return anchorMovePolicy(ctx, tx, tree, line)
+}
+
+// moveLineTuple holds a moved line of a role other than its record's to the
+// model and effort a move re-pins that role to on the line's enrollment: the
+// role's lineup line's, or for the specifier of a task whose triage record
+// escalated, the escalated line the lineup names for that enrollment. It is
+// re-read from the lineup at every admission, so a lineup edit refuses a
+// line written before it.
+func moveLineTuple(ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, line domain.TaskLine) error {
+	lineup, err := tree.ResolveLineup()
+	if err != nil {
+		return err
+	}
+	enrollment := string(line.Selection.EnrollmentID)
+	runs := func(lineupLine domain.LineupSelection) bool {
+		return lineupLine.Names.Model == line.Selection.ModelID && lineupLine.Names.Effort == line.Selection.Effort
+	}
+	if standard, ok := lineup.Line(line.Role); ok && runs(standard) {
+		return nil
+	}
+	if counterpart, ok := lineup.EscalatedCounterpart(line.Role, enrollment); ok && runs(counterpart) {
+		escalated, err := taskEscalated(ctx, tx, line.TaskID)
 		if err != nil {
 			return err
 		}
-		if !runs {
-			return errors.New("its record moved the role to another agent")
+		if escalated && line.Role == domain.RoleSpecifier {
+			return nil
 		}
 	}
-	return anchorLinePolicy(ctx, tx, tree, line)
+	return errors.New("it selects other than its role's lineup model and effort on its record's enrollment")
+}
+
+// anchorMovePolicy holds a move line under a v2 record to the policy
+// revision it cites, as anchorLinePolicy holds a router line: the revision
+// exists and was set no later than the line, it orders the line's
+// enrollment for its role (orderedEnrollments), the line was chosen at the
+// policy-order tier a move writes, and any agent the line passed over is in
+// its orders unless the task escalated (that one is history and selects
+// nothing). An escalated specifier needs no exception: a move re-pins it on
+// the record's enrollment, which the revision orders for it.
+func anchorMovePolicy(ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, line domain.TaskLine) error {
+	revision := line.Provenance.PolicyRevision
+	policy, err := routingPolicyRevision(ctx, tx, revision)
+	if err != nil {
+		return err
+	}
+	if policy.SetAt.After(line.SetAt) {
+		return fmt.Errorf("routing policy revision %d was set after the line", revision)
+	}
+	if !slices.Contains(orderedEnrollments(tree, policy, line.Role), line.Selection.EnrollmentID) {
+		return fmt.Errorf("routing policy revision %d does not order the line's enrollment for its role", revision)
+	}
+	if line.Provenance.Tier != domain.TaskLineSelectionPolicyOrder {
+		return fmt.Errorf("a move routes at the %s tier", domain.TaskLineSelectionPolicyOrder)
+	}
+	passedOver := line.Provenance.PassedOver
+	if passedOver == nil || slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
+		return slices.Contains(role.Agents, passedOver.Agent)
+	}) {
+		return nil
+	}
+	escalated, err := taskEscalated(ctx, tx, line.TaskID)
+	if err != nil {
+		return err
+	}
+	if !escalated {
+		return fmt.Errorf("routing policy revision %d orders no agent the line passed over", revision)
+	}
+	return nil
 }
 
 // anchorLinePolicy holds a line that carries a provenance to the policy

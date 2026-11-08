@@ -7,7 +7,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -25,10 +24,12 @@ import (
 // rule against current state before they write.
 
 // AcceptAlternateAgentRetryTx records the operator's alternate-agent choice
-// on an execution-failure card, in the decision's transaction: the agent the
-// command names must be one the card offers, and it must still qualify now
-// under the offer's pool and rule (requalifyAlternate). Signet validates the
-// command against the card before it calls this.
+// on an execution-failure card, in the decision's transaction: the command's
+// message names the choice (domain.ParseAlternateAgentChoice), whose
+// enrollment must be one the card offers and still qualify now under the
+// offer's pool and rule (requalifyAlternate), and whose model and effort the
+// enrollment must serve (chosenSelection). Signet validates the command
+// against the card before it calls this.
 func (s AgentSelection) AcceptAlternateAgentRetryTx(
 	ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
 ) (domain.AlternateAgentRetry, error) {
@@ -36,25 +37,30 @@ func (s AgentSelection) AcceptAlternateAgentRetryTx(
 	if failure == nil || item.Subject.RunID == nil {
 		return domain.AlternateAgentRetry{}, signet.ErrInvalidAlternateAgentDecisionPayload
 	}
-	i := slices.IndexFunc(item.AlternateAgents, func(offer domain.AlternateAgentOffer) bool {
-		return offer.Agent == command.Message
-	})
-	if i < 0 {
+	choice, err := domain.ParseAlternateAgentChoice(command.Message)
+	if err != nil {
+		return domain.AlternateAgentRetry{}, fmt.Errorf("%w: %w", signet.ErrInvalidAlternateAgentDecisionPayload, err)
+	}
+	offer, ok := domain.OfferedEnrollment(item.AlternateAgents, choice.EnrollmentID)
+	if !ok {
 		return domain.AlternateAgentRetry{}, signet.ErrAlternateAgentNotOffered
 	}
-	offer := item.AlternateAgents[i]
 	run, err := tx.GetRun(ctx, *item.Subject.RunID)
 	if err != nil {
 		return domain.AlternateAgentRetry{}, err
 	}
 	if err := s.requalifyAlternate(ctx, &tx.ReadTx, alternateAgentFailure{
 		taskID: run.TaskID, role: domain.RoleImplementer, cause: failure.Cause, invocationID: failure.InvocationID,
-	}, offer.Agent, offer.Pool, offer.Qualification, now); err != nil {
+	}, offer, now); err != nil {
+		return domain.AlternateAgentRetry{}, err
+	}
+	selection, err := s.chosenSelection(ctx, &tx.ReadTx, domain.RoleImplementer, choice)
+	if err != nil {
 		return domain.AlternateAgentRetry{}, err
 	}
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: run.TaskID, Role: domain.RoleImplementer, FailedInvocationID: failure.InvocationID,
-		ItemID: item.ID, CommandID: command.CommandID, Agent: offer.Agent, Pool: offer.Pool,
+		ItemID: item.ID, CommandID: command.CommandID, Selection: &selection, Pool: offer.Pool,
 		Qualification: offer.Qualification, RecordedAt: now,
 	})
 	if err != nil {
@@ -153,14 +159,13 @@ func (e *Engine) reconcileAlternateAgentRetry(ctx context.Context, candidate dom
 }
 
 // MoveParkedTaskTx moves a task parked on its implementer's exhausted quota
-// window to another agent, in the command's transaction. The agent must be
-// one the park offers now (parkedTaskOffers), which re-derives its rule. The
-// move records the choice, then re-pins the task's lines to the chosen pool
-// as the router would: the implementer to the chosen agent, and each other
-// role the policy orders an agent on that pool for, unless an operator set
-// that role's line. A role the policy can't pin on the pool keeps its line.
-// It clears the parked attempt's hold row; the park's gate reads the moved
-// line, not the row, to let the attempt start.
+// window to another enrollment, in the command's transaction. The request's
+// selection must be on an enrollment the park offers now (parkedTaskOffers),
+// which re-derives its rule, with a model and effort that enrollment serves
+// (chosenSelection). The move records the choice, then re-pins the task's
+// lines to the chosen enrollment as the router would (moveLines). It clears
+// the parked attempt's hold row; the park's gate reads the moved line, not
+// the row, to let the attempt start.
 //
 // The lines carry router-shaped provenance under the policy in effect, so
 // requireRoutedPoolOpen holds them on the new pool's windows like a routed
@@ -170,6 +175,9 @@ func (e *Engine) reconcileAlternateAgentRetry(ctx context.Context, candidate dom
 func (s AgentSelection) MoveParkedTaskTx(
 	ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 ) (domain.ParkedTaskMoveReceipt, error) {
+	if request.Selection == nil {
+		return domain.ParkedTaskMoveReceipt{}, signet.ErrInvalidOperatorCommandPayload
+	}
 	parked, refused, found, err := parkedRun(ctx, &tx.ReadTx, request.TaskID)
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
@@ -181,11 +189,14 @@ func (s AgentSelection) MoveParkedTaskTx(
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
-	i := slices.IndexFunc(offers, func(offer domain.AlternateAgentOffer) bool { return offer.Agent == request.Agent })
-	if i < 0 {
+	offer, ok := domain.OfferedEnrollment(offers, request.Selection.EnrollmentID)
+	if !ok {
 		return domain.ParkedTaskMoveReceipt{}, signet.ErrAlternateAgentNotQualified
 	}
-	offer := offers[i]
+	selection, err := s.chosenSelection(ctx, &tx.ReadTx, domain.RoleImplementer, domain.AlternateAgentChoice(*request.Selection))
+	if err != nil {
+		return domain.ParkedTaskMoveReceipt{}, err
+	}
 	policy, found, err := policyInEffect(ctx, &tx.ReadTx, now)
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
@@ -196,7 +207,7 @@ func (s AgentSelection) MoveParkedTaskTx(
 	}
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: request.TaskID, Role: domain.RoleImplementer, FailedInvocationID: refused,
-		CommandID: request.CommandID, Agent: offer.Agent, Pool: offer.Pool,
+		CommandID: request.CommandID, Selection: &selection, Pool: offer.Pool,
 		Qualification: offer.Qualification, RecordedAt: now,
 	})
 	if err != nil {
@@ -213,11 +224,7 @@ func (s AgentSelection) MoveParkedTaskTx(
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
-	moved, err := s.Tree.LineSelection(record.Role, record.Agent)
-	if err != nil {
-		return domain.ParkedTaskMoveReceipt{}, err
-	}
-	lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, moved, inputs)
+	lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, inputs)
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
@@ -229,11 +236,12 @@ func (s AgentSelection) MoveParkedTaskTx(
 
 // movedPastMark names the agent a move leaves and the mark it was parked on:
 // the first agent, in tree order, that ran the refused invocation
-// (failedAlternateFacts) and that the policy orders for some role, with the
+// (ranFailedBinding) and that the policy orders for some role, with the
 // parked run's hold's pool and mark. It is nil when the run holds no quota
 // window, when the tree no longer carries an agent that ran it, or when the
 // policy orders none of them for any role, since a line's anchor holds its
-// passed-over agent to the policy it cites (anchorLinePolicy).
+// passed-over agent to the policy it cites. The mark still names a tree
+// agent (TaskLinePassedOverMark.Agent); #2736 or #2599 moves it.
 func (s AgentSelection) movedPastMark(
 	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, runID domain.RunID,
 	refused domain.InvocationID,
@@ -242,37 +250,40 @@ func (s AgentSelection) movedPastMark(
 	if err != nil || !held || hold.QuotaWindow == nil {
 		return nil, err
 	}
-	failed, found, err := readFailedAlternateFacts(ctx, tx, s.Tree, refused)
+	binding, found, err := failedBinding(ctx, tx, refused)
 	if err != nil || !found {
 		return nil, err
 	}
-	index := slices.IndexFunc(failed.names, func(name string) bool {
-		return slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
-			return slices.Contains(role.Agents, name)
-		})
+	index := slices.IndexFunc(s.Tree.Agents, func(source domain.AgentSource) bool {
+		return ranFailedBinding(s.Tree, source, binding) &&
+			slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
+				return slices.Contains(role.Agents, source.Name)
+			})
 	})
 	if index < 0 {
 		return nil, nil
 	}
 	mark := hold.QuotaWindow
 	return &domain.TaskLinePassedOverMark{
-		Agent: failed.names[index], Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
+		Agent: s.Tree.Agents[index].Name, Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
 		MarkedAt: mark.SetAt.UTC(), ResetsAt: utcPtr(mark.ResetsAt),
 	}, nil
 }
 
-// moveLines derives a move's lines: the record's role to its agent, then
-// routerLinesForPool for every other role the policy orders, skipping a role
-// whose newest line an operator set (or cleared). The provenance cites the
-// policy in effect at the policy-order tier on the record's pool, and names
-// passedOver, the agent the move left (movedPastMark), as the router names
-// the agent it passed over.
+// moveLines derives a move's lines: the record's role to the record's
+// selection, then, in the policy's role order, each other role the policy
+// orders the record's enrollment for (orderedEnrollments) to the role's
+// lineup model and effort on that enrollment (plan §4, revision 106). It
+// skips a role whose newest line an operator set (or cleared), and a role
+// whose lineup tuple the enrollment does not serve (lineupServes), which
+// keeps its line. The provenance cites the policy in effect at the
+// policy-order tier on the record's pool, and names passedOver, the agent the
+// move left (movedPastMark), as the router names the agent it passed over.
 //
 // An escalated specifier (its task's triage record escalated and its newest
-// line is the triage line or one with a provenance) moves to the counterpart
-// of the first agent the policy orders for the specifier on the record's
-// pool (poolCounterpart), so the move keeps the tier; on a pool with no
-// counterpart it takes the pool's standard agent, as any other role does.
+// line is the triage line or one with a provenance) moves to the escalated
+// line the lineup names for the record's enrollment, or its standard line
+// when the lineup names none, so the move keeps the tier where it can.
 func (s AgentSelection) moveLines(
 	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, record domain.AlternateAgentRetry,
 	passedOver *domain.TaskLinePassedOverMark,
@@ -281,106 +292,80 @@ func (s AgentSelection) moveLines(
 	if err != nil {
 		return nil, err
 	}
-	skip := map[domain.RoleName]bool{record.Role: true}
-	for role, head := range heads {
-		if !head.Source.CarriesProvenance() {
-			skip[role] = true
-		}
-	}
-	candidates, err := s.routeCandidates(ctx, tx, policy)
+	choices := []domain.TaskLineChoice{{Role: record.Role, Selection: record.Selection}}
+	others, err := s.movedRoleLines(ctx, tx, policy, record, heads)
 	if err != nil {
 		return nil, err
 	}
-	pools := make(map[string]domain.UsagePoolID, len(candidates))
-	for name, candidate := range candidates {
-		pools[name] = candidate.pool
-	}
-	counterpart := ""
-	if head, ok := heads[domain.RoleSpecifier]; ok && record.Role != domain.RoleSpecifier &&
-		(head.Source == domain.TaskLineSourceTriage || head.Source.CarriesProvenance()) {
-		escalated, err := taskEscalated(ctx, tx, record.TaskID)
-		if err != nil {
-			return nil, err
-		}
-		if escalated {
-			if counterpart, err = s.poolCounterpart(ctx, tx, policy, record.Pool, pools); err != nil {
-				return nil, err
-			}
-			// With a counterpart the specifier's line is written below;
-			// without one it takes the pool's standard agent.
-			skip[domain.RoleSpecifier] = counterpart != ""
-		}
-	}
+	choices = append(choices, others...)
 	provenance := &domain.TaskLineProvenance{
 		PolicyRevision: policy.Revision, Tier: domain.TaskLineSelectionPolicyOrder, Pool: record.Pool,
 		RankedBy: []domain.TaskLineRankingReading{}, PassedOver: passedOver,
 	}
-	choices := []domain.TaskLineChoice{{Role: record.Role, Agent: record.Agent}}
-	if counterpart != "" {
-		choices = append(choices, domain.TaskLineChoice{Role: domain.RoleSpecifier, Agent: counterpart})
-	}
-	choices = append(choices, routerLinesForPool(policy, record.Pool, pools, skip)...)
 	inputs := make([]domain.TaskLineInput, 0, len(choices))
 	for _, choice := range choices {
-		selection, err := s.Tree.LineSelection(choice.Role, choice.Agent)
-		if err != nil {
-			return nil, err
-		}
 		inputs = append(inputs, domain.TaskLineInput{
-			TaskID: record.TaskID, Role: choice.Role, Selection: &selection,
+			TaskID: record.TaskID, Role: choice.Role, Selection: choice.Selection,
 			Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID), Provenance: provenance,
 		})
 	}
 	return inputs, nil
 }
 
-// escalatedAgent is the tree agent that runs the escalated line the lineup
-// names for the specifier agent name's enrollment, or false when the agent
-// does not resolve to a selection, its enrollment has no escalated line, or
-// no one agent runs that line's selection. The routing policy still names
-// agents (#2736), so the line maps back to one through the bridge.
-func escalatedAgent(tree agenttree.Tree, lineup domain.Lineup, name string) (string, bool) {
-	selection, err := tree.SelectionOfAgent(name)
-	if err != nil {
-		return "", false
-	}
-	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, string(selection.EnrollmentID))
-	if !ok {
-		return "", false
-	}
-	escalated, err := tree.AgentForSelection(domain.RoleSpecifier, counterpart.TaskLineSelection())
-	return escalated, err == nil
-}
-
-// poolCounterpart returns the escalated counterpart the lineup names for the
-// first agent of the policy's specifier order on pool (by pools, which holds
-// only resolvable agents) that has one resolving on the same pool, or empty
-// when none does. A lineup that does not resolve has none.
-func (s AgentSelection) poolCounterpart(
-	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, pool domain.UsagePoolID,
-	pools map[string]domain.UsagePoolID,
-) (string, error) {
+// movedRoleLines is moveLines' re-pin of the roles other than the record's.
+// A lineup that does not resolve re-pins none.
+func (s AgentSelection) movedRoleLines(
+	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, record domain.AlternateAgentRetry,
+	heads map[domain.RoleName]domain.TaskLine,
+) ([]domain.TaskLineChoice, error) {
 	lineup, err := s.Tree.ResolveLineup()
 	if err != nil {
-		return "", nil
+		return nil, nil
 	}
-	for _, name := range routingOrder(policy, domain.RoleSpecifier) {
-		if agentPool, ok := pools[name]; !ok || agentPool != pool {
+	enrollmentID := record.Selection.EnrollmentID
+	enrollment, err := tx.GetClientEnrollment(ctx, enrollmentID)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := readCatalog(ctx, tx, enrollmentID)
+	if err != nil {
+		return nil, err
+	}
+	escalated := false
+	if head, ok := heads[domain.RoleSpecifier]; ok && record.Role != domain.RoleSpecifier &&
+		(head.Source == domain.TaskLineSourceTriage || head.Source.CarriesProvenance()) {
+		if escalated, err = taskEscalated(ctx, tx, record.TaskID); err != nil {
+			return nil, err
+		}
+	}
+	var choices []domain.TaskLineChoice
+	for _, role := range policy.Roles {
+		head, held := heads[role.Role]
+		if role.Role == record.Role || held && !head.Source.CarriesProvenance() && head.Source != domain.TaskLineSourceTriage ||
+			!slices.Contains(orderedEnrollments(s.Tree, policy, role.Role), enrollmentID) {
 			continue
 		}
-		escalated, ok := escalatedAgent(s.Tree, lineup, name)
+		line, ok := lineup.Line(role.Role)
 		if !ok {
 			continue
 		}
-		candidate, ok, err := s.routeCandidate(ctx, tx, escalated)
+		if counterpart, ok := lineup.EscalatedCounterpart(role.Role, string(enrollmentID)); ok &&
+			role.Role == domain.RoleSpecifier && escalated {
+			line = counterpart
+		}
+		client, err := lineupClient(ctx, tx, line)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if ok && candidate.pool == pool {
-			return escalated, nil
+		if !lineupServes(enrollment, catalog, line, client) {
+			continue
 		}
+		selection := domain.TaskLineSelection{
+			EnrollmentID: enrollmentID, ModelID: line.Names.Model, Effort: line.Names.Effort,
+		}
+		choices = append(choices, domain.TaskLineChoice{Role: role.Role, Selection: &selection})
 	}
-	return "", nil
+	return choices, nil
 }
 
 // parkedRun returns the task's attempt that is parked on its implementer's

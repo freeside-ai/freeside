@@ -302,10 +302,16 @@ func (r RoutingPolicyChangeReceipt) Validate() error {
 
 // ParkedTaskMoveRequest is a move_parked_task command as accepted: the task
 // parked on an exhausted quota window and the agent it moves to.
+//
+// Agent is the tree agent name the wire carries until #2808, and Selection
+// the enrollment, model, and effort that name reduced to when the command was
+// accepted, which the move chose. A request recorded before #2735 holds no
+// selection: its record names the agent.
 type ParkedTaskMoveRequest struct {
 	CommandIdentity
-	TaskID TaskID `json:"task_id"`
-	Agent  string `json:"agent"`
+	TaskID    TaskID             `json:"task_id"`
+	Agent     string             `json:"agent"`
+	Selection *TaskLineSelection `json:"selection,omitempty"`
 }
 
 func (r ParkedTaskMoveRequest) validate() error {
@@ -318,7 +324,19 @@ func (r ParkedTaskMoveRequest) validate() error {
 	if !validAgentName(r.Agent) {
 		return fmt.Errorf("agent: %w", ErrInvalidAgentName)
 	}
+	if r.Selection != nil {
+		if err := r.Selection.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// Same reports whether two requests are one: a replay of a command must
+// carry the request its receipt records.
+func (r ParkedTaskMoveRequest) Same(other ParkedTaskMoveRequest) bool {
+	return r.CommandIdentity == other.CommandIdentity && r.TaskID == other.TaskID && r.Agent == other.Agent &&
+		(r.Selection == nil) == (other.Selection == nil) && (r.Selection == nil || *r.Selection == *other.Selection)
 }
 
 // ParkedTaskMoveReceipt records a move: the card record it wrote and the
@@ -337,11 +355,17 @@ func (r ParkedTaskMoveReceipt) Validate() error {
 	if err := r.Retry.Validate(); err != nil {
 		return fmt.Errorf("parked task move receipt %q: %w", r.CommandID, err)
 	}
-	if !r.Retry.ParkedMove() || r.Retry.CommandID != r.CommandID || r.Retry.TaskID != r.TaskID ||
-		r.Retry.Agent != r.Agent {
+	// A v2 record holds the selection the request chose, a v1 record the
+	// agent it named.
+	chose := r.Retry.Agent == r.Agent && r.Selection == nil
+	if r.Retry.Selection != nil {
+		chose = r.Selection != nil && *r.Selection == *r.Retry.Selection
+	}
+	if !r.Retry.ParkedMove() || r.Retry.CommandID != r.CommandID || r.Retry.TaskID != r.TaskID || !chose {
 		return fmt.Errorf("parked task move receipt %q retry: %w", r.CommandID, ErrParentKeyMismatch)
 	}
-	// The parked role's line is always among them: it names the chosen
+	// The parked role's line is always among them: under a v2 record it
+	// holds the record's selection; under a v1 record it names the chosen
 	// agent, or on a v2 line the selection the tree translated it to, which
 	// admission holds to the record (anchorAlternateAgentMoveLine).
 	moved := false
@@ -353,11 +377,19 @@ func (r ParkedTaskMoveReceipt) Validate() error {
 			line.SetBy != string(r.Retry.ID) {
 			return fmt.Errorf("parked task move receipt %q line %s: %w", r.CommandID, line.ID, ErrParentKeyMismatch)
 		}
-		moved = moved || line.Role == r.Retry.Role && (line.Encoding == TaskLineEncodingV2 || line.Agent == r.Agent)
+		moved = moved || line.Role == r.Retry.Role && r.movesTo(line)
 	}
 	if !moved {
 		return fmt.Errorf("parked task move receipt %q moves no %s line: %w",
 			r.CommandID, r.Retry.Role, ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// movesTo reports whether line runs what the receipt's record chose.
+func (r ParkedTaskMoveReceipt) movesTo(line TaskLine) bool {
+	if r.Retry.Selection != nil {
+		return line.Selection != nil && *line.Selection == *r.Retry.Selection
+	}
+	return line.Encoding == TaskLineEncodingV2 || line.Agent == r.Agent
 }

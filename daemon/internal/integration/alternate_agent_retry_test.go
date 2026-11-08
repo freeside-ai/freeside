@@ -20,8 +20,9 @@ import (
 )
 
 // The issue-#869 scenario: an implementation fails on its agent's expired
-// credential, the engine's failure card offers a second agent on its own
-// identity, the operator picks it, and the retry attempt runs that agent. The
+// credential, the engine's failure card offers a second enrollment on its
+// own identity, which the wire still names by its tree agent (#2735), the
+// operator picks it, and the retry attempt runs that agent. The
 // proof is the stored admission of the retry under the second agent's
 // enrollment, and an attempt that cites any record but the operator's is
 // refused where it is written.
@@ -166,6 +167,10 @@ func openAlternateAgentFixture(
 		})
 	main.seed(t, f.store)
 	second.seed(t, f.store)
+	// The card is read as the wire carries it, which names offers by tree
+	// agent until #2808 (#2735), so the read service translates through the
+	// tree the engine admits by.
+	f.signet = signet.NewService(f.store, signet.WithBlobStore(f.blobs), signet.WithAgentTree(treeOf(selection)))
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		adapter, err := agentbaseline.ClaudeWardAdapter()
 		if err != nil {
@@ -196,6 +201,11 @@ func openAlternateAgentFixture(
 		t.Fatalf("seed conformance and routing policy: %v", err)
 	}
 	return f, selection
+}
+
+// treeOf is the agent tree signet translates the wire's agent names through.
+func treeOf(selection engine.AgentSelection) func() *agenttree.Tree {
+	return func() *agenttree.Tree { return &selection.Tree }
 }
 
 // TestAlternateAgentRetryAdmitsTheChosenAgent is the acceptance proof: the
@@ -232,7 +242,7 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 
 	operator := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return admittedAt.Add(time.Minute) }),
-		signet.WithAlternateAgentRetrier(selection.AcceptAlternateAgentRetryTx))
+		signet.WithAlternateAgentRetrier(selection.AcceptAlternateAgentRetryTx), signet.WithAgentTree(treeOf(selection)))
 	agent := alternateRetryAgent
 	if _, err := operator.Submit(ctx, signet.ClientCommand{
 		CommandID: alternateRetryCommandID, DeviceID: deviceA, ExpectedEntityVersion: card.EntityVersion,
@@ -251,7 +261,11 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read the operator's record: %v", err)
 	}
-	if record.Agent != alternateRetryAgent || record.ItemID != card.Item.ID ||
+	chosen, err := selection.Tree.SelectionOfAgent(alternateRetryAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Selection == nil || *record.Selection != chosen || record.ItemID != card.Item.ID ||
 		record.FailedInvocationID != failure.invocation || record.Pool != second.identity.EffectiveUsagePool() {
 		t.Fatalf("record = %+v", record)
 	}
@@ -469,7 +483,7 @@ func TestParkedTaskMoveRefusesAStoppedTask(t *testing.T) {
 func parkedTaskMover(f *workflowFixture, selection engine.AgentSelection) *signet.Service {
 	return signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return time.Now().UTC() }),
-		signet.WithParkedTaskMover(selection.MoveParkedTaskTx))
+		signet.WithParkedTaskMover(selection.MoveParkedTaskTx), signet.WithAgentTree(treeOf(selection)))
 }
 
 func moveParkedTaskCommand(commandID string, taskID domain.TaskID) signet.ClientCommand {
@@ -512,8 +526,9 @@ func driveParkedImplementer(
 		if err != nil {
 			return err
 		}
+		// The hold stores the enrollment; the wire names it by agent.
 		want := []domain.AlternateAgentOffer{{
-			Agent: alternateRetryAgent, Pool: second.identity.EffectiveUsagePool(),
+			Enrollment: second.enrollment.ID, Pool: second.identity.EffectiveUsagePool(),
 			Harness: domain.HarnessClientClaudeCode, Model: alternateRetryModel,
 			Qualification: domain.AlternateAgentDifferentPool,
 		}}
@@ -524,6 +539,41 @@ func driveParkedImplementer(
 		return nil
 	}); err != nil {
 		t.Fatalf("read the parked run: %v", err)
+	}
+	// Both timelines name the hold's offer by its tree agent, the shape the
+	// API's AlternateAgentOffer still requires.
+	wire := []domain.AlternateAgentOffer{{
+		Agent: alternateRetryAgent, Pool: second.identity.EffectiveUsagePool(),
+		Harness: domain.HarnessClientClaudeCode, Model: alternateRetryModel,
+		Qualification: domain.AlternateAgentDifferentPool,
+	}}
+	runTimeline, err := f.signet.GetRunTimeline(ctx, failure.retryRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runTimeline.Hold == nil || runTimeline.Hold.QuotaWindow == nil ||
+		!reflect.DeepEqual(runTimeline.Hold.QuotaWindow.AlternateAgents, wire) {
+		t.Fatalf("run timeline hold = %+v, want offers %+v", runTimeline.Hold, wire)
+	}
+	taskTimeline, err := f.signet.GetTaskTimeline(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held int
+	for _, section := range taskTimeline.Sections {
+		for _, run := range section.Runs {
+			if run.Hold == nil || run.Hold.QuotaWindow == nil {
+				continue
+			}
+			held++
+			if !reflect.DeepEqual(run.Hold.QuotaWindow.AlternateAgents, wire) {
+				t.Fatalf("task timeline run %s hold offers = %+v, want %+v",
+					run.RunID, run.Hold.QuotaWindow.AlternateAgents, wire)
+			}
+		}
+	}
+	if held != 1 {
+		t.Fatalf("task timeline shows %d quota holds, want 1", held)
 	}
 	return failure, taskID
 }

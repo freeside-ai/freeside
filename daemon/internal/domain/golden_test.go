@@ -393,15 +393,16 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A quota failure whose card offers two agents on other pools.
+	// A quota failure whose card offers two enrollments on other pools, at
+	// the role's lineup model (#2735).
 	alternateAgentOffers := []domain.AlternateAgentOffer{
 		{
-			Agent: "claude-b", Pool: "claude-max-b", Harness: domain.HarnessClientClaudeCode,
+			Enrollment: "claude-max-b/claude_code", Pool: "claude-max-b", Harness: domain.HarnessClientClaudeCode,
 			Model: "claude-opus-4-1", Qualification: domain.AlternateAgentDifferentPool,
 		},
 		{
-			Agent: "codex-a", Pool: "chatgpt-pro-a", Harness: domain.HarnessClientCodexCLI,
-			Model: "gpt-5-codex", Qualification: domain.AlternateAgentDifferentPool,
+			Enrollment: "claude-max-c/claude_code", Pool: "claude-max-c", Harness: domain.HarnessClientClaudeCode,
+			Model: "claude-opus-4-1", Qualification: domain.AlternateAgentDifferentPool,
 		},
 	}
 	alternateAgentItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -423,10 +424,13 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	retrySelection := &domain.TaskLineSelection{
+		EnrollmentID: "claude-max-b/claude_code", ModelID: "claude-sonnet-4-5", Effort: "medium",
+	}
 	alternateAgentRetry, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-implementation-1",
 		ItemID: "item-execution-failure-quota", CommandID: "cmd-alternate-1",
-		Agent: "claude-b", Pool: "claude-max-b", Qualification: domain.AlternateAgentDifferentPool,
+		Selection: retrySelection, Pool: "claude-max-b", Qualification: domain.AlternateAgentDifferentPool,
 		RecordedAt: ts,
 	})
 	if err != nil {
@@ -434,12 +438,27 @@ func TestGolden(t *testing.T) {
 	}
 	parkedMoveRetry, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-implementation-1",
-		CommandID: "cmd-move-1", Agent: "claude-b", Pool: "claude-max-b",
+		CommandID: "cmd-move-1", Selection: retrySelection, Pool: "claude-max-b",
 		Qualification: domain.AlternateAgentDifferentPool, RecordedAt: ts,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each record above as stored before #2735, naming its tree agent: no
+	// writer builds one now, so the fixture computes the id itself. Their
+	// goldens keep the v1 bytes and ids, which still decode and admit.
+	retryAsV1 := func(record domain.AlternateAgentRetry) domain.AlternateAgentRetry {
+		t.Helper()
+		record.Selection, record.Agent = nil, "claude-b"
+		if record.ID, err = record.ComputeID(); err != nil {
+			t.Fatal(err)
+		}
+		if err := record.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	v1AlternateAgentRetry, v1ParkedMoveRetry := retryAsV1(alternateAgentRetry), retryAsV1(parkedMoveRetry)
 
 	interpretationFailureItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-interpretation-failure", ProjectID: "proj-1", Subject: subject,
@@ -1419,10 +1438,10 @@ func TestGolden(t *testing.T) {
 	}
 	// The operator moved the parked task off claude-a's exhausted pool: the
 	// implementer's router line gains a second version on claude-b's pool,
-	// citing the move's record.
+	// citing the move's record, here one stored before #2735.
 	alternateAgentMoveTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Selection: selectionB,
-		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(parkedMoveRetry.ID),
+		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(v1ParkedMoveRetry.ID),
 		Provenance: &domain.TaskLineProvenance{
 			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
 			RankedBy: []domain.TaskLineRankingReading{},
@@ -2442,6 +2461,8 @@ func TestGolden(t *testing.T) {
 		{"attention_item_execution_failure_alternate_agents", alternateAgentItem},
 		{"alternate_agent_retry", alternateAgentRetry},
 		{"alternate_agent_retry_parked_move", parkedMoveRetry},
+		{"alternate_agent_retry_v1", v1AlternateAgentRetry},
+		{"alternate_agent_retry_parked_move_v1", v1ParkedMoveRetry},
 		{"attention_item_interpretation_failure", interpretationFailureItem},
 		{"attention_item_publish_blocked", publishBlockedItem},
 		{"attention_item_publish_blocked_pr_reference", publishBlockedPRReferenceItem},

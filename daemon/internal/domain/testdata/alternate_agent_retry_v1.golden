@@ -1,0 +1,12 @@
+{
+  "id": "sha256:db103fb2d890ee43a041077f1b73930799b11b487d332b347f607fe512bbb099",
+  "task_id": "task-1",
+  "role": "implementer",
+  "failed_invocation_id": "inv-implementation-1",
+  "item_id": "item-execution-failure-quota",
+  "command_id": "cmd-alternate-1",
+  "agent": "claude-b",
+  "pool": "claude-max-b",
+  "qualification": "different_pool",
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

@@ -60,28 +60,22 @@ func (f *agentAdmissionFixture) offers(t *testing.T, failure alternateAgentFailu
 	return offers
 }
 
-// TestAlternateAgentOffersEscapeTheCause: under a policy that orders a second
-// agent on another pool for the implementer, a quota failure offers it under
-// different_pool and a credential failure under valid_generation. A capacity
-// failure offers nothing, since both agents share one route, and neither does
-// a cause no rule covers. A parked task's quota refusal offers the same
-// agent. Without a policy, the only candidate is the lineup agent, which is
-// the one that failed; a held pool is not offered.
+// TestAlternateAgentOffersEscapeTheCause: a card's offers draw on every
+// enrollment the store holds (#2735), so with no policy a quota failure
+// offers the second enrollment under different_pool and a credential failure
+// under valid_generation, at the role's lineup model. A capacity failure
+// offers nothing, since both enrollments share one route, and neither does a
+// cause no rule covers. A parked task's offers draw only on the enrollments
+// the policy in effect orders for the role. A held pool is not offered.
 func TestAlternateAgentOffersEscapeTheCause(t *testing.T) {
 	t.Parallel()
 	f := newAgentAdmissionFixture(t)
-	f.addSecondAgent(t)
+	_, second := f.addSecondAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseQuota)
-	if offers := f.offers(t, failure); offers != nil {
-		t.Fatalf("offers without a policy = %+v, want none", offers)
-	}
-
-	f.setRoutingPolicy(t, agentTestAt, order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
-	model := f.routeModel(t, agentTestSecondAgent)
 	offer := func(rule domain.AlternateAgentQualification) []domain.AlternateAgentOffer {
 		return []domain.AlternateAgentOffer{{
-			Agent: agentTestSecondAgent, Pool: routerSecondPool, Harness: domain.HarnessClientClaudeCode,
-			Model: model, Qualification: rule,
+			Enrollment: second.ID, Pool: routerSecondPool, Harness: domain.HarnessClientClaudeCode,
+			Model: "claude-implementer-test", Qualification: rule,
 		}}
 	}
 	for cause, want := range map[domain.FailureCause][]domain.AlternateAgentOffer{
@@ -96,34 +90,84 @@ func TestAlternateAgentOffersEscapeTheCause(t *testing.T) {
 		}
 	}
 
-	// A task parked on the same refusal offers the same agent on its hold.
+	// A parked task offers only what the policy in effect orders.
 	parked := parkedTaskFailure(failure.taskID, failure.invocationID)
+	if got := f.offers(t, parked); got != nil {
+		t.Errorf("parked offers with no policy = %+v, want none", got)
+	}
+	f.setRoutingPolicy(t, agentTestAt, order(domain.RoleImplementer, agentTestWriterAgent))
+	if got := f.offers(t, parked); got != nil {
+		t.Errorf("parked offers off the policy = %+v, want none", got)
+	}
+	f.setRoutingPolicy(t, agentTestAt.Add(time.Second),
+		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
 	if got, want := f.offers(t, parked), offer(domain.AlternateAgentDifferentPool); !reflect.DeepEqual(got, want) {
 		t.Errorf("parked offers = %+v, want %+v", got, want)
 	}
 
 	resetsAt := agentTestAt.Add(time.Hour)
-	f.markPool(t, routerSecondPool, model, &resetsAt, agentTestAt)
+	f.markPool(t, routerSecondPool, "claude-implementer-test", &resetsAt, agentTestAt)
 	failure.cause = domain.FailureCauseQuota
 	if offers := f.offers(t, failure); offers != nil {
 		t.Fatalf("offers with the second pool held = %+v, want none", offers)
 	}
 }
 
-// TestCardAdmissionRegatesTheChosenAgent: admission holds a card's agent to
-// the record against the failed invocation's own admission and outcome. The
-// failed agent, another pool than the one chosen, and a rule the cause does
-// not name are each refused.
+// TestAlternateOffersNeedTheLineupServed: an enrollment is offered only when
+// it serves the role's lineup model and effort. A recorded catalog decides
+// that; with none, the enrollment must bind the lineup enrollment's client,
+// since the bridge would take any model as named.
+func TestAlternateOffersNeedTheLineupServed(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		catalog func(f *agentAdmissionFixture, enrollment domain.ClientEnrollmentID)
+		offered bool
+	}{
+		"no catalog, the lineup's client": {offered: true},
+		"a catalog serving the lineup": {
+			catalog: func(f *agentAdmissionFixture, enrollment domain.ClientEnrollmentID) {
+				f.recordCatalog(t, enrollment, "claude-implementer-test", "low", "high")
+			},
+			offered: true,
+		},
+		"a catalog without the model": {
+			catalog: func(f *agentAdmissionFixture, enrollment domain.ClientEnrollmentID) {
+				f.recordCatalog(t, enrollment, "claude-other-test", "high")
+			},
+		},
+		"a catalog without the effort": {
+			catalog: func(f *agentAdmissionFixture, enrollment domain.ClientEnrollmentID) {
+				f.recordCatalog(t, enrollment, "claude-implementer-test", "low")
+			},
+		},
+	} {
+		f := newAgentAdmissionFixture(t)
+		_, second := f.addSecondAgent(t)
+		failure := f.failImplementer(t, domain.FailureCauseQuota)
+		if tc.catalog != nil {
+			tc.catalog(f, second.ID)
+		}
+		if got := f.offers(t, failure); (len(got) == 1) != tc.offered {
+			t.Errorf("%s: offers = %+v, want offered %t", name, got, tc.offered)
+		}
+	}
+}
+
+// TestCardAdmissionRegatesTheChosenAgent: admission holds a card's selection
+// to the record against the failed invocation's own admission and outcome.
+// The failed credential, another pool than the one chosen, and a rule the
+// cause does not name are each refused. A v1 record, which names a tree
+// agent, re-gates the same way.
 func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseQuota)
-	record := func(pool domain.UsagePoolID, rule domain.AlternateAgentQualification) domain.AlternateAgentRetry {
+	record := func(agent string, pool domain.UsagePoolID, rule domain.AlternateAgentQualification) domain.AlternateAgentRetry {
 		record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 			TaskID: failure.taskID, Role: domain.RoleImplementer, FailedInvocationID: failure.invocationID,
-			ItemID: "item-card", CommandID: "cmd-card", Agent: agentTestSecondAgent, Pool: pool,
+			ItemID: "item-card", CommandID: "cmd-card", Selection: f.lineSelection(t, agent), Pool: pool,
 			Qualification: rule, RecordedAt: agentTestAt.Add(2 * time.Minute),
 		})
 		if err != nil {
@@ -133,29 +177,41 @@ func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	}
 	regate := func(record domain.AlternateAgentRetry, agent string) error {
 		return f.store.Read(ctx, func(tx *store.ReadTx) error {
-			resolved := cardRoleAgent(t, ctx, tx, f.selection.Tree, agent)
-			return regateCardAgent(ctx, tx, f.selection.Tree, record, resolved)
+			return regateCardAgent(ctx, tx, record, cardRoleAgent(t, ctx, tx, f.selection.Tree, agent))
 		})
 	}
-	chosen := record(routerSecondPool, domain.AlternateAgentDifferentPool)
+	chosen := record(agentTestSecondAgent, routerSecondPool, domain.AlternateAgentDifferentPool)
 	if err := regate(chosen, agentTestSecondAgent); err != nil {
-		t.Fatalf("the chosen agent was refused: %v", err)
+		t.Fatalf("the chosen selection was refused: %v", err)
 	}
-	// Admission resolves the agent the record names, so a record that chose
-	// the failed agent resolves to it.
-	failedAgent := chosen
-	failedAgent.Agent = agentTestWriterAgent
+	v1 := chosen
+	v1.Selection, v1.Agent = nil, agentTestSecondAgent
+	var err error
+	if v1.ID, err = v1.ComputeID(); err != nil {
+		t.Fatal(err)
+	}
+	if err := v1.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := regate(v1, agentTestSecondAgent); err != nil {
+		t.Fatalf("a v1 record's agent was refused: %v", err)
+	}
 	for name, tc := range map[string]struct {
 		record domain.AlternateAgentRetry
 		agent  string
 		want   string
 	}{
-		"the failed agent": {failedAgent, agentTestWriterAgent, "chose the agent that failed"},
+		"the failed credential": {
+			record(agentTestWriterAgent, routerSecondPool, domain.AlternateAgentDifferentPool),
+			agentTestWriterAgent, "chose the credential that failed",
+		},
 		"another pool": {
-			record(routerMainPool, domain.AlternateAgentDifferentPool), agentTestSecondAgent, "another pool",
+			record(agentTestSecondAgent, routerMainPool, domain.AlternateAgentDifferentPool),
+			agentTestSecondAgent, "another pool",
 		},
 		"a rule the cause lacks": {
-			record(routerSecondPool, domain.AlternateAgentValidGeneration), agentTestSecondAgent, "no longer escapes",
+			record(agentTestSecondAgent, routerSecondPool, domain.AlternateAgentValidGeneration),
+			agentTestSecondAgent, "no longer escapes",
 		},
 	} {
 		if err := regate(tc.record, tc.agent); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -165,20 +221,21 @@ func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 }
 
 // moveTask records a parked move of the fixture run's task to the second
-// agent on its pool under policy, naming passedOver as the agent it left,
-// with the lines it sets, in one transaction, and the command's receipt
-// unless withoutReceipt. It returns the moved implementer line.
+// agent's selection on its pool under policy, naming passedOver as the agent
+// it left, with the lines moveLines sets plus extra, in one transaction, and
+// the command's receipt unless withoutReceipt. It returns the lines by role.
 func (f *agentAdmissionFixture) moveTask(
 	t *testing.T, policy domain.RoutingPolicy, passedOver *domain.TaskLinePassedOverMark, withoutReceipt bool,
-) domain.TaskLine {
+	extra ...domain.TaskLineInput,
+) map[domain.RoleName]domain.TaskLine {
 	t.Helper()
 	ctx := context.Background()
 	taskID := f.task(t, f.run.ID).ID
-	var moved domain.TaskLine
+	moved := map[domain.RoleName]domain.TaskLine{}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 			TaskID: taskID, Role: domain.RoleImplementer, FailedInvocationID: "inv-refused",
-			CommandID: "cmd-move", Agent: agentTestSecondAgent, Pool: routerSecondPool,
+			CommandID: "cmd-move", Selection: f.lineSelection(t, agentTestSecondAgent), Pool: routerSecondPool,
 			Qualification: domain.AlternateAgentDifferentPool, RecordedAt: agentTestAt,
 		})
 		if err != nil {
@@ -191,18 +248,16 @@ func (f *agentAdmissionFixture) moveTask(
 		if err != nil {
 			return err
 		}
-		movedTo, err := f.selection.Tree.SelectionOfAgent(record.Agent)
-		if err != nil {
-			return err
+		for _, in := range extra {
+			in.TaskID, in.SetBy, in.Source = taskID, string(record.ID), domain.TaskLineSourceAlternateAgentMove
+			inputs = append(inputs, in)
 		}
-		lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, movedTo, inputs)
+		lines, err := tx.RecordAlternateAgentMoveLines(ctx, record, inputs)
 		if err != nil {
 			return err
 		}
 		for _, line := range lines {
-			if line.Role == domain.RoleImplementer {
-				moved = line
-			}
+			moved[line.Role] = line
 		}
 		if withoutReceipt {
 			return nil
@@ -210,7 +265,7 @@ func (f *agentAdmissionFixture) moveTask(
 		_, err = tx.RecordCommandReceipt(ctx, domain.CommandReceipt{ParkedTaskMove: &domain.ParkedTaskMoveReceipt{
 			ParkedTaskMoveRequest: domain.ParkedTaskMoveRequest{
 				CommandIdentity: domain.CommandIdentity{CommandID: "cmd-move", DeviceID: "device-1"},
-				TaskID:          taskID, Agent: agentTestSecondAgent,
+				TaskID:          taskID, Agent: agentTestSecondAgent, Selection: record.Selection,
 			},
 			Retry: record, Lines: lines,
 		}})
@@ -236,8 +291,8 @@ func (f *agentAdmissionFixture) movedOffPool(t *testing.T, refused domain.UsageP
 }
 
 // TestMovedLineAnchorsToItsCommand: a move's implementer line, with the
-// command receipt that records the move, admits the chosen agent under its
-// own enrollment and releases the park on the refused pool; its provenance
+// command receipt that records the move, admits the chosen selection under
+// its own enrollment and releases the park on the refused pool; its provenance
 // names the agent it left. The same line with no receipt is one no operator
 // moved: admission refuses it, and the park holds.
 func TestMovedLineAnchorsToItsCommand(t *testing.T) {
@@ -253,7 +308,7 @@ func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 		_, enrollment := f.addSecondAgent(t)
 		policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
 			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
-		line := f.moveTask(t, policy, left, withoutReceipt)
+		line := f.moveTask(t, policy, left, withoutReceipt)[domain.RoleImplementer]
 		if f.lineAgent(line) != agentTestSecondAgent || line.Source != domain.TaskLineSourceAlternateAgentMove ||
 			line.Provenance == nil || line.Provenance.Pool != routerSecondPool ||
 			line.Provenance.PolicyRevision != policy.Revision || !reflect.DeepEqual(line.Provenance.PassedOver, left) {
@@ -290,7 +345,7 @@ func TestMoveRefusesATaskThatIsNotParked(t *testing.T) {
 	err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		_, err := f.selection.MoveParkedTaskTx(ctx, tx, domain.ParkedTaskMoveRequest{
 			CommandIdentity: domain.CommandIdentity{CommandID: "cmd-move", DeviceID: "device-1"},
-			TaskID:          taskID, Agent: agentTestSecondAgent,
+			TaskID:          taskID, Agent: agentTestSecondAgent, Selection: f.lineSelection(t, agentTestSecondAgent),
 		}, agentTestAt)
 		return err
 	})
@@ -384,32 +439,26 @@ func (f *agentAdmissionFixture) addSiblingAgent(t *testing.T) {
 }
 
 // TestCredentialAlternateNeedsAnotherCredential: a credential failure offers
-// only an agent on another credential. A sibling on the failed agent's own
-// enrollment and generation would run the failed credential again, so it is
-// neither offered nor admitted from a card that names it.
+// only another credential. The failed enrollment at its failed generation
+// would run that credential again, so it is not offered, and a card whose
+// selection a sibling agent on it reduces to is not admitted.
 func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
-	f.addSecondAgent(t)
+	_, second := f.addSecondAgent(t)
 	f.addSiblingAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseCredentialRevoked)
 	f.setRoutingPolicy(t, agentTestAt,
 		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSiblingAgent, agentTestSecondAgent))
 	offers := f.offers(t, failure)
-	if names := func() []string {
-		var names []string
-		for _, offer := range offers {
-			names = append(names, offer.Agent)
-		}
-		return names
-	}(); !slices.Equal(names, []string{agentTestSecondAgent}) {
-		t.Fatalf("credential offers = %v, want only %s", names, agentTestSecondAgent)
+	if len(offers) != 1 || offers[0].Enrollment != second.ID {
+		t.Fatalf("credential offers = %+v, want only %s", offers, second.ID)
 	}
 
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: failure.taskID, Role: domain.RoleImplementer, FailedInvocationID: failure.invocationID,
-		ItemID: "item-card", CommandID: "cmd-card", Agent: agentTestSiblingAgent, Pool: routerMainPool,
+		ItemID: "item-card", CommandID: "cmd-card", Selection: f.lineSelection(t, agentTestSiblingAgent), Pool: routerMainPool,
 		Qualification: domain.AlternateAgentValidGeneration, RecordedAt: agentTestAt.Add(2 * time.Minute),
 	})
 	if err != nil {
@@ -417,9 +466,9 @@ func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
 	}
 	err = f.store.Read(ctx, func(tx *store.ReadTx) error {
 		sibling := cardRoleAgent(t, ctx, tx, f.selection.Tree, agentTestSiblingAgent)
-		return regateCardAgent(ctx, tx, f.selection.Tree, record, sibling)
+		return regateCardAgent(ctx, tx, record, sibling)
 	})
-	if err == nil || !strings.Contains(err.Error(), "no longer escapes") {
+	if err == nil || !strings.Contains(err.Error(), "chose the credential that failed") {
 		t.Fatalf("regate of the sibling = %v, want it refused", err)
 	}
 }
@@ -441,4 +490,102 @@ func cardRoleAgent(t *testing.T, ctx context.Context, tx *store.ReadTx, tree age
 		t.Fatal(err)
 	}
 	return agent
+}
+
+// TestMoveRepinsTheRolesThePolicyOrders: a move pins every other role the
+// policy orders the chosen enrollment for to that role's lineup model and
+// effort on it, skips a role the policy orders elsewhere, and skips a role
+// whose lineup tuple the enrollment's catalog does not serve.
+func TestMoveRepinsTheRolesThePolicyOrders(t *testing.T) {
+	t.Parallel()
+	f := newAgentAdmissionFixture(t)
+	_, second := f.addSecondAgent(t)
+	// The catalog serves the implementer's and remediator's model, not the
+	// specifier's.
+	f.recordCatalog(t, second.ID, "claude-implementer-test", "high")
+	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
+		order(domain.RoleSpecifier, agentTestSpecifierAgent, agentTestSecondAgent),
+		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
+		order(domain.RoleRemediator, agentTestSecondAgent),
+		order(domain.RoleReviewer, agentTestWriterAgent))
+	lines := f.moveTask(t, policy, nil, false)
+	want := domain.TaskLineSelection{EnrollmentID: second.ID, ModelID: "claude-implementer-test", Effort: "high"}
+	for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleRemediator} {
+		if line, ok := lines[role]; !ok || line.Selection == nil || *line.Selection != want {
+			t.Fatalf("%s line = %+v, want %+v", role, line, want)
+		}
+	}
+	if len(lines) != 2 {
+		t.Fatalf("moved lines = %+v, want only the implementer and remediator", lines)
+	}
+	if _, err := f.admitRole(t, domain.RoleRemediator); err != nil {
+		t.Fatalf("admit the re-pinned remediator: %v", err)
+	}
+}
+
+// TestMoveLineAnchorRefusesAnotherTuple: a moved line for another role than
+// the record's must hold that role's lineup model and effort on the record's
+// enrollment, so admission refuses one the store accepted with another model.
+func TestMoveLineAnchorRefusesAnotherTuple(t *testing.T) {
+	t.Parallel()
+	f := newAgentAdmissionFixture(t)
+	_, second := f.addSecondAgent(t)
+	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
+		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+	f.moveTask(t, policy, nil, false, domain.TaskLineInput{
+		Role:      domain.RoleRemediator,
+		Selection: &domain.TaskLineSelection{EnrollmentID: second.ID, ModelID: "claude-specifier-test", Effort: "high"},
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: policy.Revision, Tier: domain.TaskLineSelectionPolicyOrder, Pool: routerSecondPool,
+			RankedBy: []domain.TaskLineRankingReading{},
+		},
+	})
+	if _, err := f.admitRole(t, domain.RoleRemediator); err == nil ||
+		!strings.Contains(err.Error(), "lineup model and effort") {
+		t.Fatalf("admit a remediator moved to another model = %v, want its anchor refused", err)
+	}
+}
+
+// TestChosenSelectionFillsAndChecksTheChoice: a choice that omits its model
+// or effort takes the lineup's. With no catalog only the lineup's tuple is
+// accepted; with one, the catalog decides. A refusal names the field, never
+// the operator's text.
+func TestChosenSelectionFillsAndChecksTheChoice(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAgentAdmissionFixture(t)
+	_, second := f.addSecondAgent(t)
+	chosen := func(choice domain.AlternateAgentChoice) (domain.TaskLineSelection, error) {
+		var selection domain.TaskLineSelection
+		err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			selection, err = f.selection.chosenSelection(ctx, tx, domain.RoleImplementer, choice)
+			return err
+		})
+		return selection, err
+	}
+	lineup := domain.TaskLineSelection{EnrollmentID: second.ID, ModelID: "claude-implementer-test", Effort: "high"}
+	if got, err := chosen(domain.AlternateAgentChoice{EnrollmentID: second.ID}); err != nil || got != lineup {
+		t.Fatalf("an omitted model and effort = %+v, %v; want %+v", got, err, lineup)
+	}
+	refused := func(name string, choice domain.AlternateAgentChoice, field string) {
+		t.Helper()
+		_, err := chosen(choice)
+		if !errors.Is(err, signet.ErrAlternateAgentSelectionUnserved) || !strings.HasPrefix(err.Error(), field+":") ||
+			strings.Contains(err.Error(), "claude-other") || strings.Contains(err.Error(), "max") {
+			t.Fatalf("%s = %v, want a refusal naming %s alone", name, err, field)
+		}
+	}
+	refused("another model with no catalog",
+		domain.AlternateAgentChoice{EnrollmentID: second.ID, ModelID: "claude-other-test"}, "model_id")
+	refused("another effort with no catalog", domain.AlternateAgentChoice{EnrollmentID: second.ID, Effort: "max"}, "effort")
+
+	f.recordCatalog(t, second.ID, "claude-other-test", "low", "high")
+	other := domain.TaskLineSelection{EnrollmentID: second.ID, ModelID: "claude-other-test", Effort: "low"}
+	if got, err := chosen(domain.AlternateAgentChoice(other)); err != nil || got != other {
+		t.Fatalf("a served choice = %+v, %v; want %+v", got, err, other)
+	}
+	refused("the lineup model the catalog lacks", domain.AlternateAgentChoice{EnrollmentID: second.ID}, "model_id")
+	refused("an effort the catalog lacks",
+		domain.AlternateAgentChoice{EnrollmentID: second.ID, ModelID: "claude-other-test", Effort: "max"}, "effort")
 }

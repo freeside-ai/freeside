@@ -97,30 +97,29 @@ func scanAlternateAgentRetry(row scanner) (domain.AlternateAgentRetry, error) {
 // in the caller's transaction, and returns them. The record must already be
 // stored in this transaction and be a parked move; every input must be an
 // alternate_agent_move line of the record's task that cites it, and one must
-// set the record's role to moved, the selection its agent reduces to. The
-// store has no tree to translate the agent, so the caller does; admission
-// holds the line to the record's agent again (anchorAlternateAgentMoveLine).
+// set the record's role to the record's selection. Admission holds the line
+// to the record again (anchorAlternateAgentMoveLine).
 // Unlike a router line, a moved line supersedes the role's current version,
 // whatever set it.
 //
 // Like RecordTaskLineChange, this advances the task's own version, so sync
 // serves the new task_lines.
 func (tx *WriteTx) RecordAlternateAgentMoveLines(
-	ctx context.Context, record domain.AlternateAgentRetry, moved domain.TaskLineSelection, inputs []domain.TaskLineInput,
+	ctx context.Context, record domain.AlternateAgentRetry, inputs []domain.TaskLineInput,
 ) ([]domain.TaskLine, error) {
 	stored, err := tx.GetAlternateAgentRetry(ctx, record.ID)
 	if err != nil {
 		return nil, fmt.Errorf("record alternate agent move lines: %w", err)
 	}
-	if !reflect.DeepEqual(stored, record) || !record.ParkedMove() {
+	if !reflect.DeepEqual(stored, record) || !record.ParkedMove() || record.Selection == nil {
 		return nil, fmt.Errorf("record alternate agent move lines %s: not the stored parked move: %w",
 			record.ID, domain.ErrTaskLineInconsistent)
 	}
 	if !slices.ContainsFunc(inputs, func(in domain.TaskLineInput) bool {
-		return in.Role == record.Role && in.Selection != nil && *in.Selection == moved && !in.Cleared
+		return in.Role == record.Role && in.Selection != nil && *in.Selection == *record.Selection && !in.Cleared
 	}) {
-		return nil, fmt.Errorf("record alternate agent move lines %s: no line moves %s to %s: %w",
-			record.ID, record.Role, record.Agent, domain.ErrTaskLineInconsistent)
+		return nil, fmt.Errorf("record alternate agent move lines %s: no line moves %s to its selection: %w",
+			record.ID, record.Role, domain.ErrTaskLineInconsistent)
 	}
 	lines := make([]domain.TaskLine, 0, len(inputs))
 	for _, in := range inputs {

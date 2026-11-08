@@ -118,7 +118,8 @@ type DecisionPayload struct {
 	FindingRoutes            []FindingRouteChoice `json:",omitempty"`
 	CapabilityManifestDigest *domain.Digest
 	// AlternateAgent is the tree agent a retry_with_alternate_agent decision
-	// picks from the card's offers, and forbidden on every other action.
+	// picks from the card's offers, and forbidden on every other action. It
+	// is translated to the selection it reduces to (agentNames) until #2808.
 	AlternateAgent *string
 	// TaskLines are per-role agent choices for the task a task_proposal start
 	// names (plan §5.4). Nil means absent; a present, empty list is malformed.
@@ -182,7 +183,7 @@ type EffectProposalRevisionInput struct {
 	Resolves bool `json:"resolves"`
 }
 
-func decisionMessage(payload DecisionPayload) (string, error) {
+func decisionMessage(payload DecisionPayload, names agentNames) (string, error) {
 	if payload.Action != domain.ActionAdjudicateFindings && payload.FindingRoutes != nil {
 		return "", ErrInvalidReviewDisputeDecisionPayload
 	}
@@ -261,15 +262,16 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 		}
 		return string(*payload.CapabilityManifestDigest), nil
 	case domain.ActionRetryWithAlternateAgent:
-		// The agent is the durable message, as the manifest digest is for a
-		// capability retry, so a replay compares the same choice.
+		// The choice of the selection the agent reduces to is the durable
+		// message, as the manifest digest is for a capability retry, so a
+		// replay compares the same choice.
 		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
 			payload.SnoozeUntil != nil || payload.Message != "" || len(payload.Attachments) != 0 ||
 			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil ||
 			payload.AlternateAgent == nil || *payload.AlternateAgent == "" {
 			return "", ErrInvalidAlternateAgentDecisionPayload
 		}
-		return *payload.AlternateAgent, nil
+		return names.choiceMessage(*payload.AlternateAgent)
 	default:
 		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
 			payload.SnoozeUntil != nil ||
@@ -380,12 +382,45 @@ func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 			*domain.RoutingPolicyChangeReceipt
 		}{kind, receipt.RoutingPolicyChange}, nil
 	case domain.CommandKindMoveParkedTask:
+		move := receipt.ParkedTaskMove
 		return struct {
 			Kind domain.CommandKind `json:"kind"`
-			*domain.ParkedTaskMoveReceipt
-			Lines []TaskLine `json:"lines"`
-		}{kind, receipt.ParkedTaskMove, wireTaskLines(receipt.ParkedTaskMove.Lines)}, nil
+			domain.CommandIdentity
+			TaskID domain.TaskID           `json:"task_id"`
+			Agent  string                  `json:"agent"`
+			Retry  wireAlternateAgentRetry `json:"retry"`
+			Lines  []TaskLine              `json:"lines"`
+		}{
+			kind, move.CommandIdentity, move.TaskID, move.Agent, wireRetry(move.Retry, move.Agent),
+			wireTaskLines(move.Lines),
+		}, nil
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 	}
 	return nil, domain.ErrCommandReceiptArms
+}
+
+// wireAlternateAgentRetry is the API's AlternateAgentRetry: the record with
+// the tree agent name the wire still carries in place of its selection
+// (#2808 moves the wire onto selections).
+type wireAlternateAgentRetry struct {
+	ID                 domain.Digest                      `json:"id"`
+	TaskID             domain.TaskID                      `json:"task_id"`
+	Role               domain.RoleName                    `json:"role"`
+	FailedInvocationID domain.InvocationID                `json:"failed_invocation_id"`
+	ItemID             domain.ItemID                      `json:"item_id"`
+	CommandID          string                             `json:"command_id"`
+	Agent              string                             `json:"agent"`
+	Pool               domain.UsagePoolID                 `json:"pool"`
+	Qualification      domain.AlternateAgentQualification `json:"qualification"`
+	RecordedAt         time.Time                          `json:"recorded_at"`
+}
+
+// wireRetry projects a record under agent, the name the command that made it
+// sent: a v2 record's selection is what that name reduced to.
+func wireRetry(record domain.AlternateAgentRetry, agent string) wireAlternateAgentRetry {
+	return wireAlternateAgentRetry{
+		ID: record.ID, TaskID: record.TaskID, Role: record.Role, FailedInvocationID: record.FailedInvocationID,
+		ItemID: record.ItemID, CommandID: record.CommandID, Agent: agent, Pool: record.Pool,
+		Qualification: record.Qualification, RecordedAt: record.RecordedAt,
+	}
 }

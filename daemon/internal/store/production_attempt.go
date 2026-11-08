@@ -876,10 +876,10 @@ func (tx *ReadTx) authenticateOperatorRetryAttempt(
 
 // authenticateAlternateAgentRetryAttempt binds an alternate-agent retry to
 // its record and the card it answered: the record was made by the attempt's
-// command on that card, for the failed invocation the attempt retries, and
-// names an agent the card offered with the offer's pool and rule. It does not
-// re-derive the rule; admission does that against current state before the
-// agent runs.
+// command on that card, for the failed invocation the attempt retries, holds
+// what the command chose (alternateAgentRecordChosen), and names an offer of
+// the card with the offer's pool and rule. It does not re-derive the rule;
+// admission does that against current state before the agent runs.
 func (tx *ReadTx) authenticateAlternateAgentRetryAttempt(
 	ctx context.Context, attempt domain.ProductionAttempt,
 ) error {
@@ -903,7 +903,7 @@ func (tx *ReadTx) authenticateAlternateAgentRetryAttempt(
 		record.CommandID != command.CommandID || record.ItemID != item.ID || record.ParkedMove() ||
 		record.TaskID != run.TaskID || record.Role != domain.RoleImplementer ||
 		record.FailedInvocationID != *attempt.RetryOfInvocationID ||
-		command.Message != record.Agent ||
+		!alternateAgentRecordChosen(command.Message, record) ||
 		command.ItemID != item.ID || command.ItemVersion+1 != item.ItemVersion ||
 		command.PRHeadSHA != item.PRHeadSHA ||
 		!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) ||
@@ -913,12 +913,33 @@ func (tx *ReadTx) authenticateAlternateAgentRetryAttempt(
 		item.ExecutionFailure.InvocationID != *attempt.RetryOfInvocationID ||
 		item.Subject.RunID == nil || *item.Subject.RunID != attempt.ParentRunID ||
 		!slices.ContainsFunc(item.AlternateAgents, func(offer domain.AlternateAgentOffer) bool {
-			return offer.Agent == record.Agent && offer.Pool == record.Pool &&
+			return alternateAgentRecordOffered(offer, record) && offer.Pool == record.Pool &&
 				offer.Qualification == record.Qualification
 		}) {
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
+}
+
+// alternateAgentRecordChosen reports whether the record holds the choice the
+// command's message names: a v2 record the message's enrollment and, where
+// the message names them, its model and effort (the others are the lineup's,
+// which acceptance filled in); a v1 record the agent name the message was.
+func alternateAgentRecordChosen(message string, record domain.AlternateAgentRetry) bool {
+	if record.Selection == nil {
+		return message == record.Agent
+	}
+	choice, err := domain.ParseAlternateAgentChoice(message)
+	return err == nil && choice.Chose(*record.Selection)
+}
+
+// alternateAgentRecordOffered reports whether the offer is the one the record
+// chose: by enrollment for a v2 record, by agent for a v1 record.
+func alternateAgentRecordOffered(offer domain.AlternateAgentOffer, record domain.AlternateAgentRetry) bool {
+	if record.Selection == nil {
+		return offer.Agent != "" && offer.Agent == record.Agent
+	}
+	return offer.Agent == "" && offer.Enrollment == record.Selection.EnrollmentID
 }
 
 func (tx *ReadTx) authenticateCapabilityRetryAttempt(

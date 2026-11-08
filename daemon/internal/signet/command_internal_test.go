@@ -40,7 +40,7 @@ func TestDecisionMessageRejectsPresentEmptyAlternativeChoices(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := decisionMessage(test.payload); !errors.Is(err, test.want) {
+			if _, err := decisionMessage(test.payload, agentNames{}); !errors.Is(err, test.want) {
 				t.Fatalf("decisionMessage() = %v, want %v", err, test.want)
 			}
 		})

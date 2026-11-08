@@ -63,6 +63,13 @@ var (
 // snapshot; the choice re-derives it.
 var ErrAlternateAgentNotQualified = errors.New("the agent is not an alternate the failure qualifies now")
 
+// ErrAlternateAgentSelectionUnserved refuses a retry_with_alternate_agent or
+// move_parked_task whose model or effort the chosen enrollment's catalog does
+// not serve, or, on an enrollment with no recorded catalog, is not the
+// role's lineup line's. It is wrapped with the refused field's name and never
+// the operator's text.
+var ErrAlternateAgentSelectionUnserved = errors.New("the alternate's model or effort is not one its enrollment serves")
+
 // ErrTaskNotParked refuses a move_parked_task command for a task with no
 // attempt parked on an exhausted quota window: it never parked, its attempt
 // started, or the task closed.

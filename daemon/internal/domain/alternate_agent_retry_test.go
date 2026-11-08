@@ -47,11 +47,18 @@ func TestQualifyAlternateFollowsTheFailureClass(t *testing.T) {
 	}
 }
 
-func testOffer(agent string) domain.AlternateAgentOffer {
+func testOffer(enrollment domain.ClientEnrollmentID) domain.AlternateAgentOffer {
 	return domain.AlternateAgentOffer{
-		Agent: agent, Pool: "pool-b", Harness: domain.HarnessClientClaudeCode,
+		Enrollment: enrollment, Pool: "pool-b", Harness: domain.HarnessClientClaudeCode,
 		Model: "claude-opus-4-1", Qualification: domain.AlternateAgentDifferentPool,
 	}
+}
+
+// testV1Offer is an offer as stored before #2735, naming a tree agent.
+func testV1Offer(agent string) domain.AlternateAgentOffer {
+	offer := testOffer("")
+	offer.Agent = agent
+	return offer
 }
 
 func TestValidateAlternateAgentOffers(t *testing.T) {
@@ -73,6 +80,13 @@ func TestValidateAlternateAgentOffers(t *testing.T) {
 			o.Qualification = "nearest"
 			return o
 		}()}, domain.ErrInvalidAlternateAgentQualification},
+		{"neither enrollment nor agent", []domain.AlternateAgentOffer{testOffer("")}, domain.ErrEmptyID},
+		{"enrollment and agent", []domain.AlternateAgentOffer{func() domain.AlternateAgentOffer {
+			o := testOffer("a")
+			o.Agent = "claude-a"
+			return o
+		}()}, domain.ErrCardFactInconsistent},
+		{"mixed shapes", []domain.AlternateAgentOffer{testOffer("a"), testV1Offer("b")}, domain.ErrCardFactInconsistent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,13 +98,71 @@ func TestValidateAlternateAgentOffers(t *testing.T) {
 	if err := domain.ValidateAlternateAgentOffers([]domain.AlternateAgentOffer{testOffer("a"), testOffer("b")}); err != nil {
 		t.Fatalf("sorted offers: %v", err)
 	}
+	if err := domain.ValidateAlternateAgentOffers([]domain.AlternateAgentOffer{testV1Offer("a"), testV1Offer("b")}); err != nil {
+		t.Fatalf("sorted v1 offers: %v", err)
+	}
+	offers := []domain.AlternateAgentOffer{testOffer("b"), testOffer("a")}
+	domain.SortAlternateAgentOffers(offers)
+	if offers[0].Enrollment != "a" {
+		t.Fatalf("sorted = %+v, want by enrollment", offers)
+	}
+	if _, ok := domain.OfferedEnrollment(offers, "b"); !ok {
+		t.Fatal("an offered enrollment was not found")
+	}
+	if _, ok := domain.OfferedEnrollment([]domain.AlternateAgentOffer{testV1Offer("b")}, "b"); ok {
+		t.Fatal("a v1 offer matched an enrollment")
+	}
+}
+
+// TestAlternateAgentChoiceMessage: a choice's message is its canonical JSON,
+// which parses back; another form of the same choice, or a malformed one,
+// is refused, and a model or effort is optional.
+func TestAlternateAgentChoiceMessage(t *testing.T) {
+	choice := domain.AlternateAgentChoice{EnrollmentID: "claude-b/claude_code", ModelID: "claude-opus-4-5", Effort: "high"}
+	message := choice.Message()
+	if message != `{"enrollment_id":"claude-b/claude_code","model_id":"claude-opus-4-5","effort":"high"}` {
+		t.Fatalf("message = %s", message)
+	}
+	if got, err := domain.ParseAlternateAgentChoice(message); err != nil || got != choice {
+		t.Fatalf("parse = %+v, %v; want %+v", got, err, choice)
+	}
+	bare := domain.AlternateAgentChoice{EnrollmentID: "claude-b/claude_code"}
+	if got, err := domain.ParseAlternateAgentChoice(bare.Message()); err != nil || got != bare {
+		t.Fatalf("parse bare = %+v, %v", got, err)
+	}
+	for name, message := range map[string]string{
+		"reordered":      `{"model_id":"claude-opus-4-5","enrollment_id":"claude-b/claude_code","effort":"high"}`,
+		"spaced":         `{"enrollment_id": "claude-b/claude_code","model_id":"claude-opus-4-5","effort":"high"}`,
+		"an agent name":  "claude-b",
+		"no enrollment":  `{"enrollment_id":"","model_id":"claude-opus-4-5","effort":"high"}`,
+		"a bad effort":   `{"enrollment_id":"claude-b/claude_code","model_id":"claude-opus-4-5","effort":"very high"}`,
+		"an extra field": `{"enrollment_id":"claude-b/claude_code","model_id":"","effort":"","agent":"x"}`,
+	} {
+		if _, err := domain.ParseAlternateAgentChoice(message); err == nil {
+			t.Errorf("%s: parsed", name)
+		}
+	}
+	selection := domain.TaskLineSelection(choice)
+	if !choice.Chose(selection) || !bare.Chose(selection) {
+		t.Fatal("a choice did not choose its own selection")
+	}
+	other := selection
+	other.Effort = "max"
+	if choice.Chose(other) || bare.Chose(domain.TaskLineSelection{EnrollmentID: "claude-c/claude_code"}) {
+		t.Fatal("a choice chose another selection")
+	}
+}
+
+var testRetrySelection = domain.TaskLineSelection{
+	EnrollmentID: "claude-b/claude_code", ModelID: "claude-opus-4-5", Effort: "high",
 }
 
 func testRetry(t *testing.T) domain.AlternateAgentRetry {
 	t.Helper()
+	selection := testRetrySelection
 	record, err := domain.NewAlternateAgentRetry(domain.AlternateAgentRetry{
 		TaskID: "task-1", Role: domain.RoleImplementer, FailedInvocationID: "inv-1",
-		CommandID: "cmd-1", Agent: "claude-b", Pool: "pool-b",
+		CommandID: "cmd-1", Selection: &selection, Pool: "pool-b",
 		Qualification: domain.AlternateAgentDifferentPool,
 		RecordedAt:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("x", 3600)),
 	})
@@ -109,9 +181,27 @@ func TestAlternateAgentRetryIdentity(t *testing.T) {
 		t.Fatal("a record with no item is a parked move")
 	}
 	tampered := record
-	tampered.Agent = "claude-c"
+	tampered.Selection = &domain.TaskLineSelection{EnrollmentID: "claude-c/claude_code", ModelID: "m", Effort: "high"}
 	if err := tampered.Validate(); !errors.Is(err, domain.ErrAlternateAgentRetryInconsistent) {
-		t.Fatalf("an edited agent: err = %v", err)
+		t.Fatalf("an edited selection: err = %v", err)
+	}
+	both := record
+	both.Agent = "claude-b"
+	if err := both.Validate(); err == nil {
+		t.Fatal("a record with an agent and a selection validated")
+	}
+	if _, err := domain.NewAlternateAgentRetry(both); err == nil {
+		t.Fatal("a record with an agent was built")
+	}
+	// A v1 record, naming its agent, keeps a different id and validates.
+	v1 := record
+	v1.Selection, v1.Agent = nil, "claude-b"
+	var err error
+	if v1.ID, err = v1.ComputeID(); err != nil {
+		t.Fatal(err)
+	}
+	if v1.ID == record.ID || v1.Validate() != nil {
+		t.Fatalf("v1 record %s validates %v, want its own id", v1.ID, v1.Validate())
 	}
 	ineligible := record
 	ineligible.Role = domain.RoleShadowReviewer
@@ -185,23 +275,27 @@ func TestProductionAttemptAlternateAgentBindings(t *testing.T) {
 
 func TestParkedTaskMoveReceiptBindsItsRecord(t *testing.T) {
 	record := testRetry(t)
-	line, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
-		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
-		Provenance: &domain.TaskLineProvenance{
-			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",
-			RankedBy: []domain.TaskLineRankingReading{},
-		},
-	}, 1, nil, record.RecordedAt)
-	if err != nil {
-		t.Fatal(err)
+	provenance := &domain.TaskLineProvenance{
+		PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b",
+		RankedBy: []domain.TaskLineRankingReading{},
 	}
+	moved := func(selection domain.TaskLineSelection) domain.TaskLine {
+		line, err := domain.NewTaskLine(domain.TaskLineInput{
+			TaskID: "task-1", Role: domain.RoleImplementer, Selection: &selection,
+			Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID), Provenance: provenance,
+		}, 1, nil, record.RecordedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+	selection := testRetrySelection
 	receipt := domain.ParkedTaskMoveReceipt{
 		ParkedTaskMoveRequest: domain.ParkedTaskMoveRequest{
 			CommandIdentity: domain.CommandIdentity{CommandID: "cmd-1", DeviceID: "device-1"},
-			TaskID:          "task-1", Agent: "claude-b",
+			TaskID:          "task-1", Agent: "claude-b", Selection: &selection,
 		},
-		Retry: record, Lines: []domain.TaskLine{line},
+		Retry: record, Lines: []domain.TaskLine{moved(testRetrySelection)},
 	}
 	if err := (domain.CommandReceipt{ParkedTaskMove: &receipt}).Validate(); err != nil {
 		t.Fatalf("receipt: %v", err)
@@ -211,13 +305,24 @@ func TestParkedTaskMoveReceiptBindsItsRecord(t *testing.T) {
 	if err := unmoved.Validate(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("no moved line: err = %v", err)
 	}
+	other := testRetrySelection
+	other.Effort = "max"
+	elsewhere := receipt
+	elsewhere.Lines = []domain.TaskLine{moved(other)}
+	if err := elsewhere.Validate(); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("a line on another selection: err = %v", err)
+	}
 	foreign := receipt
-	foreign.Agent = "claude-c"
+	foreign.Selection = &other
 	if err := foreign.Validate(); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("another agent: err = %v", err)
+		t.Fatalf("another selection: err = %v", err)
+	}
+	if !receipt.Same(receipt.ParkedTaskMoveRequest) ||
+		receipt.Same(foreign.ParkedTaskMoveRequest) {
+		t.Fatal("Same did not compare the selection")
 	}
 	if _, err := domain.NewTaskLine(domain.TaskLineInput{
-		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		TaskID: "task-1", Role: domain.RoleImplementer, Selection: &selection,
 		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),
 	}, 1, nil, record.RecordedAt); !errors.Is(err, domain.ErrTaskLineProvenanceInconsistent) {
 		t.Fatalf("a move line without provenance: err = %v", err)
