@@ -2170,51 +2170,66 @@ does for an operator's.
 ### Retry Or Move A Task To Another Agent
 
 When an implementation attempt fails on its agent's quota, credential, or
-provider capacity, the daemon offers the agents that escape the failure
-(issue #869). The operator picks one from a paired client; nothing picks an
-agent on its own. There's no `freesided` command for either path.
+provider capacity, the daemon offers the enrollments that escape the failure
+(issues #869 and #2735). The operator picks one from a paired client;
+nothing picks an enrollment on its own. There's no `freesided` command for
+either path.
 
-- **An offer escapes the cause.** A quota failure offers agents on another
-  usage pool (`different_pool`), an expired or revoked credential offers
-  agents on another enrollment or a later generation of the failed one,
-  whose generation is valid (`valid_generation`), and a capacity failure
-  offers agents on another provider route (`different_route`). Any other
-  cause offers nothing.
-- **An offer would admit now.** A candidate is an agent the routing policy
-  in effect orders for the implementer, other than the failed agent; a card
-  also considers the lineup's implementer. It's offered only when it
-  resolves, its credential is unmarked and valid through the attempt's
-  deadline, its route admits the daemon's egress, and its pool marks no
-  window for its model with a reset ahead.
+- **An offer escapes the cause.** A quota failure offers enrollments on
+  another usage pool (`different_pool`), an expired or revoked credential
+  offers another enrollment or a later generation of the failed one, whose
+  generation is valid (`valid_generation`), and a capacity failure offers
+  enrollments on another provider route (`different_route`). Any other cause
+  offers nothing. The failed facts come from the failed invocation's own
+  admission.
+- **An offer is an enrollment that would admit now.** A card's candidates
+  are every enrollment of an enabled identity; a parked task's are only the
+  enrollments the routing policy in effect orders for the implementer, so a
+  task with no policy in effect is offered nothing. An enrollment is offered,
+  at the implementer's lineup model, only when it serves the lineup's model
+  and effort (its recorded catalog lists them, or, with no catalog, it binds
+  the lineup enrollment's client), its credential is unmarked and valid
+  through the attempt's deadline, its route admits the daemon's egress, and
+  its pool marks no window for that model with a reset ahead.
+- **The wire still names agents.** Until #2808 the API names each offer,
+  and the operator's choice, by a tree agent. The daemon shows an offer
+  under the agent that runs the lineup's model and effort on its enrollment,
+  and drops one no agent maps to, with the card's retry action when none is
+  left. A chosen agent stands for the enrollment, model, and effort it
+  reduces to.
 - **A failure card retries once.** An `execution_failure` card for the
   implementation stage lists the offers in `alternate_agents` and offers
-  `retry_with_alternate_agent`. The decision names one offered agent. The
-  daemon re-derives the offer, records the choice as an alternate-agent
-  retry record in the decision's transaction, and starts the next attempt
-  citing it. The task's lines don't change, so only that attempt runs on the
-  chosen agent.
+  `retry_with_alternate_agent`. The decision picks one offered enrollment and
+  a model and effort its catalog serves; one it omits is the lineup's, and an
+  enrollment with no catalog takes only the lineup's. The daemon re-derives
+  the offer, records the selection as an alternate-agent retry record in the
+  decision's transaction, and starts the next attempt citing it. The task's
+  lines don't change, so only that attempt runs on the chosen selection.
 - **A parked task moves for good.** A task parked on its implementer's
   exhausted quota window carries the offers on its hold. The
-  `move_parked_task` command records the choice, re-pins the task's lines to
-  the chosen pool as the router would, and clears the hold, so the parked
-  attempt starts on the new line. The lines' provenance names the agent
-  left, with its mark, as `passed_over` when the policy orders it. Other roles the policy orders an agent on
-  that pool for move with it; a role an operator set, or one the policy
-  can't pin there, keeps its line. An escalated specifier moves to the
-  counterpart of the policy's first specifier agent on that pool, or to the
-  pool's standard agent when the pool has no counterpart. Offers here come
-  only from the routing policy, so a task with no policy in effect is
-  offered nothing.
-- **Admission checks the choice again.** Before a card's agent runs,
-  admission refuses it unless it isn't the failed agent, it draws on the pool
-  the operator chose, and it still escapes the failed invocation's cause
-  under the recorded rule. A card that fails this refuses the attempt; it
-  never falls back to the task's line or the lineup. A moved line counts
-  only with the record and the command receipt that set it, and holds on its
-  pool's windows like a routed line.
-- **A stale offer is refused, not replaced.** When the agent no longer
-  qualifies or the task is no longer parked, the command is 400 and records
-  nothing; the client refreshes and shows the current offers.
+  `move_parked_task` command records the selection, pins the implementer to
+  it, and clears the hold, so the parked attempt starts on the new line.
+  Each other role the policy orders the chosen enrollment for moves to that
+  role's lineup model and effort on it, when the enrollment serves them; an
+  escalated specifier moves to the enrollment's escalated line, or to its
+  standard line when the lineup has none. A role an operator set keeps its
+  line. The lines' provenance names the agent left, with its mark, as
+  `passed_over` when the policy orders it.
+- **Admission checks the choice again.** Before a card's selection runs,
+  admission refuses it unless it runs another credential than the failed
+  one, it draws on the pool the operator chose, and it still escapes the
+  failed invocation's cause under the recorded rule. A card that fails this
+  refuses the attempt; it never falls back to the task's line or the lineup.
+  A moved line counts only with the record and the command receipt that set
+  it, on the record's enrollment and the tuple the move would write, under a
+  cited policy that orders that enrollment for the role, and it holds on its
+  pool's windows like a routed line. A record stored before #2735 names its
+  tree agent and still admits through the tree.
+- **A stale offer is refused, not replaced.** When the enrollment no longer
+  qualifies, it doesn't serve the chosen model or effort, or the task is no
+  longer parked, the command is 400 and records nothing; a refusal names the
+  field, never the operator's text. The client refreshes and shows the
+  current offers.
 
 ### Enroll An Agent Credential
 
