@@ -2366,22 +2366,20 @@ indistinguishable from a crashed one. The exit status's value is
 agent-controlled under every delivery mechanism (an agent process chooses
 its own exit code), so exit status is crash and refusal detection, never
 adversarial proof. Acceptance authority stays with output verification and
-the export gates. What the gate trusts is freshness and delivery: it authors
-a per-invocation nonce, journals it before start, and passes it in the
-launcher argv. The launcher's final act writes the nonce and the CLI's exit
-status to a fixed evidence path and exits with that status.
+the export gates. What the gate trusts is freshness and delivery: the
+launcher's final act writes the CLI's exit status beside a per-invocation
+nonce that ward journals before the writer starts, so a marker speaks for
+exactly one invocation (the marker's shape:
+`OutcomeMarkerPath` in [`ward/spec.go`](../daemon/internal/ward/spec.go)).
 
-The write-once `ExecutionOutcome` is the canonical terminal authority for a
-failed, canceled, or lost invocation; `ExecutionExport` is the canonical
-completed authority. The ward journal is the crash bridge and cleanup
-authority, not a competing execution result. Besides the nonce and
-`WriterComplete`, its open record can carry a durable
-`CancellationIntent {reason, recovery_capture_required}`, an optional
-validated nonzero `WriterFailureStatus`, and an optional
-`RecoveryCaptureDigest`. Its terminal outcomes include `completed`,
-`failed`, `canceled`, and `loss`. After a restart, as in the live path, the
-driver idempotently maps `completed` to `ExecutionExport` and every other
-closed outcome to the matching `ExecutionOutcome`.
+The write-once execution record is the canonical terminal authority for an
+invocation: its export when it completed, its outcome when it failed, was
+canceled, or was lost ([`domain/execution.go`](../daemon/internal/domain/execution.go)).
+The ward journal is the crash bridge and cleanup authority, not a competing
+execution result. After a restart, as in the live path, the driver
+idempotently maps each closed journal outcome to the matching execution
+record. The journal's fields and outcomes are stated in
+[`ward/journal.go`](../daemon/internal/ward/journal.go).
 
 `WriterComplete` is the successful release predicate. It holds when the
 writer is stopped or proven absent, the marker is present with the
@@ -2390,35 +2388,36 @@ healthy throughout the writer's life. Only that live daemon may set the bit
 after all four facts hold. Recovery never reconstructs the lost proxy-health
 observation from a zero marker.
 
-A daemon-commanded cancellation durably records `CancellationIntent` before
-it issues stop, and that intent takes precedence over marker classification.
-After proving quiescence and satisfying any capture requirement, ward
-completes teardown and closes `canceled`; the driver then converges
-`ExecutionOutcomeCanceled`. Cancellation never makes the partial workspace
-a publication candidate or a clean-verifier input. For a graceful portable
-handoff, the intent sets `recovery_capture_required`. After quiescence,
-[§5.10](#510-coherent-backup-encrypted-checkpoints)'s normalized encrypted workspace capture completes, and its verified
-digest is durable in the ward journal before cleanup can erase its source or
-the ward can close `canceled`. Restore exposes that recovery object only as
-untrusted input to a new attempt.
+A daemon-commanded cancellation durably records its intent
+(`CancellationRequested`) before ward issues stop, and that intent takes
+precedence over the writer's own status. After proving quiescence, ward
+completes teardown and closes `canceled`, and the driver records the
+invocation canceled. Cancellation never makes the partial workspace a
+publication candidate or a clean-verifier input. A graceful portable
+handoff, which is not built yet, also needs a workspace capture: after
+quiescence, [§5.10](#510-coherent-backup-encrypted-checkpoints)'s normalized
+encrypted workspace capture completes, and its verified digest is durable
+before cleanup can erase its source or ward closes `canceled`. Restore exposes
+that capture only as untrusted input to a new attempt.
 
 For an uncommanded stop, a matching nonzero marker is terminal failure. Ward
-validates the nonce and status, persists `WriterFailureStatus` before any
-cleanup can erase the marker-bearing workspace, completes teardown, and closes
-`failed`. Source export is refused even when partial edits exist. A declared
-failure transcript may be retained through the existing sensitive-evidence
-mechanism: after writer quiescence, the read-only observer copies only the
-fixed, invocation-bound transcript and its descriptor, with independent size,
-regular-file, provenance, and secret-scan checks. Valid UTF-8 is retained as
-plain text because a failed CLI may interleave stderr with structured output.
-The journal records the retained digest or an explicit unavailable disposition
-before cleanup. Operational capture failures leave the workspace and journal
-open for recovery. A retained transcript supplies no source, verification, or
+validates the nonce and status, persists the status (`WriterFailureStatus`)
+before any cleanup can erase the marker-bearing workspace, completes
+teardown, and closes `failed`. Source export is refused even when partial
+edits exist. A declared failure transcript may be retained through the
+existing sensitive-evidence mechanism after writer quiescence: the read-only
+observer copies only the fixed, invocation-bound transcript, and it is
+secret-scanned before it is kept. The journal records the retained digest or
+an explicit unavailable disposition before cleanup. The copy's bounds and
+provenance checks are in
+[`ward/failure_evidence.go`](../daemon/internal/ward/failure_evidence.go).
+Operational capture failures leave the workspace and journal open for
+recovery. A retained transcript supplies no source, verification, or
 publication authority.
 
-Recovery checks the durable amendments first and branches on them before it
-inspects marker state: `CancellationIntent` takes first precedence; then an
-existing `WriterFailureStatus` remains the failure classification while recovery
+Recovery checks the durable amendments before it inspects marker state, in
+this order: a recorded cancellation intent wins; then a recorded
+`WriterFailureStatus` remains the failure classification while recovery
 finishes teardown and closes `failed`, even when cleanup already erased the
 marker. Marker classification runs only when neither amendment exists.
 
@@ -2475,15 +2474,17 @@ Freeside source change.
 **Toolchains (revision 92).** The builder supports two toolchains, selected by
 the manifests at the repository root or in one module directory the project
 image names. Node, keyed by `package.json` and `package-lock.json` at the
-root: a pinned Node distribution and the `npm ci` closure, as built today. Go,
-keyed by the named module's `go.mod`: a pinned Go distribution, the module
-cache that its `go.sum` pins, and the pinned binaries the recipe runs:
-golangci-lint, plus vacuum, shellcheck, Python, and procps for Freeside's
-`api/` and `scripts/` checks (#2376). Freeside has no root `go.mod`; its
-image names `daemon/`, so `bash scripts/check.sh` runs its `daemon`, `docs`,
-and `api` checks, and every `scripts` step, with networking disabled. Each
-pinned distribution and binary is part of the builder's fixed toolchain
-digest below. The Go path is its own unit (#2115, `kind:contract` because the
+root: a pinned Node distribution and the `npm ci` closure. Go, keyed by the
+named module's `go.mod`: a pinned Go distribution, the module cache that its
+`go.sum` pins, and the pinned binaries the recipe runs. Each pinned
+distribution and binary is part of the builder's fixed toolchain digest
+below. The pinned set is in
+[`projectimage/go_toolchain.go`](../daemon/internal/projectimage/go_toolchain.go)
+and the [script-tools note](../devlog/2026-10-27-1345-go-image-script-tools.md).
+Freeside has no root `go.mod`; its image names `daemon/`, a module the owner
+chose ([Go project-images note](../devlog/2026-10-21-1342-go-project-images.md)),
+so `bash scripts/check.sh` runs its `daemon`, `docs`, and `api` checks, and
+every `scripts` step, with networking disabled. The Go path is its own unit (#2115, `kind:contract` because the
 image record gains the Go manifest hashes) and is needed before Freeside is
 onboarded (Section [11](#11-roadmap-build-order-and-coordination)).
 
@@ -2504,33 +2505,19 @@ fetches a missing dependency.
 
 **Reuse across compatible commits (revision 81).** A project image is bound
 to the environment it baked, not to the commit it was built from. The image
-record names its build commit, the module directory for a Go image (revision
-92), and its environment inputs: the SHA-256 of the
-exact bytes of the two manifests it seeded (`package.json` and
-`package-lock.json` for Node; the named module's `go.mod` and `go.sum` for
-Go, revision 92), and one digest
-of the builder's fixed toolchain and preparation sources, beside the recipe
-digest and base image it already records. The image is admissible at a run
-base when that base is its build commit, or when all of these hold at the
-base:
-
-- Both dependency manifests hash to the recorded values.
-- Neither `npm-shrinkwrap.json` nor `.npmrc` exists. For a Go image, the
-  module directory holds no `vendor/` directory, its `go.mod` holds no
-  `replace` whose target is a filesystem path, inside the module directory or
-  not, and neither it nor any directory above it up to the repository root
-  holds a `go.work` file or directory. The build refuses the same inputs
-  (#2115). A filesystem-path target is refused even inside the module because
-  the image warms its module cache from a seed holding only `go.mod` and
-  `go.sum`, so no image can warm it; a module-path `replace` is served like any
-  other requirement. The builder's launcher sets `GOWORK=off`, so no command
-  it runs reads a `go.work`; a `go.work` is refused anyway, because a recipe
-  step that reads it without the launcher would see an input the image never
-  baked, and refusing it names that problem at admission instead of inside
-  the room.
-- The base's tree declares no verification recipe other than the baked one. A
-  repository whose recipe is supplied outside its tree declares none.
-- The recorded toolchain and preparation digest equals the running binary's.
+record names its build commit and its environment inputs: hashes of the
+dependency manifests it seeded and one digest of the builder's fixed
+toolchain and preparation sources, beside the recipe digest and base image.
+The image is admissible at a run base when that base is its build commit, or
+when at the base every recorded environment input is unchanged, no input the
+toolchain cannot serve is present, and the tree declares no verification
+recipe other than the baked one. The exact conditions are stated on
+`ProjectImage.AdmissibleAt` in
+[`domain/project_image.go`](../daemon/internal/domain/project_image.go), with
+their reasons in the
+[environment-compatibility note](../devlog/2026-10-06-0758-project-image-environment-compatibility.md)
+and, for Go inputs, the
+[Go project-images note](../devlog/2026-10-21-1342-go-project-images.md).
 
 Repository identity, the fixed preparation command, and recipe approval
 against current policy are checked as before. Every boundary that binds an
@@ -2555,18 +2542,13 @@ when it stays inside the project's declared policy. The gate holds when:
 
 - The candidate's dependency-manifest delta is lockfile-consistent.
 - For a Go image (revisions 92 and 102), the candidate's `go.mod` and
-  `go.sum` are readable and in Go's own shape, and `go.sum` holds the
-  `go.mod` hash of every module `go.mod` requires, after its module-path
-  `replace` directives. The build fetches every module from one proxy,
-  `proxy.golang.org`, with no `direct` fallback to a module's own VCS host
-  and no inherited Go environment able to route around it, so that proxy's
-  host is the authority every Go module resolves from (#2337). Go verifies
-  each download against `go.sum`, and against the checksum database for
-  anything `go.sum` does not pin, so the gate checks no module content. A
-  candidate that adds a `vendor/` directory to the module, a `go.work` to
-  the module directory or any directory above it, or a `replace` to a
-  filesystem path, or whose `go.mod` or `go.sum` the gate cannot read,
-  keeps the fail-loud path (#2115).
+  `go.sum` are readable and in Go's own shape, and `go.sum` pins every
+  module `go.mod` requires. The build resolves every Go module from one
+  proxy, so that proxy's host is the authority the registry clause below
+  checks (#2337). A candidate that adds a Go input no project image serves,
+  or whose `go.mod` or `go.sum` the gate cannot read, keeps the fail-loud
+  path (#2115). The Go clause's exact checks are in `daemon/README.md`
+  ([Rebuild A Project Image For A Dependency Change](../daemon/README.md#rebuild-a-project-image-for-a-dependency-change)).
 - Every added or changed package, or Go module version, resolves from an
   authority in the project's registry set, the operator's declared set plus the project's
   adopted hosts (Section [5.8](#58-control-plane-trust); the same set `provider_registry` exposes to
@@ -2650,9 +2632,9 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
     fault never opens a task.
   - *Unsupported Go input.* The tip holds a Go input no project image
     supports, or a `go.mod` or `go.sum` the gate cannot read, the Go
-    clause's fail-loud path above. It raises neither a card nor a task, and
-    keeps its recorded name, `go_module_delta`. A Go module change the gate
-    reads is classed like an npm one (revision 102).
+    clause's fail-loud path above. It raises neither a card nor a task. A
+    Go module change the gate reads is classed like an npm one (revision
+    102).
   - *Unsupported npm input.* The tip holds an npm input no project image
     supports, or changes `package.json`'s `overrides`, `workspaces`, or
     `packageManager`. Such a change is usually deliberate, and a repair
@@ -2680,13 +2662,14 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
   serves it. A task ends in the blocked outcome #1784 defines only when its
   refusal has no pending resolution (an unsupported Go or npm input, a
   declined adoption) or when no admitted image can serve its base.
-- **Serialization.** One builder runs at a time per daemon, within the
-  rebuild's time limit (one hour by default), oldest request first. An
-  upkeep rebuild and a run's policy-gated rebuild take turns on the
-  project's pointer: the second re-checks admissibility against the pointer
-  the first advanced before it builds. Neither holds the publication lane
-  while it waits. After a daemon upgrade, the start trigger checks every
-  project right away (one digest comparison each) and queues the rebuilds.
+- **Serialization.** One builder runs at a time per daemon, within a
+  bounded time. An upkeep rebuild and a run's policy-gated rebuild take
+  turns on the project's pointer: the second re-checks admissibility against
+  the pointer the first advanced before it builds. Neither holds the
+  publication lane while it waits. After a daemon upgrade, the start trigger
+  checks every project right away. The bound, the queue, and the recorded
+  refusal classes are in `daemon/README.md`
+  ([Keep Project Images Current](../daemon/README.md#keep-project-images-current)).
 - **The trust boundary is unchanged.** No gate clause widens. The
   toolchain-only delta touches nothing the recipe or the registry set
   governs, and an adoption changes image policy only through the Section
@@ -2753,15 +2736,15 @@ Each job is confined four ways, and each confinement is conformance-proven
 and probed live, as the slot uid, before the recipe runs:
 
 - **Network access is denied twice.** A sandbox profile on the recipe's
-  process tree denies every network operation, which on the reference host
-  closed off-host connections, loopback connections, and name resolution
-  through the system resolver. Packet-filter rules keyed on the slot's uid
-  add a second layer for off-host traffic: they drop every packet of a
-  socket the uid owns, in and out, so a sandbox escape still cannot reach
-  the network. The spike showed the packet filter alone does not close
-  loopback or the system resolver (neither socket is the uid's), so the
-  probe refutes those two under the sandbox specifically, and off-host
-  reach under both.
+  process tree denies every network operation: off-host connections,
+  loopback connections, and name resolution through the system resolver.
+  Packet-filter rules keyed on the slot's uid add a second layer for
+  off-host traffic: they drop every packet of a socket the uid owns, in and
+  out, so a sandbox escape still cannot reach the network. The probe
+  refutes loopback and the system resolver under the sandbox, and off-host
+  reach under both; why the packet filter alone does not close the first
+  two is in the
+  [macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md).
 - **Writes are confined to the job directory** by the same sandbox profile;
   the probe writes outside it and must fail.
 - **Dependencies come from a trusted offline cache keyed by digest.** A
@@ -2770,13 +2753,14 @@ and probed live, as the slot uid, before the recipe runs:
 - **The slot's home is reset between jobs** from an empty template, so
   nothing a candidate wrote survives into the next.
 
-The slot never logs in, so it has no window-server session; the spike
-rendered the app suite's SwiftUI `ImageRenderer` path (the explicit bitmap
-and `cgImage`) in a session-less slot, with zero displays, inside the
-network-denying sandbox. The executor plugs in at the verifier's room seam,
+The slot never logs in, so it has no window-server session; the spike that
+showed the app suite's SwiftUI rendering works without one is in the
+[macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md).
+The executor plugs in at the verifier's room seam,
 so no trust decision moves: recipe resolution, head binding, and evidence
-stamping stay with the verifier. It is admitted in `unattended` (Operating
-Modes) as the one host-side class, under its own capability declaration,
+stamping stay with the verifier. The executor is not built yet. Once built,
+it is admitted in `unattended` (Operating Modes) as the one host-side class,
+under its own capability declaration,
 `supports_credential_free_host_verification`, proven by the full conformance
 pass and rechecked by the pre-job probe. The Section [10](#10-operations-and-onboarding) rule that confines
 host-side runners to `attended_dev` and `ephemeral` names it as its one
@@ -2799,10 +2783,11 @@ writer context, on either Mac, waits for `subscription_injected`, where it
 holds a placeholder, which is what makes it defensible at all (revision 95).
 That mode is held (revision 103), so host-run writers keep waiting; they
 never fall back to copying the token.
-The two-guest limit is a kernel quota per Apple host
-(`hv_apple_isa_vm_quota`), not only a license term; its one bypass, a KDK
-kernel with SIP off, is rejected, and the reference host's memory and disk
-cannot hold even two Xcode guests. The tier is not scheduled; Phase 4 keeps
+The two-guest limit is a kernel quota per Apple host, not only a license
+term, and the reference host cannot hold even two Xcode guests (the quota,
+its rejected bypass, and the host's limits are in the
+[macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md)).
+The tier is not scheduled; Phase 4 keeps
 it, and until it exists SwiftUI work that needs a macOS writer keeps the
 bootstrap exception below.
 
@@ -2811,7 +2796,7 @@ bootstrap exception below.
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires all of these: successful conformance including the handoff gate; a valid trust profile; an approved credential mode; every runner minimum, including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary; a host-side executor only as the credential-free macOS verification class with its `supports_credential_free_host_verification` declaration current (macOS Execution); current backup health including encryption status; and no blocking `system_health` item. |
+| `unattended` | Requires all of these: successful conformance including the handoff gate; a valid trust profile; an approved credential mode; every runner minimum, including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary; a host-side executor only as the credential-free macOS verification class, not yet built, with its `supports_credential_free_host_verification` declaration current (macOS Execution); current backup health including encryption status; and no blocking `system_health` item. |
 
 Run the full conformance suite at startup, after configuration changes, and on
 the doctor's schedule. Run a lightweight probe before every unattended job.
@@ -2833,31 +2818,16 @@ unreadable. So the declaration that gates a new unattended admission is
 reconstructed from persisted conformance evidence, never from transient process
 state.
 
-Phase 1A.2 exception (owner decision, 2026-07-26; retired once the encrypted
-checkpoint landed, and kept here as its record): unattended admission could
+Phase 1A.2 exception (owner decision, 2026-07-26; retired, kept here as its
+record): until the encrypted checkpoint landed, unattended admission could
 waive the encryption-state dimension of backup health, and only that
-dimension. Checkpoint currency, artifact closure, and restore-test age still
-gate admission against the local owner-only checkpoint ([§5.10](#510-coherent-backup-encrypted-checkpoints)). The waiver
-applied only while all of the following held, checked mechanically at
-admission:
-
-- The daemon configuration contains an explicit operator-set
-  `backup_encryption_waiver` naming the exact trusted numeric repository ID it
-  covers.
-- The run targets exactly that repository, verified against its trusted binding
-  rather than a positional notion such as "the first onboarded".
-- The daemon does not yet carry the encrypted, digest-bound
-  `BackupCheckpoint`. A build that carries it rejects the waiver as invalid
-  configuration and retires the exception.
-
-Admission without the waiver fails closed as before. Every admission under the
-waiver records it in the run's audit record and surfaces the degraded posture as
-a `system_health` item. The validated waiver configuration supersedes that
-item's blocking state (the [§4](#4-the-attention-model) supersession rule), so the item stays visible
-without blocking the later admissions the waiver exists to permit. The encrypted
+dimension, for one operator-named repository. It recorded every waived
+admission and surfaced it as a `system_health` item that the validated
+waiver kept visible without blocking (the [§4](#4-the-attention-model)
+supersession rule). The encrypted
 checkpoint landed before the Phase 1A exit, so a current build rejects the
-waiver as invalid configuration; the doctor ([§10](#10-operations-and-onboarding)) packages its encryption
-check.
+`backup_encryption_waiver` as invalid configuration. The full rule is in
+[history/decisions.md](history/decisions.md#revision-18) (revision 18).
 
 Bootstrap exception: SwiftUI work that needs a macOS writer is exempt until a
 UI-writer tier exists. SwiftUI work whose verification the macOS verification
@@ -2875,8 +2845,9 @@ case and no consumer special-cases it. An execution host is a runner backend
 reached over the network, never a second daemon: the control plane keeps every
 durable record, every forge credential, the gauntlet, and publication.
 
-**The runner.** Each execution host runs `freesided runner`, the daemon binary
-in its runner role. It owns that host's runtime, per-run host-only networks and
+**The runner.** Each execution host will run `freesided runner`, the daemon
+binary in its runner role, which is not built yet (Start triggers, below). It
+owns that host's runtime, per-run host-only networks and
 CONNECT proxy, handoff gate, verification room, and conformance suite, and
 serves them to its enrolled control plane over one session its outbound
 connector opens (Transport, below). It holds no durable state: the handoff
@@ -2887,9 +2858,8 @@ restart is: the proxy's egress proof is process-local and dies with it, so no
 run survives a runner restart as live. It holds no forge credential: seeding
 runs on the control plane, which digests the exact-base tree before shipping it;
 the released export streams back, and the control plane re-verifies its manifest
-and blob digests before the gauntlet sees it. Driving the runtime over SSH from
-the control plane was rejected: the proxy, the gate's proofs, and the suite all
-run where the runtime is, so SSH would need a remote helper for all three.
+and blob digests before the gauntlet sees it. Why the control plane does not
+drive the runtime over SSH is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
 
 **Transport.** The runner connects out to the control plane and opens no
 listener. The control plane listens for runners beside its API, bound under the
@@ -2903,11 +2873,9 @@ application layer: each side proves its enrolled Section
 [5.9](#59-durability-effectively-once) host key and pins the other's, and no
 certificate authority, hostname, or Tailscale identity is consulted, because
 Tailscale provides reachability and never authentication (Section
-[5.2](#52-the-daemon-and-its-supervisor)). Connecting out is chosen because the
-runner has nothing to serve anyone else, a laptop sleeps and roams, and the
-managed relay (Section [5.19](#519-deferred-subsystems-provisional-contracts))
-already assumes an enrolled host with an outbound connector; a runner listening
-on its own address was rejected. The relay, when it exists, changes only the
+[5.2](#52-the-daemon-and-its-supervisor)). Why the runner connects out rather
+than listening is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md). The managed relay (Section
+[5.19](#519-deferred-subsystems-provisional-contracts)), when it exists, changes only the
 connector's target: it connects to the relay instead of the tailnet address, and
 the relay carries the same end-to-end authenticated session as an opaque channel
 under that section's prohibitions. The first increment depends on no relay; the
@@ -2922,22 +2890,17 @@ increment requires the same build on every host.
 **The daemon host.** The daemon host runs no separate runner process. The daemon
 composes the ward package in-process behind the same runner-backend interface,
 so the local backend is the remote backend minus the wire, and both share one
-implementation of the runtime, proxy, gate, and suite. A separate process on the
-daemon host is rejected for the first increment: under the Phase 1
-single-operator deployment (Section [5.2](#52-the-daemon-and-its-supervisor))
-the operator account is the only isolation boundary, so a second process under
-the same account separates nothing and adds a supervision unit, a listener, and
-a recovery path. Revisit when the hardened tier's dedicated user lands, where a
-runner under a user other than the control plane's could keep the runtime and
-the per-run proxy apart from the forge credential and control-plane state.
+implementation of the runtime, proxy, gate, and suite. Why the first increment
+runs no separate runner process on the daemon host, and when to revisit that,
+is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
 
 **Installation.** An execution host is an ordinary Freeside installation in the
 runner role, never a separate agent or product. The same `freesided` binary is
 installed by the path the daemon takes on that host's tier (Section
 [5.2](#52-the-daemon-and-its-supervisor): the operator app's per-user
 LaunchAgent on the Mac-first path, the elevation helper's unit on the hardened
-path), supervised with `KeepAlive`, and upgraded the same way. The role makes
-the unit run `freesided runner` and gives it its own root: the host key in
+path), supervised with `KeepAlive`, and upgraded the same way. In the runner
+role the unit gets its own root: the host key in
 platform-protected storage, the host enrollment record (the control plane's
 address and key, the registry it names), the credential volumes, and the image
 cache, and no control-plane database, checkpoint, or backup, so the root is
@@ -2947,9 +2910,9 @@ plane names, because ward resolves an image only through a registry
 (`images/README.md`); a loopback-only local registry on the daemon host does not
 qualify, so that registry is bound to the daemon host's Tailscale address for
 runners or a shared registry is used. The runner pulls each approved digest the
-control plane names before it reports that digest present. `freesided runner
-enroll` runs the host side of the pairing ceremony below, and `freesided doctor`
-on the control plane reports every host.
+control plane names before it reports that digest present. A runner
+enrollment command will run the host side of the pairing ceremony below, and
+the doctor on the control plane will report every host; neither is built yet.
 
 **Host enrollment and credentials.** Host enrollment is a pairing ceremony in
 the shape of device pairing (Section
@@ -2987,9 +2950,8 @@ injection is a unit of its own, held with #2175 and filed once #2175
 merges; until it lands every execution host runs under `subscription_contained` with the volume above. It is
 required on any execution host the owner does not physically hold, so the Linux
 host waits for it and no such host is enrolled while the hold stands; the
-MacBook does not wait. Relaying the writer's CONNECT tunnel to
-the control plane's proxy without termination is rejected as a credential
-measure: it centralizes the allowlist but leaves the token in the writer.
+MacBook does not wait. Why relaying the writer's tunnel without termination
+is no credential measure is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
 
 **Placement.** Admission chooses the host in the launch transaction. A host is
 eligible when its current durable conformance record covers the launch's
