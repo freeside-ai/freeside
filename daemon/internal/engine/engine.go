@@ -51,7 +51,6 @@ type Engine struct {
 	store                       *store.Store
 	signet                      *signet.Service
 	driver                      exec.StageDriver
-	publication                 *fakePublicationWorkflow
 	fakePublicationPolicy       *fakePublicationPolicyRecovery
 	productionPublication       *productionPublicationWorkflow
 	productionDeliveryValidator func(context.Context, exec.StartSpec) error
@@ -311,16 +310,6 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 			return result, fmt.Errorf("reconcile specification gates: %w", gateErr)
 		}
 	}
-	if e.publication != nil {
-		publication, err := e.ReconcileFakePublications(ctx)
-		result.PublicationTasksCompleted += publication.PublicationTasksCompleted
-		result.ReadyItemsCreated += publication.ReadyItemsCreated
-		result.BlockedItemsCreated += publication.BlockedItemsCreated
-		if publication.LastPRNumber > 0 {
-			result.LastPRNumber = publication.LastPRNumber
-		}
-		return result, err
-	}
 	return result, nil
 }
 
@@ -357,52 +346,6 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	}
 	if err != nil {
 		return result, fmt.Errorf("reconcile production publications: %w", err)
-	}
-	return result, nil
-}
-
-// ReconcileFakePublications advances only the attended fake-publication lane.
-// One-shot publication commands use this entry point so an unrelated run or
-// invocation in the shared store cannot be advanced by their private driver.
-func (e *Engine) ReconcileFakePublications(ctx context.Context) (ReconcileResult, error) {
-	if e.publication == nil {
-		return ReconcileResult{}, errors.New("fake publication workflow is not configured")
-	}
-	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
-		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
-	}
-	publication, err := e.publication.reconcile(ctx)
-	result := ReconcileResult{
-		PublicationTasksCompleted: publication.completed,
-		ReadyItemsCreated:         publication.ready,
-		BlockedItemsCreated:       publication.blocked,
-		LastPRNumber:              publication.lastPRNumber,
-	}
-	if err != nil {
-		return result, fmt.Errorf("reconcile fake publications: %w", err)
-	}
-	return result, nil
-}
-
-// ReconcileFakePublication advances only the requested attended publication.
-// A one-shot command uses this form so a broken sibling cannot terminate or
-// otherwise interfere with the requested run.
-func (e *Engine) ReconcileFakePublication(
-	ctx context.Context,
-	runID domain.RunID,
-) (ReconcileResult, error) {
-	if e.publication == nil {
-		return ReconcileResult{}, errors.New("fake publication workflow is not configured")
-	}
-	publication, err := e.publication.reconcileRun(ctx, runID)
-	result := ReconcileResult{
-		PublicationTasksCompleted: publication.completed,
-		ReadyItemsCreated:         publication.ready,
-		BlockedItemsCreated:       publication.blocked,
-		LastPRNumber:              publication.lastPRNumber,
-	}
-	if err != nil {
-		return result, fmt.Errorf("reconcile fake publication %q: %w", runID, err)
 	}
 	return result, nil
 }

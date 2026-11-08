@@ -99,29 +99,28 @@ func headRepo(t *testing.T, transport *fakeforge.Transport) string {
 }
 
 type publicationHarness struct {
-	t                         *testing.T
-	ctx                       context.Context
-	dbPath                    string
-	blobDir                   string
-	workDir                   string
-	baseDir                   string
-	baseSHA                   string
-	baseFiles                 map[string]string
-	projectImageInput         func(*domain.ProjectImageInput)
-	cliSubmission             *cliPublicationSubmission
-	recipe                    []byte
-	recipeD                   domain.Digest
-	profile                   domain.AutomationTrustProfile
-	audit                     domain.WorkflowAudit
-	store                     *store.Store
-	attention                 *signet.Service
-	blobs                     *signet.BlobStore
-	transport                 *fakeforge.Transport
-	forge                     *fakeforge.Forge
-	server                    *httptest.Server
-	tokens                    publish.TokenSource
-	now                       time.Time
-	afterPublicationFinalized func() error
+	t                 *testing.T
+	ctx               context.Context
+	dbPath            string
+	blobDir           string
+	workDir           string
+	baseDir           string
+	baseSHA           string
+	baseFiles         map[string]string
+	projectImageInput func(*domain.ProjectImageInput)
+	cliSubmission     *cliPublicationSubmission
+	recipe            []byte
+	recipeD           domain.Digest
+	profile           domain.AutomationTrustProfile
+	audit             domain.WorkflowAudit
+	store             *store.Store
+	attention         *signet.Service
+	blobs             *signet.BlobStore
+	transport         *fakeforge.Transport
+	forge             *fakeforge.Forge
+	server            *httptest.Server
+	tokens            publish.TokenSource
+	now               time.Time
 
 	// repairRefusal, when set, makes a client submission the maintenance
 	// task image upkeep submits for the refusal it returns, given the

@@ -562,9 +562,6 @@ directory named before it in the same bullet. All under `daemon/`:
   recipe, runs verification, and stores its verdict),
   `internal/engine/production_remediation_source.go` (authenticates the
   remediation source tree),
-  `internal/engine/fake_publication.go` (the attended fake-candidate
-  workflow: exports a handoff, verifies it, and pushes it through the
-  publish gate),
   `internal/engine/production_review_gate.go` (decides whether a reviewed
   candidate may reach publication),
   `internal/engine/production_reentry*.go` (re-earn readiness against a

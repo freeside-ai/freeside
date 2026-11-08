@@ -1,14 +1,18 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -16,11 +20,19 @@ import (
 func TestDecodeFakePublicationInvocationOwnerRejectsUppercaseBindingDigest(t *testing.T) {
 	t.Parallel()
 	task := validFakePublicationTask(t)
-	owners, err := expectedFakePublicationInvocationOwners(task)
+	owner := fakePublicationInvocationOwner{
+		Version:      fakePublicationInvocationOwnerVersion,
+		InvocationID: task.VerificationInvocationID, Role: "verification",
+		BindingDigest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		RunID:         task.RunID,
+	}
+	valid, err := json.Marshal(owner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := owners[0]
+	if _, err := decodeFakePublicationInvocationOwner(valid); err != nil {
+		t.Fatalf("valid invocation owner rejected: %v", err)
+	}
 	owner.BindingDigest = domain.Digest("sha256:" + strings.Repeat("A", 64))
 	payload, err := json.Marshal(owner)
 	if err != nil {
@@ -66,7 +78,7 @@ func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	task := validFakePublicationTask(t)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: FakePublicationReadyItemID(task.RunID), ProjectID: task.ProjectID,
+		ID: fakepublication.ReadyItemID(task.RunID), ProjectID: task.ProjectID,
 		Subject: domain.Subject{
 			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &task.RunID,
 		},
@@ -218,7 +230,7 @@ func validFakePublicationTask(t *testing.T) fakePublicationTask {
 		Body:                     "Verified candidate.",
 		CommitDate:               now,
 		StartedAt:                now,
-		OperatingMode:            OperatingModeAttendedDev,
+		OperatingMode:            fakepublication.OperatingModeAttended,
 	}
 }
 
@@ -279,6 +291,113 @@ func TestValidSHA256Digest(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := validSHA256Digest(test.digest); got != test.want {
 				t.Fatalf("validSHA256Digest(%q) = %t, want %t", test.digest, got, test.want)
+			}
+		})
+	}
+}
+
+// validateFakePublicationRun checks that a run and its policy row are the
+// current, converged shape the task implies.
+func validateFakePublicationRun(
+	ctx context.Context,
+	reader fakePublicationRunReader,
+	task fakePublicationTask,
+) error {
+	run, err := reader.GetRun(ctx, task.RunID)
+	if err != nil {
+		return fmt.Errorf("load publication run %q: %w", task.RunID, err)
+	}
+	expected := publicationRun(task)
+	expected.TaskID = run.TaskID
+	if !reflect.DeepEqual(run, expected) {
+		return fmt.Errorf(
+			"publication run %q disagrees with task: %w",
+			task.RunID, domain.ErrParentKeyMismatch,
+		)
+	}
+	policy, err := reader.GetResolvedPolicy(ctx, task.RunID)
+	if err != nil {
+		return fmt.Errorf("load publication resolved policy %q: %w", task.RunID, err)
+	}
+	if !reflect.DeepEqual(policy, publicationPolicy(task)) {
+		return fmt.Errorf(
+			"publication resolved policy %q disagrees with task: %w",
+			task.RunID, domain.ErrParentKeyMismatch,
+		)
+	}
+	return nil
+}
+
+// The two tests below keep coverage of fakepublication's task validation,
+// which DecodeTask applies to every fake-lane row the converge, the backup
+// extractors, and the store migrations still decode.
+
+func TestFakePublicationTaskValidateReappliesAdmissionValidators(t *testing.T) {
+	t.Parallel()
+	valid := validFakePublicationTask(t)
+	if err := fakepublication.Task(valid).Validate(); err != nil {
+		t.Fatalf("valid task: %v", err)
+	}
+
+	tests := map[string]func(*fakePublicationTask){
+		"repository": func(task *fakePublicationTask) { task.Repo = "owner/repo/extra" },
+		"base ref":   func(task *fakePublicationTask) { task.BaseRef = "release/.candidate" },
+		"allowlist":  func(task *fakePublicationTask) { task.AllowedPaths = []string{"["} },
+		"recipe path": func(task *fakePublicationTask) {
+			task.RecipePath = "../verify.json"
+		},
+		"publication body": func(task *fakePublicationTask) {
+			task.Body = "<!-- freeside:publication-identity=sha256:foreign -->"
+		},
+		"commit date": func(task *fakePublicationTask) {
+			task.CommitDate = time.Unix(-1, 0).UTC()
+		},
+		"commit date upper bound": func(task *fakePublicationTask) {
+			task.CommitDate = time.Unix(fakePublicationMaxCommitTimestamp, 0).UTC()
+		},
+		"handoff digest case": func(task *fakePublicationTask) {
+			task.HandoffDigest = domain.Digest("sha256:" + strings.Repeat("A", 64))
+		},
+		"utf-8": func(task *fakePublicationTask) {
+			task.RunID = domain.RunID("run-\xff")
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			task := valid
+			task.AllowedPaths = append([]string(nil), valid.AllowedPaths...)
+			mutate(&task)
+			if err := fakepublication.Task(task).Validate(); err == nil {
+				t.Fatal("decoded task passed admission validation")
+			}
+		})
+	}
+}
+
+// fakePublicationMaxCommitTimestamp is 2100-01-01T00:00:00Z, the first commit
+// date fakepublication.ValidateCommitDate refuses.
+const fakePublicationMaxCommitTimestamp = int64(4102444800)
+
+func TestValidateFakePublicationCommitDateBoundaries(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		commitDate time.Time
+		wantErr    bool
+	}{
+		"epoch":              {commitDate: time.Unix(0, 0).UTC()},
+		"before epoch":       {commitDate: time.Unix(-1, 0).UTC(), wantErr: true},
+		"last accepted time": {commitDate: time.Unix(fakePublicationMaxCommitTimestamp-1, 0).UTC()},
+		"2100 boundary": {
+			commitDate: time.Unix(fakePublicationMaxCommitTimestamp, 0).UTC(),
+			wantErr:    true,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := fakepublication.ValidateCommitDate(test.commitDate)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("fakepublication.ValidateCommitDate(%v) error = %v, wantErr %t",
+					test.commitDate, err, test.wantErr)
 			}
 		})
 	}
