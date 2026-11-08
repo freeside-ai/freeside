@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 112
+revision: 113
 status: active
-updated: 2026-11-07
+updated: 2026-11-08
 ---
 
 # Freeside
@@ -2486,7 +2486,10 @@ chose ([Go project-images note](../devlog/2026-10-21-1342-go-project-images.md))
 so `bash scripts/check.sh` runs its `daemon`, `docs`, and `api` checks, and
 every `scripts` step, with networking disabled. The Go path is its own unit (#2115, `kind:contract` because the
 image record gains the Go manifest hashes) and is needed before Freeside is
-onboarded (Section [11](#11-roadmap-build-order-and-coordination)).
+onboarded (Section [11](#11-roadmap-build-order-and-coordination)). Revision
+113 lets one project image carry more than one toolchain path, each keyed by
+its own module directory, when a repository's checks need them, as
+Freeside's will carry Go and Swift (#2881).
 
 The declared verification recipe runs verbatim with networking disabled. The
 builder proves both that this clean run passes and that the baked dependency
@@ -2713,8 +2716,8 @@ the offline proof resolves and builds with networking disabled, and a
 `Package.resolved` the mirrors cannot satisfy fails the build (#2183). A
 project qualifies once its core modules build and test on Linux with the
 Apple-only modules declared in its manifest, not discovered by the build;
-Freeside's `app/` (#2182) and Straylight each need a module split first
-(Section [11](#11-roadmap-build-order-and-coordination)).
+Freeside's `app/` has its module split (#2182), and Straylight still needs
+one (Section [11](#11-roadmap-build-order-and-coordination)).
 
 macOS is a verification tier, used as briefly as possible. The **macOS
 verification executor** is a credential-free host-side execution class for
@@ -2731,7 +2734,9 @@ enrolled in the runner role, the Capability start trigger's case; admission
 places the job as it places any launch, and the executor is never a separate
 agent or product. One installation per host serves every managed project,
 and concurrency comes from slots, not machines: a pool of unprivileged
-accounts, one per slot, with a job running as its slot's uid.
+accounts, one per slot, with a job running as its slot's uid. In-process on
+the daemon host, the executor needs nothing from the execution-hosts tracker
+(#2161).
 Each job is confined four ways, and each confinement is conformance-proven
 and probed live, as the slot uid, before the recipe runs:
 
@@ -2758,7 +2763,10 @@ showed the app suite's SwiftUI rendering works without one is in the
 [macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md).
 The executor plugs in at the verifier's room seam,
 so no trust decision moves: recipe resolution, head binding, and evidence
-stamping stay with the verifier. The executor is not built yet. Once built,
+stamping stay with the verifier. Each command of a trusted recipe names the
+room that runs it, the project image or the macOS executor, so one recipe
+verifies a repository whose checks span both; Freeside's `app/` is onboarded
+this way (Section [11](#11-roadmap-build-order-and-coordination), revision 113). The executor is not built yet. Once built,
 it is admitted in `unattended` (Operating Modes) as the one host-side class,
 under its own capability declaration,
 `supports_credential_free_host_verification`, proven by the full conformance
@@ -6716,22 +6724,27 @@ requirement, and infrequent workflow or instruction-file changes. Ordinary
 repository features such as tag-only release automation belong in the audited,
 digest-bound trust profile. They are not prose exceptions.
 
-**Freeside follows gh-imgup (revision 92).** After the first completed
-unattended run on gh-imgup (the wave 8 exit proof), Freeside is onboarded as a
-managed repository: `daemon/` first, as a wave 9 unit whose exit proof is an
-unattended run on a Freeside issue (revision 99), then `api/`, `scripts/`,
-and `docs/` as the image's baked recipe comes to verify each networkless.
+**Freeside follows gh-imgup and manages its whole repository (revisions 92
+and 113).** After the first completed unattended run on gh-imgup (the wave 8
+exit proof), Freeside is onboarded as a managed repository for every path but
+`images/`, `app/` included, so no task needs a judgment of its edit set
+before Freeside takes it; writer work that itself needs macOS keeps the
+bootstrap exception (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). `images/` stays out because the agent bases stay
+operator-built (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). Onboarding
+waits until the project image, carrying the Go and Swift toolchain paths,
+verifies the Linux-clean checks and the macOS verification executor verifies
+the Apple-only ones, both networkless under the criteria above (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Toolchains and
+macOS Execution).
 Control-plane paths stay operator-authored, including those inside the
 onboarded directories (verification recipes such as `scripts/check.sh`, and
 the materiality rules in this plan): the accepted hot spot in Section
 [3.2](#32-the-interruption-budget) stands, and a control-plane modification
-stays non-waivable under Section [3.1](#31-autonomy-inside-the-ward). `app/`
-stays out until a macOS execution class exists (the bootstrap exception in
-Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)).
-Onboarding needs the Go toolchain path in Section
-[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) (#2115), and the
-image's baked recipe must verify every onboarded path networkless under the
-criteria above; it covers `daemon/`, `docs/`, `api/`, and `scripts/`.
+stays non-waivable under Section [3.1](#31-autonomy-inside-the-ward). The
+work runs on the ad hoc tracker #2873, starts by fiat, and does not gate the
+1B.1 exit.
 
 **macOS execution: Linux-first cores and a credential-free verifier (revision
 96).** The class revision 92 left open is decided in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
@@ -6750,13 +6763,18 @@ all (revision 95). That mode is held (revision 103), so these writers keep
 waiting and never fall back to copying the token. Two spikes on the reference host gated the text:
 SwiftUI `ImageRenderer` renders for a uid with no window-server session, and
 per-uid packet-filter rules refute off-host egress while a sandbox profile
-closes loopback and the system resolver. The order of work: the Swift
-toolchain path for project images (#2183); the `FreesideCore` split so the
-Linux-clean half of `app/` builds and tests in a ward (#2182); then the
-executor as its own unit, filed when the Swift path exists.
-Straylight's module split runs in its own repository on the same order.
-`app/` paths whose verification the executor covers are onboarded after it
-is conformance-proven; the rest stay under the bootstrap exception.
+closes loopback and the system resolver. Freeside's module split is done
+(#2182), so the Linux-clean half of `app/` can build and test in a ward once
+the Swift toolchain path lands. The order
+of work, on tracker #2873 (revision 113): the Swift toolchain path for
+project images (#2183); one image that carries both Go and Swift (#2881);
+trusted recipe commands that name their room (#2875); the executor (#2876,
+#2877, #2878, #2879, #2880); verification across both rooms (#2882); the
+whole-repository onboarding (#2883); and the live run (#2382).
+Straylight still needs its module split, in its own repository, before it
+can follow the same order. `app/` is onboarded once the executor is
+conformance-proven; writer work that itself needs macOS stays under the
+bootstrap exception.
 
 ### Phase 1A: The Secure Publish Path, in Three Internal Exits
 
@@ -6932,14 +6950,13 @@ once all three have closed.
   stopped-operation signals, the registry egress profile and the policy-gated
   image rebuild, and re-entry of published-PR activity.
 - **Claude capacity closes (wave 9).** This wave delivers one agent
-  vocabulary across execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
-  routing between two Claude subscriptions by an operator-set policy, with
+  vocabulary across execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)),
+  and routing between two Claude subscriptions by an operator-set policy, with
   usage observations per pool and window, their collection and refresh, and
   the account usage view on Mac and iPhone (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [8](#8-observability-and-optimization-telemetry), and
   [10](#10-operations-and-onboarding)), so the operator sees how full each subscription is and the
   policy sends new tasks to one subscription until its window is exhausted
-  (revision 103); and Freeside onboarded as a managed
-  repository for `daemon/`. The Codex execution driver and pi moved to
+  (revision 103). The Codex execution driver and pi moved to
   Phase 2 (revision 99).
 
 #### 1B.2: The Initiative View
@@ -7023,7 +7040,7 @@ landing tip keeps parallel work honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. External first-round adjudication fallbacks wait for per-finding human decisions (#1989), using #1016’s executable dispute contract. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); revision 107's routing contract, the drain-first account and the tier and resets a selection cites, before the router (#2516); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Specifier triage joins the wave by revision 106: the escalated-line contract (#2510), then the triage call (#2511, `starts-after` #2510, the router #2393, and the alternate-agent card #869); the exit proof does not cover it. Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a fixture pass that seeds both pools' weekly resets routes a new task to the pool that resets sooner, and a named drain-first account takes it instead; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
+| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); revision 107's routing contract, the drain-first account and the tier and resets a selection cites, before the router (#2516); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); and the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598). Specifier triage joins the wave by revision 106: the escalated-line contract (#2510), then the triage call (#2511, `starts-after` #2510, the router #2393, and the alternate-agent card #869); the exit proof does not cover it. Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a managed repository's issue (gh-imgup until Freeside is onboarded) completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a fixture pass that seeds both pools' weekly resets routes a new task to the pool that resets sooner, and a named drain-first account takes it instead; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
 | **10 (1B.1): subscription operations** | Folded | Folded into row 9 by revision 99. No wave 10 tracker is created; rows 11 and 12 keep their numbers. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assigned by the planner), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
 | **12 (1B.2): image upkeep** | Parallel | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assigned by the planner: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). The adoption record and the card's storage (#2379, a contract unit, `starts-after` #2378, the revision 101 unit) precede the adoption card for policy-clause refusals (#2335, `starts-after` #2333 and #2379). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and a new admitted image built at the tip under the adopted recipe; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
@@ -7118,7 +7135,7 @@ The 1A backlog also serves as specifier fixtures.
 Expand beyond the first constrained path:
 
 - a second workflow shape (Freeside itself is the second repository,
-  onboarded in wave 9);
+  onboarded on tracker #2873, revision 113);
 - scan initiators and chaining;
 - the Codex execution driver (#406, #407, #408, #873, #868) and the Codex
   usage collector (#1718), moved out of wave 9 by revision 99: a hedge not
@@ -7204,43 +7221,40 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 112 ("A Reading Order on the Ready Card"):
+Revision 113 ("Freeside Manages Its Whole Repository"):
 
-1. **The `ready_for_final_review` card carries an optional review guide
-   after the change summary and before the verification verdicts.** The
-   guide is an ordered list of stops: the places in the change where the
-   operator's judgment matters, each pointing at the code it concerns, so
-   the operator reads the PR in the order the change is understood instead
-   of file by file. It rides the summary layer, so a card still presents at
-   most four layers, and the verdicts still precede the actions (Section [9](#9-comprehension)).
-   The shape follows T3 Code's pull-request review guide. Rejected: a
-   daemon-generated diff summary, which can say what changed but not where
-   judgment matters.
-2. **The guide's prose is a labeled claim, and its excerpt text is a daemon
-   fact.** The implementer or remediator writes the guide as reserved,
-   launcher-declared evidence in its own handoff; it never enters
-   `evidence_snapshot` (Section [5.15](#515-evidence-and-images) rule 2). The agent supplies a location and a
-   caption, never code text; the daemon reads the lines from the imported
-   commit or its base, and an excerpt it cannot read renders as unresolved,
-   never as agent-supplied code. Rejected: free Markdown inside the summary
-   claim, which would let agent-quoted code pass as the change's real code;
-   and T3's separate generator agent in a temporary checkout, because the
-   implementer's own handoff gives provenance and head binding for free.
-3. **A guide is bound to the head it was written against.** A head change
-   already supersedes the ready item, so a re-entered or remediated
-   candidate brings its own guide or none. Rejected: keeping a stale guide
-   across heads, which would point the operator at code the PR no longer
-   holds.
-4. **A missing guide never blocks a ready item; a malformed one fails the
-   import closed** as invalid evidence, while a well-formed excerpt the
-   daemon declines to read renders as unresolved.
-5. **Non-Goal 1 holds.** The guide orders a reading and points into the PR.
-   It adds no inline comments, no per-stop resolution, and no verdict; review
-   and merging stay on GitHub. This extends revision 78's rule that View PR
-   is navigation and never resolves the item.
+1. **Freeside is onboarded for every path but `images/`, `app/` included.**
+   The project image verifies the Linux-clean checks and the macOS
+   verification executor the Apple-only ones, both networkless; `images/`
+   stays out because the agent bases stay operator-built, and control-plane
+   paths stay operator-authored as before (Sections [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) and [11](#11-roadmap-build-order-and-coordination)). This
+   overturns revision 92 item 2 (`daemon/` first, then `api/`, `scripts/`,
+   and `docs/`, with `app/` out until a macOS execution class exists) and
+   revision 99 item 6 (Freeside's `daemon/` onboarding as wave 9's exit
+   proof). The assumption that changed: that a task's edit set stays inside
+   one directory. The seams cut through ordinary units: a Tier A daemon
+   change edits `AGENTS.md`, a daemon change with a client-visible effect
+   edits `app/`, and any API schema change needs the generated client in
+   `app/`. Partial onboarding therefore made the owner judge each task's edit
+   set before handing it over, which is the interruption Freeside exists to
+   remove. Rejected: keeping partial onboarding as the steady state.
+2. **The work runs on the ad hoc tracker #2873, starts by fiat, and does
+   not gate the 1B.1 exit.** Wave 9's exit proof runs on a managed
+   repository's issue, gh-imgup until Freeside is onboarded, and Freeside's
+   own run moves to #2873. Rejected: adding the units to wave 9, which would
+   hold the 1B.1 exit evaluation for a long serial chain of mostly Tier A
+   units; and a new wave 10 reusing the folded row, a numbered wave for one
+   feature.
+3. **Recipe commands name their room, and one image may carry more than one
+   toolchain.** One trusted recipe verifies a repository whose checks span
+   the project image and the executor, and Freeside's image carries Go and
+   Swift. Revision 96's executor design stands: the four confinements,
+   pooled slots, and in-process placement on the daemon host, which needs
+   nothing from the execution-hosts tracker (#2161). Its order of work is
+   replaced by #2873's units, and its module-split step is done (#2182).
 
-(Owner decision of 2026-11-07 on #2738;
-[decision note](../devlog/2026-11-07-1021-review-guide-on-ready-card.md).)
+(Owner decision of 2026-11-08, in chat, on #2874;
+[decision note](../devlog/2026-11-08-1223-whole-repository-self-management.md).)
 
 ## 14. Risks
 

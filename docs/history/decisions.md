@@ -3539,3 +3539,41 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-04 on #2593;
 [decision note](../../devlog/2026-11-05-1035-select-by-enrollment-model-effort.md).)
+
+## Revision 112 ("A Reading Order on the Ready Card"):
+
+1. **The `ready_for_final_review` card carries an optional review guide
+   after the change summary and before the verification verdicts.** The
+   guide is an ordered list of stops: the places in the change where the
+   operator's judgment matters, each pointing at the code it concerns, so
+   the operator reads the PR in the order the change is understood instead
+   of file by file. It rides the summary layer, so a card still presents at
+   most four layers, and the verdicts still precede the actions (Section [9](../plan.md#9-comprehension)).
+   The shape follows T3 Code's pull-request review guide. Rejected: a
+   daemon-generated diff summary, which can say what changed but not where
+   judgment matters.
+2. **The guide's prose is a labeled claim, and its excerpt text is a daemon
+   fact.** The implementer or remediator writes the guide as reserved,
+   launcher-declared evidence in its own handoff; it never enters
+   `evidence_snapshot` (Section [5.15](../plan.md#515-evidence-and-images) rule 2). The agent supplies a location and a
+   caption, never code text; the daemon reads the lines from the imported
+   commit or its base, and an excerpt it cannot read renders as unresolved,
+   never as agent-supplied code. Rejected: free Markdown inside the summary
+   claim, which would let agent-quoted code pass as the change's real code;
+   and T3's separate generator agent in a temporary checkout, because the
+   implementer's own handoff gives provenance and head binding for free.
+3. **A guide is bound to the head it was written against.** A head change
+   already supersedes the ready item, so a re-entered or remediated
+   candidate brings its own guide or none. Rejected: keeping a stale guide
+   across heads, which would point the operator at code the PR no longer
+   holds.
+4. **A missing guide never blocks a ready item; a malformed one fails the
+   import closed** as invalid evidence, while a well-formed excerpt the
+   daemon declines to read renders as unresolved.
+5. **Non-Goal 1 holds.** The guide orders a reading and points into the PR.
+   It adds no inline comments, no per-stop resolution, and no verdict; review
+   and merging stay on GitHub. This extends revision 78's rule that View PR
+   is navigation and never resolves the item.
+
+(Owner decision of 2026-11-07 on #2738;
+[decision note](../../devlog/2026-11-07-1021-review-guide-on-ready-card.md).)
