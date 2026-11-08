@@ -398,21 +398,15 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	// through the same runState, but its release waits for the full-token
 	// audit rather than teardown's name-keyed writer check (see the defer).
 	st := &runState{ownershipLabel: Label{Key: ownershipLabelKey, Value: rec.OwnershipToken}}
-	for _, claim := range []*objectClaim{
-		&st.workspace, &st.instructions,
-		&st.seeder, &st.observer, &st.instructionSeeder, &st.instructionObserver,
-		&st.credObsPre, &st.credObsPost, &st.agent, &st.writerObserver, &st.exporter, &st.network,
-	} {
-		claim.attempted = true
-	}
-	if hs.Agent.LaunchState == LaunchStateClaudeClean {
-		for _, claim := range []*objectClaim{
-			&st.configRoot, &st.continuity, &st.sessionScratch,
-			&st.configRootSeeder, &st.configRootObserver,
-			&st.continuityObserver, &st.scratchObserver,
-		} {
-			claim.attempted = true
+	// The credential observers are marked whether or not the spec leases a
+	// store: a claim marked for an object the run never made only costs
+	// teardown an inspection, since it reaps on ownership evidence alone.
+	for _, r := range handoffRoles {
+		if r.feature == featureAuthStoreLease || r.feature.enabledBy(hs) {
+			r.claim(st).attempted = true
 		}
+	}
+	if featureClaudeClean.enabledBy(hs) {
 		if rec.State != nil {
 			st.preparedState = rec.State
 			st.configRoot.fingerprint = rec.State.ConfigRootFingerprint
@@ -421,17 +415,11 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		}
 		st.preparedInstructions = rec.Instructions
 	}
-	if hs.Agent.PromptFile != nil {
-		st.prompt.attempted, st.promptSeeder.attempted, st.promptObserver.attempted = true, true, true
-		if rec.State != nil {
-			st.prompt.fingerprint = rec.State.PromptFingerprint
-		}
+	if featurePromptFile.enabledBy(hs) && rec.State != nil {
+		st.prompt.fingerprint = rec.State.PromptFingerprint
 	}
-	if len(hs.Agent.Inputs) > 0 {
-		st.inputs.attempted, st.inputsSeeder.attempted, st.inputsObserver.attempted = true, true, true
-		if rec.State != nil {
-			st.inputs.fingerprint = rec.State.InputsFingerprint
-		}
+	if featureOperatorInputs.enabledBy(hs) && rec.State != nil {
+		st.inputs.fingerprint = rec.State.InputsFingerprint
 	}
 	if rec.Lease != nil {
 		// Re-gate the recorded window against the live store row before any
@@ -718,61 +706,15 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 			LossCause: "writer completed but the workspace is no longer provably this run's",
 		}, nil
 	}
-	// A dead process may have left an exporter or post-writer observer under
-	// this run's deterministic names; their pre-execution inspections died
-	// with it, so they are reaped on fresh ownership evidence and rerun,
-	// never trusted.
-	if err := b.reapRecoveredContainer(ctx, names.Exporter, &st.exporter, st.ownershipLabel); err != nil {
-		return nil, err
-	}
-	if err := b.reapRecoveredContainer(ctx, names.CredObsPost, &st.credObsPost, st.ownershipLabel); err != nil {
-		return nil, err
-	}
-	if err := b.reapRecoveredContainer(
-		ctx, names.WriterObserver, &st.writerObserver, st.ownershipLabel,
-	); err != nil {
-		return nil, err
-	}
-	// A damaged or interrupted world can also leave the pre-writer roles
-	// standing; they are this run's deterministic-name leftovers, reaped on
-	// the same fresh ownership evidence before anything is re-earned.
-	if err := b.reapRecoveredContainer(ctx, names.Seeder, &st.seeder, st.ownershipLabel); err != nil {
-		return nil, err
-	}
-	if err := b.reapRecoveredContainer(ctx, names.Observer, &st.observer, st.ownershipLabel); err != nil {
-		return nil, err
-	}
-	if err := b.reapRecoveredContainer(
-		ctx, names.InstructionSeeder, &st.instructionSeeder, st.ownershipLabel,
-	); err != nil {
-		return nil, err
-	}
-	if err := b.reapRecoveredContainer(
-		ctx, names.InstructionObserver, &st.instructionObserver, st.ownershipLabel,
-	); err != nil {
-		return nil, err
-	}
-	for _, recovered := range []struct {
-		name  string
-		claim *objectClaim
-	}{
-		{names.ConfigRootSeeder, &st.configRootSeeder},
-		{names.ConfigRootObserver, &st.configRootObserver},
-		{names.ContinuityObserver, &st.continuityObserver},
-		{names.ScratchObserver, &st.scratchObserver},
-		{names.PromptSeeder, &st.promptSeeder},
-		{names.PromptObserver, &st.promptObserver},
-		{names.InputsSeeder, &st.inputsSeeder},
-		{names.InputsObserver, &st.inputsObserver},
-	} {
-		if err := b.reapRecoveredContainer(
-			ctx, recovered.name, recovered.claim, st.ownershipLabel,
-		); err != nil {
+	// A dead process may have left the exporter, the observers, or the
+	// pre-writer roles under this run's deterministic names. Their
+	// pre-execution inspections died with it, so each is reaped on fresh
+	// ownership evidence before anything is re-earned, never trusted
+	// (handoffRoles holds the order).
+	for _, r := range handoffRecoveryReapOrder() {
+		if err := b.reapRecoveredContainer(ctx, *r.name(&names), r.claim(st), st.ownershipLabel); err != nil {
 			return nil, err
 		}
-	}
-	if err := b.reapRecoveredContainer(ctx, names.CredObsPre, &st.credObsPre, st.ownershipLabel); err != nil {
-		return nil, err
 	}
 	// After the deterministic names are settled, no container anywhere may
 	// still carry this run's token: a credential-bearing survivor under an

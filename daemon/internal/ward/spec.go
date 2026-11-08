@@ -874,35 +874,13 @@ type handoffNames struct {
 	Network             string
 }
 
+// namesFor names every handoff role for runID from handoffRoles.
 func namesFor(runID string) handoffNames {
-	name := func(role string) string { return wardname.Name(wardname.HandoffPrefix, runID, role) }
-	return handoffNames{
-		Prompt:              name(wardname.Prompt),
-		PromptSeeder:        name(wardname.PromptSeed),
-		PromptObserver:      name(wardname.PromptCheck),
-		Inputs:              name(wardname.Inputs),
-		InputsSeeder:        name(wardname.InputsSeed),
-		InputsObserver:      name(wardname.InputsCheck),
-		Workspace:           name(wardname.Workspace),
-		Instructions:        name(wardname.Ins),
-		ConfigRoot:          name(wardname.Cfg),
-		Continuity:          name(wardname.Projects),
-		SessionScratch:      name(wardname.SessionEnv),
-		Seeder:              name(wardname.Seeder),
-		Observer:            name(wardname.Observer),
-		InstructionSeeder:   name(wardname.InsSeed),
-		InstructionObserver: name(wardname.InsCheck),
-		ConfigRootSeeder:    name(wardname.CfgSeed),
-		ConfigRootObserver:  name(wardname.CfgCheck),
-		ContinuityObserver:  name(wardname.ProjectsCheck),
-		ScratchObserver:     name(wardname.SessCheck),
-		WriterObserver:      name(wardname.WriterCheck),
-		CredObsPre:          name(wardname.CredPre),
-		CredObsPost:         name(wardname.CredPost),
-		Agent:               name(wardname.Agent),
-		Exporter:            name(wardname.Exporter),
-		Network:             name(wardname.Egress),
+	var names handoffNames
+	for _, r := range handoffRoles {
+		*r.name(&names) = wardname.Name(wardname.HandoffPrefix, runID, r.role)
 	}
+	return names
 }
 
 // RuntimeResourceNames is the complete deterministic host-runtime namespace
@@ -921,20 +899,7 @@ type RuntimeResourceAuthorizer func(context.Context, RuntimeResourceNames) error
 // RuntimeResourceNamesFor returns every deterministic runtime object name for
 // runID from ward's single naming authority.
 func RuntimeResourceNamesFor(runID string) RuntimeResourceNames {
-	names := namesFor(runID)
-	return promptResourceNames(names, RuntimeResourceNames{
-		Containers: []string{
-			names.Seeder, names.Observer, names.InstructionSeeder, names.InstructionObserver,
-			names.ConfigRootSeeder, names.ConfigRootObserver, names.ContinuityObserver,
-			names.ScratchObserver, names.WriterObserver, names.CredObsPre, names.CredObsPost,
-			names.Agent, names.Exporter,
-		},
-		Volumes: []string{
-			names.Workspace, names.Instructions, names.ConfigRoot, names.Continuity,
-			names.SessionScratch,
-		},
-		Networks: []string{names.Network},
-	})
+	return appendRuntimeNames(RuntimeResourceNames{}, namesFor(runID), handoffRoles)
 }
 
 // PreJobRunIDForInvocation is the deterministic, bounded conformance run ID
