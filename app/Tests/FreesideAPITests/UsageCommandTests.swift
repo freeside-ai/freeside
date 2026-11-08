@@ -29,13 +29,13 @@ import Testing
     }
 
     private func policy(
-        _ id: String, expected: Int?, agents: [String], drainFirst: String? = nil
+        _ id: String, expected: Int?, enrollments: [String], drainFirst: String? = nil
     ) -> Components.Schemas.ClientCommand {
         command(
             id,
             .set_routing_policy(
                 .init(
-                    kind: .set_routing_policy, roles: [.init(role: .implementer, agents: agents)],
+                    kind: .set_routing_policy, roles: [.init(role: .implementer, enrollments: enrollments)],
                     drain_first_account: drainFirst, expected_revision: expected)))
     }
 
@@ -257,7 +257,8 @@ import Testing
         let current = try #require(bootstrap.routing_policy?.value1.policy)
 
         let stale = try await client.submitCommand(
-            body: .json(policy("stale", expected: current.revision - 1, agents: ["claude-primary"]))
+            body: .json(
+                policy("stale", expected: current.revision - 1, enrollments: [UsageFixtures.readingCollectorID]))
         ).conflict.body.json
         guard case .RoutingPolicyRejection(let rejection) = stale else {
             Issue.record("wrong conflict arm")
@@ -265,13 +266,16 @@ import Testing
         }
         #expect(rejection.current_policy?.value1 == current)
 
-        let unknown = policy("unknown", expected: current.revision, agents: ["gemini"])
+        let unknown = policy("unknown", expected: current.revision, enrollments: ["enrollment-gemini"])
         #expect(status(try await client.submitCommand(body: .json(unknown))) == 400)
-        let repeated = policy("repeated", expected: current.revision, agents: ["codex-primary", "codex-primary"])
+        let repeated = policy(
+            "repeated", expected: current.revision,
+            enrollments: [UsageFixtures.unsupportedCollectorID, UsageFixtures.unsupportedCollectorID])
         #expect(status(try await client.submitCommand(body: .json(repeated))) == 400)
 
         let same = policy(
-            "same", expected: current.revision, agents: current.roles.first { $0.role == .implementer }?.agents ?? [])
+            "same", expected: current.revision,
+            enrollments: current.roles.first { $0.role == .implementer }?.enrollments ?? [])
         let held = try await client.submitCommand(body: .json(same)).ok.body.json
         guard case .set_routing_policy(let heldRecord) = held.record else {
             Issue.record("wrong receipt arm")
@@ -280,7 +284,8 @@ import Testing
         #expect(!heldRecord.recorded && heldRecord.policy == current)
         #expect(CommandResultTrust.accepts(held, for: same))
 
-        let setCommand = policy("set", expected: current.revision, agents: ["claude-secondary"])
+        let setCommand = policy(
+            "set", expected: current.revision, enrollments: [UsageFixtures.readingSecondEnrollmentID])
         let set = try await client.submitCommand(body: .json(setCommand)).ok.body.json
         guard case .set_routing_policy(let record) = set.record else {
             Issue.record("wrong receipt arm")
@@ -300,23 +305,25 @@ import Testing
                 .init(record: .set_routing_policy(forged), revision: set.revision), for: setCommand))
     }
 
-    @Test func routingPolicyChangeChecksAgentsAgainstTheCatalog() async throws {
+    @Test func routingPolicyChangeChecksEnrollmentsAgainstTheCatalog() async throws {
         let server = MockServer(routingPolicy: nil)
         let client = APIClientFactory.mock(server: server)
         var changed = UsageFixtures.defaultAgentCatalog()
         changed.lineup_revision = .init(value1: "sha256:" + String(repeating: "e", count: 64))
-        changed.agents.removeAll { $0.name == "codex-primary" }
+        changed.enrollments.removeAll { $0.enrollment_id == UsageFixtures.unsupportedCollectorID }
+        changed.agents.removeAll { $0.enrollment_id == UsageFixtures.unsupportedCollectorID }
         await server.setAgentCatalog(changed)
 
-        // An agent the default fixtures carry but the served catalog does not.
-        let dropped = policy("dropped", expected: nil, agents: ["codex-primary"])
+        // An enrollment the default fixtures carry but the served catalog does not.
+        let dropped = policy("dropped", expected: nil, enrollments: [UsageFixtures.unsupportedCollectorID])
         #expect(status(try await client.submitCommand(body: .json(dropped))) == 400)
-        // The dropped agent's pool is no catalog agent's pool any more.
+        // The dropped enrollment's pool is no ordered enrollment's pool.
         let droppedPool = policy(
-            "dropped-pool", expected: nil, agents: ["claude-secondary"], drainFirst: UsageFixtures.unsupportedPoolID)
+            "dropped-pool", expected: nil, enrollments: [UsageFixtures.readingSecondEnrollmentID],
+            drainFirst: UsageFixtures.unsupportedPoolID)
         #expect(status(try await client.submitCommand(body: .json(droppedPool))) == 400)
 
-        let kept = policy("kept", expected: nil, agents: ["claude-secondary"])
+        let kept = policy("kept", expected: nil, enrollments: [UsageFixtures.readingSecondEnrollmentID])
         let set = try await client.submitCommand(body: .json(kept)).ok.body.json
         guard case .set_routing_policy(let record) = set.record else {
             Issue.record("wrong receipt arm")
@@ -328,18 +335,18 @@ import Testing
     @Test func routingPolicyChangeRecordsADrainFirstAccount() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let current = try #require(try await client.getSyncBootstrap().ok.body.json.routing_policy?.value1.policy)
-        let agents = current.roles.first { $0.role == .implementer }?.agents ?? []
+        let enrollments = current.roles.first { $0.role == .implementer }?.enrollments ?? []
 
-        // codex-b is codex-primary's pool; spare holds no catalog agent.
+        // codex-b is the codex enrollment's pool; spare holds no ordered enrollment.
         for (id, account) in [
             ("unknown-pool", "nope"), ("agentless-pool", UsageFixtures.unrecordedPoolID), ("empty", ""),
         ] {
-            let refused = policy(id, expected: current.revision, agents: agents, drainFirst: account)
+            let refused = policy(id, expected: current.revision, enrollments: enrollments, drainFirst: account)
             #expect(status(try await client.submitCommand(body: .json(refused))) == 400)
         }
 
         let nameCommand = policy(
-            "name", expected: current.revision, agents: agents, drainFirst: UsageFixtures.unsupportedPoolID)
+            "name", expected: current.revision, enrollments: enrollments, drainFirst: UsageFixtures.unsupportedPoolID)
         let named = try await client.submitCommand(body: .json(nameCommand)).ok.body.json
         guard case .set_routing_policy(let record) = named.record else {
             Issue.record("wrong receipt arm")
@@ -355,7 +362,8 @@ import Testing
                 .init(record: .set_routing_policy(forged), revision: named.revision), for: nameCommand))
 
         let repeatCommand = policy(
-            "repeat", expected: record.policy.revision, agents: agents, drainFirst: UsageFixtures.unsupportedPoolID)
+            "repeat", expected: record.policy.revision, enrollments: enrollments,
+            drainFirst: UsageFixtures.unsupportedPoolID)
         let repeated = try await client.submitCommand(body: .json(repeatCommand)).ok.body.json
         guard case .set_routing_policy(let repeatRecord) = repeated.record else {
             Issue.record("wrong receipt arm")
@@ -364,7 +372,7 @@ import Testing
         #expect(!repeatRecord.recorded && repeatRecord.policy == record.policy)
 
         // The same orders with no account clear it, as a new revision.
-        let clearCommand = policy("clear", expected: record.policy.revision, agents: agents)
+        let clearCommand = policy("clear", expected: record.policy.revision, enrollments: enrollments)
         let cleared = try await client.submitCommand(body: .json(clearCommand)).ok.body.json
         guard case .set_routing_policy(let clearRecord) = cleared.record else {
             Issue.record("wrong receipt arm")
@@ -378,14 +386,14 @@ import Testing
     @Test func routingPolicyChangeFailsClosedWithoutATree() async throws {
         let client = APIClientFactory.mock(
             server: MockServer(routingPolicy: nil, agentCatalog: UsageFixtures.treelessAgentCatalog()))
-        let first = policy("first", expected: nil, agents: ["claude-primary"])
+        let first = policy("first", expected: nil, enrollments: [UsageFixtures.readingCollectorID])
         #expect(status(try await client.submitCommand(body: .json(first))) == 500)
         #expect(try await client.getSyncBootstrap().ok.body.json.routing_policy == nil)
     }
 
     @Test func routingPolicyChangeFromNoPolicy() async throws {
         let client = APIClientFactory.mock(server: MockServer(routingPolicy: nil))
-        let first = policy("first", expected: nil, agents: ["codex-primary"])
+        let first = policy("first", expected: nil, enrollments: [UsageFixtures.unsupportedCollectorID])
         let set = try await client.submitCommand(body: .json(first)).ok.body.json
         guard case .set_routing_policy(let record) = set.record else {
             Issue.record("wrong receipt arm")
@@ -393,7 +401,7 @@ import Testing
         }
         #expect(record.recorded && record.policy.revision == 1 && record.expected_revision == nil)
         #expect(CommandResultTrust.accepts(set, for: first))
-        let again = policy("again", expected: nil, agents: ["claude-primary"])
+        let again = policy("again", expected: nil, enrollments: [UsageFixtures.readingCollectorID])
         let conflict = try await client.submitCommand(body: .json(again)).conflict.body.json
         guard case .RoutingPolicyRejection(let rejection) = conflict else {
             Issue.record("wrong conflict arm")

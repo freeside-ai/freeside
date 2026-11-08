@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -324,5 +325,36 @@ func TestValidateTaskLineChoicesErrorOmitsRefusedText(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), pasted) {
 			t.Fatalf("%s: err = %v, want an error without the refused text", name, err)
 		}
+	}
+}
+
+// The wire renders exactly one of a passed-over mark's agent and
+// enrollment, whichever the stored mark records: a mark written before
+// #2736 named an agent, a later one an enrollment, and nothing translates
+// between them (#2807).
+func TestTaskLineProvenanceWireRendersTheStoredMarkForm(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 12, 3, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		mark domain.TaskLinePassedOverMark
+		want string
+	}{
+		{"enrollment", domain.TaskLinePassedOverMark{Enrollment: "enrollment-a"}, `"agent":null,"enrollment":"enrollment-a"`},
+		{"agent", domain.TaskLinePassedOverMark{Agent: "claude-a"}, `"agent":"claude-a","enrollment":null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mark := tc.mark
+			mark.Pool, mark.Window, mark.Source, mark.MarkedAt = "claude-max-a", "five_hour", domain.ExhaustedMarkUsageReading, at
+			provenance := domain.TaskLineProvenance{PassedOver: &mark}
+			body, err := json.Marshal(provenance.Wire().PassedOver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(string(body), "{"+tc.want+",") {
+				t.Fatalf("passed_over = %s, want it to start with {%s", body, tc.want)
+			}
+		})
 	}
 }

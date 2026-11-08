@@ -263,7 +263,8 @@
             }
           ],
           "passed_over": {
-            "agent": "claude-a/claude_code",
+            "agent": null,
+            "enrollment": "claude-a/claude_code",
             "pool": "pool-a",
             "window": "five_hour",
             "source": "provider_refusal",

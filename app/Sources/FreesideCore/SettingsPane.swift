@@ -62,13 +62,14 @@ enum SettingsSummary {
         preferences.advancesToNextItem ? "Advance on" : "Advance off"
     }
 
-    /// Agents: an unanswered change, or the agents the policy orders, each
-    /// once, in role order.
+    /// Agents: an unanswered change, or the enrollments the policy orders
+    /// (the agent names an older revision recorded), each once, in role
+    /// order.
     static func agents(_ routing: RoutingPolicyModel) -> String {
         if let pending = routing.pending, pending.receipt == nil { return "Unconfirmed" }
         guard let policy = routing.policy else { return "No policy" }
         var seen = Set<String>()
-        let names = policy.roles.flatMap(\.agents).filter { seen.insert($0).inserted }
+        let names = policy.roles.flatMap { $0.enrollments ?? $0.agents ?? [] }.filter { seen.insert($0).inserted }
         return names.isEmpty ? "Lineup order" : names.joined(separator: " · ")
     }
 

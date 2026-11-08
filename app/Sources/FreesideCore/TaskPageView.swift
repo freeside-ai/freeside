@@ -2546,7 +2546,10 @@ enum TaskTimelinePresentation {
         if let superseded {
             return "\(subject) changed\(actor) · \(superseded) → \(agent)"
         }
-        let fallback = line.provenance?.value1.passed_over.map { " instead of \($0.value1.agent)" } ?? ""
+        let fallback =
+            line.provenance?.value1.passed_over.flatMap { mark in
+                (mark.value1.enrollment ?? mark.value1.agent).map { " instead of \($0)" }
+            } ?? ""
         return "\(subject) set\(actor) · \(agent)\(fallback)"
     }
 }

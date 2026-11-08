@@ -98,6 +98,49 @@ type RoutingPolicySnapshot struct {
 	Policy        RoutingPolicyWire `json:"policy"`
 }
 
+// RoutingPolicyWire is a routing policy revision as the client wire carries
+// it, matching api/openapi.yaml's RoutingPolicy (renderRoutingPolicy).
+type RoutingPolicyWire struct {
+	Revision          int                        `json:"revision"`
+	Roles             []RoutingPolicyRoleWire    `json:"roles"`
+	Source            domain.RoutingPolicySource `json:"source"`
+	SetBy             string                     `json:"set_by"`
+	SetAt             time.Time                  `json:"set_at"`
+	LineupRevision    domain.Digest              `json:"lineup_revision"`
+	DrainFirstAccount *domain.UsagePoolID        `json:"drain_first_account"`
+}
+
+// RoutingPolicyRoleWire is one role's order as the client wire carries it:
+// exactly one of Enrollments and Agents is non-nil, in the form the revision
+// was stored in. The stored role omits the empty form; the wire carries both
+// keys, the empty one null.
+type RoutingPolicyRoleWire struct {
+	Role        domain.RoleName             `json:"role"`
+	Enrollments []domain.ClientEnrollmentID `json:"enrollments"`
+	Agents      []string                    `json:"agents"`
+}
+
+// renderRoutingPolicy projects a revision for the client wire. A revision
+// stored since #2736 renders its enrollments and one stored before it the
+// agent names it recorded; neither is translated into the other, so the
+// rendering reads no agent tree.
+func renderRoutingPolicy(policy domain.RoutingPolicy) RoutingPolicyWire {
+	roles := make([]RoutingPolicyRoleWire, 0, len(policy.Roles))
+	for _, role := range policy.Roles {
+		wire := RoutingPolicyRoleWire{Role: role.Role}
+		if role.AgentsForm() {
+			wire.Agents = slices.Clone(role.Agents)
+		} else {
+			wire.Enrollments = slices.Clone(role.Enrollments)
+		}
+		roles = append(roles, wire)
+	}
+	return RoutingPolicyWire{
+		Revision: policy.Revision, Roles: roles, Source: policy.Source, SetBy: policy.SetBy, SetAt: policy.SetAt,
+		LineupRevision: policy.LineupRevision, DrainFirstAccount: policy.DrainFirstAccount,
+	}
+}
+
 // usagePoolSnapshots projects every pool, in pool id order.
 func usagePoolSnapshots(
 	ctx context.Context, tx *store.ReadTx, state store.ServerState, refreshAge time.Duration,
@@ -238,10 +281,9 @@ func usageWindowReading(reading domain.WindowReading, refreshAge time.Duration) 
 }
 
 // currentRoutingPolicySnapshot projects the current routing policy revision,
-// nil when none was ever set, its orders rendered against catalog
-// (renderRoutingPolicy).
+// nil when none was ever set.
 func currentRoutingPolicySnapshot(
-	ctx context.Context, tx *store.ReadTx, state store.ServerState, catalog *AgentCatalog,
+	ctx context.Context, tx *store.ReadTx, state store.ServerState,
 ) (*RoutingPolicySnapshot, error) {
 	policy, err := tx.CurrentRoutingPolicy(ctx)
 	if errors.Is(err, store.ErrNotFound) {
@@ -252,6 +294,6 @@ func currentRoutingPolicySnapshot(
 	}
 	return &RoutingPolicySnapshot{
 		AsOfRevision: state.Revision, EntityVersion: int64(policy.Revision),
-		Policy: renderRoutingPolicy(policy, catalog),
+		Policy: renderRoutingPolicy(policy),
 	}, nil
 }

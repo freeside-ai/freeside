@@ -1989,29 +1989,35 @@ public enum Components {
             case cli_routing_set = "cli_routing_set"
             case client_routing_set = "client_routing_set"
         }
-        /// One role's agents: the router's candidates for the role, whose pools it ranks by the drain-first account, then the soonest known weekly reset, then this order, passing over a pool whose window is marked exhausted.
+        /// One role's order: the router's candidates for the role, whose pools it ranks by the drain-first account, then the soonest known weekly reset, then this order, passing over a pool whose window is marked exhausted. Exactly one of enrollments and agents is non-null: a revision stored since #2736 orders enrollment ids, and an older one the agent names it recorded. The daemon never translates one into the other.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole`.
         public struct RoutingPolicyRole: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole/role`.
             public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole/enrollments`.
+            public var enrollments: [Swift.String]?
             /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole/agents`.
-            public var agents: [Swift.String]
+            public var agents: [Swift.String]?
             /// Creates a new `RoutingPolicyRole`.
             ///
             /// - Parameters:
             ///   - role:
+            ///   - enrollments:
             ///   - agents:
             public init(
                 role: Components.Schemas.TaskLineRole,
-                agents: [Swift.String]
+                enrollments: [Swift.String]? = nil,
+                agents: [Swift.String]? = nil
             ) {
                 self.role = role
+                self.enrollments = enrollments
                 self.agents = agents
             }
             public enum CodingKeys: String, CodingKey {
                 case role
+                case enrollments
                 case agents
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -2020,17 +2026,63 @@ public enum Components {
                     Components.Schemas.TaskLineRole.self,
                     forKey: .role
                 )
-                self.agents = try container.decode(
+                self.enrollments = try container.decodeIfPresent(
+                    [Swift.String].self,
+                    forKey: .enrollments
+                )
+                self.agents = try container.decodeIfPresent(
                     [Swift.String].self,
                     forKey: .agents
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "role",
+                    "enrollments",
                     "agents"
                 ])
             }
         }
-        /// One revision of the routing policy: the standing rule for which usage pool a new task runs on, and so which agent takes it when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
+        /// One role's order in a set_routing_policy request: enrollment ids the daemon holds, each run on the role's lineup model and effort, with no id twice. A request cannot order agent names.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicyRoleInput`.
+        public struct RoutingPolicyRoleInput: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRoleInput/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRoleInput/enrollments`.
+            public var enrollments: [Swift.String]
+            /// Creates a new `RoutingPolicyRoleInput`.
+            ///
+            /// - Parameters:
+            ///   - role:
+            ///   - enrollments:
+            public init(
+                role: Components.Schemas.TaskLineRole,
+                enrollments: [Swift.String]
+            ) {
+                self.role = role
+                self.enrollments = enrollments
+            }
+            public enum CodingKeys: String, CodingKey {
+                case role
+                case enrollments
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.enrollments = try container.decode(
+                    [Swift.String].self,
+                    forKey: .enrollments
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "role",
+                    "enrollments"
+                ])
+            }
+        }
+        /// One revision of the routing policy: the standing rule for which usage pool a new task runs on, and so which enrollment runs it when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RoutingPolicy`.
@@ -2051,7 +2103,7 @@ public enum Components {
             public var set_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RoutingPolicy/lineup_revision`.
             public var lineup_revision: Components.Schemas.Digest
-            /// The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an agent on it; null when the revision names none. It was the pool of an agent of the tree at lineup_revision when set.
+            /// The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an enrollment on it; null when the revision names none. It was the pool of an ordered enrollment when set.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/RoutingPolicy/drain_first_account`.
@@ -2065,7 +2117,7 @@ public enum Components {
             ///   - set_by: The operator identity that set it; device:<device_id> for a client.
             ///   - set_at:
             ///   - lineup_revision:
-            ///   - drain_first_account: The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an agent on it; null when the revision names none. It was the pool of an agent of the tree at lineup_revision when set.
+            ///   - drain_first_account: The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an enrollment on it; null when the revision names none. It was the pool of an ordered enrollment when set.
             public init(
                 revision: Swift.Int,
                 roles: [Components.Schemas.RoutingPolicyRole],
@@ -3913,7 +3965,7 @@ public enum Components {
             case triage = "triage"
             case alternate_agent_move = "alternate_agent_move"
         }
-        /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an agent on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
+        /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an enrollment on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineSelectionTier`.
@@ -3985,13 +4037,15 @@ public enum Components {
                 ])
             }
         }
-        /// The exhausted mark that made the router pass over an agent ranked ahead of the chosen one: the agent, its pool, and the mark on that pool's window for the agent's model.
+        /// The exhausted mark that made the router pass over a candidate ranked ahead of the chosen one: the candidate, its pool, and the mark on that pool's window for the candidate's model. Exactly one of enrollment and agent is non-null: a mark written since #2736 names the enrollment, and an older one the agent it recorded.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark`.
         public struct TaskLinePassedOverMark: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/agent`.
-            public var agent: Swift.String
+            public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/enrollment`.
+            public var enrollment: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/pool`.
             public var pool: Swift.String
             /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/window`.
@@ -4008,13 +4062,15 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - agent:
+            ///   - enrollment:
             ///   - pool:
             ///   - window:
             ///   - source:
             ///   - marked_at:
             ///   - resets_at: When the mark clears; null when no reset is known.
             public init(
-                agent: Swift.String,
+                agent: Swift.String? = nil,
+                enrollment: Swift.String? = nil,
                 pool: Swift.String,
                 window: Swift.String,
                 source: Components.Schemas.ExhaustedMarkSource,
@@ -4022,6 +4078,7 @@ public enum Components {
                 resets_at: Foundation.Date? = nil
             ) {
                 self.agent = agent
+                self.enrollment = enrollment
                 self.pool = pool
                 self.window = window
                 self.source = source
@@ -4030,6 +4087,7 @@ public enum Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case agent
+                case enrollment
                 case pool
                 case window
                 case source
@@ -4038,9 +4096,13 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.agent = try container.decode(
+                self.agent = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .agent
+                )
+                self.enrollment = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .enrollment
                 )
                 self.pool = try container.decode(
                     Swift.String.self,
@@ -4064,6 +4126,7 @@ public enum Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "agent",
+                    "enrollment",
                     "pool",
                     "window",
                     "source",
@@ -4072,7 +4135,7 @@ public enum Components {
                 ])
             }
         }
-        /// How the router chose a routing's pool: the policy revision it applied, the tier that chose, the pool, the resets that ranked the candidates, and any exhausted mark it passed over. One routing writes one provenance onto every line it writes. ranked_by holds one reading per candidate pool whose weekly reset was known, in rank order (ascending resets_at, ties in the policy's order, no pool twice); it is empty when no reset was known. passed_over is the first agent ranked ahead of the chosen pool whose pool's window was marked exhausted, null when none was. The tier fixes the rest: drain_first_account passes over no one; soonest_reset names a pool in ranked_by, and passed_over is set when that pool is not first; policy_order names a pool absent from ranked_by, and passed_over is set when ranked_by is not empty. A pool passed over for a mark keeps its reading in ranked_by. An alternate_agent_move line carries the same shape at tier policy_order with an empty ranked_by; its passed_over names the agent the move left, with the parked hold's mark, when the policy orders that agent, and is null otherwise.
+        /// How the router chose a routing's pool: the policy revision it applied, the tier that chose, the pool, the resets that ranked the candidates, and any exhausted mark it passed over. One routing writes one provenance onto every line it writes. ranked_by holds one reading per candidate pool whose weekly reset was known, in rank order (ascending resets_at, ties in the policy's order, no pool twice); it is empty when no reset was known. passed_over is the first candidate ranked ahead of the chosen pool whose pool's window was marked exhausted, null when none was. The tier fixes the rest: drain_first_account passes over no one; soonest_reset names a pool in ranked_by, and passed_over is set when that pool is not first; policy_order names a pool absent from ranked_by, and passed_over is set when ranked_by is not empty. A pool passed over for a mark keeps its reading in ranked_by. An alternate_agent_move line carries the same shape at tier policy_order with an empty ranked_by; its passed_over names the agent the move left, with the parked hold's mark, when the policy orders that agent, and is null otherwise.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineProvenance`.
@@ -9978,7 +10041,7 @@ public enum Components {
                 ])
             }
         }
-        /// Set the routing policy, as `freesided routing set` does on the daemon host: one order per role and an optional drain-first account, replacing the whole policy, so a null drain_first_account clears the current one. Every agent must be in the daemon's agent tree, and the drain-first account must be the usage pool of at least one of them. A request for the orders and account the current revision holds records nothing. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
+        /// Set the routing policy, as `freesided routing set` does on the daemon host: one order per role and an optional drain-first account, replacing the whole policy, so a null drain_first_account clears the current one. Every enrollment must be one the daemon holds, with its identity enabled, and must run the role's lineup model and effort; the drain-first account must be the usage pool of an ordered enrollment. A request for the orders and account the current revision holds records nothing. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload`.
@@ -9990,7 +10053,7 @@ public enum Components {
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/kind`.
             public var kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/roles`.
-            public var roles: [Components.Schemas.RoutingPolicyRole]
+            public var roles: [Components.Schemas.RoutingPolicyRoleInput]
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/drain_first_account`.
             public var drain_first_account: Swift.String?
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/expected_revision`.
@@ -10004,7 +10067,7 @@ public enum Components {
             ///   - expected_revision:
             public init(
                 kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload,
-                roles: [Components.Schemas.RoutingPolicyRole],
+                roles: [Components.Schemas.RoutingPolicyRoleInput],
                 drain_first_account: Swift.String? = nil,
                 expected_revision: Swift.Int? = nil
             ) {
@@ -10026,7 +10089,7 @@ public enum Components {
                     forKey: .kind
                 )
                 self.roles = try container.decode(
-                    [Components.Schemas.RoutingPolicyRole].self,
+                    [Components.Schemas.RoutingPolicyRoleInput].self,
                     forKey: .roles
                 )
                 self.drain_first_account = try container.decodeIfPresent(

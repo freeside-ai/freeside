@@ -27,10 +27,10 @@ package struct RoutingPolicyFailure: Equatable {
     package var currentPolicy: Components.Schemas.RoutingPolicy? = nil
 }
 
-/// The operator's edit of the routing policy, before it is saved: one agent
-/// order per role, the drain-first account, and the revision and epoch it
-/// started from. The command names that revision as its expected revision,
-/// which means nothing in another epoch.
+/// The operator's edit of the routing policy, before it is saved: one order
+/// of enrollment ids per role, the drain-first account, and the revision and
+/// epoch it started from. The command names that revision as its expected
+/// revision, which means nothing in another epoch.
 public struct RoutingPolicyDraft: Equatable, Sendable {
     public typealias Role = Components.Schemas.TaskLineRole
 
@@ -43,71 +43,96 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
     public let syncEpoch: String
     private var orders: [Role: [String]]
 
-    /// The schema promises one order per role and no repeated agent, but
-    /// the policy comes from the daemon or the cache: the first of a
-    /// repeated role or agent wins rather than trapping.
-    public init(policy: Components.Schemas.RoutingPolicy?, syncEpoch: String) {
+    /// A role the policy orders by enrollment starts with those ids. A role
+    /// stored before policies ordered enrollments (#2736) holds agent names,
+    /// which the client wire never translates; the draft starts it with the
+    /// enrollment each name's catalog agent runs, dropping a name the catalog
+    /// lacks, so the operator's first save sends enrollments. The schema
+    /// promises one order per role and no repeated entry, but the policy
+    /// comes from the daemon or the cache: the first of a repeated role or
+    /// entry wins rather than trapping.
+    public init(
+        policy: Components.Schemas.RoutingPolicy?, catalog: Components.Schemas.AgentCatalog?, syncEpoch: String
+    ) {
         baseRevision = policy?.revision
         drainFirstAccount = policy?.drain_first_account
         self.syncEpoch = syncEpoch
         var orders: [Role: [String]] = [:]
         for role in policy?.roles ?? [] where orders[role.role] == nil {
+            let enrollments =
+                role.enrollments
+                ?? (role.agents ?? []).compactMap { name in
+                    catalog?.agents.first { $0.name == name }?.enrollment_id
+                }
             var seen = Set<String>()
-            orders[role.role] = role.agents.filter { seen.insert($0).inserted }
+            let unique = enrollments.filter { seen.insert($0).inserted }
+            if !unique.isEmpty { orders[role.role] = unique }
         }
         self.orders = orders
     }
 
-    public func agents(for role: Role) -> [String] { orders[role] ?? [] }
+    public func enrollments(for role: Role) -> [String] { orders[role] ?? [] }
 
-    /// The catalog's agents the role doesn't already order, in catalog order.
+    /// The catalog's enrollments the role doesn't already order, in catalog
+    /// order. The daemon decides whether one runs the role's lineup model and
+    /// effort; the app offers them all and shows its refusal.
     public func offered(for role: Role, catalog: Components.Schemas.AgentCatalog) -> [String] {
-        let ordered = Set(agents(for: role))
-        return catalog.agents.map(\.name).filter { !ordered.contains($0) }
+        let ordered = Set(enrollments(for: role))
+        return catalog.enrollments.map(\.enrollment_id).filter { !ordered.contains($0) }
     }
 
-    public mutating func add(_ agent: String, to role: Role) {
-        guard !agents(for: role).contains(agent) else { return }
-        orders[role, default: []].append(agent)
+    public mutating func add(_ enrollment: String, to role: Role) {
+        guard !enrollments(for: role).contains(enrollment) else { return }
+        orders[role, default: []].append(enrollment)
     }
 
-    /// Removing a role's last agent leaves the role to the lineup.
-    public mutating func remove(_ agent: String, from role: Role) {
-        orders[role]?.removeAll { $0 == agent }
+    /// Removing a role's last enrollment leaves the role to the lineup.
+    public mutating func remove(_ enrollment: String, from role: Role) {
+        orders[role]?.removeAll { $0 == enrollment }
         if orders[role]?.isEmpty == true { orders[role] = nil }
     }
 
-    /// Sets the role's whole order, keeping the first of a repeated agent.
-    /// An empty list leaves the role to the lineup, as removing its last
-    /// agent does.
-    public mutating func replace(_ agents: [String], for role: Role) {
+    /// Sets the role's whole order, keeping the first of a repeated
+    /// enrollment. An empty list leaves the role to the lineup, as removing
+    /// its last enrollment does.
+    public mutating func replace(_ enrollments: [String], for role: Role) {
         var seen = Set<String>()
-        let unique = agents.filter { seen.insert($0).inserted }
+        let unique = enrollments.filter { seen.insert($0).inserted }
         orders[role] = unique.isEmpty ? nil : unique
     }
 
-    /// Moves the agent one place earlier (`offset` -1) or later (+1).
-    public mutating func move(_ agent: String, in role: Role, by offset: Int) {
-        guard var list = orders[role], let index = list.firstIndex(of: agent),
+    /// Moves the enrollment one place earlier (`offset` -1) or later (+1).
+    public mutating func move(_ enrollment: String, in role: Role, by offset: Int) {
+        guard var list = orders[role], let index = list.firstIndex(of: enrollment),
             list.indices.contains(index + offset)
         else { return }
         list.swapAt(index, index + offset)
         orders[role] = list
     }
 
-    /// The orders as the command sends them: roles with an agent, in
+    /// The orders as the command sends them: roles with an enrollment, in
     /// TaskLineRole order, the order the policy records them in.
-    public var roles: [Components.Schemas.RoutingPolicyRole] {
+    public var roles: [Components.Schemas.RoutingPolicyRoleInput] {
         Role.allCases.compactMap { role in
-            orders[role].map { .init(role: role, agents: $0) }
+            orders[role].map { .init(role: role, enrollments: $0) }
         }
     }
+
+    /// The orders as a revision recording them would hold them, to compare
+    /// with the current policy: an agents-form role never matches.
+    var policyRoles: [Components.Schemas.RoutingPolicyRole] {
+        roles.map { .init(role: $0.role, enrollments: $0.enrollments, agents: nil) }
+    }
+
+    /// Every enrollment some role orders.
+    var orderedEnrollments: Set<String> { Set(orders.values.joined()) }
 }
 
-/// A usage pool the operator may drain first, with the catalog agents on it.
+/// A usage pool the operator may drain first, with the ordered enrollments
+/// on it.
 package struct RoutingDrainFirstPool: Equatable {
     package let pool: Components.Schemas.UsagePoolUsage
-    package let agents: [String]
+    package let enrollments: [String]
 }
 
 /// One of the Agents pane's routing popups. Writer reads and sets the three
@@ -173,9 +198,13 @@ package final class RoutingPolicyModel {
     }
     package var currentDeviceID: String { coordinator.store.device.deviceID }
 
-    /// The pools the operator may drain first, in sync order.
+    /// The pools the operator may drain first, in sync order: those an
+    /// enrollment the draft orders sits on, or, with no draft open, one the
+    /// current policy orders.
     package var drainFirstPools: [RoutingDrainFirstPool] {
-        Self.drainFirstPools(coordinator.usagePools, catalog: catalog)
+        guard let catalog else { return [] }
+        let orders = draft ?? RoutingPolicyDraft(policy: policy, catalog: catalog, syncEpoch: "")
+        return Self.drainFirstPools(coordinator.usagePools, ordered: orders.orderedEnrollments)
     }
 
     /// The synced usage pool with this id, whether or not it can be drained
@@ -184,20 +213,17 @@ package final class RoutingPolicyModel {
         coordinator.usagePools.first { $0.pool.id == id }?.pool
     }
 
-    /// The pools at least one catalog agent's enrollment sits on, each with
-    /// those agents. It mirrors the daemon's rule (`checkDrainFirstAccount`
+    /// The pools at least one ordered enrollment sits on, each with those
+    /// enrollments. It mirrors the daemon's rule (`checkDrainFirstAccount`
     /// in daemon/internal/engine/routing_policy.go), which refuses any other
-    /// pool: the daemon resolves each tree agent's enrollment to its
-    /// identity's pool, and sync lists every pool's enrollments. Empty
-    /// without a catalog.
+    /// pool: the daemon resolves each ordered enrollment to its identity's
+    /// pool, and sync lists every pool's enrollments.
     package static func drainFirstPools(
-        _ pools: [Components.Schemas.UsagePoolSnapshot], catalog: Components.Schemas.AgentCatalog?
+        _ pools: [Components.Schemas.UsagePoolSnapshot], ordered: Set<String>
     ) -> [RoutingDrainFirstPool] {
-        guard let catalog else { return [] }
-        return pools.compactMap { snapshot in
-            let enrollments = Set(snapshot.pool.enrollments.map(\.enrollment_id))
-            let agents = catalog.agents.filter { enrollments.contains($0.enrollment_id) }.map(\.name)
-            return agents.isEmpty ? nil : RoutingDrainFirstPool(pool: snapshot.pool, agents: agents)
+        pools.compactMap { snapshot in
+            let enrollments = snapshot.pool.enrollments.map(\.enrollment_id).filter(ordered.contains)
+            return enrollments.isEmpty ? nil : RoutingDrainFirstPool(pool: snapshot.pool, enrollments: enrollments)
         }
     }
 
@@ -209,12 +235,17 @@ package final class RoutingPolicyModel {
         }?.pool.id
     }
 
-    /// The one order every role of the popup has in the policy, read as a
-    /// draft reads it; `[]` when all of them are on the lineup, nil when
-    /// they differ.
+    /// The role's order as the policy stores it: its enrollment ids, or the
+    /// agent names a revision from before #2736 recorded; `[]` when the
+    /// policy leaves the role to the lineup.
+    package func storedOrder(for role: RoutingPolicyDraft.Role) -> [String] {
+        policy?.roles.first { $0.role == role }.map { $0.enrollments ?? $0.agents ?? [] } ?? []
+    }
+
+    /// The one order every role of the popup has in the policy, as stored;
+    /// `[]` when all of them are on the lineup, nil when they differ.
     package func sharedOrder(_ popup: RoutingPopup) -> [String]? {
-        let current = RoutingPolicyDraft(policy: policy, syncEpoch: "")
-        let orders = popup.roles.map(current.agents(for:))
+        let orders = popup.roles.map(storedOrder(for:))
         return orders.allSatisfy { $0 == orders.first } ? orders.first : nil
     }
 
@@ -254,17 +285,17 @@ package final class RoutingPolicyModel {
         if draft.baseRevision != policy?.revision || draft.syncEpoch != coordinator.cursors?.syncEpoch {
             return "The policy changed while you were editing. Cancel and edit it again."
         }
-        let known = Set(catalog.agents.map(\.name))
-        if draft.roles.contains(where: { !$0.agents.allSatisfy(known.contains) }) {
-            return "Remove the agents the daemon's agent tree doesn't carry."
+        let held = Set(catalog.enrollments.map(\.enrollment_id))
+        if draft.roles.contains(where: { !$0.enrollments.allSatisfy(held.contains) }) {
+            return "Remove the enrollments the daemon doesn't hold."
         }
         if let account = draft.drainFirstAccount, !drainFirstPools.contains(where: { $0.pool.id == account }) {
-            return "No agent in the tree is on \(account) any more. Clear the drain-first account or pick another."
+            return "No ordered enrollment is on \(account). Clear the drain-first account or pick another."
         }
         // The schema requires a role, so an account alone can't make a
         // first policy.
-        if draft.roles.isEmpty { return "Order at least one agent for a role." }
-        if draft.roles == policy?.roles && draft.drainFirstAccount == policy?.drain_first_account {
+        if draft.roles.isEmpty { return "Order at least one enrollment for a role." }
+        if draft.policyRoles == policy?.roles && draft.drainFirstAccount == policy?.drain_first_account {
             return "No change to save."
         }
         return nil
@@ -275,12 +306,15 @@ package final class RoutingPolicyModel {
         draft = fresh
     }
 
-    /// A popup's choice: the agent first, then the order the popup's roles
-    /// shared, or the agent alone when they differed. It saves at once.
-    package func choose(_ agent: String, for popup: RoutingPopup) async {
-        let rest = (sharedOrder(popup) ?? []).filter { $0 != agent }
+    /// A popup's choice: the enrollment first, then the order the popup's
+    /// roles shared, or the enrollment alone when they differed. It saves at
+    /// once.
+    package func choose(_ enrollment: String, for popup: RoutingPopup) async {
         await saveChoice { draft in
-            for role in popup.roles { draft.replace([agent] + rest, for: role) }
+            let orders = popup.roles.map(draft.enrollments(for:))
+            let shared = orders.allSatisfy { $0 == orders.first } ? orders.first ?? [] : []
+            let rest = shared.filter { $0 != enrollment }
+            for role in popup.roles { draft.replace([enrollment] + rest, for: role) }
         }
     }
 
@@ -316,7 +350,7 @@ package final class RoutingPolicyModel {
         failure = nil
         choiceBlocker = nil
         coordinator.clearConfirmedRoutingPolicyChange()
-        return RoutingPolicyDraft(policy: policy, syncEpoch: epoch)
+        return RoutingPolicyDraft(policy: policy, catalog: catalog, syncEpoch: epoch)
     }
 
     package func cancelEditing() { draft = nil }

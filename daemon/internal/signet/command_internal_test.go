@@ -65,7 +65,7 @@ func TestAMoveReceiptWithoutAChoiceAndSelectionHasNoWireForm(t *testing.T) {
 			Retry: domain.AlternateAgentRetry{Agent: "claude-b"},
 		},
 	} {
-		if _, err := kindedReceiptRecord(domain.CommandReceipt{ParkedTaskMove: &move}, nil); !errors.Is(err, domain.ErrCommandReceiptArms) {
+		if _, err := kindedReceiptRecord(domain.CommandReceipt{ParkedTaskMove: &move}); !errors.Is(err, domain.ErrCommandReceiptArms) {
 			t.Errorf("%s: err = %v, want ErrCommandReceiptArms", name, err)
 		}
 	}

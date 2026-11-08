@@ -57,10 +57,11 @@
         /// order and the reviewer has its own.
         static func canvasPolicy() -> Components.Schemas.RoutingPolicy {
             var policy = UsageFixtures.defaultRoutingPolicy()
-            let writers = ["claude-primary", "codex-primary"]
+            let writers = [UsageFixtures.readingCollectorID, UsageFixtures.unsupportedCollectorID]
             policy.roles = [
-                .init(role: .specifier, agents: writers), .init(role: .implementer, agents: writers),
-                .init(role: .remediator, agents: writers), .init(role: .reviewer, agents: ["codex-primary"]),
+                .init(role: .specifier, enrollments: writers), .init(role: .implementer, enrollments: writers),
+                .init(role: .remediator, enrollments: writers),
+                .init(role: .reviewer, enrollments: [UsageFixtures.unsupportedCollectorID]),
             ]
             return policy
         }
@@ -98,7 +99,7 @@
                     payload: .set_routing_policy(
                         .init(
                             kind: .set_routing_policy,
-                            roles: [.init(role: .implementer, agents: ["codex-primary"])],
+                            roles: [.init(role: .implementer, enrollments: [UsageFixtures.unsupportedCollectorID])],
                             expected_revision: 2)))
                 _ = try? await coordinator.store.client.submitCommand(body: .json(other))
                 await model.save()
@@ -114,9 +115,9 @@
 
         private static func edit(_ model: RoutingPolicyModel) {
             model.beginEditing()
-            model.draft?.add("claude-secondary", to: .implementer)
-            model.draft?.move("claude-secondary", in: .implementer, by: -1)
-            model.draft?.add("claude-primary", to: .reviewer)
+            model.draft?.add(UsageFixtures.readingSecondEnrollmentID, to: .implementer)
+            model.draft?.move(UsageFixtures.readingSecondEnrollmentID, in: .implementer, by: -1)
+            model.draft?.add(UsageFixtures.readingCollectorID, to: .reviewer)
         }
     }
 #endif

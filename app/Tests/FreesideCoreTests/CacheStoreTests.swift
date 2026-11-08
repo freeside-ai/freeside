@@ -197,7 +197,8 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
                 command_id: "routing-1", device_id: "device-1",
                 payload: .set_routing_policy(
                     .init(
-                        kind: .set_routing_policy, roles: [.init(role: .implementer, agents: ["codex-primary"])],
+                        kind: .set_routing_policy,
+                        roles: [.init(role: .implementer, enrollments: [UsageFixtures.unsupportedCollectorID])],
                         expected_revision: 2))),
             syncEpoch: "epoch-1")
         state.routingDaemonID = "daemon-1"

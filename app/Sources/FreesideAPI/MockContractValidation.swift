@@ -1339,27 +1339,32 @@ enum MockContractValidation {
 
     /// The daemon's routing-policy shape check (domain.CanonicalRoutingPolicyRoles):
     /// at least one role, each named once with a non-empty order of distinct
-    /// agents, returned in TaskLineRole order so one policy has one form.
+    /// enrollment ids, each a launch option, returned in TaskLineRole order
+    /// so one policy has one form. A request orders enrollments only, so the
+    /// result holds enrollments and no agents.
     static func canonicalRoutingPolicyRoles(
-        _ roles: [Components.Schemas.RoutingPolicyRole]
+        _ roles: [Components.Schemas.RoutingPolicyRoleInput]
     ) throws -> [Components.Schemas.RoutingPolicyRole] {
         guard !roles.isEmpty else { throw RoutingPolicyShapeError(reason: "routing policy names no role") }
         guard Set(roles.map(\.role)).count == roles.count else {
             throw RoutingPolicyShapeError(reason: "routing policy names a role twice")
         }
         for role in roles {
-            guard !role.agents.isEmpty else {
-                throw RoutingPolicyShapeError(reason: "routing policy role \(role.role.rawValue) orders no agent")
+            guard !role.enrollments.isEmpty else {
+                throw RoutingPolicyShapeError(reason: "routing policy role \(role.role.rawValue) orders no enrollment")
             }
-            guard role.agents.allSatisfy(validAgentName) else {
+            guard role.enrollments.allSatisfy(validLaunchOptionValue) else {
                 throw RoutingPolicyShapeError(
-                    reason: "routing policy role \(role.role.rawValue) names an invalid agent")
+                    reason: "routing policy role \(role.role.rawValue) names an invalid enrollment")
             }
-            guard Set(role.agents).count == role.agents.count else {
-                throw RoutingPolicyShapeError(reason: "routing policy role \(role.role.rawValue) repeats an agent")
+            guard Set(role.enrollments).count == role.enrollments.count else {
+                throw RoutingPolicyShapeError(
+                    reason: "routing policy role \(role.role.rawValue) repeats an enrollment")
             }
         }
-        return Components.Schemas.TaskLineRole.allCases.compactMap { name in roles.first { $0.role == name } }
+        return Components.Schemas.TaskLineRole.allCases.compactMap { name in
+            roles.first { $0.role == name }.map { .init(role: $0.role, enrollments: $0.enrollments, agents: nil) }
+        }
     }
 
     static func validateStructure(_ command: Components.Schemas.ClientCommand) throws {
