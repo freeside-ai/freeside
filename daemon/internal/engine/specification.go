@@ -3653,9 +3653,7 @@ func (e *Engine) specificationRevisionFailureItem(
 }
 
 func specificationRevisionFailureItemID(request specificationRequest) domain.ItemID {
-	return domain.ItemID(fmt.Sprintf(
-		"execution-failure-spec-revision-%s-%d", request.ImplementationRunID, request.Iteration+1,
-	))
+	return domain.SpecificationRevisionFailureItemID(request.ImplementationRunID, request.Iteration+1)
 }
 
 func (e *Engine) specificationRevisionFailed(
@@ -3948,7 +3946,7 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, error) {
 			}
 			if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
 				if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-					id := domain.ItemID("execution-failure-spec-revision-" + string(request.ImplementationRunID))
+					id := domain.SpecificationIterationsExhaustedItemID(request.ImplementationRunID)
 					if _, err := tx.GetAttentionItem(ctx, id); err == nil {
 						return errReplay
 					} else if !errors.Is(err, store.ErrNotFound) {

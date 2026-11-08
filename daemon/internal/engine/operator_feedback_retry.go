@@ -6,7 +6,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -36,7 +35,7 @@ func (e *Engine) reconcileOperatorFeedbackRetries(ctx context.Context) (int, err
 	for _, item := range items {
 		if item.Status != domain.StatusOpen || item.Type != domain.AttentionExecutionFailure ||
 			item.ExecutionFailure == nil || item.Offers(domain.ActionRetry) ||
-			!strings.HasPrefix(string(item.ExecutionFailure.InvocationID), "inv-operator-feedback-") {
+			!domain.HasOperatorFeedbackInvocationPrefix(item.ExecutionFailure.InvocationID) {
 			continue
 		}
 		if err := e.offerOperatorFeedbackRetry(ctx, item.ID); err != nil {
@@ -45,7 +44,7 @@ func (e *Engine) reconcileOperatorFeedbackRetries(ctx context.Context) (int, err
 	}
 	created := 0
 	for _, command := range commands {
-		if !strings.HasPrefix(string(command.ItemID), "execution-failure-inv-operator-feedback-") {
+		if !domain.IsOperatorFeedbackExecutionFailureItemID(command.ItemID) {
 			continue
 		}
 		made, err := e.enqueueOperatorFeedbackRetry(ctx, command)

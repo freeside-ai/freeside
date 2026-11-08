@@ -108,7 +108,7 @@ func productionVerificationInvocationIDForProducer(
 	if round, ok := remediationRoundForInvocation(runID, producer); ok {
 		return domain.InvocationID(fmt.Sprintf("verify-remediation-%d-%s", round, runID))
 	}
-	if strings.HasPrefix(string(producer), "inv-operator-feedback-") {
+	if domain.HasOperatorFeedbackInvocationPrefix(producer) {
 		return domain.InvocationID("verify-" + string(producer))
 	}
 	return ""
@@ -1338,7 +1338,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 			return outcomeErr
 		}
 		if _, itemErr := tx.GetAttentionItem(
-			ctx, domain.ItemID("execution-failure-"+string(attempt.InvocationID)),
+			ctx, domain.ExecutionFailureItemID(attempt.InvocationID),
 		); errors.Is(itemErr, store.ErrNotFound) {
 			return nil
 		} else if itemErr != nil {
@@ -1941,7 +1941,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 			}
 		}
 
-		itemID := domain.ItemID("execution-failure-" + string(invocationID))
+		itemID := domain.ExecutionFailureItemID(invocationID)
 		names, err := tx.DisplayNamesFor(ctx, current.ProjectID, domain.Subject{
 			Type: domain.SubjectRun, ID: domain.SubjectID(current.ID), RunID: &current.ID,
 		})
@@ -2036,7 +2036,7 @@ func productionFailureItem(
 		actions = append([]domain.Action{domain.ActionRetryWithAlternateAgent}, actions...)
 	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:        domain.ItemID("execution-failure-" + string(terminal.InvocationID)),
+		ID:        domain.ExecutionFailureItemID(terminal.InvocationID),
 		ProjectID: run.ProjectID,
 		Subject:   domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:      domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
@@ -2431,17 +2431,6 @@ func readProductionQuarantineItem(
 	return item, true, nil
 }
 
-// productionExecutionFailureCardPrefix is the deterministic id prefix every
-// real execution-failure recovery card shares: productionFailureItem and
-// productionDeliveryRefusalItem here, and the specification failure and
-// spec-revision cards in specification.go, all mint
-// "execution-failure-"+<identity>. A quarantine notice is an execution_failure
-// item too, but its id carries a "-quarantined-" marker prefix instead, so
-// this prefix separates a recovery card from a synthetic marker notice without
-// depending on the card's optional ExecutionFailure facts (a delivery-refusal
-// card can carry none) or on tracking the full quarantine-reason set.
-const productionExecutionFailureCardPrefix = "execution-failure-"
-
 // supersedeEarlierAttemptFailures retires every open execution-failure
 // recovery card raised by an earlier attempt of this campaign, once a later
 // attempt reaches admission. It supersedes rather than resolves, following
@@ -2485,8 +2474,12 @@ func supersedeEarlierAttemptFailures(
 			return fmt.Errorf("list open items for earlier-attempt run %q: %w", runID, err)
 		}
 		for _, item := range items {
+			// The ID prefix, not the type alone, separates a recovery card
+			// (productionFailureItem, productionDeliveryRefusalItem, and the
+			// specification failure and revision cards) from a quarantine
+			// marker notice, without tracking the full quarantine-reason set.
 			if item.Type != domain.AttentionExecutionFailure ||
-				!strings.HasPrefix(string(item.ID), productionExecutionFailureCardPrefix) {
+				!domain.HasExecutionFailureItemPrefix(item.ID) {
 				continue
 			}
 			superseded := fmt.Sprintf(

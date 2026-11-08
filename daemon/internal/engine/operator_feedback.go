@@ -111,7 +111,7 @@ func newSpecificationAnswerInput(
 }
 
 func operatorFeedbackInvocationID(commandID string) domain.InvocationID {
-	return domain.InvocationID("inv-operator-feedback-" + commandID)
+	return domain.OperatorFeedbackInvocationID(commandID)
 }
 
 func operatorFeedbackStageID(invocationID domain.InvocationID) domain.StageID {
@@ -1458,12 +1458,10 @@ func (e *Engine) quarantinePendingOperatorFeedbackMarker(
 	if !errors.Is(cause, errOperatorFeedbackMarkerUnreadable) {
 		return false, nil
 	}
-	const prefix = "inv-operator-feedback-"
-	raw := entry.IdempotencyKey
-	if !strings.HasPrefix(raw, prefix) || len(raw) == len(prefix) {
+	commandID, ok := domain.OperatorFeedbackCommandID(domain.InvocationID(entry.IdempotencyKey))
+	if !ok {
 		return false, nil
 	}
-	commandID := strings.TrimPrefix(raw, prefix)
 	var (
 		item domain.AttentionItem
 		run  domain.Run

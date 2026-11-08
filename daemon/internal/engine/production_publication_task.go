@@ -468,7 +468,7 @@ func (t productionPublicationTask) validateWithPublication(validatePublication f
 			// A successor re-entry keeps the head its predecessor's producer
 			// exported: an operator feedback return or a remediation.
 			validProducer = remediationProducer ||
-				strings.HasPrefix(string(t.ProducingInvocationID), "inv-operator-feedback-")
+				domain.HasOperatorFeedbackInvocationPrefix(t.ProducingInvocationID)
 		default:
 			validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
 		}

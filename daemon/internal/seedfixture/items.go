@@ -61,7 +61,8 @@ func seedItems(s seeder, failed, active, verification domain.Run) error {
 	var inputs []domain.AttentionItemInput
 
 	executionFailure := itemSpec{
-		id: "execution-failure-" + domain.ItemID(failed.ID), project: p, runID: failed.ID,
+		// The fixture keys this card by its run, not an invocation.
+		id: domain.ExecutionFailureItemID(domain.InvocationID(failed.ID)), project: p, runID: failed.ID,
 		itemType: domain.AttentionExecutionFailure, priority: domain.PriorityHigh,
 		reason:  "The implementation attempt failed before producing a candidate.",
 		actions: []domain.Action{domain.ActionRetry, domain.ActionDiscuss, domain.ActionStop}, createdAt: at,
@@ -184,7 +185,7 @@ func seedInterpretationFailure(s seeder, implementationRunID domain.RunID, at ti
 	}
 	invocation := domain.InvocationID("inv-specify-" + string(specificationRunID) + "-1")
 	in := itemSpec{
-		id: "execution-failure-" + domain.ItemID(invocation), project: freesideProject, runID: specificationRunID,
+		id: domain.ExecutionFailureItemID(invocation), project: freesideProject, runID: specificationRunID,
 		itemType: domain.AttentionExecutionFailure, priority: domain.PriorityHigh,
 		reason:  "A research fetch failed after the specification invocation exported.",
 		actions: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, createdAt: at,

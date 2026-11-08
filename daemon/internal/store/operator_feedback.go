@@ -127,7 +127,7 @@ func (tx *ReadTx) operatorFeedbackIntent(
 func (tx *ReadTx) feedbackFailure(
 	ctx context.Context, item domain.AttentionItem, invocation domain.InvocationID, runID domain.RunID,
 ) error {
-	if item.ID != domain.ItemID("execution-failure-"+string(invocation)) ||
+	if item.ID != domain.ExecutionFailureItemID(invocation) ||
 		item.Type != domain.AttentionExecutionFailure || item.ExecutionFailure == nil ||
 		item.ExecutionFailure.InvocationID != invocation || item.ExecutionFailure.Stage != domain.StageNameImplementation ||
 		item.Subject.RunID == nil || *item.Subject.RunID != runID {
@@ -152,7 +152,7 @@ func (tx *ReadTx) FeedbackPublicationParent(
 	ctx context.Context, invocation domain.InvocationID,
 ) (domain.OperatorFeedbackInvocationIntent, domain.ReadyItemPRBinding, bool, error) {
 	seen := make(map[domain.InvocationID]bool)
-	for strings.HasPrefix(string(invocation), "inv-operator-feedback-") {
+	for domain.HasOperatorFeedbackInvocationPrefix(invocation) {
 		if seen[invocation] {
 			return domain.OperatorFeedbackInvocationIntent{}, domain.ReadyItemPRBinding{}, false, domain.ErrParentKeyMismatch
 		}

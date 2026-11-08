@@ -311,7 +311,7 @@ func authenticateSpecificationRetryTransition(
 }
 
 func specificationFailureItemID(invocationID domain.InvocationID) domain.ItemID {
-	return domain.ItemID("execution-failure-" + string(invocationID))
+	return domain.ExecutionFailureItemID(invocationID)
 }
 
 func specificationFailureCardBinds(card domain.AttentionItem, run domain.Run) bool {
