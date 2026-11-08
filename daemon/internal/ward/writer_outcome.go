@@ -24,70 +24,52 @@ func (b *Backend) observeWriterOutcome(
 	st *runState,
 ) (int, error) {
 	spec := buildWriterOutcomeObserverSpec(b.cfg, hs, names, st.ownershipLabel)
-	st.writerObserver.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return 0, failw(CheckWriterTermination, err, "create writer-outcome observer: %v", err)
-	}
-	st.writerObserver.owned = true
-	rep, err := b.rt.Inspect(ctx, names.WriterObserver)
-	if err != nil {
-		return 0, failw(CheckWriterTermination, err, "inspect writer-outcome observer: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckWriterTermination,
-	); err != nil {
-		return 0, err
-	}
-	st.writerObserver.fingerprint, err = ownedFingerprint(
-		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
-	)
-	if err != nil {
-		return 0, failw(CheckWriterTermination, err, "writer-outcome observer: %v", err)
-	}
-	if err := b.rt.StartContainer(ctx, names.WriterObserver); err != nil {
-		return 0, failw(CheckWriterTermination, err, "start writer-outcome observer: %v", err)
-	}
-	if err := b.waitStopped(
-		ctx,
-		names.WriterObserver,
-		st.writerObserver,
-		st.ownershipLabel,
-		b.cfg.SeedTimeout,
-	); err != nil {
-		return 0, failw(CheckWriterTermination, err, "writer-outcome observer: %v", err)
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.WriterObserver); err != nil {
-		return 0, err
-	}
-	status, err := b.readWriterOutcomeProof(
-		ctx, hs, names.WriterObserver, st.ownershipLabel.Value, st,
-	)
-	if err != nil {
-		return 0, err
-	}
-	if status != 0 {
-		if b.cfg.Journal != nil {
-			st.preserveForRecovery, st.leaveJournalOpen = true, true
-			if err := b.cfg.Journal.MarkWriterFailed(ctx, hs.RunID, status); err != nil {
-				return 0, errors.Join(ErrWriterFailed, err)
+	var status int
+	// proofChecked marks that checkProof accepted the status, so only the
+	// delete and the absence proof can have failed since; those alone take
+	// writerObservationError's wrapping, as every earlier failure either
+	// precedes the status or already carries ErrWriterFailed.
+	proofChecked := false
+	err := b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "writer-outcome observer", claim: &st.writerObserver, owner: st.ownershipLabel,
+		check: CheckWriterTermination, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(
+				rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckWriterTermination,
+			)
+		},
+		readProof: func(ctx context.Context) ([]byte, error) {
+			read, err := b.readWriterOutcomeProof(
+				ctx, hs, names.WriterObserver, st.ownershipLabel.Value, st,
+			)
+			if err == nil {
+				status = read
 			}
-			st.preserveForRecovery, st.leaveJournalOpen = false, false
+			return nil, err
+		},
+		// The journal write stays ahead of the delete: the failure status is
+		// durable before the observer that read it is gone.
+		checkProof: func([]byte) error {
+			if status != 0 {
+				if b.cfg.Journal != nil {
+					st.preserveForRecovery, st.leaveJournalOpen = true, true
+					if err := b.cfg.Journal.MarkWriterFailed(ctx, hs.RunID, status); err != nil {
+						return errors.Join(ErrWriterFailed, err)
+					}
+					st.preserveForRecovery, st.leaveJournalOpen = false, false
+				}
+				st.writerFailureStatus = &status
+			}
+			proofChecked = true
+			return nil
+		},
+	})
+	if err != nil {
+		if proofChecked {
+			return 0, writerObservationError(status, err)
 		}
-		st.writerFailureStatus = &status
+		return 0, err
 	}
-	if err := b.rt.DeleteContainer(ctx, names.WriterObserver); err != nil {
-		return 0, writerObservationError(status, failw(CheckWriterTermination, err, "delete writer-outcome observer: %v", err))
-	}
-	if err := b.verifyContainerAbsent(
-		ctx,
-		names.WriterObserver,
-		st.writerObserver,
-		st.ownershipLabel,
-		CheckWriterTermination,
-	); err != nil {
-		return 0, writerObservationError(status, err)
-	}
-	st.writerObserver = objectClaim{}
 	return status, nil
 }
 
