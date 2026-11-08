@@ -195,7 +195,7 @@ start-container freeside-review-review-1-codex
 # Injected failures: role, step, error class, operational, content evidence, journal, runtime.
 workspace-observer create conformance:observed_base_identity operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 workspace-observer inspect conformance:observed_base_identity operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
-workspace-observer allowlist conformance:observed_base_identity not-operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+workspace-observer allowlist conformance:observed_base_identity not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 workspace-observer start conformance:observed_base_identity operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 workspace-observer stopped conformance:observed_base_identity operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 workspace-observer journal conformance:observed_base_identity operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
@@ -207,7 +207,7 @@ shadow-initializer stopped conformance:control_plane_isolation operational no-ev
 shadow-initializer journal conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
 shadow-observer create conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 shadow-observer inspect conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
-shadow-observer allowlist conformance:control_plane_isolation not-operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+shadow-observer allowlist conformance:control_plane_isolation not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 shadow-observer start conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 shadow-observer stopped conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 shadow-observer journal conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
@@ -219,7 +219,7 @@ snapshot-seeder stopped conformance:credential_separation operational no-evidenc
 snapshot-seeder journal conformance:credential_separation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
 snapshot-observer create conformance:credential_separation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 snapshot-observer inspect conformance:credential_separation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
-snapshot-observer allowlist conformance:credential_separation not-operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer allowlist conformance:credential_separation not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 snapshot-observer start conformance:credential_separation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 snapshot-observer stopped conformance:credential_separation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 snapshot-observer journal conformance:credential_separation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
@@ -231,7 +231,7 @@ inputs-seeder stopped conformance:control_plane_isolation operational no-evidenc
 inputs-seeder journal conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
 inputs-observer create conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 inputs-observer inspect conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
-inputs-observer allowlist conformance:control_plane_isolation not-operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+inputs-observer allowlist conformance:control_plane_isolation not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
 inputs-observer start conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 inputs-observer stopped conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
 inputs-observer journal conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws

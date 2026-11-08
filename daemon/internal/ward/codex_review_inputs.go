@@ -164,7 +164,7 @@ func (b *CodexReviewLifecycle) observeCodexReviewInputs(
 		return CodexReviewInputsObservation{}, codexReviewJournalCheckf(
 			CheckControlPlaneIsolation, "journal input observer intent: %v", err)
 	}
-	report, proof, err := b.runCodexReviewObserver(
+	report, proof, err := b.runCodexReviewObserverRole(
 		ctx, spec, observerOwner, stateProofPath, CheckControlPlaneIsolation,
 		func(resource CodexReviewIntentResource) error {
 			resource.OwnershipToken = observerOwner.Value
