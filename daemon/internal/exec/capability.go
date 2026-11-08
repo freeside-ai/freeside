@@ -31,6 +31,8 @@ const (
 	CapWorkspaceSnapshot      = domain.CapWorkspaceSnapshot
 	CapNetworklessExport      = domain.CapNetworklessExport
 	CapEnforcedProviderEgress = domain.CapEnforcedProviderEgress
+
+	CapCredentialFreeHostVerification = domain.CapCredentialFreeHostVerification
 )
 
 // AllCapabilities lists every valid Capability; it drives table-driven tests

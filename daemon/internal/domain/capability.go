@@ -30,6 +30,13 @@ const (
 	// with DNS and direct connections refuted by live probes. It attests the
 	// enforcement #302 built, distinct from the *requested* EgressProfile.
 	CapEnforcedProviderEgress RunnerCapability = "supports_enforced_provider_egress"
+	// CapCredentialFreeHostVerification is the macOS verification executor's
+	// own declaration (§5.7, macOS Execution): a host-side room that holds no
+	// provider or GitHub credential and no placeholder, runs no agent, and
+	// confines each job's network, writes, dependencies, and slot home. The
+	// executor's full conformance pass (#2879) earns it, and it is the one
+	// capability that lets a host-side class run under unattended.
+	CapCredentialFreeHostVerification RunnerCapability = "supports_credential_free_host_verification"
 )
 
 // AllRunnerCapabilities lists every valid RunnerCapability; it drives
@@ -42,13 +49,14 @@ var AllRunnerCapabilities = []RunnerCapability{
 	CapWorkspaceSnapshot,
 	CapNetworklessExport,
 	CapEnforcedProviderEgress,
+	CapCredentialFreeHostVerification,
 }
 
 func (c RunnerCapability) valid() bool {
 	switch c {
 	case CapDetachableWorkspace, CapPostExitExport, CapReadOnlyRemount,
 		CapCredentialVolumeDetach, CapWorkspaceSnapshot, CapNetworklessExport,
-		CapEnforcedProviderEgress:
+		CapEnforcedProviderEgress, CapCredentialFreeHostVerification:
 		return true
 	default:
 		return false

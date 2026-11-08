@@ -134,6 +134,39 @@ func TestBackendConformanceValidate(t *testing.T) {
 	}
 }
 
+// TestHostVerificationConformanceCeiling proves the executor class earns
+// exactly its own declaration: a passed record carrying it validates, and a
+// record claiming any ward capability is refused as an over-claim, so a store
+// that accepts the record cannot be talked into a ward proof for a host room.
+func TestHostVerificationConformanceCeiling(t *testing.T) {
+	input := domain.BackendConformanceInput{
+		Backend:             domain.BackendCredentialFreeHostVerification,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        domain.NewCapabilitySnapshot(domain.CapCredentialFreeHostVerification),
+		ProvedAt:            provedAt,
+	}
+	if _, err := domain.NewBackendConformance(input); err != nil {
+		t.Fatalf("passed host-verification record: %v", err)
+	}
+	wardCeiling, _ := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	for _, ward := range wardCeiling {
+		t.Run(string(ward), func(t *testing.T) {
+			over := input
+			over.Capabilities = domain.NewCapabilitySnapshot(domain.CapCredentialFreeHostVerification, ward)
+			if _, err := domain.NewBackendConformance(over); !errors.Is(err, domain.ErrConformanceOverclaim) {
+				t.Errorf("host-verification record claiming %q = %v, want ErrConformanceOverclaim", ward, err)
+			}
+		})
+	}
+	// The reverse holds too: the ward class cannot claim the executor's proof.
+	ward := validPassedConformance(t)
+	ward.Capabilities = domain.NewCapabilitySnapshot(append(ward.Capabilities.Clone(), domain.CapCredentialFreeHostVerification)...)
+	if err := ward.Validate(); !errors.Is(err, domain.ErrConformanceOverclaim) {
+		t.Errorf("ward record claiming host verification = %v, want ErrConformanceOverclaim", err)
+	}
+}
+
 // TestProvableCapabilities pins each registered class's ceiling: every member
 // is registered vocabulary, the refuted capabilities are excluded, and an
 // unregistered class has no ceiling at all.
@@ -165,6 +198,12 @@ func TestProvableCapabilities(t *testing.T) {
 		if freshVM.Has(refuted) {
 			t.Errorf("fresh-vm ceiling includes refuted capability %q", refuted)
 		}
+	}
+
+	hostVerification, _ := domain.ProvableCapabilities(domain.BackendCredentialFreeHostVerification)
+	wantHost := domain.NewCapabilitySnapshot(domain.CapCredentialFreeHostVerification)
+	if !slices.Equal(hostVerification, wantHost) {
+		t.Errorf("host-verification ceiling = %v, want %v", hostVerification, wantHost)
 	}
 
 	if ceiling, ok := domain.ProvableCapabilities("no_such_class"); ok || ceiling != nil {

@@ -1,11 +1,12 @@
 {
-  "id": "sha256:85ea3fcb91a18d053473b19fdb79553d60075e00f5e8fa457834d0a9c64639f6",
+  "id": "sha256:447cba34e3241354436f6f75d6ce237128ed8dda187fda7b6603fb3114a8f043",
   "invocation_id": "inv-2",
   "run_id": "run-1",
   "stage_id": "stage-1",
   "attempt_id": "attempt-2",
   "backend": "fresh_vm_read_only_volume_handoff",
   "capabilities": [
+    "supports_credential_free_host_verification",
     "supports_credential_volume_detach",
     "supports_detachable_workspace",
     "supports_enforced_provider_egress",

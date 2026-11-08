@@ -29,11 +29,14 @@ var conformancePendingCapabilities = []exec.Capability{
 	exec.CapEnforcedProviderEgress,
 }
 
-// refusedCapabilities must never be declared: both are refuted on the
-// reference runtime (the same-VM fallback class and volume snapshots).
+// refusedCapabilities must never be declared: the first two are refuted on
+// the reference runtime (the same-VM fallback class and volume snapshots),
+// and the last belongs to the host verification executor's class, not the
+// ward's.
 var refusedCapabilities = []exec.Capability{
 	exec.CapCredentialVolumeDetach,
 	exec.CapWorkspaceSnapshot,
+	exec.CapCredentialFreeHostVerification,
 }
 
 func newTestBackend(t *testing.T) *Backend {
