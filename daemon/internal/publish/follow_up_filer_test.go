@@ -1694,13 +1694,11 @@ func TestFollowUpFilerRunSweepsAtStartOnTickAndOnWake(t *testing.T) {
 		}
 
 		h.advance(pastSettle)
-		time.Sleep(29 * time.Second)
-		synctest.Wait()
+		synctest.Sleep(29 * time.Second)
 		if intent := h.intent(first.ID); intent == nil || intent.Terminal != nil {
 			t.Fatalf("intent before the first tick = %+v, want outstanding", intent)
 		}
-		time.Sleep(2 * time.Second)
-		synctest.Wait()
+		synctest.Sleep(2 * time.Second)
 		h.assertLedgered(first.ID, h.forgeIssues()[0].Number)
 
 		second := h.approve(run, 1)

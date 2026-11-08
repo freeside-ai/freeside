@@ -182,8 +182,7 @@ func TestPreemptionWaitKeepsSlotUntilCleanup(t *testing.T) {
 				default:
 				}
 				if canceled {
-					time.Sleep(time.Second)
-					synctest.Wait()
+					synctest.Sleep(time.Second)
 					if got := <-finished; got.err == nil || got.call != nil {
 						t.Fatal("expired waiter acquired a call")
 					}

@@ -51,8 +51,7 @@ func TestRunTickerCadence(t *testing.T) {
 		// Immediate pass at bubble start, then one pass per tick. Let five
 		// ticks elapse in fake time, then wait for Run to settle back into its
 		// select before reading the count.
-		time.Sleep(5*time.Second + 500*time.Millisecond)
-		synctest.Wait()
+		synctest.Sleep(5*time.Second + 500*time.Millisecond)
 		if got := passes.Load(); got != 6 {
 			t.Fatalf("passes after immediate + 5 ticks = %d, want 6", got)
 		}

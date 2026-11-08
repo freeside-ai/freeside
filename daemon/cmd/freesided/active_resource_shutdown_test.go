@@ -162,13 +162,11 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 			t.Fatal("Run did not reconcile immediately")
 		}
 		for pass := 1; pass <= 3; pass++ {
-			time.Sleep(operatorInterval - time.Nanosecond)
-			synctest.Wait()
+			synctest.Sleep(operatorInterval - time.Nanosecond)
 			if got := passCount(); got != baseline+pass-1 {
 				t.Fatalf("passes before operator tick %d = %d, want %d", pass, got, baseline+pass-1)
 			}
-			time.Sleep(time.Nanosecond)
-			synctest.Wait()
+			synctest.Sleep(time.Nanosecond)
 			if got := passCount(); got != baseline+pass {
 				t.Fatalf("passes at operator tick %d = %d, want %d", pass, got, baseline+pass)
 			}
@@ -183,8 +181,7 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 		assertNoActiveCompletion(t, st, item)
 
 		merged.Store(true)
-		time.Sleep(operatorInterval)
-		synctest.Wait()
+		synctest.Sleep(operatorInterval)
 		if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
 			t.Fatalf("item status after merge tick = %s, want resolved", got.Status)
 		}
@@ -194,8 +191,7 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 		}
 
 		// Count passes directly: an unwanted idle pass need not add a pull fact.
-		time.Sleep(3 * operatorInterval)
-		synctest.Wait()
+		synctest.Sleep(3 * operatorInterval)
 		if got := passCount(); got != completedPasses {
 			t.Fatalf("passes after cadence release = %d, want %d", got, completedPasses)
 		}

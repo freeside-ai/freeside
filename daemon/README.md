@@ -706,19 +706,26 @@ import "testing/synctest"
 func TestCadence(t *testing.T) {
     synctest.Test(t, func(t *testing.T) {
         // ... start the timer-driven work in a goroutine ...
-        time.Sleep(5 * time.Second) // fake time; advances only when idle
-        synctest.Wait()             // let the work settle before asserting
+        synctest.Sleep(5 * time.Second) // fake time; returns once the work settles
     })
 }
 ```
 
 The bubble's fake clock advances only when every goroutine in it is durably
 blocked, so a ticker or timeout fires deterministically with no wall-clock
-flakiness and no wasted real time.
+flakiness and no wasted real time. `synctest.Sleep(d)` is the same as
+`time.Sleep(d)` followed by `synctest.Wait()`; a new test that sleeps and then
+asserts uses it.
 
 - **Ratchet, not a retrofit sweep.** New or substantially revised
   timer-dependent tests use synctest; an existing real-sleep or `Eventually`
   test converts only when a revision already touches it.
+- **HTTP fakes inside a bubble use `httptest.NewTestServer(t, handler)`.** It
+  serves on an in-memory network and closes itself at test cleanup. Only the
+  client from `server.Client()` (or its transport) reaches that network, so
+  the code under test has to be given that client. An existing
+  `httptest.NewServer` fake moves into a bubble only when a revision
+  substantially changes its test, under the ratchet above.
 - **Only where the code uses the real `time` package.** Behavior driven by an
   injected clock (the scheduler's occurrence-due `clock`, the janitor's
   reconciliation `now`, the engine's retry `now`) is already deterministic and
@@ -946,12 +953,14 @@ Code (Beta) sent `GET /` with `User-Agent: node` to listening `127.0.0.1`
 ports (#2465). A test fake that counts, records, or refuses every request then
 fails with an error such as `unexpected forge request GET /` or `unexpected
 request /`, or sees one notification too many; CI doesn't run T3 Code, so it
-never fails this way (#2451). Every `httptest` server in `daemon/` wraps its
-handler in `strayrequest.Ignore`, which answers exactly an origin-form `GET /`
-(any query string) with 404, so no setting needs changing. Wrap a new fake the
-same way (`internal/strayrequest`). If a local run fails on another stray
-request, log its method, path, `User-Agent`, and `RemoteAddr` before widening
-the filter. Name the sender with `lsof -nP -iTCP@127.0.0.1:<remote port>`,
+never fails this way (#2451). Every loopback `httptest` server in `daemon/`
+(`httptest.NewServer` and the like) wraps its handler in
+`strayrequest.Ignore`, which answers exactly an origin-form `GET /` (any query
+string) with 404, so no setting needs changing. Wrap a new loopback fake the
+same way (`internal/strayrequest`). An `httptest.NewTestServer` server doesn't
+need the wrap: it opens no loopback port, so no other program can reach it.
+If a local run fails on another stray request, log its method, path,
+`User-Agent`, and `RemoteAddr` before widening the filter. Name the sender with `lsof -nP -iTCP@127.0.0.1:<remote port>`,
 which only works while the connection is open, so hold the handler for a
 moment first.
 
