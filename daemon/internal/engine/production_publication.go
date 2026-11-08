@@ -1177,8 +1177,14 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 	}
-	if task.reentersInPlace() {
+	// Scope-conflict recovery writes only task.scopeDecision, which route
+	// doesn't read, so the route computed here holds for the whole pass.
+	route := task.route()
+	switch route {
+	case productionPublicationRouteReentryInPlace:
 		return w.reconcileReentryTask(ctx, task, binding)
+	case productionPublicationRouteRetireUnpublishedReentry, productionPublicationRouteContinuation,
+		productionPublicationRouteForward:
 	}
 	if outcome, err := w.recoverScopeConflictTask(ctx, &task, binding); err != nil {
 		if errors.Is(err, domain.ErrParentKeyMismatch) || errors.Is(err, domain.ErrCardFactInconsistent) {
@@ -1196,8 +1202,12 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err := releaseProductionQuarantine(ctx, w.store, w.attention, productionScopeQuarantinePrefix, task.RunID); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	if task.Successor != nil && task.Successor.ReentersUnpublishedHead() {
+	switch route {
+	case productionPublicationRouteReentryInPlace:
+		return productionTaskOutcome{}, fmt.Errorf("publication route %q reached unpublished-head retirement", route)
+	case productionPublicationRouteRetireUnpublishedReentry:
 		return w.retireReentryTask(ctx, task, binding)
+	case productionPublicationRouteContinuation, productionPublicationRouteForward:
 	}
 	scratch, err := os.MkdirTemp(w.workDir, ".production-publication-")
 	if err != nil {
@@ -1286,8 +1296,12 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, fmt.Errorf("reconstructed execution export produced head %q with %d findings, want clean %q: %w",
 			imported.CommitSHA, len(imported.Findings), binding.export.HeadSHA, domain.ErrParentKeyMismatch)
 	}
-	if task.continuation != nil {
+	switch route {
+	case productionPublicationRouteReentryInPlace, productionPublicationRouteRetireUnpublishedReentry:
+		return productionTaskOutcome{}, fmt.Errorf("publication route %q reached publication continuation", route)
+	case productionPublicationRouteContinuation:
 		return w.startPublicationContinuation(ctx, task, checkoutDir)
+	case productionPublicationRouteForward:
 	}
 	if binding.remediation != nil {
 		sourceTree, err := w.loadRemediationSourceTree(ctx, task, binding, checkoutDir)
