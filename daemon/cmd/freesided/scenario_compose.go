@@ -45,11 +45,12 @@ var (
 )
 
 // composeScenario seeds the scenario's world and composes the production
-// engine over it: the same admission, specification, delivery validation,
-// task cancellation, and publication options the Claude branch uses, with
-// the scripted stage driver and review source, an in-process forge on
-// 127.0.0.1:0, and process-level verification. It runs unattended because
-// production publication holds every other mode's work before publishing.
+// engine over it through the builder the Claude branch uses
+// (productionEngine), with the scripted stage driver and review source, an
+// in-process forge on 127.0.0.1:0, and process-level verification. Each part
+// it leaves out is an explicit zero value with its reason. It runs
+// unattended because production publication holds every other mode's work
+// before publishing.
 //
 // run refuses a non-ephemeral environment before calling it: the fake
 // backend's conformance record claims a containment no process here has.
@@ -146,9 +147,10 @@ func composeScenario(
 	}
 
 	identity := scenarioIdentityID
-	options := []engine.Option{
-		engine.WithDaemonLock(lock),
-		engine.WithAdmission(world.Backend, admissionFloor(domain.ModeUnattended), engine.AdmissionEnvironment{
+	production := productionEngine{
+		Lock: lock, Bound: bound,
+		Backend: world.Backend, AdmissionFloor: admissionFloor(domain.ModeUnattended),
+		Admission: engine.AdmissionEnvironment{
 			OperatingMode: domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,
 			EgressProfile: domain.EgressProviderOnly, ImageRef: world.Image.ImageRef,
 			PromptPackageDigest:       digests["implementation"],
@@ -158,20 +160,21 @@ func composeScenario(
 				HostPath: vendorInstructions,
 			},
 			AuthIdentityID: &identity,
-		}, now),
-		engine.WithAdmissionDerivation(func(context.Context, domain.InvocationID) (string, domain.BaseRevision, error) {
+		},
+		AdmissionNow: now,
+		Derive: func(context.Context, domain.InvocationID) (string, domain.BaseRevision, error) {
 			return "scenario-workspace", domain.BaseRevision{
 				Repo: scenarioRepo, RepositoryID: scenarioRepositoryID,
 				BaseRef: scenarioBaseRef, BaseSHA: world.BaseSHA,
 			}, nil
-		}),
-		engine.WithProductionDeliveryValidation(productionImplementationDeliveryValidator(materializer)),
-		engine.WithSpecification(engine.SpecificationConfig{
+		},
+		DeliveryValidation: productionImplementationDeliveryValidator(materializer),
+		Specification: engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: now,
 			PromptPackageDigest: digests["specification"],
 			ValidateDelivery:    productionSpecificationDeliveryValidator(materializer),
-		}),
-		engine.WithTaskCancellationRuntime(engine.TaskCancellationRuntime{
+		},
+		Cancellation: engine.TaskCancellationRuntime{
 			Timeout: time.Minute,
 			StopRun: func(stopCtx context.Context, run domain.Run, requests []domain.ReviewRequestRecord) error {
 				var joined error
@@ -192,17 +195,38 @@ func composeScenario(
 				return errors.Join(joined, publisher.ReconcileCancelledRun(stopCtx, run.ID))
 			},
 			Unprovable: func(context.Context, domain.TaskID) (string, error) { return "", nil },
-		}),
-		engine.WithProductionPublication(engine.ProductionPublicationConfig{
+		},
+		Publication: engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(world.Dir, "publication"),
 			Transport: transport, Publisher: publisher, Artifacts: blobs,
-			ApprovedRecipes:                map[domain.Digest]bool{verify.RecipeDigest(scenarioRecipe): true},
+			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(scenarioRecipe): true},
+			// The scenario approves its one recipe above and records no
+			// image-policy adoption, so no adoption's recipes can apply. A
+			// scenario that seeds an adoption must set scenarioRepositoryID.
+			RepositoryID:                   0,
 			RemediationPromptPackageDigest: digests["remediation"],
 			ReviewSource:                   reviews,
 			ReviewAdmission:                fake.AdmitReview,
 			ReviewRecovery:                 func(context.Context) error { return nil },
 			ReviewConfigurationDigest:      fake.DefaultReviewConfigurationDigest,
-			Now:                            now,
+			// No shadow review source is composed, so the engine requires
+			// none of the other shadow fields.
+			ShadowReviewSource:              nil,
+			ShadowReviewConfigurationDigest: "",
+			ShadowReviewDefaultRate:         0,
+			ShadowReviewFailure:             nil,
+			// The fake review source reads no operator-host instructions;
+			// the zero value records the source as absent.
+			ReviewHostInstructions: engine.ReviewHostInstructions{},
+			// The scenario runs unattended (see the doc comment), so the
+			// publication queue advances.
+			HoldOnly: false,
+			// The image is fixed at seeding, so a dependency-changing
+			// candidate is refused as rebuild_not_configured.
+			RebuildProjectImage: nil,
+			// No image upkeep is composed, so nothing is pending.
+			ImageUpkeepPending: nil,
+			Now:                now,
 			NewRoom: func(domain.ProjectImage, ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 				home, err := os.MkdirTemp(world.Dir, "verification-home-")
 				if err != nil {
@@ -210,13 +234,25 @@ func composeScenario(
 				}
 				return &scenarioRoom{ProcRoom: verify.ProcRoom{Home: home}}, nil
 			},
-		}),
+			// Verification runs as a host process (verify.ProcRoom), with no
+			// container to bind to task ownership, so NewRoom serves.
+			NewBoundRoom: nil,
+		},
+		// The scenario admits the one image it seeded, world.Image.ImageRef.
+		SelectImage: nil,
+		// No judgment runtime is composed; every judgment site takes its
+		// fail-safe.
+		Inference: nil,
+		// The refresh converges the doctor's review-configuration health,
+		// and no doctor runs without a Claude config (newDoctorPass); the
+		// scenario's review configuration is the fake's fixed default.
+		HealthRefresh: nil,
+		Logger:        cfg.Logger,
+		// The scripted stage driver runs no Claude writer turn, so there is
+		// no usage capture to sink.
+		UsageSink: nil,
 	}
-	options = append(options, engine.WithMachineCapacity(bound))
-	if cfg.Logger != nil {
-		options = append(options, engine.WithLogger(cfg.Logger))
-	}
-	workflow, err := engine.New(st, attention, driver, options...)
+	workflow, err := engine.New(st, attention, driver, production.options()...)
 	if err != nil {
 		return nil, err
 	}
