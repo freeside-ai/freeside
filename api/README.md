@@ -103,11 +103,13 @@ revision. A `command_id` names one command of any kind.
   clears it, as a set without `-drain-first` does. A pool no agent of the
   tree is on is 400. The same orders and account record nothing.
 - **`move_parked_task`** moves a task parked on its implementer's exhausted
-  quota window to `agent`, one of the agents the park's hold offers in
-  `alternate_agents`. The daemon re-derives the offer against current state
-  and refuses with 400 when the task is no longer parked or the agent no
-  longer qualifies, recording nothing. The record carries the alternate-agent
-  retry record and the task lines the move set: the implementer on the
-  selection the tree runs the chosen agent with, and each other role the routing policy orders an agent on that pool
-  for, unless an operator set its line (`daemon/README.md`, Retry Or Move A
-  Task To Another Agent).
+  quota window to `choice`: an enrollment the park's hold offers in
+  `alternate_agents`, with a model and effort its catalog serves, null for
+  the lineup's. The daemon re-derives the offer against current state and
+  refuses with 400 when the task is no longer parked, the enrollment no
+  longer qualifies, or its catalog doesn't serve the model or effort,
+  recording nothing. The record carries the choice, the alternate-agent
+  retry record with the selection the choice resolved to, and the task lines
+  the move set: the implementer on that selection, and each other role the
+  routing policy orders an agent on that pool for, unless an operator set
+  its line (`daemon/README.md`, Retry Or Move A Task To Another Agent).

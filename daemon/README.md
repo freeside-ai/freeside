@@ -2222,12 +2222,12 @@ either path.
   the lineup enrollment's client), its credential is unmarked and valid
   through the attempt's deadline, its route admits the daemon's egress, and
   its pool marks no window for that model with a reset ahead.
-- **The wire still names agents.** Until #2808 the API names each offer,
-  and the operator's choice, by a tree agent. The daemon shows an offer
-  under the agent that runs the lineup's model and effort on its enrollment,
-  and drops one no agent maps to, with the card's retry action when none is
-  left. A chosen agent stands for the enrollment, model, and effort it
-  reduces to.
+- **The wire names enrollments.** Each offer names its enrollment, and the
+  operator's choice is an enrollment with an optional model and effort
+  (`AlternateAgentChoice`; null means the lineup's). A choice that leaves
+  out a value sends null, never an empty string, which is refused. A card
+  or hold recorded before #2735 names tree agents; the wire drops its
+  offers, with the card's retry action, and stores it unchanged.
 - **A failure card retries once.** An `execution_failure` card for the
   implementation stage lists the offers in `alternate_agents` and offers
   `retry_with_alternate_agent`. The decision picks one offered enrollment and
