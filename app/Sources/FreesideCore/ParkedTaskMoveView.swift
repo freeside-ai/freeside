@@ -33,9 +33,9 @@ struct ParkedTaskMoveView: View {
 
     private var menu: some View {
         Menu {
-            ForEach(offers, id: \.agent) { offer in
+            ForEach(offers, id: \.enrollment) { offer in
                 Button(AgentChoiceDisplay.offerLabel(offer)) {
-                    Task { await model.move(taskID: taskID, to: offer.agent) }
+                    Task { await model.move(taskID: taskID, to: AgentChoiceDisplay.choice(offer)) }
                 }
             }
         } label: {
@@ -45,7 +45,7 @@ struct ParkedTaskMoveView: View {
         .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
         .disabled(!model.canMove)
         .accessibilityLabel("Move to another agent")
-        .accessibilityHint("Offers \(offers.map(\.agent).formatted(.list(type: .or)))")
+        .accessibilityHint("Offers \(offers.map(\.enrollment).formatted(.list(type: .or)))")
     }
 
     private func statement(_ text: String) -> some View {

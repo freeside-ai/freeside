@@ -104,7 +104,7 @@ type DecisionPayload struct {
 	Attachments []domain.Digest
 	// TaskProposalRevision, EffectProposalRevision, SnoozeUntil,
 	// AlternativeChoices, FindingRoutes, CapabilityManifestDigest, and
-	// AlternateAgent are the typed wire inputs for the parameterized decisions
+	// AlternateAgentChoice are the typed wire inputs for the parameterized decisions
 	// (start_with_changes, approve_with_changes, snooze,
 	// choose_alternative_route, adjudicate_findings, retry_with_capabilities,
 	// and retry_with_alternate_agent, in that order). decisionMessage
@@ -117,10 +117,10 @@ type DecisionPayload struct {
 	AlternativeChoices       []AlternativeChoice
 	FindingRoutes            []FindingRouteChoice `json:",omitempty"`
 	CapabilityManifestDigest *domain.Digest
-	// AlternateAgent is the tree agent a retry_with_alternate_agent decision
-	// picks from the card's offers, and forbidden on every other action. It
-	// is translated to the selection it reduces to (agentNames) until #2808.
-	AlternateAgent *string
+	// AlternateAgentChoice is the enrollment, and any model and effort, a
+	// retry_with_alternate_agent decision picks from the card's offers, and
+	// forbidden on every other action.
+	AlternateAgentChoice *AlternateAgentChoice
 	// TaskLines are per-role agent choices for the task a task_proposal start
 	// names (plan §5.4). Nil means absent; a present, empty list is malformed.
 	// Only start and start_with_changes apply them, in the decision's
@@ -183,11 +183,11 @@ type EffectProposalRevisionInput struct {
 	Resolves bool `json:"resolves"`
 }
 
-func decisionMessage(payload DecisionPayload, names agentNames) (string, error) {
+func decisionMessage(payload DecisionPayload) (string, error) {
 	if payload.Action != domain.ActionAdjudicateFindings && payload.FindingRoutes != nil {
 		return "", ErrInvalidReviewDisputeDecisionPayload
 	}
-	if payload.Action != domain.ActionRetryWithAlternateAgent && payload.AlternateAgent != nil {
+	if payload.Action != domain.ActionRetryWithAlternateAgent && payload.AlternateAgentChoice != nil {
 		return "", ErrInvalidAlternateAgentDecisionPayload
 	}
 	switch payload.Action {
@@ -262,16 +262,20 @@ func decisionMessage(payload DecisionPayload, names agentNames) (string, error) 
 		}
 		return string(*payload.CapabilityManifestDigest), nil
 	case domain.ActionRetryWithAlternateAgent:
-		// The choice of the selection the agent reduces to is the durable
-		// message, as the manifest digest is for a capability retry, so a
-		// replay compares the same choice.
+		// The choice's canonical message is the durable message, as the
+		// manifest digest is for a capability retry, so a replay compares the
+		// same choice.
 		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
 			payload.SnoozeUntil != nil || payload.Message != "" || len(payload.Attachments) != 0 ||
 			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil ||
-			payload.AlternateAgent == nil || *payload.AlternateAgent == "" {
+			payload.AlternateAgentChoice == nil {
 			return "", ErrInvalidAlternateAgentDecisionPayload
 		}
-		return names.choiceMessage(*payload.AlternateAgent)
+		choice, err := payload.AlternateAgentChoice.choice()
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrInvalidAlternateAgentDecisionPayload, err)
+		}
+		return choice.Message(), nil
 	default:
 		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
 			payload.SnoozeUntil != nil ||
@@ -386,45 +390,25 @@ func kindedReceiptRecord(receipt domain.CommandReceipt, catalog *AgentCatalog) (
 			Policy RoutingPolicyWire `json:"policy"`
 		}{kind, receipt.RoutingPolicyChange, renderRoutingPolicy(receipt.RoutingPolicyChange.Policy, catalog)}, nil
 	case domain.CommandKindMoveParkedTask:
+		// The wire carries a choice and its record's selection. A receipt
+		// stored before #2808 holds neither; no command renders one, since a
+		// replay must send the choice its receipt stores (Same).
 		move := receipt.ParkedTaskMove
+		if move.Choice == nil || move.Retry.Selection == nil {
+			return nil, domain.ErrCommandReceiptArms
+		}
 		return struct {
 			Kind domain.CommandKind `json:"kind"`
 			domain.CommandIdentity
-			TaskID domain.TaskID           `json:"task_id"`
-			Agent  string                  `json:"agent"`
-			Retry  wireAlternateAgentRetry `json:"retry"`
-			Lines  []TaskLine              `json:"lines"`
+			TaskID domain.TaskID              `json:"task_id"`
+			Choice AlternateAgentChoice       `json:"choice"`
+			Retry  domain.AlternateAgentRetry `json:"retry"`
+			Lines  []TaskLine                 `json:"lines"`
 		}{
-			kind, move.CommandIdentity, move.TaskID, move.Agent, wireRetry(move.Retry, move.Agent),
+			kind, move.CommandIdentity, move.TaskID, wireAlternateAgentChoice(*move.Choice), move.Retry,
 			wireTaskLines(move.Lines),
 		}, nil
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 	}
 	return nil, domain.ErrCommandReceiptArms
-}
-
-// wireAlternateAgentRetry is the API's AlternateAgentRetry: the record with
-// the tree agent name the wire still carries in place of its selection
-// (#2808 moves the wire onto selections).
-type wireAlternateAgentRetry struct {
-	ID                 domain.Digest                      `json:"id"`
-	TaskID             domain.TaskID                      `json:"task_id"`
-	Role               domain.RoleName                    `json:"role"`
-	FailedInvocationID domain.InvocationID                `json:"failed_invocation_id"`
-	ItemID             domain.ItemID                      `json:"item_id"`
-	CommandID          string                             `json:"command_id"`
-	Agent              string                             `json:"agent"`
-	Pool               domain.UsagePoolID                 `json:"pool"`
-	Qualification      domain.AlternateAgentQualification `json:"qualification"`
-	RecordedAt         time.Time                          `json:"recorded_at"`
-}
-
-// wireRetry projects a record under agent, the name the command that made it
-// sent: a v2 record's selection is what that name reduced to.
-func wireRetry(record domain.AlternateAgentRetry, agent string) wireAlternateAgentRetry {
-	return wireAlternateAgentRetry{
-		ID: record.ID, TaskID: record.TaskID, Role: record.Role, FailedInvocationID: record.FailedInvocationID,
-		ItemID: record.ItemID, CommandID: record.CommandID, Agent: agent, Pool: record.Pool,
-		Qualification: record.Qualification, RecordedAt: record.RecordedAt,
-	}
 }

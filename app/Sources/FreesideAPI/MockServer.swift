@@ -1734,17 +1734,20 @@ public actor MockServer {
                     reason: "capability manifest was not offered")
             }
         }
-        // signet validateAlternateAgentRetryDecision: the agent is one the
-        // item offered. The daemon's re-derivation against current state has
-        // no mock analogue, so an offered agent is accepted.
+        // signet validateAlternateAgentRetryDecision: the choice names an
+        // enrollment the item offered, and the engine's chosenSelection
+        // holds its model and effort to the enrollment's catalog. Whether the
+        // offer still qualifies against current state has no mock analogue,
+        // so an offered enrollment is accepted.
         if payload.action == .retry_with_alternate_agent {
-            guard let agent = payload.alternate_agent,
-                current.item.alternate_agents?.contains(where: { $0.agent == agent }) == true
+            guard let choice = payload.alternate_agent_choice?.value1,
+                current.item.alternate_agents?.contains(where: { $0.enrollment == choice.enrollment_id }) == true
             else {
                 throw MalformedCommandError(
                     commandID: command.command_id,
                     reason: "alternate agent was not offered")
             }
+            _ = try chosenSelection(choice, commandID: command.command_id)
         }
         // The daemon's answer_route policy (signet validateAnswerRoute): an
         // implementation-stage question must name where the answer goes, and
@@ -2392,10 +2395,11 @@ public actor MockServer {
     }
 
     /// Moves a task parked on its implementer's exhausted quota window to an
-    /// agent its hold offers (engine.MoveParkedTaskTx). The mock pins only
-    /// the implementer, under the offer's pool, and releases the hold as the
-    /// parked attempt's start would; a task with no such hold, or an agent
-    /// the hold does not offer, is refused and records nothing.
+    /// enrollment its hold offers (engine.MoveParkedTaskTx). The mock pins
+    /// only the implementer, under the offer's pool, and releases the hold as
+    /// the parked attempt's start would; a task with no such hold, an
+    /// enrollment the hold does not offer, or a model or effort it does not
+    /// serve, is refused and records nothing.
     private func submitMoveParkedTaskCommand(
         _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.MoveParkedTaskPayload
     ) throws -> SubmitOutcome {
@@ -2408,21 +2412,22 @@ public actor MockServer {
         else {
             throw OperatorCommandRejectedError(commandID: command.command_id, reason: "task is not parked")
         }
-        // The daemon records the selection its tree runs the agent with
-        // (agenttree LineSelection), so an agent outside the tree can't move.
-        guard let offer = window.alternate_agents?.first(where: { $0.agent == payload.agent }),
-            let selection = agentCatalog.agents.first(where: { $0.name == payload.agent })?.selection
+        guard let offer = window.alternate_agents?.first(where: { $0.enrollment == payload.choice.enrollment_id })
         else {
             throw OperatorCommandRejectedError(
                 commandID: command.command_id, reason: "alternate agent no longer qualifies")
         }
+        let selection = try chosenSelection(payload.choice, commandID: command.command_id)
         revision += 1
         let retry = Components.Schemas.AlternateAgentRetry(
             id: MockContractValidation.sha256Digest(
-                of: ["alternate_agent_retry", payload.task_id, invocationID, command.command_id, payload.agent]
-                    .joined(separator: "/")),
+                of: [
+                    "alternate_agent_retry", payload.task_id, invocationID, command.command_id,
+                    Self.selectionText(selection),
+                ]
+                .joined(separator: "/")),
             task_id: payload.task_id, role: .implementer, failed_invocation_id: invocationID, item_id: "",
-            command_id: command.command_id, agent: payload.agent, pool: offer.pool,
+            command_id: command.command_id, selection: selection, pool: offer.pool,
             qualification: offer.qualification, recorded_at: currentTime)
         let key = Self.taskLineKey(payload.task_id, .implementer)
         let head = taskLineHeads[key]
@@ -2478,7 +2483,32 @@ public actor MockServer {
             .move_parked_task(
                 .init(
                     kind: .move_parked_task, command_id: command.command_id, device_id: command.device_id,
-                    task_id: payload.task_id, agent: payload.agent, retry: retry, lines: [line])))
+                    task_id: payload.task_id, choice: payload.choice, retry: retry, lines: [line])))
+    }
+
+    /// The selection a choice from an offer runs on the implementer
+    /// (engine chosenSelection): the choice's enrollment with its model and
+    /// effort, or the implementer lineup line's where it names none. The
+    /// enrollment's discovered catalog must serve the pair; one with no
+    /// catalog takes only the lineup's. A refusal names the field.
+    private func chosenSelection(
+        _ choice: Components.Schemas.AlternateAgentChoice, commandID: String
+    ) throws -> Components.Schemas.TaskLineSelection {
+        guard let line = agentCatalog.lineup.first(where: { $0.role == .implementer })?.selection else {
+            throw OperatorCommandRejectedError(commandID: commandID, reason: "alternate agent no longer qualifies")
+        }
+        let selection = Components.Schemas.TaskLineSelection(
+            enrollment_id: choice.enrollment_id, model_id: choice.model_id ?? line.model_id,
+            effort: choice.effort ?? line.effort)
+        try validateLineSelection(selection, field: "choice", commandID: commandID)
+        let catalogued =
+            agentCatalog.enrollments.first(where: { $0.enrollment_id == choice.enrollment_id })?.discovery != nil
+        if !catalogued, selection.model_id != line.model_id || selection.effort != line.effort {
+            let field = selection.model_id != line.model_id ? "model_id" : "effort"
+            throw MalformedCommandError(
+                commandID: commandID, reason: "choice.\(field): not the lineup's on an enrollment with no catalog")
+        }
+        return selection
     }
 
     /// Records the task_line_set event for a line version this mock wrote,

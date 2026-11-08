@@ -802,15 +802,17 @@ public final class DecisionModel {
             reviewedSnapshot: reviewedSnapshot)
     }
 
-    /// Retries the failed role under one of the item's alternate_agents. The
-    /// daemon re-derives that the agent still qualifies before it records the
-    /// choice, so the offer is a snapshot, never an authority.
+    /// Retries the failed role under a choice from the item's
+    /// alternate_agents. The daemon re-derives that the enrollment still
+    /// qualifies, and that it serves any model and effort the choice names,
+    /// before it records the choice, so the offer is a snapshot, never an
+    /// authority.
     public func submitAlternateAgentRetry(
-        agent: String,
+        choice: Components.Schemas.AlternateAgentChoice,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
     ) async {
         await submit(
-            .retry_with_alternate_agent, alternateAgent: agent,
+            .retry_with_alternate_agent, alternateAgentChoice: choice,
             revision: nil, snoozeUntil: nil, alternativeChoices: nil,
             reviewedSnapshot: reviewedSnapshot)
     }
@@ -842,7 +844,7 @@ public final class DecisionModel {
     private func submit(
         _ action: Components.Schemas.Action,
         capabilityManifestDigest: String? = nil,
-        alternateAgent: String? = nil,
+        alternateAgentChoice: Components.Schemas.AlternateAgentChoice? = nil,
         revision: Components.Schemas.TaskProposalRevisionInput? = nil,
         effectRevision: Components.Schemas.EffectProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
@@ -861,7 +863,7 @@ public final class DecisionModel {
         guard (action == .start_with_changes) == (revision != nil),
             (action == .approve_with_changes) == (effectRevision != nil),
             (action == .retry_with_capabilities) == (capabilityManifestDigest != nil),
-            (action == .retry_with_alternate_agent) == (alternateAgent != nil),
+            (action == .retry_with_alternate_agent) == (alternateAgentChoice != nil),
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil),
             (action == .adjudicate_findings) == (findingRoutes != nil),
@@ -910,7 +912,7 @@ public final class DecisionModel {
                     capability_manifest_digest: capabilityManifestDigest.map {
                         .init(value1: $0)
                     },
-                    alternate_agent: alternateAgent,
+                    alternate_agent_choice: alternateAgentChoice.map { .init(value1: $0) },
                     answer_route: answerRoute.map { .init(value1: $0) },
                     task_proposal_revision: revision.map {
                         .init(value1: $0)

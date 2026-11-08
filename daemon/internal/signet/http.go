@@ -404,7 +404,7 @@ type decisionPayloadRequest struct {
 	FindingRoutes               []FindingRouteChoice           `json:"finding_routes"`
 	TaskLines                   []domain.TaskLineChoice        `json:"task_lines"`
 	CapabilityManifestDigest    *domain.Digest                 `json:"capability_manifest_digest"`
-	AlternateAgent              *string                        `json:"alternate_agent"`
+	AlternateAgentChoice        *AlternateAgentChoice          `json:"alternate_agent_choice"`
 	AnswerRoute                 *domain.AnswerRoute            `json:"answer_route"`
 	DecisionActionSurfaceDigest *domain.Digest                 `json:"decision_action_surface_digest"`
 }
@@ -543,9 +543,9 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 		digest := *arm.CapabilityManifestDigest
 		payload.CapabilityManifestDigest = &digest
 	}
-	if arm.AlternateAgent != nil {
-		agent := *arm.AlternateAgent
-		payload.AlternateAgent = &agent
+	if arm.AlternateAgentChoice != nil {
+		choice := *arm.AlternateAgentChoice
+		payload.AlternateAgentChoice = &choice
 	}
 	if arm.AnswerRoute != nil {
 		route := *arm.AnswerRoute

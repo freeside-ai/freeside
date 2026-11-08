@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -102,11 +101,10 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				tree, moveAgent := moveTree(t)
 				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
 					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
-					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog, signet.WithParkedTaskMover(fakeParkedTaskMover),
-					signet.WithAgentTree(func() *agenttree.Tree { return tree }))
+					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog,
+					signet.WithParkedTaskMover(fakeParkedTaskMover))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {
 					case domain.CommandKindDecision:
@@ -124,7 +122,7 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 					case domain.CommandKindSetRoutingPolicy:
 						return policyCommand("shared", nil, "codex-primary")
 					case domain.CommandKindMoveParkedTask:
-						return moveCommand("shared", id, moveAgent)
+						return moveCommand("shared", id, "move-claude/claude_code")
 					}
 					t.Fatal("unknown kind")
 					return signet.ClientCommand{}

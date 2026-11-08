@@ -160,9 +160,9 @@ func (e *Engine) reconcileAlternateAgentRetry(ctx context.Context, candidate dom
 
 // MoveParkedTaskTx moves a task parked on its implementer's exhausted quota
 // window to another enrollment, in the command's transaction. The request's
-// selection must be on an enrollment the park offers now (parkedTaskOffers),
-// which re-derives its rule, with a model and effort that enrollment serves
-// (chosenSelection). The move records the choice, then re-pins the task's
+// choice must name an enrollment the park offers now (parkedTaskOffers),
+// which re-derives its rule, with any model and effort it names one that
+// enrollment serves (chosenSelection). The move records the choice, then re-pins the task's
 // lines to the chosen enrollment as the router would (moveLines). It clears
 // the parked attempt's hold row; the park's gate reads the moved line, not
 // the row, to let the attempt start.
@@ -175,7 +175,7 @@ func (e *Engine) reconcileAlternateAgentRetry(ctx context.Context, candidate dom
 func (s AgentSelection) MoveParkedTaskTx(
 	ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 ) (domain.ParkedTaskMoveReceipt, error) {
-	if request.Selection == nil {
+	if request.Choice == nil {
 		return domain.ParkedTaskMoveReceipt{}, signet.ErrInvalidOperatorCommandPayload
 	}
 	parked, refused, found, err := parkedRun(ctx, &tx.ReadTx, request.TaskID)
@@ -189,11 +189,11 @@ func (s AgentSelection) MoveParkedTaskTx(
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}
-	offer, ok := domain.OfferedEnrollment(offers, request.Selection.EnrollmentID)
+	offer, ok := domain.OfferedEnrollment(offers, request.Choice.EnrollmentID)
 	if !ok {
 		return domain.ParkedTaskMoveReceipt{}, signet.ErrAlternateAgentNotQualified
 	}
-	selection, err := s.chosenSelection(ctx, &tx.ReadTx, domain.RoleImplementer, domain.AlternateAgentChoice(*request.Selection))
+	selection, err := s.chosenSelection(ctx, &tx.ReadTx, domain.RoleImplementer, *request.Choice)
 	if err != nil {
 		return domain.ParkedTaskMoveReceipt{}, err
 	}

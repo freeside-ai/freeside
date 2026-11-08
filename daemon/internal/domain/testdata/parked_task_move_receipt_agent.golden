@@ -1,0 +1,52 @@
+{
+  "command_id": "cmd-move",
+  "device_id": "device-1",
+  "task_id": "task-1",
+  "agent": "claude-b",
+  "selection": {
+    "enrollment_id": "claude-b/claude_code",
+    "model_id": "claude-opus-4-5",
+    "effort": "high"
+  },
+  "retry": {
+    "id": "sha256:064d4932a481ca61519dee741c8ee6452b1d4fd5330c3a3881565fb93c22f93a",
+    "task_id": "task-1",
+    "role": "implementer",
+    "failed_invocation_id": "inv-refused",
+    "item_id": "",
+    "command_id": "cmd-move",
+    "selection": {
+      "enrollment_id": "claude-b/claude_code",
+      "model_id": "claude-opus-4-5",
+      "effort": "high"
+    },
+    "pool": "pool-b",
+    "qualification": "different_pool",
+    "recorded_at": "2026-01-02T03:04:05Z"
+  },
+  "lines": [
+    {
+      "id": "sha256:a4469a774b018ba905b964de9588f50a25b11a103e1aeb23ae14709a7092c74e",
+      "encoding": "freeside.task_line/v2",
+      "task_id": "task-1",
+      "role": "implementer",
+      "selection": {
+        "enrollment_id": "claude-b/claude_code",
+        "model_id": "claude-opus-4-5",
+        "effort": "high"
+      },
+      "version": 1,
+      "predecessor_id": null,
+      "source": "alternate_agent_move",
+      "set_by": "sha256:064d4932a481ca61519dee741c8ee6452b1d4fd5330c3a3881565fb93c22f93a",
+      "set_at": "2026-01-02T03:04:05Z",
+      "provenance": {
+        "policy_revision": 1,
+        "tier": "policy_order",
+        "pool": "pool-b",
+        "ranked_by": [],
+        "passed_over": null
+      }
+    }
+  ]
+}

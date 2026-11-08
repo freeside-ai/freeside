@@ -394,12 +394,12 @@ struct DecisionDetailView: View {
                 titleVisibility: .visible
             ) {
                 if let reviewedSnapshot = alternateAgentRetrySnapshot {
-                    ForEach(reviewedSnapshot.item.alternate_agents ?? [], id: \.agent) { offer in
+                    ForEach(reviewedSnapshot.item.alternate_agents ?? [], id: \.enrollment) { offer in
                         Button(AgentChoiceDisplay.offerLabel(offer)) {
                             alternateAgentRetrySnapshot = nil
                             Task {
                                 await model.submitAlternateAgentRetry(
-                                    agent: offer.agent, reviewedSnapshot: reviewedSnapshot)
+                                    choice: AgentChoiceDisplay.choice(offer), reviewedSnapshot: reviewedSnapshot)
                             }
                         }
                     }

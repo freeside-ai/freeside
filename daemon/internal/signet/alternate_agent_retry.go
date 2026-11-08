@@ -5,104 +5,78 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// The wire still names alternates by tree agent (the decision's
-// alternate_agent, a move_parked_task's agent, and each offer's agent) while
-// the daemon stores enrollments and selections (#2735). agentNames
-// translates between the two at the handler and the projection; #2808 moves
-// the wire onto selections and removes it.
-type agentNames struct {
-	// tree is the committed agent tree, nil when the daemon holds none,
-	// which translates nothing.
-	tree *agenttree.Tree
+// AlternateAgentChoice mirrors the API's AlternateAgentChoice: an offered
+// enrollment and, where the operator picks them, a model and an effort. A nil
+// model or effort is the implementer lineup line's.
+type AlternateAgentChoice struct {
+	EnrollmentID domain.ClientEnrollmentID `json:"enrollment_id"`
+	ModelID      *string                   `json:"model_id"`
+	Effort       *string                   `json:"effort"`
 }
 
-// agentNames is the translation over the daemon's committed tree.
-func (s *Service) agentNames() agentNames {
-	if s.agentTreeFunc == nil {
-		return agentNames{}
-	}
-	return agentNames{tree: s.agentTreeFunc()}
-}
-
-// selection is the enrollment, model, and effort the named tree agent
-// reduces to (agenttree.Tree.SelectionOfAgent), or false when there is no
-// tree or the tree reduces no such agent.
-func (n agentNames) selection(name string) (domain.TaskLineSelection, bool) {
-	if n.tree == nil {
-		return domain.TaskLineSelection{}, false
-	}
-	selection, err := n.tree.SelectionOfAgent(name)
-	return selection, err == nil
-}
-
-// choiceMessage is a retry_with_alternate_agent's durable message for the
-// tree agent the wire names: the choice of the selection it reduces to
-// (domain.AlternateAgentChoice.Message). A name no tree agent reduces is not
-// offered; the refusal never repeats it.
-func (n agentNames) choiceMessage(name string) (string, error) {
-	selection, ok := n.selection(name)
-	if !ok {
-		return "", ErrAlternateAgentNotOffered
-	}
-	return domain.AlternateAgentChoice(selection).Message(), nil
-}
-
-// renderOffers is offers as the wire names them: each enrollment offer under
-// the tree agent that runs the implementer's lineup model and effort on that
-// enrollment (agenttree.Tree.AgentForSelection), sorted by agent. An offer no
-// one agent maps to is dropped, so before #2808 the operator may see fewer
-// offers than the daemon derived. A pre-#2735 offer already names its agent.
-// It returns nil when no offer is left.
-func (n agentNames) renderOffers(offers []domain.AlternateAgentOffer) []domain.AlternateAgentOffer {
-	var rendered []domain.AlternateAgentOffer
-	for _, offer := range offers {
-		if offer.Agent == "" {
-			name, ok := n.offerAgent(offer)
-			if !ok {
-				continue
-			}
-			offer.Agent, offer.Enrollment = name, ""
+// choice is the domain choice the wire names. The wire's null, not an empty
+// string, means the lineup's, so a present empty model or effort is refused
+// like an invalid one: the error names the field, never the text.
+func (c AlternateAgentChoice) choice() (domain.AlternateAgentChoice, error) {
+	choice := domain.AlternateAgentChoice{EnrollmentID: c.EnrollmentID}
+	for _, field := range []struct {
+		name  string
+		wire  *string
+		value *string
+	}{{"model_id", c.ModelID, &choice.ModelID}, {"effort", c.Effort, &choice.Effort}} {
+		if field.wire == nil {
+			continue
 		}
-		rendered = append(rendered, offer)
+		if *field.wire == "" {
+			return domain.AlternateAgentChoice{}, fmt.Errorf("alternate agent choice %s: %w",
+				field.name, domain.ErrInvalidTaskLineSelection)
+		}
+		*field.value = *field.wire
 	}
-	domain.SortAlternateAgentOffers(rendered)
-	return rendered
+	if err := choice.Validate(); err != nil {
+		return domain.AlternateAgentChoice{}, err
+	}
+	return choice, nil
 }
 
-// offerAgent is the tree agent an enrollment offer renders as, or false when
-// there is no tree, no implementer lineup line, or no one agent for it.
-func (n agentNames) offerAgent(offer domain.AlternateAgentOffer) (string, bool) {
-	if n.tree == nil {
-		return "", false
+// wireAlternateAgentChoice is a stored choice as the wire carries it, null
+// for a model or effort the choice left to the lineup.
+func wireAlternateAgentChoice(choice domain.AlternateAgentChoice) AlternateAgentChoice {
+	optional := func(value string) *string {
+		if value == "" {
+			return nil
+		}
+		return &value
 	}
-	lineup, err := n.tree.ResolveLineup()
-	if err != nil {
-		return "", false
+	return AlternateAgentChoice{
+		EnrollmentID: choice.EnrollmentID, ModelID: optional(choice.ModelID), Effort: optional(choice.Effort),
 	}
-	line, ok := lineup.Line(domain.RoleImplementer)
-	if !ok {
-		return "", false
-	}
-	name, err := n.tree.AgentForSelection(domain.RoleImplementer, domain.TaskLineSelection{
-		EnrollmentID: offer.Enrollment, ModelID: line.Names.Model, Effort: line.Names.Effort,
-	})
-	return name, err == nil
 }
 
-// renderItem is the item with its offers as the wire names them. When no
+// renderOffers is offers as the wire carries them. A stored set is all
+// enrollment offers or all pre-#2735 offers (domain.ValidateAlternateAgentOffers),
+// already sorted; a pre-#2735 set names tree agents the wire no longer
+// carries and renders as nil.
+func renderOffers(offers []domain.AlternateAgentOffer) []domain.AlternateAgentOffer {
+	if len(offers) == 0 || offers[0].Agent != "" {
+		return nil
+	}
+	return offers
+}
+
+// renderItem is the item with its offers as the wire carries them. When no
 // offer is left the item renders with no offers and without the
 // retry_with_alternate_agent action, which the wire offers exactly beside
 // them; the stored item is unchanged and still offers it.
-func (n agentNames) renderItem(item domain.AttentionItem) domain.AttentionItem {
+func renderItem(item domain.AttentionItem) domain.AttentionItem {
 	if item.AlternateAgents == nil {
 		return item
 	}
-	item.AlternateAgents = n.renderOffers(item.AlternateAgents)
+	item.AlternateAgents = renderOffers(item.AlternateAgents)
 	if item.AlternateAgents == nil {
 		item.RequestedDecision = slices.DeleteFunc(slices.Clone(item.RequestedDecision), func(action domain.Action) bool {
 			return action == domain.ActionRetryWithAlternateAgent
@@ -111,14 +85,14 @@ func (n agentNames) renderItem(item domain.AttentionItem) domain.AttentionItem {
 	return item
 }
 
-// renderHold is the hold with its quota window's offers as the wire names
+// renderHold is the hold with its quota window's offers as the wire carries
 // them.
-func (n agentNames) renderHold(hold *domain.RunHoldObservation) *domain.RunHoldObservation {
+func renderHold(hold *domain.RunHoldObservation) *domain.RunHoldObservation {
 	if hold == nil || hold.QuotaWindow == nil || hold.QuotaWindow.AlternateAgents == nil {
 		return hold
 	}
 	window := *hold.QuotaWindow
-	window.AlternateAgents = n.renderOffers(window.AlternateAgents)
+	window.AlternateAgents = renderOffers(window.AlternateAgents)
 	rendered := *hold
 	rendered.QuotaWindow = &window
 	return &rendered

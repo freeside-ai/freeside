@@ -284,7 +284,7 @@ func (f *agentAdmissionFixture) moveTask(
 		_, err = tx.RecordCommandReceipt(ctx, domain.CommandReceipt{ParkedTaskMove: &domain.ParkedTaskMoveReceipt{
 			ParkedTaskMoveRequest: domain.ParkedTaskMoveRequest{
 				CommandIdentity: domain.CommandIdentity{CommandID: "cmd-move", DeviceID: "device-1"},
-				TaskID:          taskID, Agent: agentTestSecondAgent, Selection: record.Selection,
+				TaskID:          taskID, Choice: &domain.AlternateAgentChoice{EnrollmentID: record.Selection.EnrollmentID},
 			},
 			Retry: record, Lines: lines,
 		}})
@@ -401,7 +401,8 @@ func TestMoveRefusesATaskThatIsNotParked(t *testing.T) {
 	err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		_, err := f.selection.MoveParkedTaskTx(ctx, tx, domain.ParkedTaskMoveRequest{
 			CommandIdentity: domain.CommandIdentity{CommandID: "cmd-move", DeviceID: "device-1"},
-			TaskID:          taskID, Agent: agentTestSecondAgent, Selection: f.lineSelection(t, agentTestSecondAgent),
+			TaskID:          taskID,
+			Choice:          &domain.AlternateAgentChoice{EnrollmentID: f.lineSelection(t, agentTestSecondAgent).EnrollmentID},
 		}, agentTestAt)
 		return err
 	})

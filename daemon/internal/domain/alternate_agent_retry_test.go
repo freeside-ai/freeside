@@ -321,6 +321,30 @@ func TestParkedTaskMoveReceiptBindsItsRecord(t *testing.T) {
 		receipt.Same(foreign.ParkedTaskMoveRequest) {
 		t.Fatal("Same did not compare the selection")
 	}
+	// Since #2808 the request stores the choice the operator sent, which
+	// the record's selection must satisfy.
+	chosen := receipt
+	chosen.Agent, chosen.Selection = "", nil
+	chosen.Choice = &domain.AlternateAgentChoice{EnrollmentID: testRetrySelection.EnrollmentID, Effort: "high"}
+	if err := chosen.Validate(); err != nil {
+		t.Fatalf("a choice receipt: %v", err)
+	}
+	unchosen := chosen
+	unchosen.Choice = &domain.AlternateAgentChoice{EnrollmentID: testRetrySelection.EnrollmentID, Effort: "max"}
+	if err := unchosen.Validate(); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("a choice the record does not satisfy: err = %v", err)
+	}
+	both := chosen
+	both.Agent = "claude-b"
+	if err := both.Validate(); !errors.Is(err, domain.ErrInvalidTaskLineSelection) {
+		t.Fatalf("a choice beside an agent: err = %v", err)
+	}
+	agentOnly := receipt.ParkedTaskMoveRequest
+	agentOnly.Selection = nil
+	if !chosen.Same(chosen.ParkedTaskMoveRequest) || chosen.Same(unchosen.ParkedTaskMoveRequest) ||
+		chosen.Same(receipt.ParkedTaskMoveRequest) || chosen.Same(agentOnly) {
+		t.Fatal("Same did not compare the choice")
+	}
 	if _, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Selection: &selection,
 		Source: domain.TaskLineSourceAlternateAgentMove, SetBy: string(record.ID),

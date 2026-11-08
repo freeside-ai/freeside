@@ -991,8 +991,8 @@ public enum AttentionFixtures {
         snapshot.item.requested_decision = [.retry, .retry_with_alternate_agent, .discuss, .stop]
         snapshot.item.alternate_agents = [
             .init(
-                agent: "claude-team", pool: "claude-team-pool", harness: .claude_code, model: "claude-opus-5-5",
-                qualification: .different_pool)
+                enrollment: UsageFixtures.readingSecondEnrollmentID, pool: "claude-team-pool", harness: .claude_code,
+                model: "claude-opus-5-5", qualification: .different_pool)
         ]
         return snapshot
     }

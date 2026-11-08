@@ -26,10 +26,20 @@ public enum AgentChoiceDisplay {
     /// default. Every discovered model accepts it.
     public static let harnessDefault = "harness_default"
 
-    /// An alternate-agent offer as a picker names it: the agent, its model,
-    /// and the usage pool it draws on, so the operator sees what changes.
+    /// An alternate-agent offer as a picker names it: the enrollment, its
+    /// model, and the usage pool it draws on, so the operator sees what
+    /// changes.
     public static func offerLabel(_ offer: Components.Schemas.AlternateAgentOffer) -> String {
-        "\(offer.agent) · \(offer.model) · \(offer.pool)"
+        "\(offer.enrollment) · \(offer.model) · \(offer.pool)"
+    }
+
+    /// The choice a picker sends for an offer: the enrollment alone, so the
+    /// daemon runs the implementer lineup's model and effort on it, the
+    /// model and effort the offer was made at.
+    public static func choice(
+        _ offer: Components.Schemas.AlternateAgentOffer
+    ) -> Components.Schemas.AlternateAgentChoice {
+        .init(enrollment_id: offer.enrollment)
     }
 
     /// The roles in the order the form shows them and a submission sends

@@ -106,7 +106,7 @@ import Testing
     /// while the position is current and its recorded hold is that park.
     @Test func quotaWindowParkOffersItsAgentsWhileCurrent() throws {
         let parked = HoldPresentationFixtures.make("Quota window")
-        #expect(TaskDisplay.moveOffers(parked.position).map(\.agent) == ["claude-team"])
+        #expect(TaskDisplay.moveOffers(parked.position).map(\.enrollment) == [UsageFixtures.readingCollectorID])
 
         var unloaded = parked
         unloaded.history = nil
@@ -382,7 +382,8 @@ enum HoldPresentationFixtures {
                         set_at: observed,
                         alternate_agents: [
                             .init(
-                                agent: "claude-team", pool: "claude-team-pool", harness: .claude_code,
+                                enrollment: UsageFixtures.readingCollectorID, pool: "claude-team-pool",
+                                harness: .claude_code,
                                 model: "claude-opus-5-5", qualification: .different_pool)
                         ])),
                 first_observed_at: observed, last_observed_at: observed)

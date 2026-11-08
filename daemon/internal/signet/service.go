@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -56,12 +55,9 @@ type Service struct {
 	// holds no committed tree (the fake driver, the scenario daemon), and
 	// both serve null.
 	agentCatalogFunc func() *AgentCatalog
-	// agentTreeFunc reports the committed agent tree the wire's agent names
-	// translate through (agentNames), nil when the daemon holds none.
-	agentTreeFunc   func() *agenttree.Tree
-	doctorSchedule  domain.ScheduleID
-	doctorAvailable func() bool
-	now             func() time.Time
+	doctorSchedule   domain.ScheduleID
+	doctorAvailable  func() bool
+	now              func() time.Time
 	// logger records durable diagnoses the read projections would otherwise
 	// swallow into an undifferentiated 500 (issue #767): when a listing read
 	// isolates a run whose observation rows contradict their durable authority,
@@ -196,13 +192,6 @@ func WithEffectiveReviewConfiguration(digest func() domain.Digest) Option {
 // the tree is loaded; it answers nil until then.
 func WithAgentCatalog(catalog func() *AgentCatalog) Option {
 	return func(s *Service) { s.agentCatalogFunc = catalog }
-}
-
-// WithAgentTree supplies the committed agent tree the wire's alternate-agent
-// names translate through until #2808 (agentNames). Like WithAgentCatalog,
-// the func is read at each use and answers nil until the tree is loaded.
-func WithAgentTree(tree func() *agenttree.Tree) Option {
-	return func(s *Service) { s.agentTreeFunc = tree }
 }
 
 // WithLogger supplies the process logger the read projections record a run
@@ -412,7 +401,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				return fmt.Errorf("submit command %q: action %q: %w",
 					command.CommandID, command.Action, ErrUnsupportedAction)
 			}
-			message, err := decisionMessage(in.Payload, s.agentNames())
+			message, err := decisionMessage(in.Payload)
 			if err != nil {
 				return fmt.Errorf("submit command %q: %w", in.CommandID, err)
 			}
@@ -574,7 +563,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			// message. If typed decoding fails, retain the structural command:
 			// PutCommand will still surface an immutable conflict for a changed
 			// body under the occupied id, preserving command-id-first judgment.
-			if message, messageErr := decisionMessage(in.Payload, s.agentNames()); messageErr == nil {
+			if message, messageErr := decisionMessage(in.Payload); messageErr == nil {
 				if canonical, commandErr := newCommand(message); commandErr == nil {
 					command = canonical
 				}

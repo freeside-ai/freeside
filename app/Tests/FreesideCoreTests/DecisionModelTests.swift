@@ -791,7 +791,7 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
-    @Test func alternateAgentRetrySubmitsTheChosenAgent() async throws {
+    @Test func alternateAgentRetrySubmitsTheChosenEnrollment() async throws {
         let server = MockServer(items: [AttentionFixtures.quotaFailure()])
         let store = await makeStore(server: server)
         let model = DecisionModel(store: store, itemID: "item-execution_failure")
@@ -799,21 +799,25 @@ import Testing
         let reviewedSnapshot = try #require(model.snapshot)
         let offer = try #require(reviewedSnapshot.item.alternate_agents?.first)
 
-        await model.submitAlternateAgentRetry(agent: offer.agent, reviewedSnapshot: reviewedSnapshot)
+        await model.submitAlternateAgentRetry(
+            choice: AgentChoiceDisplay.choice(offer), reviewedSnapshot: reviewedSnapshot)
 
         #expect(model.appliedRecord?.action == .retry_with_alternate_agent)
-        #expect(model.appliedRecord?.message == offer.agent)
+        #expect(
+            model.appliedRecord?.message
+                == #"{"enrollment_id":"\#(offer.enrollment)","model_id":"","effort":""}"#)
         #expect(model.snapshot?.item.status == .superseded)
     }
 
-    @Test func alternateAgentRetryRefusesAnAgentTheCardDidNotOffer() async throws {
+    @Test func alternateAgentRetryRefusesAnEnrollmentTheCardDidNotOffer() async throws {
         let server = MockServer(items: [AttentionFixtures.quotaFailure()])
         let store = await makeStore(server: server)
         let model = DecisionModel(store: store, itemID: "item-execution_failure")
         await model.validate()
         let reviewedSnapshot = try #require(model.snapshot)
 
-        await model.submitAlternateAgentRetry(agent: "claude-other", reviewedSnapshot: reviewedSnapshot)
+        await model.submitAlternateAgentRetry(
+            choice: .init(enrollment_id: UsageFixtures.unsupportedCollectorID), reviewedSnapshot: reviewedSnapshot)
 
         #expect(model.appliedRecord == nil)
         #expect(model.snapshot?.item.status == .open)
