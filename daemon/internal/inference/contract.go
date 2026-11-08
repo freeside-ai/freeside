@@ -502,7 +502,9 @@ type Response struct {
 // Driver performs one structured completion without tools or a workspace.
 // Implementations must stop provider work and return when ctx is canceled;
 // Client additionally prevents a non-conforming driver from accumulating
-// more than one orphaned call per site.
+// more than one orphaned call per site. A returned error's identity is not
+// part of the contract: a driver may return one opaque error for every
+// failure, and Client classifies a deadline from its own context too.
 type Driver interface {
 	Complete(context.Context, Request, Secret) (Response, error)
 }
