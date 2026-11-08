@@ -321,7 +321,8 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		verified, err = verify.Verify(ctx, checkoutDir, verify.Options{
 			HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
 			InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
-			RecipePath: verify.DefaultRecipePath, Room: room,
+			RecipePath:      verify.DefaultRecipePath,
+			Rooms:           map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: room},
 			ApprovedRecipes: recipes, Changes: imported.Changes,
 			// A stable per-verification time, not a wall clock: the emitted evidence
 			// is content-addressed and write-once, and this checkpoint can re-run, so
@@ -417,8 +418,14 @@ func verificationMemoryLimit(err error) bool {
 	return errors.As(err, &limit) && limit.Class == ward.LaunchVerification
 }
 
+// productionVerificationStateContradiction reports a verify refusal that a
+// retry would meet again because Freeside's own state causes it. A recipe that
+// names an execution class with no room is one: the recipe is approved and the
+// rooms are the engine's choice, so retrying cannot supply the missing room
+// (#2882 adds the macOS room and maps this refusal to a failed verification).
 func productionVerificationStateContradiction(err error) bool {
 	return errors.Is(err, verify.ErrRecipeInvalid) ||
+		errors.Is(err, verify.ErrRoomUnavailable) ||
 		errors.Is(err, verify.ErrRecipeUnreadable) ||
 		errors.Is(err, verify.ErrGitPlumbing) ||
 		errors.Is(err, verify.ErrUnsupportedRepo) ||

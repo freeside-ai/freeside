@@ -12,6 +12,7 @@
         "test",
         "./..."
       ],
+      "room": "project_image",
       "exit_code": 0,
       "output_truncated": false
     },
@@ -21,6 +22,7 @@
         "vet",
         "./..."
       ],
+      "room": "project_image",
       "exit_code": 0,
       "output_truncated": false
     }

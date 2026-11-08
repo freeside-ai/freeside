@@ -6,7 +6,11 @@
 // Trust model. The recipe loads only from approved control-plane config
 // or the trusted base commit (§5.8); the candidate head's copy of the
 // recipe path is data, compared and risk-flagged on divergence but
-// never executed. Verification output binds to the exact recipe digest
+// never executed. The recipe, not the caller, names each command's
+// execution class (the project image or the macOS host); the caller
+// supplies a room per class, and a class with no room fails closed
+// rather than running in another room. Verification output binds to the
+// exact recipe digest
 // (sha256 over the trusted bytes as loaded) and the exact head SHA; a
 // head the checkout does not hold fails closed before any command runs.
 // Evidence is only what the verifier itself authors (the report and the
@@ -39,7 +43,8 @@
 //
 //   - errors.go       fail-closed sentinels for recipe, checkout, and git failures
 //   - options.go      Options and their defaults: recipe path, caps, timeouts
-//   - recipe.go       the recipe format and its capture modes (§5.15)
+//   - recipe.go       the recipe format, each Command's ExecutionClass
+//     (§5.7), and the capture modes (§5.15)
 //   - source.go       base and evaluated-commit bindings, trusted recipe
 //     loading (§5.8), and recipe divergence
 //   - recipe_at_commit.go CommitReader and the bounded recipe read at one

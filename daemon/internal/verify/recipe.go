@@ -1,7 +1,9 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -38,6 +40,45 @@ func (m CaptureMode) valid() bool {
 	}
 }
 
+// ExecutionClass names the room a recipe command runs in (§5.7): the
+// Linux project image or the credential-free macOS verification
+// executor. The recipe, not the caller, chooses each command's class,
+// and the class is part of the bytes the recipe digest covers, so
+// moving a command to another room is a recipe change that needs
+// reapproval. The zero value "" is invalid by design.
+type ExecutionClass string
+
+const (
+	// ClassProjectImage runs a command in the repository's project
+	// image: the room every recipe ran in before classes existed, and
+	// the class of a command given in the bare argv form.
+	ClassProjectImage ExecutionClass = "project_image"
+	// ClassMacOSHost runs a command on the macOS host's credential-free
+	// verification executor.
+	ClassMacOSHost ExecutionClass = "macos_host"
+)
+
+// AllExecutionClasses lists every valid ExecutionClass: the single
+// place a new class is registered, driving the table-driven tests.
+var AllExecutionClasses = []ExecutionClass{ClassProjectImage, ClassMacOSHost}
+
+// valid is the validity predicate; as a predicate it uses default.
+func (c ExecutionClass) valid() bool {
+	switch c {
+	case ClassProjectImage, ClassMacOSHost:
+		return true
+	default:
+		return false
+	}
+}
+
+// Command is one recipe command: its argument vector and the class of
+// room that runs it.
+type Command struct {
+	Argv  []string
+	Class ExecutionClass
+}
+
 // Recipe is a parsed trusted verification recipe: the commands the
 // clean workspace runs and the capture block governing evidence.
 // Commands are argument vectors given verbatim on the wire
@@ -48,36 +89,69 @@ func (m CaptureMode) valid() bool {
 // redirection past the no-shell execution path, which never sees the
 // argument as anything but an opaque execve token.
 type Recipe struct {
-	Commands [][]string
+	Commands []Command
 	Capture  CaptureMode
 }
 
+// CommandsIn returns the argument vectors of the recipe's commands of
+// one class, in recipe order.
+func (r Recipe) CommandsIn(class ExecutionClass) [][]string {
+	var out [][]string
+	for _, cmd := range r.Commands {
+		if cmd.Class == class {
+			out = append(out, cmd.Argv)
+		}
+	}
+	return out
+}
+
 // recipeWire is the recipe's JSON wire form, e.g.
-// {"commands": [["go", "test", "./..."], ["go", "vet", "./..."]],
+// {"commands": [["go", "test", "./..."], {"argv": ["bash",
+// "scripts/check.sh", "app", "test"], "room": "macos_host"}],
 // "capture": "none"}. Each command is an explicit argument vector, not
 // a shell string: an argv element carries its spaces and metacharacters
-// verbatim, and the parser neither splits nor rewrites it.
+// verbatim, and the parser neither splits nor rewrites it. A command is
+// either a bare argv array, which runs in the project image, or an
+// object naming its argv and its room (commandObjectWire). The bare form
+// is the only form recipes had before execution classes, so every
+// earlier recipe keeps its bytes and therefore its digest and approval.
 // JSON rather than the plan's §5.12 YAML config syntax: the daemon
 // carries no YAML dependency and the control-plane config format is not
 // yet initialized; the decision note records the revisit condition.
+//
+// Each command decodes in a second strictjson pass over its raw bytes
+// (parseCommand), so both forms keep the outer decode's refusal of
+// unknown fields and duplicate names.
+type recipeWire struct {
+	Commands []json.RawMessage `json:"commands"`
+	Capture  string            `json:"capture"`
+}
+
+// commandObjectWire is a command's object form,
+// {"argv": [...], "room": "macos_host"}. Both fields are required:
+// a missing room is refused rather than defaulted, so the object form
+// always says where its command runs.
 //
 // Tokens are *string, not string, so the parser can tell a JSON null
 // (nil) from an intentional empty string (a non-nil pointer to ""):
 // json unmarshals null into a string's zero value, which would let a
 // malformed `["swift", "test", null]` masquerade as a valid empty
-// argument, so a null token fails closed rather than executing.
-type recipeWire struct {
-	Commands [][]*string `json:"commands"`
-	Capture  string      `json:"capture"`
+// argument, so a null token fails closed rather than executing. The
+// same holds for the bare array form.
+type commandObjectWire struct {
+	Argv []*string `json:"argv"`
+	Room *string   `json:"room"`
 }
 
 // ParseRecipe parses and validates trusted recipe bytes. Unknown
-// fields, trailing data, an empty command list, an empty command (no
-// argv or an empty executable name), a null or NUL-bearing token, a
-// ".." path segment in a token, a recognized direct shell runner
-// carrying a command-string option, and an invalid capture mode all
-// fail closed with ErrRecipeInvalid. Command arguments are otherwise
-// opaque: no whitespace splitting or metacharacter rejection.
+// fields, trailing data, an empty command list, a command that is
+// neither an argv array nor a command object, a command object with no
+// argv or no room or an unknown room, an empty command (no argv or an
+// empty executable name), a null or NUL-bearing token, a ".." path
+// segment in a token, a recognized direct shell runner carrying a
+// command-string option, and an invalid capture mode all fail closed
+// with ErrRecipeInvalid. Command arguments are otherwise opaque: no
+// whitespace splitting or metacharacter rejection.
 func ParseRecipe(raw []byte) (Recipe, error) {
 	var w recipeWire
 	if err := strictjson.Decode(raw, &w, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
@@ -90,26 +164,68 @@ func ParseRecipe(raw []byte) (Recipe, error) {
 		return Recipe{}, fmt.Errorf("recipe declares no commands: %w", ErrRecipeInvalid)
 	}
 	r := Recipe{
-		Commands: make([][]string, 0, len(w.Commands)),
+		Commands: make([]Command, 0, len(w.Commands)),
 		Capture:  CaptureMode(w.Capture),
 	}
-	for _, rawArgv := range w.Commands {
-		argv := make([]string, 0, len(rawArgv))
-		for _, tok := range rawArgv {
-			if tok == nil {
-				return Recipe{}, fmt.Errorf("recipe command carries a null token: %w", ErrRecipeInvalid)
-			}
-			argv = append(argv, *tok)
-		}
-		if err := validateCommand(argv); err != nil {
+	for _, rawCmd := range w.Commands {
+		cmd, err := parseCommand(rawCmd)
+		if err != nil {
 			return Recipe{}, err
 		}
-		r.Commands = append(r.Commands, argv)
+		r.Commands = append(r.Commands, cmd)
 	}
 	if !r.Capture.valid() {
 		return Recipe{}, fmt.Errorf("recipe capture mode %q: %w", w.Capture, ErrRecipeInvalid)
 	}
 	return r, nil
+}
+
+// parseCommand decodes one command by its JSON kind: an array is the
+// bare argv form and runs in the project image; an object is the
+// explicit form and must name both its argv and a valid room. Anything
+// else (a string, a number, null) is refused.
+func parseCommand(raw json.RawMessage) (Command, error) {
+	trimmed := bytes.TrimLeft(raw, " \t\r\n")
+	if len(trimmed) == 0 {
+		return Command{}, fmt.Errorf("recipe command is empty: %w", ErrRecipeInvalid)
+	}
+	var rawArgv []*string
+	class := ClassProjectImage
+	switch trimmed[0] {
+	case '[':
+		if err := strictjson.Decode(raw, &rawArgv, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+			return Command{}, fmt.Errorf("recipe command does not parse: %w: %w", err, ErrRecipeInvalid)
+		}
+	case '{':
+		var obj commandObjectWire
+		if err := strictjson.Decode(raw, &obj, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+			return Command{}, fmt.Errorf("recipe command object does not parse: %w: %w", err, ErrRecipeInvalid)
+		}
+		if obj.Argv == nil {
+			return Command{}, fmt.Errorf("recipe command object carries no argv: %w", ErrRecipeInvalid)
+		}
+		if obj.Room == nil {
+			return Command{}, fmt.Errorf("recipe command object names no room: %w", ErrRecipeInvalid)
+		}
+		class = ExecutionClass(*obj.Room)
+		if !class.valid() {
+			return Command{}, fmt.Errorf("recipe command room %q is not an execution class: %w", *obj.Room, ErrRecipeInvalid)
+		}
+		rawArgv = obj.Argv
+	default:
+		return Command{}, fmt.Errorf("recipe command is neither an argv array nor a command object: %w", ErrRecipeInvalid)
+	}
+	argv := make([]string, 0, len(rawArgv))
+	for _, tok := range rawArgv {
+		if tok == nil {
+			return Command{}, fmt.Errorf("recipe command carries a null token: %w", ErrRecipeInvalid)
+		}
+		argv = append(argv, *tok)
+	}
+	if err := validateCommand(argv); err != nil {
+		return Command{}, err
+	}
+	return Command{Argv: argv, Class: class}, nil
 }
 
 // validateCommand fails closed on a malformed argument vector. A recipe
@@ -189,12 +305,14 @@ func shellCommandString(argv []string) bool {
 // operand such as `-destination "generic/platform=iOS Simulator"`, not
 // a single filename; see repoRelPath). Paths are returned slash-clean
 // with any leading `./` stripped, matching the change account's path
-// space.
+// space. Every command counts whatever its class: a candidate that
+// rewrites a script the macOS executor runs changes the recipe's effect
+// as much as one the project image runs.
 func (r Recipe) CommandPaths() []string {
 	seen := map[string]bool{}
 	var paths []string
-	for _, argv := range r.Commands {
-		for _, tok := range argv {
+	for _, cmd := range r.Commands {
+		for _, tok := range cmd.Argv {
 			p, ok := repoRelPath(tok)
 			if ok && !seen[p] {
 				seen[p] = true

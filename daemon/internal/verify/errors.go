@@ -57,4 +57,9 @@ var (
 	// it to a target the recorded path does not name, so the recipe must
 	// name the target file directly.
 	ErrSymlinkEntrypoint = errors.New("recipe command entrypoint is a symlink")
+	// ErrRoomUnavailable rejects a trusted recipe that names an execution
+	// class the caller supplied no room for. The caller chose the rooms,
+	// so this is an integrity failure, never a finding: the verification
+	// does not start, and no command runs in another class's room.
+	ErrRoomUnavailable = errors.New("recipe names an execution class with no room")
 )

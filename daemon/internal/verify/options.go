@@ -29,7 +29,7 @@ const (
 )
 
 // Options configures one verification. The zero value of every field
-// except HeadSHA, BaseSHA, InvocationID, RecipeSource, and Room selects
+// except HeadSHA, BaseSHA, InvocationID, RecipeSource, and Rooms selects
 // a documented default.
 type Options struct {
 	// HeadSHA is the candidate commit to verify: the importer's
@@ -57,9 +57,12 @@ type Options struct {
 	// RecipePath is the recipe's in-tree path, used by the base-commit
 	// source and by divergence detection. Empty means DefaultRecipePath.
 	RecipePath string
-	// Room executes the recipe's commands in the materialized workspace.
-	// Required.
-	Room Room
+	// Rooms maps each execution class to the room that runs the recipe's
+	// commands of that class in the materialized workspace. Required and
+	// non-empty; every key a valid class and every room non-nil. A recipe
+	// that names a class absent here fails with ErrRoomUnavailable before
+	// any workspace is materialized.
+	Rooms map[ExecutionClass]Room
 	// ApprovedRecipes is the trusted policy's approved-recipe set;
 	// publish eligibility of the emitted evidence derives from it. Nil
 	// approves nothing, so evidence is emitted publish-ineligible: the
@@ -151,8 +154,16 @@ func (o Options) validate() error {
 	if !o.RecipeSource.valid() {
 		return fmt.Errorf("recipe source is unset: %w", ErrInvalidOptions)
 	}
-	if o.Room == nil {
-		return fmt.Errorf("room is unset: %w", ErrInvalidOptions)
+	if len(o.Rooms) == 0 {
+		return fmt.Errorf("no rooms supplied: %w", ErrInvalidOptions)
+	}
+	for class, room := range o.Rooms {
+		if !class.valid() {
+			return fmt.Errorf("room for unknown execution class %q: %w", class, ErrInvalidOptions)
+		}
+		if room == nil {
+			return fmt.Errorf("room for execution class %q is nil: %w", class, ErrInvalidOptions)
+		}
 	}
 	if err := validRecipePath(o.RecipePath); err != nil {
 		return fmt.Errorf("recipe path %q: %w: %w", o.RecipePath, err, ErrInvalidOptions)

@@ -322,11 +322,22 @@ func TestReentryStopsOnlyOnRefusalsTheTreeCauses(t *testing.T) {
 	}
 	for _, cause := range []error{
 		nil, verify.ErrGitPlumbing, verify.ErrRecipeInvalid, verify.ErrHeadMismatch,
-		verify.ErrBaseMismatch, context.Canceled,
+		verify.ErrBaseMismatch, verify.ErrRoomUnavailable, context.Canceled,
 	} {
 		if reason, stop := reentryUnverifiableTreeReason(task, base, cause); stop || reason != "" {
 			t.Errorf("%v: stop = %t, reason = %q; want an error the lane sees", cause, stop, reason)
 		}
+	}
+}
+
+// TestVerificationMissingRoomIsNotRetried: a recipe naming an execution class
+// the engine supplies no room for meets the same refusal on every retry, so
+// both verification call sites must not wrap it as retryable.
+func TestVerificationMissingRoomIsNotRetried(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("recipe names execution class %q with no room: %w", verify.ClassMacOSHost, verify.ErrRoomUnavailable)
+	if !productionVerificationStateContradiction(err) {
+		t.Fatal("a missing room was classed as retryable")
 	}
 }
 

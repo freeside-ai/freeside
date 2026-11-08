@@ -376,8 +376,11 @@ func (b *Builder) Build(
 	if err := b.backend.CheckAllowlist(ctx, localRef); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image allowlist: %w", proofFailure(err))
 	}
+	// The image runs only the recipe's project_image commands; a command
+	// of another class runs in its own room and proves nothing here.
 	if err := b.proveOffline(
-		ctx, repositoryDir, normalized.CommitSHA, localRef, recipe.Commands, scratch, layout,
+		ctx, repositoryDir, normalized.CommitSHA, localRef,
+		recipe.CommandsIn(verify.ClassProjectImage), scratch, layout,
 	); err != nil {
 		return domain.ProjectImage{}, err
 	}

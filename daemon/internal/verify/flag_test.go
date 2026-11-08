@@ -169,7 +169,7 @@ func TestFlagControlPathsGolden(t *testing.T) {
 // flagged without the recipe author duplicating it in policy.
 func TestFlagControlPathsCommandEntrypoints(t *testing.T) {
 	t.Parallel()
-	commandPaths := Recipe{Commands: [][]string{{"bash", "scripts/verify.sh"}, {"./tools/lint"}}}.CommandPaths()
+	commandPaths := imageRecipe([][]string{{"bash", "scripts/verify.sh"}, {"./tools/lint"}}).CommandPaths()
 	flagged := flagControlPaths([]importer.Change{
 		changed("scripts/verify.sh"),
 		{Path: "tools/lint", Kind: importer.ChangeDeleted},
@@ -206,7 +206,7 @@ func TestCommandEntrypointFilenameEnumeration(t *testing.T) {
 	}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			cp := Recipe{Commands: [][]string{{"./" + name}}}.CommandPaths()
+			cp := imageRecipe([][]string{{"./" + name}}).CommandPaths()
 			if got := flagControlPaths([]importer.Change{changed(name)}, nil, cp, testRecipePath); len(got) != 1 || got[0].Path != name {
 				t.Fatalf("entrypoint %q change not flagged: %v", name, got)
 			}
@@ -220,17 +220,17 @@ func TestCommandEntrypointFilenameEnumeration(t *testing.T) {
 	// no entrypoint finding. This is the accepted limitation of the
 	// whitespace rule: a verification entrypoint with an embedded space
 	// is unsupported and the recipe author names it without spaces.
-	if cp := (Recipe{Commands: [][]string{{"./scripts/weird .sh"}}}).CommandPaths(); len(cp) != 0 {
+	if cp := imageRecipe([][]string{{"./scripts/weird .sh"}}).CommandPaths(); len(cp) != 0 {
 		t.Errorf("whitespace-bearing entrypoint classified: %v", cp)
 	}
 	if got := flagControlPaths([]importer.Change{changed("scripts/weird .sh")}, nil,
-		Recipe{Commands: [][]string{{"./scripts/weird .sh"}}}.CommandPaths(), testRecipePath); len(got) != 0 {
+		imageRecipe([][]string{{"./scripts/weird .sh"}}).CommandPaths(), testRecipePath); len(got) != 0 {
 		t.Errorf("whitespace-bearing entrypoint change flagged: %v", got)
 	}
 
 	// Literal match, never a glob expansion: a char-class entrypoint
 	// must not flag a name the class would have matched.
-	cp := Recipe{Commands: [][]string{{"./scripts/check[fast].sh"}}}.CommandPaths()
+	cp := imageRecipe([][]string{{"./scripts/check[fast].sh"}}).CommandPaths()
 	if got := flagControlPaths([]importer.Change{changed("scripts/checkf.sh")}, nil, cp, testRecipePath); len(got) != 0 {
 		t.Errorf("literal entrypoint over-matched a glob expansion: %v", got)
 	}
@@ -238,7 +238,7 @@ func TestCommandEntrypointFilenameEnumeration(t *testing.T) {
 	// The Go recursive package pattern is not a file and is not an
 	// entrypoint; a change to a literal `...` name it would clean to is
 	// not flagged via the entrypoint path.
-	if paths := (Recipe{Commands: [][]string{{"go", "test", "./..."}, {"go", "build", "./internal/..."}}}).CommandPaths(); len(paths) != 0 {
+	if paths := imageRecipe([][]string{{"go", "test", "./..."}, {"go", "build", "./internal/..."}}).CommandPaths(); len(paths) != 0 {
 		t.Errorf("Go package patterns leaked into command paths: %v", paths)
 	}
 }
