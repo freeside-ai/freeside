@@ -616,7 +616,7 @@ func TestTaskCancellationOrdersLaunchRegistrationAndStop(t *testing.T) {
 		go func() { joined <- e.stopTaskWork(t.Context(), run.TaskID) }()
 		synctest.Wait()
 		select {
-		case <-joined:
+		case <-joined: //nolint:errcheck // Any value here fails the test, whatever the error.
 			t.Fatal("cancel signal was mistaken for a joined call")
 		default:
 		}

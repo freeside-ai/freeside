@@ -1487,7 +1487,7 @@ func readCodexReviewInput(root, file string, limit int64) (string, []byte, error
 func readCodexReviewInputWithMetadata(
 	root, file string, limit int64,
 ) (string, []byte, codexReviewInputMetadata, error) {
-	rootInfo, err := os.Lstat(root)
+	rootInfo, err := os.Lstat(root) //nolint:gosec,nolintlint // G703: Lstat reads only metadata, and a root that is not a private directory owned by this user is refused below. nolintlint is exempt because gosec 2.29 reports G703 here on only some runs.
 	var rootStat *syscall.Stat_t
 	rootStatOK := false
 	if rootInfo != nil {
@@ -1501,7 +1501,7 @@ func readCodexReviewInputWithMetadata(
 	if err != nil {
 		return "", nil, codexReviewInputMetadata{}, errors.New("input root cannot be resolved")
 	}
-	info, err := os.Lstat(file)
+	info, err := os.Lstat(file) //nolint:gosec,nolintlint // G703: Lstat reads only metadata; the file is opened only after it resolves inside the private root. nolintlint is exempt because gosec 2.29 reports G703 here on only some runs.
 	if err != nil || !info.Mode().IsRegular() {
 		return "", nil, codexReviewInputMetadata{}, errors.New("input is not a regular file")
 	}
@@ -1516,6 +1516,7 @@ func readCodexReviewInputWithMetadata(
 	if !cliSafe(resolvedFile) {
 		return "", nil, codexReviewInputMetadata{}, errors.New("input path is not CLI-safe")
 	}
+	//nolint:gosec,nolintlint // G703: resolvedFile is symlink-resolved, inside the private root, and CLI-safe; O_NOFOLLOW and the post-open identity checks refuse a swap. nolintlint is exempt because gosec 2.29 reports G703 here on only some runs.
 	f, err := os.OpenFile(resolvedFile, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", nil, codexReviewInputMetadata{}, errors.New("input cannot be opened")

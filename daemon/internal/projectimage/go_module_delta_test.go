@@ -102,7 +102,7 @@ func TestGoModuleRequirementsResolveReplacesAsGoDoes(t *testing.T) {
 		},
 		{
 			name: "directives that choose no module",
-			goMod: module + "toolchain go1.26.10\ngodebug default=go1.21\nexclude example.test/a v0.1.0\n" +
+			goMod: module + "toolchain go" + goToolchainVersion + "\ngodebug default=go1.21\nexclude example.test/a v0.1.0\n" +
 				"retract [v0.1.0, v0.2.0]\ntool example.test/a/cmd\nignore ./node_modules\n",
 		},
 		{

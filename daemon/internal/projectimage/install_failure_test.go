@@ -103,11 +103,13 @@ func TestInstallFailureBoundsLongEntryLists(t *testing.T) {
 }
 
 // The fixtures in testdata/go are the output of `go mod download` from Go
-// 1.26.10, the Go a Go image pins, run with the warm step's environment
+// 1.27.3, the Go a Go image pins, run with the warm step's environment
 // against proxy.golang.org: a go.sum with one zip or go.mod hash altered, a
-// version the proxy does not serve, and the build proxy refusing or failing
-// to resolve. proxy-410.txt is proxy-404.txt with the status replaced, since
-// the proxy's 410 can't be produced on demand.
+// version the proxy does not serve, a godebug setting Go does not know or
+// has removed, and the build proxy refusing or failing to resolve. Go
+// 1.26.10 wrote the same bytes for every fixture but godebug-removed.txt,
+// whose setting it still accepted. proxy-410.txt is proxy-404.txt with the
+// status replaced, since the proxy's 410 can't be produced on demand.
 func readGoFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join("testdata", "go", name)) //nolint:gosec // G304: test-named fixture under testdata.
@@ -181,6 +183,63 @@ func TestInstallFailureMatchesOnlyCandidateCausedGoFailures(t *testing.T) {
 		{
 			name: "go.mod Go cannot load", output: readGoFixture(t, "godebug-unknown.txt"), want: true,
 			wantHas: []string{"go: error loading go.mod:\ngo.mod:7: unknown godebug \"nosuchkey\""},
+		},
+		{
+			name: "go.mod setting a removed godebug to its old value", want: true,
+			output:  buildKitPrefixed(readGoFixture(t, "godebug-removed.txt")),
+			wantHas: []string{"go: error loading go.mod:\ngo.mod:7: removed GODEBUG \"tlsrsakex\" set to old value \"1\""},
+		},
+		{
+			name: "removed godebug beside an unknown one", want: true,
+			output: []byte("go: error loading go.mod:\n" +
+				"go.mod:7: removed GODEBUG \"tlsrsakex\" set to old value \"1\" (https://go.dev/doc/godebug#go-127)\n" +
+				"go.mod:8: unknown godebug \"nosuchkey\"\n"),
+			wantHas: []string{"go.mod:8: unknown godebug"},
+		},
+		{
+			// One fetch failure makes the whole refusal the host's.
+			name: "removed godebug beside a failed query",
+			output: []byte("go: errors parsing go.mod:\n" +
+				"go.mod:7: removed GODEBUG \"tlsrsakex\" set to old value \"1\" (https://go.dev/doc/godebug#go-127)\n" +
+				"go.mod:9: retract example.com/g3: version \"banana\" invalid: Get " +
+				"\"https://proxy.golang.org/example.com/g3/@v/banana.info\": proxyconnect tcp: " +
+				"dial tcp: lookup no-such-host.invalid: no such host\n"),
+		},
+		{
+			name: "godebug documentation link on another host",
+			output: []byte("go: error loading go.mod:\n" +
+				"go.mod:7: removed GODEBUG \"tlsrsakex\" set to old value \"1\" (https://go.dev.example.test/doc/godebug#go-127)\n"),
+		},
+		{
+			name: "godebug documentation link with trailing text",
+			output: []byte("go: error loading go.mod:\n" +
+				"go.mod:7: removed GODEBUG \"tlsrsakex\" set to old value \"1\" (https://go.dev/doc/godebug#go-127): " +
+				"Get \"https://proxy.golang.org/x\": EOF\n"),
+		},
+		{
+			// Go 1.26's wording for any removed setting. The image pins a Go
+			// that no longer writes it, so it keeps the URL rule's verdict.
+			name: "earlier Go's removed godebug wording",
+			output: []byte("go: error loading go.mod:\n" +
+				"go.mod:7: use of removed godebug \"x509sha1\", see https://go.dev/doc/godebug#go-124\n"),
+		},
+		{
+			name: "godebug documentation link after other text",
+			output: []byte("go: error loading go.mod:\n" +
+				"go.mod:7: retract example.com/g3: Get \"https://proxy.golang.org/x\": EOF; " +
+				"go.mod:7: removed GODEBUG \"tlsrsakex\" set to old value \"1\" (https://go.dev/doc/godebug#go-127)\n"),
+		},
+		{
+			name: "godebug setting holding a quote and a URL",
+			output: []byte("go: error loading go.mod:\n" +
+				"go.mod:7: removed GODEBUG \"x\" (https://proxy.golang.org/x) y\" set to old value \"1\" " +
+				"(https://go.dev/doc/godebug#go-127)\n"),
+		},
+		{
+			name: "godebug documentation link quoted inside another error",
+			output: []byte("go: errors parsing go.mod:\n" +
+				"go.mod:7: retract example.com/g3: version \"removed GODEBUG \\\"x\\\" set to old value \\\"1\\\" " +
+				"(https://go.dev/doc/godebug#go-127)\" invalid: Get \"https://proxy.golang.org/x\": EOF\n"),
 		},
 		{
 			// Go resolves a non-canonical version through the proxy while

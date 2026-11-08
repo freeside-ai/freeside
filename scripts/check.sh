@@ -23,7 +23,7 @@
 # Tool overrides, for CI runners that install pinned binaries and for
 # local machines with a tool outside PATH:
 #   GOLANGCI_LINT  command for golangci-lint (default: golangci-lint;
-#                  CI pins v2.12.2 through golangci-lint-action)
+#                  CI pins v2.15.0 through golangci-lint-action)
 #   SHELLCHECK     command for shellcheck (default: shellcheck; CI pins a
 #                  checksum-verified binary in .github/workflows/scripts-ci.yml)
 #   VACUUM         command for the OpenAPI linter (default: `go run`

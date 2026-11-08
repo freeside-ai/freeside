@@ -683,7 +683,7 @@ func withDurableInstallationPoll(
 	select {
 	case err := <-done:
 		stopWait()
-		<-waited
+		<-waited //nolint:errcheck // The poll was canceled above, so its result no longer matters; the receive only joins the goroutine.
 		if err == nil {
 			err = errors.New("installation janitor stopped before the grant matched")
 		}

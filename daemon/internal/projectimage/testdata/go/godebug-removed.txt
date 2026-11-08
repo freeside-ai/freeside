@@ -1,0 +1,2 @@
+go: error loading go.mod:
+go.mod:7: removed GODEBUG "tlsrsakex" set to old value "1" (https://go.dev/doc/godebug#go-127)

@@ -2883,7 +2883,7 @@ approval digest binds. Without it, a root `package.json` selects npm, and
 otherwise a root `go.mod` selects Go at the root. A root `package.json` beside
 a declared module is refused.
 
-A Go image bakes Go 1.26.10 and golangci-lint 2.12.2 from pinned archives,
+A Go image bakes Go 1.27.3 and golangci-lint 2.15.0 from pinned archives,
 and a module cache warmed from the commit's `go.mod` and `go.sum` at
 `/opt/freeside/go-mod-cache`. It bakes no build cache, so every room compiles
 from scratch. For Freeside's `api/` and `scripts/` checks it also bakes:
@@ -2922,10 +2922,24 @@ rebuild gate report, the Go inputs no image serves:
   above it, up to the root.
 - A `replace` in `go.mod` whose target is a local path, inside the module or
   not: the seed holds only `go.mod` and `go.sum`, so no image can warm it.
-- A `go` directive above 1.26.10, or a `toolchain` directive naming any other
+- A `go` directive above 1.27.3, or a `toolchain` directive naming any other
   toolchain.
 
 A `go.mod` or `go.sum` that is missing or not a regular file is refused too.
+
+**A daemon upgrade that changes these pins rebuilds every image.** The pins
+are part of the preparation digest, which one value covers for npm and Go
+images alike, so a new daemon treats every image an earlier one built as not
+current, even at its own build commit. Attempts hold under
+`image_upkeep_pending` until the image-upkeep start pass rebuilds the image
+at the tip, with the same proofs and one-hour bound as a publication
+rebuild, and advances the pointer (Keep Project Images Current). A rebuild
+whose recipe proof fails under the new pins, for example because the
+project's tests depend on the old Go's behavior, records a `repair` refusal
+instead, and attempts stay held until the repository is fixed. No
+re-approval is needed: onboarding approval binds the recipe digest and the
+image request, not the preparation digest. A module whose `toolchain`
+directive names the old Go stops being served.
 The masked-cache probe runs `go mod download` from the module directory and
 passes only on Go's offline refusal.
 
