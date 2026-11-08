@@ -631,6 +631,57 @@ public actor MockServer {
         granted_scope: ._operator
     )
 
+    /// The default mock with a quota failure and a quota-parked task that
+    /// each offer `UsageFixtures.alternateAgentOffers()`, on pools that read
+    /// current, stale, and unsupported at `now` (`-FreesideAlternates`,
+    /// #1722). The parked task is the retry campaign's: its active run
+    /// holds on the weekly window the provider refused its lineup
+    /// implementer on `UsageFixtures.readingPoolID`, the pool's recorded
+    /// refusal, instead of verification findings. Its task history is
+    /// seeded, so a move from its menu is recorded as the daemon records
+    /// one.
+    public static func alternates(now: Date) -> MockServer {
+        let runID = RunFixtures.activeRunID
+        var timelines = RunFixtures.defaultTimelines()
+        let pools = UsageFixtures.alternatesUsagePools(now: now)
+        guard let timelineIndex = timelines.firstIndex(where: { $0.run_id == runID }),
+            var hold = timelines[timelineIndex].hold?.value1,
+            let refusal = pools.first(where: { $0.pool.id == UsageFixtures.readingPoolID })?.pool
+                .recorded_exhausted_marks.first(where: { $0.source == .provider_refusal }),
+            let resetsAt = refusal.resets_at
+        else { preconditionFailure("The retry run must carry a hold and its pool a recorded refusal with a reset") }
+        hold.reason = .quota_window_exhausted
+        hold.quota_window = .init(
+            value1: .init(
+                pool: UsageFixtures.readingPoolID, window: refusal.window, source: .provider_refusal,
+                invocation_id: hold.invocation_id, resets_at: resetsAt, set_at: refusal.set_at,
+                alternate_agents: UsageFixtures.alternateAgentOffers()))
+        timelines[timelineIndex].hold = .init(value1: hold)
+        let runs = RunFixtures.defaultRuns().map { snapshot in
+            var snapshot = snapshot
+            if snapshot.run.id == runID { snapshot.run.hold_reason = .init(value1: .quota_window_exhausted) }
+            return snapshot
+        }
+        let tasks = TaskFixtures.defaultTasks().map { snapshot in
+            var snapshot = snapshot
+            if snapshot.task.current_position?.value1.run_id == runID {
+                snapshot.task.current_position?.value1.hold_reason = .init(value1: .quota_window_exhausted)
+            }
+            return snapshot
+        }
+        guard let parked = tasks.first(where: { $0.task.current_position?.value1.run_id == runID }) else {
+            preconditionFailure("The retry campaign's task must sit on its active run")
+        }
+        let history = TaskFixtures.timeline(
+            for: parked.task, runs: runs.map(\.run),
+            timelines: Dictionary(uniqueKeysWithValues: timelines.map { ($0.run_id, $0) }),
+            revision: parked.as_of_revision, asOf: RunFixtures.screenshotInstant)
+        return MockServer(
+            items: AttentionFixtures.alternatesInbox(), runs: runs, tasks: tasks, timelines: timelines,
+            taskTimelines: [history], usagePools: pools, agentCatalog: UsageFixtures.alternatesAgentCatalog(),
+            automaticallyCompletesAgentWork: true)
+    }
+
     /// Reports the facts a live code would grant without consuming it: the
     /// code's state never changes here, so a previewed code still pairs
     /// exactly once, and a dead code is rejected exactly as pairing

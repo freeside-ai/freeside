@@ -528,7 +528,7 @@ public final class AppSession {
             for: mode, localDaemonURL: environment.supervisedAPIURL,
             cacheRoot: environment.stateRoot(),
             credentialStore: credentialStore(for: environment, keychainStore: keychainStore),
-            persistServerURL: persist)
+            persistServerURL: persist, mockAlternates: arguments["FreesideAlternates"] as? String == "YES")
         // `launchMode` threw for any path it would not follow, so only a
         // validated one names the window's instance.
         session.readinessRun = followedReadinessRun(
@@ -587,7 +587,8 @@ public final class AppSession {
             hasCredential: { (try? keychainStore($0).load()) != nil })
         return session(
             for: mode, localDaemonURL: nil, cacheRoot: defaultCacheRoot,
-            credentialStore: keychainStore, persistServerURL: persistServerURLToDefaults)
+            credentialStore: keychainStore, persistServerURL: persistServerURLToDefaults,
+            mockAlternates: arguments["FreesideAlternates"] as? String == "YES")
     }
 
     private static func argumentDomain() -> [String: Any] {
@@ -600,10 +601,11 @@ public final class AppSession {
         }
     }
 
+    /// `mockAlternates` (`-FreesideAlternates YES`) applies to `.mock` only.
     static func session(
         for mode: LaunchMode, localDaemonURL: URL?, cacheRoot: URL?,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,
-        persistServerURL: @escaping (URL) -> Void
+        persistServerURL: @escaping (URL) -> Void, mockAlternates: Bool = false
     ) -> AppSession {
         switch mode {
         case .needsConnection:
@@ -617,7 +619,7 @@ public final class AppSession {
         case .pairingDemo:
             pairingDemo()
         case .mock:
-            mock()
+            mock(alternates: mockAlternates)
         case .refused(let refusal):
             AppSession(
                 localDaemonURL: localDaemonURL, cacheRoot: cacheRoot, credentialStore: credentialStore,
@@ -709,13 +711,15 @@ public final class AppSession {
     }
 
     /// An explicitly requested demo: a permissive mock and a pre-paired
-    /// mock identity, so the inbox renders immediately.
-    public static func mock() -> AppSession {
+    /// mock identity, so the inbox renders immediately. `alternates`
+    /// (`-FreesideAlternates YES`) seeds the quota failure and quota-parked
+    /// task whose agent offers show usage readings (`MockServer.alternates`).
+    public static func mock(alternates: Bool = false) -> AppSession {
         let secretSegment = Data(repeating: 0, count: 32).base64EncodedString()
             .replacingOccurrences(of: "=", with: "")
         // swift-format-ignore: NeverForceUnwrap
         return AppSession(
-            client: APIClientFactory.mock(),
+            client: alternates ? APIClientFactory.mock(server: .alternates(now: Date())) : APIClientFactory.mock(),
             credentials: InMemoryCredentialStore(
                 credential: DeviceCredential(
                     deviceID: DeviceIdentity.mock.deviceID,

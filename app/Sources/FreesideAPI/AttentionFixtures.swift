@@ -997,6 +997,16 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The default inbox with the invalid-configuration failure replaced by
+    /// the quota failure, offering `UsageFixtures.alternateAgentOffers()`,
+    /// for `-FreesideAlternates` (#1722). The item keeps its id, so
+    /// `-FreesideSelect item-execution_failure` opens it.
+    public static func alternatesInbox() -> [Components.Schemas.AttentionItemSnapshot] {
+        var failure = quotaFailure()
+        failure.item.alternate_agents = UsageFixtures.alternateAgentOffers()
+        return defaultInbox().map { $0.item.id == failure.item.id ? failure : $0 }
+    }
+
     /// A hold raised after the run's pull request already existed: the item
     /// carries that pull request's reference and offers viewing it beside
     /// inspecting the trust failure. The default inbox keeps the hold opened
