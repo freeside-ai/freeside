@@ -505,6 +505,14 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/engine/agent_admission.go` (choosing an agent chooses which
   credential runs), `internal/engine/admission.go` (the runner capability
   floor), `internal/domain/capability.go`,
+  `internal/domain/execution.go` (`RequiredCapabilities`, the per-class
+  unattended minimum), `internal/domain/conformance.go`
+  (`ProvableCapabilities`, the class ceiling the store refuses over-claims
+  against), `internal/store/conformance.go` (whether a backend's durable
+  proof lets it run unattended), `internal/macverify/` (the host
+  verification executor's backend and its declaration),
+  `internal/engine/host_verification_admission.go` (admits a verification
+  job onto the host executor and never a ward role),
   `internal/domain/wardless_admission.go`, `cmd/freesided/claude_driver.go`
   (`storeAdmissionAuthority`, which wires admission and import authority,
   and the daemon's GitHub wiring: the keystore, minter, janitor, and the
