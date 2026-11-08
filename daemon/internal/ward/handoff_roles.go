@@ -1,6 +1,11 @@
 package ward
 
-import "github.com/freeside-ai/freeside/daemon/internal/wardname"
+import (
+	"cmp"
+	"slices"
+
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
+)
 
 // handoffRoleKind is the runtime class of a handoff role's object. The zero
 // value is invalid by design.
@@ -56,6 +61,23 @@ func (f handoffFeature) valid() bool {
 	default:
 		return false
 	}
+}
+
+// enabledBy reports whether hs makes the handoff create this feature's roles.
+func (f handoffFeature) enabledBy(hs HandoffSpec) bool {
+	switch f {
+	case featureAlways:
+		return true
+	case featureAuthStoreLease:
+		return hs.AuthStoreLease != nil
+	case featureClaudeClean:
+		return hs.Agent.LaunchState == LaunchStateClaudeClean
+	case featurePromptFile:
+		return hs.Agent.PromptFile != nil
+	case featureOperatorInputs:
+		return len(hs.Agent.Inputs) > 0
+	}
+	return false
 }
 
 // handoffRole is one row of handoffRoles: a deterministic runtime object one
@@ -214,6 +236,19 @@ var handoffRoles = []handoffRole{
 		name:  func(n *handoffNames) *string { return &n.Network },
 		claim: func(s *runState) *objectClaim { return &s.network },
 	},
+}
+
+// handoffRolesOfKind returns the rows of one kind in teardown order.
+func handoffRolesOfKind(kind handoffRoleKind) []handoffRole {
+	return slices.DeleteFunc(slices.Clone(handoffRoles), func(r handoffRole) bool { return r.kind != kind })
+}
+
+// handoffRecoveryReapOrder returns the rows recovery's adoption reaps, in
+// recoveryReap order.
+func handoffRecoveryReapOrder() []handoffRole {
+	rows := slices.DeleteFunc(slices.Clone(handoffRoles), func(r handoffRole) bool { return r.recoveryReap == 0 })
+	slices.SortFunc(rows, func(a, b handoffRole) int { return cmp.Compare(a.recoveryReap, b.recoveryReap) })
+	return rows
 }
 
 // appendRuntimeNames appends each row's name for runID to its class in

@@ -1645,24 +1645,9 @@ func (b runtimeOps) teardown(
 		id    string
 		claim objectClaim
 	}
-	containerClaims := []containerClaim{
-		{id: names.PromptSeeder, claim: st.promptSeeder},
-		{id: names.PromptObserver, claim: st.promptObserver},
-		{id: names.InputsSeeder, claim: st.inputsSeeder},
-		{id: names.InputsObserver, claim: st.inputsObserver},
-		{id: names.Seeder, claim: st.seeder},
-		{id: names.Observer, claim: st.observer},
-		{id: names.InstructionSeeder, claim: st.instructionSeeder},
-		{id: names.InstructionObserver, claim: st.instructionObserver},
-		{id: names.ConfigRootSeeder, claim: st.configRootSeeder},
-		{id: names.ConfigRootObserver, claim: st.configRootObserver},
-		{id: names.ContinuityObserver, claim: st.continuityObserver},
-		{id: names.ScratchObserver, claim: st.scratchObserver},
-		{id: names.WriterObserver, claim: st.writerObserver},
-		{id: names.CredObsPre, claim: st.credObsPre},
-		{id: names.CredObsPost, claim: st.credObsPost},
-		{id: names.Agent, claim: st.agent},
-		{id: names.Exporter, claim: st.exporter},
+	var containerClaims []containerClaim
+	for _, r := range handoffRolesOfKind(handoffContainer) {
+		containerClaims = append(containerClaims, containerClaim{id: *r.name(&names), claim: *r.claim(st)})
 	}
 	// Derived from the claim list rather than naming roles: a failure during
 	// seeding leaves the agent and exporter unattempted, so a role-by-role
@@ -1730,14 +1715,9 @@ func (b runtimeOps) teardown(
 		name  string
 		claim objectClaim
 	}
-	volumeClaims := []volumeClaim{
-		{name: names.Prompt, claim: st.prompt},
-		{name: names.Inputs, claim: st.inputs},
-		{name: names.Workspace, claim: st.workspace},
-		{name: names.Instructions, claim: st.instructions},
-		{name: names.ConfigRoot, claim: st.configRoot},
-		{name: names.Continuity, claim: st.continuity},
-		{name: names.SessionScratch, claim: st.sessionScratch},
+	var volumeClaims []volumeClaim
+	for _, r := range handoffRolesOfKind(handoffVolume) {
+		volumeClaims = append(volumeClaims, volumeClaim{name: *r.name(&names), claim: *r.claim(st)})
 	}
 	// Both run-owned volumes follow the same evidence rule: a successful
 	// create alone no longer authorizes a name-addressed delete; the volume
@@ -1803,8 +1783,12 @@ func (b runtimeOps) teardown(
 			}
 		}
 	}
-	if st.network.attempted {
-		if err := hooks.teardownNet(ctx, b, names.Network, st.network, st.ownershipLabel); err != nil {
+	for _, r := range handoffRolesOfKind(handoffNetwork) {
+		claim := *r.claim(st)
+		if !claim.attempted {
+			continue
+		}
+		if err := hooks.teardownNet(ctx, b, *r.name(&names), claim, st.ownershipLabel); err != nil {
 			problems = append(problems, err.Error())
 		}
 	}
