@@ -1,6 +1,7 @@
 package fake_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -10,14 +11,22 @@ import (
 
 func TestDriverContract(t *testing.T) {
 	contract.Run(t, contract.Factory{
-		New: func(*testing.T) inference.Driver { return fake.New() },
-		Script: func(t *testing.T, driver inference.Driver, response inference.Response, err error) {
+		New: func(t *testing.T, script contract.Script) (inference.Driver, <-chan struct{}) {
 			t.Helper()
-			driver.(*fake.Driver).Script("contract", fake.Script{Response: response, Err: err})
-		},
-		Block: func(t *testing.T, driver inference.Driver) {
-			t.Helper()
-			driver.(*fake.Driver).Script("contract", fake.Script{Wait: make(chan struct{})})
+			step := fake.Script{Response: script.Response}
+			if script.Fail {
+				step = fake.Script{Err: errors.New("scripted failure")}
+			}
+			if script.Block {
+				// The fake's wait selects on the call's context, so the
+				// call counts as in flight from the start.
+				step = fake.Script{Wait: make(chan struct{})}
+			}
+			driver := fake.New()
+			driver.Script(inference.ClassifierSiteID, step)
+			started := make(chan struct{})
+			close(started)
+			return driver, started
 		},
 		Requests: func(t *testing.T, driver inference.Driver) []inference.Request {
 			t.Helper()

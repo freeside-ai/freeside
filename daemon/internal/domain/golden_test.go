@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
@@ -681,9 +682,7 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewRecord := legacyReviewRecord
-	reviewRecord.LegacyProvider, reviewRecord.LegacyModelConfiguration, reviewRecord.LegacyCostOwner = "", "", ""
-	reviewRecord.Admission = fake.SeededReviewAdmission("run-1", "review-run-1-1")
+	reviewRecord := domaintest.ReviewRecord()
 	legacyShadowReviewRecord, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: "shadow-review-run-1-1", RunID: "run-1", ShadowedRound: 1,
 		Source: domain.ShadowReviewClaudeLocal, LegacyProvider: "anthropic",
@@ -1023,12 +1022,7 @@ func TestGolden(t *testing.T) {
 
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
-	run := domain.Run{
-		TaskID: "task-1", ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest,
-		CampaignID: "campaign-1", AttemptNumber: 2,
-		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
-		Stages: []domain.Stage{stage},
-	}
+	run := domaintest.Run()
 	productionAttempt := domain.ProductionAttempt{
 		CampaignID: "campaign-1", AttemptNumber: 2, Kind: domain.ProductionAttemptRetry,
 		Reason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
@@ -1053,13 +1047,7 @@ func TestGolden(t *testing.T) {
 	// its auth store. The identity carries the narrowed §5.4 shape: account
 	// and operator fields on the identity, the interim client facts under
 	// Interim until the #867 adoption moves them onto an enrollment.
-	identity := domain.AuthIdentity{
-		ID: "auth-claude-owner", Provider: "claude",
-		AccountBinding: "acct-claude-owner-7f3a", UsagePool: "claude-owner-subscription",
-		Budget: 500_000, AuthStoreMutationLease: true,
-		Enabled: true, CostOwner: "owner",
-		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
-	}
+	identity := domaintest.AuthIdentity()
 	mutationLease := domain.AuthStoreMutationLease{
 		AuthIdentityID: identity.ID, Holder: "inv-1", Fence: 1,
 		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
@@ -1186,8 +1174,8 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The durable execution record for that attempt. Capabilities are passed
-	// unsorted to exercise the constructor's canonicalization.
+	// The stage inputs of the durable execution record for that attempt; the
+	// base admission itself comes from domaintest.ExecutionAdmission.
 	authIdentity := identity.ID
 	conversationDigest := stageDigest("7")
 	vendorDigest := stageDigest("8")
@@ -1239,26 +1227,7 @@ func TestGolden(t *testing.T) {
 	if err := attachmentsStageInput.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
-		Backend: "fresh_vm_read_only_volume_handoff",
-		Capabilities: domain.CapabilitySnapshot{
-			domain.CapPostExitExport, domain.CapDetachableWorkspace, domain.CapReadOnlyRemount,
-		},
-		OperatingMode:  domain.ModeAttendedDev,
-		CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile:  domain.EgressProviderOnly,
-		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
-		StageInputs:    &stageInputs,
-		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
-		Workspace:      "freeside-handoff-run-1-ws",
-		AuthIdentityID: &authIdentity,
-		AdmittedAt:     ts,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	admission := domaintest.ExecutionAdmission()
 
 	// The provider_registry variant: the profile is the only field that
 	// differs from the base admission. The declared registry set is not a
