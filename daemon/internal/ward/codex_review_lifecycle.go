@@ -1841,59 +1841,22 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 			))
 		}
 	}()
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return codexReviewOperationalCheckf(
-			CheckControlPlaneIsolation, "create Codex review shadow initializer: %v", err,
-		)
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, spec.Name)
-	if err != nil {
-		return codexReviewOperationalCheckf(
-			CheckControlPlaneIsolation, "inspect Codex review shadow initializer: %v", err,
-		)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep, spec, volume, codexShadowObserverTarget, CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	claim.fingerprint, err = ownedFingerprint(
-		rep.CreationDate, rep.Labels, rep.LabelsObserved, owner,
-	)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err, "authenticate Codex review shadow initializer: %v", err)
-	}
-	if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: claim.fingerprint}); err != nil {
-		return codexReviewJournalCheckf(
-			CheckControlPlaneIsolation, "journal Codex review shadow initializer: %v", err,
-		)
-	}
-	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
-		return codexReviewOperationalCheckf(
-			CheckControlPlaneIsolation, "start Codex review shadow initializer: %v", err,
-		)
-	}
-	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
-		return codexReviewOperationalCheckf(
-			CheckControlPlaneIsolation, "wait for Codex review shadow initializer: %v", err,
-		)
-	}
-	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
-		return codexReviewOperationalCheckf(
-			CheckControlPlaneIsolation, "delete Codex review shadow initializer: %v", err,
-		)
-	}
-	if err := b.verifyContainerAbsent(
-		ctx, spec.Name, claim, owner, CheckControlPlaneIsolation,
-	); err != nil {
-		return err
-	}
-	claim.attempted = false
-	return nil
+	return b.runHelperRole(ctx, helperRole{
+		spec: spec, label: "Codex review shadow initializer", claim: &claim, owner: owner,
+		check: CheckControlPlaneIsolation, class: LaunchReview, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, volume, codexShadowObserverTarget, CheckControlPlaneIsolation)
+		},
+		journal: func(fingerprint string) error {
+			if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: fingerprint}); err != nil {
+				return codexReviewJournalCheckf(
+					CheckControlPlaneIsolation, "journal Codex review shadow initializer: %v", err,
+				)
+			}
+			return nil
+		},
+		wrapRuntimeFailure: codexReviewOperational,
+	})
 }
 
 // codexReviewSnapshotStagePath is the deterministic, runID-keyed host directory
@@ -2032,50 +1995,32 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 			))
 		}
 	}()
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "create Codex review snapshot seeder: %v", err)
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, spec.Name)
-	if err != nil {
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "inspect Codex review snapshot seeder: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(rep, spec, volume, codexReviewSnapshotSeedTarget, CheckCredentialSeparation); err != nil {
-		return err
-	}
-	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, owner)
-	if err != nil {
-		return failw(CheckCredentialSeparation, err, "authenticate Codex review snapshot seeder: %v", err)
-	}
-	if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: claim.fingerprint}); err != nil {
-		return codexReviewJournalCheckf(CheckCredentialSeparation, "journal Codex review snapshot seeder: %v", err)
-	}
-	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "start Codex review snapshot seeder: %v", err)
-	}
-	if err := b.copyIntoSeeder(ctx, spec.Name, dir, b.cfg.SeedStageDir); err != nil {
-		// copyIntoSeeder classifies its CLI copy failure as a durable contradiction
-		// (shared with the workspace seeder); for the credential stage a transient
-		// host-copy failure is retryable, so reclassify operational at this site.
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "copy Codex review snapshot stage into seeder: %v", err)
-	}
-	if err := b.copyIntoSeeder(ctx, spec.Name, readyDir, b.cfg.SeedReadyDir); err != nil {
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "copy Codex review snapshot sentinel into seeder: %v", err)
-	}
-	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "wait for Codex review snapshot seeder: %v", err)
-	}
-	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
-		return codexReviewOperationalCheckf(CheckCredentialSeparation, "delete Codex review snapshot seeder: %v", err)
-	}
-	if err := b.verifyContainerAbsent(ctx, spec.Name, claim, owner, CheckCredentialSeparation); err != nil {
-		return err
-	}
-	claim.attempted = false
-	return nil
+	return b.runHelperRole(ctx, helperRole{
+		spec: spec, label: "Codex review snapshot seeder", claim: &claim, owner: owner,
+		check: CheckCredentialSeparation, class: LaunchReview, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, volume, codexReviewSnapshotSeedTarget, CheckCredentialSeparation)
+		},
+		journal: func(fingerprint string) error {
+			if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: fingerprint}); err != nil {
+				return codexReviewJournalCheckf(CheckCredentialSeparation, "journal Codex review snapshot seeder: %v", err)
+			}
+			return nil
+		},
+		afterStart: func(ctx context.Context) error {
+			if err := b.copyIntoSeeder(ctx, spec.Name, dir, b.cfg.SeedStageDir); err != nil {
+				// copyIntoSeeder classifies its CLI copy failure as a durable contradiction
+				// (shared with the workspace seeder); for the credential stage a transient
+				// host-copy failure is retryable, so reclassify operational at this site.
+				return codexReviewOperationalCheckf(CheckCredentialSeparation, "copy Codex review snapshot stage into seeder: %v", err)
+			}
+			if err := b.copyIntoSeeder(ctx, spec.Name, readyDir, b.cfg.SeedReadyDir); err != nil {
+				return codexReviewOperationalCheckf(CheckCredentialSeparation, "copy Codex review snapshot sentinel into seeder: %v", err)
+			}
+			return nil
+		},
+		wrapRuntimeFailure: codexReviewOperational,
+	})
 }
 
 func (b *CodexReviewLifecycle) observeCodexReviewSnapshot(

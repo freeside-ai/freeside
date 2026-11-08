@@ -108,48 +108,30 @@ func (b *CodexReviewLifecycle) seedCodexReviewInputs(
 				CheckControlPlaneIsolation, cleanupErr, "Codex review input seeder cleanup: %v", cleanupErr))
 		}
 	}()
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "create Codex review input seeder: %v", err)
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, spec.Name)
-	if err != nil {
-		return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "inspect Codex review input seeder: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(rep, spec, roles.volume, inputVolumeTarget, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, owner)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err, "authenticate Codex review input seeder: %v", err)
-	}
-	if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID, CodexReviewIntentResource{
-		Name: spec.Name, OwnershipToken: owner.Value, Fingerprint: claim.fingerprint,
-	}); err != nil {
-		return codexReviewJournalCheckf(CheckControlPlaneIsolation, "journal Codex review input seeder: %v", err)
-	}
-	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
-		return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "start Codex review input seeder: %v", err)
-	}
-	for _, copy := range []struct{ source, target string }{{input, inputStageDir}, {ready, inputReadyDir}} {
-		if err := b.copyIntoSeeder(ctx, spec.Name, copy.source, copy.target); err != nil {
-			return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "copy Codex review inputs into seeder: %v", err)
-		}
-	}
-	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
-		return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "wait for Codex review input seeder: %v", err)
-	}
-	if err := b.helperStopped(ctx, LaunchReview, roles.size, spec.Name); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
-		return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "delete Codex review input seeder: %v", err)
-	}
-	if err := b.verifyContainerAbsent(ctx, spec.Name, claim, owner, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	claim.attempted = false
-	return nil
+	return b.runHelperRole(ctx, helperRole{
+		spec: spec, label: "Codex review input seeder", claim: &claim, owner: owner,
+		check: CheckControlPlaneIsolation, class: LaunchReview, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, roles.volume, inputVolumeTarget, CheckControlPlaneIsolation)
+		},
+		journal: func(fingerprint string) error {
+			if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID, CodexReviewIntentResource{
+				Name: spec.Name, OwnershipToken: owner.Value, Fingerprint: fingerprint,
+			}); err != nil {
+				return codexReviewJournalCheckf(CheckControlPlaneIsolation, "journal Codex review input seeder: %v", err)
+			}
+			return nil
+		},
+		afterStart: func(ctx context.Context) error {
+			for _, copy := range []struct{ source, target string }{{input, inputStageDir}, {ready, inputReadyDir}} {
+				if err := b.copyIntoSeeder(ctx, spec.Name, copy.source, copy.target); err != nil {
+					return codexReviewOperationalCheckf(CheckControlPlaneIsolation, "copy Codex review inputs into seeder: %v", err)
+				}
+			}
+			return nil
+		},
+		wrapRuntimeFailure: codexReviewOperational,
+	})
 }
 
 // observeCodexReviewInputs runs a fresh read-only observer over the input
