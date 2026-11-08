@@ -16,6 +16,7 @@ var pauseClassifiers = map[string]bool{
 	"MutableAdmissionPolicyRefusal": true,
 	"dispatchHoldReason":            true,
 	"invocationDispatchHold":        true,
+	"operatingGateHold":             true,
 	"unattendedDispatchRefusal":     true,
 	"workflowAdvancementFenced":     true,
 }
@@ -74,10 +75,6 @@ var holdlessPauseExits = map[string]string{
 	// An attention discussion is a reply to an operator, not a run, so there
 	// is no run to hold; the stop notice or the blocking item is already open.
 	"attention_discussion.go:Engine.attentionDiscussionHeld": "gates a conversation reply, which has no run to hold",
-
-	// A classifier, not an exit: it derives the detail its caller records
-	// beside the hold, so the caller's hold covers it.
-	"observation.go:admissionRefusalDetail": "derives the hold detail its caller records",
 
 	// Reads the cancellation fence to decide whether a held-work notice still
 	// applies. It pauses nothing: the hold it reports on is already recorded.

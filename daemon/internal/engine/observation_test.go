@@ -12,80 +12,77 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// holdClassifiedSentinels is every error the dispatch path classifies as a
-// quiet hold or refusal (the unattendedDispatchRefusal,
-// invocationDispatchHold, and operating-gate sets). The observation contract
-// requires each to carry a typed reason: a sentinel held quietly but mapped
-// to no code would leave a run held with nothing for an operator to see.
-var holdClassifiedSentinels = []error{
-	domain.ErrUnattendedOperationStopped,
-	domain.ErrBlockingSystemHealth,
-	domain.ErrUsagePoolExhausted,
-	domain.ErrMachineCapacity,
-	exec.ErrInputUnavailable,
-	exec.ErrCapabilityRefused,
-	exec.ErrPreJobRefused,
-	store.ErrBackendNotConformant,
-	domain.ErrConformanceConfigurationUnbound,
-	domain.ErrAdmissionConfigurationMismatch,
-	domain.ErrAdmissionExceedsConformance,
-	domain.ErrUnknownAdmissionFloor,
-	domain.ErrCapabilityBelowFloor,
-	domain.ErrCredentialModeNotApproved,
-	domain.ErrWaiverNotConfigured,
-	domain.ErrBackupHealthUnavailable,
-	domain.ErrCheckpointNotEncrypted,
-	domain.ErrCheckpointNotCurrent,
-	domain.ErrArtifactClosureIncomplete,
-	domain.ErrRestoreTestStale,
-	domain.ErrInvalidBackupHealthStatus,
-	store.ErrRepositoryUntrusted,
-	publish.ErrJanitorInactive,
-	domain.ErrRepositoryIdentityMismatch,
-	domain.ErrPathBoundaryMismatch,
-	domain.ErrTrustProfileSuperseded,
-	domain.ErrReviewConfigurationUnapproved,
-	ErrEgressProfileNotEnforceable,
-	ErrEgressPolicyRefused,
-	ErrImageUpkeepPending,
-	ErrProjectImageUnserved,
-}
-
-// TestDispatchHoldReasonCoversEveryHoldClass: every sentinel the dispatch
-// predicates hold quietly classifies onto the closed reason vocabulary, and
-// every produced code is a registered member. An unclassified error maps to
-// nothing, which is the loud-failure path, not a hold.
+// TestDispatchHoldReasonCoversEveryHoldClass: every holdClasses row is
+// well formed, its sentinel classifies onto its own registered reason (an
+// earlier row never shadows it), and the dispatch predicates agree with its
+// action. A sentinel held quietly but mapped to no code would leave a run
+// held with nothing for an operator to see, so only the fenced no-more-work
+// rows may have no reason. An unclassified error maps to nothing, which is
+// the loud-failure path, not a hold.
 func TestDispatchHoldReasonCoversEveryHoldClass(t *testing.T) {
 	t.Parallel()
-	for _, sentinel := range holdClassifiedSentinels {
+	for _, action := range allHoldActions {
+		if !action.valid() {
+			t.Errorf("allHoldActions lists invalid action %q", action)
+		}
+	}
+	if holdAction("").valid() {
+		t.Error("the zero hold action is valid")
+	}
+	seenSentinel := map[error]bool{}
+	seenCheck := map[domain.AdmissionCheck]bool{}
+	for _, class := range holdClasses {
+		sentinel := class.sentinel
+		if !class.action.valid() {
+			t.Errorf("%v: invalid action %q", sentinel, class.action)
+		}
+		if seenSentinel[sentinel] {
+			t.Errorf("%v is listed twice", sentinel)
+		}
+		seenSentinel[sentinel] = true
+		if class.check != "" {
+			if seenCheck[class.check] {
+				t.Errorf("%v: check %q names two rows", sentinel, class.check)
+			}
+			seenCheck[class.check] = true
+		}
+		if class.clearsOnStart && class.action != holdActionInvocation {
+			t.Errorf("%v clears on start but its action is %q", sentinel, class.action)
+		}
 		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", sentinel)
 		reason, ok := dispatchHoldReason(wrapped)
-		if !ok {
-			t.Errorf("sentinel %v classifies as a hold but maps to no reason code", sentinel)
-			continue
-		}
-		registered := false
-		for _, member := range domain.AllRunHoldReasons {
-			if member == reason {
-				registered = true
-				break
+		if class.reason == "" {
+			if !workflowAdvancementFenced(wrapped) {
+				t.Errorf("%v has no reason but is not a fenced no-more-work outcome", sentinel)
+			}
+			if ok {
+				t.Errorf("fenced %v maps to reason %q", sentinel, reason)
+			}
+		} else {
+			if !ok || reason != class.reason {
+				t.Errorf("%v maps to %q, %t; want its row's %q", sentinel, reason, ok, class.reason)
+			}
+			if !slices.Contains(domain.AllRunHoldReasons, class.reason) {
+				t.Errorf("%v maps to unregistered reason %q", sentinel, class.reason)
 			}
 		}
-		if !registered {
-			t.Errorf("sentinel %v maps to unregistered reason %q", sentinel, reason)
+		_, gated := operatingGateHold(wrapped)
+		got := map[holdAction]bool{
+			holdActionOperatingGate:     gated,
+			holdActionInvocation:        invocationDispatchHold(wrapped),
+			holdActionPass:              unattendedDispatchRefusal(wrapped) && !MutableAdmissionPolicyRefusal(wrapped),
+			holdActionPassMutablePolicy: MutableAdmissionPolicyRefusal(wrapped),
 		}
-		// The mapped classes must agree with the dispatch predicates: a
-		// hold-classified error is exactly one the loop would keep quiet.
-		if !unattendedDispatchRefusal(wrapped) && !invocationDispatchHold(wrapped) &&
-			reason != domain.HoldOperationStopped && reason != domain.HoldBlockingSystemHealth {
-			t.Errorf("sentinel %v maps to %q but no dispatch predicate holds it", sentinel, reason)
+		for _, action := range allHoldActions {
+			if got[action] != (action == class.action) {
+				t.Errorf("%v (action %q): the %q predicate answers %t", sentinel, class.action, action, got[action])
+			}
 		}
 	}
 	if _, ok := dispatchHoldReason(fmt.Errorf("an unclassified failure")); ok {
@@ -96,69 +93,29 @@ func TestDispatchHoldReasonCoversEveryHoldClass(t *testing.T) {
 	}
 }
 
-type admissionCheckCase struct {
-	sentinel error
-	check    domain.AdmissionCheck
-}
-
-// admissionRefusalChecks is the check each error class dispatchHoldReason
-// maps onto admission_policy_refused names when it carries no typed agent
-// refusal (issue #2211).
-var admissionRefusalChecks = []admissionCheckCase{
-	{ErrAgentNotAdmissible, domain.AdmissionCheckAgentAdmission},
-	{domain.ErrGenerationIntegrityMarked, domain.AdmissionCheckGenerationIntegrityMarked},
-	{ErrEgressProfileNotEnforceable, domain.AdmissionCheckEgressProfileNotEnforceable},
-	{ErrEgressPolicyRefused, domain.AdmissionCheckEgressPolicyRefused},
-	{exec.ErrCapabilityRefused, domain.AdmissionCheckBackendCapabilityRefused},
-	{exec.ErrPreJobRefused, domain.AdmissionCheckBackendPreJobRefused},
-	{domain.ErrUnknownAdmissionFloor, domain.AdmissionCheckAdmissionFloorUnknown},
-	{domain.ErrCapabilityBelowFloor, domain.AdmissionCheckCapabilityBelowFloor},
-	{domain.ErrCredentialModeNotApproved, domain.AdmissionCheckCredentialModeNotApproved},
-	{domain.ErrWaiverNotConfigured, domain.AdmissionCheckWaiverNotConfigured},
-	{domain.ErrRepositoryIdentityMismatch, domain.AdmissionCheckRepositoryIdentityMismatch},
-	{domain.ErrPathBoundaryMismatch, domain.AdmissionCheckPathBoundaryMismatch},
-	{domain.ErrTrustProfileSuperseded, domain.AdmissionCheckTrustProfileSuperseded},
-	{domain.ErrReviewConfigurationUnapproved, domain.AdmissionCheckReviewConfigurationUnapproved},
-}
-
-// TestAdmissionRefusalDetailCoversEveryAdmissionClass: every error class the
-// hold records as admission_policy_refused names its own check and no agent
-// or launch, every hold-classified sentinel of that reason is in the table,
-// and an error of any other reason has no detail.
+// TestAdmissionRefusalDetailCoversEveryAdmissionClass: every row the hold
+// records as admission_policy_refused names its own check and no agent or
+// launch, the unserved base alone names none, and an error of any other
+// reason has no detail.
 func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
 	t.Parallel()
-	seen := map[domain.AdmissionCheck]bool{}
-	for _, tc := range admissionRefusalChecks {
-		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", tc.sentinel)
-		if reason, ok := dispatchHoldReason(wrapped); !ok || reason != domain.HoldAdmissionPolicyRefused {
-			t.Errorf("%v: hold reason = %q, %t; want %q", tc.sentinel, reason, ok, domain.HoldAdmissionPolicyRefused)
-			continue
-		}
-		got := admissionRefusalDetail(wrapped)
-		want := domain.AdmissionRefusal{Check: tc.check}
-		if got == nil || *got != want {
-			t.Errorf("%v: detail = %+v, want %+v", tc.sentinel, got, want)
-		}
-		if seen[tc.check] {
-			t.Errorf("%v: check %q names two error classes", tc.sentinel, tc.check)
-		}
-		seen[tc.check] = true
-	}
-	for _, sentinel := range holdClassifiedSentinels {
-		reason, _ := dispatchHoldReason(sentinel)
-		detail := admissionRefusalDetail(sentinel)
+	for _, class := range holdClasses {
+		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", class.sentinel)
+		detail := admissionRefusalDetail(wrapped)
 		// An unserved base has no check in the vocabulary, so its hold
 		// carries none rather than a check that would name another cause.
-		if reason != domain.HoldAdmissionPolicyRefused || errors.Is(sentinel, ErrProjectImageUnserved) {
+		if class.reason != domain.HoldAdmissionPolicyRefused || errors.Is(class.sentinel, ErrProjectImageUnserved) {
+			if class.check != "" {
+				t.Errorf("%v: reason %q names check %q", class.sentinel, class.reason, class.check)
+			}
 			if detail != nil {
-				t.Errorf("%v: reason %q carries detail %+v", sentinel, reason, detail)
+				t.Errorf("%v: reason %q carries detail %+v", class.sentinel, class.reason, detail)
 			}
 			continue
 		}
-		if !slices.ContainsFunc(admissionRefusalChecks, func(tc admissionCheckCase) bool {
-			return errors.Is(sentinel, tc.sentinel)
-		}) {
-			t.Errorf("%v maps to %q but has no expected check", sentinel, reason)
+		want := domain.AdmissionRefusal{Check: class.check}
+		if class.check == "" || detail == nil || *detail != want {
+			t.Errorf("%v: detail = %+v, want %+v", class.sentinel, detail, want)
 		}
 	}
 	// A typed agent refusal names its own check, agent, and launch through
@@ -583,7 +540,8 @@ func TestHoldObservationsPassTheLeakAxisEnumeration(t *testing.T) {
 	inv := domain.InvocationID("inv-1")
 
 	for axis, payload := range axes {
-		for _, sentinel := range holdClassifiedSentinels {
+		for _, class := range holdClasses {
+			sentinel := class.sentinel
 			seeded := fmt.Errorf("dispatch %s: %w", payload, sentinel)
 			reason, ok := dispatchHoldReason(seeded)
 			if !ok {
