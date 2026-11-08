@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -137,7 +138,7 @@ func TestReadinessGolden(t *testing.T) {
 	got, err := json.MarshalIndent(Readiness{
 		APIURL:      "http://127.0.0.1:8421",
 		PairingCode: "ABCD-2345",
-		Environment: environmentDev,
+		Environment: "dev",
 		RunID:       "0123456789abcdef0123456789abcdef",
 	}, "", "  ")
 	if err != nil {
@@ -160,7 +161,7 @@ func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
 		if err := h.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
-		if ready.Environment != environmentProd || !runIDPattern.MatchString(ready.RunID) {
+		if ready.Environment != string(environmentProd) || !runIDPattern.MatchString(ready.RunID) {
 			t.Fatalf("readiness = %+v, want prod with a 32-hex run_id", ready)
 		}
 		return ready.RunID
@@ -248,7 +249,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	if ready != h.Readiness() || ready.APIURL == "" || ready.PairingCode == "" {
 		t.Fatalf("readiness = %+v, want %+v", ready, h.Readiness())
 	}
-	if ready.Environment != environmentDev {
+	if ready.Environment != string(environmentDev) {
 		t.Fatalf("readiness environment = %q, want %q", ready.Environment, environmentDev)
 	}
 	if !runIDPattern.MatchString(ready.RunID) {
@@ -332,10 +333,8 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read durable-stop item: %v", err)
 	}
-	select {
-	case err := <-h.errs:
+	if err := waitBriefly(h.Shell); err != nil {
 		t.Fatalf("durable stop reached fatal channel: %v", err)
-	default:
 	}
 
 	cancelLifetime()
@@ -349,7 +348,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	}); !errors.Is(err, domain.ErrBlockingSystemHealth) {
 		t.Fatalf("admission after reopen = %v, want blocking system health", err)
 	}
-	restarted := &daemon{store: reopened}
+	restarted := New(Parts{Store: reopened, Logger: slog.New(slog.DiscardHandler)})
 	if err := restarted.EnableDurableStopRecovery(context.Background()); err != nil {
 		t.Fatalf("enable durable-stop recovery after reopen: %v", err)
 	}
@@ -365,9 +364,9 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read recovered durable-stop item: %v", err)
 	}
-	if err := restarted.fileDurableStop(context.Background(), errors.New("second durable-stop cause")); err != nil {
-		t.Fatalf("record second durable stop: %v", err)
-	}
+	// ComponentExited returns once the durable stop is recorded.
+	restarted.ComponentExited(context.Background(), context.Background(), ComponentWorkflow,
+		errors.New("second durable-stop cause"))
 	if err := reopened.Read(context.Background(), func(tx *store.ReadTx) error {
 		item, err := tx.GetAttentionItem(context.Background(), durableStop.ID)
 		if err != nil {
@@ -400,6 +399,14 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read recurrent durable-stop item: %v", err)
 	}
+}
+
+// waitBriefly returns a component exit the shell has already reported, or
+// nil when none arrives within a short bound.
+func waitBriefly(s *Shell) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	return s.Wait(ctx)
 }
 
 func TestDurableStopReasonExplainsRecovery(t *testing.T) {

@@ -47,9 +47,8 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := h.fileDurableStop(t.Context(), errors.New(cause)); err != nil {
-			t.Fatal(err)
-		}
+		// ComponentExited returns once the durable stop is recorded.
+		h.ComponentExited(t.Context(), t.Context(), ComponentLocalBackups, errors.New(cause))
 		if err := service.DeliverOwed(t.Context(), func(err error) { t.Errorf("delivery: %v", err) }); err != nil {
 			t.Fatal(err)
 		}
@@ -496,10 +495,8 @@ func assertDaemonHealthy(t *testing.T, h *daemon) {
 	if response.StatusCode != http.StatusOK {
 		t.Errorf("GET /health = %d, want 200", response.StatusCode)
 	}
-	select {
-	case err := <-h.errs:
+	if err := waitBriefly(h.Shell); err != nil {
 		t.Errorf("daemon reported a component exit: %v", err)
-	default:
 	}
 	for _, item := range durableStops(t, h) {
 		t.Errorf("daemon recorded a durable stop: %+v", item)
@@ -507,7 +504,7 @@ func assertDaemonHealthy(t *testing.T, h *daemon) {
 }
 
 // durableStops returns the daemon's open durable-stop items. A durable stop
-// leaves the listener up and h.errs empty; its item is the only sign of it.
+// leaves the listener up and Wait quiet; its item is the only sign of it.
 func durableStops(t *testing.T, h *daemon) []domain.AttentionItem {
 	t.Helper()
 	var stops []domain.AttentionItem

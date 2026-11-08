@@ -33,9 +33,8 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if err := h.fileDurableStop(ctx, errors.New("prior diagnostic scheduler stopped")); err != nil {
-		t.Fatal(err)
-	}
+	// ComponentExited returns once the durable stop is recorded.
+	h.ComponentExited(ctx, ctx, ComponentScheduler, errors.New("prior diagnostic scheduler stopped"))
 	now := time.Now().UTC()
 	next := now.Add(time.Hour)
 	seconds := int64(3600)

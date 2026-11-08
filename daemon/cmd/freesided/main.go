@@ -524,7 +524,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := Serve(ctx, stop, h); err != nil {
+	if err := Serve(ctx, stop, h.Shell); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
@@ -545,7 +545,7 @@ func main() {
 // nothing abandons the lease on a timer, and abandoning it is a human
 // decision, taken deliberately, with the process still reporting what it
 // was doing.
-func Serve(ctx context.Context, stop func(), h *daemon) error {
+func Serve(ctx context.Context, stop func(), h *Shell) error {
 	waitErr := h.Wait(ctx)
 	stop()
 	return errors.Join(waitErr, h.Close())
@@ -780,9 +780,9 @@ func runScheduledDoctorPass(
 }
 
 type Readiness struct {
-	APIURL      string      `json:"api_url"`
-	PairingCode string      `json:"pairing_code"`
-	Environment environment `json:"environment"`
+	APIURL      string `json:"api_url"`
+	PairingCode string `json:"pairing_code"`
+	Environment string `json:"environment"`
 	// RunID names one daemon process start, not a workflow run (domain.RunID).
 	// It lets a script tell a fresh start from a stale file.
 	RunID string `json:"run_id"`
@@ -811,28 +811,84 @@ func reportAttentionDelivery(logger *slog.Logger, err error) {
 	logger.Warn("phone notification pass failed", "error", err)
 }
 
+// daemon is what run() composes: the shell that runs the process, and the
+// composition results that startup and the tests reach.
 type daemon struct {
+	*Shell
+	store     *store.Store
+	attention *signet.Service
+	workflow  *engine.Engine
+	driver    *fake.StageDriver
+	pairing   *pairingControl
+	usage     *usagecollect.Coordinator
+}
+
+// Shell runs the process run() composes: it serves the API and pairing
+// control, tracks the long-running goroutines, supervises their exits,
+// publishes readiness, and tears the process down.
+type Shell struct {
 	lock          *daemonlock.Lock
 	store         *store.Store
-	attention     *signet.Service
-	workflow      *engine.Engine
-	driver        *fake.StageDriver
 	listener      net.Listener
 	loopbackTwin  net.Listener
 	server        *http.Server
-	pairing       *pairingControl
+	pairing       PairingControl
 	cancel        context.CancelFunc
-	sessionCloser sessionCloser
+	sessionCloser SessionCloser
 	errs          chan error
 	wg            sync.WaitGroup
 	closeOnce     sync.Once
 	closeErr      error
 	pairingCode   string
-	environment   environment
+	environment   string
 	runID         string
 	logger        *slog.Logger
 	now           func() time.Time
-	usage         *usagecollect.Coordinator
+}
+
+// PairingControl is the control socket the shell serves and closes. Its
+// configuration, routes, and publication stay with the composition.
+type PairingControl interface {
+	Serve() error
+	Close() error
+}
+
+// SessionCloser tears down the credential-bearing sessions. Close waits for
+// it without a deadline (see Shell.Close).
+type SessionCloser interface {
+	Close(context.Context) error
+}
+
+// Parts are what the composition hands the shell. Pairing and SessionCloser
+// may be nil: a shell without them serves and closes neither.
+type Parts struct {
+	Lock          *daemonlock.Lock
+	Store         *store.Store
+	Listener      net.Listener
+	LoopbackTwin  net.Listener
+	Server        *http.Server
+	Pairing       PairingControl
+	SessionCloser SessionCloser
+	Cancel        context.CancelFunc
+	Logger        *slog.Logger
+	Now           func() time.Time
+}
+
+// New builds a shell from the composition's parts. It starts nothing.
+func New(parts Parts) *Shell {
+	return &Shell{
+		lock:          parts.Lock,
+		store:         parts.Store,
+		listener:      parts.Listener,
+		loopbackTwin:  parts.LoopbackTwin,
+		server:        parts.Server,
+		pairing:       parts.Pairing,
+		sessionCloser: parts.SessionCloser,
+		cancel:        parts.Cancel,
+		errs:          make(chan error, 1),
+		logger:        parts.Logger,
+		now:           parts.Now,
+	}
 }
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
@@ -1104,25 +1160,26 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err := reconcileWorkUnitCompletionMilestones(parent, st, logger); err != nil {
 		return nil, err
 	}
-	d := &daemon{
-		lock:  lock,
-		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, loopbackTwin: loopbackTwin, pairing: pairing, cancel: cancel, errs: make(chan error, 1),
-		logger: logger, now: cfg.now,
-		server: &http.Server{
-			Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
-				Status: "ok", Version: buildVersion(), StartedAt: startedAt,
-			}),
-			ReadHeaderTimeout: 5 * time.Second,
-		},
+	server := &http.Server{
+		Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
+			Status: "ok", Version: buildVersion(), StartedAt: startedAt,
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 	// Shutdown releases open revision long-polls, so draining the server
 	// stays inside ServerShutdownBudget instead of waiting out their bound.
-	d.server.RegisterOnShutdown(attention.Shutdown)
+	server.RegisterOnShutdown(attention.Shutdown)
+	var sessions SessionCloser
 	if claudeWiring != nil {
-		d.sessionCloser = claudeWiring.closer
+		sessions = claudeWiring.closer
 	}
-	d.usage = usage
+	d := &daemon{
+		Shell: New(Parts{
+			Lock: lock, Store: st, Listener: listener, LoopbackTwin: loopbackTwin, Server: server,
+			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.now,
+		}),
+		store: st, attention: attention, workflow: workflow, driver: driver, pairing: pairing, usage: usage,
+	}
 	d.pairing.configure(d.Readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
 	// extends with its own recipe, and the recipes adopted for the Claude
@@ -1163,17 +1220,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}
 
-	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, listener, loopbackTwin,
-		localBackups, logger)
+	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, localBackups, logger)
 	defer func() {
 		if !success {
 			if stop != nil {
 				stop()
 			}
-			cancel()
-			_ = d.server.Close()
-			_ = d.pairing.Close()
-			d.wg.Wait()
+			d.AbortStart()
 		}
 	}()
 	if cfg.afterBackgroundStart != nil {
@@ -1182,12 +1235,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}
 	if fakeSched != nil {
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
+		d.Go(func() {
 			d.ComponentExited(parent, ctx, ComponentScheduler,
 				fakeSched.Run(ctx, cfg.SchedulerInterval))
-		}()
+		})
 	}
 	if loops != nil {
 		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
@@ -1199,16 +1250,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err != nil {
 		return nil, fmt.Errorf("mint startup pairing code: %w", err)
 	}
-	d.pairingCode = pairingCode
-	runID, err := newDaemonRunID()
-	if err != nil {
-		return nil, err
-	}
-	d.environment = cfg.Environment
-	d.runID = runID
-	// The file's same-host app reader uses loopback; stdout and pairing keep the
-	// primary URL for remote devices (plan §5.2 Reachability).
-	if err := publishReadiness(cfg.StateDir, d.sameHostReadiness()); err != nil {
+	if err := d.PublishReadiness(cfg.StateDir, pairingCode, string(cfg.Environment)); err != nil {
 		return nil, err
 	}
 	if d.pairing != nil {
@@ -1337,12 +1379,12 @@ func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.Invocation
 	return inspection, nil
 }
 
-func (d *daemon) Readiness() Readiness {
+func (s *Shell) Readiness() Readiness {
 	return Readiness{
-		APIURL:      "http://" + d.listener.Addr().String(),
-		PairingCode: d.pairingCode,
-		Environment: d.environment,
-		RunID:       d.runID,
+		APIURL:      "http://" + s.listener.Addr().String(),
+		PairingCode: s.pairingCode,
+		Environment: s.environment,
+		RunID:       s.runID,
 	}
 }
 
@@ -1356,21 +1398,86 @@ func newDaemonRunID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func (d *daemon) sameHostReadiness() Readiness {
-	ready := d.Readiness()
-	if d.loopbackTwin != nil {
-		ready.APIURL = "http://" + d.loopbackTwin.Addr().String()
+func (s *Shell) sameHostReadiness() Readiness {
+	ready := s.Readiness()
+	if s.loopbackTwin != nil {
+		ready.APIURL = "http://" + s.loopbackTwin.Addr().String()
 	}
 	return ready
 }
 
+// PublishReadiness mints this start's run ID, records the pairing code and
+// environment it reports, and writes the readiness file under stateDir.
+// The file's same-host app reader uses loopback; stdout and pairing keep the
+// primary URL for remote devices (plan §5.2 Reachability).
+func (s *Shell) PublishReadiness(stateDir, pairingCode, environment string) error {
+	s.pairingCode = pairingCode
+	runID, err := newDaemonRunID()
+	if err != nil {
+		return err
+	}
+	s.environment = environment
+	s.runID = runID
+	return publishReadiness(stateDir, s.sameHostReadiness())
+}
+
+// Go runs fn on its own goroutine, which Close and AbortStart wait for.
+func (s *Shell) Go(fn func()) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		fn()
+	}()
+}
+
+// StartServers serves the API on the primary listener and its loopback
+// twin, and pairing control when the shell has it. A server that stops
+// before ctx ends reports through ComponentExited.
+func (s *Shell) StartServers(parent, ctx context.Context) {
+	s.Go(func() {
+		err := s.server.Serve(s.listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			return
+		}
+		s.ComponentExited(parent, ctx, ComponentHTTP, err)
+	})
+	if s.loopbackTwin != nil {
+		// The same s.server serves both listeners, so s.server.Shutdown closes
+		// this one too; its exit is the same ComponentHTTP failure as the primary.
+		s.Go(func() {
+			err := s.server.Serve(s.loopbackTwin)
+			if errors.Is(err, http.ErrServerClosed) {
+				return
+			}
+			s.ComponentExited(parent, ctx, ComponentHTTP, err)
+		})
+	}
+	if s.pairing != nil {
+		s.Go(func() {
+			if err := s.pairing.Serve(); !errors.Is(err, http.ErrServerClosed) {
+				s.ComponentExited(parent, ctx, ComponentPairingControl, err)
+			}
+		})
+	}
+}
+
+// AbortStart stops a start that failed after its goroutines began: it
+// cancels their context, closes the servers, and waits for every goroutine
+// Go started. The store and lock stay with the caller's own cleanup.
+func (s *Shell) AbortStart() {
+	s.cancel()
+	_ = s.server.Close()
+	_ = s.closePairing()
+	s.wg.Wait()
+}
+
 // Wait returns when the process context is canceled or any long-running
 // component exits. A nil component result is normal only during shutdown.
-func (d *daemon) Wait(ctx context.Context) error {
+func (s *Shell) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return nil
-	case err := <-d.errs:
+	case err := <-s.errs:
 		return err
 	}
 }
@@ -1389,24 +1496,31 @@ func (d *daemon) Wait(ctx context.Context) error {
 // restores signal disposition before calling this, so an operator who
 // decides to abandon a lease can, with a second SIGTERM. That is a human
 // choosing to, which is the distinction §5.2 draws.
-func (d *daemon) Close() error {
-	d.closeOnce.Do(func() {
-		d.cancel()
+func (s *Shell) Close() error {
+	s.closeOnce.Do(func() {
+		s.cancel()
 		var driverErr error
-		if d.sessionCloser != nil {
+		if s.sessionCloser != nil {
 			// A credential-bearing external writer is more important than
 			// bounded process-exit latency. Ward owns bounded teardown; do not
 			// close its store or exit while a session still uses its lease.
-			driverErr = d.sessionCloser.Close(context.Background())
+			driverErr = s.sessionCloser.Close(context.Background())
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), ServerShutdownBudget)
 		defer cancel()
-		shutdownErr := d.server.Shutdown(ctx)
-		pairingErr := d.pairing.Close()
-		d.wg.Wait()
-		d.closeErr = errors.Join(driverErr, shutdownErr, pairingErr, d.store.Close(), d.lock.Close())
+		shutdownErr := s.server.Shutdown(ctx)
+		pairingErr := s.closePairing()
+		s.wg.Wait()
+		s.closeErr = errors.Join(driverErr, shutdownErr, pairingErr, s.store.Close(), s.lock.Close())
 	})
-	return d.closeErr
+	return s.closeErr
+}
+
+func (s *Shell) closePairing() error {
+	if s.pairing == nil {
+		return nil
+	}
+	return s.pairing.Close()
 }
 
 // ServerShutdownBudget bounds draining in-flight HTTP requests. Unlike the

@@ -219,7 +219,7 @@ func runDeputy(
 		stop()
 		return errors.Join(err, h.Close())
 	}
-	if err := Serve(ctx, stop, h); err != nil {
+	if err := Serve(ctx, stop, h.Shell); err != nil {
 		return err
 	}
 	cleanEnd = true

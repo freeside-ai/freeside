@@ -1257,7 +1257,7 @@ func TestSameHostReadinessFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d := &daemon{listener: &listenerStub{addr: primary}, pairingCode: "test-code"}
+			d := &Shell{listener: &listenerStub{addr: primary}, pairingCode: "test-code"}
 			if tc.twin != "" {
 				twin, err := net.ResolveTCPAddr("tcp", tc.twin)
 				if err != nil {

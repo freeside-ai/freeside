@@ -150,7 +150,7 @@ func classifyComponentExit(kind ComponentKind) exitDisposition {
 	return exitInvoluntary
 }
 
-func (d *daemon) ComponentExited(
+func (s *Shell) ComponentExited(
 	lifetimeCtx, workerCtx context.Context,
 	kind ComponentKind,
 	err error,
@@ -164,9 +164,9 @@ func (d *daemon) ComponentExited(
 	cause := fmt.Errorf("%s: %w", kind, err)
 	switch classifyComponentExit(kind) {
 	case exitDurableStop:
-		d.durableStop(lifetimeCtx, cause)
+		s.durableStop(lifetimeCtx, cause)
 	case exitRestartSafe:
-		d.errs <- cause
+		s.errs <- cause
 	case exitInvoluntary:
 		panic(cause)
 	}
@@ -174,14 +174,14 @@ func (d *daemon) ComponentExited(
 
 const DurableStopItemPrefix = "system-health-daemon-stop-"
 
-func (d *daemon) durableStop(ctx context.Context, cause error) {
-	d.logger.Error("daemon entered a durable stop", "error", cause)
+func (s *Shell) durableStop(ctx context.Context, cause error) {
+	s.logger.Error("daemon entered a durable stop", "error", cause)
 	for {
-		if err := d.fileDurableStop(ctx, cause); err == nil {
-			d.logger.Error("daemon durable stop recorded", "error", cause)
+		if err := s.fileDurableStop(ctx, cause); err == nil {
+			s.logger.Error("daemon durable stop recorded", "error", cause)
 			return
 		} else {
-			d.logger.Error("record daemon durable stop", "error", err)
+			s.logger.Error("record daemon durable stop", "error", err)
 		}
 		timer := time.NewTimer(time.Second)
 		select {
@@ -193,8 +193,8 @@ func (d *daemon) durableStop(ctx context.Context, cause error) {
 	}
 }
 
-func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
-	return d.store.Write(ctx, func(tx *store.WriteTx) error {
+func (s *Shell) fileDurableStop(ctx context.Context, cause error) error {
+	return s.store.Write(ctx, func(tx *store.WriteTx) error {
 		open, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
 			return err
@@ -223,8 +223,8 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 		}
 		posture := domain.HealthPostureBlocking
 		createdAt := time.Now().UTC()
-		if d.now != nil {
-			createdAt = d.now().UTC()
+		if s.now != nil {
+			createdAt = s.now().UTC()
 		}
 		subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
 		displayNames, err := tx.DisplayNamesFor(ctx, "project-system", subject)
@@ -272,8 +272,8 @@ func durableStopReason(cause error) string {
 // EnableDurableStopRecovery offers the explicit operator recovery only after
 // a fresh daemon start. A same-process recurrence strips the offer again,
 // because the failed loop has returned and is not safe to resume in place.
-func (d *daemon) EnableDurableStopRecovery(ctx context.Context) error {
-	return d.store.Write(ctx, func(tx *store.WriteTx) error {
+func (s *Shell) EnableDurableStopRecovery(ctx context.Context) error {
+	return s.store.Write(ctx, func(tx *store.WriteTx) error {
 		open, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
 			return err

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -698,81 +696,41 @@ func (d *daemon) composeClaudeLoops(
 // later reports through ComponentExited.
 func (d *daemon) startServing(
 	parent, ctx context.Context, cfg config, st *store.Store, attention *signet.Service,
-	workflow *engine.Engine, claudeWiring *claudeComposition, listener, loopbackTwin net.Listener,
-	localBackups *store.LocalBackupProducer, logger *slog.Logger,
+	workflow *engine.Engine, claudeWiring *claudeComposition, localBackups *store.LocalBackupProducer,
+	logger *slog.Logger,
 ) {
 	// Usage collection starts before the control socket serves and the
 	// scheduler runs, either of which can trigger it. It only observes and
 	// ends only at shutdown, so it is not a supervised component: nothing it
 	// meets stops the daemon.
 	d.usage.Start(ctx)
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		d.usage.Wait()
-	}()
+	})
 	// Model discovery observes like usage collection: it runs once in the
 	// background, one container at a time, and nothing it meets stops the
 	// daemon.
 	if claudeWiring != nil {
 		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.containerBin,
 			cfg.claudeModelDiscoverer, cfg.codexModelDiscoverer, logger)
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
+		d.Go(func() {
 			refresh.run(ctx)
-		}()
+		})
 	}
-	d.wg.Add(2)
-	go func() {
-		defer d.wg.Done()
-		err := d.server.Serve(listener)
-		if errors.Is(err, http.ErrServerClosed) {
-			return
-		}
-		d.ComponentExited(parent, ctx, ComponentHTTP, err)
-	}()
-	if loopbackTwin != nil {
-		// The same d.server serves both listeners, so d.server.Shutdown closes
-		// this one too; its exit is the same ComponentHTTP failure as the primary.
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			err := d.server.Serve(loopbackTwin)
-			if errors.Is(err, http.ErrServerClosed) {
-				return
-			}
-			d.ComponentExited(parent, ctx, ComponentHTTP, err)
-		}()
-	}
-	if d.pairing != nil {
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			if err := d.pairing.Serve(); !errors.Is(err, http.ErrServerClosed) {
-				d.ComponentExited(parent, ctx, ComponentPairingControl, err)
-			}
-		}()
-	}
+	d.StartServers(parent, ctx)
 	if workflow != nil {
-		d.wg.Add(2)
-		go func() {
-			defer d.wg.Done()
+		d.Go(func() {
 			d.ComponentExited(parent, ctx, ComponentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
-		}()
-		go func() {
-			defer d.wg.Done()
+		})
+		d.Go(func() {
 			d.ComponentExited(parent, ctx, ComponentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
-		}()
+		})
 	}
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		d.ComponentExited(parent, ctx, ComponentLocalBackups, localBackups.Run(ctx))
-	}()
+	})
 	if cfg.AttentionDeliveryInterval > 0 {
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
+		d.Go(func() {
 			err := attention.RunDeliveries(ctx, cfg.AttentionDeliveryInterval, func(err error) {
 				reportAttentionDelivery(cfg.Logger, err)
 			})
@@ -786,7 +744,7 @@ func (d *daemon) startServing(
 				return
 			}
 			d.ComponentExited(parent, ctx, ComponentAttentionDeliveries, err)
-		}()
+		})
 	}
 }
 
@@ -801,60 +759,51 @@ func (d *daemon) startClaudeLoops(
 	activeReconciler := loops.activeReconciler
 	intakeReconcilerLoop := loops.intakeReconcilerLoop
 	upkeepTrigger := loops.upkeepTrigger
-	d.wg.Add(6)
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		err := claudeWiring.followUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
 			if cfg.Logger != nil {
 				cfg.Logger.Error("follow-up filing pass failed", "error", err)
 			}
 		})
 		d.ComponentExited(parent, ctx, ComponentFollowUpFiling, err)
-	}()
+	})
 	doctorAvailable.Store(true)
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		err := claudeWiring.reviewReplier.Run(ctx, time.Minute, func(err error) {
 			if cfg.Logger != nil {
 				cfg.Logger.Warn("external review reply sweep", "error", err)
 			}
 		})
 		d.ComponentExited(parent, ctx, ComponentReviewReplies, err)
-	}()
+	})
 
 	// The production publication lane gets its own loop: one task holds a
 	// clone, a containerized verification, and GitHub calls for minutes,
 	// which inside the reconcile loop would stall every other run,
 	// invocation, and attention item for that whole span (issue #425).
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		d.ComponentExited(parent, ctx, ComponentProductionPublication,
 			workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
-	}()
-	go func() {
-		defer d.wg.Done()
+	})
+	d.Go(func() {
 		err := claudeSched.Run(ctx, cfg.SchedulerInterval)
 		doctorAvailable.Store(false)
 		d.ComponentExited(parent, ctx, ComponentScheduler, err)
-	}()
-	go func() {
-		defer d.wg.Done()
+	})
+	d.Go(func() {
 		err := activeReconciler.Run(ctx,
 			defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
 		d.ComponentExited(parent, ctx, ComponentActiveResource, err)
-	}()
-	go func() {
-		defer d.wg.Done()
+	})
+	d.Go(func() {
 		err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
 		d.ComponentExited(parent, ctx, ComponentLabelIntake, err)
-	}()
+	})
 	// The start and tip-advance triggers: an upgrade's rebuild can take
 	// an hour, so start does not wait for it.
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		upkeepTrigger.run(ctx, imageUpkeep, logger)
-	}()
+	})
 }
 
 // startScenarioLoops starts the scenario's forge, publication lane, and
@@ -866,19 +815,15 @@ func (d *daemon) startScenarioLoops(
 	// to, the publication lane, and the durable scheduler's publication
 	// watches. The forge is an HTTP server like the API, so its exit is
 	// the same component failure.
-	d.wg.Add(3)
-	go func() {
-		defer d.wg.Done()
+	d.Go(func() {
 		d.ComponentExited(parent, ctx, ComponentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
-	}()
-	go func() {
-		defer d.wg.Done()
+	})
+	d.Go(func() {
 		d.ComponentExited(parent, ctx, ComponentProductionPublication,
 			workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
-	}()
-	go func() {
-		defer d.wg.Done()
+	})
+	d.Go(func() {
 		d.ComponentExited(parent, ctx, ComponentScheduler,
 			scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
-	}()
+	})
 }

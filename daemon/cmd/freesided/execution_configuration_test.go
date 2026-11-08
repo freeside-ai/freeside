@@ -38,10 +38,10 @@ func TestDefaultExecutionDisabled(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "freeside.db.fake-stage-driver")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("default daemon created fake-driver state: %v", err)
 	}
-	if h.pairingCode == "" {
+	if h.Readiness().PairingCode == "" {
 		t.Fatal("default daemon did not offer pairing")
 	}
-	response, err := http.Get("http://" + h.listener.Addr().String() + "/health")
+	response, err := http.Get(h.Readiness().APIURL + "/health")
 	if err != nil {
 		t.Fatal(err)
 	}
