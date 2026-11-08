@@ -1,18 +1,28 @@
 // Package strictjson centralizes the daemon's single-value JSON decoding
 // contract. It accepts exactly one JSON value, optionally rejects invalid
-// UTF-8 before encoding/json can replace it with U+FFFD, optionally rejects
-// unknown object fields, and enforces the caller's explicit byte limit.
+// UTF-8 before the decoder can replace it with U+FFFD, optionally rejects
+// unknown object members, and enforces the caller's explicit byte limit.
+// Under RejectInvalidUTF8 the decoder also refuses an escaped lone surrogate,
+// which the byte check cannot see; that error is a jsontext.SyntacticError,
+// not ErrInvalidUTF8.
 //
-// Duplicate object keys retain encoding/json's last-value-wins behavior.
-// Boundaries that reject duplicates or require canonical bytes keep those
-// stronger gates around this package. The package is a standard-library-only
-// leaf so every daemon lane can share the same delimiting decision without
-// importing another lane's policy.
+// Decoding rejects duplicate object member names, including names that
+// differ only in case but match one struct field. It runs on
+// encoding/json/v2 with v1's options for name matching, merging, and
+// encodings, and v2's error reporting, which stops at the first error and
+// may leave the destination partly written. Boundaries that require
+// canonical bytes keep that stronger gate around this package. The package
+// is a standard-library-only leaf so every daemon lane can share the same
+// delimiting decision without importing another lane's policy.
+//
+// Decision record: devlog/2026-11-08-1212-json-v2-strict-decoding.md.
 package strictjson
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -54,6 +64,10 @@ var (
 	ErrInvalidLimit      = errors.New("strictjson: invalid byte limit")
 	ErrInvalidUTF8Policy = errors.New("strictjson: invalid UTF-8 policy")
 	ErrTrailingData      = errors.New("strictjson: trailing data after the JSON value")
+	// ErrDuplicateName marks a duplicate object member name. The returned
+	// error wraps both it and jsontext.ErrDuplicateName, so errors.Is matches
+	// either.
+	ErrDuplicateName = errors.New("strictjson: duplicate object member name")
 )
 
 // Decode decodes exactly one JSON value from data and rejects unknown object
@@ -76,8 +90,9 @@ func DecodeReader(r io.Reader, dst any, policy UTF8Policy, max Limit) error {
 	return decodeBytes(data, dst, policy, NoLimit, false)
 }
 
-// DecodeAllowingUnknownFields decodes exactly one JSON value from data while
-// retaining encoding/json's forward-compatible unknown-field behavior.
+// DecodeAllowingUnknownFields decodes exactly one JSON value from data and
+// skips unknown object members, for formats that may add fields. A skipped
+// member is still checked for duplicate names.
 func DecodeAllowingUnknownFields(data []byte, dst any, policy UTF8Policy, max Limit) error {
 	return decodeBytes(data, dst, policy, max, true)
 }
@@ -106,14 +121,25 @@ func decodeBytes(data []byte, dst any, policy UTF8Policy, max Limit, allowUnknow
 		return ErrInvalidUTF8
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if !allowUnknown {
-		decoder.DisallowUnknownFields()
-	}
-	if err := decoder.Decode(dst); err != nil {
+	// DefaultOptionsV1 must come first: it sets AllowDuplicateNames(true) and
+	// AllowInvalidUTF8(true) itself, and a later option wins.
+	options := json.JoinOptions(
+		jsonv1.DefaultOptionsV1(),
+		// v2 error reporting keeps io.ErrUnexpectedEOF on truncation and
+		// exposes jsontext.ErrDuplicateName.
+		jsonv1.ReportErrorsWithLegacySemantics(false),
+		jsontext.AllowDuplicateNames(false),
+		jsontext.AllowInvalidUTF8(policy == TolerateInvalidUTF8),
+		json.RejectUnknownMembers(!allowUnknown),
+	)
+	decoder := jsontext.NewDecoder(bytes.NewReader(data), options)
+	if err := json.UnmarshalDecode(decoder, dst, options); err != nil {
+		if errors.Is(err, jsontext.ErrDuplicateName) {
+			return fmt.Errorf("%w: %w", ErrDuplicateName, err)
+		}
 		return err
 	}
-	if err := decoder.Decode(new(json.RawMessage)); err == nil {
+	if _, err := decoder.ReadToken(); err == nil {
 		return ErrTrailingData
 	} else if !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%w: %w", ErrTrailingData, err)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // evidenceNowFixture is the fixed stamp buildClaims tests pin as each claim's
@@ -213,7 +214,7 @@ func TestLoadEvidenceManifest(t *testing.T) {
 		{name: "head_independent with source", body: rawEvidenceJSON(t, headIndepWithHead), wantErr: export.ErrProvenanceInconsistent},
 		{name: "non-canonical order", body: rawEvidenceJSON(t, unsorted), wantErr: export.ErrEvidenceNotCanonical},
 		{name: "duplicate key", body: []byte(strings.Replace(string(validBytes), `"version": "`+export.EvidenceManifestVersion+`",`, `"version": "`+export.EvidenceManifestVersion+`",
-  "version": "`+export.EvidenceManifestVersion+`",`, 1)), wantErr: export.ErrNotCanonicalEncoding},
+  "version": "`+export.EvidenceManifestVersion+`",`, 1)), wantErr: strictjson.ErrDuplicateName},
 		{name: "trailing content", body: append(append([]byte{}, validBytes...), []byte("{}\n")...), wantErr: export.ErrTrailingContent},
 		{name: "invalid utf8", body: append(append([]byte{}, validBytes...), 0xff), wantErr: export.ErrInvalidUTF8},
 		{name: "compact non-canonical", body: mustMarshalCompact(t, valid), wantErr: export.ErrNotCanonicalEncoding},

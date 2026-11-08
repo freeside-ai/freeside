@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // fullEvidenceManifest is a fixed, valid evidence manifest covering both
@@ -255,9 +256,10 @@ func TestDecodeEvidenceManifest(t *testing.T) {
 		t.Errorf("invalid UTF-8 error = %v, want ErrInvalidUTF8", err)
 	}
 
-	// Only Encode's exact byte form is accepted: duplicate keys (last-wins
-	// under encoding/json) and re-formatted whitespace both decode cleanly
-	// but are not the canonical bytes.
+	// Only Encode's exact byte form is accepted: re-formatted whitespace
+	// decodes cleanly but is not the canonical bytes, so the re-encode gate
+	// refuses it. A duplicate key no longer reaches that gate: the strict
+	// decode refuses it first.
 	var reformatted bytes.Buffer
 	if err := json.Compact(&reformatted, wire); err != nil {
 		t.Fatal(err)
@@ -268,8 +270,8 @@ func TestDecodeEvidenceManifest(t *testing.T) {
 	duplicated := []byte(strings.Replace(string(wire),
 		`"label": "after-screenshot",`,
 		`"label": "decoy", "label": "after-screenshot",`, 1))
-	if _, err := export.DecodeEvidenceManifest(duplicated); !errors.Is(err, export.ErrNotCanonicalEncoding) {
-		t.Errorf("duplicate-key error = %v, want ErrNotCanonicalEncoding", err)
+	if _, err := export.DecodeEvidenceManifest(duplicated); !errors.Is(err, strictjson.ErrDuplicateName) {
+		t.Errorf("duplicate-key error = %v, want strictjson.ErrDuplicateName", err)
 	}
 
 	// Empty has exactly one wire form, "entries": []: the null encoding a
