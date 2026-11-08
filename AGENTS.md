@@ -506,7 +506,9 @@ directory named before it in the same bullet. All under `daemon/`:
   credential runs), `internal/engine/admission.go` (the runner capability
   floor), `internal/domain/capability.go`,
   `internal/domain/wardless_admission.go`, `cmd/freesided/claude_driver.go`
-  (`storeAdmissionAuthority`, which wires admission and import authority),
+  (`storeAdmissionAuthority`, which wires admission and import authority,
+  and the daemon's GitHub wiring: the keystore, minter, janitor, and the
+  publish, follow-up-filing, and issue-read token sources),
   `internal/exec/claude/spec.go` (the credential mount),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
   `internal/exec/capability.go`, and the `CredentialMode` and
@@ -526,6 +528,25 @@ directory named before it in the same bullet. All under `daemon/`:
   terminal).
 - **GitHub publish, app keys, tokens, and janitor deletes:**
   `internal/publish/`.
+- **GitHub tokens outside `publish`:** files that reveal or send an
+  installation token, decide where a token-bearing request may go, open
+  the keystore, or choose which token source a component gets.
+  `internal/projectimage/source.go` (sends the clone token in
+  `http.extraHeader`), `internal/projectimage/identity.go` (sends it to
+  read the repository's identity, redirects refused),
+  `internal/projectimage/auth.go` (refuses any token but the exact
+  read-only set for the repository), `internal/projectimage/builder.go`
+  (`Options.Tokens`, the source clone and identity requests use),
+  `internal/specify/fetcher.go` (sends an issue-read token on in-scope
+  research fetches), `cmd/freesided/prelaunch.go` (builds an
+  issue-inspection token source and sends its token to read one issue),
+  and `internal/gitrun/runner.go` (`TransportBaseline`, which keeps the
+  token-bearing clone and publish git off redirects and credential
+  helpers). The commands that open the keystore and build the minter,
+  janitor, or token source a component gets join them:
+  `cmd/freesided/onboard.go`, `cmd/freesided/setup.go` (also hands the
+  registration code to the exchange for the App key),
+  `cmd/freesided/preflight.go`, and `cmd/freesided/fake_publication.go`.
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
