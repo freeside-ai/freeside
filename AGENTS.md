@@ -545,8 +545,8 @@ directory named before it in the same bullet. All under `daemon/`:
   helpers). The commands that open the keystore and build the minter,
   janitor, or token source a component gets join them:
   `cmd/freesided/onboard.go`, `cmd/freesided/setup.go` (also hands the
-  registration code to the exchange for the App key),
-  `cmd/freesided/preflight.go`, and `cmd/freesided/fake_publication.go`.
+  registration code to the exchange for the App key), and
+  `cmd/freesided/preflight.go`.
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),

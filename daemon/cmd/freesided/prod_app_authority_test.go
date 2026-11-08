@@ -241,24 +241,19 @@ func TestCheckProdDriverUnderLease(t *testing.T) {
 	for name, leaseRoot := range leaseRoots {
 		leased := name == "live" || name == "stale"
 		for _, mode := range AllExecutionModes {
-			for _, fakePublication := range []bool{false, true} {
-				err := checkProdDriverUnderLease(leaseRoot, mode, fakePublication)
-				refused := leased && (mode != executionDisabled || fakePublication)
-				if !refused {
-					if err != nil {
-						t.Errorf("%s lease, -driver %s, fake publication %t: %v", name, mode, fakePublication, err)
-					}
-					continue
+			err := checkProdDriverUnderLease(leaseRoot, mode)
+			refused := leased && mode != executionDisabled
+			if !refused {
+				if err != nil {
+					t.Errorf("%s lease, -driver %s: %v", name, mode, err)
 				}
-				want := "-driver " + string(mode)
-				if fakePublication {
-					want = "-fake-publication"
-				}
-				if err == nil || !strings.Contains(err.Error(), leaseRoot) || !strings.Contains(err.Error(), want) ||
-					!strings.Contains(err.Error(), "rig recover") {
-					t.Errorf("%s lease, -driver %s, fake publication %t: error = %v, want a refusal naming %q, the lease root, and rig recover",
-						name, mode, fakePublication, err, want)
-				}
+				continue
+			}
+			want := "-driver " + string(mode)
+			if err == nil || !strings.Contains(err.Error(), leaseRoot) || !strings.Contains(err.Error(), want) ||
+				!strings.Contains(err.Error(), "rig recover") {
+				t.Errorf("%s lease, -driver %s: error = %v, want a refusal naming %q, the lease root, and rig recover",
+					name, mode, err, want)
 			}
 		}
 	}

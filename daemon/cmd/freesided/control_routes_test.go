@@ -442,9 +442,6 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 	if !errors.Is(inspection.OpenError, daemonlock.ErrAlreadyRunning) {
 		t.Fatalf("preflight inspection error = %v", inspection.OpenError)
 	}
-	if _, err := runFakePublicationCommand(ctx, fakePublicationCommandConfig{DBPath: dbPath}); err == nil || !strings.Contains(err.Error(), "stop the daemon first") {
-		t.Fatalf("fake publication conflict = %v", err)
-	}
 }
 
 func TestControlReattemptUsesRunningDaemonStore(t *testing.T) {
