@@ -205,9 +205,10 @@ func newAttentionService(
 			}, now)
 			return signet.TaskLineChangeOutcome{Recorded: result.Recorded, Line: result.Line}, err
 		}),
-		// A policy names agents of the committed tree, which exists only
-		// after the Claude composition (composeClaudeWorkflow); without it
-		// the command fails closed.
+		// A policy orders enrollments on the committed tree's lineup, which
+		// exists only after the Claude composition (composeClaudeWorkflow);
+		// without it the command fails closed. Signet has already translated
+		// the wire's agent names to enrollments.
 		signet.WithRoutingPolicySetter(func(
 			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 		) (signet.RoutingPolicyOutcome, error) {

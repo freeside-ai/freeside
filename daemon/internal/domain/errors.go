@@ -451,6 +451,14 @@ var (
 		"routing policy role has an empty order")
 	ErrRoutingPolicyAgentRepeated = errors.New(
 		"routing policy role lists an agent more than once")
+	ErrRoutingPolicyEnrollmentRepeated = errors.New(
+		"routing policy role lists an enrollment more than once")
+	ErrInvalidRoutingPolicyEnrollment = errors.New(
+		"routing policy enrollment is empty or not one launch option value")
+	ErrRoutingPolicyFormMixed = errors.New(
+		"routing policy role holds both enrollments and agents")
+	ErrRoutingPolicyAgentsForm = errors.New(
+		"a new routing policy revision orders enrollments, not agents")
 	ErrRoutingPolicyNotCanonical = errors.New(
 		"routing policy roles are not in task-line role order")
 	ErrInvalidRoutingPolicySource = errors.New(
@@ -458,7 +466,15 @@ var (
 	ErrRoutingPolicyAgentUnknown = errors.New(
 		"routing policy agent is not in the committed agent tree")
 	ErrRoutingPolicyDrainFirstUnknown = errors.New(
-		"routing policy drain-first account is no agent's usage pool in the committed agent tree")
+		"routing policy drain-first account is the usage pool of no ordered enrollment")
+	ErrRoutingPolicyEnrollmentUnknown = errors.New(
+		"routing policy enrollment is not one the store holds")
+	ErrRoutingPolicyEnrollmentDisabled = errors.New(
+		"routing policy enrollment's identity is disabled")
+	ErrRoutingPolicyEnrollmentUnserved = errors.New(
+		"routing policy enrollment's catalog does not serve the role's lineup model and effort")
+	ErrRoutingPolicyRoleUnbound = errors.New(
+		"routing policy orders a role the lineup leaves unbound")
 	// ErrTaskLinesNotCanonical marks a submission record whose lines are
 	// present but empty or out of role order.
 	ErrTaskLinesNotCanonical       = errors.New("recorded task lines are empty or out of role order")

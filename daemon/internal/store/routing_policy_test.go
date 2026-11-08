@@ -17,9 +17,9 @@ import (
 
 var routingPolicySetAt = time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
 
-func routingPolicyInput(agents ...string) domain.RoutingPolicyInput {
+func routingPolicyInput(enrollments ...domain.ClientEnrollmentID) domain.RoutingPolicyInput {
 	return domain.RoutingPolicyInput{
-		Roles:  []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: agents}},
+		Roles:  []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Enrollments: enrollments}},
 		Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator",
 		LineupRevision: domain.Digest("sha256:" + strings.Repeat("a", 64)),
 	}
@@ -72,11 +72,11 @@ func TestRoutingPolicyAbsentUntilSet(t *testing.T) {
 func TestRoutingPolicyRevisionsSupersede(t *testing.T) {
 	t.Parallel()
 	s := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
-	first := appendRoutingPolicy(t, s, routingPolicyInput("claude-a", "claude-b"), routingPolicySetAt)
-	drained := routingPolicyInput("claude-b", "claude-a")
+	first := appendRoutingPolicy(t, s, routingPolicyInput("claude-a/claude_code", "claude-b/claude_code"), routingPolicySetAt)
+	drained := routingPolicyInput("claude-b/claude_code", "claude-a/claude_code")
 	drained.DrainFirstAccount = new(domain.UsagePoolID("pool-a"))
 	second := appendRoutingPolicy(t, s, drained, routingPolicySetAt.Add(time.Hour))
-	third := appendRoutingPolicy(t, s, routingPolicyInput("claude-b", "claude-a"), routingPolicySetAt.Add(2*time.Hour))
+	third := appendRoutingPolicy(t, s, routingPolicyInput("claude-b/claude_code", "claude-a/claude_code"), routingPolicySetAt.Add(2*time.Hour))
 	if first.Revision != 1 || second.Revision != 2 || third.Revision != 3 {
 		t.Fatalf("revisions = %d, %d, %d, want 1, 2, 3", first.Revision, second.Revision, third.Revision)
 	}
@@ -112,47 +112,38 @@ func TestAppendRoutingPolicyRefusesAnInvalidPolicy(t *testing.T) {
 	}
 }
 
-// TestRoutingPolicyRowEditedInPlaceFailsTheRead: every column is cross-checked
-// against the body, so an edit to either fails both reads.
-func TestRoutingPolicyRowEditedInPlaceFailsTheRead(t *testing.T) {
+// TestRoutingPolicyReadsAPreEnrollmentRevision: a revision stored before
+// routing policy ordered enrollments (#2736) holds agent names. It is never
+// rewritten, so it still reads back, in its agents form.
+func TestRoutingPolicyReadsAPreEnrollmentRevision(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
-		statement string
-		account   *domain.UsagePoolID
-	}{
-		"edited body":     {`UPDATE routing_policies SET body = replace(body, '"cli:operator"', '"cli:other"')`, nil},
-		"unparsable body": {`UPDATE routing_policies SET body = 'not json'`, nil},
-		"edited revision": {`UPDATE routing_policies SET revision = 9`, nil},
-		"edited source":   {`UPDATE routing_policies SET source = 'other'`, nil},
-		"edited set_by":   {`UPDATE routing_policies SET set_by = 'cli:other'`, nil},
-		"edited set_at":   {`UPDATE routing_policies SET set_at = '2027-01-01T00:00:00Z'`, nil},
-		"edited lineup":   {`UPDATE routing_policies SET lineup_revision = 'sha256:other'`, nil},
-		"account added":   {`UPDATE routing_policies SET drain_first_account = 'pool-a'`, nil},
-		"edited account":  {`UPDATE routing_policies SET drain_first_account = 'pool-b'`, new(domain.UsagePoolID("pool-a"))},
-		"account dropped": {`UPDATE routing_policies SET drain_first_account = NULL`, new(domain.UsagePoolID("pool-a"))},
-		"body account": {
-			`UPDATE routing_policies SET body = replace(body, '"pool-a"', '"pool-b"')`, new(domain.UsagePoolID("pool-a")),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			path := filepath.Join(t.TempDir(), "routing.db")
-			s := storetest.Open(t, path, store.Options{})
-			in := routingPolicyInput("claude-a")
-			in.DrainFirstAccount = tc.account
-			appendRoutingPolicy(t, s, in, routingPolicySetAt)
-			db, err := sql.Open("sqlite", path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = db.Close() }()
-			if _, err := db.ExecContext(t.Context(), tc.statement); err != nil {
-				t.Fatal(err)
-			}
-			if _, _, currentErr, listErr := readRoutingPolicies(t, s); currentErr == nil || listErr == nil ||
-				errors.Is(currentErr, store.ErrNotFound) {
-				t.Fatalf("reads = %v, %v, want both to fail", currentErr, listErr)
-			}
-		})
+	path := filepath.Join(t.TempDir(), "routing.db")
+	s := storetest.Open(t, path, store.Options{})
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	lineup := "sha256:" + strings.Repeat("a", 64)
+	if _, err := db.ExecContext(t.Context(), `
+INSERT INTO routing_policies (revision, source, set_by, set_at, lineup_revision, drain_first_account, body)
+VALUES (1, 'cli_routing_set', 'cli:operator', '2026-01-02T03:04:05Z', ?, NULL, ?)`, lineup,
+		`{"revision":1,"roles":[{"role":"implementer","agents":["claude-a","claude-b"]}],`+
+			`"source":"cli_routing_set","set_by":"cli:operator","set_at":"2026-01-02T03:04:05Z",`+
+			`"lineup_revision":"`+lineup+`","drain_first_account":null}`); err != nil {
+		t.Fatal(err)
+	}
+	current, revisions, currentErr, listErr := readRoutingPolicies(t, s)
+	if currentErr != nil || listErr != nil {
+		t.Fatalf("read: %v, %v", currentErr, listErr)
+	}
+	want := []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}}}
+	if !reflect.DeepEqual(current.Roles, want) || len(revisions) != 1 || !reflect.DeepEqual(revisions[0], current) {
+		t.Fatalf("current = %+v, revisions = %+v, want the agents form", current, revisions)
+	}
+	// A change after it is a new revision over enrollments.
+	next := appendRoutingPolicy(t, s, routingPolicyInput("claude-a/claude_code"), routingPolicySetAt.Add(time.Hour))
+	if next.Revision != 2 {
+		t.Fatalf("next revision = %d, want 2", next.Revision)
 	}
 }

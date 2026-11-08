@@ -410,3 +410,37 @@ func TestLineageGroupOf(t *testing.T) {
 		t.Errorf("an unknown derived group compares %q, want %q", relation, domain.LineageUnknown)
 	}
 }
+
+// TestSelectionServed: the router and the routing policy's setter keep the
+// enrollments admission resolves. The native-default model passes a
+// claude_code enrollment whatever its catalog lists, an enrollment with no
+// catalog passes on a native effort, and otherwise the catalog decides.
+func TestSelectionServed(t *testing.T) {
+	t.Parallel()
+	catalog := selectionCatalog("codex-a/codex_cli")
+	for name, tc := range map[string]struct {
+		client        domain.HarnessClientKind
+		catalog       *domain.DiscoveredModelCatalog
+		model, effort string
+		served        bool
+	}{
+		"native default on claude_code": {
+			domain.HarnessClientClaudeCode, catalog, domain.ClaudeCodeNativeDefaultRouteModelID, "high", true,
+		},
+		"native default on codex_cli": {
+			domain.HarnessClientCodexCLI, catalog, domain.ClaudeCodeNativeDefaultRouteModelID, "high", false,
+		},
+		"native default without a native effort": {
+			domain.HarnessClientClaudeCode, nil, domain.ClaudeCodeNativeDefaultRouteModelID, "turbo", false,
+		},
+		"no catalog, native effort":    {domain.HarnessClientCodexCLI, nil, "gpt-5.6-sol", "high", true},
+		"no catalog, no native effort": {domain.HarnessClientCodexCLI, nil, "gpt-5.6-sol", "turbo", false},
+		"catalog serves":               {domain.HarnessClientCodexCLI, catalog, "gpt-5.6-sol", "xhigh", true},
+		"catalog lacks the model":      {domain.HarnessClientCodexCLI, catalog, "gpt-5.6-other", "high", false},
+		"catalog lacks the effort":     {domain.HarnessClientCodexCLI, catalog, "gpt-5.6-mini", "high", false},
+	} {
+		if err := domain.SelectionServed(tc.client, tc.catalog, tc.model, tc.effort); (err == nil) != tc.served {
+			t.Errorf("%s: SelectionServed = %v, want served %v", name, err, tc.served)
+		}
+	}
+}

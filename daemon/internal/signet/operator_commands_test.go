@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,13 +25,33 @@ import (
 
 var (
 	operatorAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	// codex-primary runs on seedUsageEnrollment's enrollment, so pool-a is a
-	// drain-first account the tree can name.
-	operatorTree = agenttree.Tree{Agents: []domain.AgentSource{
-		{Name: "claude-primary"}, {Name: "codex-primary", Enrollment: "enrollment-usage-1"},
-	}}
-	operatorTreeRev  = domain.Digest("sha256:" + strings.Repeat("a", 64))
-	errOperatorFails = errors.New("operator failed")
+	// operatorLineup is the implementer's lineup line: the model and effort
+	// a policy's enrollments run on.
+	operatorLineup = domain.TaskLineSelection{EnrollmentID: "line-other/codex_cli", ModelID: "model-lineup", Effort: "high"}
+	operatorTree   = agenttree.Tree{Lineup: []agenttree.LineupLine{{
+		Key: string(domain.RoleImplementer),
+		Selection: domain.LineupSelection{
+			Names: domain.AgentSelectionNames{
+				Enrollment: string(operatorLineup.EnrollmentID), Model: operatorLineup.ModelID, Effort: operatorLineup.Effort,
+			},
+			PromptName: "implementer", PromptDigest: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		},
+	}}}
+	operatorTreeRev = domain.Digest("sha256:" + strings.Repeat("a", 64))
+	// operatorCatalog is operatorTree's catalog with the agents the wire
+	// names: codex-primary runs seedUsageEnrollment's enrollment, so pool-a
+	// is its drain-first account, and claude-primary a line enrollment on
+	// its identity's own pool.
+	operatorCatalog = signet.AgentCatalog{
+		LineupRevision: &operatorTreeRev,
+		Agents: []signet.AgentCatalogEntry{
+			operatorAgent("claude-primary", "line-claude-primary/codex_cli"),
+			operatorAgent("codex-primary", "enrollment-usage-1"),
+		},
+		Lineup: []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Selection: operatorLineup}},
+	}
+	withOperatorCatalog = signet.WithAgentCatalog(func() *signet.AgentCatalog { return &operatorCatalog })
+	errOperatorFails    = errors.New("operator failed")
 )
 
 // recordingUsageOperator records each call it receives, and fails every call
@@ -54,6 +76,16 @@ func (o *recordingUsageOperator) ReassignCollector(
 ) (func(), error) {
 	o.reassigns = append(o.reassigns, collector)
 	return func() { o.afters++ }, o.err
+}
+
+// operatorAgent is a catalog agent running enrollment on the implementer's
+// lineup model and effort.
+func operatorAgent(name string, enrollment domain.ClientEnrollmentID) signet.AgentCatalogEntry {
+	selection := operatorLineup
+	selection.EnrollmentID = enrollment
+	return signet.AgentCatalogEntry{
+		Name: name, EnrollmentID: enrollment, Model: selection.ModelID, Effort: domain.EffortHigh, Selection: selection,
+	}
 }
 
 // engineTaskLineChanger and engineRoutingPolicySetter bind the hooks the way
@@ -192,10 +224,31 @@ func fakeParkedTaskMover(
 func policyCommand(id string, expected *int, agents ...string) signet.ClientCommand {
 	in := operatorCommand(id, domain.CommandKindSetRoutingPolicy)
 	in.SetRoutingPolicy = signet.SetRoutingPolicyPayload{
-		Roles:            []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: agents}},
+		Roles:            []signet.RoutingPolicyRoleWire{{Role: domain.RoleImplementer, Agents: agents}},
 		ExpectedRevision: expected,
 	}
 	return in
+}
+
+// wantAgents checks that a routing policy receipt renders the implementer's
+// order on the wire as agents.
+func wantAgents(t *testing.T, result signet.CommandResult, agents ...string) {
+	t.Helper()
+	body, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Record struct {
+			Policy signet.RoutingPolicyWire `json:"policy"`
+		} `json:"record"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if roles := wire.Record.Policy.Roles; len(roles) != 1 || !slices.Equal(roles[0].Agents, agents) {
+		t.Fatalf("receipt on the wire = %s, want agents %v", body, agents)
+	}
 }
 
 func serverRevision(t *testing.T, st *store.Store) int64 {
@@ -241,7 +294,7 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog)
 			before := serverRevision(t, st)
 			result, err := svc.Submit(t.Context(), tc.command(id))
 			if err != nil {
@@ -434,22 +487,30 @@ func TestChangeTaskLineRefusesARunningRole(t *testing.T) {
 
 func TestSetRoutingPolicyHoldsTheExpectedRevision(t *testing.T) {
 	t.Parallel()
-	svc, st, _ := newOperatorService(t, signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+	svc, st, _ := newOperatorService(t, signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog)
 	first, err := svc.Submit(t.Context(), policyCommand("policy-1", nil, "codex-primary", "claude-primary"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The wire's agent names record their enrollments, and the receipt
+	// renders them back as the catalog's agents (#2807 moves the wire).
 	policy := first.Receipt.RoutingPolicyChange.Policy
 	if !first.Receipt.RoutingPolicyChange.Recorded || policy.Revision != 1 ||
 		policy.Source != domain.RoutingPolicySourceClientSet || policy.SetBy != "device:device-1" ||
-		policy.LineupRevision != operatorTreeRev {
+		policy.LineupRevision != operatorTreeRev || !policy.SameRule([]domain.RoutingPolicyRole{{
+		Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"enrollment-usage-1", "line-claude-primary/codex_cli"},
+	}}, nil) {
 		t.Fatalf("first policy = %+v", first.Receipt.RoutingPolicyChange)
 	}
+	wantAgents(t, first, "codex-primary", "claude-primary")
 
 	before := serverRevision(t, st)
 	_, err = svc.Submit(t.Context(), policyCommand("policy-stale", nil, "claude-primary"))
 	var rejection *signet.RoutingPolicyRejectionError
-	if !errors.As(err, &rejection) || rejection.CurrentPolicy == nil || !reflect.DeepEqual(*rejection.CurrentPolicy, policy) {
+	if !errors.As(err, &rejection) || rejection.CurrentPolicy == nil || rejection.CurrentPolicy.Revision != 1 ||
+		!reflect.DeepEqual(rejection.CurrentPolicy.Roles, []signet.RoutingPolicyRoleWire{{
+			Role: domain.RoleImplementer, Agents: []string{"codex-primary", "claude-primary"},
+		}}) {
 		t.Fatalf("stale expectation = %v, want the current policy", err)
 	}
 	for name, tc := range map[string]struct {
@@ -497,21 +558,31 @@ func TestSetRoutingPolicyHoldsTheExpectedRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := next.Receipt.RoutingPolicyChange.Policy; got.Revision != 2 || !got.SameRule(
-		[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-primary"}}}, nil) {
+		[]domain.RoutingPolicyRole{{
+			Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"line-claude-primary/codex_cli"},
+		}}, nil) {
 		t.Fatalf("second policy = %+v", got)
+	}
+	// An enrollment id names that enrollment, so an id the wire rendered for
+	// want of an agent comes back as itself, and two names on one
+	// enrollment keep its first position: the current orders again.
+	if same, err := svc.Submit(t.Context(),
+		policyCommand("policy-ids", new(2), "line-claude-primary/codex_cli", "claude-primary")); err != nil ||
+		same.Receipt.RoutingPolicyChange.Recorded || same.Receipt.RoutingPolicyChange.Policy.Revision != 2 {
+		t.Fatalf("ids = %+v, %v, want the current revision", same, err)
 	}
 
 	// The same orders with a drain-first account are a new revision. The
-	// account is pool-a, codex-primary's pool, though the order names only
-	// claude-primary: whether a role can use it is the router's question.
+	// account is the pool of claude-primary's identity, the one enrollment
+	// the order names.
 	drained := policyCommand("policy-3", new(2), "claude-primary")
-	drained.SetRoutingPolicy.DrainFirstAccount = new(domain.UsagePoolID("pool-a"))
+	drained.SetRoutingPolicy.DrainFirstAccount = new(domain.UsagePoolID("identity:line-claude-primary"))
 	third, err := svc.Submit(t.Context(), drained)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := third.Receipt.RoutingPolicyChange; !got.Recorded || got.Policy.Revision != 3 ||
-		got.Policy.DrainFirstAccount == nil || *got.Policy.DrainFirstAccount != "pool-a" {
+		got.Policy.DrainFirstAccount == nil || *got.Policy.DrainFirstAccount != "identity:line-claude-primary" {
 		t.Fatalf("drain-first policy = %+v", got)
 	}
 	if replay, err := svc.Submit(t.Context(), drained); err != nil || !reflect.DeepEqual(replay.Receipt, third.Receipt) {
@@ -565,10 +636,13 @@ func TestOperatorCommandsFailClosedWithoutTheirHook(t *testing.T) {
 	}
 }
 
+// pastedRole reads like a credential pasted where a role belongs.
+const pastedRole = "sk-ant-oat01-fixture-not-a-token"
+
 func TestOperatorCommandsHTTP(t *testing.T) {
 	t.Parallel()
 	svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
-		signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
+		signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog)
 	handler := signet.NewHTTPHandler(svc, testAuthorizer)
 	post := func(t *testing.T, body string) (int, map[string]any) {
 		t.Helper()
@@ -603,10 +677,18 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 		"unknown agent":        {command("h9", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["gemini"]}],"expected_revision":null}`), 400},
 		"repeated agent":       {command("h10", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["codex-primary","codex-primary"]}],"expected_revision":null}`), 400},
 		"ineligible line role": {command("h11", `{"kind":"change_task_line","task_id":"`+task+`","role":"verifier","selection":{"enrollment_id":"line-codex-primary/codex_cli","model_id":"model-codex-primary","effort":"high"}}`), 400},
+		// Until #2807 the wire's roles carry agents only.
+		"enrollments member": {command("h12", `{"kind":"set_routing_policy","roles":[{"role":"implementer","enrollments":["line-codex-primary/codex_cli"]}],"expected_revision":null}`), 400},
+		"pasted role":        {command("h13", `{"kind":"set_routing_policy","roles":[{"role":"`+pastedRole+`","agents":["gemini"]}],"expected_revision":null}`), 400},
+		"pasted role repeat": {command("h14", `{"kind":"set_routing_policy","roles":[{"role":"`+pastedRole+`","agents":["gemini","gemini"]}],"expected_revision":null}`), 400},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if code, body := post(t, tc.body); code != tc.want {
+			code, body := post(t, tc.body)
+			if code != tc.want {
 				t.Fatalf("status %d want %d: %v", code, tc.want, body)
+			}
+			if strings.Contains(fmt.Sprint(body), pastedRole) {
+				t.Fatalf("refusal repeats the request's role: %v", body)
 			}
 		})
 	}

@@ -69,17 +69,17 @@ func validateLineSelections(ctx context.Context, tx *store.ReadTx, lines []domai
 // Agent name with a nil Selection, so no projection reads the tree. A
 // cleared version never reaches the wire.
 type TaskLine struct {
-	ID            domain.Digest              `json:"id"`
-	TaskID        domain.TaskID              `json:"task_id"`
-	Role          domain.RoleName            `json:"role"`
-	Agent         *string                    `json:"agent"`
-	Selection     *domain.TaskLineSelection  `json:"selection"`
-	Version       int                        `json:"version"`
-	PredecessorID *domain.Digest             `json:"predecessor_id"`
-	Source        domain.TaskLineSource      `json:"source"`
-	SetBy         string                     `json:"set_by"`
-	SetAt         time.Time                  `json:"set_at"`
-	Provenance    *domain.TaskLineProvenance `json:"provenance"`
+	ID            domain.Digest                  `json:"id"`
+	TaskID        domain.TaskID                  `json:"task_id"`
+	Role          domain.RoleName                `json:"role"`
+	Agent         *string                        `json:"agent"`
+	Selection     *domain.TaskLineSelection      `json:"selection"`
+	Version       int                            `json:"version"`
+	PredecessorID *domain.Digest                 `json:"predecessor_id"`
+	Source        domain.TaskLineSource          `json:"source"`
+	SetBy         string                         `json:"set_by"`
+	SetAt         time.Time                      `json:"set_at"`
+	Provenance    *domain.TaskLineProvenanceWire `json:"provenance"`
 }
 
 // TaskLineChoice is the API's TaskLineChoice: a role and what a recorded
@@ -111,7 +111,7 @@ func wireTaskLine(line domain.TaskLine) TaskLine {
 	return TaskLine{
 		ID: line.ID, TaskID: line.TaskID, Role: line.Role, Agent: agent, Selection: selection,
 		Version: line.Version, PredecessorID: line.PredecessorID, Source: line.Source, SetBy: line.SetBy,
-		SetAt: line.SetAt, Provenance: line.Provenance,
+		SetAt: line.SetAt, Provenance: line.Provenance.Wire(),
 	}
 }
 

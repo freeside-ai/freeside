@@ -1028,13 +1028,17 @@ func isCommandRequestError(err error) bool {
 		ErrInvalidDigest,
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
 		ErrInvalidSubmitTaskPayload, ErrInvalidStopTaskPayload, ErrInvalidOperatorCommandPayload,
-		// A collector must be enrolled on its pool; a policy names only
-		// agents the daemon's tree carries and a drain-first account one of
-		// them is on; and a task line selection names an enrollment the
-		// daemon holds and a model and effort it serves: each is the
-		// client's request.
+		// A collector must be enrolled on its pool; a policy orders only
+		// roles the lineup binds and enrollments the daemon holds on an
+		// enabled identity that serve the role's lineup model, named by
+		// enrollment or tree agent, and a drain-first account one of them
+		// is on; and a task line selection names an enrollment the daemon
+		// holds and a model and effort it serves: each is the client's
+		// request.
 		store.ErrEnrollmentNotOnPool, domain.ErrRoutingPolicyAgentUnknown, ErrTaskLineSelectionUnserved,
-		domain.ErrRoutingPolicyDrainFirstUnknown,
+		domain.ErrRoutingPolicyDrainFirstUnknown, domain.ErrRoutingPolicyEnrollmentUnknown,
+		domain.ErrRoutingPolicyEnrollmentDisabled, domain.ErrRoutingPolicyEnrollmentUnserved,
+		domain.ErrRoutingPolicyRoleUnbound,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

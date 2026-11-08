@@ -31,8 +31,10 @@ func TestSignetWireGoldens(t *testing.T) {
 				{Pool: "pool-a", Window: "seven_day", ResetsAt: createdAt.Add(24 * time.Hour), ObservedAt: createdAt.Add(-time.Hour)},
 				{Pool: "pool-b", Window: "seven_day", ResetsAt: createdAt.Add(48 * time.Hour), ObservedAt: createdAt.Add(-time.Hour)},
 			},
+			// The wire renders the passed-over enrollment as its id in
+			// agent until #2807.
 			PassedOver: &domain.TaskLinePassedOverMark{
-				Agent: "claude-a", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+				Enrollment: "anthropic-a/claude_code", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
 				MarkedAt: createdAt.Add(-30 * time.Minute), ResetsAt: new(createdAt.Add(2 * time.Hour)),
 			},
 		},
@@ -606,13 +608,19 @@ func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 	return snapshots
 }
 
-// routingPolicyFixture is a client-set policy revision ordering two roles.
+// routingPolicyFixture is a client-set policy revision ordering two roles'
+// enrollments, rendered against agentCatalogFixture's catalog: the reviewer's
+// enrollment and the implementer's second as the catalog agents that run
+// them on the role's lineup model and effort, and the implementer's first as
+// its id, since no agent runs it on the implementer's lineup line.
 func routingPolicyFixture(t *testing.T, at time.Time) *RoutingPolicySnapshot {
 	t.Helper()
 	policy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
 		Roles: []domain.RoutingPolicyRole{
-			{Role: domain.RoleReviewer, Agents: []string{"codex-b"}},
-			{Role: domain.RoleImplementer, Agents: []string{"claude-b", "claude-a"}},
+			{Role: domain.RoleReviewer, Enrollments: []domain.ClientEnrollmentID{"anthropic-b/claude_code"}},
+			{Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{
+				"anthropic-b/claude_code", "anthropic-a/claude_code",
+			}},
 		},
 		Source: domain.RoutingPolicySourceClientSet, SetBy: "device:device-569",
 		LineupRevision: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -620,5 +628,7 @@ func routingPolicyFixture(t *testing.T, at time.Time) *RoutingPolicySnapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &RoutingPolicySnapshot{AsOfRevision: 23, EntityVersion: 2, Policy: policy}
+	return &RoutingPolicySnapshot{
+		AsOfRevision: 23, EntityVersion: 2, Policy: renderRoutingPolicy(policy, agentCatalogFixture(t)),
+	}
 }

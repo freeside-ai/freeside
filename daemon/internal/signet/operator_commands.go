@@ -41,9 +41,9 @@ type ChangeTaskLinePayload struct {
 // ExpectedRevision says the client saw no policy, and a nil
 // DrainFirstAccount names none, clearing any the current policy names.
 type SetRoutingPolicyPayload struct {
-	Roles             []domain.RoutingPolicyRole `json:"roles"`
-	DrainFirstAccount *domain.UsagePoolID        `json:"drain_first_account"`
-	ExpectedRevision  *int                       `json:"expected_revision"`
+	Roles             []RoutingPolicyRoleWire `json:"roles"`
+	DrainFirstAccount *domain.UsagePoolID     `json:"drain_first_account"`
+	ExpectedRevision  *int                    `json:"expected_revision"`
 }
 
 // MoveParkedTaskPayload mirrors the API's MoveParkedTaskPayload: the task
@@ -123,7 +123,9 @@ type RoutingPolicyOutcome struct {
 
 // RoutingPolicySetter applies a policy change in the accepting transaction
 // (engine.SetRoutingPolicyTx against the daemon's agent tree, bound by
-// WithRoutingPolicySetter). It refuses an agent the tree does not carry with
+// WithRoutingPolicySetter). The change's orders are enrollments: signet has
+// translated the wire's agent names (routingPolicyRolesFromWire), refusing a
+// name that is neither an enrollment nor a tree agent with
 // domain.ErrRoutingPolicyAgentUnknown.
 type RoutingPolicySetter func(ctx context.Context, tx *store.WriteTx, change RoutingPolicyChange, now time.Time) (RoutingPolicyOutcome, error)
 
@@ -178,7 +180,7 @@ func (*TaskLineChangeRejectionError) Error() string { return "an attempt of the 
 // revision that is no longer current, with the current policy (nil when none
 // was ever set).
 type RoutingPolicyRejectionError struct {
-	CurrentPolicy *domain.RoutingPolicy `json:"current_policy"`
+	CurrentPolicy *RoutingPolicyWire `json:"current_policy"`
 }
 
 func (*RoutingPolicyRejectionError) Error() string { return "the routing policy changed" }
@@ -217,7 +219,7 @@ func (s *Service) commitReceipt(
 			if !same(old) {
 				return fmt.Errorf("command %q: %w", in.CommandID, store.ErrImmutableConflict)
 			}
-			result = CommandResult{Receipt: &old, Revision: snap.AsOfRevision}
+			result = CommandResult{Receipt: &old, Revision: snap.AsOfRevision, catalog: s.agentCatalog()}
 			return errReplay
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
@@ -233,7 +235,7 @@ func (s *Service) commitReceipt(
 		if err != nil {
 			return err
 		}
-		result = CommandResult{Receipt: &receipt, Revision: snap.AsOfRevision}
+		result = CommandResult{Receipt: &receipt, Revision: snap.AsOfRevision, catalog: s.agentCatalog()}
 		return nil
 	})
 	if err != nil && !errors.Is(err, errReplay) {
@@ -401,7 +403,21 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 		p.DrainFirstAccount != nil && *p.DrainFirstAccount == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
-	roles, err := domain.CanonicalRoutingPolicyRoles(p.Roles)
+	// The receipt records the policy over enrollments, so a replay compares
+	// the translated orders. An enrollment never leaves the store, so the
+	// translation holds into the write; the setter re-checks each one there.
+	catalog := s.agentCatalog()
+	var translated []domain.RoutingPolicyRole
+	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		translated, err = routingPolicyRolesFromWire(ctx, tx, catalog, p.Roles)
+		return err
+	}); errors.Is(err, domain.ErrRoutingPolicyAgentRepeated) {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
+	} else if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
+	}
+	roles, err := domain.CanonicalRoutingPolicyRoles(translated)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
 	}
@@ -421,7 +437,12 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 				return domain.CommandReceipt{}, err
 			}
 			if !sameRevision(current, p.ExpectedRevision) {
-				return domain.CommandReceipt{}, &RoutingPolicyRejectionError{CurrentPolicy: current}
+				rejection := &RoutingPolicyRejectionError{}
+				if current != nil {
+					rendered := renderRoutingPolicy(*current, catalog)
+					rejection.CurrentPolicy = &rendered
+				}
+				return domain.CommandReceipt{}, rejection
 			}
 			outcome, err := s.routingPolicySetter(ctx, tx, RoutingPolicyChange{
 				Roles: roles, DrainFirstAccount: p.DrainFirstAccount,

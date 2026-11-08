@@ -141,23 +141,23 @@ func TestV2TaskLineAdmissionRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-					order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+					order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 				f.appendLine(t, domain.TaskLineInput{
 					TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Selection: foreign,
 					Source: domain.TaskLineSourceRouter, SetBy: routerSetBy(f.task(t, f.run.ID).ID),
 					Provenance: policyOrder(policy.Revision, routerSecondPool),
 				}, agentTestAt.Add(-time.Minute))
 			},
-			// The router's anchor reads the routing policy's agent names
-			// until #2736.
-			want: agenttree.ErrNoAgentForSelection.Error(),
+			// A router line runs its enrollment on the lineup's model and
+			// effort; any other selection is not one the policy orders.
+			want: "does not order the line's selection for its role",
 		},
 		{
-			name: "a router line selects an agent its policy does not order",
+			name: "a router line selects an enrollment its policy does not order",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour),
-					order(domain.RoleImplementer, agentTestWriterAgent))
+					order(domain.RoleImplementer, agentTestEnrollment))
 				f.appendLine(t, domain.TaskLineInput{
 					TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer,
 					Selection: f.lineSelection(t, agentTestSecondAgent),
@@ -165,7 +165,7 @@ func TestV2TaskLineAdmissionRefusals(t *testing.T) {
 					Provenance: policyOrder(policy.Revision, routerSecondPool),
 				}, agentTestAt.Add(-time.Minute))
 			},
-			want: "does not order the line's agent for its role",
+			want: "does not order the line's selection for its role",
 		},
 	}
 	for _, tc := range cases {
@@ -216,7 +216,7 @@ func TestV2TaskLineTwinsAreOneAgent(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, enrollment := f.addSecondAgent(t)
 		f.addTwinOf(t, agentTestSecondAgent, "claude-second-twin", false)
-		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleImplementer, "claude-second-twin"))
+		f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleImplementer, agentTestSecondEnrollment))
 		admission, err := f.admitRun(t, f.run, agentTestAt)
 		if err != nil {
 			t.Fatal(err)
@@ -230,17 +230,16 @@ func TestV2TaskLineTwinsAreOneAgent(t *testing.T) {
 	})
 }
 
-// TestMovedV2LineAnchorsToThePolicyOrder: a v2 move's record holds the
-// selection it moved the role to (#2735), so a renamed agent no longer
-// breaks the record's own match. The cited policy still names agents until
-// #2736, though, and once the tree renames the agent it ordered, that policy
-// orders no agent on the line's enrollment, so the anchor refuses.
-func TestMovedV2LineAnchorsToThePolicyOrder(t *testing.T) {
+// TestMovedV2LineSurvivesAnAgentRename: a v2 move's record holds the
+// selection it moved the role to (#2735), and the policy it cites orders
+// enrollments (#2736), so renaming the tree agent that runs the moved
+// selection changes nothing the anchor reads, and the move still admits.
+func TestMovedV2LineSurvivesAnAgentRename(t *testing.T) {
 	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 	line := f.moveTask(t, policy, nil, false)[domain.RoleImplementer]
 	if line.Encoding != domain.TaskLineEncodingV2 || f.lineAgent(line) != agentTestSecondAgent {
 		t.Fatalf("moved line = %+v", line)
@@ -253,7 +252,7 @@ func TestMovedV2LineAnchorsToThePolicyOrder(t *testing.T) {
 		}
 	})
 	admission, err := f.admitRun(t, f.run, agentTestAt.Add(time.Minute))
-	if err == nil || !strings.Contains(err.Error(), "does not order the line's enrollment") {
-		t.Fatalf("admission of a move the tree renamed = %+v, %v; want its policy anchor refused", admission.AgentBinding, err)
+	if err != nil || admission.AgentBinding == nil || admission.AgentBinding.EnrollmentID != agentTestSecondEnrollment {
+		t.Fatalf("admission of a move the tree renamed = %+v, %v; want the moved enrollment", admission.AgentBinding, err)
 	}
 }

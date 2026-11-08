@@ -13,7 +13,6 @@ const (
 	insertRoutingPolicySQL = `
 INSERT INTO routing_policies (revision, source, set_by, set_at, lineup_revision, drain_first_account, body)
 VALUES (?, ?, ?, ?, ?, ?, ?)`
-	routingPolicyColumns = `revision, source, set_by, set_at, lineup_revision, drain_first_account, body`
 )
 
 // AppendRoutingPolicy records the next routing policy revision. The store
@@ -51,7 +50,7 @@ func (tx *WriteTx) AppendRoutingPolicy(
 // none was ever set, so nothing routes and admission keeps the lineup.
 func (tx *ReadTx) CurrentRoutingPolicy(ctx context.Context) (domain.RoutingPolicy, error) {
 	policy, err := scanRoutingPolicy(tx.tx.QueryRowContext(ctx,
-		`SELECT `+routingPolicyColumns+` FROM routing_policies ORDER BY revision DESC LIMIT 1`))
+		`SELECT body FROM routing_policies ORDER BY revision DESC LIMIT 1`))
 	if err != nil {
 		return domain.RoutingPolicy{}, fmt.Errorf("current routing policy: %w", notFoundOr(err))
 	}
@@ -59,10 +58,10 @@ func (tx *ReadTx) CurrentRoutingPolicy(ctx context.Context) (domain.RoutingPolic
 }
 
 // RoutingPolicyRevisions reconstructs every revision in order; one
-// inconsistent row fails the whole listing. None set is an empty listing.
+// row that fails its decode fails the whole listing. None set is an empty listing.
 func (tx *ReadTx) RoutingPolicyRevisions(ctx context.Context) ([]domain.RoutingPolicy, error) {
 	policies, err := queryAll(ctx, tx.tx, scanRoutingPolicy,
-		`SELECT `+routingPolicyColumns+` FROM routing_policies ORDER BY revision`)
+		`SELECT body FROM routing_policies ORDER BY revision`)
 	if err != nil {
 		return nil, fmt.Errorf("list routing policies: %w", err)
 	}
@@ -72,27 +71,14 @@ func (tx *ReadTx) RoutingPolicyRevisions(ctx context.Context) ([]domain.RoutingP
 	return policies, nil
 }
 
-// scanRoutingPolicy decodes one row and cross-checks every column against the
-// body, so an edit to either fails the read.
+// scanRoutingPolicy decodes one row's body, which Validate checks on decode.
+// The row is ordinary state (Tier B): admission reads a revision's body, never
+// its columns, so the columns, which order and number the revisions, are not
+// compared with it.
 func scanRoutingPolicy(row scanner) (domain.RoutingPolicy, error) {
-	var (
-		revision                     int
-		source, setBy, setAt, lineup string
-		drainFirst                   sql.NullString
-		body                         []byte
-	)
-	if err := row.Scan(&revision, &source, &setBy, &setAt, &lineup, &drainFirst, &body); err != nil {
+	var body []byte
+	if err := row.Scan(&body); err != nil {
 		return domain.RoutingPolicy{}, err
 	}
-	policy, err := decode[domain.RoutingPolicy](body)
-	if err != nil {
-		return domain.RoutingPolicy{}, err
-	}
-	if policy.Revision != revision || string(policy.Source) != source || policy.SetBy != setBy ||
-		!timeColumnEqual(setAt, policy.SetAt) || string(policy.LineupRevision) != lineup ||
-		drainFirst.Valid != (policy.DrainFirstAccount != nil) ||
-		drainFirst.Valid && drainFirst.String != string(*policy.DrainFirstAccount) {
-		return domain.RoutingPolicy{}, errRowInconsistent
-	}
-	return policy, nil
+	return decode[domain.RoutingPolicy](body)
 }

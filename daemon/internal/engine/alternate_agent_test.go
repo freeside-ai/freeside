@@ -95,12 +95,12 @@ func TestAlternateAgentOffersEscapeTheCause(t *testing.T) {
 	if got := f.offers(t, parked); got != nil {
 		t.Errorf("parked offers with no policy = %+v, want none", got)
 	}
-	f.setRoutingPolicy(t, agentTestAt, order(domain.RoleImplementer, agentTestWriterAgent))
+	f.setRoutingPolicy(t, agentTestAt, order(domain.RoleImplementer, agentTestEnrollment))
 	if got := f.offers(t, parked); got != nil {
 		t.Errorf("parked offers off the policy = %+v, want none", got)
 	}
 	f.setRoutingPolicy(t, agentTestAt.Add(time.Second),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 	if got, want := f.offers(t, parked), offer(domain.AlternateAgentDifferentPool); !reflect.DeepEqual(got, want) {
 		t.Errorf("parked offers = %+v, want %+v", got, want)
 	}
@@ -150,6 +150,25 @@ func TestAlternateOffersNeedTheLineupServed(t *testing.T) {
 		if got := f.offers(t, failure); (len(got) == 1) != tc.offered {
 			t.Errorf("%s: offers = %+v, want offered %t", name, got, tc.offered)
 		}
+	}
+}
+
+// TestParkedOffersReadAPreUnitPolicy: a revision stored before #2736 orders
+// agent names, and a parked task's offers are the enrollments those agents
+// reduce to through the tree (roleOrder), at the role's lineup model, as
+// under a revision that orders enrollments.
+func TestParkedOffersReadAPreUnitPolicy(t *testing.T) {
+	t.Parallel()
+	f := newAgentAdmissionFixture(t)
+	_, second := f.addSecondAgent(t)
+	failure := f.failImplementer(t, domain.FailureCauseQuota)
+	f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent)
+	want := []domain.AlternateAgentOffer{{
+		Enrollment: second.ID, Pool: routerSecondPool, Harness: domain.HarnessClientClaudeCode,
+		Model: "claude-implementer-test", Qualification: domain.AlternateAgentDifferentPool,
+	}}
+	if got := f.offers(t, parkedTaskFailure(failure.taskID, failure.invocationID)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("parked offers = %+v, want %+v", got, want)
 	}
 }
 
@@ -293,13 +312,13 @@ func (f *agentAdmissionFixture) movedOffPool(t *testing.T, refused domain.UsageP
 // TestMovedLineAnchorsToItsCommand: a move's implementer line, with the
 // command receipt that records the move, admits the chosen selection under
 // its own enrollment and releases the park on the refused pool; its provenance
-// names the agent it left. The same line with no receipt is one no operator
+// names the enrollment it left. The same line with no receipt is one no operator
 // moved: admission refuses it, and the park holds.
 func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 	t.Parallel()
 	resetsAt := agentTestAt.Add(time.Hour)
 	left := &domain.TaskLinePassedOverMark{
-		Agent: agentTestWriterAgent, Pool: routerMainPool, Window: "five_hour",
+		Enrollment: agentTestEnrollment, Pool: routerMainPool, Window: "five_hour",
 		Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: agentTestAt.Add(-2 * time.Minute),
 		ResetsAt: &resetsAt,
 	}
@@ -307,7 +326,7 @@ func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, enrollment := f.addSecondAgent(t)
 		policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
-			order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+			order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 		line := f.moveTask(t, policy, left, withoutReceipt)[domain.RoleImplementer]
 		if f.lineAgent(line) != agentTestSecondAgent || line.Source != domain.TaskLineSourceAlternateAgentMove ||
 			line.Provenance == nil || line.Provenance.Pool != routerSecondPool ||
@@ -330,6 +349,43 @@ func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 		wantCites(t, admission, line, enrollment.ID)
 		if !f.movedOffPool(t, routerMainPool) || f.movedOffPool(t, routerSecondPool) {
 			t.Fatal("the park did not read the move off the refused pool")
+		}
+	}
+}
+
+// TestMovedLineKeepsAPreUnitAgentMark: a move made before #2736 cites a
+// revision in the agents form, and its passed-over mark names an agent.
+// The anchor admits the mark while that revision orders the agent, and
+// refuses one naming an agent it does not order, on a task that never
+// escalated.
+func TestMovedLineKeepsAPreUnitAgentMark(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	resetsAt := agentTestAt.Add(time.Hour)
+	for agent, admits := range map[string]bool{agentTestWriterAgent: true, "claude-unordered": false} {
+		f := newAgentAdmissionFixture(t)
+		f.addSecondAgent(t)
+		f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent)
+		var policy domain.RoutingPolicy
+		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			policy, err = routingPolicyRevision(ctx, tx, 1)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		left := &domain.TaskLinePassedOverMark{
+			Agent: agent, Pool: routerMainPool, Window: "five_hour",
+			Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: agentTestAt.Add(-2 * time.Minute),
+			ResetsAt: &resetsAt,
+		}
+		f.moveTask(t, policy, left, false)
+		admission, err := f.admitRun(t, f.run, agentTestAt.Add(time.Minute))
+		switch {
+		case admits && err != nil:
+			t.Errorf("%s: a mark the revision orders was refused: %v", agent, err)
+		case !admits && (err == nil || !strings.Contains(err.Error(), "orders nothing the line passed over")):
+			t.Errorf("%s: a mark the revision does not order = %+v, %v; want refused", agent, admission.AgentBinding, err)
 		}
 	}
 }
@@ -357,18 +413,18 @@ func TestMoveRefusesATaskThatIsNotParked(t *testing.T) {
 	}
 }
 
-// TestMoveNamesTheAgentItLeft: a move's provenance names the refused
-// invocation's agent with the parked run's quota-window mark, but only while
-// the run holds that window and the policy orders the agent, which a line's
-// anchor requires of the agent it passed over.
-func TestMoveNamesTheAgentItLeft(t *testing.T) {
+// TestMoveNamesTheEnrollmentItLeft: a move's provenance names the refused
+// invocation's enrollment with the parked run's quota-window mark, but only
+// while the run holds that window and the policy orders the enrollment, which
+// a line's anchor requires of what it passed over.
+func TestMoveNamesTheEnrollmentItLeft(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseQuota)
-	ordered := f.setRoutingPolicy(t, agentTestAt, order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
-	unordered := f.setRoutingPolicy(t, agentTestAt.Add(time.Second), order(domain.RoleImplementer, agentTestSecondAgent))
+	ordered := f.setRoutingPolicy(t, agentTestAt, order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
+	unordered := f.setRoutingPolicy(t, agentTestAt.Add(time.Second), order(domain.RoleImplementer, agentTestSecondEnrollment))
 	left := func(policy domain.RoutingPolicy) *domain.TaskLinePassedOverMark {
 		var mark *domain.TaskLinePassedOverMark
 		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -399,14 +455,14 @@ func TestMoveNamesTheAgentItLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &domain.TaskLinePassedOverMark{
-		Agent: agentTestWriterAgent, Pool: routerMainPool, Window: "five_hour",
+		Enrollment: agentTestEnrollment, Pool: routerMainPool, Window: "five_hour",
 		Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: markedAt, ResetsAt: &resetsAt,
 	}
 	if got := left(ordered); !reflect.DeepEqual(got, want) {
 		t.Fatalf("passed over = %+v, want %+v", got, want)
 	}
 	if mark := left(unordered); mark != nil {
-		t.Fatalf("a policy that orders no failed agent named %+v", mark)
+		t.Fatalf("a policy that orders no failed enrollment named %+v", mark)
 	}
 }
 
@@ -450,7 +506,7 @@ func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
 	f.addSiblingAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseCredentialRevoked)
 	f.setRoutingPolicy(t, agentTestAt,
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSiblingAgent, agentTestSecondAgent))
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 	offers := f.offers(t, failure)
 	if len(offers) != 1 || offers[0].Enrollment != second.ID {
 		t.Fatalf("credential offers = %+v, want only %s", offers, second.ID)
@@ -504,10 +560,10 @@ func TestMoveRepinsTheRolesThePolicyOrders(t *testing.T) {
 	// specifier's.
 	f.recordCatalog(t, second.ID, "claude-implementer-test", "high")
 	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
-		order(domain.RoleSpecifier, agentTestSpecifierAgent, agentTestSecondAgent),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent),
-		order(domain.RoleRemediator, agentTestSecondAgent),
-		order(domain.RoleReviewer, agentTestWriterAgent))
+		order(domain.RoleSpecifier, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment),
+		order(domain.RoleRemediator, agentTestSecondEnrollment),
+		order(domain.RoleReviewer, agentTestEnrollment))
 	lines := f.moveTask(t, policy, nil, false)
 	want := domain.TaskLineSelection{EnrollmentID: second.ID, ModelID: "claude-implementer-test", Effort: "high"}
 	for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleRemediator} {
@@ -531,7 +587,7 @@ func TestMoveLineAnchorRefusesAnotherTuple(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	_, second := f.addSecondAgent(t)
 	policy := f.setRoutingPolicy(t, agentTestAt.Add(-time.Minute),
-		order(domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent))
+		order(domain.RoleImplementer, agentTestEnrollment, agentTestSecondEnrollment))
 	f.moveTask(t, policy, nil, false, domain.TaskLineInput{
 		Role:      domain.RoleRemediator,
 		Selection: &domain.TaskLineSelection{EnrollmentID: second.ID, ModelID: "claude-specifier-test", Effort: "high"},

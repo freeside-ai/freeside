@@ -1533,8 +1533,11 @@ func TestAuthAdoptSecondWriter(t *testing.T) {
 	}
 
 	checkout, commit := commitAdoptedPatch(t, patch)
-	order := "implementer=" + agentbaseline.WriterAgentName(domain.RoleImplementer) + "," +
-		agentbaseline.WriterAgentName(domain.RoleImplementer) + agentbaseline.SecondWriterAgentSuffix
+	// The policy orders the two writers' enrollments, which the agents name.
+	writer := agentbaseline.WriterAgentName(domain.RoleImplementer)
+	writerAgent, _ := tree.Agent(writer)
+	secondAgent, _ := tree.Agent(writer + agentbaseline.SecondWriterAgentSuffix)
+	order := "implementer=" + writerAgent.Enrollment + "," + secondAgent.Enrollment
 	output, err := runRouting(ctx, "set", "-db", f.dbPath, "-agent-tree", checkout, "-agent-tree-commit", commit,
 		"-order", order, "-drain-first", string(snap.identity(t, "claude-second").EffectiveUsagePool()))
 	if err != nil {

@@ -70,7 +70,7 @@ func wireLine(line domain.TaskLine) signet.TaskLine {
 	wire := signet.TaskLine{
 		ID: line.ID, TaskID: line.TaskID, Role: line.Role, Version: line.Version,
 		PredecessorID: line.PredecessorID, Source: line.Source, SetBy: line.SetBy, SetAt: line.SetAt,
-		Provenance: line.Provenance,
+		Provenance: line.Provenance.Wire(),
 	}
 	if line.Selection != nil {
 		wire.Selection = line.Selection

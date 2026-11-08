@@ -33,24 +33,36 @@ func (s RoutingPolicySource) valid() bool {
 	}
 }
 
-// RoutingPolicyRole is one role's agents: the router's candidates for the
-// role, whose pools it ranks by the drain-first account, then the soonest
-// known weekly reset, then this order (plan §5.4, revision 107). It stores
-// agent names only; the router reads each agent's pool through its
-// enrollment.
+// RoutingPolicyRole is one role's enrollments: the router's candidates for
+// the role, whose pools it ranks by the drain-first account, then the
+// soonest known weekly reset, then this order (plan §5.4, revision 107). A
+// router-sourced line runs the role's lineup model and effort on the chosen
+// enrollment (#2593).
+//
+// Agents is the form a revision took before enrollments (#2736): agent names
+// the router read each agent's enrollment through. A stored revision is
+// never rewritten, so a role decoded from one may still hold it; a role
+// holds exactly one of the two, and only Enrollments may start a new
+// revision (NewRoutingPolicy).
 type RoutingPolicyRole struct {
-	Role   RoleName `json:"role"`
-	Agents []string `json:"agents"`
+	Role        RoleName             `json:"role"`
+	Enrollments []ClientEnrollmentID `json:"enrollments,omitempty"`
+	Agents      []string             `json:"agents,omitempty"`
 }
+
+// AgentsForm reports whether the role holds the pre-enrollment agents form.
+func (r RoutingPolicyRole) AgentsForm() bool { return len(r.Agents) > 0 }
 
 // CanonicalRoutingPolicyRoles validates the roles' shape and returns a copy
 // in TaskLineRoles order, so one policy has one form whatever order it was
-// typed in. Whether each agent resolves in the committed tree is the setter's
-// question, asked against the tree it holds.
+// typed in. Whether each enrollment exists, and serves the role's lineup
+// model and effort, is the setter's question, asked against the store and
+// the tree it holds.
 //
 // As in ValidateTaskLineChoices, the error names the role by its position, and
-// by name once it is known to be eligible, and never carries the text that
-// failed a check: a credential pasted into either must not come back.
+// by name once it is known to be eligible, and an entry by its position, and
+// never carries the text that failed a check: a credential pasted into either
+// must not come back.
 func CanonicalRoutingPolicyRoles(roles []RoutingPolicyRole) ([]RoutingPolicyRole, error) {
 	if len(roles) == 0 {
 		return nil, ErrRoutingPolicyNoRoles
@@ -63,32 +75,53 @@ func CanonicalRoutingPolicyRoles(roles []RoutingPolicyRole) ([]RoutingPolicyRole
 		if _, seen := byRole[role.Role]; seen {
 			return nil, fmt.Errorf("routing policy role %d (%s): %w", i+1, role.Role, ErrRoutingPolicyRoleRepeated)
 		}
-		if len(role.Agents) == 0 {
-			return nil, fmt.Errorf("routing policy role %d (%s): %w", i+1, role.Role, ErrRoutingPolicyOrderEmpty)
-		}
-		for j, agent := range role.Agents {
-			if !validAgentName(agent) {
-				return nil, fmt.Errorf("routing policy role %d (%s) agent %d: %w", i+1, role.Role, j+1, ErrInvalidAgentName)
-			}
-			if slices.Contains(role.Agents[:j], agent) {
-				return nil, fmt.Errorf("routing policy role %d (%s) agent %d: %w",
-					i+1, role.Role, j+1, ErrRoutingPolicyAgentRepeated)
-			}
+		if err := validateRoutingPolicyOrder(role); err != nil {
+			return nil, fmt.Errorf("routing policy role %d (%s): %w", i+1, role.Role, err)
 		}
 		byRole[role.Role] = role
 	}
 	canonical := make([]RoutingPolicyRole, 0, len(roles))
 	for _, name := range TaskLineRoles {
 		if role, ok := byRole[name]; ok {
-			canonical = append(canonical, RoutingPolicyRole{Role: name, Agents: slices.Clone(role.Agents)})
+			canonical = append(canonical, RoutingPolicyRole{
+				Role: name, Enrollments: slices.Clone(role.Enrollments), Agents: slices.Clone(role.Agents),
+			})
 		}
 	}
 	return canonical, nil
 }
 
+// validateRoutingPolicyOrder checks one role's order: exactly one form, no
+// entry malformed or repeated. An entry is named by its position only.
+func validateRoutingPolicyOrder(role RoutingPolicyRole) error {
+	switch {
+	case len(role.Enrollments) == 0 && len(role.Agents) == 0:
+		return ErrRoutingPolicyOrderEmpty
+	case len(role.Enrollments) > 0 && len(role.Agents) > 0:
+		return ErrRoutingPolicyFormMixed
+	}
+	for j, enrollment := range role.Enrollments {
+		if enrollment == "" || !ValidLaunchOptionValue(string(enrollment)) {
+			return fmt.Errorf("enrollment %d: %w", j+1, ErrInvalidRoutingPolicyEnrollment)
+		}
+		if slices.Contains(role.Enrollments[:j], enrollment) {
+			return fmt.Errorf("enrollment %d: %w", j+1, ErrRoutingPolicyEnrollmentRepeated)
+		}
+	}
+	for j, agent := range role.Agents {
+		if !validAgentName(agent) {
+			return fmt.Errorf("agent %d: %w", j+1, ErrInvalidAgentName)
+		}
+		if slices.Contains(role.Agents[:j], agent) {
+			return fmt.Errorf("agent %d: %w", j+1, ErrRoutingPolicyAgentRepeated)
+		}
+	}
+	return nil
+}
+
 func sameRoutingPolicyRoles(a, b []RoutingPolicyRole) bool {
 	return slices.EqualFunc(a, b, func(x, y RoutingPolicyRole) bool {
-		return x.Role == y.Role && slices.Equal(x.Agents, y.Agents)
+		return x.Role == y.Role && slices.Equal(x.Enrollments, y.Enrollments) && slices.Equal(x.Agents, y.Agents)
 	})
 }
 
@@ -110,14 +143,14 @@ type RoutingPolicyInput struct {
 
 // RoutingPolicy is one revision of the deployment's routing policy (plan §5.4,
 // revisions 99, 103, and 107): the standing rule for which usage pool a new
-// task runs on, and so which agent takes it when the operator chose none for
-// the role. It orders agents the committed tree already carries and never adds
-// one; the orders are the router's candidates and its fallback order. A role
-// absent from it keeps lineup behaviour. The router ranks the candidates'
+// task runs on, and so which enrollment takes it when the operator chose none
+// for the role. It orders enrollments the store holds, each running the role's
+// lineup model and effort; the orders are the router's candidates and its
+// fallback order. A role absent from it keeps lineup behaviour. The router ranks the candidates'
 // pools drain-first account, then soonest known weekly reset, then the
 // order. A change is a new revision and a revision is never edited, so the
 // revision a task line cites (TaskLineProvenance.PolicyRevision) stays the
-// rule that chose its agent.
+// rule that chose its enrollment.
 type RoutingPolicy struct {
 	// Revision counts the deployment's policies from 1.
 	Revision int `json:"revision"`
@@ -127,24 +160,29 @@ type RoutingPolicy struct {
 	SetBy  string              `json:"set_by"`
 	SetAt  time.Time           `json:"set_at"`
 	// LineupRevision is the agent tree's revision (agenttree.Revision) the
-	// roles were validated against. A later tree may drop an agent, so the
-	// router must still resolve each one at admission.
+	// roles were validated against: its lineup gave each role's model and
+	// effort. A later tree may change them, so the router reads the lineup
+	// it holds at admission.
 	LineupRevision Digest `json:"lineup_revision"`
 	// DrainFirstAccount is the usage pool that takes every new task ahead of
-	// reset order, when the deciding role's order holds an agent on it; nil
-	// when the revision names none. The setter accepted it as the effective
-	// pool of an agent of the tree at LineupRevision; a later tree may move
-	// that agent, so the router still resolves pools at admission.
+	// reset order, when the deciding role's order holds an enrollment on it;
+	// nil when the revision names none. The setter accepted it as the
+	// effective pool of an ordered enrollment's identity; an identity's pool
+	// can move, so the router still resolves pools at admission.
 	DrainFirstAccount *UsagePoolID `json:"drain_first_account"`
 }
 
 // NewRoutingPolicy builds a validated revision in canonical form: the roles
 // are in TaskLineRoles order and detached from the input, and the timestamp is
-// normalized to UTC.
+// normalized to UTC. A new revision orders enrollments only; the agents form
+// is one a stored revision may hold, never one a change may write.
 func NewRoutingPolicy(in RoutingPolicyInput, revision int, setAt time.Time) (RoutingPolicy, error) {
 	roles, err := CanonicalRoutingPolicyRoles(in.Roles)
 	if err != nil {
 		return RoutingPolicy{}, err
+	}
+	if i := slices.IndexFunc(roles, RoutingPolicyRole.AgentsForm); i >= 0 {
+		return RoutingPolicy{}, fmt.Errorf("routing policy role %s: %w", roles[i].Role, ErrRoutingPolicyAgentsForm)
 	}
 	policy := RoutingPolicy{
 		Revision: revision, Roles: roles, Source: in.Source, SetBy: in.SetBy,
@@ -167,7 +205,7 @@ func (p RoutingPolicy) SameRule(roles []RoutingPolicyRole, drainFirst *UsagePool
 }
 
 // Validate reports whether the revision is well-formed. The store re-runs it
-// on every decode.
+// on every decode, so it accepts a role in either form.
 func (p RoutingPolicy) Validate() error {
 	if p.Revision < 1 {
 		return fmt.Errorf("routing policy revision %d: %w", p.Revision, ErrNonPositive)

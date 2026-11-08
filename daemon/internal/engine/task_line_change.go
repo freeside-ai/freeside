@@ -138,7 +138,10 @@ func ChangeTaskLineTx(
 	// supersede this head unchecked too, and admission reports the fault.
 	// With no tree, a router or move head that selects cannot be held to its
 	// policy (anchorLinePolicy), so asking for its selection records a change
-	// that backs it.
+	// that backs it. A v2 move record's line for its own role under a
+	// revision that orders enrollments is the exception: its anchor then
+	// reads nothing from the tree, so it holds or fails alike with any tree,
+	// and asking for its selection keeps it.
 	if req.sameLine(current) && (replaces == nil || anchorTaskLine(ctx, &tx.ReadTx, agenttree.Tree{}, *current) == nil) {
 		return TaskLineChangeResult{Line: current}, nil
 	}

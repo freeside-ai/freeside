@@ -234,14 +234,12 @@ func (s AgentSelection) MoveParkedTaskTx(
 	return domain.ParkedTaskMoveReceipt{ParkedTaskMoveRequest: request, Retry: record, Lines: lines}, nil
 }
 
-// movedPastMark names the agent a move leaves and the mark it was parked on:
-// the first agent, in tree order, that ran the refused invocation
-// (ranFailedBinding) and that the policy orders for some role, with the
-// parked run's hold's pool and mark. It is nil when the run holds no quota
-// window, when the tree no longer carries an agent that ran it, or when the
-// policy orders none of them for any role, since a line's anchor holds its
-// passed-over agent to the policy it cites. The mark still names a tree
-// agent (TaskLinePassedOverMark.Agent); #2736 or #2599 moves it.
+// movedPastMark names the enrollment a move leaves and the mark it was parked
+// on: the enrollment the refused invocation's admission bound
+// (failedBinding), with the parked run's hold's pool and mark. It is nil when
+// the run holds no quota window or when the policy orders that enrollment for
+// no role, since a move line's anchor holds what it passed over to the policy
+// it cites (anchorMovePolicy).
 func (s AgentSelection) movedPastMark(
 	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, runID domain.RunID,
 	refused domain.InvocationID,
@@ -254,31 +252,28 @@ func (s AgentSelection) movedPastMark(
 	if err != nil || !found {
 		return nil, err
 	}
-	index := slices.IndexFunc(s.Tree.Agents, func(source domain.AgentSource) bool {
-		return ranFailedBinding(s.Tree, source, binding) &&
-			slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
-				return slices.Contains(role.Agents, source.Name)
-			})
-	})
-	if index < 0 {
+	if !slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
+		return slices.Contains(roleOrder(s.Tree, policy, role.Role), binding.EnrollmentID)
+	}) {
 		return nil, nil
 	}
 	mark := hold.QuotaWindow
 	return &domain.TaskLinePassedOverMark{
-		Agent: s.Tree.Agents[index].Name, Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
+		Enrollment: binding.EnrollmentID, Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
 		MarkedAt: mark.SetAt.UTC(), ResetsAt: utcPtr(mark.ResetsAt),
 	}, nil
 }
 
 // moveLines derives a move's lines: the record's role to the record's
 // selection, then, in the policy's role order, each other role the policy
-// orders the record's enrollment for (orderedEnrollments) to the role's
-// lineup model and effort on that enrollment (plan §4, revision 106). It
+// orders the record's enrollment for (roleOrder) to the role's lineup model
+// and effort on that enrollment (plan §4, revision 106). It
 // skips a role whose newest line an operator set (or cleared), and a role
 // whose lineup tuple the enrollment does not serve (lineupServes), which
 // keeps its line. The provenance cites the policy in effect at the
-// policy-order tier on the record's pool, and names passedOver, the agent the
-// move left (movedPastMark), as the router names the agent it passed over.
+// policy-order tier on the record's pool, and names passedOver, the
+// enrollment the move left (movedPastMark), as the router names the
+// enrollment it passed over.
 //
 // An escalated specifier (its task's triage record escalated and its newest
 // line is the triage line or one with a provenance) moves to the escalated
@@ -342,7 +337,7 @@ func (s AgentSelection) movedRoleLines(
 	for _, role := range policy.Roles {
 		head, held := heads[role.Role]
 		if role.Role == record.Role || held && !head.Source.CarriesProvenance() && head.Source != domain.TaskLineSourceTriage ||
-			!slices.Contains(orderedEnrollments(s.Tree, policy, role.Role), enrollmentID) {
+			!slices.Contains(roleOrder(s.Tree, policy, role.Role), enrollmentID) {
 			continue
 		}
 		line, ok := lineup.Line(role.Role)

@@ -38,7 +38,9 @@ func receiptTaskLineOf(t *testing.T, task domain.TaskID, source domain.TaskLineS
 func receiptPolicy(t *testing.T, revision int) domain.RoutingPolicy {
 	t.Helper()
 	policy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
-		Roles:  []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"codex-primary", "claude-primary"}}},
+		Roles: []domain.RoutingPolicyRole{{
+			Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"codex-primary/codex", "claude-primary/claude_code"},
+		}},
 		Source: domain.RoutingPolicySourceClientSet, SetBy: "device:device-1",
 		LineupRevision: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 	}, revision, receiptAt)

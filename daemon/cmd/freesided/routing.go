@@ -49,18 +49,27 @@ func runRoutingCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 	return errors.New("unknown routing command (want set or show)")
 }
 
-// routingOrderFlag collects repeated -order role=agent1,agent2 values. It
-// checks only that form; the engine validates the set.
+// routingOrderFlag collects repeated -order role=enrollment1,enrollment2
+// values. It checks only that form; the engine validates the set. The ids
+// are comma-separated, so an id holding a comma cannot be ordered here, and
+// an empty one is refused rather than guessed at.
 type routingOrderFlag []domain.RoutingPolicyRole
 
 func (f *routingOrderFlag) String() string { return "" }
 
 func (f *routingOrderFlag) Set(value string) error {
-	role, agents, found := strings.Cut(value, "=")
-	if !found || role == "" || agents == "" {
-		return errors.New("want role=agent1,agent2")
+	role, list, found := strings.Cut(value, "=")
+	if !found || role == "" || list == "" {
+		return errors.New("want role=enrollment1,enrollment2")
 	}
-	*f = append(*f, domain.RoutingPolicyRole{Role: domain.RoleName(role), Agents: strings.Split(agents, ",")})
+	var enrollments []domain.ClientEnrollmentID
+	for id := range strings.SplitSeq(list, ",") {
+		if id == "" {
+			return errors.New("want role=enrollment1,enrollment2 with no empty enrollment id")
+		}
+		enrollments = append(enrollments, domain.ClientEnrollmentID(id))
+	}
+	*f = append(*f, domain.RoutingPolicyRole{Role: domain.RoleName(role), Enrollments: enrollments})
 	return nil
 }
 
@@ -81,8 +90,9 @@ type routingSetResult struct {
 	Policy   domain.RoutingPolicy `json:"policy"`
 }
 
-// runRoutingSetCommand records a new revision validated against the committed
-// tree at -agent-tree-commit. A running daemon runs it from its forwarded
+// runRoutingSetCommand records a new revision validated against the store's
+// enrollments and the lineup of the committed tree at -agent-tree-commit,
+// which gives each ordered role the model and effort its enrollments run. A running daemon runs it from its forwarded
 // args, so the daemon's process reads the tree and the record names its
 // account, which the control socket's peer check makes the caller's.
 func runRoutingSetCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
@@ -133,9 +143,11 @@ func parseRoutingSetConfig(args []string, output io.Writer) (routingSetConfig, e
 	flags.StringVar(&cfg.AgentTreeCheckout, "agent-tree", "",
 		"absolute path of a local checkout holding the admitted-agent tree under policy/ (required)")
 	flags.StringVar(&cfg.AgentTreeCommit, "agent-tree-commit", "", "exact commit of -agent-tree whose tree is read (required)")
-	flags.Var(&cfg.Orders, "order", "role=agent1,agent2: the role's agents in fallback order; repeat per role (required)")
+	flags.Var(&cfg.Orders, "order",
+		"role=enrollment1,enrollment2: the role's enrollment ids in fallback order, each run on the role's "+
+			"lineup model and effort; repeat per role (required)")
 	flags.StringVar(&cfg.DrainFirst, "drain-first", "",
-		"usage pool that takes every new task ahead of reset order; an agent of the tree must be on it "+
+		"usage pool that takes every new task ahead of reset order; an ordered enrollment's identity must be on it "+
 			"(optional; omitting it clears the current account)")
 	if err := flags.Parse(args); err != nil {
 		return routingSetConfig{}, err

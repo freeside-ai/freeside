@@ -1,5 +1,5 @@
 {
-  "id": "sha256:b9ad6468eee7da1cc0402b564144d4f4abf5ce1a9825628c1b20dfd0744ce4d2",
+  "id": "sha256:2297dbe37b11ab6d7fca412a582835e799784082c648e8980e459c81014f0719",
   "encoding": "freeside.task_line/v2",
   "task_id": "task-1",
   "role": "implementer",
@@ -9,7 +9,7 @@
     "effort": "medium"
   },
   "version": 2,
-  "predecessor_id": "sha256:367f4330991e7401270c9a1a956adac2adc48bb7d2e33904467f188945c35061",
+  "predecessor_id": "sha256:15acbdaa8cbf8975fa683b32d63b344101e32dc46ceb0745b02e46945ba3ebf6",
   "source": "alternate_agent_move",
   "set_by": "sha256:a522335cbe5b428841b0e8c9bfffc0a34067c0e2fd73db986640b2c90eaf6683",
   "set_at": "2026-01-02T03:04:05Z",
@@ -19,7 +19,7 @@
     "pool": "claude-max-b",
     "ranked_by": [],
     "passed_over": {
-      "agent": "claude-a",
+      "enrollment": "claude-max-a",
       "pool": "claude-max-a",
       "window": "seven_day_opus",
       "source": "provider_refusal",

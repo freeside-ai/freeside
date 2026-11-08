@@ -93,9 +93,9 @@ type UsageWindowReading struct {
 // its own, so AsOfRevision is the snapshot's; EntityVersion is the policy
 // revision, which every change advances.
 type RoutingPolicySnapshot struct {
-	AsOfRevision  int64                `json:"as_of_revision"`
-	EntityVersion int64                `json:"entity_version"`
-	Policy        domain.RoutingPolicy `json:"policy"`
+	AsOfRevision  int64             `json:"as_of_revision"`
+	EntityVersion int64             `json:"entity_version"`
+	Policy        RoutingPolicyWire `json:"policy"`
 }
 
 // usagePoolSnapshots projects every pool, in pool id order.
@@ -238,9 +238,10 @@ func usageWindowReading(reading domain.WindowReading, refreshAge time.Duration) 
 }
 
 // currentRoutingPolicySnapshot projects the current routing policy revision,
-// nil when none was ever set.
+// nil when none was ever set, its orders rendered against catalog
+// (renderRoutingPolicy).
 func currentRoutingPolicySnapshot(
-	ctx context.Context, tx *store.ReadTx, state store.ServerState,
+	ctx context.Context, tx *store.ReadTx, state store.ServerState, catalog *AgentCatalog,
 ) (*RoutingPolicySnapshot, error) {
 	policy, err := tx.CurrentRoutingPolicy(ctx)
 	if errors.Is(err, store.ErrNotFound) {
@@ -250,6 +251,7 @@ func currentRoutingPolicySnapshot(
 		return nil, fmt.Errorf("routing policy: %w", err)
 	}
 	return &RoutingPolicySnapshot{
-		AsOfRevision: state.Revision, EntityVersion: int64(policy.Revision), Policy: policy,
+		AsOfRevision: state.Revision, EntityVersion: int64(policy.Revision),
+		Policy: renderRoutingPolicy(policy, catalog),
 	}, nil
 }

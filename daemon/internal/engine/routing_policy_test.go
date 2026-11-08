@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,27 +11,36 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 var (
-	routingPolicyTree = agenttree.Tree{Agents: []domain.AgentSource{
-		{Name: "claude-a"}, {Name: "claude-b"}, {Name: "codex"},
-	}}
 	routingPolicyTreeRevision = domain.Digest("sha256:" + strings.Repeat("a", 64))
 	routingPolicyAt           = time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
 )
 
-func routingPolicyRequest(agents ...string) SetRoutingPolicyRequest {
+func routingPolicyRequest(enrollments ...domain.ClientEnrollmentID) SetRoutingPolicyRequest {
 	return SetRoutingPolicyRequest{
-		Roles:  []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: agents}},
+		Roles:  []domain.RoutingPolicyRole{order(domain.RoleImplementer, enrollments...)},
 		Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator",
 	}
 }
 
-func setRoutingPolicy(t *testing.T, st *store.Store, revision domain.Digest, req SetRoutingPolicyRequest) SetRoutingPolicyResult {
+// newRoutingPolicyFixture is the admission fixture with a second enrollment,
+// on its own identity and pool, beside the main one.
+func newRoutingPolicyFixture(t *testing.T) *agentAdmissionFixture {
 	t.Helper()
-	result, err := SetRoutingPolicy(context.Background(), st, routingPolicyTree, revision, req, routingPolicyAt)
+	f := newAgentAdmissionFixture(t)
+	f.addSecondAgent(t)
+	return f
+}
+
+func (f *agentAdmissionFixture) setPolicy(req SetRoutingPolicyRequest) (SetRoutingPolicyResult, error) {
+	return SetRoutingPolicy(context.Background(), f.store, f.selection.Tree, routingPolicyTreeRevision, req, routingPolicyAt)
+}
+
+func setRoutingPolicy(t *testing.T, f *agentAdmissionFixture, req SetRoutingPolicyRequest) SetRoutingPolicyResult {
+	t.Helper()
+	result, err := f.setPolicy(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,145 +68,197 @@ func routingPolicyState(t *testing.T, st *store.Store) ([]domain.RoutingPolicy, 
 	return revisions, server
 }
 
-func TestSetRoutingPolicyRefusesAnAgentTheTreeLacks(t *testing.T) {
+// Each refusal writes nothing and names the role and the entry's position,
+// never the enrollment, which is request text.
+func TestSetRoutingPolicyRefusesAnEnrollmentThatCannotRoute(t *testing.T) {
 	t.Parallel()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
-	_, err := SetRoutingPolicy(context.Background(), st, routingPolicyTree, routingPolicyTreeRevision,
-		routingPolicyRequest("claude-a", "not-in-tree"), routingPolicyAt)
-	if !errors.Is(err, domain.ErrRoutingPolicyAgentUnknown) {
-		t.Fatalf("set = %v, want %v", err, domain.ErrRoutingPolicyAgentUnknown)
+	for name, tc := range map[string]struct {
+		change func(t *testing.T, f *agentAdmissionFixture)
+		order  []domain.ClientEnrollmentID
+		want   error
+	}{
+		"unknown": {
+			order: []domain.ClientEnrollmentID{agentTestEnrollment, agentTestPastedName},
+			want:  domain.ErrRoutingPolicyEnrollmentUnknown,
+		},
+		"disabled identity": {
+			change: func(t *testing.T, f *agentAdmissionFixture) {
+				identity := f.identity
+				identity.Enabled = false
+				if err := f.store.Write(context.Background(), func(tx *store.WriteTx) error {
+					return tx.RecordAuthIdentity(context.Background(), identity, agentTestAt)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			order: []domain.ClientEnrollmentID{agentTestSecondEnrollment, agentTestEnrollment},
+			want:  domain.ErrRoutingPolicyEnrollmentDisabled,
+		},
+		"catalog lacks the lineup model": {
+			change: func(t *testing.T, f *agentAdmissionFixture) {
+				f.recordCatalog(t, agentTestEnrollment, "claude-other-test", "high")
+			},
+			order: []domain.ClientEnrollmentID{agentTestSecondEnrollment, agentTestEnrollment},
+			want:  domain.ErrRoutingPolicyEnrollmentUnserved,
+		},
+		"catalog lacks the lineup effort": {
+			change: func(t *testing.T, f *agentAdmissionFixture) {
+				f.recordCatalog(t, agentTestEnrollment, "claude-implementer-test", "low")
+			},
+			order: []domain.ClientEnrollmentID{agentTestSecondEnrollment, agentTestEnrollment},
+			want:  domain.ErrRoutingPolicyEnrollmentUnserved,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newRoutingPolicyFixture(t)
+			if tc.change != nil {
+				tc.change(t, f)
+			}
+			_, err := f.setPolicy(routingPolicyRequest(tc.order...))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("set = %v, want %v", err, tc.want)
+			}
+			if !strings.Contains(err.Error(), "role implementer enrollment 2") {
+				t.Fatalf("refusal names neither the role nor the position: %v", err)
+			}
+			if strings.Contains(err.Error(), string(tc.order[1])) {
+				t.Fatalf("refusal repeats the enrollment: %v", err)
+			}
+			if revisions, _ := routingPolicyState(t, f.store); len(revisions) != 0 {
+				t.Fatalf("revisions after a refusal = %+v", revisions)
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), string(domain.RoleImplementer)) || !strings.Contains(err.Error(), "not-in-tree") {
-		t.Fatalf("refusal names neither the role nor the agent: %v", err)
+}
+
+// An enrollment whose catalog serves the lineup's model and effort is
+// accepted, as is one with no catalog recorded.
+func TestSetRoutingPolicyAcceptsAServedOrUncataloguedEnrollment(t *testing.T) {
+	t.Parallel()
+	f := newRoutingPolicyFixture(t)
+	f.recordCatalog(t, agentTestEnrollment, "claude-implementer-test", "high")
+	result := setRoutingPolicy(t, f, routingPolicyRequest(agentTestEnrollment, agentTestSecondEnrollment))
+	if !result.Recorded || !slices.Equal(result.Policy.Roles[0].Enrollments,
+		[]domain.ClientEnrollmentID{agentTestEnrollment, agentTestSecondEnrollment}) {
+		t.Fatalf("set = %+v", result)
 	}
-	if revisions, _ := routingPolicyState(t, st); len(revisions) != 0 {
+}
+
+// A role the lineup leaves unbound has no model and effort to route on, and
+// a new revision is never written in the pre-unit agents form.
+func TestSetRoutingPolicyRefusesARoleItCannotRoute(t *testing.T) {
+	t.Parallel()
+	f := newRoutingPolicyFixture(t)
+	unbound := f.selection.Tree
+	unbound.Lineup = slices.DeleteFunc(slices.Clone(unbound.Lineup), func(line agenttree.LineupLine) bool {
+		return line.Key == string(domain.RoleImplementer)
+	})
+	_, err := SetRoutingPolicy(context.Background(), f.store, unbound, routingPolicyTreeRevision,
+		routingPolicyRequest(agentTestEnrollment), routingPolicyAt)
+	if !errors.Is(err, domain.ErrRoutingPolicyRoleUnbound) {
+		t.Fatalf("unbound role: set = %v, want %v", err, domain.ErrRoutingPolicyRoleUnbound)
+	}
+	agents := SetRoutingPolicyRequest{
+		Roles:  []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{agentTestWriterAgent}}},
+		Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator",
+	}
+	if _, err := f.setPolicy(agents); !errors.Is(err, domain.ErrRoutingPolicyAgentsForm) {
+		t.Fatalf("agents form: set = %v, want %v", err, domain.ErrRoutingPolicyAgentsForm)
+	}
+	if revisions, _ := routingPolicyState(t, f.store); len(revisions) != 0 {
 		t.Fatalf("revisions after a refusal = %+v", revisions)
 	}
 }
 
 func TestSetRoutingPolicyRefusesAShapeBeforeTheStore(t *testing.T) {
 	t.Parallel()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
-	if err := st.Close(); err != nil {
+	f := newAgentAdmissionFixture(t)
+	if err := f.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err := SetRoutingPolicy(context.Background(), st, routingPolicyTree, routingPolicyTreeRevision,
-		routingPolicyRequest("claude-a", "claude-a"), routingPolicyAt)
-	if !errors.Is(err, domain.ErrRoutingPolicyAgentRepeated) {
-		t.Fatalf("set = %v, want %v", err, domain.ErrRoutingPolicyAgentRepeated)
+	_, err := f.setPolicy(routingPolicyRequest(agentTestEnrollment, agentTestEnrollment))
+	if !errors.Is(err, domain.ErrRoutingPolicyEnrollmentRepeated) {
+		t.Fatalf("set = %v, want %v", err, domain.ErrRoutingPolicyEnrollmentRepeated)
 	}
 }
 
 func TestSetRoutingPolicyRecordsAChangedOrderOnly(t *testing.T) {
 	t.Parallel()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
+	f := newRoutingPolicyFixture(t)
+	ctx := context.Background()
 
-	first := setRoutingPolicy(t, st, routingPolicyTreeRevision, routingPolicyRequest("claude-a", "claude-b"))
+	first := setRoutingPolicy(t, f, routingPolicyRequest(agentTestEnrollment, agentTestSecondEnrollment))
 	if !first.Recorded || first.Policy.Revision != 1 || first.Policy.LineupRevision != routingPolicyTreeRevision {
 		t.Fatalf("first set = %+v", first)
 	}
-	_, server := routingPolicyState(t, st)
+	_, server := routingPolicyState(t, f.store)
 
 	// The same orders against a newer tree record nothing and move no
 	// revision, and the result is still the current one.
 	newer := domain.Digest("sha256:" + strings.Repeat("b", 64))
-	repeat := setRoutingPolicy(t, st, newer, routingPolicyRequest("claude-a", "claude-b"))
+	repeat, err := SetRoutingPolicy(ctx, f.store, f.selection.Tree, newer,
+		routingPolicyRequest(agentTestEnrollment, agentTestSecondEnrollment), routingPolicyAt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if repeat.Recorded || repeat.Policy.Revision != 1 || repeat.Policy.LineupRevision != routingPolicyTreeRevision {
 		t.Fatalf("repeat = %+v", repeat)
 	}
-	if revisions, after := routingPolicyState(t, st); len(revisions) != 1 || after != server {
+	if revisions, after := routingPolicyState(t, f.store); len(revisions) != 1 || after != server {
 		t.Fatalf("repeat wrote: %d revisions, server revision %d to %d", len(revisions), server, after)
 	}
 
-	changed := setRoutingPolicy(t, st, newer, routingPolicyRequest("claude-b", "claude-a"))
+	changed, err := SetRoutingPolicy(ctx, f.store, f.selection.Tree, newer,
+		routingPolicyRequest(agentTestSecondEnrollment, agentTestEnrollment), routingPolicyAt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !changed.Recorded || changed.Policy.Revision != 2 || changed.Policy.LineupRevision != newer {
 		t.Fatalf("changed = %+v", changed)
 	}
-	if revisions, after := routingPolicyState(t, st); len(revisions) != 2 || after != server+1 {
+	if revisions, after := routingPolicyState(t, f.store); len(revisions) != 2 || after != server+1 {
 		t.Fatalf("change: %d revisions, server revision %d to %d", len(revisions), server, after)
 	}
 }
 
-// TestSetRoutingPolicyChecksATreeThatDroppedTheAgent: a repeat is still
-// checked, so it cannot report as current a policy this tree refuses.
-func TestSetRoutingPolicyChecksATreeThatDroppedTheAgent(t *testing.T) {
+// TestSetRoutingPolicyChecksARepeat: a repeat is still checked, so it cannot
+// report as current a policy whose enrollment no longer qualifies.
+func TestSetRoutingPolicyChecksARepeat(t *testing.T) {
 	t.Parallel()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
-	setRoutingPolicy(t, st, routingPolicyTreeRevision, routingPolicyRequest("claude-a", "codex"))
-	smaller := agenttree.Tree{Agents: []domain.AgentSource{{Name: "claude-a"}}}
-	_, err := SetRoutingPolicy(context.Background(), st, smaller, routingPolicyTreeRevision,
-		routingPolicyRequest("claude-a", "codex"), routingPolicyAt)
-	if !errors.Is(err, domain.ErrRoutingPolicyAgentUnknown) {
-		t.Fatalf("set = %v, want %v", err, domain.ErrRoutingPolicyAgentUnknown)
+	f := newRoutingPolicyFixture(t)
+	setRoutingPolicy(t, f, routingPolicyRequest(agentTestSecondEnrollment, agentTestEnrollment))
+	f.recordCatalog(t, agentTestEnrollment, "claude-other-test", "high")
+	if _, err := f.setPolicy(routingPolicyRequest(agentTestSecondEnrollment, agentTestEnrollment)); !errors.Is(err, domain.ErrRoutingPolicyEnrollmentUnserved) {
+		t.Fatalf("set = %v, want %v", err, domain.ErrRoutingPolicyEnrollmentUnserved)
 	}
-}
-
-// seedRoutingPolicyPools gives claude-a an enrollment on pool-a and claude-b
-// one on pool-b, and returns the tree naming them; codex keeps no enrollment.
-func seedRoutingPolicyPools(t *testing.T, st *store.Store) agenttree.Tree {
-	t.Helper()
-	ctx := context.Background()
-	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		for _, seed := range []struct{ agent, pool string }{{"claude-a", "pool-a"}, {"claude-b", "pool-b"}} {
-			identity := domain.AuthIdentity{
-				ID: domain.AuthIdentityID("auth-" + seed.agent), Provider: "openai",
-				AccountBinding: "acct-" + seed.agent, UsagePool: seed.pool,
-				AuthStoreMutationLease: true, Enabled: true,
-			}
-			if err := storetest.RecordIdentityOnPool(ctx, tx, identity, 1, routingPolicyAt.Add(-time.Hour)); err != nil {
-				return err
-			}
-			if err := tx.RecordClientEnrollment(ctx, domain.ClientEnrollment{
-				ID: domain.ClientEnrollmentID("enrollment-" + seed.agent), AuthIdentityID: identity.ID,
-				HarnessClient: domain.HarnessClientCodexCLI, Route: "openai_chatgpt_codex",
-				AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
-				RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
-				AccountBinding: identity.AccountBinding,
-			}, routingPolicyAt.Add(-time.Hour)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return agenttree.Tree{Agents: []domain.AgentSource{
-		{Name: "claude-a", Enrollment: "enrollment-claude-a"},
-		{Name: "claude-b", Enrollment: "enrollment-claude-b"},
-		{Name: "codex", Enrollment: "enrollment-codex"},
-	}}
 }
 
 // TestSetRoutingPolicyRecordsADrainFirstAccount: the account is part of the
 // rule, so naming, repeating, and clearing it behave like a change of order.
 func TestSetRoutingPolicyRecordsADrainFirstAccount(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
-	tree := seedRoutingPolicyPools(t, st)
+	f := newRoutingPolicyFixture(t)
 	set := func(account *domain.UsagePoolID) SetRoutingPolicyResult {
 		t.Helper()
-		req := routingPolicyRequest("claude-a", "claude-b")
+		req := routingPolicyRequest(agentTestEnrollment, agentTestSecondEnrollment)
 		req.DrainFirstAccount = account
-		result, err := SetRoutingPolicy(ctx, st, tree, routingPolicyTreeRevision, req, routingPolicyAt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return result
+		return setRoutingPolicy(t, f, req)
 	}
 
 	set(nil)
-	// The account is claude-b's pool, though claude-b is second in the order.
-	named := set(new(domain.UsagePoolID("pool-b")))
+	// The account is the second enrollment's pool, though it is second in
+	// the order.
+	named := set(new(routerSecondPool))
 	if !named.Recorded || named.Policy.Revision != 2 || named.Policy.DrainFirstAccount == nil ||
-		*named.Policy.DrainFirstAccount != "pool-b" {
+		*named.Policy.DrainFirstAccount != routerSecondPool {
 		t.Fatalf("named = %+v", named)
 	}
-	_, server := routingPolicyState(t, st)
-	if repeat := set(new(domain.UsagePoolID("pool-b"))); repeat.Recorded || repeat.Policy.Revision != 2 {
+	_, server := routingPolicyState(t, f.store)
+	if repeat := set(new(routerSecondPool)); repeat.Recorded || repeat.Policy.Revision != 2 {
 		t.Fatalf("repeat = %+v", repeat)
 	}
-	if revisions, after := routingPolicyState(t, st); len(revisions) != 2 || after != server {
+	if revisions, after := routingPolicyState(t, f.store); len(revisions) != 2 || after != server {
 		t.Fatalf("repeat wrote: %d revisions, server revision %d to %d", len(revisions), server, after)
 	}
 	cleared := set(nil)
@@ -206,26 +267,20 @@ func TestSetRoutingPolicyRecordsADrainFirstAccount(t *testing.T) {
 	}
 }
 
-// TestSetRoutingPolicyRefusesAnUnknownDrainFirstAccount: an account no tree
-// agent's identity meters is refused and writes nothing, whether it names no
-// pool or a pool only an agent outside the tree is on.
+// TestSetRoutingPolicyRefusesAnUnknownDrainFirstAccount: an account no
+// ordered enrollment's identity meters is refused and writes nothing,
+// whether it names no pool or a pool only an unordered enrollment is on.
 func TestSetRoutingPolicyRefusesAnUnknownDrainFirstAccount(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
-	tree := seedRoutingPolicyPools(t, st)
-	onlyA := agenttree.Tree{Agents: tree.Agents[:1]}
-	for name, tc := range map[string]struct {
-		tree    agenttree.Tree
-		account domain.UsagePoolID
-	}{
-		"no such pool":        {tree, "SECRET-TOKEN"},
-		"empty":               {tree, ""},
-		"agent left the tree": {onlyA, "pool-b"},
+	f := newRoutingPolicyFixture(t)
+	for name, account := range map[string]domain.UsagePoolID{
+		"no such pool":         "SECRET-TOKEN",
+		"empty":                "",
+		"unordered enrollment": routerSecondPool,
 	} {
-		req := routingPolicyRequest("claude-a")
-		req.DrainFirstAccount = &tc.account
-		_, err := SetRoutingPolicy(ctx, st, tc.tree, routingPolicyTreeRevision, req, routingPolicyAt)
+		req := routingPolicyRequest(agentTestEnrollment)
+		req.DrainFirstAccount = &account
+		_, err := f.setPolicy(req)
 		if !errors.Is(err, domain.ErrRoutingPolicyDrainFirstUnknown) {
 			t.Errorf("%s: set = %v, want %v", name, err, domain.ErrRoutingPolicyDrainFirstUnknown)
 		}
@@ -233,7 +288,7 @@ func TestSetRoutingPolicyRefusesAnUnknownDrainFirstAccount(t *testing.T) {
 			t.Errorf("%s: the error repeats the refused text: %v", name, err)
 		}
 	}
-	if revisions, _ := routingPolicyState(t, st); len(revisions) != 0 {
+	if revisions, _ := routingPolicyState(t, f.store); len(revisions) != 0 {
 		t.Fatalf("a refusal wrote %d revisions", len(revisions))
 	}
 }

@@ -268,10 +268,10 @@ func (e *Engine) requireQuotaWindowReset(
 }
 
 // implementerMovedOffPool reports whether the run's current implementer line
-// selects a credential on a pool other than refused (linePool). No selection,
-// no line, a line that fails its anchor, or a selection that no longer
-// resolves reports false: the park holds, and admission refuses a bad line when the
-// window resets.
+// runs a selection that resolves to a pool other than refused (lineRoute). No
+// selection, no line, a line that fails its anchor, or a selection that no
+// longer resolves reports false: the park holds, and admission refuses a bad
+// line when the window resets.
 func implementerMovedOffPool(
 	ctx context.Context, tx *store.ReadTx, selection *AgentSelection, runID domain.RunID, refused domain.UsagePoolID,
 ) (bool, error) {
@@ -282,11 +282,11 @@ func implementerMovedOffPool(
 	if err != nil || !found {
 		return false, nil
 	}
-	pool, _, ok, err := selection.linePool(ctx, tx, line)
+	candidate, ok, err := lineRoute(ctx, tx, selection.Tree, line)
 	if err != nil || !ok {
 		return false, err
 	}
-	return pool != refused, nil
+	return candidate.pool != refused, nil
 }
 
 // agentSelection is the engine's agent selection, nil when it admits under
