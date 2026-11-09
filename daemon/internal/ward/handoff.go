@@ -954,51 +954,33 @@ func (b *Backend) observeCredentialProof(
 	case credObserverTokenRead:
 		spec.Command = credTokenReadObserverCommand(b.cfg, st.ownershipLabel.Value, hs.leasedCredentialTarget())
 	}
-	claim.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return fail(failw(CheckAuthStoreMutationLease, err, "create credential observer container from image %s: %v", spec.Image, err))
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, name)
+	var proof credProof
+	var token SetupToken
+	// The label carries the image, which the create reason has always named.
+	err := b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "credential observer container from image " + spec.Image, claim: claim,
+		owner: st.ownershipLabel, check: CheckAuthStoreMutationLease, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifyCredentialObserverAllowlist(rep, spec)
+		},
+		readProof: func(ctx context.Context) ([]byte, error) {
+			var err error
+			proof, token, err = b.readCredProof(
+				ctx,
+				hs.RunID,
+				name,
+				st,
+				hs.leasedCredentialManifest(),
+				observer,
+			)
+			return nil, err
+		},
+	})
 	if err != nil {
-		return fail(failw(CheckAuthStoreMutationLease, err, "inspect credential observer before execution: %v", err))
-	}
-	if err := verifyCredentialObserverAllowlist(rep, spec); err != nil {
+		// Never the captured proof or token: a failed observation returns
+		// neither, even when the read succeeded before the delete failed.
 		return fail(err)
 	}
-	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
-	if err != nil {
-		return fail(failw(CheckAuthStoreMutationLease, err, "credential observer container %q: %v", name, err))
-	}
-	if err := b.rt.StartContainer(ctx, name); err != nil {
-		return fail(failw(CheckAuthStoreMutationLease, err, "start credential observer container: %v", err))
-	}
-	if err := b.waitStopped(ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return fail(failw(CheckAuthStoreMutationLease, err, "credential observer: %v", err))
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, name); err != nil {
-		return fail(err)
-	}
-
-	proof, token, err := b.readCredProof(
-		ctx,
-		hs.RunID,
-		name,
-		st,
-		hs.leasedCredentialManifest(),
-		observer,
-	)
-	if err != nil {
-		return fail(err)
-	}
-
-	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return fail(failw(CheckAuthStoreMutationLease, err, "delete stopped credential observer: %v", err))
-	}
-	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckAuthStoreMutationLease); err != nil {
-		return fail(err)
-	}
-	*claim = objectClaim{}
 	return proof, token, nil
 }
 

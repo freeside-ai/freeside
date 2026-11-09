@@ -934,59 +934,28 @@ func (b runtimeOps) seedWorkspace(
 	if hooks.seederCommand != nil {
 		spec.Command = hooks.seederCommand(seedCfg)
 	}
-	st.seeder.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckWorkspaceSeeding, err, "create seeder container: %v", err)
-	}
-	st.seeder.owned = true
-	rep, err := b.rt.Inspect(ctx, names.Seeder)
-	if err != nil {
-		return failw(CheckWorkspaceSeeding, err, "inspect seeder before execution: %v", err)
-	}
-	// The fingerprint is captured only after the allowlist verified the
-	// report's identity, as for the agent and exporter: a fingerprint bound to
-	// the wrong object would make cleanup misclassify this run's own seeder.
-	if err := verifySeedRoleAllowlist(
-		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckWorkspaceSeeding,
-	); err != nil {
-		return err
-	}
-	st.seeder.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
-	if err != nil {
-		return failw(CheckWorkspaceSeeding, err, "seeder container %q: %v", names.Seeder, err)
-	}
-	if err := b.rt.StartContainer(ctx, names.Seeder); err != nil {
-		return failw(CheckWorkspaceSeeding, err, "start seeder container: %v", err)
-	}
-
 	// Each copy is bounded on its own so a wedged transfer cannot consume the
 	// whole handoff budget while the seeder holds the workspace read-write.
 	copyIntoSeeder := b.copyIntoSeeder
 	if hooks.copyIntoSeeder != nil {
 		copyIntoSeeder = hooks.copyIntoSeeder
 	}
-	if err := copyIntoSeeder(ctx, names.Seeder, source, b.cfg.SeedStageDir); err != nil {
-		return err
-	}
-	// Ordering signal, sent only after the staged tree is complete.
-	if err := copyIntoSeeder(ctx, names.Seeder, readyDir, b.cfg.SeedReadyDir); err != nil {
-		return err
-	}
-
-	if err := b.waitStopped(ctx, names.Seeder, st.seeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return failw(CheckWorkspaceSeeding, err, "seeder: %v", err)
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Seeder); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, names.Seeder); err != nil {
-		return failw(CheckWorkspaceSeeding, err, "delete stopped seeder: %v", err)
-	}
-	if err := b.verifyContainerAbsent(ctx, names.Seeder, st.seeder, st.ownershipLabel, CheckWorkspaceSeeding); err != nil {
-		return err
-	}
-	st.seeder = objectClaim{}
-	return nil
+	return b.runHelperRole(ctx, helperRole{
+		spec: spec, label: "seeder container", claim: &st.seeder, owner: st.ownershipLabel,
+		check: CheckWorkspaceSeeding, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(
+				rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckWorkspaceSeeding,
+			)
+		},
+		afterStart: func(ctx context.Context) error {
+			if err := copyIntoSeeder(ctx, names.Seeder, source, b.cfg.SeedStageDir); err != nil {
+				return err
+			}
+			// Ordering signal, sent only after the staged tree is complete.
+			return copyIntoSeeder(ctx, names.Seeder, readyDir, b.cfg.SeedReadyDir)
+		},
+	})
 }
 
 // observeSeededBase reads the base the workspace actually holds and checks it
@@ -1009,51 +978,30 @@ func (b runtimeOps) observeSeededBase(
 		return "", nil
 	}
 	spec := buildObserverSpec(b.cfg.seedConfig(), hs, names, st.ownershipLabel)
-	st.observer.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return "", failw(CheckObservedBaseIdentity, err, "create base observer container: %v", err)
-	}
-	st.observer.owned = true
-	rep, err := b.rt.Inspect(ctx, names.Observer)
-	if err != nil {
-		return "", failw(CheckObservedBaseIdentity, err, "inspect base observer before execution: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(
-		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckObservedBaseIdentity,
-	); err != nil {
-		return "", err
-	}
-	st.observer.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
-	if err != nil {
-		return "", failw(CheckObservedBaseIdentity, err, "base observer container %q: %v", names.Observer, err)
-	}
-	if err := b.rt.StartContainer(ctx, names.Observer); err != nil {
-		return "", failw(CheckObservedBaseIdentity, err, "start base observer container: %v", err)
-	}
-	if err := b.waitStopped(ctx, names.Observer, st.observer, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return "", failw(CheckObservedBaseIdentity, err, "base observer: %v", err)
-	}
-	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Observer); err != nil {
-		return "", err
-	}
-
 	readBaseProof := b.readBaseProof
 	if hooks.readBaseProof != nil {
 		readBaseProof = hooks.readBaseProof
 	}
-	observed, err := readBaseProof(ctx, hs.RunID, names.Observer, st)
-	if err != nil {
+	var observed string
+	if err := b.runHelperRole(ctx, helperRole{
+		spec: spec, label: "base observer container", claim: &st.observer, owner: st.ownershipLabel,
+		check: CheckObservedBaseIdentity, class: hs.Class, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(
+				rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckObservedBaseIdentity,
+			)
+		},
+		readProof: func(ctx context.Context) ([]byte, error) {
+			var err error
+			observed, err = readBaseProof(ctx, hs.RunID, names.Observer, st)
+			return nil, err
+		},
+	}); err != nil {
 		return "", err
 	}
 
-	if err := b.rt.DeleteContainer(ctx, names.Observer); err != nil {
-		return "", failw(CheckObservedBaseIdentity, err, "delete stopped base observer: %v", err)
-	}
-	if err := b.verifyContainerAbsent(ctx, names.Observer, st.observer, st.ownershipLabel, CheckObservedBaseIdentity); err != nil {
-		return "", err
-	}
-	st.observer = objectClaim{}
-
+	// The comparison runs only after the observer is proven absent, so a
+	// mismatch leaves nothing of this role for teardown.
 	if observed != hs.Seed.Base.BaseSHA {
 		// Categorical: the observed value comes from an archive nothing has
 		// scanned, so neither side of the comparison is echoed.
