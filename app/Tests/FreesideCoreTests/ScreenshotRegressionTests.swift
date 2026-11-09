@@ -3613,7 +3613,8 @@
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
                 contractDigest: "sha256:" + String(repeating: "a", count: 64))
             let panelActions = DaemonMenuPanel.Actions(
-                openApp: {}, showNeedsYou: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {})
+                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, start: {}, stop: {},
+                openApprovalSettings: {}, quit: {})
             surfaces.append(
                 Surface(
                     name: "menu-panel-running",
@@ -3640,6 +3641,25 @@
                             unattendedStopped:
                                 "Unattended operation is stopped by operator decision.",
                             actions: panelActions))))
+            // Open findings (#2921): the System Health line after Show Needs
+            // You with the pane's open count, here beside the stop a
+            // blocking finding raised.
+            for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "menu-panel-system-health" + suffix,
+                        width: 320,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            DaemonMenuPanel(
+                                state: .running(panelHealth, restartObserved: false),
+                                actionError: nil,
+                                needsYou: .init(rows: 6),
+                                systemHealth: .init(open: 2),
+                                unattendedStopped:
+                                    "Unattended operation is stopped by a system health finding.",
+                                actions: panelActions))))
+            }
             surfaces.append(
                 Surface(
                     name: "menu-panel-mismatch-restart-dark",

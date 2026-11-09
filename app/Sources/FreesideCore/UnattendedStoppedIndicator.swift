@@ -172,6 +172,16 @@ extension InboxStore {
 }
 
 extension SyncCoordinator {
+    /// How many System Health findings are open, the count the pane, the
+    /// iPhone gear badge, and the Mac menu bar line all show; nil until the
+    /// inbox has loaded, when a zero would read as nothing open. It counts
+    /// open findings, not unseen ones: no acknowledgement reaches the wire
+    /// (devlog 2026-11-09-0836-system-health-signals).
+    public var openFindingCount: Int? {
+        guard store.loadState == .loaded else { return nil }
+        return SystemHealthFindings(open: store.openSnapshots, closed: []).openCount
+    }
+
     /// The standing indicator's message for surfaces outside the synced
     /// window (the Mac menu bar); nil when admission is open or unknown.
     public func unattendedStoppedMessage(at now: Date = .now) -> String? {

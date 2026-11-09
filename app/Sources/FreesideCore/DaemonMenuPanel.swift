@@ -10,7 +10,7 @@
     ///
     /// The view takes plain state, so the screenshot suite renders every
     /// daemon state; the app binds it to `DaemonMenuModel` and the session's
-    /// Needs you count. Click-outside dismissal comes from the window style;
+    /// Needs you and open-findings counts. Click-outside dismissal comes from the window style;
     /// Escape and each row action dismiss through the environment.
     public struct DaemonMenuPanel: View {
         /// The Show Needs You row's count: rows, the same as the list's Needs
@@ -35,9 +35,28 @@
             }
         }
 
+        /// The System Health line's count: open findings, the number the
+        /// pane and the Settings source list show. Nil before the inbox has
+        /// loaded; the line draws only for a count above zero.
+        public struct SystemHealthCount: Equatable, Sendable {
+            public let open: Int
+
+            public init(open: Int) {
+                self.open = open
+            }
+
+            /// The session's count, or nil before its inbox has loaded.
+            @MainActor
+            public init?(coordinator: SyncCoordinator) {
+                guard let open = coordinator.openFindingCount else { return nil }
+                self.open = open
+            }
+        }
+
         public struct Actions {
             public let openApp: () -> Void
             public let showNeedsYou: () -> Void
+            public let showSystemHealth: () -> Void
             public let start: () -> Void
             public let stop: () -> Void
             public let openApprovalSettings: () -> Void
@@ -46,6 +65,7 @@
             public init(
                 openApp: @escaping () -> Void,
                 showNeedsYou: @escaping () -> Void,
+                showSystemHealth: @escaping () -> Void,
                 start: @escaping () -> Void,
                 stop: @escaping () -> Void,
                 openApprovalSettings: @escaping () -> Void,
@@ -53,6 +73,7 @@
             ) {
                 self.openApp = openApp
                 self.showNeedsYou = showNeedsYou
+                self.showSystemHealth = showSystemHealth
                 self.start = start
                 self.stop = stop
                 self.openApprovalSettings = openApprovalSettings
@@ -65,6 +86,7 @@
         enum Row: Hashable {
             case openApp
             case showNeedsYou
+            case showSystemHealth
             case openApprovalSettings
             case control
             case quit
@@ -73,6 +95,7 @@
         let state: DaemonMenuState
         let actionError: String?
         let needsYou: NeedsYouCount?
+        let systemHealth: SystemHealthCount?
         /// The standing stopped indicator's message while unattended
         /// operation is stopped; nil when admission is open or unknown. This
         /// is the daemon's operating state, not its process state: a running
@@ -102,12 +125,14 @@
             state: DaemonMenuState,
             actionError: String?,
             needsYou: NeedsYouCount?,
+            systemHealth: SystemHealthCount? = nil,
             unattendedStopped: String? = nil,
             actions: Actions
         ) {
             self.state = state
             self.actionError = actionError
             self.needsYou = needsYou
+            self.systemHealth = systemHealth
             self.unattendedStopped = unattendedStopped
             self.actions = actions
         }
@@ -131,6 +156,11 @@
                 row(.openApp, "Open Freeside") { actions.openApp() }
                 row(.showNeedsYou, "Show Needs You", enabled: needsYou != nil, trailing: needsYouTrailing) {
                     actions.showNeedsYou()
+                }
+                if let openFindings {
+                    row(.showSystemHealth, "System Health", trailing: countTrailing(openFindings)) {
+                        actions.showSystemHealth()
+                    }
                 }
                 divider
                 stateBlock
@@ -243,10 +273,21 @@
 
         @ViewBuilder private var needsYouTrailing: some View {
             if let needsYou {
-                Text("\(needsYou.rows)")
-                    .font(FreesideFont.trailingSummary)
-                    .foregroundStyle(Color.inkDim)
+                countTrailing(needsYou.rows)
             }
+        }
+
+        /// The System Health line's count, nil while the line is absent:
+        /// before the inbox loads or with nothing open.
+        var openFindings: Int? {
+            guard let open = systemHealth?.open, open > 0 else { return nil }
+            return open
+        }
+
+        private func countTrailing(_ count: Int) -> some View {
+            Text("\(count)")
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
         }
 
         private func shortcutGloss(_ keys: String) -> some View {
@@ -402,6 +443,9 @@
             if needsYou != nil {
                 order.append(.showNeedsYou)
             }
+            if openFindings != nil {
+                order.append(.showSystemHealth)
+            }
             if state == .needsApproval {
                 order.append(.openApprovalSettings)
             }
@@ -430,6 +474,8 @@
                 perform(actions.openApp)
             case .showNeedsYou:
                 perform(actions.showNeedsYou)
+            case .showSystemHealth:
+                perform(actions.showSystemHealth)
             case .openApprovalSettings:
                 perform(actions.openApprovalSettings)
             case .control:
