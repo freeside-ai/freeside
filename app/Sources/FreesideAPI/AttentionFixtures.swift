@@ -102,10 +102,28 @@ public enum AttentionFixtures {
         .accept_recommended_route, .choose_alternative_route, .adjudicate_findings,
     ]
 
-    /// The default mock inbox: one open item per Phase 1 type, then the
-    /// closed cards (`closedInbox()`).
+    /// The default mock inbox: one open item per Phase 1 type, an open
+    /// blocking system health finding beside that type's advisory one, then
+    /// the closed cards (`closedInbox()`). The blocking finding stops the
+    /// mock's unattended admission, as the seeded development daemon's
+    /// does, so the System Health pane and the stopped indicator both have
+    /// something to show.
     public static func defaultInbox() -> [Components.Schemas.AttentionItemSnapshot] {
-        phase1Types.map { fixture(type: $0) } + closedInbox()
+        phase1Types.map { fixture(type: $0) } + [blockingSystemHealth()] + closedInbox()
+    }
+
+    /// The durable stop as an open blocking finding, created before the
+    /// advisory one, so the System Health pane's posture-first order is the
+    /// one that puts it first.
+    public static func blockingSystemHealth() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .system_health)
+        snapshot.item = durableStop()
+        snapshot.item.id = "item-system_health-blocking"
+        snapshot.item.created_at = createdInstant.addingTimeInterval(-1800)
+        // The default finding is a Codex re-enrollment; a durable stop
+        // binds no enrollment.
+        snapshot.item.codex_reenrollment_recovery_binding = nil
+        return snapshot
     }
 
     /// One closed card per way an item concludes (#2097): an operator's

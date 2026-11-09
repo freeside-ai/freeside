@@ -2,7 +2,7 @@
     import SwiftUI
 
     /// The Mac's Settings window (`⌘,`, the App's `Settings` scene): a source
-    /// list of the six panes with the daemon's host and version at its foot,
+    /// list of the seven panes with the daemon's host and version at its foot,
     /// and the selected pane beside it, as the 4 Nov 2026 handoff draws it
     /// (`docs/design/handoff-2026-11-04-settings-usage-new-task/`, canvas
     /// band 1). The selection is `NavigationModel.settingsPane`, so the
@@ -111,7 +111,8 @@
                     unresolvedActionCount: FreesideRootView.unsentActionCount(
                         pendingCommands: coordinator.store.pendingCommandsByItemID.count,
                         pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
-                        taskStops: coordinator.pendingTaskStops.values)),
+                        taskStops: coordinator.pendingTaskStops.values),
+                    store: coordinator.store, unattendedOperation: coordinator.unattendedOperation),
                 flowPreferences: flowPreferences,
                 host: SettingsHost.line(session.serverURL),
                 daemon: daemon
@@ -125,20 +126,35 @@
     }
 
     /// The window's drawing, which the screenshot suite renders with fixed
-    /// models: the source list and the selected pane.
+    /// models: the source list and the selected pane, or a System Health
+    /// finding's card seated in the pane.
     struct SettingsWindowContent: View {
+        static let width: CGFloat = 760
+        static let sourceListWidth: CGFloat = 180
+        /// The pane's width beside the source list.
+        static var paneWidth: CGFloat { width - sourceListWidth }
+
         let navigation: NavigationModel
         let sync: SettingsSync?
         let flowPreferences: DecisionFlowPreferences
         let host: String?
         let daemon: DaemonPane.MacDaemon?
+        /// Where the System Health pane keeps its History fold's state.
+        var listDefaults: UserDefaults = .standard
         var rendersInteractiveControls = true
 
         var body: some View {
             HStack(alignment: .top, spacing: 0) {
                 sourceList
                 Group {
-                    if rendersInteractiveControls {
+                    if navigation.settingsPane == .systemHealth, let itemID = navigation.settingsFinding,
+                        let sync
+                    {
+                        SystemHealthCardSeat(
+                            itemID: itemID, store: sync.store, onBack: navigation.closeFinding,
+                            onSelectItem: navigation.openFinding,
+                            rendersInteractiveControls: rendersInteractiveControls)
+                    } else if rendersInteractiveControls {
                         // The pane scrolls, never the source list: Usage with
                         // several pools outgrows the window.
                         ScrollView { pane }
@@ -148,7 +164,7 @@
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(width: 760)
+            .frame(width: Self.width)
             .frame(minHeight: 520)
             .background(Color.ground)
         }
@@ -156,7 +172,8 @@
         private var pane: some View {
             SettingsPaneView(
                 page: navigation.settingsPane, sync: sync, flowPreferences: flowPreferences, host: host,
-                client: .mac, mac: daemon, rendersInteractiveControls: rendersInteractiveControls)
+                client: .mac, mac: daemon, openFinding: navigation.openFinding, listDefaults: listDefaults,
+                rendersInteractiveControls: rendersInteractiveControls)
         }
 
         private var sourceList: some View {
@@ -182,7 +199,7 @@
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 12)
-            .frame(width: 180, alignment: .leading)
+            .frame(width: Self.sourceListWidth, alignment: .leading)
             .frame(maxHeight: .infinity, alignment: .top)
             .background(Color.sidebarGround)
             .overlay(alignment: .trailing) {
@@ -195,17 +212,31 @@
             return Button {
                 navigation.selectSettingsPane(page)
             } label: {
-                Text(page.title)
-                    .font(FreesideFont.factLabel)
-                    .foregroundStyle(selected ? Color.ink : Color.inkDim)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color.accentWash : .clear))
-                    .contentShape(RoundedRectangle(cornerRadius: 6))
+                HStack(spacing: 8) {
+                    Text(page.title)
+                        .font(FreesideFont.factLabel)
+                        .foregroundStyle(selected ? Color.ink : Color.inkDim)
+                    Spacer(minLength: 0)
+                    if let summary = summary(page) {
+                        Text(summary)
+                            .font(FreesideFont.trailingSummary)
+                            .foregroundStyle(Color.inkDim)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color.accentWash : .clear))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(selected ? .isSelected : [])
+        }
+
+        /// What trails a source-list row: System Health's open count.
+        private func summary(_ page: NavigationModel.SettingsPage) -> String? {
+            guard page == .systemHealth, let sync else { return nil }
+            return SettingsSummary.systemHealthCount(sync.findings)
         }
     }
 #endif

@@ -160,6 +160,64 @@ import Testing
         #expect(list.working.map(\.id) == [.task("task-mine")])
     }
 
+    @Test func systemHealthFindingsStayOutOfEverySection() {
+        // Findings live on Settings' System Health pane (#2920), open or
+        // closed, blocking or not; another system-scoped item still lists.
+        func finding(_ id: String, status: Components.Schemas.ItemStatus = .open, task taskID: String? = nil) -> Item {
+            var snapshot = AttentionFixtures.fixture(type: .system_health)
+            snapshot.item.id = id
+            snapshot.item.status = status
+            if let taskID {
+                snapshot.item.subject = .task(.init(subject_type: .task, subject_id: taskID, task_id: taskID))
+            }
+            return snapshot
+        }
+        var blocking = AttentionFixtures.blockingSystemHealth()
+        blocking.item.created_at = Date(timeIntervalSince1970: 50)
+        var proposal = projectItem("proposal", project: "project-a")
+        proposal.item._type = .task_proposal
+        proposal.item.created_at = Date(timeIntervalSince1970: 100)
+        let list = UnifiedList(
+            open: [
+                blocking, finding("advisory"), finding("on-task", task: "task-a"), proposal, systemItem("system"),
+            ],
+            closed: [finding("resolved", status: .resolved, task: "task-done")],
+            tasks: [task("task-a"), task("task-done", lifecycle: .finished)], projectFilter: nil)
+
+        #expect(list.needsYou.map(\.id) == [.item("proposal"), .item("system")])
+        #expect(list.working.map(\.id) == [.task("task-a")])
+        #expect(list.finished.map(\.id) == [.task("task-done")])
+        #expect(list.rows.allSatisfy { $0.openItems.allSatisfy { $0.item._type != .system_health } })
+        #expect(list.nextOpenItemID(excluding: "system") == "proposal")
+        #expect(list.nextOpenItemID(excluding: "proposal") == "system")
+    }
+
+    @Test func aBlockingFindingAloneLeavesNeedsYouEmpty() {
+        let list = UnifiedList(
+            open: [AttentionFixtures.blockingSystemHealth()], closed: [], tasks: [], projectFilter: nil)
+
+        #expect(list.needsYou.isEmpty)
+        #expect(list.rows.isEmpty)
+    }
+
+    @Test func theProjectFilterOffersNoProjectWhoseOnlyItemsAreFindings() {
+        var finding = AttentionFixtures.fixture(type: .system_health)
+        finding.item.id = "finding"
+        finding.item.project_id = "project-findings"
+        var unscoped = AttentionFixtures.fixture(type: .system_health)
+        unscoped.item.id = "unscoped"
+        unscoped.item.project_id = UnifiedList.noProject
+        unscoped.item.subject = .project(.init(subject_type: .project, subject_id: "none"))
+        let list = UnifiedList(
+            open: [finding, unscoped, projectItem("question", project: "project-work")], closed: [],
+            tasks: [], projectFilter: nil)
+
+        #expect(list.knownProjects == ["project-work"])
+        #expect(!list.offersNoProject)
+        #expect(list.isFinding(itemID: "finding"))
+        #expect(!list.isFinding(itemID: "question"))
+    }
+
     @Test func aFilteredOutTaskKeepsItsItemsFromReadingAsScopedRows() {
         let list = UnifiedList(
             open: [taskItem("item", task: "task-other")], closed: [],

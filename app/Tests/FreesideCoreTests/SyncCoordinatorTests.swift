@@ -155,7 +155,8 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
 
         let cursors = try #require(coordinator.cursors)
         #expect(cursors.lastFullSnapshotRevision == cursors.highestObservedServerRevision)
-        #expect(coordinator.store.rows.count == AttentionFixtures.phase1Types.count)
+        let openFixtures = AttentionFixtures.defaultInbox().filter { $0.item.status == .open }
+        #expect(coordinator.store.rows.count == openFixtures.count)
         #expect(
             coordinator.store.orderedConversations == AttentionFixtures.defaultConversations())
         #expect(coordinator.store.freshness == .fresh)

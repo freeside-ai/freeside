@@ -49,10 +49,6 @@ struct UnattendedStoppedPresentation: Equatable {
         case .blocking_system_health: cause = .blockingFinding
         case nil: cause = .unspecified
         }
-        let withinThreshold =
-            lastUpdatedAt.map {
-                now.timeIntervalSince($0) < SyncCoordinator.stalenessThreshold
-            } ?? false
         // The reason only says whether the item is open; its text stays on
         // the item, so a long one never grows the indicator (#2313).
         let itemIsOpen = first?.item_id.flatMap(reason) != nil
@@ -60,7 +56,18 @@ struct UnattendedStoppedPresentation: Equatable {
             cause: cause,
             itemID: itemIsOpen ? first?.item_id : nil,
             additionalStops: max(0, operation.stops.count - 1),
-            isCurrent: freshness == .fresh && withinThreshold)
+            isCurrent: isCurrent(freshness: freshness, lastUpdatedAt: lastUpdatedAt, now: now))
+    }
+
+    /// Whether a snapshot can be claimed current (§5.14): fresh, and read
+    /// within the staleness threshold.
+    @MainActor
+    static func isCurrent(freshness: InboxStore.Freshness, lastUpdatedAt: Date?, now: Date) -> Bool {
+        let withinThreshold =
+            lastUpdatedAt.map {
+                now.timeIntervalSince($0) < SyncCoordinator.stalenessThreshold
+            } ?? false
+        return freshness == .fresh && withinThreshold
     }
 
     var keyword: String { "Stopped" }

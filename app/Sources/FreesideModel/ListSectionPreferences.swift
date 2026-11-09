@@ -1,14 +1,16 @@
 import Foundation
 import Observation
 
-/// Whether the unified list's Working and Finished sections are open, per
-/// device. Needs you has no disclosure: it is what the list is for.
+/// Whether the unified list's Working and Finished sections, and the System
+/// Health pane's History, are open, per device. Needs you has no
+/// disclosure: it is what the list is for.
 @MainActor
 @Observable
 package final class ListSectionPreferences {
     private enum Key {
         static let working = "FreesideListWorkingExpanded"
         static let finished = "FreesideListFinishedExpanded"
+        static let systemHealthHistory = "FreesideSystemHealthHistoryExpanded"
     }
 
     private let defaults: UserDefaults
@@ -19,11 +21,15 @@ package final class ListSectionPreferences {
     package var finishedExpanded: Bool {
         didSet { defaults.set(finishedExpanded, forKey: Key.finished) }
     }
+    package var systemHealthHistoryExpanded: Bool {
+        didSet { defaults.set(systemHealthHistoryExpanded, forKey: Key.systemHealthHistory) }
+    }
 
     package init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         workingExpanded = Self.value(defaults, key: Key.working, defaultValue: false)
         finishedExpanded = Self.value(defaults, key: Key.finished, defaultValue: false)
+        systemHealthHistoryExpanded = Self.value(defaults, key: Key.systemHealthHistory, defaultValue: false)
     }
 
     private static func value(

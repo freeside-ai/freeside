@@ -100,7 +100,12 @@ struct UnattendedOperationSyncTests {
     }
 
     @Test func stopRebuildAcknowledgeResume() async throws {
-        let server = MockServer()
+        // Without the default inbox's blocking finding, whose stop would
+        // stand through the resume.
+        let server = MockServer(
+            items: AttentionFixtures.defaultInbox().filter {
+                $0.item.id != AttentionFixtures.blockingSystemHealth().item.id
+            })
         let cache = InMemoryCacheStore()
         let coordinator = makeCoordinator(server: server, cache: cache)
         await coordinator.bootstrap()

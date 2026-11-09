@@ -6078,7 +6078,7 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 | `ready_for_final_review` | The ask, a labeled change summary, then the review guide when the run wrote one: ordered stops whose prose is a labeled claim, each excerpt's text a daemon fact read from the imported commit or its base (Summary Provenance). Then daemon verification verdicts with diff stats. Then View PR, when the client supports it (revision 78). View PR is navigation: it never resolves the item, and capability filtering still decides whether it renders. | Digested review history, then the evidence packet and the routine bindings. |
 | `task_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
-| `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
+| `system_health` | The diagnostic fact and the unattended capability it impairs. The card opens from the clients' System Health settings pane, not the inbox. | Doctor output. |
 
 ### Summary Provenance
 
