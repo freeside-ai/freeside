@@ -90,6 +90,13 @@ enum FreesidePalette {
     // A hovered control (R19): ground-3, which keeps a wax-outlined
     // control's label over the 4.5:1 text floor in both appearances.
     static let hover = FreesideColorCuts(day: ground3.day, dusk: ground3.dusk)
+    // The wash behind every other row of a fact group (R9), so the eye
+    // can follow a label across a wide column to its trailing value. A
+    // neutral, never the accent (R23): darker than both day grounds and
+    // lighter than both dusk grounds, so it shows on a card's ground-2 and
+    // on the bare ground alike. Increased Contrast deepens it to ground-3.
+    static let factStripe = FreesideColorCuts(
+        day: 0xE9E9E5, dusk: 0x202226, dayIC: ground3.day, duskIC: ground3.dusk)
 
     // Diff counts and diff lines (R28), and one use beyond them: diffAdd
     // fills the marker on a stage start in the task timeline
@@ -186,6 +193,8 @@ extension Color {
     static let noticeWaxWash = freeside(FreesidePalette.noticeWaxWash)
     /// The fill of a hovered control.
     static let hover = freeside(FreesidePalette.hover)
+    /// The wash behind every other row of a fact group.
+    static let factStripe = freeside(FreesidePalette.factStripe)
     /// Additions and removals, in a diff count or a diff line and nowhere else.
     static let diffAdd = freeside(FreesidePalette.diffAdd)
     static let diffRemove = freeside(FreesidePalette.diffRemove)
