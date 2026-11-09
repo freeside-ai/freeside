@@ -119,6 +119,29 @@ import Testing
         }
     #endif
 
+    /// The iPhone gear's badge shows the pane's open count, and nothing at
+    /// zero or before the inbox loads.
+    @Test func theGearBadgeIsThePanesOpenCount() async throws {
+        let coordinator = SyncCoordinator(
+            client: APIClientFactory.mock(server: findingsServer()), cache: InMemoryCacheStore())
+        #expect(FreesideRootView.settingsBadge(openFindings: coordinator.openFindingCount) == nil)
+
+        await coordinator.bootstrap()
+        let pane = SystemHealthFindings(
+            open: coordinator.store.openSnapshots, closed: coordinator.store.closedSnapshots)
+        #expect(pane.openCount == 2)
+        #expect(coordinator.openFindingCount == pane.openCount)
+        #expect(FreesideRootView.settingsBadge(openFindings: coordinator.openFindingCount) == "2")
+
+        let none = SyncCoordinator(
+            client: APIClientFactory.mock(
+                server: MockServer(items: [AttentionFixtures.resolvedSystemHealth()])),
+            cache: InMemoryCacheStore())
+        await none.bootstrap()
+        #expect(none.openFindingCount == 0)
+        #expect(FreesideRootView.settingsBadge(openFindings: none.openFindingCount) == nil)
+    }
+
     /// Open blocking and advisory findings, a closed one, and an item of
     /// another type, so only the two open findings count.
     private func findingsServer() -> MockServer {

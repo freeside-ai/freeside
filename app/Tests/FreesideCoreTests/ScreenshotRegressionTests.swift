@@ -3505,6 +3505,29 @@
                             colorScheme: scheme, paintsGround: true))
                 }
             }
+            // The iPhone bottom bar's gear with its open-findings badge
+            // (#2921), one digit and two, in the bar's tint. The suite
+            // renders on the Mac, so the bar itself is drawn here by hand.
+            for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "settings-gear-badge-phone" + suffix,
+                        width: 390,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            HStack {
+                                SettingsGearLabel(badge: "2")
+                                Spacer()
+                                SettingsGearLabel(badge: "12")
+                                Spacer()
+                                SettingsGearLabel(badge: nil)
+                            }
+                            .font(.title3)
+                            .foregroundStyle(Color.accentText)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 14)
+                            .background(Color.ground))))
+            }
             // The exit run's phone state (#2313): the daemon unreachable over
             // a cached finding stop whose reason is a ten-line Go error
             // chain, the shape that once pushed the inbox below the fold.
