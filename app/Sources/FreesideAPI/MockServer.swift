@@ -2287,8 +2287,8 @@ public actor MockServer {
     // MARK: - Operator commands
 
     /// An operator command the daemon refuses as invalid client input (400):
-    /// an enrollment not on the pool, an agent outside the daemon's tree, or
-    /// a malformed order.
+    /// an enrollment not on the pool, an enrollment the daemon doesn't hold,
+    /// or a malformed order.
     public struct OperatorCommandRejectedError: Error {
         public let commandID: String
         public let reason: String
@@ -2489,14 +2489,20 @@ public actor MockServer {
                 retry.id,
             ]
             .joined(separator: "/"))
-        // The provenance names the agent the move left, with the hold's
-        // mark, when the policy orders it (engine.movedPastMark): a v1 line's
-        // own name, or the tree agent that runs a v2 line's selection.
-        let leftName = head?.line.flatMap { line in
-            line.agent ?? agentCatalog.agents.first(where: { $0.selection == line.selection?.value1 })?.name
+        // The provenance names the enrollment the move left, with the hold's
+        // mark, when the policy orders it (engine.movedPastMark): a v2 line's
+        // selection's enrollment, or the tree agent's for a v1 line's name.
+        // An agents-form role orders its agents' enrollments (engine.roleOrder).
+        let treeAgents = agentCatalog.agents
+        let enrollmentOf = { (agent: String) in treeAgents.first(where: { $0.name == agent })?.enrollment_id }
+        let leftEnrollment = head?.line.flatMap { line in
+            line.selection?.value1.enrollment_id ?? line.agent.flatMap(enrollmentOf)
         }
-        let left = leftName.flatMap { agent -> String? in
-            routingPolicy?.roles.contains { $0.agents.contains(agent) } == true ? agent : nil
+        let left = leftEnrollment.flatMap { enrollment -> String? in
+            let ordered = routingPolicy?.roles.contains {
+                ($0.enrollments ?? $0.agents?.compactMap(enrollmentOf) ?? []).contains(enrollment)
+            }
+            return ordered == true ? enrollment : nil
         }
         let line = Components.Schemas.TaskLine(
             id: id, task_id: payload.task_id, role: .implementer, selection: .init(value1: selection), version: version,
@@ -2509,7 +2515,8 @@ public actor MockServer {
                     passed_over: left.map {
                         .init(
                             value1: .init(
-                                agent: $0, pool: window.pool, window: window.window, source: window.source,
+                                agent: nil, enrollment: $0, pool: window.pool, window: window.window,
+                                source: window.source,
                                 marked_at: window.set_at, resets_at: window.resets_at))
                     })))
         recordTaskLineEvent(
@@ -2642,19 +2649,24 @@ public actor MockServer {
                 .init(message: "the routing policy changed", current_policy: routingPolicy.map { .init(value1: $0) }))
         }
         guard let lineupRevision = agentCatalog.lineup_revision?.value1 else { throw OperatorSettingUnavailableError() }
-        let catalogAgents = Set(agentCatalog.agents.map(\.name))
-        guard roles.allSatisfy({ $0.agents.allSatisfy(catalogAgents.contains) }) else {
-            throw rejected("routing policy names an agent outside the agent tree")
+        // The daemon refuses an enrollment it doesn't hold by the role and
+        // position (engine.checkRoutingPolicyEnrollments), never the id.
+        let held = Set(agentCatalog.enrollments.map(\.enrollment_id))
+        for role in roles {
+            if let position = role.enrollments?.firstIndex(where: { !held.contains($0) }) {
+                throw rejected(
+                    "routing policy role \(role.role.rawValue) enrollment \(position + 1): "
+                        + "routing policy enrollment is not one the store holds")
+            }
         }
-        // As the daemon resolves each tree agent's pool through its enrollment,
-        // the mock joins the catalog's enrollments to the pools' enrollments.
+        // The drain-first account must be the pool of an ordered enrollment.
         if let account = payload.drain_first_account {
-            let catalogEnrollments = Set(agentCatalog.agents.map(\.enrollment_id))
+            let ordered = Set(roles.flatMap { $0.enrollments ?? [] })
             guard
                 let pool = usagePoolsByID[account],
-                pool.pool.enrollments.contains(where: { catalogEnrollments.contains($0.enrollment_id) })
+                pool.pool.enrollments.contains(where: { ordered.contains($0.enrollment_id) })
             else {
-                throw rejected("routing policy drain-first account is no agent's usage pool")
+                throw rejected("routing policy drain-first account is no ordered enrollment's usage pool")
             }
         }
         let recorded =

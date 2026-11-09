@@ -224,7 +224,8 @@
                 }
               ],
               "passed_over": {
-                "agent": "anthropic-a/claude_code",
+                "agent": null,
+                "enrollment": "anthropic-a/claude_code",
                 "pool": "pool-a",
                 "window": "five_hour",
                 "source": "provider_refusal",
@@ -487,16 +488,18 @@
       "roles": [
         {
           "role": "implementer",
-          "agents": [
+          "enrollments": [
             "anthropic-b/claude_code",
-            "claude-a"
-          ]
+            "anthropic-a/claude_code"
+          ],
+          "agents": null
         },
         {
           "role": "reviewer",
-          "agents": [
-            "claude-c"
-          ]
+          "enrollments": [
+            "anthropic-b/claude_code"
+          ],
+          "agents": null
         }
       ],
       "source": "client_routing_set",

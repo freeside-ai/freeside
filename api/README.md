@@ -97,11 +97,17 @@ revision. A `command_id` names one command of any kind.
 - **`set_routing_policy`** replaces the whole policy, as `freesided routing
   set` does. `expected_revision` is the revision the client saw, null or
   omitted when it saw none. Any other current revision is 409 with the
-  current policy, so two operators can't overwrite each other. An agent
-  outside the daemon's agent tree is 400. `drain_first_account` names the
-  usage pool that takes every new task ahead of reset order; null or omitted
-  clears it, as a set without `-drain-first` does. A pool no agent of the
-  tree is on is 400. The same orders and account record nothing.
+  current policy, so two operators can't overwrite each other. Each role
+  orders enrollment ids in `enrollments`; an `agents` key is 400. An
+  enrollment the daemon doesn't hold, one whose identity is disabled, one
+  whose discovered models lack the role's lineup model and effort, and one
+  repeated in a role are 400, by the role and the entry's position, never
+  the id. `drain_first_account` names the usage pool that takes every new
+  task ahead of reset order; null or omitted clears it, as a set without
+  `-drain-first` does. A pool no ordered enrollment is on is 400. The same
+  orders and account record nothing. A policy comes back with each role's
+  `enrollments`, or the `agents` a revision set before policies ordered
+  enrollments recorded, the other null.
 - **`move_parked_task`** moves a task parked on its implementer's exhausted
   quota window to `choice`: an enrollment the park's hold offers in
   `alternate_agents`, with a model and effort its catalog serves, null for

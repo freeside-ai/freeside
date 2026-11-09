@@ -2105,17 +2105,15 @@ optional and takes a usage pool id, as `freesided auth list` prints it.
   the tree no longer carries. A new revision always orders enrollments.
 
 A paired client sets the same policy with the `set_routing_policy` command,
-and changes a task's line with `change_task_line`. Until the client wire
-moves to enrollments (#2807), the command's `agents` list takes, for each
-entry, an enrollment id or an agent name from the daemon's agent catalog,
-which the daemon maps to that agent's enrollment; two entries on one
-enrollment keep its first position, and an entry that is neither is
-refused. The daemon renders a policy back to the client the same way: each
-enrollment as the catalog agent that runs it on the role's lineup model and
-effort, or as the enrollment id when no agent does, and a line's
-`passed_over` agent as the passed-over enrollment's id. The daemon checks the
-policy against the agent tree its own composition loaded, records the
-revision with source `client_routing_set` and `set_by` `device:<device_id>`,
+and changes a task's line with `change_task_line`. Each role orders
+enrollment ids (`roles[].enrollments`), checked as `routing set` checks
+them, and an entry repeated in one role is refused. The daemon renders a
+policy back as it stored it: `enrollments`, or for a revision set before
+policies ordered enrollments its `agents`, with the other key null; it never
+translates one into the other. A line's `passed_over` names the passed-over
+`enrollment`, or the `agent` a mark written before then recorded. The
+daemon checks the policy against the agent tree its own composition loaded,
+records the revision with source `client_routing_set` and `set_by` `device:<device_id>`,
 and refuses a change prepared against a revision that is no longer current
 (`api/README.md`, Usage and Routing Command Contract). A client refreshes a
 pool with `refresh_usage`, which starts a collection as `freesided auth

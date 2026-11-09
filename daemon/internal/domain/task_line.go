@@ -238,12 +238,10 @@ type TaskLineProvenance struct {
 	PassedOver *TaskLinePassedOverMark `json:"passed_over"`
 }
 
-// TaskLineProvenanceWire is a provenance as the client wire carries it until
-// #2807 moves the wire to enrollments. The API requires passed_over.agent, so
-// a mark that names an enrollment carries the enrollment id there, which the
-// API's agent-name pattern does not admit and clients decode as a plain
-// string. It is never stored: a line's id addresses TaskLineProvenance's own
-// encoding.
+// TaskLineProvenanceWire is a provenance as the client wire carries it: the
+// passed-over mark names its agent or its enrollment under its own key, the
+// other null, where the stored mark omits the empty one. It is never stored:
+// a line's id addresses TaskLineProvenance's own encoding.
 type TaskLineProvenanceWire struct {
 	PolicyRevision int                         `json:"policy_revision"`
 	Tier           TaskLineSelectionTier       `json:"tier"`
@@ -253,14 +251,16 @@ type TaskLineProvenanceWire struct {
 }
 
 // TaskLinePassedOverMarkWire is TaskLinePassedOverMark as
-// TaskLineProvenanceWire carries it.
+// TaskLineProvenanceWire carries it: exactly one of Agent and Enrollment is
+// non-nil, as in the stored mark.
 type TaskLinePassedOverMarkWire struct {
-	Agent    string              `json:"agent"`
-	Pool     UsagePoolID         `json:"pool"`
-	Window   string              `json:"window"`
-	Source   ExhaustedMarkSource `json:"source"`
-	MarkedAt time.Time           `json:"marked_at"`
-	ResetsAt *time.Time          `json:"resets_at"`
+	Agent      *string             `json:"agent"`
+	Enrollment *ClientEnrollmentID `json:"enrollment"`
+	Pool       UsagePoolID         `json:"pool"`
+	Window     string              `json:"window"`
+	Source     ExhaustedMarkSource `json:"source"`
+	MarkedAt   time.Time           `json:"marked_at"`
+	ResetsAt   *time.Time          `json:"resets_at"`
 }
 
 // Wire projects the provenance for the client wire, nil for nil.
@@ -272,13 +272,16 @@ func (p *TaskLineProvenance) Wire() *TaskLineProvenanceWire {
 		PolicyRevision: p.PolicyRevision, Tier: p.Tier, Pool: p.Pool, RankedBy: p.RankedBy,
 	}
 	if mark := p.PassedOver; mark != nil {
-		agent := mark.Agent
-		if agent == "" {
-			agent = string(mark.Enrollment)
-		}
 		wire.PassedOver = &TaskLinePassedOverMarkWire{
-			Agent: agent, Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
+			Pool: mark.Pool, Window: mark.Window, Source: mark.Source,
 			MarkedAt: mark.MarkedAt, ResetsAt: mark.ResetsAt,
+		}
+		if mark.Agent != "" {
+			agent := mark.Agent
+			wire.PassedOver.Agent = &agent
+		} else {
+			enrollment := mark.Enrollment
+			wire.PassedOver.Enrollment = &enrollment
 		}
 	}
 	return wire

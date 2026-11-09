@@ -41,9 +41,17 @@ type ChangeTaskLinePayload struct {
 // ExpectedRevision says the client saw no policy, and a nil
 // DrainFirstAccount names none, clearing any the current policy names.
 type SetRoutingPolicyPayload struct {
-	Roles             []RoutingPolicyRoleWire `json:"roles"`
-	DrainFirstAccount *domain.UsagePoolID     `json:"drain_first_account"`
-	ExpectedRevision  *int                    `json:"expected_revision"`
+	Roles             []RoutingPolicyRoleInput `json:"roles"`
+	DrainFirstAccount *domain.UsagePoolID      `json:"drain_first_account"`
+	ExpectedRevision  *int                     `json:"expected_revision"`
+}
+
+// RoutingPolicyRoleInput mirrors the API's RoutingPolicyRoleInput: one
+// role's order of enrollment ids. It has no agents key, so the strict
+// decoder refuses a request that orders agent names.
+type RoutingPolicyRoleInput struct {
+	Role        domain.RoleName             `json:"role"`
+	Enrollments []domain.ClientEnrollmentID `json:"enrollments"`
 }
 
 // MoveParkedTaskPayload mirrors the API's MoveParkedTaskPayload: the task
@@ -124,10 +132,9 @@ type RoutingPolicyOutcome struct {
 
 // RoutingPolicySetter applies a policy change in the accepting transaction
 // (engine.SetRoutingPolicyTx against the daemon's agent tree, bound by
-// WithRoutingPolicySetter). The change's orders are enrollments: signet has
-// translated the wire's agent names (routingPolicyRolesFromWire), refusing a
-// name that is neither an enrollment nor a tree agent with
-// domain.ErrRoutingPolicyAgentUnknown.
+// WithRoutingPolicySetter). The change's orders are the request's enrollment
+// ids in canonical form; the setter refuses one the store does not hold, a
+// disabled one, and one that cannot run its role's lineup model and effort.
 type RoutingPolicySetter func(ctx context.Context, tx *store.WriteTx, change RoutingPolicyChange, now time.Time) (RoutingPolicyOutcome, error)
 
 // ParkedTaskMover moves a parked task in the accepting transaction
@@ -222,7 +229,7 @@ func (s *Service) commitReceipt(
 			if !same(old) {
 				return fmt.Errorf("command %q: %w", in.CommandID, store.ErrImmutableConflict)
 			}
-			result = CommandResult{Receipt: &old, Revision: snap.AsOfRevision, catalog: s.agentCatalog()}
+			result = CommandResult{Receipt: &old, Revision: snap.AsOfRevision}
 			return errReplay
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
@@ -238,7 +245,7 @@ func (s *Service) commitReceipt(
 		if err != nil {
 			return err
 		}
-		result = CommandResult{Receipt: &receipt, Revision: snap.AsOfRevision, catalog: s.agentCatalog()}
+		result = CommandResult{Receipt: &receipt, Revision: snap.AsOfRevision}
 		return nil
 	})
 	if err != nil && !errors.Is(err, errReplay) {
@@ -406,21 +413,11 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 		p.DrainFirstAccount != nil && *p.DrainFirstAccount == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
-	// The receipt records the policy over enrollments, so a replay compares
-	// the translated orders. An enrollment never leaves the store, so the
-	// translation holds into the write; the setter re-checks each one there.
-	catalog := s.agentCatalog()
-	var translated []domain.RoutingPolicyRole
-	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		translated, err = routingPolicyRolesFromWire(ctx, tx, catalog, p.Roles)
-		return err
-	}); errors.Is(err, domain.ErrRoutingPolicyAgentRepeated) {
-		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
-	} else if err != nil {
-		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
+	requested := make([]domain.RoutingPolicyRole, 0, len(p.Roles))
+	for _, role := range p.Roles {
+		requested = append(requested, domain.RoutingPolicyRole{Role: role.Role, Enrollments: role.Enrollments})
 	}
-	roles, err := domain.CanonicalRoutingPolicyRoles(translated)
+	roles, err := domain.CanonicalRoutingPolicyRoles(requested)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidOperatorCommandPayload, err)
 	}
@@ -442,7 +439,7 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 			if !sameRevision(current, p.ExpectedRevision) {
 				rejection := &RoutingPolicyRejectionError{}
 				if current != nil {
-					rendered := renderRoutingPolicy(*current, catalog)
+					rendered := renderRoutingPolicy(*current)
 					rejection.CurrentPolicy = &rendered
 				}
 				return domain.CommandReceipt{}, rejection

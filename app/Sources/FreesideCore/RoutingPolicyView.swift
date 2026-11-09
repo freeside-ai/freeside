@@ -3,12 +3,14 @@ import SwiftUI
 
 /// Settings' Agents pane on both platforms (`SettingsPaneView`), drawn as
 /// the 4 Nov 2026 handoff's "Settings Agents" frame: the routing policy
-/// (plan §5.4), which agent takes a new task for each role when the operator
-/// chose none, read from sync and changed as a saved command, then the
-/// daemon's agent tree, read-only. A popup per role puts the chosen agent
-/// first and saves at once; `Change order…` opens `RoutingPolicyEditor` as a
-/// sheet. The drain-first popup picks among the pools catalog agents sit
-/// on. The lineup itself still changes through the committed agent tree.
+/// (plan §5.4), which enrollment takes a new task for each role when the
+/// operator chose none, read from sync and changed as a saved command, then
+/// the daemon's agent tree, read-only. A popup per role puts the chosen
+/// enrollment first and saves at once; `Change order…` opens
+/// `RoutingPolicyEditor` as a sheet. The drain-first popup picks among the
+/// pools ordered enrollments sit on. A revision set before policies ordered
+/// enrollments reads its agent names until the operator changes it. The
+/// lineup itself still changes through the committed agent tree.
 struct RoutingPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -85,10 +87,12 @@ struct RoutingPolicyView: View {
         case .popup(let popup):
             let shared = model.sharedOrder(popup)
             let text = popupText(popup, shared: shared)
-            SettingsRow(label: popup.title, line: popupLine(popup, shared: shared), warning: missingAgents(popup)) {
+            SettingsRow(label: popup.title, line: popupLine(popup, shared: shared), warning: missingEntries(popup)) {
                 popupControl(text: text, accessibilityLabel: popup == .writer ? "Writer agents" : "Reviewer agent") {
-                    ForEach(model.catalog?.agents ?? [], id: \.name) { agent in
-                        Button(agent.name) { Task { await model.choose(agent.name, for: popup) } }
+                    ForEach(model.catalog?.enrollments ?? [], id: \.enrollment_id) { enrollment in
+                        Button(enrollment.enrollment_id) {
+                            Task { await model.choose(enrollment.enrollment_id, for: popup) }
+                        }
                     }
                     Divider()
                     Button("Change order…") { model.beginEditing() }
@@ -106,8 +110,8 @@ struct RoutingPolicyView: View {
             }
         case .drainFirst:
             let account = model.policy?.drain_first_account
-            // Without a catalog the app can't tell which pools agents sit
-            // on, so it doesn't call the account stale.
+            // Without a catalog the app can't tell which pools ordered
+            // enrollments sit on, so it doesn't call the account stale.
             let stale =
                 account.map { account in
                     model.catalog != nil && !model.drainFirstPools.contains { $0.pool.id == account }
@@ -170,7 +174,7 @@ struct RoutingPolicyView: View {
         case .writer:
             guard shared == nil else { return "Specifies, implements and remediates." }
             return popup.roles.map { role in
-                let order = model.policy?.roles.first { $0.role == role }?.agents ?? []
+                let order = model.storedOrder(for: role)
                 let text = order.isEmpty ? Self.lineupText(model.lineupSelection(for: role)) : Self.orderText(order)
                 return "\(Self.roleName(role)) · \(text)"
             }
@@ -180,16 +184,25 @@ struct RoutingPolicyView: View {
         }
     }
 
-    /// The agents the popup's roles order that the catalog no longer
-    /// carries, each once. Without a catalog none is called missing.
-    private func missingAgents(_ popup: RoutingPopup) -> String? {
+    /// The enrollments the popup's roles order that the daemon no longer
+    /// holds, and the agent names an older revision orders that the catalog
+    /// no longer carries (a change drops them), each once. Without a catalog
+    /// none is called missing.
+    private func missingEntries(_ popup: RoutingPopup) -> String? {
         guard let catalog = model.catalog else { return nil }
+        let held = Set(catalog.enrollments.map(\.enrollment_id))
         let known = Set(catalog.agents.map(\.name))
-        var seen = Set<String>()
-        let missing = popup.roles
-            .flatMap { role in model.policy?.roles.first { $0.role == role }?.agents ?? [] }
-            .filter { !known.contains($0) && seen.insert($0).inserted }
-        return missing.isEmpty ? nil : "\(missing.joined(separator: ", ")) not in the agent tree"
+        let roles = popup.roles.compactMap { role in model.policy?.roles.first { $0.role == role } }
+        func unique(_ entries: [String]) -> [String] {
+            var seen = Set<String>()
+            return entries.filter { seen.insert($0).inserted }
+        }
+        let enrollments = unique(roles.flatMap { $0.enrollments ?? [] }.filter { !held.contains($0) })
+        let agents = unique(roles.flatMap { $0.agents ?? [] }.filter { !known.contains($0) })
+        let lines =
+            (enrollments.isEmpty ? [] : ["\(enrollments.joined(separator: ", ")) \(Self.notHeld)"])
+            + (agents.isEmpty ? [] : ["\(agents.joined(separator: ", ")) not in the agent tree"])
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     // MARK: Agent tree
@@ -225,16 +238,17 @@ struct RoutingPolicyView: View {
 
     // MARK: Shared words
 
-    static let staleAccount = "No agent in the tree is on this account."
+    static let staleAccount = "No ordered enrollment is on this account."
+    static let notHeld = "not an enrollment the daemon holds"
 
     /// The pool's provider and plan, as Account usage heads its card.
     static func poolDetail(_ pool: Components.Schemas.UsagePoolUsage) -> String {
         [pool.provider, pool.plan].compactMap(\.self).joined(separator: " · ")
     }
 
-    /// An order as the canvas reads it: `claude-opus, then codex`.
-    static func orderText(_ agents: [String]) -> String {
-        agents.joined(separator: ", then ")
+    /// An order as the canvas reads it: `claude-a/claude_code, then codex`.
+    static func orderText(_ entries: [String]) -> String {
+        entries.joined(separator: ", then ")
     }
 
     static func roleName(_ role: RoutingPolicyDraft.Role) -> String {
@@ -263,7 +277,9 @@ struct RoutingPolicyView: View {
     /// One line for a policy the pane doesn't otherwise draw: the one a
     /// refusal carries.
     static func policyLine(_ policy: Components.Schemas.RoutingPolicy) -> String {
-        let roles = policy.roles.map { "\(roleName($0.role)): \($0.agents.joined(separator: ", "))" }
+        let roles = policy.roles.map {
+            "\(roleName($0.role)): \(($0.enrollments ?? $0.agents ?? []).joined(separator: ", "))"
+        }
         let drainFirst = policy.drain_first_account.map { ["Drain first: \($0)"] } ?? []
         return (["Revision \(policy.revision)"] + roles + drainFirst).joined(separator: " · ")
     }
@@ -318,7 +334,7 @@ struct RoutingPolicyNotices: View {
 }
 
 /// The `Change order…` sheet: the full routing edit, for orders of more than
-/// two names. One order per role among the catalog's agents, and the
+/// two names. One order per role among the catalog's enrollments, and the
 /// drain-first account among the pools they sit on, saved as one command.
 struct RoutingPolicyEditor: View {
     let model: RoutingPolicyModel
@@ -349,19 +365,19 @@ struct RoutingPolicyEditor: View {
         }
         ForEach(RoutingPolicyDraft.Role.allCases, id: \.self) { role in
             card(title: RoutingPolicyView.roleName(role)) {
-                let agents = draft.agents(for: role)
-                if agents.isEmpty { lineupLine(role) }
-                ForEach(Array(agents.enumerated()), id: \.element) { index, agent in
-                    editableAgent(agent, role: role, index: index, count: agents.count)
+                let enrollments = draft.enrollments(for: role)
+                if enrollments.isEmpty { lineupLine(role) }
+                ForEach(Array(enrollments.enumerated()), id: \.element) { index, enrollment in
+                    editableEnrollment(enrollment, role: role, index: index, count: enrollments.count)
                 }
                 if let catalog = model.catalog {
                     let offered = draft.offered(for: role, catalog: catalog)
                     if !offered.isEmpty {
                         WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
-                            ForEach(offered, id: \.self) { agent in
-                                Button("+ \(agent)") { model.draft?.add(agent, to: role) }
+                            ForEach(offered, id: \.self) { enrollment in
+                                Button("+ \(enrollment)") { model.draft?.add(enrollment, to: role) }
                                     .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                                    .accessibilityLabel("Add \(agent) to \(RoutingPolicyView.roleName(role))")
+                                    .accessibilityLabel("Add \(enrollment) to \(RoutingPolicyView.roleName(role))")
                             }
                         }
                     }
@@ -384,20 +400,22 @@ struct RoutingPolicyEditor: View {
         }
     }
 
-    private func editableAgent(_ agent: String, role: RoutingPolicyDraft.Role, index: Int, count: Int) -> some View {
+    private func editableEnrollment(
+        _ enrollment: String, role: RoutingPolicyDraft.Role, index: Int, count: Int
+    ) -> some View {
         let roleName = RoutingPolicyView.roleName(role)
-        let known = model.catalog?.agents.contains { $0.name == agent } ?? false
+        let held = model.catalog?.enrollments.contains { $0.enrollment_id == enrollment } ?? false
         return HStack(spacing: 6) {
-            orderedAgent(index: index, name: agent, known: known)
+            orderedEnrollment(index: index, name: enrollment, held: held)
             Spacer(minLength: 0)
-            iconButton("↑", label: "Move \(agent) up in \(roleName)", enabled: index > 0) {
-                model.draft?.move(agent, in: role, by: -1)
+            iconButton("↑", label: "Move \(enrollment) up in \(roleName)", enabled: index > 0) {
+                model.draft?.move(enrollment, in: role, by: -1)
             }
-            iconButton("↓", label: "Move \(agent) down in \(roleName)", enabled: index < count - 1) {
-                model.draft?.move(agent, in: role, by: 1)
+            iconButton("↓", label: "Move \(enrollment) down in \(roleName)", enabled: index < count - 1) {
+                model.draft?.move(enrollment, in: role, by: 1)
             }
-            iconButton("✕", label: "Remove \(agent) from \(roleName)", enabled: true) {
-                model.draft?.remove(agent, from: role)
+            iconButton("✕", label: "Remove \(enrollment) from \(roleName)", enabled: true) {
+                model.draft?.remove(enrollment, from: role)
             }
         }
     }
@@ -430,7 +448,7 @@ struct RoutingPolicyEditor: View {
             .init(
                 value: offered.pool.id, label: offered.pool.id,
                 consequence:
-                    "\(RoutingPolicyView.poolDetail(offered.pool))\nAgents: \(offered.agents.joined(separator: ", "))",
+                    "\(RoutingPolicyView.poolDetail(offered.pool))\nEnrollments: \(offered.enrollments.joined(separator: ", "))",
                 register: .item)
         }
         if let current, !pools.contains(where: { $0.pool.id == current }) {
@@ -452,7 +470,7 @@ struct RoutingPolicyEditor: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
-    private func orderedAgent(index: Int, name: String, known: Bool) -> some View {
+    private func orderedEnrollment(index: Int, name: String, held: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("\(index + 1).")
                 .font(FreesideFont.monoValue)
@@ -460,8 +478,8 @@ struct RoutingPolicyEditor: View {
             Text(name)
                 .font(FreesideFont.monoValue)
                 .foregroundStyle(Color.ink)
-            if !known {
-                Text("not in the agent tree")
+            if !held {
+                Text(RoutingPolicyView.notHeld)
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.waxText)
             }

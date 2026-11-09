@@ -1552,17 +1552,29 @@ components:
     RoutingPolicyRole:
       type: object
       description: >
-        One role's agents: the router's candidates for the role, whose pools
+        One role's order: the router's candidates for the role, whose pools
         it ranks by the drain-first account, then the soonest known weekly
         reset, then this order, passing over a pool whose window is marked
-        exhausted.
+        exhausted. Exactly one of enrollments and agents is non-null: a
+        revision stored since #2736 orders enrollment ids, and an older one
+        the agent names it recorded. The daemon never translates one into
+        the other.
       additionalProperties: false
-      required: [role, agents]
+      required: [role, enrollments, agents]
       properties:
         role:
           $ref: "#/components/schemas/TaskLineRole"
+        enrollments:
+          type: array
+          nullable: true
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
         agents:
           type: array
+          nullable: true
           minItems: 1
           items:
             type: string
@@ -1570,11 +1582,30 @@ components:
             maxLength: 246
             pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
 
+    RoutingPolicyRoleInput:
+      type: object
+      description: >
+        One role's order in a set_routing_policy request: enrollment ids the
+        daemon holds, each run on the role's lineup model and effort, with no
+        id twice. A request cannot order agent names.
+      additionalProperties: false
+      required: [role, enrollments]
+      properties:
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        enrollments:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
+
     RoutingPolicy:
       type: object
       description: >
         One revision of the routing policy: the standing rule for which usage
-        pool a new task runs on, and so which agent takes it when the
+        pool a new task runs on, and so which enrollment runs it when the
         operator chose none for the role. A role absent from it keeps lineup
         behaviour. A revision is never edited.
       additionalProperties: false
@@ -1606,9 +1637,9 @@ components:
           nullable: true
           description: >
             The usage pool that takes every new task ahead of reset order,
-            when the deciding role's order holds an agent on it; null when
-            the revision names none. It was the pool of an agent of the tree
-            at lineup_revision when set.
+            when the deciding role's order holds an enrollment on it; null
+            when the revision names none. It was the pool of an ordered
+            enrollment when set.
 
     AgentCatalog:
       type: object
@@ -2312,10 +2343,10 @@ components:
       description: >
         Which of the router's tiers chose a routing's pool (plan §5.4).
         drain_first_account: the policy's drain-first account, which leads
-        every other pool when the deciding role's order holds an agent on it
-        and its window is not marked. soonest_reset: the candidate pool whose
-        known weekly reset for its agent's model came soonest, among those
-        not marked. policy_order: the first pool in the policy's order among
+        every other pool when the deciding role's order holds an enrollment
+        on it and its window is not marked. soonest_reset: the candidate pool
+        whose known weekly reset for its agent's model came soonest, among
+        those not marked. policy_order: the first pool in the policy's order among
         those with no known reset, when no pool with one was available.
       enum: [drain_first_account, soonest_reset, policy_order]
 
@@ -2344,17 +2375,25 @@ components:
     TaskLinePassedOverMark:
       type: object
       description: >
-        The exhausted mark that made the router pass over an agent ranked
-        ahead of the chosen one: the agent, its pool, and the mark on that
-        pool's window for the agent's model.
+        The exhausted mark that made the router pass over a candidate ranked
+        ahead of the chosen one: the candidate, its pool, and the mark on that
+        pool's window for the candidate's model. Exactly one of enrollment and
+        agent is non-null: a mark written since #2736 names the enrollment,
+        and an older one the agent it recorded.
       additionalProperties: false
-      required: [agent, pool, window, source, marked_at, resets_at]
+      required: [agent, enrollment, pool, window, source, marked_at, resets_at]
       properties:
         agent:
           type: string
+          nullable: true
           minLength: 1
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        enrollment:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 256
         pool:
           type: string
           minLength: 1
@@ -2381,7 +2420,7 @@ components:
         one provenance onto every line it writes. ranked_by holds one reading
         per candidate pool whose weekly reset was known, in rank order
         (ascending resets_at, ties in the policy's order, no pool twice); it
-        is empty when no reset was known. passed_over is the first agent
+        is empty when no reset was known. passed_over is the first candidate
         ranked ahead of the chosen pool whose pool's window was marked
         exhausted, null when none was. The tier fixes the rest:
         drain_first_account passes over no one; soonest_reset names a pool in
@@ -4673,8 +4712,9 @@ components:
         Set the routing policy, as `freesided routing set` does on the daemon
         host: one order per role and an optional drain-first account,
         replacing the whole policy, so a null drain_first_account clears the
-        current one. Every agent must be in the daemon's agent tree, and the
-        drain-first account must be the usage pool of at least one of them.
+        current one. Every enrollment must be one the daemon holds, with its
+        identity enabled, and must run the role's lineup model and effort; the
+        drain-first account must be the usage pool of an ordered enrollment.
         A request for the orders and account the current revision holds
         records nothing. expected_revision is the
         policy revision the client saw, null when it saw none; any other
@@ -4690,7 +4730,7 @@ components:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/RoutingPolicyRole"
+            $ref: "#/components/schemas/RoutingPolicyRoleInput"
         drain_first_account:
           type: string
           minLength: 1

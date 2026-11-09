@@ -120,7 +120,7 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 					case domain.CommandKindChangeTaskLine:
 						return lineCommand("shared", id, new("codex-primary"))
 					case domain.CommandKindSetRoutingPolicy:
-						return policyCommand("shared", nil, "codex-primary")
+						return policyCommand("shared", nil, codexPrimary)
 					case domain.CommandKindMoveParkedTask:
 						return moveCommand("shared", id, "move-claude/claude_code")
 					}

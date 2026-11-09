@@ -197,7 +197,8 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
                 command_id: "routing-1", device_id: "device-1",
                 payload: .set_routing_policy(
                     .init(
-                        kind: .set_routing_policy, roles: [.init(role: .implementer, agents: ["codex-primary"])],
+                        kind: .set_routing_policy,
+                        roles: [.init(role: .implementer, enrollments: [UsageFixtures.unsupportedCollectorID])],
                         expected_revision: 2))),
             syncEpoch: "epoch-1")
         state.routingDaemonID = "daemon-1"
@@ -550,6 +551,61 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         let migrated = try #require(store.load())
         #expect(migrated.cursors == nil)
         #expect(migrated.tasks.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
+    @Test func aPreEnrollmentFormatElevenCacheDropsItsPolicyAndNamedRoutingChangeAndKeepsItsLedger() throws {
+        // Format 11 holds a routing policy the interim wire rendered as
+        // agent names (#2807). The format bump discards its snapshot and
+        // cursor so the bootstrap restores the policy as the daemon stores
+        // it, and an unsettled change that ordered names fails its section's
+        // decode, since the daemon now refuses names, while the ledger stays.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.routingPolicy = .init(as_of_revision: 4, entity_version: 2, policy: UsageFixtures.defaultRoutingPolicy())
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        state.pendingRoutingPolicyChange = PendingRoutingPolicyChange(
+            command: .init(
+                command_id: "routing-1", device_id: "device-1",
+                payload: .set_routing_policy(
+                    .init(
+                        kind: .set_routing_policy,
+                        roles: [.init(role: .implementer, enrollments: [UsageFixtures.unsupportedCollectorID])],
+                        expected_revision: 2))),
+            syncEpoch: "epoch-1")
+        state.routingDaemonID = "daemon-1"
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        // A format 11 snapshot rendered the policy's order as agent names,
+        // which still decodes, so the rest of the file loads.
+        var snapshot = try #require(legacyState["routingPolicy"] as? [String: Any])
+        var cachedPolicy = try #require(snapshot["policy"] as? [String: Any])
+        cachedPolicy["roles"] = [["role": "implementer", "agents": ["claude-primary", "codex-primary"]]]
+        snapshot["policy"] = cachedPolicy
+        legacyState["routingPolicy"] = snapshot
+        // A format 11 change named its agents.
+        var change = try #require(legacyState["pendingRoutingPolicyChange"] as? [String: Any])
+        var command = try #require(change["command"] as? [String: Any])
+        var payload = try #require(command["payload"] as? [String: Any])
+        payload["roles"] = [["role": "implementer", "agents": ["codex-primary"]]]
+        command["payload"] = payload
+        change["command"] = command
+        legacyState["pendingRoutingPolicyChange"] = change
+        object["format"] = 11
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.routingPolicy == nil)
+        #expect(migrated.pendingRoutingPolicyChange == nil)
         #expect(migrated.pendingCommands == state.pendingCommands)
     }
 

@@ -161,18 +161,19 @@ public enum UsageFixtures {
         ]
     }
 
-    /// Set from the other paired device fixture, so a client names it.
+    /// Set from the other paired device fixture, so a client names it. It
+    /// orders the enrollments claude-primary and codex-primary run on.
     public static func defaultRoutingPolicy() -> Components.Schemas.RoutingPolicy {
         .init(
             revision: 2,
-            roles: [.init(role: .implementer, agents: ["claude-primary", "codex-primary"])],
+            roles: [.init(role: .implementer, enrollments: [readingCollectorID, unsupportedCollectorID], agents: nil)],
             source: .client_routing_set, set_by: "device:\(DeviceFixtures.otherDeviceID)", set_at: date(1_200),
             lineup_revision: lineupRevision, drain_first_account: nil)
     }
 
-    /// The mock's agent catalog. Its tree half holds the agents
-    /// set_routing_policy accepts, as the daemon checks a policy against its
-    /// tree: each agent's enrollment joins a pool fixture's enrollment, one
+    /// The mock's agent catalog. Its enrollments are the ones
+    /// set_routing_policy accepts. Its tree half holds the agents: each
+    /// agent's enrollment joins a pool fixture's enrollment, one
     /// offer declares no lineage group, and the lineup binds every task-line
     /// role. Its enrollments are those pools' enrollments, two with a
     /// discovery record and one the daemon hasn't discovered yet, so a

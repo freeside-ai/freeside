@@ -110,11 +110,10 @@ func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
 		t.Fatalf("recorded availability = %+v", answer)
 	}
 	policy := after.RoutingPolicy
-	// With no committed tree there is no agent to render the enrollment as,
-	// so the wire carries its id until #2807.
 	if policy == nil || policy.EntityVersion != 1 || policy.AsOfRevision != after.Revision ||
 		policy.Policy.Source != domain.RoutingPolicySourceClientSet || len(policy.Policy.Roles) != 1 ||
-		!slices.Equal(policy.Policy.Roles[0].Agents, []string{"enrollment-usage-1"}) {
+		!slices.Equal(policy.Policy.Roles[0].Enrollments, []domain.ClientEnrollmentID{"enrollment-usage-1"}) ||
+		policy.Policy.Roles[0].Agents != nil {
 		t.Fatalf("routing policy = %+v", policy)
 	}
 }
