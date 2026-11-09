@@ -1424,6 +1424,7 @@ struct FactRow: View {
                 valueContent
                     .multilineTextAlignment(.trailing)
             }
+            .reportsFactRow()
         }
     }
 
@@ -1464,6 +1465,7 @@ struct StackedFact<Value: View>: View {
             value
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .reportsFactRow()
     }
 }
 
@@ -1514,6 +1516,7 @@ struct FactLinkRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open \(accessibilityName ?? label): \(value)")
+        .reportsFactRow()
     }
 
     private var labelText: some View {
@@ -1532,6 +1535,86 @@ extension FactRow {
     /// A fact whose value is a state: the chip sits in the value slot.
     init(label: String, chip: StateChip) {
         self.init(label: label, value: chip.label, chip: chip)
+    }
+}
+
+/// A group of fact rows (R9) laid out at the caller's spacing, with a
+/// faint wash behind every other row so the eye can follow a label across
+/// to its trailing value. The first row is unstriped, and a one-row group
+/// draws none.
+///
+/// Each fact form (`FactRow`, `FactLinkRow`, `StackedFact`) reports its
+/// frame once, and the group stripes from those frames, so no caller
+/// counts rows: hand-listed, conditional, and `ForEach` rows stripe alike,
+/// and a view in the group that isn't a fact (a bare label) takes no
+/// stripe and doesn't shift the count. The group draws only a background,
+/// so no row moves, and it hides its rows from an enclosing group, so the
+/// count restarts at each group. `ForEach(subviews:)` would avoid the
+/// preference, but it needs macOS 15 / iOS 18.
+struct FactGroup<Content: View>: View {
+    let spacing: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: spacing) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .backgroundPreferenceValue(FactRowFrames.self) { rows in
+            GeometryReader { proxy in
+                let bands = FactStripe.bands(
+                    rows: rows.map { proxy[$0] }, width: proxy.size.width, spacing: spacing)
+                Path { path in
+                    for band in bands {
+                        path.addRoundedRect(
+                            in: band,
+                            cornerSize: CGSize(width: FactStripe.cornerRadius, height: FactStripe.cornerRadius))
+                    }
+                }
+                .fill(Color.factStripe)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+        .transformPreference(FactRowFrames.self) { $0 = [] }
+    }
+}
+
+/// The geometry of a fact group's stripes.
+enum FactStripe {
+    /// How far a stripe runs past the group's edges, so a label and a
+    /// value don't sit flush on the wash's edge.
+    static let outset: CGFloat = 6
+    static let cornerRadius: CGFloat = 4
+
+    /// One band behind each even row (the 2nd, 4th, ...), given the rows'
+    /// frames in view order. A band spans the group's width plus the
+    /// outset, so it also covers a technical row's copy control, and
+    /// reaches half the row gap above and below its row, so a striped row
+    /// and its unstriped neighbor split each gap evenly.
+    static func bands(rows: [CGRect], width: CGFloat, spacing: CGFloat) -> [CGRect] {
+        rows.enumerated().compactMap { index, row in
+            guard index.isMultiple(of: 2) == false else { return nil }
+            return CGRect(
+                x: -outset, y: row.minY - spacing / 2,
+                width: width + 2 * outset, height: row.height + spacing)
+        }
+    }
+}
+
+/// The frames of the fact rows inside one `FactGroup`, in view order.
+private struct FactRowFrames: PreferenceKey {
+    static var defaultValue: [Anchor<CGRect>] { [] }
+
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+extension View {
+    /// Reports this view as one fact row to the enclosing `FactGroup`.
+    fileprivate func reportsFactRow() -> some View {
+        anchorPreference(key: FactRowFrames.self, value: .bounds) { [$0] }
     }
 }
 

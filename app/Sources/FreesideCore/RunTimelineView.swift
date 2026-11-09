@@ -456,7 +456,7 @@ struct RunTimelineView: View {
             }
             // What ran the attempt, as its admission recorded it (#979).
             if let admission {
-                VStack(alignment: .leading, spacing: 6) {
+                FactGroup(spacing: 6) {
                     ForEach(Array(RunDisplay.admissionRows(admission).enumerated()), id: \.offset) { _, row in
                         FactRow(label: row.label, value: row.value)
                     }

@@ -325,7 +325,7 @@ struct TaskStopConfirmationView: View {
             FreesideSheetHeader(
                 eyebrow: "Stop task", ask: "Stop this task?", consequence: Self.consequence,
                 binding: entry.taskID, askLineLimit: nil)
-            VStack(alignment: .leading, spacing: 11) {
+            FactGroup(spacing: 11) {
                 FactRow(label: "Task", value: entry.taskName)
                 FactRow(label: "Project", value: entry.projectName)
             }
@@ -381,8 +381,10 @@ struct TaskStopRecoveryView: View {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(pending, id: \.command.command_id) { entry in
                     VStack(alignment: .leading, spacing: 11) {
-                        FactRow(label: "Task", value: entry.taskName)
-                        FactRow(label: "Project", value: entry.projectName)
+                        FactGroup(spacing: 11) {
+                            FactRow(label: "Task", value: entry.taskName)
+                            FactRow(label: "Project", value: entry.projectName)
+                        }
                         TaskStopView(coordinator: coordinator, taskID: entry.taskID)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

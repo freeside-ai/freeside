@@ -157,8 +157,10 @@ struct DecisionStopCauseModuleView: View {
             if let audit = presentation.audit {
                 VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                     KeywordLabel(text: "Drift Audit")
-                    FactRow(label: "Verdict", value: audit.verdict)
-                    FactRow(label: "Confidence", value: audit.confidence)
+                    FactGroup(spacing: DecisionCardComposition.Scale.moduleGap) {
+                        FactRow(label: "Verdict", value: audit.verdict)
+                        FactRow(label: "Confidence", value: audit.confidence)
+                    }
                 }
                 // Quoted, like every model-written section on the card: the
                 // explanation and the reversal text are the audit model's

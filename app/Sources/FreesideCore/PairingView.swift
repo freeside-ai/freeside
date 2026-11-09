@@ -110,7 +110,9 @@ struct PairingView: View {
                 KeywordLabel(text: "Host facts")
                     .accessibilityAddTraits(.isHeader)
                 if let facts = model.facts {
-                    Self.detailsContent(facts, now: now)
+                    FactGroup(spacing: 11) {
+                        Self.detailsContent(facts, now: now)
+                    }
                 } else {
                     Text("Enter a code to see host details")
                         .font(FreesideFont.cardBody)

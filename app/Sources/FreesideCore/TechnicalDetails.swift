@@ -146,10 +146,12 @@ struct TechnicalDetailsSection: View {
                                 KeywordLabel(text: owner)
                                     .accessibilityAddTraits(.isHeader)
                             }
-                            ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
-                                TechnicalDetailRow(
-                                    row: row, rendersInteractiveControls: rendersInteractiveControls,
-                                    owner: group.owner)
+                            FactGroup(spacing: 6) {
+                                ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
+                                    TechnicalDetailRow(
+                                        row: row, rendersInteractiveControls: rendersInteractiveControls,
+                                        owner: group.owner)
+                                }
                             }
                         }
                     }
