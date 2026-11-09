@@ -179,6 +179,9 @@ it at most every few minutes, and "Never" means it has recorded no request
 from that device. **Revoke** asks for confirmation. Revoking this device signs
 the app out: once the daemon confirms, the stored credential is deleted and
 the app returns to pairing, which takes a new code from the daemon's host.
+Each active device has a **Notifications** switch on its own line, and any
+paired device can turn any active device's notifications on or off (see
+[Phone Notifications](#phone-notifications)).
 
 ## Phone Notifications
 
@@ -188,15 +191,18 @@ notification, and tapping it opens Freeside. Freeside has no Apple push channel
 of its own in Phase 1, so the ntfy app is what listens while Freeside is
 closed.
 
-**What notifies.** The daemon notifies each paired device once for each open
-item, within a few seconds of the item appearing. It sends nothing for an item
-created before the device paired, nothing for a snoozed proposal until its
-snooze ends, and no reminder for an item that stays open. A send that fails is
-retried up to six times over about half an hour; the inbox shows the item
-either way.
+**What notifies.** Notifications are off for every device until someone turns
+them on: in Settings, under **Notifications** for this device or **Devices**
+for any device. The daemon then notifies the device once for each item opened
+after its switch went on, within a few seconds of the item appearing. It sends
+nothing for an item created before the device paired or before its switch went
+on, nothing for a snoozed proposal until its snooze ends, and no reminder for
+an item that stays open. A send that fails is retried up to six times over
+about half an hour, unless the device is turned off meanwhile; the inbox shows
+the item either way.
 
-Set a phone up once. Freeside on the iPhone offers these steps right after it
-pairs, and keeps them on this device's card under **Devices**:
+Set a phone up once. Turn its notifications on in Settings under
+**Notifications**; these steps appear there, below the switch:
 
 1. Install the ntfy app on the iPhone and allow its notifications. The steps
    link its App Store page.
@@ -206,9 +212,8 @@ pairs, and keeps them on this device's card under **Devices**:
    server** in the ntfy app and enter it.
 3. On the daemon's host, send a test notification:
    `freesided notify-test -state-dir /path/to/daemon-state`.
-4. Tap the notification on the phone. Freeside opens on the inbox, under the
-   setup or Devices sheet if one is still open, and the steps' **Notification
-   opened** row changes from "Never" to the time.
+4. Tap the notification on the phone. Freeside opens on the inbox, and the
+   steps' **Notification opened** row changes from "Never" to the time.
 
 - **Notification opened is an observation.** The phone records when it opens
   a notification's link, per pairing, in its own preferences. Any app on the
