@@ -160,6 +160,14 @@ func preparationDigest(parts []string) domain.Digest {
 	return domain.Digest(contentaddr.Format(hash.Sum(nil)))
 }
 
+// projectLabels are the provenance label lines every project image carries
+// after its toolchain's, ending the LABEL instruction.
+const projectLabels = `	ai.freeside.project.repository="${PROJECT_REPOSITORY}" \
+	ai.freeside.project.repository-id="${PROJECT_REPOSITORY_ID}" \
+	ai.freeside.project.commit="${PROJECT_COMMIT}" \
+	ai.freeside.project.recipe-digest="${PROJECT_RECIPE_DIGEST}"
+`
+
 // renderContainerfile renders the generated Containerfile for the layout's
 // toolchain.
 func renderContainerfile(
