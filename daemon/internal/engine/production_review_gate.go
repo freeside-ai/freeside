@@ -282,6 +282,10 @@ func reviewedDiffScope(
 	return scope, nil
 }
 
+// reconcileReviewGate runs one pass of the production review gate. After the
+// review-mode check it runs the gate's phases in a fixed order. Each phase
+// either ends the pass with the state and error it returns, or hands its
+// result to the next.
 func (w *productionPublicationWorkflow) reconcileReviewGate(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -296,9 +300,82 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			binding.profile.Review.Mode, domain.ErrInvalidReviewMode,
 		)
 	}
-	latestRecord, latestFailure, err := w.latestReviewState(ctx, task.RunID)
+	sel, err := w.selectReviewState(ctx, task)
 	if err != nil {
 		return productionReviewPending, err
+	}
+	recoveredContradiction, state, done, err := w.recoverReviewContradiction(ctx, task, binding, sel)
+	if done {
+		return state, err
+	}
+	state, done, err = w.gateReviewConfiguration(ctx, task, binding, sel)
+	if done {
+		return state, err
+	}
+	state, done, err = w.reconcileCurrentReviewRecord(
+		ctx, task, binding, checkpoint, workspace, reviewInstructions, sel)
+	if done {
+		return state, err
+	}
+	round, state, done, err := w.chooseReviewRound(ctx, task, binding, sel, recoveredContradiction)
+	if done {
+		return state, err
+	}
+	inv, state, done, err := w.requestReviewRound(ctx, task, binding, checkpoint, reviewInstructions, round)
+	if done {
+		return state, err
+	}
+	state, done, err = w.launchReviewRound(ctx, task, binding, workspace, inv)
+	if done {
+		return state, err
+	}
+	result, state, done, err := w.pollReviewRound(ctx, task, binding, inv)
+	if done {
+		return state, err
+	}
+	record, remediationOutcome, err := w.recordReviewRound(ctx, task, binding, checkpoint, inv, result)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	return w.settleReviewRound(
+		ctx, task, binding, checkpoint, workspace, reviewInstructions, inv, record, remediationOutcome)
+}
+
+// reviewGateSelection is what the select phase hands to the phases that
+// decide whether a new round is needed: the latest review record and failure
+// at or above the round floor, and that floor.
+type reviewGateSelection struct {
+	record       *domain.ReviewRecord
+	failure      *domain.ReviewFailure
+	minimumRound int
+}
+
+// reviewRoundInvocation is the round the request phase admitted and
+// requested, handed to the phases that launch, poll, record, and settle it.
+// The review workspace is req.Workspace.
+type reviewRoundInvocation struct {
+	id        domain.InvocationID
+	round     int
+	admission domain.ReviewAdmission
+	req       exec.ReviewRequest
+	authority domain.Digest
+	verifier  exec.ReviewRequestAuthorityVerifier
+}
+
+// The phase methods below that may either end the pass or hand on share one
+// return shape: the values a phase hands on, then the gate state, a bool that
+// is true when the pass ends there, and the error. A phase that does not end
+// the pass returns a nil error.
+
+// selectReviewState reads the latest review record and failure, drops either
+// when it sits below a successor's or a reevaluation's round floor, and
+// removes the workspaces of settled rounds.
+func (w *productionPublicationWorkflow) selectReviewState(
+	ctx context.Context, task productionPublicationTask,
+) (reviewGateSelection, error) {
+	latestRecord, latestFailure, err := w.latestReviewState(ctx, task.RunID)
+	if err != nil {
+		return reviewGateSelection{}, err
 	}
 	minimumRound := 1
 	if task.Successor != nil {
@@ -321,39 +398,69 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 	if latestRecord != nil && latestRecord.Outcome != domain.ReviewFindings {
 		if err := w.removeReviewWorkspace(latestRecord.InvocationID); err != nil {
-			return productionReviewPending, err
+			return reviewGateSelection{}, err
 		}
 	}
 	if latestFailure != nil {
 		if err := w.removeReviewWorkspace(latestFailure.InvocationID); err != nil {
-			return productionReviewPending, err
+			return reviewGateSelection{}, err
 		}
 	}
-	recoveredContradiction := false
+	return reviewGateSelection{
+		record: latestRecord, failure: latestFailure, minimumRound: minimumRound,
+	}, nil
+}
+
+// recoverReviewContradiction handles a contradiction failure that outranks
+// the latest record. It refuses one bound to another candidate, parks the run
+// on the contradiction until reviewContradictionRecovered says the operator
+// recovered it, and then aborts the recovered invocation. The first result
+// reports that recovery for the hard-limit item ID.
+func (w *productionPublicationWorkflow) recoverReviewContradiction(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	sel reviewGateSelection,
+) (bool, productionReviewGateState, bool, error) {
+	latestRecord, latestFailure := sel.record, sel.failure
 	if latestFailure != nil && latestFailure.Class == domain.ReviewFailureContradiction &&
 		(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
 		if latestFailure.BaseSHA != binding.admission.Base.BaseSHA ||
 			latestFailure.HeadSHA != task.HeadSHA {
-			return productionReviewPending, fmt.Errorf(
+			return false, productionReviewPending, true, fmt.Errorf(
 				"latest review failure is bound to a different candidate: %w",
 				domain.ErrParentKeyMismatch,
 			)
 		}
 		recovered, err := w.reviewContradictionRecovered(ctx, *latestFailure)
 		if err != nil {
-			return productionReviewPending, err
+			return false, productionReviewPending, true, err
 		}
 		if !recovered {
 			if err := w.putReviewContradictionAttention(ctx, task, *latestFailure); err != nil {
-				return productionReviewPending, err
+				return false, productionReviewPending, true, err
 			}
-			return productionReviewPending, nil
+			return false, productionReviewPending, true, nil
 		}
 		if err := w.abortRecoveredReview(ctx, latestFailure.InvocationID); err != nil {
-			return productionReviewPending, err
+			return false, productionReviewPending, true, err
 		}
-		recoveredContradiction = true
+		return true, productionReviewPending, false, nil
 	}
+	return false, productionReviewPending, false, nil
+}
+
+// gateReviewConfiguration holds the profile's reviewer configuration digest
+// against the effective one. On a mismatch it passes only when
+// reviewConfigurationApproved finds an adopted supersession; otherwise it
+// parks the run on its configuration failure or records a new one.
+func (w *productionPublicationWorkflow) gateReviewConfiguration(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	sel reviewGateSelection,
+) (productionReviewGateState, bool, error) {
+	latestRecord, latestFailure, minimumRound := sel.record, sel.failure, sel.minimumRound
 	if binding.profile.Review.ConfigDigest != w.reviewConfigurationDigest {
 		// The gate consults the adoption whenever the pinned profile disagrees
 		// with the effective configuration, not only while the parked failure
@@ -363,12 +470,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// failure and re-parking an already recovered run.
 		approved, err := w.reviewConfigurationApproved(ctx, binding)
 		if err != nil {
-			return productionReviewPending, err
+			return productionReviewPending, true, err
 		}
 		if !approved {
 			if latestFailure != nil && latestFailure.Class == domain.ReviewFailureConfiguration &&
 				(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
-				return w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
+				state, err := w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
+				return state, true, err
 			}
 			round := minimumRound
 			if latestRecord != nil {
@@ -377,7 +485,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			if latestFailure != nil && latestFailure.Round >= round {
 				round = latestFailure.Round + 1
 			}
-			return w.recordReviewSourceFailure(ctx, task,
+			state, err := w.recordReviewSourceFailure(ctx, task,
 				ProductionReviewInvocationID(task.RunID, round), round,
 				binding.admission.Base.BaseSHA, task.HeadSHA,
 				&exec.ReviewSourceFailure{
@@ -387,12 +495,34 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 						w.reviewConfigurationDigest,
 					),
 				})
+			return state, true, err
 		}
 		// approved: the operator-authorized supersession approves the
 		// effective configuration, so the gate falls through; when the latest
 		// row is still the parked failure, the round machinery below re-gates
 		// the exact-failure adoption binding before advancing past it.
 	}
+	return productionReviewPending, false, nil
+}
+
+// reconcileCurrentReviewRecord acts on the latest record when it is current.
+// It first holds an admitted record's admission to the one the daemon stored.
+// A record bound to another candidate passes on only when a remediation
+// supersedes it. A current record (same candidate, admitted, current
+// instructions) runs the remediation reconcile, the shadow review, and
+// external or reentry escalation, then adjudicates its findings or passes
+// through passCurrentReviewRecord. The pass continues to a new round only
+// when the record is not current or adjudication asks for another round.
+func (w *productionPublicationWorkflow) reconcileCurrentReviewRecord(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	workspace PublicationCheckout,
+	reviewInstructions exec.ReviewInstructionBinding,
+	sel reviewGateSelection,
+) (productionReviewGateState, bool, error) {
+	latestRecord, latestFailure := sel.record, sel.failure
 	// A legacy record carries no admission snapshot: it was requested before
 	// review admission was recorded. Its persisted request is a legacy
 	// request the source no longer verifies, so the record cannot be re-gated
@@ -413,10 +543,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		stored, found, err := w.storedReviewAdmission(
 			ctx, domain.RoleReviewer, task.RunID, latestRecord.InvocationID)
 		if err != nil {
-			return productionReviewPending, err
+			return productionReviewPending, true, err
 		}
 		if !found || !latestRecord.Admission.Equal(stored) {
-			return productionReviewPending, fmt.Errorf(
+			return productionReviewPending, true, fmt.Errorf(
 				"review record %s carries an admission the daemon did not store for it: %w",
 				latestRecord.InvocationID, domain.ErrReviewAdmissionMismatch)
 		}
@@ -428,10 +558,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		if latestRecord.BaseSHA != binding.admission.Base.BaseSHA || latestRecord.HeadSHA != task.HeadSHA {
 			superseded, err := w.remediationSupersedesReview(ctx, task, *latestRecord)
 			if err != nil {
-				return productionReviewPending, err
+				return productionReviewPending, true, err
 			}
 			if !superseded {
-				return productionReviewPending, fmt.Errorf(
+				return productionReviewPending, true, fmt.Errorf(
 					"latest review record is bound to a different candidate: %w", domain.ErrParentKeyMismatch,
 				)
 			}
@@ -442,12 +572,12 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			); remediated {
 				findings, err := w.reviewRecordFindings(ctx, *latestRecord)
 				if err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				remediationOutcome, err = w.reconcileRemediationReview(
 					ctx, task, *latestRecord, findings, checkpoint.Imported.Claims)
 				if err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				if remediationOutcome.attention != "" {
 					if err := w.putReviewAttentionWithActionsAndID(
@@ -457,30 +587,32 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 						[]domain.Action{domain.ActionDiscuss, domain.ActionStop},
 						remediationOutcome.claims,
 					); err != nil {
-						return productionReviewPending, err
+						return productionReviewPending, true, err
 					}
-					return productionReviewEscalated, nil
+					return productionReviewEscalated, true, nil
 				}
 			}
 			shadowComplete, err := w.reconcileShadowReview(
 				ctx, task, binding, checkpoint, workspace, reviewInstructions, *latestRecord,
 			)
 			if err != nil {
-				return productionReviewPending, err
+				return productionReviewPending, true, err
 			}
 			if !shadowComplete {
-				return productionReviewPending, nil
+				return productionReviewPending, true, nil
 			}
 			adjudicatesExternal, err := w.adjudicatesExternalReview(ctx, task, binding, *latestRecord)
 			if err != nil {
-				return productionReviewPending, err
+				return productionReviewPending, true, err
 			}
 			if task.answersExternalReview() && !adjudicatesExternal {
-				return w.escalateExternalReviewFindings(ctx, task, *latestRecord)
+				state, err := w.escalateExternalReviewFindings(ctx, task, *latestRecord)
+				return state, true, err
 			}
 			if latestRecord.Outcome == domain.ReviewFindings && task.reentersInPlace() &&
 				!adjudicatesExternal {
-				return w.escalateReentryFindings(ctx, task, *latestRecord)
+				state, err := w.escalateReentryFindings(ctx, task, *latestRecord)
+				return state, true, err
 			}
 			// An external review cycle's first round adjudicates its external
 			// findings whatever Freeside's own review found, so a clean record
@@ -489,13 +621,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				candidateWorkspace, err := w.ensureReviewWorkspace(
 					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
 				if err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				baseWorkspaceID := findingAdjudicationBaseWorkspaceID(latestRecord.InvocationID)
 				baseWorkspace, err := w.ensureReviewWorkspace(
 					ctx, baseWorkspaceID, workspace, binding.admission.Base.BaseSHA)
 				if err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				var state productionReviewGateState
 				if remediationOutcome.dissent != nil {
@@ -507,57 +639,93 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 						ctx, task, binding, *latestRecord, baseWorkspace, candidateWorkspace)
 				}
 				if err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				if err := w.removeReviewWorkspace(latestRecord.InvocationID); err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				if err := w.removeReviewWorkspace(baseWorkspaceID); err != nil {
-					return productionReviewPending, err
+					return productionReviewPending, true, err
 				}
 				if state != productionReviewContinue {
-					return state, nil
+					return state, true, nil
 				}
 				advanceReview = true
 			}
 			if !advanceReview {
-				req, requestAuthority, err := w.productionReviewRequest(
-					ctx, task, binding, checkpoint, latestRecord.InvocationID,
-					latestRecord.Round, reviewInstructions, latestAdmission,
-				)
-				if err != nil {
-					return productionReviewPending, err
-				}
-				requestAuthority, err = w.persistedReviewAuthority(
-					ctx, latestRecord.InvocationID, req, requestAuthority)
-				if err != nil {
-					return productionReviewPending, err
-				}
-				authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
-				if !ok {
-					return productionReviewPending, errors.New(
-						"review source cannot re-gate persisted request authority")
-				}
-				if err := authorityVerifier.VerifyRequestAuthority(
-					ctx, latestRecord.InvocationID, requestAuthority,
-				); err != nil {
-					return productionReviewPending, fmt.Errorf(
-						"re-gate persisted review instruction authority: %w", err)
-				}
-				// This clean-pass re-entry is downstream of the record write that
-				// already cleared the durable row; clear its durable twin too so a
-				// crash-recovered pass never leaves an orphan pending retry.
-				if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-					return tx.DeleteReviewRetry(ctx, task.RunID)
-				}); err != nil {
-					return productionReviewPending, err
-				}
-				delete(w.reviewRetryAfter, task.RunID)
-				return productionReviewPassed, nil
+				state, err := w.passCurrentReviewRecord(
+					ctx, task, binding, checkpoint, reviewInstructions, latestRecord, latestAdmission)
+				return state, true, err
 			}
 		}
 	}
+	return productionReviewPending, false, nil
+}
 
+// passCurrentReviewRecord passes a current record that needs no adjudication.
+// It rebuilds the record's request from current state, re-gates its persisted
+// authority through the review source's VerifyRequestAuthority, and clears the
+// pending retry before reporting the pass.
+func (w *productionPublicationWorkflow) passCurrentReviewRecord(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	reviewInstructions exec.ReviewInstructionBinding,
+	latestRecord *domain.ReviewRecord,
+	latestAdmission domain.ReviewAdmission,
+) (productionReviewGateState, error) {
+	req, requestAuthority, err := w.productionReviewRequest(
+		ctx, task, binding, checkpoint, latestRecord.InvocationID,
+		latestRecord.Round, reviewInstructions, latestAdmission,
+	)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	requestAuthority, err = w.persistedReviewAuthority(
+		ctx, latestRecord.InvocationID, req, requestAuthority)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
+	if !ok {
+		return productionReviewPending, errors.New(
+			"review source cannot re-gate persisted request authority")
+	}
+	if err := authorityVerifier.VerifyRequestAuthority(
+		ctx, latestRecord.InvocationID, requestAuthority,
+	); err != nil {
+		return productionReviewPending, fmt.Errorf(
+			"re-gate persisted review instruction authority: %w", err)
+	}
+	// This clean-pass re-entry is downstream of the record write that
+	// already cleared the durable row; clear its durable twin too so a
+	// crash-recovered pass never leaves an orphan pending retry.
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.DeleteReviewRetry(ctx, task.RunID)
+	}); err != nil {
+		return productionReviewPending, err
+	}
+	delete(w.reviewRetryAfter, task.RunID)
+	return productionReviewPassed, nil
+}
+
+// chooseReviewRound picks the next round. A failure that outranks the latest
+// record must be bound to this candidate; a quota failure escalates, a
+// configuration failure waits for reviewConfigurationRecovered, and a
+// transient one sets the retry deadline. It then escalates past
+// reviewHardRoundLimit and waits out the retry deadline, rebuilding a lost
+// one through reconstructReviewRetryDeadline. An adopted configuration
+// failure sets its own copy of recoveredContradiction, which only the
+// hard-limit item ID here reads.
+func (w *productionPublicationWorkflow) chooseReviewRound(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	sel reviewGateSelection,
+	recoveredContradiction bool,
+) (int, productionReviewGateState, bool, error) {
+	latestRecord, latestFailure, minimumRound := sel.record, sel.failure, sel.minimumRound
 	round := minimumRound
 	if latestRecord != nil {
 		round = latestRecord.Round + 1
@@ -565,7 +733,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if latestFailure != nil && latestFailure.Round >= round {
 		if latestFailure.BaseSHA != binding.admission.Base.BaseSHA ||
 			latestFailure.HeadSHA != task.HeadSHA {
-			return productionReviewPending, fmt.Errorf(
+			return 0, productionReviewPending, true, fmt.Errorf(
 				"latest review failure is bound to a different candidate: %w",
 				domain.ErrParentKeyMismatch,
 			)
@@ -580,17 +748,18 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				fmt.Sprintf("Review stopped because of a %s failure.", latestFailure.Class),
 				domain.AttentionReviewDispute,
 			); err != nil {
-				return productionReviewPending, err
+				return 0, productionReviewPending, true, err
 			}
-			return productionReviewEscalated, nil
+			return 0, productionReviewEscalated, true, nil
 		}
 		if latestFailure.Class == domain.ReviewFailureConfiguration {
 			adopted, err := w.reviewConfigurationRecovered(ctx, binding, *latestFailure)
 			if err != nil {
-				return productionReviewPending, err
+				return 0, productionReviewPending, true, err
 			}
 			if !adopted {
-				return w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
+				state, err := w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
+				return 0, state, true, err
 			}
 			// The adopted failure row's round may sit exactly at the hard
 			// limit; the exhaustion item below must then live under the
@@ -607,7 +776,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 	hardLimit, err := w.reviewHardRoundLimit(ctx, task.RunID)
 	if err != nil {
-		return productionReviewPending, err
+		return 0, productionReviewPending, true, err
 	}
 	if round > hardLimit {
 		record := domain.ReviewRecord{
@@ -620,7 +789,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		} else if task.reentersInPlace() {
 			legacyOpen, err := w.readinessLegacyExhaustionOpen(ctx, task, itemID)
 			if err != nil {
-				return productionReviewPending, err
+				return 0, productionReviewPending, true, err
 			}
 			if !legacyOpen {
 				itemID = readinessReentryExhaustionItemID(*task.Successor)
@@ -630,13 +799,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			fmt.Sprintf("Review exhausted the resolved hard limit of %d rounds.", hardLimit),
 			domain.AttentionReviewDiminishing, itemID,
 		); err != nil {
-			return productionReviewPending, err
+			return 0, productionReviewPending, true, err
 		}
-		return productionReviewEscalated, nil
+		return 0, productionReviewEscalated, true, nil
 	}
 	if retryAt, ok := w.reviewRetryAfter[task.RunID]; ok {
 		if w.now().Before(retryAt) {
-			return productionReviewPending, nil
+			return 0, productionReviewPending, true, nil
 		}
 	} else {
 		// No process-local deadline: a restart may have dropped a pending
@@ -644,13 +813,29 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// fails closed on a corrupt or unreadable row rather than retrying.
 		pending, err := w.reconstructReviewRetryDeadline(ctx, task, binding, round)
 		if err != nil {
-			return productionReviewPending, err
+			return 0, productionReviewPending, true, err
 		}
 		if pending {
-			return productionReviewPending, nil
+			return 0, productionReviewPending, true, nil
 		}
 	}
+	return round, productionReviewPending, false, nil
+}
 
+// requestReviewRound admits the round's reviewer through ensureReviewAdmission
+// (a refusal fails the invocation, a capacity or memory refusal waits),
+// releases a launch-memory quarantine, and records the request. Before any
+// launch it requires an authority verifier, checks the request against
+// VerifyReviewRequestSupersession, and re-gates its persisted authority
+// through VerifyRequestAuthority.
+func (w *productionPublicationWorkflow) requestReviewRound(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	reviewInstructions exec.ReviewInstructionBinding,
+	round int,
+) (reviewRoundInvocation, productionReviewGateState, bool, error) {
 	id := ProductionReviewInvocationID(task.RunID, round)
 	// Admission comes before the request: the request and its authority
 	// digest carry the snapshot. A refusal fails the invocation as the
@@ -659,60 +844,64 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		var refusal *exec.ReviewSourceFailure
 		if errors.As(err, &refusal) {
-			return w.retryOrRecordReviewFailure(ctx, task, id, round,
+			state, err := w.retryOrRecordReviewFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
+			return reviewRoundInvocation{}, state, true, err
 		}
 		// A full pool, memory that does not fit yet, or a routed reviewer's
 		// marked window is a wait, not a source failure: it spends no retry
 		// budget, and a later pass asks again once capacity frees or the
 		// window resets.
 		if reviewCapacityRefusal(err) {
-			return productionReviewPending, w.holdReviewForCapacity(ctx, task.RunID, id, err)
+			return reviewRoundInvocation{}, productionReviewPending, true,
+				w.holdReviewForCapacity(ctx, task.RunID, id, err)
 		}
 		// A launch the budget refuses for good, as under a runtime with no
 		// recorded overhead or a budget lowered below it, waits under the
 		// notice for a budget or start that fits it.
 		if launchMemoryRefusal(err) {
-			return productionReviewPending, noticeLaunchMemoryRefusal(
+			return reviewRoundInvocation{}, productionReviewPending, true, noticeLaunchMemoryRefusal(
 				ctx, w.store, w.attention, &w.holdPace, task.RunID, id, task.ProjectID, err)
 		}
-		return productionReviewPending, err
+		return reviewRoundInvocation{}, productionReviewPending, true, err
 	}
 	// Not gated on the startup bound: a budget recorded since may have raised
 	// the notice.
 	if err := releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID); err != nil {
-		return productionReviewPending, err
+		return reviewRoundInvocation{}, productionReviewPending, true, err
 	}
 	req, requestAuthority, err := w.productionReviewRequest(
 		ctx, task, binding, checkpoint, id, round, reviewInstructions, admission,
 	)
 	if err != nil {
-		return productionReviewPending, err
+		return reviewRoundInvocation{}, productionReviewPending, true, err
 	}
-	reviewWorkspace := req.Workspace
 	if err := w.recordReviewRequest(ctx, id, req); err != nil {
-		return productionReviewPending, err
+		return reviewRoundInvocation{}, productionReviewPending, true, err
 	}
 	authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
 	if !ok {
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			&exec.ReviewSourceFailure{
 				Class: domain.ReviewFailureConfiguration,
 				Err:   errors.New("review source cannot verify request authority"),
 			},
 		)
+		return reviewRoundInvocation{}, state, true, err
 	}
 	if supersessionVerifier, ok := w.reviewSource.(exec.ReviewRequestSupersessionVerifier); ok {
 		if err := supersessionVerifier.VerifyReviewRequestSupersession(ctx, id, req); err != nil &&
 			!errors.Is(err, exec.ErrUnknownInvocation) {
 			if errors.Is(err, exec.ErrSupersededReviewRequest) || errors.Is(err, exec.ErrLegacyReviewRequest) {
-				return w.recordReviewSourceFailure(ctx, task, id, round,
+				state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 					binding.admission.Base.BaseSHA, task.HeadSHA,
 					&exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err})
+				return reviewRoundInvocation{}, state, true, err
 			}
-			return w.retryOrRecordReviewFailure(ctx, task, id, round,
+			state, err := w.retryOrRecordReviewFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
+			return reviewRoundInvocation{}, state, true, err
 		}
 	}
 	// Re-gate the persisted request against the engine's current authority
@@ -723,19 +912,42 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil &&
 		!errors.Is(err, exec.ErrUnknownInvocation) {
 		if errors.Is(err, exec.ErrLegacyReviewRequest) {
-			return w.recordReviewSourceFailure(ctx, task, id, round,
+			state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA,
 				&exec.ReviewSourceFailure{
 					Class: domain.ReviewFailureTransient,
 					Err:   err,
 				},
 			)
+			return reviewRoundInvocation{}, state, true, err
 		}
-		return w.retryOrRecordReviewFailure(ctx, task, id, round,
+		state, err := w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA, err)
+		return reviewRoundInvocation{}, state, true, err
 	}
+	return reviewRoundInvocation{
+		id: id, round: round, admission: admission, req: req,
+		authority: requestAuthority, verifier: authorityVerifier,
+	}, productionReviewPending, false, nil
+}
+
+// launchReviewRound inspects the requested invocation, claiming provider
+// dispatch first. An unknown invocation is launched: its retained workspace
+// must match the request's, and the launch runs between the
+// DurableTransitionReviewRequest hooks with a dispatch claim before the
+// request and before the second Inspect. It records the observed status and
+// ends the pass while the review is pending or running.
+func (w *productionPublicationWorkflow) launchReviewRound(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	workspace PublicationCheckout,
+	inv reviewRoundInvocation,
+) (productionReviewGateState, bool, error) {
+	id, round, req := inv.id, inv.round, inv.req
+	reviewWorkspace := req.Workspace
 	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
-		return productionReviewPending, err
+		return productionReviewPending, true, err
 	}
 	status, err := w.reviewSource.Inspect(ctx, id)
 	if errors.Is(err, exec.ErrUnknownInvocation) {
@@ -746,54 +958,76 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(ctx, id, workspace, req.HeadSHA)
 		if workspaceErr != nil {
 			if errors.Is(workspaceErr, publish.ErrMaterializationRefused) {
-				return w.recordReviewSourceFailure(ctx, task, id, round,
+				state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 					binding.admission.Base.BaseSHA, task.HeadSHA,
 					&exec.ReviewSourceFailure{
 						Class: domain.ReviewFailureConfiguration,
 						Err:   workspaceErr,
 					},
 				)
+				return state, true, err
 			}
-			return productionReviewPending, workspaceErr
+			return productionReviewPending, true, workspaceErr
 		}
 		if retainedWorkspace != reviewWorkspace {
-			return productionReviewPending, fmt.Errorf(
+			return productionReviewPending, true, fmt.Errorf(
 				"retained review workspace changed: %w", domain.ErrPathBoundaryMismatch,
 			)
 		}
 		if err := runDurableTransitionHook(w.transitionHook,
 			DurableTransitionReviewRequest, DurableTransitionBefore); err != nil {
-			return productionReviewPending, err
+			return productionReviewPending, true, err
 		}
 		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
-			return productionReviewPending, err
+			return productionReviewPending, true, err
 		}
 		if err := w.reviewSource.RequestReview(ctx, id, req); err != nil {
-			return w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+			state, err := w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+			return state, true, err
 		}
 		if err := runDurableTransitionHook(w.transitionHook,
 			DurableTransitionReviewRequest, DurableTransitionAfter); err != nil {
-			return productionReviewPending, err
+			return productionReviewPending, true, err
 		}
 		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
-			return productionReviewPending, err
+			return productionReviewPending, true, err
 		}
 		status, err = w.reviewSource.Inspect(ctx, id)
 		if err != nil {
-			return w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+			state, err := w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+			return state, true, err
 		}
 	}
 	if err != nil {
-		return w.retryOrRecordReviewFailure(
+		state, err := w.retryOrRecordReviewFailure(
 			ctx, task, id, round, binding.admission.Base.BaseSHA, task.HeadSHA, err,
 		)
+		return state, true, err
 	}
 	if err := w.observeReviewInvocation(ctx, task.RunID, id, status); err != nil {
-		return productionReviewPending, err
+		return productionReviewPending, true, err
 	}
 	if status == exec.StatusPending || status == exec.StatusRunning {
-		return productionReviewPending, nil
+		return productionReviewPending, true, nil
 	}
+	return productionReviewPending, false, nil
+}
+
+// pollReviewRound polls the finished invocation and validates its result
+// before anything is recorded: result.Validate, the invocation, base, head,
+// and configuration binding, the instruction digest, equality with the stored
+// admission, a post-result VerifyRequestAuthority, the source's Verify, each
+// finding's run, and each finding's overlap with the engine's own reviewed
+// diff. A failed check records a source failure or schedules a retry.
+func (w *productionPublicationWorkflow) pollReviewRound(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	inv reviewRoundInvocation,
+) (exec.ReviewResult, productionReviewGateState, bool, error) {
+	id, round, req, admission := inv.id, inv.round, inv.req, inv.admission
+	requestAuthority, authorityVerifier := inv.authority, inv.verifier
+	reviewWorkspace := req.Workspace
 	result, err := w.reviewSource.Poll(ctx, id)
 	if errors.Is(err, exec.ErrNoResult) {
 		err = normalizeTerminalReviewFailure(err)
@@ -801,80 +1035,88 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		scheduled, schedErr := w.scheduleReviewInvocationRetry(
 			ctx, id, task.RunID, round, binding.admission.Base.BaseSHA, task.HeadSHA, err)
 		if schedErr != nil {
-			return productionReviewPending, schedErr
+			return exec.ReviewResult{}, productionReviewPending, true, schedErr
 		}
 		if scheduled {
-			return productionReviewPending, nil
+			return exec.ReviewResult{}, productionReviewPending, true, nil
 		}
 	}
 	if errors.Is(err, exec.ErrResultNotReady) {
-		return productionReviewPending, nil
+		return exec.ReviewResult{}, productionReviewPending, true, nil
 	}
 	if err != nil {
-		return w.recordReviewSourceFailure(
+		state, err := w.recordReviewSourceFailure(
 			ctx, task, id, round, binding.admission.Base.BaseSHA, task.HeadSHA, err,
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	if err := result.Validate(); err != nil {
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction, err, result.Usage),
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	if result.InvocationID != id || result.BaseSHA != binding.admission.Base.BaseSHA ||
 		result.HeadSHA != task.HeadSHA || result.ConfigurationDigest != w.reviewConfigurationDigest {
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			reviewSourceFailureWithUsage(
 				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	if result.InstructionDigest != req.Instructions.ResultDigest {
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			reviewSourceFailureWithUsage(
 				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	// The result says which agent reviewed by returning the snapshot it was
 	// asked under. One that differs from the stored snapshot names an agent
 	// the daemon did not admit for this invocation, so the pass is a
 	// contradiction and no record is written.
 	if !result.Admission.Equal(admission) {
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction,
 				fmt.Errorf("review result %s: %w", id, domain.ErrReviewAdmissionMismatch), result.Usage),
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil {
-		return w.retryOrRecordReviewFailure(ctx, task, id, round,
+		state, err := w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			preserveReviewSourceFailureUsage(err, result.Usage),
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	if err := w.reviewSource.Verify(ctx, id, binding.admission.Base.BaseSHA, task.HeadSHA); err != nil {
 		scheduled, schedErr := w.scheduleReviewInvocationRetry(
 			ctx, id, task.RunID, round, binding.admission.Base.BaseSHA, task.HeadSHA,
 			preserveReviewSourceFailureUsage(err, result.Usage))
 		if schedErr != nil {
-			return productionReviewPending, schedErr
+			return exec.ReviewResult{}, productionReviewPending, true, schedErr
 		}
 		if scheduled || errors.Is(err, exec.ErrResultNotReady) {
-			return productionReviewPending, nil
+			return exec.ReviewResult{}, productionReviewPending, true, nil
 		}
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
 			preserveReviewSourceFailureUsage(err, result.Usage),
 		)
+		return exec.ReviewResult{}, state, true, err
 	}
 	for _, finding := range result.Findings {
 		if finding.RunID != task.RunID {
-			return w.recordReviewSourceFailure(ctx, task, id, round,
+			state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA,
 				reviewSourceFailureWithUsage(
 					domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 			)
+			return exec.ReviewResult{}, state, true, err
 		}
 	}
 	// Fail closed unless every routed finding resolves into the exact reviewed
@@ -891,7 +1133,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		scope, err := reviewedDiffScope(
 			ctx, w.workDir, reviewWorkspace, binding.admission.Base.BaseSHA, req.HeadSHA)
 		if err != nil {
-			return productionReviewPending, err
+			return exec.ReviewResult{}, productionReviewPending, true, err
 		}
 		for _, finding := range result.Findings {
 			if scope.Overlaps(finding.Location) {
@@ -901,15 +1143,33 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			if finding.Location != nil {
 				locText = finding.Location.String()
 			}
-			return w.recordReviewSourceFailure(ctx, task, id, round,
+			state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA,
 				reviewSourceFailureWithUsage(
 					domain.ReviewFailureContradiction, fmt.Errorf(
 						"review finding %s location %s does not overlap the reviewed diff: %w",
 						finding.ID, locText, domain.ErrParentKeyMismatch), result.Usage),
 			)
+			return exec.ReviewResult{}, state, true, err
 		}
 	}
+	return result, productionReviewPending, false, nil
+}
+
+// recordReviewRound builds the round's record from the stored admission,
+// never the result's, reconciles a remediation's dispositions, and writes the
+// usage, record, diff metrics, dispositions, and the retry delete in one
+// write between the DurableTransitionReviewResult hooks.
+func (w *productionPublicationWorkflow) recordReviewRound(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	inv reviewRoundInvocation,
+	result exec.ReviewResult,
+) (domain.ReviewRecord, remediationReviewOutcome, error) {
+	id, round, admission := inv.id, inv.round, inv.admission
+	reviewWorkspace := inv.req.Workspace
 	outcome := domain.ReviewClean
 	findingIDs := make([]domain.FindingID, len(result.Findings))
 	if len(result.Findings) > 0 {
@@ -930,22 +1190,22 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		Outcome: outcome, FindingIDs: findingIDs,
 	})
 	if err != nil {
-		return productionReviewPending, err
+		return domain.ReviewRecord{}, remediationReviewOutcome{}, err
 	}
 	remediationOutcome, err := w.reconcileRemediationReview(
 		ctx, task, record, result.Findings, checkpoint.Imported.Claims)
 	if err != nil {
-		return productionReviewPending, err
+		return domain.ReviewRecord{}, remediationReviewOutcome{}, err
 	}
 	diffMetrics, err := w.reviewRoundDiffMetrics(ctx, task, binding, reviewWorkspace, record)
 	if err != nil {
-		return productionReviewPending, err
+		return domain.ReviewRecord{}, remediationReviewOutcome{}, err
 	}
 	// The completed record supersedes any pending same-invocation retry for
 	// this run: clear the durable row atomically with the record it writes.
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionReviewResult, DurableTransitionBefore); err != nil {
-		return productionReviewPending, err
+		return domain.ReviewRecord{}, remediationReviewOutcome{}, err
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if _, err := tx.AppendUsageObservations(ctx, id, result.Usage); err != nil {
@@ -980,12 +1240,33 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		return tx.DeleteReviewRetry(ctx, task.RunID)
 	}); err != nil {
-		return productionReviewPending, err
+		return domain.ReviewRecord{}, remediationReviewOutcome{}, err
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionReviewResult, DurableTransitionAfter); err != nil {
-		return productionReviewPending, err
+		return domain.ReviewRecord{}, remediationReviewOutcome{}, err
 	}
+	return record, remediationOutcome, nil
+}
+
+// settleReviewRound concludes the recorded round: the shadow review first,
+// then a remediation's attention item, external or reentry escalation, and
+// finding adjudication, removing the round's workspaces. Unlike
+// reconcileCurrentReviewRecord, it turns productionReviewContinue into
+// productionReviewPending, so the next pass starts the next round.
+func (w *productionPublicationWorkflow) settleReviewRound(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	workspace PublicationCheckout,
+	reviewInstructions exec.ReviewInstructionBinding,
+	inv reviewRoundInvocation,
+	record domain.ReviewRecord,
+	remediationOutcome remediationReviewOutcome,
+) (productionReviewGateState, error) {
+	id := inv.id
+	reviewWorkspace := inv.req.Workspace
 	shadowComplete, err := w.reconcileShadowReview(
 		ctx, task, binding, checkpoint, workspace, reviewInstructions, record,
 	)
