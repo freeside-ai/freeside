@@ -395,8 +395,12 @@ public protocol APIProtocol: Sendable {
     ///
     /// Ingests one typed decision-path event (plan §8). Deliberately not a
     /// ClientCommand, like reportDeliveryOpened: it records a fact, makes no
-    /// judgment, and has no version precondition. Recording never advances the
-    /// server revision. The device is the bearer credential's and the event_id
+    /// judgment, and has no version precondition. Recording does not advance
+    /// the server revision, with one exception: the first card_opened for an
+    /// item's decision surface sets the item's surface_first_opened_at, which
+    /// advances the revision once so every device's inbox learns the item was
+    /// viewed. A repeat open of that surface advances nothing. The device is
+    /// the bearer credential's and the event_id
     /// is the path idempotency key, so the body carries neither; received_at is
     /// daemon-stamped. Idempotent by (device, event_id): replaying returns the
     /// recorded event unchanged. The action-bearing kinds (action_taken,
@@ -973,8 +977,12 @@ extension APIProtocol {
     ///
     /// Ingests one typed decision-path event (plan §8). Deliberately not a
     /// ClientCommand, like reportDeliveryOpened: it records a fact, makes no
-    /// judgment, and has no version precondition. Recording never advances the
-    /// server revision. The device is the bearer credential's and the event_id
+    /// judgment, and has no version precondition. Recording does not advance
+    /// the server revision, with one exception: the first card_opened for an
+    /// item's decision surface sets the item's surface_first_opened_at, which
+    /// advances the revision once so every device's inbox learns the item was
+    /// viewed. A repeat open of that surface advances nothing. The device is
+    /// the bearer credential's and the event_id
     /// is the path idempotency key, so the body carries neither; received_at is
     /// daemon-stamped. Idempotent by (device, event_id): replaying returns the
     /// recorded event unchanged. The action-bearing kinds (action_taken,
@@ -17050,6 +17058,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/decided_at`.
             public var decided_at: Foundation.Date?
+            /// When any paired device first opened the item's current decision surface: the daemon-stamped received_at of the earliest card_opened comprehension event bound to decision_surface.digest. Null while no device has opened that surface. Derived display state, never client-set, and nothing gates on it: the inbox marks an open item unviewed while it is null. A revision of the decision surface (a new digest) resets it to null. Moving it advances as_of_revision but never entity_version.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/surface_first_opened_at`.
+            public var surface_first_opened_at: Foundation.Date?
             /// What closed the item: the decision that concluded it, or why the daemon closed it. Daemon-stamped in the transaction that moves the item off open, immutable once set, and never client-set. Null while the item is open, and on an item closed by a daemon that predates this field; non-null on every other closed item.
             ///
             ///
@@ -17179,6 +17192,7 @@ public enum Components {
             ///   - created_at: The daemon-stamped instant the attention item was created. Immutable and never client-set; null only for items persisted before this field existed.
             ///   - expires_when:
             ///   - decided_at: The daemon-stamped instant the item's first concluding decision was accepted, recorded in the same transaction as the command and the status flip; the durable endpoint of the open-to-decision metric (plan §4). Never client-set; null while the item is open and for items concluded without a decision (expiry, supersession).
+            ///   - surface_first_opened_at: When any paired device first opened the item's current decision surface: the daemon-stamped received_at of the earliest card_opened comprehension event bound to decision_surface.digest. Null while no device has opened that surface. Derived display state, never client-set, and nothing gates on it: the inbox marks an open item unviewed while it is null. A revision of the decision surface (a new digest) resets it to null. Moving it advances as_of_revision but never entity_version.
             ///   - conclusion: What closed the item: the decision that concluded it, or why the daemon closed it. Daemon-stamped in the transaction that moves the item off open, immutable once set, and never client-set. Null while the item is open, and on an item closed by a daemon that predates this field; non-null on every other closed item.
             ///   - posture: The explicit admission posture of a system_health item (plan §4; mirrors domain.AttentionItem.Posture): blocking preserves the item's admission-gating effect, while advisory keeps the observation open and visible without blocking unrelated unattended admission. Required and non-null exactly on system_health items; null on every other item type. A blocking_supersession may appear only with the blocking posture. Fixed at creation and never client-set.
             ///   - blocking_supersession: The typed condition under which this open system_health item does not block unattended admission (plan §4, §5.7; mirrors domain.AttentionItem.BlockingSupersession): set at creation by the daemon from the validated configuration the item reports on, null for every other item and for a health item that blocks unconditionally. Never client-set, and never a verdict — the daemon re-validates the condition against live policy at each admission, so a cleared or retargeted configuration re-blocks the still-open item.
@@ -17230,6 +17244,7 @@ public enum Components {
                 created_at: Foundation.Date? = nil,
                 expires_when: Foundation.Date? = nil,
                 decided_at: Foundation.Date? = nil,
+                surface_first_opened_at: Foundation.Date? = nil,
                 conclusion: Components.Schemas.AttentionItem.conclusionPayload? = nil,
                 posture: Components.Schemas.AttentionItem.posturePayload? = nil,
                 blocking_supersession: Components.Schemas.AttentionItem.blocking_supersessionPayload? = nil,
@@ -17281,6 +17296,7 @@ public enum Components {
                 self.created_at = created_at
                 self.expires_when = expires_when
                 self.decided_at = decided_at
+                self.surface_first_opened_at = surface_first_opened_at
                 self.conclusion = conclusion
                 self.posture = posture
                 self.blocking_supersession = blocking_supersession
@@ -17333,6 +17349,7 @@ public enum Components {
                 case created_at
                 case expires_when
                 case decided_at
+                case surface_first_opened_at
                 case conclusion
                 case posture
                 case blocking_supersession
@@ -25326,8 +25343,12 @@ public enum Operations {
     ///
     /// Ingests one typed decision-path event (plan §8). Deliberately not a
     /// ClientCommand, like reportDeliveryOpened: it records a fact, makes no
-    /// judgment, and has no version precondition. Recording never advances the
-    /// server revision. The device is the bearer credential's and the event_id
+    /// judgment, and has no version precondition. Recording does not advance
+    /// the server revision, with one exception: the first card_opened for an
+    /// item's decision surface sets the item's surface_first_opened_at, which
+    /// advances the revision once so every device's inbox learns the item was
+    /// viewed. A repeat open of that surface advances nothing. The device is
+    /// the bearer credential's and the event_id
     /// is the path idempotency key, so the body carries neither; received_at is
     /// daemon-stamped. Idempotent by (device, event_id): replaying returns the
     /// recorded event unchanged. The action-bearing kinds (action_taken,

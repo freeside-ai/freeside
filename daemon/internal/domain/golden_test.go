@@ -588,6 +588,14 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The viewed fixture pins the present render of surface_first_opened_at
+	// (issue #2930): the open item above as the signet read projection serves
+	// it once a device has opened its current decision surface. Every other
+	// fixture keeps the explicit-null render.
+	surfaceViewedItem := item
+	surfaceOpenedAt := ts.Add(time.Hour)
+	surfaceViewedItem.SurfaceFirstOpenedAt = &surfaceOpenedAt
+
 	// The waived-posture shape (issues #319/#321): a system_health notice
 	// carrying the typed condition that supersedes its blocking effect, so the
 	// goldens pin the present render of blocking_supersession beside the
@@ -2523,6 +2531,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_agent_question", agentQuestionItem},
 		{"blocked_outcome", blockedOutcome},
 		{"attention_item_decided", decidedItem},
+		{"attention_item_surface_viewed", surfaceViewedItem},
 		{"attention_item_superseded", supersededItem},
 		{"attention_item_conclusion_adjudicated", adjudicatedDispute},
 		{"attention_item_conclusion_expired", expiredItem},
