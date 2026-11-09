@@ -1,9 +1,10 @@
 # Ward Density on Apple Container
 
 - Status: complete
-- Tested: 2026-10-22
+- Tested: 2026-10-22; concurrent steps 2026-11-09
 - Runtime: Apple container 1.1.0 (`5973b9c`), guest kernel `vmlinux-6.18.15-186`
-- Host: Mac Studio, Apple M1 Max, 10 cores, 32 GiB, macOS 26.7.1
+- Host: Mac Studio, Apple M1 Max, 10 cores (8 performance, 2 efficiency),
+  32 GiB, macOS 26.7.1; macOS 27.2 for the concurrent steps
 - Plan target: `docs/plan.md` §5.4 Machine Capacity, §5.7 ward class
 
 ## Conclusion
@@ -15,11 +16,16 @@ budget should reserve the declared size plus a fixed per-VM overhead. That
 changes the reservation the plan states, so it is a gated plan edit, filed
 as #2188 and not made here.
 
-**Concurrent wards were not measured.** The steps for 4, 6 and 8 concurrent
-writers need a host with no other containers. For more than an hour this
-host ran another Freeside ward while swap stood at 17 of 18 GiB, so adding
-up to 18 GiB of benchmark wards risked critical pressure under live work.
-CPU overcommit and the slowdown point stay open in #2187.
+**CPU runs out before memory.** On a quiet host, four concurrent writers
+(16 virtual CPUs on 10 cores) already leave the host about 7% idle, and
+each build takes 2.1 times as long as it does alone. Past four, every
+added writer stretches every build without finishing more work: four
+writers finish a build every 91 s, six every 95 s, eight every 106 s.
+Memory holds up longer. Eight writers (17.2 GiB of ward footprint) put
+macOS at warning pressure about a minute into the build and keep it there,
+but never reach critical, grow swap, or hit a memory limit. Of the counts
+measured (1, 4, 6, 8), four writers is the useful ceiling on this Studio
+(#2187).
 
 **Upgrade verdict: upgrade to 1.6.0, as its own unit, for security fixes, not
 density.** No release from 1.2.0 to 1.6.0 lifts a known limitation or changes
@@ -97,15 +103,57 @@ An earlier run seeded only `daemon/`, failed 12 packages on missing
 repository paths, and is not used for timing; its memory figures match the
 table and are folded in.
 
+The 392 s is a floor for a loaded host (see Host Load Caveat). The
+concurrent session's quiet-host baseline took 173 s, but on a newer image,
+Go release and commit, so the two times are not a measure of host load
+alone.
+
 ### Concurrent Wards
 
-Not measured; see the conclusion. The script's `concurrent N` step is ready
-and refuses to start while other containers run. #2187 tracks running it on
-a quiet host.
+Measured on 2026-11-09 with the production daemon stopped and no other
+containers running; the image and seed differ from the steps above (see
+Method). The one-ward row is the `build` step rerun in the same session as
+the baseline. Every ward used the writer size, 4 CPUs and 2048 MiB.
+
+| Wards | Virtual CPUs on 10 cores | Wall time per ward | Versus one ward | Seconds per finished build | Host footprint per ward, peak | Pressure | Swap used | Compressor, peak | CPU idle, mean (min) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 4 | 173 s | 1.0x | 173 | 2204 MiB | 1 normal | 504 MiB, unchanged | 3.8 GiB | 57% (41%) |
+| 4 | 16 | 364 to 367 s | 2.1x | 91 | 2204 MiB | 1 normal | 504 MiB, unchanged | 8.3 GiB | 7% (0%) |
+| 6 | 24 | 568 to 570 s | 3.3x | 95 | 2204 MiB | 1 normal | 504 MiB, unchanged | 10.8 GiB | 3% (0%) |
+| 8 | 32 | 851 to 852 s | 4.9x | 106 | 2204 to 2212 MiB | 2 warning, from about 1 min in to the end | 504 MiB, unchanged | 14.1 GiB | 2% (0%) |
+
+- **The host saturates by four writers.** One writer leaves the host 57%
+  idle; four leave 7%, and from there each build's wall time grows with
+  the count of writers sharing the cores. Ten cores hold two and a half
+  4-CPU writers, so the slowdown likely starts at the third; two and three
+  were not measured. Of the measured counts, four give the best
+  throughput; six add nothing and eight finish 14% fewer builds per hour.
+  Five was not measured.
+- **Every build still finished.** All builds passed 61 packages with no
+  failures, and no ward hit its memory limit: guest `memory.peak` stayed
+  between 1968 and 1992 MiB.
+- **Per-ward memory matches the single-ward result.** Each built ward held
+  2204 MiB on the host, the declared size plus 156 MiB, and 280 to 286 MiB
+  while idle.
+- **Memory is the second limit.** Free and inactive pages fell from 18.0
+  GiB before the 8-ward step's launch to 7.0 GiB at the lowest. macOS
+  moved to warning pressure between 39 and 62 s into the build and stayed
+  there to the end. After delete, free and inactive pages recovered to
+  17.7 to 19.1 GiB. Between steps the compressor returned to about 7 GiB,
+  up from 3.8 GiB before the first concurrent step.
+- **Start and teardown don't degrade with count.** Each serial launch
+  answered its first `exec` in 0.78 to 0.97 s, and each `delete` took 0.95
+  to 2.27 s, at every count.
 
 ## Host Load Caveat
 
-This host was not idle. Before and during every step it ran other
+This caveat covers the 2026-10-22 steps. The concurrent steps ran on a
+quiet host: the production daemon stopped, no other containers but
+buildkit and registries in any sample, memory pressure normal, 504 MiB of
+swap, and the CPU about 90% idle before each step. The development daemon
+and desktop applications still ran.
+
+On 2026-10-22 this host was not idle. Before and during every step it ran other
 applications and, at times, other sessions' work: an Xcode build, a
 `go test` of `freesided`, the prod and dev daemons, two registry containers
 and the buildkit container, and from 16:24Z another session's 4-CPU,
@@ -126,14 +174,23 @@ workstation, not a clean-host benchmark.
 - **Keep reserving the full declared size.** Freed guest memory is not
   returned, so a ward that has built once holds its declared size until
   delete. Reserving recorded peak instead would overcommit.
-- **On this host, don't rely on half of RAM.** The default prod budget of
-  16 GiB fits seven writers at 2048 + 256 MiB, not the eight that 16 GiB /
-  2048 MiB suggests. This Studio is also a workstation already at warning
-  pressure before any ward runs: about 14 GiB of swap and 15 GiB in the
-  compressor with one ward or none. Until the concurrent steps are measured,
-  the owner should set the Studio's budget explicitly rather than take the
-  default, and start no higher than four writers' worth (about 9 GiB). That
-  is a recommendation for the owner's setting, not a code default.
+- **On this host, budget four writers, about 9 GiB.** Four writers at
+  2048 + 256 MiB is 9216 MiB. Four gave the best throughput of the
+  measured counts with memory pressure normal; six and eight only made
+  every build slower and held their memory longer, and eight reached
+  warning pressure even on a quiet host. The default prod budget of 16 GiB
+  admits seven writers (not the eight that 16 GiB / 2048 MiB suggests).
+  Seven was not measured, but it falls between six, which finished no more
+  work than four, and eight, which reached warning pressure. On
+  2026-10-22 the Studio was already at warning pressure with one ward or
+  none, so when it also serves as a busy workstation, the owner may want
+  less. Set the Studio's budget explicitly rather than take the default.
+  That is a recommendation for the owner's setting, not a code default.
+- **The budget limits memory, not CPU.** A writer declares 4 CPUs, so any
+  budget that admits more than two writers overcommits this host's 10
+  cores, and the slowdown above follows. Choosing the memory budget by the
+  CPU ceiling, as the previous bullet does, is enough on this host; a host
+  with more memory per core would need its own measurement.
 - **The plan's per-instance text needs a change.** §5.4 says the daemon
   "reserves its declared memory against the budget", and plan revision 94
   (#2169) carries the same rule to each execution host. Adding the overhead
@@ -260,13 +317,22 @@ zsh docs/spikes/ward-density-bench.zsh cleanup
   the project image `freeside-project-freeside-ai-freeside@sha256:15476780…`
   (agent-claude base, Go 1.26.10, golangci-lint 2.12.2, module cache warmed
   at commit `b8e8b08e`). The idle comparison adds the exporter image
-  `freeside-exporter@sha256:e8aaf8b3…`.
+  `freeside-exporter@sha256:e8aaf8b3…`. That project image was gone by the
+  concurrent steps, so they rebuilt this repository's Go image with
+  `freeside-project-image -go-module-dir daemon` at commit `c68d534c`:
+  `freeside-project-freeside-ai-freeside@sha256:fa66fe6d…` (agent-claude
+  base `13738f7b…`, Go 1.27.3, golangci-lint 2.15.0, `ps`). The build used a
+  one-command recipe (`go version`), because the repository's own recipe
+  fails its image proof (#2854) and the builder deletes an unproven image.
+  The recipe doesn't change the toolchain or module cache, and this
+  benchmark runs its own workload.
 - **Size.** The writer default from `daemon/internal/ward/sizes.go`: 4
   CPUs, 2048 MiB. Idle is also sampled at 1024 MiB. The benchmark never
   changes the sizes.
 - **Shape.** One 4 GiB workspace volume per ward, seeded with a
-  `git archive` of the whole repository at `2f76e54e`, because daemon tests
-  read `prompts/`, `images/` and `scripts/`. No network (`--network none`).
+  `git archive` of the whole repository at `2f76e54e` (`c68d534c` for the
+  concurrent steps, to match that image's module cache), because daemon
+  tests read `prompts/`, `images/` and `scripts/`. No network (`--network none`).
   The main process sleeps and exits on SIGTERM, as a well-behaved agent
   would.
 - **Workload.** In each ward, `cd /workspace/daemon && go build ./... &&
