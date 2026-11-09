@@ -35,12 +35,16 @@ func liveRoom(t *testing.T) (*Room, Config) {
 	if root == "" || slots == "" {
 		t.Skip(liveSkip)
 	}
+	toolchain, err := HostToolchain(t.Context())
+	if err != nil {
+		t.Fatalf("HostToolchain: %v", err)
+	}
 	cfg := Config{
 		ExecutorRoot:      root,
 		SandboxProfile:    DefaultSandboxProfile(),
 		PacketFilterRules: []byte("# the live suite does not load packet-filter rules (#2879)\n"),
 		Slots:             strings.Split(slots, ","),
-		ToolchainIdentity: "live-test",
+		Toolchain:         toolchain,
 	}
 	b, err := New(cfg)
 	if err != nil {

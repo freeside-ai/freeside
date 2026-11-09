@@ -45,8 +45,9 @@ type Config struct {
 	// Slots are the unprivileged account names, one per concurrent job,
 	// sorted and unique.
 	Slots []string
-	// ToolchainIdentity pins the toolchain the recipe runs under.
-	ToolchainIdentity string
+	// Toolchain pins the operator-installed Xcode and Swift the recipe runs
+	// under. The room refuses a job when the host's differ (#2880).
+	Toolchain Toolchain
 }
 
 func (c Config) validate() error {
@@ -72,8 +73,8 @@ func (c Config) validate() error {
 				ErrInvalidConfig, slot, c.Slots[i-1])
 		}
 	}
-	if c.ToolchainIdentity == "" {
-		return fmt.Errorf("%w: ToolchainIdentity is required", ErrInvalidConfig)
+	if err := c.Toolchain.validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	return nil
 }
@@ -105,7 +106,8 @@ type conformanceConfiguration struct {
 	SandboxProfile    string   `json:"sandbox_profile"`
 	PacketFilterRules string   `json:"packet_filter_rules"`
 	Slots             []string `json:"slots"`
-	ToolchainIdentity string   `json:"toolchain_identity"`
+	XcodeBuild        string   `json:"xcode_build"`
+	Swift             string   `json:"swift"`
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -154,13 +156,14 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		return ""
 	}
 	body, err := json.Marshal(conformanceConfiguration{
-		Version:           "freeside.macverify.conformance-configuration/v1",
+		Version:           "freeside.macverify.conformance-configuration/v2",
 		Daemon:            b.daemonIdentity,
 		ExecutorRoot:      b.cfg.ExecutorRoot,
 		SandboxProfile:    contentaddr.Sum(b.cfg.SandboxProfile),
 		PacketFilterRules: contentaddr.Sum(b.cfg.PacketFilterRules),
 		Slots:             b.cfg.Slots,
-		ToolchainIdentity: b.cfg.ToolchainIdentity,
+		XcodeBuild:        b.cfg.Toolchain.XcodeBuild,
+		Swift:             b.cfg.Toolchain.Swift,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal macverify conformance configuration: %v", err))

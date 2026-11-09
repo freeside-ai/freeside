@@ -88,7 +88,11 @@ func TestLiveInstall(t *testing.T) {
 	}
 
 	cfg := spec.Config()
-	cfg.SandboxProfile, cfg.ToolchainIdentity = DefaultSandboxProfile(), "live-test"
+	toolchain, err := HostToolchain(t.Context())
+	if err != nil {
+		t.Fatalf("HostToolchain: %v", err)
+	}
+	cfg.SandboxProfile, cfg.Toolchain = DefaultSandboxProfile(), toolchain
 	b, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

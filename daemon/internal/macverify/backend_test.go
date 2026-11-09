@@ -17,7 +17,7 @@ func testConfig() macverify.Config {
 		SandboxProfile:    []byte("(version 1)(deny default)"),
 		PacketFilterRules: []byte("block drop quick user slot1"),
 		Slots:             []string{"slot1", "slot2"},
-		ToolchainIdentity: "xcode-26.0@sha256:abc",
+		Toolchain:         macverify.Toolchain{XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"},
 	}
 }
 
@@ -58,7 +58,11 @@ func TestNewRefusesInvalidConfig(t *testing.T) {
 		"empty slot":          func(c *macverify.Config) { c.Slots = []string{""} },
 		"unsorted slots":      func(c *macverify.Config) { c.Slots = []string{"slot2", "slot1"} },
 		"duplicate slots":     func(c *macverify.Config) { c.Slots = []string{"slot1", "slot1"} },
-		"no toolchain pinned": func(c *macverify.Config) { c.ToolchainIdentity = "" },
+		"no toolchain pinned": func(c *macverify.Config) { c.Toolchain = macverify.Toolchain{} },
+		"no Xcode build":      func(c *macverify.Config) { c.Toolchain.XcodeBuild = "" },
+		"Xcode version":       func(c *macverify.Config) { c.Toolchain.XcodeBuild = "Xcode 16.4" },
+		"no Swift":            func(c *macverify.Config) { c.Toolchain.Swift = "" },
+		"Swift version":       func(c *macverify.Config) { c.Toolchain.Swift = "6.1.2" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testConfig()
@@ -102,7 +106,8 @@ func TestConfigurationDigestTracksEveryField(t *testing.T) {
 		"sandbox profile":     func(c *macverify.Config) { c.SandboxProfile = []byte("(version 1)(allow default)") },
 		"packet filter rules": func(c *macverify.Config) { c.PacketFilterRules = []byte("pass all") },
 		"slots":               func(c *macverify.Config) { c.Slots = []string{"slot1"} },
-		"toolchain identity":  func(c *macverify.Config) { c.ToolchainIdentity = "xcode-26.1@sha256:def" },
+		"Xcode build":         func(c *macverify.Config) { c.Toolchain.XcodeBuild = "17F43" },
+		"Swift":               func(c *macverify.Config) { c.Toolchain.Swift = "swiftlang-6.1.2.1.3" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testConfig()

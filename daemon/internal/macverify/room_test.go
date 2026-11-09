@@ -153,6 +153,8 @@ func (f *fakeLauncher) snapshot() ([]string, []prepareCall, []runRequest) {
 
 const testProfile = "(version 1)(allow default)(deny network*)"
 
+var testToolchain = Toolchain{XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"}
+
 func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 	t.Helper()
 	if len(slots) == 0 {
@@ -164,7 +166,7 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 		SandboxProfile:    []byte(testProfile),
 		PacketFilterRules: []byte("block drop quick user slot1"),
 		Slots:             slots,
-		ToolchainIdentity: "xcode-26.0@sha256:abc",
+		Toolchain:         testToolchain,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -178,6 +180,7 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 	room.launcher = fake
 	room.helperOwner = uint32(os.Getuid()) //nolint:gosec // G115: a uid fits
 	room.hostSupported = true
+	room.hostToolchain = func(context.Context) (Toolchain, error) { return testToolchain, nil }
 	room.prepareTimeout = 200 * time.Millisecond
 	room.teardownTimeout = 200 * time.Millisecond
 	room.cancelGrace = 200 * time.Millisecond
@@ -395,7 +398,7 @@ func TestRoomsOverOneBackendShareSlots(t *testing.T) {
 	t.Parallel()
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
-		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, ToolchainIdentity: "xcode",
+		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -641,7 +644,7 @@ func TestNewRoomRefusesToRunOffMacOS(t *testing.T) {
 	}
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
-		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, ToolchainIdentity: "xcode",
+		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -659,7 +662,7 @@ func TestNewRoomRejectsInvalidOptions(t *testing.T) {
 	t.Parallel()
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
-		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, ToolchainIdentity: "xcode",
+		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
 	})
 	if err != nil {
 		t.Fatal(err)

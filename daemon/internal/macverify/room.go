@@ -67,6 +67,10 @@ type Room struct {
 	prepareTimeout  time.Duration
 	teardownTimeout time.Duration
 	hostSupported   bool
+	// toolchain is the configuration's pin, and hostToolchain reads the
+	// host's (HostToolchain outside tests).
+	toolchain     Toolchain
+	hostToolchain func(context.Context) (Toolchain, error)
 }
 
 var _ verify.Room = (*Room)(nil)
@@ -106,6 +110,8 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 		prepareTimeout:  defaultPrepareTimeout,
 		teardownTimeout: defaultTeardownTimeout,
 		hostSupported:   hostSupported,
+		toolchain:       b.cfg.Toolchain,
+		hostToolchain:   HostToolchain,
 	}, nil
 }
 
@@ -115,7 +121,8 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 // because the daemon cannot signal the root helper.
 //
 // Tier A gates, each checked on every call: the installed helper is the
-// embedded one (checkInstalledHelper); the prepared job directory is the
+// embedded one (checkInstalledHelper); the host's Xcode and Swift are the
+// configuration's pin (checkToolchain); the prepared job directory is the
 // slot's own at 0700 (checkPrepared); and, before the slot is released, no
 // process owned by the slot's uid survives (teardown). A slot that fails the
 // last, or whose helper the room stopped waiting for, is quarantined and Run
@@ -134,6 +141,9 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 		return verify.StepResult{}, err
 	}
 	if err := checkInstalledHelper(r.helperPath, r.helperOwner); err != nil {
+		return verify.StepResult{}, err
+	}
+	if err := r.checkToolchain(ctx); err != nil {
 		return verify.StepResult{}, err
 	}
 	jobID, err := newJobID()
@@ -238,6 +248,20 @@ func (r *Room) checkPrepared(slot, jobDir string, p preparedJob) error {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !info.IsDir() || !ok || int(st.Uid) != p.UID || info.Mode().Perm() != 0o700 {
 		return fmt.Errorf("job directory %s is %v, not slot uid %d's directory at 0700", jobDir, info.Mode(), p.UID)
+	}
+	return nil
+}
+
+// checkToolchain refuses the job unless the host's Xcode and Swift are the
+// configuration's pin, so a toolchain the conformance pass did not prove
+// never runs a recipe.
+func (r *Room) checkToolchain(ctx context.Context) error {
+	host, err := r.hostToolchain(ctx)
+	if err != nil {
+		return err
+	}
+	if host != r.toolchain {
+		return fmt.Errorf("%w: host has %s, configuration pins %s", ErrToolchainMismatch, host, r.toolchain)
 	}
 	return nil
 }
