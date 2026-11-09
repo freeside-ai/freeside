@@ -47,7 +47,7 @@ struct StandingNotices: View {
     let onRePair: (() -> Void)?
     let operation: Components.Schemas.UnattendedOperationSnapshot?
     let reason: (String) -> String?
-    let onOpenItem: ((String) -> Void)?
+    let onOpenSystemHealth: ((String?) -> Void)?
     var placement = StandingNoticePlacement.window
 
     var body: some View {
@@ -65,7 +65,7 @@ struct StandingNotices: View {
                 placement: placement)
             UnattendedStoppedIndicator(
                 operation: operation, freshness: freshness, lastUpdatedAt: lastUpdatedAt,
-                reason: reason, onOpenItem: onOpenItem, placement: placement)
+                reason: reason, onOpenSystemHealth: onOpenSystemHealth, placement: placement)
         }
     }
 

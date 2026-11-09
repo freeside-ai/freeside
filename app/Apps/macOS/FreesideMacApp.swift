@@ -202,16 +202,19 @@ private struct DaemonMenu: View {
     let session: AppSession
     let navigation: NavigationModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         DaemonMenuPanel(
             state: model?.state ?? .unsupervised,
             actionError: model?.actionError,
             needsYou: coordinator.flatMap(DaemonMenuPanel.NeedsYouCount.init(coordinator:)),
+            systemHealth: coordinator.flatMap(DaemonMenuPanel.SystemHealthCount.init(coordinator:)),
             unattendedStopped: coordinator?.unattendedStoppedMessage(),
             actions: DaemonMenuPanel.Actions(
                 openApp: showApp,
                 showNeedsYou: showApp,
+                showSystemHealth: showSystemHealth,
                 start: { Task { await model?.start() } },
                 stop: { Task { await model?.stop() } },
                 openApprovalSettings: { model?.openApprovalSettings() },
@@ -230,6 +233,16 @@ private struct DaemonMenu: View {
             openWindow(id: "main")
         }
         NSApplication.shared.activate()
+    }
+
+    /// The Settings window on System Health, the way the toolbar gear
+    /// opens it. The app activates first: from the menu bar panel it is
+    /// not active, so Settings would otherwise open behind the frontmost
+    /// app.
+    private func showSystemHealth() {
+        navigation.openSystemHealth()
+        NSApplication.shared.activate()
+        openSettings()
     }
 }
 

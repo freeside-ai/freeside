@@ -279,6 +279,50 @@ import Testing
         #expect(try await openedAttempts(server).isEmpty)
     }
 
+    /// A finding's link lands on its card over System Health, never the
+    /// inbox; the type comes from the synced store.
+    @Test func aSystemHealthItemLinkOpensItsCardOverTheSystemHealthPane() async throws {
+        let findingID = AttentionFixtures.blockingSystemHealth().item.id
+        let session = try session(server())
+        try await bootstrap(session)
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        await session.open(
+            .attentionItem(itemID: findingID, channel: "ntfy", attempt: 1), in: navigation)
+
+        #expect(navigation.settingsRoute == [.list, .pane(.systemHealth), .finding(findingID)])
+        #expect(navigation.settingsFinding == findingID)
+        #expect(navigation.path.isEmpty)
+        #expect(navigation.linkedItemID == nil)
+    }
+
+    /// Every other type keeps the inbox card, and so does an item the store
+    /// doesn't hold yet, such as one a cold start hasn't synced.
+    @Test(arguments: [
+        AttentionFixtures.fixture(type: .task_proposal).item.id,
+        "item-not-synced",
+    ])
+    func anyOtherItemLinkOpensTheInboxCard(itemID: String) async throws {
+        let session = try session(server())
+        try await bootstrap(session)
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        await session.open(
+            .attentionItem(itemID: itemID, channel: "ntfy", attempt: 1), in: navigation)
+
+        #expect(navigation.path == [.attentionItem(itemID)])
+        #expect(navigation.settingsRoute.isEmpty)
+    }
+
+    private func bootstrap(_ session: AppSession) async throws {
+        guard case .ready(let coordinator) = session.phase else {
+            Issue.record("the session is not paired")
+            return
+        }
+        await coordinator.bootstrap()
+        #expect(coordinator.store.loadState == .loaded)
+    }
+
     @Test func theInboxLinkShowsTheListAsItStands() async throws {
         let session = try session(server())
         let navigation = NavigationModel(launchInputs: .standard())

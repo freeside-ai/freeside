@@ -249,7 +249,19 @@ public final class NavigationModel {
     /// A System Health row: its finding's card over the pane, pushed on the
     /// iPhone and seated in the pane on the Mac.
     public func openFinding(_ itemID: String) {
-        setSettingsRoute([.list, .pane(.systemHealth), .finding(itemID)])
+        openSystemHealth(finding: itemID)
+    }
+
+    /// Where every ambient health signal lands (the stopped notice, the Mac
+    /// menu bar line, a notification link): the System Health pane, with
+    /// `itemID`'s card over it when one is named. The iPhone pushes this
+    /// path; the Mac's Settings window reads the selected pane and seated
+    /// finding from it, so the caller still opens that window.
+    public func openSystemHealth(finding itemID: String? = nil) {
+        setSettingsRoute([.list, .pane(.systemHealth)] + (itemID.map { [.finding($0)] } ?? []))
+        // The Mac source list selects a pane without moving the path, so a
+        // path that is already the pane's leaves another pane selected.
+        settingsPane = .systemHealth
     }
 
     /// The seated card's back control: return to the System Health pane.
@@ -416,7 +428,8 @@ public final class NavigationModel {
     /// the row stays selected and the page stays, its card gone. A closed
     /// item opened on
     /// purpose stays, and so does a system health finding's card, which no
-    /// row holds (the stopped notice opens one). A selection with no row left
+    /// row holds (a `-FreesideSelect` launch or a viewed concluded item can
+    /// still open one in the main route). A selection with no row left
     /// clears, taking any run with it. A task with an open item settles on
     /// the item leading its page, so a newer item can't swap the card under
     /// an operator working on it. `previouslyOpen` is the open item ids

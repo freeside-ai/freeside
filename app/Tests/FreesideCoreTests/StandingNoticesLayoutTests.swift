@@ -86,7 +86,7 @@
                 noticesHeight(
                     notices(
                         .unreachable, stopped: true, stopKind: .blocking_system_health,
-                        reason: reason, onOpenItem: { _ in }, placement: .window),
+                        reason: reason, onOpenSystemHealth: { _ in }, placement: .window),
                     paneWidth: 375)
             }
             let chain = (1...10).map {
@@ -223,7 +223,7 @@
             _ freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil,
             stopped: Bool = false, saveWarning: String? = nil,
             stopKind: Components.Schemas.UnattendedStopKind = .operator_stop,
-            reason: String? = nil, onOpenItem: ((String) -> Void)? = nil,
+            reason: String? = nil, onOpenSystemHealth: ((String?) -> Void)? = nil,
             placement: StandingNoticePlacement = .detailColumn
         ) -> StandingNotices {
             StandingNotices(
@@ -238,7 +238,7 @@
                                 command_id: stopKind == .operator_stop ? "cmd-stop" : nil,
                                 since: AttentionFixtures.createdInstant)
                         ]) : nil,
-                reason: { _ in reason }, onOpenItem: onOpenItem, placement: placement)
+                reason: { _ in reason }, onOpenSystemHealth: onOpenSystemHealth, placement: placement)
         }
 
         /// The height the notices take in a pane, read from where a probe

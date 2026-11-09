@@ -96,6 +96,34 @@ import Testing
         #expect(navigation.settingsRoute == [.list, .pane(.systemHealth)])
     }
 
+    /// The entry every ambient health signal uses: the iPhone pushes the
+    /// path over the task route it leaves in place, and the Mac's window
+    /// reads the selected pane and seated finding from it.
+    @Test func openingSystemHealthLandsOnThePaneWithOrWithoutAFinding() {
+        let navigation = launch()
+        navigation.route(to: .attentionItem("item-a"))
+        navigation.selectSettingsPane(.daemon)
+        let revision = navigation.operatorNavigationRevision
+
+        navigation.openSystemHealth(finding: "finding-a")
+        #expect(navigation.settingsRoute == [.list, .pane(.systemHealth), .finding("finding-a")])
+        #expect(navigation.settingsPane == .systemHealth)
+        #expect(navigation.settingsFinding == "finding-a")
+        #expect(
+            navigation.phoneRoute == [
+                .destination(.attentionItem("item-a")),
+                .settings(.list), .settings(.pane(.systemHealth)), .settings(.finding("finding-a")),
+            ])
+        #expect(navigation.operatorNavigationRevision > revision)
+
+        navigation.selectSettingsPane(.daemon)
+        navigation.openSystemHealth()
+        #expect(navigation.settingsRoute == [.list, .pane(.systemHealth)])
+        #expect(navigation.settingsPane == .systemHealth)
+        #expect(navigation.settingsFinding == nil)
+        #expect(navigation.path == [.attentionItem("item-a")])
+    }
+
     @Test func choosingAPaneOrRoutingAwayLeavesTheFindingSeat() {
         let navigation = launch()
         navigation.openFinding("finding-a")

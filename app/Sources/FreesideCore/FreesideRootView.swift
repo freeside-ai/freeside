@@ -172,8 +172,18 @@ public struct FreesideRootView: View {
             onRePair: bannerRePair(coordinator.store.freshness),
             operation: coordinator.unattendedOperation,
             reason: { coordinator.store.openItemReason($0) },
-            onOpenItem: openItem,
+            onOpenSystemHealth: openSystemHealth,
             placement: placement)
+    }
+
+    /// The stopped notice's action: System Health, over it the card of the
+    /// item the stop names when one is open. The Mac opens the Settings
+    /// window on it, as the toolbar gear does; the iPhone pushes it.
+    private func openSystemHealth(_ itemID: String?) {
+        navigation.openSystemHealth(finding: itemID)
+        #if os(macOS)
+            openSettings()
+        #endif
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {
@@ -461,20 +471,48 @@ public struct FreesideRootView: View {
             onRevealTechnicalDetails: revealTechnicalDetails)
     }
 
-    /// The gear on both toolbars: the Settings window on the Mac, on the pane
-    /// it last showed; the pushed list on iPhone.
-    private var settingsButton: some View {
-        Button {
-            #if os(macOS)
+    #if os(macOS)
+        /// The Mac toolbar's gear: the Settings window, on the pane it last
+        /// showed. The iPhone's is `phoneSettingsButton`.
+        private var settingsButton: some View {
+            Button {
                 openSettings()
-            #else
-                navigation.openSettings()
-            #endif
-        } label: {
-            Label("Settings", systemImage: "gearshape")
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings")
         }
-        .help("Settings")
+    #endif
+
+    /// The gear's badge: the open-findings count, the number System Health
+    /// lists as open. Nil, so no badge, before the inbox loads or with
+    /// nothing open; acknowledging a finding leaves it.
+    static func settingsBadge(openFindings: Int?) -> String? {
+        guard let openFindings, openFindings > 0 else { return nil }
+        return "\(openFindings)"
     }
+
+    #if os(iOS)
+        /// The iPhone bottom bar's gear, badged with the open-findings
+        /// count. Drawn by hand: the package targets iOS 17, before the
+        /// toolbar's own `.badge`.
+        private func phoneSettingsButton(_ coordinator: SyncCoordinator) -> some View {
+            let badge = Self.settingsBadge(openFindings: coordinator.openFindingCount)
+            return Button {
+                navigation.openSettings()
+            } label: {
+                SettingsGearLabel(badge: badge)
+            }
+            .accessibilityLabel("Settings")
+            .accessibilityValue(badge.map { "\($0) open in System Health" } ?? "")
+            // The bare glyph carries no title, so name the item for the
+            // Large Content Viewer the bar shows at accessibility sizes.
+            .accessibilityShowsLargeContentViewer {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .accessibilityIdentifier("settings-gear")
+        }
+    #endif
 
     @ViewBuilder
     private func submissionRecoveryButton(_ coordinator: SyncCoordinator) -> some View {
@@ -514,7 +552,7 @@ public struct FreesideRootView: View {
                         // NavigationStack.
                         .toolbar {
                             ToolbarItemGroup(placement: .bottomBar) {
-                                settingsButton
+                                phoneSettingsButton(coordinator)
                                 Spacer()
                                 // New Task's disabled reason draws with the
                                 // loaded list, so the button waits for it too.
@@ -867,3 +905,45 @@ struct RevokedPane: View {
         }
     }
 #endif
+
+/// The iPhone bottom bar's gear and its open-findings badge. Not gated to
+/// iOS so the screenshot suite, which renders on the Mac, can draw it.
+struct SettingsGearLabel: View {
+    let badge: String?
+
+    var body: some View {
+        Image(systemName: "gearshape")
+            .overlay(alignment: .topTrailing) {
+                // Mostly outside the glyph, above and after it, so the
+                // gear still reads under a two-digit count. A fixed offset
+                // holds because the badge's type is capped.
+                if let badge {
+                    SettingsGearBadge(count: badge)
+                        .offset(x: 10, y: -8)
+                }
+            }
+    }
+}
+
+/// The open-findings count on the gear: the accent cut a chip that asks
+/// for attention takes, on a capsule so one digit reads as a dot. Its type
+/// stops growing at the largest non-accessibility size, since the bar's
+/// gear does not grow with it and a larger badge would hide it.
+struct SettingsGearBadge: View {
+    let count: String
+
+    var body: some View {
+        Text(count)
+            .font(FreesideFont.chip)
+            .monospacedDigit()
+            .foregroundStyle(Color.accentText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .frame(minWidth: 16)
+            .background(Capsule().fill(Color.accentWash))
+            .overlay(Capsule().strokeBorder(Color.accentBorder, lineWidth: 1))
+            .fixedSize()
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .accessibilityHidden(true)
+    }
+}

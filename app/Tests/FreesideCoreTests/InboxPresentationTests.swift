@@ -78,7 +78,98 @@ import Testing
             coordinator.store.projectID = "proj-empty"
             #expect(DaemonMenuPanel.NeedsYouCount(coordinator: coordinator)?.rows == 0)
         }
+
+        /// The System Health line counts open findings, the pane's number:
+        /// absent before the inbox loads, blind to the project filter, and
+        /// unmoved by an acknowledgement, which the daemon records without
+        /// closing the finding.
+        @Test func thePanelsSystemHealthLineCountsOpenFindings() async throws {
+            let server = findingsServer()
+            let coordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+            #expect(DaemonMenuPanel.SystemHealthCount(coordinator: coordinator) == nil)
+
+            await coordinator.bootstrap()
+            let pane = SystemHealthFindings(
+                open: coordinator.store.openSnapshots, closed: coordinator.store.closedSnapshots)
+            #expect(pane.openCount == 2)
+            #expect(DaemonMenuPanel.SystemHealthCount(coordinator: coordinator)?.open == pane.openCount)
+
+            coordinator.store.projectID = "proj-empty"
+            #expect(DaemonMenuPanel.SystemHealthCount(coordinator: coordinator)?.open == 2)
+
+            try await acknowledge("item-system_health", through: coordinator, server: server)
+            await coordinator.heartbeat()
+            #expect(coordinator.store.snapshotsByID["item-system_health"]?.item.status == .open)
+            #expect(DaemonMenuPanel.SystemHealthCount(coordinator: coordinator)?.open == 2)
+        }
+
+        /// The line draws only for a count above zero.
+        @Test func theSystemHealthLineIsAbsentAtZeroOrBeforeLoad() {
+            func panel(_ count: DaemonMenuPanel.SystemHealthCount?) -> DaemonMenuPanel {
+                DaemonMenuPanel(
+                    state: .unsupervised, actionError: nil, needsYou: nil, systemHealth: count,
+                    actions: .init(
+                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, start: {}, stop: {},
+                        openApprovalSettings: {}, quit: {}))
+            }
+            #expect(panel(nil).openFindings == nil)
+            #expect(panel(.init(open: 0)).openFindings == nil)
+            #expect(panel(.init(open: 3)).openFindings == 3)
+        }
     #endif
+
+    /// The iPhone gear's badge shows the pane's open count, and nothing at
+    /// zero or before the inbox loads.
+    @Test func theGearBadgeIsThePanesOpenCount() async throws {
+        let coordinator = SyncCoordinator(
+            client: APIClientFactory.mock(server: findingsServer()), cache: InMemoryCacheStore())
+        #expect(FreesideRootView.settingsBadge(openFindings: coordinator.openFindingCount) == nil)
+
+        await coordinator.bootstrap()
+        let pane = SystemHealthFindings(
+            open: coordinator.store.openSnapshots, closed: coordinator.store.closedSnapshots)
+        #expect(pane.openCount == 2)
+        #expect(coordinator.openFindingCount == pane.openCount)
+        #expect(FreesideRootView.settingsBadge(openFindings: coordinator.openFindingCount) == "2")
+
+        let none = SyncCoordinator(
+            client: APIClientFactory.mock(
+                server: MockServer(items: [AttentionFixtures.resolvedSystemHealth()])),
+            cache: InMemoryCacheStore())
+        await none.bootstrap()
+        #expect(none.openFindingCount == 0)
+        #expect(FreesideRootView.settingsBadge(openFindings: none.openFindingCount) == nil)
+    }
+
+    /// Open blocking and advisory findings, a closed one, and an item of
+    /// another type, so only the two open findings count.
+    private func findingsServer() -> MockServer {
+        MockServer(items: [
+            AttentionFixtures.blockingSystemHealth(),
+            AttentionFixtures.fixture(type: .system_health),
+            AttentionFixtures.resolvedSystemHealth(),
+            AttentionFixtures.fixture(type: .agent_question),
+        ])
+    }
+
+    private func acknowledge(
+        _ itemID: String, through coordinator: SyncCoordinator, server: MockServer
+    ) async throws {
+        let snapshot = try #require(await server.snapshot(itemID: itemID))
+        let command = Components.Schemas.ClientCommand(
+            command_id: "cmd-ack",
+            device_id: coordinator.store.device.deviceID,
+            expected_entity_version: snapshot.entity_version,
+            expected_bindings: .init(additionalProperties: [:]),
+            payload: .decision(
+                .init(
+                    kind: .decision, item_id: itemID, action: .acknowledge,
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests)))
+        _ = try await coordinator.store.client.submitCommand(body: .json(command)).ok.body.json
+    }
 
     /// An empty Needs you answers for the project when one is filtered (R13).
     @Test func emptyNeedsYouNamesTheProjectOnlyUnderAFilter() {

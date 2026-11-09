@@ -107,9 +107,11 @@ struct UnattendedStoppedPresentation: Equatable {
         return text
     }
 
-    /// The label on the action that opens the reopening item.
+    /// The label on the action: the reopening item's card when one is
+    /// open, else System Health itself.
     var actionTitle: String {
-        cause == .operatorStop ? "Review to Resume" : "Open Finding"
+        guard itemID != nil else { return "Open System Health" }
+        return cause == .operatorStop ? "Review to Resume" : "Open Finding"
     }
 }
 
@@ -122,10 +124,11 @@ struct UnattendedStoppedIndicator: View {
     let freshness: InboxStore.Freshness
     let lastUpdatedAt: Date?
     /// The daemon's reason for an open item, by id; nil when the item is not
-    /// open in the synced inbox, which also withholds the action.
+    /// open in the synced inbox, so the action opens System Health alone.
     let reason: (String) -> String?
-    /// Opens the reopening item. Absent where the surface is read-only.
-    let onOpenItem: ((String) -> Void)?
+    /// Opens System Health, with the reopening item's card when one is open.
+    /// Absent where the surface is read-only.
+    let onOpenSystemHealth: ((String?) -> Void)?
     var placement = StandingNoticePlacement.window
 
     var body: some View {
@@ -153,9 +156,10 @@ struct UnattendedStoppedIndicator: View {
         .accessibilityIdentifier("unattended-stopped-indicator")
     }
 
-    private func action(for presentation: UnattendedStoppedPresentation) -> Notice.Action? {
-        guard let itemID = presentation.itemID, let onOpenItem else { return nil }
-        return .init(label: presentation.actionTitle) { onOpenItem(itemID) }
+    func action(for presentation: UnattendedStoppedPresentation) -> Notice.Action? {
+        guard let onOpenSystemHealth else { return nil }
+        let itemID = presentation.itemID
+        return .init(label: presentation.actionTitle) { onOpenSystemHealth(itemID) }
     }
 }
 
@@ -168,6 +172,16 @@ extension InboxStore {
 }
 
 extension SyncCoordinator {
+    /// How many System Health findings are open, the count the pane, the
+    /// iPhone gear badge, and the Mac menu bar line all show; nil until the
+    /// inbox has loaded, when a zero would read as nothing open. It counts
+    /// open findings, not unseen ones: no acknowledgement reaches the wire
+    /// (devlog 2026-11-09-0836-system-health-signals).
+    public var openFindingCount: Int? {
+        guard store.loadState == .loaded else { return nil }
+        return SystemHealthFindings(open: store.openSnapshots, closed: []).openCount
+    }
+
     /// The standing indicator's message for surfaces outside the synced
     /// window (the Mac menu bar); nil when admission is open or unknown.
     public func unattendedStoppedMessage(at now: Date = .now) -> String? {

@@ -296,13 +296,15 @@ struct UnattendedStoppedPresentationTests {
         #expect(long.itemID == "finding")
     }
 
-    @Test func aStopWhoseItemIsNotOpenHereOffersNoLink() throws {
+    @Test func aStopWhoseItemIsNotOpenHereOffersSystemHealth() throws {
         let presentation = try #require(
             make(
                 [.init(kind: .operator_stop, item_id: "notice", command_id: "cmd", since: Self.now)],
                 reason: nil))
         #expect(presentation.cause == .operatorStop)
         #expect(presentation.itemID == nil)
+        #expect(presentation.actionTitle == "Open System Health")
+        #expect(presentation.message == "Unattended operation is stopped by operator decision.")
     }
 
     @Test func anOperatorStopWithNoOpenNoticeStillStands() throws {
@@ -310,6 +312,44 @@ struct UnattendedStoppedPresentationTests {
             make([.init(kind: .operator_stop, item_id: nil, command_id: "cmd", since: Self.now)]))
         #expect(presentation.cause == .operatorStop)
         #expect(presentation.itemID == nil)
+        #expect(presentation.actionTitle == "Open System Health")
+    }
+
+    /// The action always lands in System Health: on the named item's card
+    /// when it is open here, for either cause, else on the pane alone.
+    @Test(
+        arguments: [
+            (Components.Schemas.UnattendedStopKind.operator_stop, "An open notice", "Review to Resume", "item"),
+            (.blocking_system_health, "An open finding", "Open Finding", "item"),
+            (.operator_stop, nil, "Open System Health", nil),
+            (.blocking_system_health, nil, "Open System Health", nil),
+        ] as [(Components.Schemas.UnattendedStopKind, String?, String, String?)])
+    func theActionOpensSystemHealthOnTheNamedOpenItem(
+        kind: Components.Schemas.UnattendedStopKind, reason: String?, title: String, opened: String?
+    ) throws {
+        let stop = Components.Schemas.UnattendedStop(
+            kind: kind, item_id: "item", command_id: kind == .operator_stop ? "cmd" : nil, since: Self.now)
+        let presentation = try #require(make([stop], reason: reason))
+        var received: [String?] = []
+        let indicator = UnattendedStoppedIndicator(
+            operation: .init(admission: .stopped, stops: [stop]), freshness: .fresh,
+            lastUpdatedAt: Self.now, reason: { _ in reason },
+            onOpenSystemHealth: { received.append($0) })
+        let action = try #require(indicator.action(for: presentation))
+        #expect(action.label == title)
+        action.handler()
+        #expect(received == [opened])
+    }
+
+    /// A read-only surface passes no handler, so no action is offered.
+    @Test func noHandlerOffersNoAction() throws {
+        let stop = Components.Schemas.UnattendedStop(
+            kind: .operator_stop, item_id: nil, command_id: "cmd", since: Self.now)
+        let presentation = try #require(make([stop]))
+        let indicator = UnattendedStoppedIndicator(
+            operation: .init(admission: .stopped, stops: [stop]), freshness: .fresh,
+            lastUpdatedAt: Self.now, reason: { _ in nil }, onOpenSystemHealth: nil)
+        #expect(indicator.action(for: presentation) == nil)
     }
 
     /// Each case is a fresh-looking snapshot made not current one way: by
