@@ -279,8 +279,47 @@ var errReplay = errors.New("idempotent replay: original result captured")
 // An accepted decision's item transition commits atomically with the command:
 // one Write, one revision, no window where the command exists without its
 // resolution.
+//
+// A 409 carrier's replacement item is projected with its view state
+// (withSurfaceView) before it returns, so the item a client re-renders from a
+// conflict agrees with what sync serves for it.
 func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
-	return s.submit(ctx, in)
+	result, err := s.submit(ctx, in)
+	if err != nil {
+		s.projectReplacementView(ctx, err)
+	}
+	return result, err
+}
+
+// projectReplacementView sets the view state on the item a 409 carrier in err
+// holds, in place. The carrier's item was read in the rejected write's
+// transaction, which rolled back, so the view is read in a fresh one. A read
+// failure leaves the carrier as it was: the view is a display hint and must
+// never change the rejection.
+func (s *Service) projectReplacementView(ctx context.Context, err error) {
+	var (
+		stale   *StaleVersionError
+		closed  *ClosedItemError
+		pending *AgentPendingError
+	)
+	var item *domain.AttentionItem
+	var snapshot *store.Snapshot
+	switch {
+	case errors.As(err, &stale):
+		item, snapshot = &stale.Replacement, &stale.Snapshot
+	case errors.As(err, &closed):
+		item, snapshot = &closed.Item, &closed.Snapshot
+	case errors.As(err, &pending):
+		item, snapshot = &pending.Item, &pending.Snapshot
+	default:
+		return
+	}
+	if readErr := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		*item, *snapshot = s.withSurfaceView(ctx, tx, *item, *snapshot)
+		return nil
+	}); readErr != nil {
+		s.logger.Warn("serve replacement item without view state", "item_id", item.ID, "error", readErr)
+	}
 }
 
 func (s *Service) submit(ctx context.Context, in ClientCommand) (CommandResult, error) {

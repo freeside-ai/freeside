@@ -406,7 +406,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 				snoozedItems[item.Value.ID] = true
 				continue
 			}
-			out.AttentionItems = append(out.AttentionItems, s.itemSnapshot(item.Value, item.Snapshot))
+			out.AttentionItems = append(out.AttentionItems, s.viewedItemSnapshot(ctx, tx, item.Value, item.Snapshot))
 		}
 		for _, delivery := range deliveries {
 			if snoozedItems[delivery.Value.ItemID] {
@@ -592,7 +592,7 @@ func (s *Service) ListAttentionItems(ctx context.Context) ([]AttentionItemSnapsh
 				return fmt.Errorf("item %q snooze: %w", value.Value.ID, err)
 			}
 			if !snoozed {
-				out = append(out, s.itemSnapshot(value.Value, value.Snapshot))
+				out = append(out, s.viewedItemSnapshot(ctx, tx, value.Value, value.Snapshot))
 			}
 		}
 		return nil
@@ -629,7 +629,7 @@ func (s *Service) GetAttentionItem(ctx context.Context, id domain.ItemID) (Atten
 		if snoozed {
 			return ErrProposalSnoozed
 		}
-		out = s.itemSnapshot(item, snapshot)
+		out = s.viewedItemSnapshot(ctx, tx, item, snapshot)
 		return nil
 	})
 	if err != nil {
@@ -685,6 +685,9 @@ func (s *Service) GetTaskProposalFacts(ctx context.Context, id domain.ItemID) (T
 				Scope:             superseded.TaskProposal.Scope,
 			}
 		}
+		// The card matches facts to the served item by as_of_revision, so
+		// the facts carry the same view-raised revision the item does.
+		_, snapshot = s.withSurfaceView(ctx, tx, item, snapshot)
 		out = TaskProposalFactsSnapshot{
 			AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion,
 			ItemVersion: item.ItemVersion, ProposalDigest: proposal.Digest,
@@ -745,6 +748,8 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 		if err != nil {
 			return err
 		}
+		// Matched to the served item as the task-proposal facts are.
+		_, snapshot = s.withSurfaceView(ctx, tx, item, snapshot)
 		out = EffectProposalFactsSnapshot{
 			AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion,
 			ItemVersion: item.ItemVersion, ProposalDigest: proposal.Digest,
@@ -1163,6 +1168,42 @@ func validateSnapshot(state store.ServerState, snapshot store.Snapshot) error {
 // itemSnapshot is the item as the wire carries it: normalized, its evidence
 // availability re-derived, and its alternate-agent offers as the wire carries
 // them (renderItem).
+// viewedItemSnapshot is itemSnapshot after projecting the item's view state
+// (withSurfaceView), for every read that serves a stored item.
+func (s *Service) viewedItemSnapshot(
+	ctx context.Context, tx *store.ReadTx, item domain.AttentionItem, snapshot store.Snapshot,
+) AttentionItemSnapshot {
+	item, snapshot = s.withSurfaceView(ctx, tx, item, snapshot)
+	return s.itemSnapshot(item, snapshot)
+}
+
+// withSurfaceView sets SurfaceFirstOpenedAt on a served copy of item from the
+// view recorded for its current decision-surface digest (issue #2930), and
+// raises the snapshot's as_of_revision to the view's so a client sees the
+// value move with the revision that wrote it. Every read that serves an
+// item's revision goes through it, the proposal facts reads included, since
+// the card requires their as_of_revision to equal the item's. entity_version
+// stays the item row's, so a view on one device never stales another device's command
+// precondition. The view is a Tier C display hint: a missing row serves nil,
+// and an unreadable one is logged and served as nil, so it can never fail a
+// listing.
+func (s *Service) withSurfaceView(
+	ctx context.Context, tx *store.ReadTx, item domain.AttentionItem, snapshot store.Snapshot,
+) (domain.AttentionItem, store.Snapshot) {
+	item.SurfaceFirstOpenedAt = nil
+	view, asOfRevision, err := tx.GetAttentionItemView(ctx, item.ID, item.DecisionSurface.Digest)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			s.logger.Warn("serve attention item without view state", "item_id", item.ID, "error", err)
+		}
+		return item, snapshot
+	}
+	opened := view.FirstOpenedAt
+	item.SurfaceFirstOpenedAt = &opened
+	snapshot.AsOfRevision = max(snapshot.AsOfRevision, asOfRevision)
+	return item, snapshot
+}
+
 func (s *Service) itemSnapshot(item domain.AttentionItem, snapshot store.Snapshot) AttentionItemSnapshot {
 	normalized := projectEvidenceAvailability(normalizeAttentionItem(renderItem(item)), s.blobs)
 	return AttentionItemSnapshot{
