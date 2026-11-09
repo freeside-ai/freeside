@@ -69,6 +69,7 @@ public final class NavigationModel {
         case devices
         case notifications
         case daemon
+        case systemHealth
 
         public var title: String {
             switch self {
@@ -78,15 +79,23 @@ public final class NavigationModel {
             case .devices: "Devices"
             case .notifications: "Notifications"
             case .daemon: "Daemon"
+            case .systemHealth: "System Health"
             }
         }
     }
 
     /// One step of the iPhone's pushed Settings path: the grouped list, then
-    /// the pane one of its rows opens.
+    /// the pane one of its rows opens, then a System Health finding's card
+    /// over that pane. The Mac window draws no stack and reads only the
+    /// trailing `finding`, as the card it seats in place of the pane.
     public enum SettingsRoute: Hashable, Sendable {
         case list
         case pane(SettingsPage)
+        case finding(String)
+
+        var page: SettingsPage? {
+            if case .pane(let page) = self { page } else { nil }
+        }
     }
 
     /// One element of the iPhone's one stack: the task route, then the
@@ -99,13 +108,15 @@ public final class NavigationModel {
 
     /// The selected Settings pane, kept across opens: the Mac window's
     /// source list selection and the pane an iPhone row last pushed. The
-    /// `-FreesideDevices`, `-FreesideRouting`, and `-FreesideUsage` launch
-    /// arguments choose it, so a capture needs no click.
+    /// `-FreesideDevices`, `-FreesideRouting`, `-FreesideUsage`, and
+    /// `-FreesideSystemHealth` launch arguments choose it, so a capture
+    /// needs no click.
     public private(set) var settingsPane: SettingsPage = .general
     /// The iPhone's pushed Settings path above the task route: empty, the
-    /// list, or the list and one pane. The Mac draws Settings in its own
-    /// window and never reads it. Kept apart from `path`, whose first
-    /// element means the selected task or item.
+    /// list, the list and one pane, or those and a finding's card. The Mac
+    /// draws Settings in its own window and reads only a trailing finding.
+    /// Kept apart from `path`, whose first element means the selected task
+    /// or item.
     public private(set) var settingsRoute: [SettingsRoute] = []
     /// A launch argument asked for the Mac's Settings window. The root opens
     /// the window once and consumes it, so a rebuilt root never opens it
@@ -134,9 +145,17 @@ public final class NavigationModel {
         // After the route, which clears the Settings path: a launch that
         // names both opens Settings over the selection.
         let launchPane: SettingsPage? =
-            launchInputs.devicesPresented
-            ? .devices
-            : launchInputs.routingPresented ? .agents : launchInputs.usagePresented ? .usage : nil
+            if launchInputs.devicesPresented {
+                .devices
+            } else if launchInputs.routingPresented {
+                .agents
+            } else if launchInputs.usagePresented {
+                .usage
+            } else if launchInputs.systemHealthPresented {
+                .systemHealth
+            } else {
+                nil
+            }
         if let launchPane {
             settingsPane = launchPane
             settingsRoute = [.list, .pane(launchPane)]
@@ -205,9 +224,11 @@ public final class NavigationModel {
         setSettingsRoute([.list])
     }
 
-    /// The Mac source list's selection.
+    /// The Mac source list's selection. It leaves a seated finding's card
+    /// for the pane, as choosing any row of the list does.
     public func selectSettingsPane(_ page: SettingsPage) {
         settingsPane = page
+        if case .finding? = settingsRoute.last { settingsRoute.removeLast() }
     }
 
     /// An iPhone list row: push its pane over the list.
@@ -221,7 +242,25 @@ public final class NavigationModel {
         guard settingsRoute != route else { return }
         operatorNavigationRevision += 1
         settingsRoute = route
-        if case .pane(let page)? = route.last { settingsPane = page }
+        // A finding's card sits over its pane, so the pane under it counts.
+        if let page = route.reversed().lazy.compactMap(\.page).first { settingsPane = page }
+    }
+
+    /// A System Health row: its finding's card over the pane, pushed on the
+    /// iPhone and seated in the pane on the Mac.
+    public func openFinding(_ itemID: String) {
+        setSettingsRoute([.list, .pane(.systemHealth), .finding(itemID)])
+    }
+
+    /// The seated card's back control: return to the System Health pane.
+    public func closeFinding() {
+        guard case .finding? = settingsRoute.last else { return }
+        setSettingsRoute(Array(settingsRoute.dropLast()))
+    }
+
+    /// The finding whose card the Settings path ends on, if any.
+    public var settingsFinding: String? {
+        if case .finding(let itemID)? = settingsRoute.last { itemID } else { nil }
     }
 
     /// Leave the iPhone's Settings path, as signing out from Devices does.
@@ -376,7 +415,8 @@ public final class NavigationModel {
     /// along the task's row: to another of its open items, else the task, so
     /// the row stays selected and the page stays, its card gone. A closed
     /// item opened on
-    /// purpose stays. A selection with no row left
+    /// purpose stays, and so does a system health finding's card, which no
+    /// row holds (the stopped notice opens one). A selection with no row left
     /// clears, taking any run with it. A task with an open item settles on
     /// the item leading its page, so a newer item can't swap the card under
     /// an operator working on it. `previouslyOpen` is the open item ids
@@ -384,7 +424,7 @@ public final class NavigationModel {
     package func repairSelection(in list: UnifiedList, previouslyOpen: Set<String> = []) {
         switch path.first {
         case .attentionItem(let itemID):
-            guard itemID != linkedItemID else { return }
+            guard itemID != linkedItemID, !list.isFinding(itemID: itemID) else { return }
             guard let row = list.selection(attentionItemID: itemID, taskID: nil), list.holds(row) else {
                 path = []
                 return

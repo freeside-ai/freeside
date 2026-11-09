@@ -78,19 +78,29 @@ package struct UnifiedList {
     /// Whether the filter offers `No project`: a held scoped item names none.
     package let offersNoProject: Bool
     private let openItemIDs: Set<String>
+    /// The findings the list leaves out, open or closed, whose cards open
+    /// from Settings and the stopped notice, not from a row.
+    private let findingIDs: Set<String>
     /// The held task of every held item that has one.
     private let taskIDsByItemID: [String: String]
     private let rowIDs: Set<UnifiedSelection>
 
     /// `open` is newest first (`InboxStore.openSnapshots`), which orders Needs
     /// you; `open` and `closed` are unfiltered, so a filtered-out task keeps
-    /// its items from reading as scoped rows.
+    /// its items from reading as scoped rows. System health findings never
+    /// reach the list, open or closed: the inbox holds decisions about work,
+    /// and findings about the daemon have Settings' System Health pane
+    /// (`SystemHealthFindings`).
     package init(
-        open: [Components.Schemas.AttentionItemSnapshot],
-        closed: [Components.Schemas.AttentionItemSnapshot],
+        open allOpen: [Components.Schemas.AttentionItemSnapshot],
+        closed allClosed: [Components.Schemas.AttentionItemSnapshot],
         tasks: [Components.Schemas.TaskSnapshot],
         projectFilter: String?
     ) {
+        // Before the project filter's options are read, so a project whose
+        // only items were findings isn't offered.
+        let open = allOpen.filter { $0.item._type != .system_health }
+        let closed = allClosed.filter { $0.item._type != .system_health }
         let tasksByID = Dictionary(tasks.map { ($0.task.id, $0) }, uniquingKeysWith: { first, _ in first })
         let heldTaskID = { (item: Components.Schemas.AttentionItem) in
             Self.taskID(of: item).flatMap { tasksByID[$0] == nil ? nil : $0 }
@@ -147,10 +157,16 @@ package struct UnifiedList {
             .subtracting([Self.noProject]).sorted()
         offersNoProject = items.contains { $0.project_id == Self.noProject && heldTaskID($0) == nil }
         openItemIDs = Set(open.map(\.item.id))
+        findingIDs = Set((allOpen + allClosed).filter { $0.item._type == .system_health }.map(\.item.id))
         taskIDsByItemID = Dictionary(
             items.compactMap { item in heldTaskID(item).map { (item.id, $0) } },
             uniquingKeysWith: { first, _ in first })
         rowIDs = Set((needsYou + working + finished).map(\.id))
+    }
+
+    /// Whether `itemID` is a held system health finding, which no row holds.
+    package func isFinding(itemID: String) -> Bool {
+        findingIDs.contains(itemID)
     }
 
     /// The task id an item's subject names, whether or not the client holds

@@ -1508,8 +1508,13 @@ import Testing
         // stop_unattended concludes the decided health item and raises the
         // system-scoped notice offering resume_unattended; accepting the
         // resume concludes that notice. The operating state itself rides the
-        // bootstrap's unattended_operation (#980).
-        let server = MockServer()
+        // bootstrap's unattended_operation (#980). Without the default
+        // inbox's blocking finding, whose stop would stand through the
+        // resume.
+        let server = MockServer(
+            items: AttentionFixtures.defaultInbox().filter {
+                $0.item.id != AttentionFixtures.blockingSystemHealth().item.id
+            })
         let client = APIClientFactory.mock(server: server)
         #expect(
             try await client.getSyncBootstrap().ok.body.json.unattended_operation

@@ -585,6 +585,10 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     var isSelected = false
     /// False draws no chip line where the header stacks.
     var hasBadges = false
+    /// True for a row inside a bordered group, which draws the border and
+    /// the hairlines between rows: the row takes a group row's padding in
+    /// place of its own surface.
+    var grouped = false
     @ViewBuilder var badges: Badges
     @ViewBuilder var title: Title
     @ViewBuilder var context: Context
@@ -592,6 +596,17 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        if grouped {
+            lines
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            lines.modifier(SidebarRowSurface(isSelected: isSelected))
+        }
+    }
+
+    private var lines: some View {
         VStack(alignment: .leading, spacing: SidebarRowSurface.lineGap) {
             if SidebarRowSurface.stacksHeader(at: dynamicTypeSize) {
                 keywordLine
@@ -628,7 +643,6 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
         // iOS it takes the long press from the row's menu. Each row's menu
         // offers Copy for its text instead (app/README.md, Copyable Text).
         .textSelection(.disabled)
-        .modifier(SidebarRowSurface(isSelected: isSelected))
     }
 
     /// The keyword sized to its own height so a long one wraps at the large

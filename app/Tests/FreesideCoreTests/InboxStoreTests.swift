@@ -18,7 +18,7 @@ import Testing
     @Test func refreshReconstructsTheInboxFromTheCanonicalList() async {
         let store = await makeStore(server: MockServer())
         #expect(store.loadState == .loaded)
-        #expect(store.rows.count == AttentionFixtures.phase1Types.count)
+        #expect(store.rows.count == AttentionFixtures.defaultInbox().filter { $0.item.status == .open }.count)
         #expect(Set(store.rows.map(\.item._type)) == Set(AttentionFixtures.phase1Types))
     }
 
@@ -133,7 +133,7 @@ import Testing
         #expect(store.openSnapshots.contains { $0.item.id == resolved.item.id })
         #expect(
             UnifiedList(open: store.openSnapshots, closed: [], tasks: [], projectFilter: nil)
-                .needsYou.count == store.openSnapshots.count)
+                .needsYou.count == store.openSnapshots.filter { $0.item._type != .system_health }.count)
         #expect(!store.closedSnapshots.contains { $0.item.id == resolved.item.id })
 
         store.replaceAll(with: Array(store.snapshotsByID.values))
@@ -423,7 +423,7 @@ import Testing
 
         store.apply(replacement)
         #expect(store.snapshotsByID["item-spec_approval"] == replacement)
-        #expect(store.rows.count == AttentionFixtures.phase1Types.count)
+        #expect(store.rows.count == AttentionFixtures.defaultInbox().filter { $0.item.status == .open }.count)
     }
 
     @Test func visibilityRemovalRejectsStaleResponsesUntilANewerRelease() async throws {

@@ -43,12 +43,13 @@ import Testing
     }
 
     private func launch(
-        devices: Bool = false, routing: Bool = false, usage: Bool = false, selection: String? = nil
+        devices: Bool = false, routing: Bool = false, usage: Bool = false, systemHealth: Bool = false,
+        selection: String? = nil
     ) -> NavigationModel {
         NavigationModel(
             launchInputs: LaunchInputs(
                 colorSchemeRaw: nil, selectionRaw: selection, devicesPresented: devices,
-                routingPresented: routing, usagePresented: usage))
+                routingPresented: routing, usagePresented: usage, systemHealthPresented: systemHealth))
     }
 
     @Test func aPlainLaunchSelectsGeneralAndAsksForNoSettings() {
@@ -63,6 +64,7 @@ import Testing
             (launch(devices: true), NavigationModel.SettingsPage.devices),
             (launch(routing: true), .agents),
             (launch(usage: true), .usage),
+            (launch(systemHealth: true), .systemHealth),
         ] {
             #expect(navigation.settingsPane == pane)
             #expect(navigation.settingsRoute == [.list, .pane(pane)])
@@ -74,6 +76,42 @@ import Testing
         #expect(launch(devices: true, routing: true, usage: true).settingsPane == .devices)
         #expect(launch(devices: true, usage: true).settingsPane == .devices)
         #expect(launch(routing: true, usage: true).settingsPane == .agents)
+        #expect(launch(usage: true, systemHealth: true).settingsPane == .usage)
+    }
+
+    @Test func aFindingRowPushesItsCardOverTheSystemHealthPane() {
+        let navigation = launch()
+        navigation.openFinding("finding-a")
+        #expect(navigation.settingsRoute == [.list, .pane(.systemHealth), .finding("finding-a")])
+        #expect(navigation.settingsPane == .systemHealth)
+        #expect(navigation.settingsFinding == "finding-a")
+        // Opening a finding never touches the task route.
+        #expect(navigation.path.isEmpty)
+
+        navigation.closeFinding()
+        #expect(navigation.settingsRoute == [.list, .pane(.systemHealth)])
+        #expect(navigation.settingsFinding == nil)
+        // With no card open, closing changes nothing.
+        navigation.closeFinding()
+        #expect(navigation.settingsRoute == [.list, .pane(.systemHealth)])
+    }
+
+    @Test func choosingAPaneOrRoutingAwayLeavesTheFindingSeat() {
+        let navigation = launch()
+        navigation.openFinding("finding-a")
+        navigation.selectSettingsPane(.daemon)
+        #expect(navigation.settingsFinding == nil)
+        #expect(navigation.settingsPane == .daemon)
+
+        navigation.openFinding("finding-a")
+        navigation.selectSettingsPane(.systemHealth)
+        #expect(navigation.settingsFinding == nil)
+        #expect(navigation.settingsPane == .systemHealth)
+
+        navigation.openFinding("finding-a")
+        navigation.route(toLinkedItem: "item-a")
+        #expect(navigation.settingsRoute.isEmpty)
+        #expect(navigation.settingsFinding == nil)
     }
 
     @Test func aSettingsLaunchOpensOverItsSelection() {
@@ -288,6 +326,26 @@ import Testing
         #expect(navigation.path.isEmpty)
     }
 
+    @Test func aFindingOpenedFromTheStoppedNoticeStaysRouted() {
+        // No row holds a system health finding (#2920), so the card the
+        // stopped notice opens must survive the list changing under it, as
+        // when the operator acknowledges it, open or after it closes.
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let finding = AttentionFixtures.blockingSystemHealth()
+        store.replaceAll(with: [finding])
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        navigation.route(to: .attentionItem(finding.item.id))
+        navigation.repairSelection(in: list(store), previouslyOpen: [finding.item.id])
+        #expect(navigation.path == [.attentionItem(finding.item.id)])
+
+        var resolved = finding
+        resolved.item.status = .resolved
+        store.replaceAll(with: [resolved])
+        navigation.repairSelection(in: list(store), previouslyOpen: [finding.item.id])
+        #expect(navigation.path == [.attentionItem(finding.item.id)])
+    }
+
     @Test func leavingALinkedItemEndsItsExemption() {
         let navigation = NavigationModel(launchInputs: .standard())
 
@@ -500,7 +558,7 @@ import Testing
     }
 
     @Test func conclusionKeepsAScopedItemSelectedInFinished() throws {
-        var scoped = AttentionFixtures.fixture(type: .system_health)
+        var scoped = AttentionFixtures.fixture(type: .task_proposal)
         scoped.item.status = .resolved
         scoped.item.decided_at = nil
         let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))

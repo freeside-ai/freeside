@@ -52,6 +52,30 @@
             #expect(SettingsSummary.daemon(.unauthenticated) == "Revoked")
         }
 
+        @Test func systemHealthCountsOpenAndBlockingFindings() {
+            func finding(
+                _ id: String, posture: Components.Schemas.HealthPosture
+            ) -> Components.Schemas.AttentionItemSnapshot {
+                var snapshot = AttentionFixtures.fixture(type: .system_health)
+                snapshot.item.id = id
+                snapshot.item.posture = .init(value1: posture)
+                return snapshot
+            }
+            let closed = AttentionFixtures.resolvedSystemHealth()
+            let two = SystemHealthFindings(
+                open: [finding("a", posture: .advisory), finding("b", posture: .blocking)], closed: [closed])
+            let one = SystemHealthFindings(open: [finding("a", posture: .advisory)], closed: [])
+            let none = SystemHealthFindings(open: [], closed: [closed])
+
+            #expect(SettingsSummary.systemHealth(two) == "2 open · 1 blocking")
+            #expect(SettingsSummary.systemHealth(one) == "1 open")
+            #expect(SettingsSummary.systemHealth(none) == "Nothing open")
+            // The Mac's source list trails the open count alone, or nothing.
+            #expect(SettingsSummary.systemHealthCount(two) == "2")
+            #expect(SettingsSummary.systemHealthCount(one) == "1")
+            #expect(SettingsSummary.systemHealthCount(none) == nil)
+        }
+
         @Test func theHostCarriesItsPortWhenTheAddressHasOne() {
             #expect(SettingsHost.line(URL(string: "http://127.0.0.1:7342")) == "127.0.0.1:7342")
             #expect(SettingsHost.line(URL(string: "https://studio.local")) == "studio.local")

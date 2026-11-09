@@ -210,7 +210,8 @@ public struct FreesideRootView: View {
                 for: navigation.attentionSelection)
         }
         .onChange(of: coordinator.store.openSnapshots.map(\.item.id)) {
-            if !coordinator.store.openSnapshots.isEmpty {
+            // A finding is no row of the list, so it leaves the inbox clear.
+            if coordinator.hasNeedsYouRows {
                 showsInboxClearResult = false
             }
         }
@@ -552,7 +553,8 @@ public struct FreesideRootView: View {
                                 ScrollView {
                                     SettingsPaneView(
                                         page: page, sync: sync, flowPreferences: flowPreferences,
-                                        host: SettingsHost.line(session.serverURL))
+                                        host: SettingsHost.line(session.serverURL),
+                                        openFinding: navigation.openFinding)
                                 }
                                 .background(Color.ground)
                                 // The list's load ends when a pane covers it, and
@@ -561,6 +563,14 @@ public struct FreesideRootView: View {
                                 .task(id: sync.devices.observedRevision) {
                                     await sync.devices.loadIfStale()
                                 }
+                            case .settings(.finding(let itemID)):
+                                // The card over the System Health pane, with
+                                // no conclusion advance: that would route to
+                                // the next item and pop Settings under it.
+                                DecisionDetailView(
+                                    store: coordinator.store, itemID: itemID,
+                                    findingReasonPreferences: .shared,
+                                    onSelectItem: navigation.openFinding)
                             }
                         }
                 }
@@ -599,7 +609,8 @@ public struct FreesideRootView: View {
                 unresolvedActionCount: Self.unsentActionCount(
                     pendingCommands: coordinator.store.pendingCommandsByItemID.count,
                     pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
-                    taskStops: coordinator.pendingTaskStops.values))
+                    taskStops: coordinator.pendingTaskStops.values),
+                store: coordinator.store, unattendedOperation: coordinator.unattendedOperation)
         }
 
         @ViewBuilder

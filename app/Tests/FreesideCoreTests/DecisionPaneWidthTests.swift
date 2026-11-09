@@ -190,7 +190,15 @@
                 .environment(\.dynamicTypeSize, .large)
                 .frame(width: paneWidth, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
-            let host = NSHostingView(rootView: AnyView(card))
+            return mountedTextFrame(in: AnyView(card), paneWidth: paneWidth, matching: matches)
+        }
+
+        /// The frame, in the pane's coordinates, of the first text mounted
+        /// as its own view under `root` whose string `matches`.
+        private func mountedTextFrame(
+            in root: AnyView, paneWidth: CGFloat, matching matches: (String) -> Bool
+        ) -> CGRect? {
+            let host = NSHostingView(rootView: root)
             // Selectable text mounts its own view only inside a window.
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: paneWidth, height: 3_000), styleMask: [.borderless],
@@ -217,6 +225,48 @@
                 frame = find(in: host)
             } while frame == nil && Date() < deadline
             return frame
+        }
+
+        /// A finding's card in the System Health pane on the Mac (#2920)
+        /// takes the pane's width inside the detail card's margins, under its
+        /// back control, and its prose stays inside the card's content at no
+        /// more than the measure. The seat places any card the same way; a
+        /// summary long enough to wrap stands for the prose, since it mounts
+        /// as its own view and a finding's lines don't.
+        @Test func aCardInTheSystemHealthSeatFillsThePaneInsideTheCardMargins() throws {
+            typealias Scale = DecisionCardComposition.Scale
+            _ = FreesideFont.registration
+            let margin = Scale.paneMargin(compact: false)
+            let padding = Scale.padding(compact: false)
+            let paneWidth = SettingsWindowContent.paneWidth
+            let sentence = "The run passed every check and the reviewer found nothing left to change. "
+            var snapshot = AttentionFixtures.fixture(type: .ready_for_final_review)
+            let index = try #require(snapshot.item.agent_claims.firstIndex { $0.label == "freeside.summary" })
+            snapshot.item.agent_claims[index].text = .init(
+                media_type: .text_sol_markdown, content: String(repeating: sentence, count: 4))
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: [snapshot])
+            let seat = AnyView(
+                SystemHealthCardSeat(
+                    itemID: snapshot.item.id, store: store, onBack: {}, rendersInteractiveControls: false
+                )
+                .environment(\.pinnedNow, AttentionFixtures.createdInstant)
+                .environment(\.dynamicTypeSize, .large)
+                .frame(width: paneWidth, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true))
+
+            let summary = try #require(
+                mountedTextFrame(in: seat, paneWidth: paneWidth) { $0.hasPrefix(sentence.prefix(40)) })
+            // The same card in a detail pane of the same width: the seat
+            // keeps its x and width and moves it down under the back row.
+            let inDetailPane = try #require(
+                mountedTextFrame(of: snapshot, paneWidth: paneWidth) { $0.hasPrefix(sentence.prefix(40)) })
+            #expect(summary.minX == inDetailPane.minX)
+            #expect(summary.width == inDetailPane.width)
+            #expect(summary.minY > inDetailPane.minY)
+            #expect(summary.minX >= margin.leading + padding.leading)
+            #expect(summary.maxX <= paneWidth - margin.trailing - padding.trailing)
+            #expect(summary.width <= Scale.proseMeasure)
         }
 
         /// An empty state in the detail pane centers in the column a card

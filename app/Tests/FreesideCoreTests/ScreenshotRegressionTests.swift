@@ -920,28 +920,55 @@
                     DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant),
                     restartObserved: false),
                 actionError: nil, start: {}, stop: {}, openApprovalSettings: {})
+            // The System Health pane (#2920) reads the default inbox's
+            // findings: an advisory and a blocking one open, a resolved one
+            // closed, with the gate the blocking one closes. Its empty state
+            // has no findings and an open gate.
+            let blockingFinding = AttentionFixtures.blockingSystemHealth().item
+            let healthStopped = Components.Schemas.UnattendedOperationSnapshot(
+                admission: .stopped,
+                stops: [
+                    .init(
+                        kind: .blocking_system_health, item_id: blockingFinding.id, command_id: nil,
+                        since: blockingFinding.created_at)
+                ])
+            let noFindings = InboxStore(client: client)
             func settingsSync(
-                _ devices: DevicesModel, routing: RoutingPolicyModel = routing, usage: AccountUsageModel = usage
+                _ devices: DevicesModel, routing: RoutingPolicyModel = routing, usage: AccountUsageModel = usage,
+                store: InboxStore = store,
+                unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = healthStopped,
+                age: TimeInterval = 120
             ) -> SettingsSync {
                 SettingsSync(
                     devices: devices, routing: routing, usage: usage, freshness: .fresh,
-                    lastUpdatedAt: screenshotNow.addingTimeInterval(-120), revision: 4812,
+                    lastUpdatedAt: screenshotNow.addingTimeInterval(-age), revision: 4812,
                     projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
-                    deviceID: DeviceIdentity.mock.deviceID, unresolvedActionCount: 0)
+                    deviceID: DeviceIdentity.mock.deviceID, unresolvedActionCount: 0, store: store,
+                    unattendedOperation: unattendedOperation)
             }
-            func settingsWindow(_ page: NavigationModel.SettingsPage, sync: SettingsSync) -> AnyView {
+            let historyDefaults = try #require(
+                UserDefaults(suiteName: "FreesideScreenshotHistory-\(UUID().uuidString)"))
+            ListSectionPreferences(defaults: historyDefaults).systemHealthHistoryExpanded = true
+            func settingsWindow(
+                _ page: NavigationModel.SettingsPage, sync: SettingsSync, listDefaults: UserDefaults = settingsDefaults,
+                finding: String? = nil
+            ) -> AnyView {
                 let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
                 navigation.selectSettingsPane(page)
+                if let finding { navigation.openFinding(finding) }
                 return AnyView(
                     SettingsWindowContent(
                         navigation: navigation, sync: sync, flowPreferences: flowPreferences,
-                        host: "studio.local", daemon: settingsDaemon, rendersInteractiveControls: false))
+                        host: "studio.local", daemon: settingsDaemon, listDefaults: listDefaults,
+                        rendersInteractiveControls: false))
             }
-            func phonePane(_ page: NavigationModel.SettingsPage, sync: SettingsSync) -> AnyView {
+            func phonePane(
+                _ page: NavigationModel.SettingsPage, sync: SettingsSync, listDefaults: UserDefaults = settingsDefaults
+            ) -> AnyView {
                 AnyView(
                     SettingsPaneView(
                         page: page, sync: sync, flowPreferences: flowPreferences, host: "studio.local",
-                        client: .iPhone, rendersInteractiveControls: false
+                        client: .iPhone, listDefaults: listDefaults, rendersInteractiveControls: false
                     )
                     .background(Color.ground))
             }
@@ -975,6 +1002,35 @@
                             name: surface + suffix, width: 390, colorScheme: scheme,
                             view: phonePane(page, sync: phoneSync)))
                 }
+                // Inside the staleness threshold, so the gate reads current.
+                let healthSync = settingsSync(devicesModel, age: 30)
+                let phoneHealthSync = settingsSync(phoneDevicesModel, age: 30)
+                let emptySync = settingsSync(
+                    devicesModel, store: noFindings, unattendedOperation: .init(admission: .open, stops: []),
+                    age: 30)
+                surfaces += [
+                    Surface(
+                        name: "system-health" + suffix, width: 760, colorScheme: scheme,
+                        view: settingsWindow(.systemHealth, sync: healthSync)),
+                    Surface(
+                        name: "system-health-empty" + suffix, width: 760, colorScheme: scheme,
+                        view: settingsWindow(.systemHealth, sync: emptySync)),
+                    Surface(
+                        name: "system-health-history" + suffix, width: 760, colorScheme: scheme,
+                        view: settingsWindow(.systemHealth, sync: healthSync, listDefaults: historyDefaults)),
+                    Surface(
+                        name: "system-health-seat" + suffix, width: 760, colorScheme: scheme,
+                        view: settingsWindow(.systemHealth, sync: healthSync, finding: blockingFinding.id)),
+                    Surface(
+                        name: "system-health-phone" + suffix, width: 390, colorScheme: scheme,
+                        view: phonePane(.systemHealth, sync: phoneHealthSync)),
+                    Surface(
+                        name: "system-health-empty-phone" + suffix, width: 390, colorScheme: scheme,
+                        view: phonePane(.systemHealth, sync: emptySync)),
+                    Surface(
+                        name: "system-health-history-phone" + suffix, width: 390, colorScheme: scheme,
+                        view: phonePane(.systemHealth, sync: phoneHealthSync, listDefaults: historyDefaults)),
+                ]
             }
 
             // The Agents pane (#2582), the routing policy (#2394, #2528) as a
@@ -1357,9 +1413,12 @@
                 }
             }
 
-            // One open card per type; the closed matrix below draws the
+            // One open card per type, the first of each, since the surface
+            // takes the type's name; the closed matrix below draws the
             // closed fixtures under their own names.
-            for snapshot in inbox where snapshot.item.status == .open {
+            var drawnTypes = Set<Components.Schemas.AttentionType>()
+            for snapshot in inbox where snapshot.item.status == .open && drawnTypes.insert(snapshot.item._type).inserted
+            {
                 let graphics = graphicPresentations(for: snapshot.item)
                 let detail = DecisionDetailView(
                     store: store,
@@ -3391,7 +3450,9 @@
                 freshness: InboxStore.Freshness = .fresh,
                 operation: Components.Schemas.UnattendedOperationSnapshot,
                 lastUpdatedAt: Date,
-                reason: String = "The daemon stopped unattended operation after repeated restarts"
+                reason: String = "The daemon stopped unattended operation after repeated restarts",
+                colorScheme: ColorScheme = .light,
+                content: AnyView = AnyView(Text("Inbox").padding())
             ) -> Surface {
                 let inDetailColumn = width > 390
                 let notices = StandingNotices(
@@ -3404,13 +3465,13 @@
                 return Surface(
                     name: name,
                     width: width,
+                    colorScheme: colorScheme,
                     view: inDetailColumn
-                        ? AnyView(
-                            StandingDetailColumn(notices: notices) { _ in Text("Inbox").padding() })
+                        ? AnyView(StandingDetailColumn(notices: notices) { _ in content })
                         : AnyView(
                             VStack(spacing: 0) {
                                 notices
-                                Text("Inbox").padding()
+                                content
                             }))
             }
             let stoppedFresh = Date().addingTimeInterval(3_600)
@@ -3443,6 +3504,33 @@
                     name: "unattended-stopped-unreachable-finding-phone", width: 390,
                     freshness: .unreachable, operation: findingStopped,
                     lastUpdatedAt: stoppedFresh, reason: errorChainReason))
+            // The inbox clear while a blocking finding is open (#2920): the
+            // finding is not a Needs you row, so the detail column keeps the
+            // inbox-clear result and the phone's list its empty Needs you,
+            // with the standing notice above each carrying the stop.
+            let findingOnly = InboxStore(client: client)
+            findingOnly.replaceAll(with: [AttentionFixtures.blockingSystemHealth()])
+            let clear = UnifiedListView.emptyNeedsYou(projectID: nil)
+            for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                surfaces.append(
+                    stoppedSurface(
+                        name: "unattended-stopped-clear" + suffix, width: Self.detailColumnWidth,
+                        operation: findingStopped, lastUpdatedAt: stoppedFresh, colorScheme: scheme,
+                        content: AnyView(
+                            UnavailableStateView(
+                                glyph: .inbox, title: clear.title, description: clear.description,
+                                seat: .detailColumn))))
+                try surfaces.append(
+                    stoppedSurface(
+                        name: "unattended-stopped-clear-phone" + suffix, width: 390,
+                        operation: findingStopped, lastUpdatedAt: stoppedFresh, colorScheme: scheme,
+                        content: AnyView(
+                            UnifiedListView(
+                                store: findingOnly, tasks: [], runs: [],
+                                navigation: screenshotNavigation(selecting: nil),
+                                preferences: screenshotListPreferences()
+                            ).screenshotContent(now: screenshotNow))))
+            }
 
             // The non-image attachment reader as a sheet: inline serif title,
             // the mono text preview laid out in place of its scroll view,

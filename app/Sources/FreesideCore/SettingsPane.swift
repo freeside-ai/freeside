@@ -44,6 +44,16 @@ struct SettingsSync {
     let deviceID: String
     /// Passed to the Devices pane's revoke confirmation.
     let unresolvedActionCount: Int
+    /// The synced inbox: the System Health pane lists its findings, and the
+    /// Mac seats a finding's card on it.
+    let store: InboxStore
+    /// The unattended-admission gate as the last bootstrap reported it
+    /// (#980), which the standing stopped indicator also reads.
+    let unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
+
+    var findings: SystemHealthFindings {
+        SystemHealthFindings(open: store.openSnapshots, closed: store.closedSnapshots)
+    }
 
     /// Paired device names by id, once the Devices list has loaded, so the
     /// Agents pane names the device that set the policy.
@@ -111,6 +121,22 @@ enum SettingsSummary {
         case .mac: "On iPhone"
         case .iPhone, .iPad: subscription == nil ? "Not set up" : "ntfy · topic set"
         }
+    }
+
+    /// System Health on the iPhone: how many findings are open, and how
+    /// many of those block unattended work.
+    static func systemHealth(_ findings: SystemHealthFindings) -> String {
+        switch (findings.openCount, findings.blockingCount) {
+        case (0, _): "Nothing open"
+        case (let open, 0): "\(open) open"
+        case (let open, let blocking): "\(open) open · \(blocking) blocking"
+        }
+    }
+
+    /// System Health in the Mac source list: the open count, or nothing
+    /// when none is open.
+    static func systemHealthCount(_ findings: SystemHealthFindings) -> String? {
+        findings.openCount == 0 ? nil : "\(findings.openCount)"
     }
 
     /// Daemon, in the words the freshness banner's keyword uses.
@@ -398,6 +424,10 @@ struct SettingsPaneView: View {
     #if os(macOS)
         var mac: DaemonPane.MacDaemon? = nil
     #endif
+    /// Opens a System Health finding's card.
+    var openFinding: (String) -> Void = { _ in }
+    /// Where the System Health pane keeps its History fold's state.
+    var listDefaults: UserDefaults = .standard
     var rendersInteractiveControls = true
 
     var body: some View {
@@ -452,6 +482,17 @@ struct SettingsPaneView: View {
             .padding(SettingsPaneInsets.grammar(client))
         case .daemon:
             daemonPane
+        case .systemHealth:
+            if let sync {
+                SystemHealthPane(
+                    findings: sync.findings, operation: sync.unattendedOperation, freshness: sync.freshness,
+                    lastUpdatedAt: sync.lastUpdatedAt, client: client, openFinding: openFinding,
+                    preferences: ListSectionPreferences(defaults: listDefaults)
+                )
+                .padding(SettingsPaneInsets.grammar(client))
+            } else {
+                unpaired
+            }
         }
     }
 

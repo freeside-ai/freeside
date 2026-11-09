@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The iPhone's Settings: a grouped list of the six panes, pushed from the
+/// The iPhone's Settings: a grouped list of the seven panes, pushed from the
 /// bottom bar's gear, each row trailing a summary of its pane and pushing
 /// it, as the 4 Nov 2026 handoff draws it (`phoneSettings`, canvas band 1).
 /// The stack's back button returns to Freeside. Only iOS presents it; it
@@ -65,6 +65,7 @@ struct SettingsList: View {
         case .devices: SettingsSummary.devices(sync.devices, client: client)
         case .notifications: SettingsSummary.notifications(sync.devices.notificationSubscription, client: client)
         case .daemon: SettingsSummary.daemon(sync.freshness)
+        case .systemHealth: SettingsSummary.systemHealth(sync.findings)
         }
     }
 

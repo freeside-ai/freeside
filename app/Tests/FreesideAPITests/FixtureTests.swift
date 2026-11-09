@@ -73,10 +73,14 @@ import Testing
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
-    @Test func defaultInboxCoversEveryPhase1TypeOnce() {
+    /// Every Phase 1 type once, then the one second open item: the
+    /// blocking finding that stops the mock's unattended admission.
+    @Test func defaultInboxCoversEveryPhase1TypeOnceAndABlockingFinding() {
         let inbox = AttentionFixtures.defaultInbox()
         let open = inbox.filter { $0.item.status == .open || $0.item._type == .blocked }
-        #expect(open.map(\.item._type) == AttentionFixtures.phase1Types)
+        #expect(open.map(\.item._type) == AttentionFixtures.phase1Types + [.system_health])
+        #expect(open.last?.item.id == AttentionFixtures.blockingSystemHealth().item.id)
+        #expect(open.last?.item.posture?.value1 == .blocking)
         #expect(Set(inbox.map(\.item.id)).count == inbox.count)
     }
 
@@ -256,6 +260,7 @@ import Testing
                 "item-task_proposal",
                 "item-effect_proposal",
                 "item-system_health",
+                "item-system_health-blocking",
                 "production-review-run-review_dispute-1",
                 "item-publish_blocked-expired",
                 "item-effect_proposal-superseded",
