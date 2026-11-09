@@ -263,6 +263,7 @@ func TestTaskLineSelectionMigrationKeepsV1Rows(t *testing.T) {
 // 0129 form, so a store holding one fails the copy's CHECK.
 func rewindTaskLineSelection(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindDeviceNotificationPreferences(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE task_lines RENAME TO task_lines_v2`,
 		`CREATE TABLE task_lines (

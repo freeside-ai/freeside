@@ -58,6 +58,7 @@
 //   - conversation.go conversations, messages, invocations (§5.14)
 //   - device.go, pairing_code.go
 //     paired devices, their credential verifiers, and pairing codes (§5.14)
+//   - device_notification_preference.go a device's notifications switch (§4)
 //   - policy.go       resolved policy with per-key provenance (§5.12)
 //   - routing_policy.go routing policy revisions and their source (§5.4)
 //   - unattended.go   the unattended-operation state an operator moves
