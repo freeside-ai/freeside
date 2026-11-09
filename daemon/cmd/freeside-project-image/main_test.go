@@ -58,6 +58,17 @@ func TestParseConfig(t *testing.T) {
 	}
 }
 
+func TestParseConfigAcceptsBothToolchainDirectories(t *testing.T) {
+	args := append(validArgs(), "-go-module-dir", "daemon", "-swift-package-dir", "app")
+	cfg, err := parseConfig(args, new(bytes.Buffer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GoModuleDir != "daemon" || cfg.SwiftPackageDir != "app" {
+		t.Fatalf("GoModuleDir, SwiftPackageDir = %q, %q, want daemon, app", cfg.GoModuleDir, cfg.SwiftPackageDir)
+	}
+}
+
 func TestImageCheckerFailsWhenCleanupInspectionFails(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq is required by the image checker")

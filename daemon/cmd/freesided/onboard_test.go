@@ -95,6 +95,16 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 			t.Fatalf("BuildProxy = %q, want empty", cfg.BuildProxy)
 		}
 	})
+	t.Run("both toolchain directories together", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs),
+			"-go-module-dir", "daemon", "-swift-package-dir", "app"), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.GoModuleDir != "daemon" || cfg.SwiftPackageDir != "app" {
+			t.Fatalf("GoModuleDir, SwiftPackageDir = %q, %q, want daemon, app", cfg.GoModuleDir, cfg.SwiftPackageDir)
+		}
+	})
 	t.Run("recovery is an explicit fresh request", func(t *testing.T) {
 		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-recover-installation", "33"), io.Discard)
 		if err != nil || cfg.RecoverInstallationID != 33 || cfg.InstallationID != 0 {

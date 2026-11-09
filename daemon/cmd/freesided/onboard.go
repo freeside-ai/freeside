@@ -543,10 +543,12 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "",
 		"build-only HTTP proxy URL without credentials, overriding the managed build proxy")
 	flags.StringVar(&cfg.GoModuleDir, "go-module-dir", "",
-		"repository-relative Go module directory to build a Go image for "+
+		"repository-relative Go module directory to build a Go image for; with -swift-package-dir, "+
+			"one image bakes both toolchains "+
 			"(default: Go at the root when it holds go.mod and no package.json, npm otherwise)")
 	flags.StringVar(&cfg.SwiftPackageDir, "swift-package-dir", "",
-		"repository-relative Swift package directory to build a Swift image for; exclusive with -go-module-dir "+
+		"repository-relative Swift package directory to build a Swift image for; with -go-module-dir, "+
+			"one image bakes both toolchains "+
 			"(default: Swift at the root when it holds Package.swift and no package.json or go.mod)")
 	// The repository may come first or after the flags. A repository name
 	// never starts with "-", so a leading flag means the flags-first form.
