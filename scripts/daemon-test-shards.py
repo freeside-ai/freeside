@@ -33,11 +33,13 @@ DARWIN_SELECTION = [
     {"package": "cmd/freesided", "families": [
         "TestPairingControlRejectsUnauthorizedPeers",
         "TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput",
-        "TestUnderRootAcceptsAPFSFirmlinkAlias", "TestEnvironmentPaths",
+        "TestUnderRootAcceptsAPFSFirmlinkAlias", "TestEnvironmentPaths"],
+     "reason": "build tag (pairing_peer_darwin.go, setup_process_other_test.go), "
+               "filesystem (APFS firmlinks)"},
+    {"package": "internal/daemonshell", "families": [
         "TestListenPrivileged", "TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses",
         "TestConnectionModeOfBoundListener", "TestLoopbackTwinAddr", "TestListenLoopbackTwin"],
-     "reason": "build tag (pairing_peer_darwin.go, setup_process_other_test.go), "
-               "filesystem (APFS firmlinks), network (loopback and Tailscale binds)"},
+     "reason": "network: loopback and Tailscale binds"},
     {"package": "internal/publish", "families": [
         "TestNewKeystoreRejectsOverlap", "TestKeystoreWritesStayOutsideStateDir",
         "TestRejectMaterializationFilesystemCollisions",

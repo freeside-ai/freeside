@@ -207,8 +207,8 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 			}
 		}
 	})
-	payload, _ := json.Marshal(map[string]string{"pairing_code": h.readiness().PairingCode, "display_name": "Client"})
-	response, err := http.Post(h.readiness().APIURL+"/pairing", "application/json", bytes.NewReader(payload))
+	payload, _ := json.Marshal(map[string]string{"pairing_code": h.Readiness().PairingCode, "display_name": "Client"})
+	response, err := http.Post(h.Readiness().APIURL+"/pairing", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	_ = response.Body.Close()
 	request := func(method, path string, body []byte, status int, result any) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(context.Background(), method, h.readiness().APIURL+path, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(context.Background(), method, h.Readiness().APIURL+path, bytes.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
@@ -511,7 +512,7 @@ func proveRigIdle(ctx context.Context, host rigHost, resources daemonlock.RigRes
 	// A Tailscale-bound daemon also serves the loopback twin (#1449), so a
 	// process squatting that loopback port would collide at startup: refuse the
 	// lease now, naming the loopback address.
-	if twin, ok, err := loopbackTwinListenAddress(canonicalListen); err != nil {
+	if twin, ok, err := daemonshell.LoopbackTwinListenAddress(canonicalListen); err != nil {
 		return err
 	} else if ok {
 		if description, live, err := host.ProbeDaemon(ctx, twin); err != nil {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -43,13 +44,12 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	}
 	for index, cause := range []string{"janitor stopped", "backup stopped", "backup stopped"} {
 		if index == 2 {
-			if err := h.enableDurableStopRecovery(t.Context()); err != nil {
+			if err := h.EnableDurableStopRecovery(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := h.fileDurableStop(t.Context(), errors.New(cause)); err != nil {
-			t.Fatal(err)
-		}
+		// ComponentExited returns once the durable stop is recorded.
+		h.ComponentExited(t.Context(), t.Context(), daemonshell.ComponentLocalBackups, errors.New(cause))
 		if err := service.DeliverOwed(t.Context(), func(err error) { t.Errorf("delivery: %v", err) }); err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +58,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		all, err := tx.ListOpenAttentionItems(t.Context(), domain.AttentionSystemHealth)
 		for _, item := range all {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				items = append(items, item)
 			}
 		}
@@ -83,7 +83,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 	_, clicks := sink.published()
 	stopNotifications := 0
 	for _, click := range clicks {
-		if strings.HasPrefix(click, "freeside://attention/items/"+durableStopItemPrefix) {
+		if strings.HasPrefix(click, "freeside://attention/items/"+daemonshell.DurableStopItemPrefix) {
 			stopNotifications++
 		}
 	}
@@ -488,7 +488,7 @@ func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 
 func assertDaemonHealthy(t *testing.T, h *daemon) {
 	t.Helper()
-	response, err := http.Get(h.readiness().APIURL + "/health")
+	response, err := http.Get(h.Readiness().APIURL + "/health")
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
@@ -496,10 +496,8 @@ func assertDaemonHealthy(t *testing.T, h *daemon) {
 	if response.StatusCode != http.StatusOK {
 		t.Errorf("GET /health = %d, want 200", response.StatusCode)
 	}
-	select {
-	case err := <-h.errs:
+	if err := waitBriefly(h.Shell); err != nil {
 		t.Errorf("daemon reported a component exit: %v", err)
-	default:
 	}
 	for _, item := range durableStops(t, h) {
 		t.Errorf("daemon recorded a durable stop: %+v", item)
@@ -507,14 +505,14 @@ func assertDaemonHealthy(t *testing.T, h *daemon) {
 }
 
 // durableStops returns the daemon's open durable-stop items. A durable stop
-// leaves the listener up and h.errs empty; its item is the only sign of it.
+// leaves the listener up and Wait quiet; its item is the only sign of it.
 func durableStops(t *testing.T, h *daemon) []domain.AttentionItem {
 	t.Helper()
 	var stops []domain.AttentionItem
 	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range items {
-			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
 				stops = append(stops, item)
 			}
 		}

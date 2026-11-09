@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -276,7 +277,7 @@ func (c *scenarioComposition) serveForge(ctx context.Context, logger *slog.Logge
 	case err := <-served:
 		return fmt.Errorf("scenario forge: %w", err)
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownBudget)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), daemonshell.ServerShutdownBudget)
 		defer cancel()
 		if err := c.forge.Shutdown(shutdownCtx); err != nil && logger != nil {
 			logger.Warn("scenario forge shutdown", "error", err)

@@ -63,9 +63,9 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 	if _, err := h.workflow.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	beforeHealth := pairingTestHealth(t, h.readiness().APIURL)
+	beforeHealth := pairingTestHealth(t, h.Readiness().APIURL)
 	workflow := h.workflow
-	original := pairingTestRedeem(t, h.readiness().APIURL, h.readiness().PairingCode)
+	original := pairingTestRedeem(t, h.Readiness().APIURL, h.Readiness().PairingCode)
 	mint := func() pairingCodeResult {
 		t.Helper()
 		before := pairingTestWorkflow(t, h.store)
@@ -77,7 +77,7 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 			t.Fatal("invalid command JSON")
 		}
-		if result.APIURL != h.readiness().APIURL || len(result.PairingCode) != 8 ||
+		if result.APIURL != h.Readiness().APIURL || len(result.PairingCode) != 8 ||
 			!result.ExpiresAt.Equal(now.Add(10*time.Minute)) {
 			t.Fatal("mint did not return the current endpoint, canonical code and ten-minute expiry")
 		}
@@ -99,7 +99,7 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 	pairingTestRejected(t, expired.APIURL, expired.PairingCode)
 	fresh := mint()
 	pairingTestRejected(t, expired.APIURL, expired.PairingCode)
-	pairingTestRejected(t, fresh.APIURL, h.readiness().PairingCode)
+	pairingTestRejected(t, fresh.APIURL, h.Readiness().PairingCode)
 	preview := pairingTestPost(t, fresh.APIURL+"/pairing/preview", fresh.PairingCode)
 	if preview.StatusCode != http.StatusOK {
 		t.Fatalf("preview status = %d", preview.StatusCode)

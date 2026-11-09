@@ -79,3 +79,9 @@ b3b370c95de3ad11f6761e69e83f30d596a47d33
 
 # Move publication run holds to their own file (#2761)
 26c05608405279a7cec6777fcfc2228ec1b827eb
+
+# Export the freesided shell names before their move (#2861)
+53d9a4379cbc18facfb647d33ee776c212428f3d
+
+# Move freesided's process shell to internal/daemonshell (#2861)
+d8518e19211c7d7e42a087bb779ac48600fadf30

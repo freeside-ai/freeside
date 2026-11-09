@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -98,7 +99,7 @@ func productionDeputyHost() deputyHost {
 		preflight:    newProductionPreflightEnvironment(),
 		adopt:        productionAuthAdoptDeps(),
 		now:          func() time.Time { return time.Now().UTC() },
-		tailscaleIPs: readTailscaleIPs,
+		tailscaleIPs: daemonshell.ReadTailscaleIPs,
 		inspectImage: func(ctx context.Context, ref string) error {
 			return checkImageInStore(ctx, deputyContainerBin, ref)
 		},
@@ -215,11 +216,11 @@ func runDeputy(
 	if err != nil {
 		return err
 	}
-	if err := json.NewEncoder(stdout).Encode(h.readiness()); err != nil {
+	if err := json.NewEncoder(stdout).Encode(h.Readiness()); err != nil {
 		stop()
 		return errors.Join(err, h.Close())
 	}
-	if err := serve(ctx, stop, h); err != nil {
+	if err := daemonshell.Serve(ctx, stop, h.Shell); err != nil {
 		return err
 	}
 	cleanEnd = true
@@ -846,7 +847,7 @@ func checkDeputyDaemonSettings(
 	if _, err := loadManualSubmissionConfig(settings.ManualSubmissionConfig); err != nil {
 		return fmt.Errorf("settings: manual_submission_config: %w", err)
 	}
-	if _, err := resolveListenAddress(settings.Listen, tailscaleIPs); err != nil {
+	if _, err := daemonshell.ResolveListenAddress(settings.Listen, tailscaleIPs); err != nil {
 		return fmt.Errorf("settings: listen: %w", err)
 	}
 	cfg := deputyClaudeDriverConfig(settings, paths, "")

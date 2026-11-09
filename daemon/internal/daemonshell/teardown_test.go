@@ -1,4 +1,4 @@
-package main
+package daemonshell
 
 import (
 	"bufio"
@@ -40,10 +40,10 @@ func newSlowCloser() *slowCloser {
 	return &slowCloser{entered: make(chan struct{}), release: make(chan struct{})}
 }
 
-func newTeardownDaemon(t *testing.T, closer sessionCloser) *daemon {
+func newTeardownDaemon(t *testing.T, closer SessionCloser) *Shell {
 	t.Helper()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	return &daemon{
+	return &Shell{
 		store:         st,
 		server:        &http.Server{ReadHeaderTimeout: time.Second},
 		cancel:        func() {},
@@ -177,7 +177,7 @@ func runWedgedTeardownHelper(t *testing.T) {
 		select {}
 	}))
 	fmt.Println(teardownReadyMarker)
-	_ = serve(ctx, stop, d)
+	_ = Serve(ctx, stop, d)
 	// Only reachable if the wedged teardown somehow returned, which would
 	// mean the parent's second signal proved nothing.
 	fmt.Println(teardownDoneMarker)

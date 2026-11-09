@@ -181,7 +181,7 @@ func TestClientUsageCommandsDriveCollection(t *testing.T) {
 	})
 	seedUsagePools(t, h.store)
 	client := usageClient{
-		t: t, api: h.readiness().APIURL, grant: pairingTestRedeem(t, h.readiness().APIURL, h.readiness().PairingCode),
+		t: t, api: h.Readiness().APIURL, grant: pairingTestRedeem(t, h.Readiness().APIURL, h.Readiness().PairingCode),
 	}
 	staleAge := 2 * defaultDoctorInterval
 
