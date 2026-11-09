@@ -21,13 +21,22 @@ type RunnerBackendClass string
 // a detachable volume remounted read-only.
 const BackendFreshVMReadOnlyVolumeHandoff RunnerBackendClass = "fresh_vm_read_only_volume_handoff"
 
+// BackendCredentialFreeHostVerification is the macOS verification executor
+// (§5.7, macOS Execution): a host-side room for clean verification that holds
+// no provider or GitHub credential and no placeholder and runs no agent. It is
+// the one host-side class unattended admits, and only for verification.
+const BackendCredentialFreeHostVerification RunnerBackendClass = "credential_free_host_verification" //nolint:gosec // G101: a backend class name, not a credential
+
 // AllRunnerBackendClasses lists every valid RunnerBackendClass; it drives
 // table-driven tests and is the single place a new class is registered.
-var AllRunnerBackendClasses = []RunnerBackendClass{BackendFreshVMReadOnlyVolumeHandoff}
+var AllRunnerBackendClasses = []RunnerBackendClass{
+	BackendFreshVMReadOnlyVolumeHandoff,
+	BackendCredentialFreeHostVerification,
+}
 
 func (c RunnerBackendClass) valid() bool {
 	switch c {
-	case BackendFreshVMReadOnlyVolumeHandoff:
+	case BackendFreshVMReadOnlyVolumeHandoff, BackendCredentialFreeHostVerification:
 		return true
 	default:
 		return false
@@ -61,6 +70,11 @@ func ProvableCapabilities(class RunnerBackendClass) (CapabilitySnapshot, bool) {
 			CapNetworklessExport,
 			CapEnforcedProviderEgress,
 		), true
+	case BackendCredentialFreeHostVerification:
+		// The executor exports nothing and runs no writer, so every ward
+		// capability is an over-claim for it: its suite (#2879) can prove
+		// only its own declaration.
+		return NewCapabilitySnapshot(CapCredentialFreeHostVerification), true
 	}
 	return nil, false
 }

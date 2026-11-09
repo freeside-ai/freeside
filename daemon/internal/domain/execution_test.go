@@ -571,6 +571,104 @@ func TestAdmittedUnder(t *testing.T) {
 	}
 }
 
+// TestRequiredCapabilitiesPerClass pins the class-aware minimum (§5.7): under
+// unattended the ward class keeps its configured floor plus the plan's two
+// proofs, the host-verification executor needs exactly its own declaration
+// whatever the configured floor says, and an unregistered class is refused.
+func TestRequiredCapabilitiesPerClass(t *testing.T) {
+	floor := domain.NewCapabilitySnapshot(domain.CapPostExitExport)
+	cases := []struct {
+		name    string
+		mode    domain.OperatingMode
+		class   domain.RunnerBackendClass
+		want    []domain.RunnerCapability
+		wantErr error
+	}{
+		{
+			"unattended ward", domain.ModeUnattended, domain.BackendFreshVMReadOnlyVolumeHandoff,
+			[]domain.RunnerCapability{
+				domain.CapPostExitExport, domain.CapNetworklessExport, domain.CapEnforcedProviderEgress,
+			},
+			nil,
+		},
+		{
+			"unattended host verification", domain.ModeUnattended, domain.BackendCredentialFreeHostVerification,
+			[]domain.RunnerCapability{domain.CapCredentialFreeHostVerification},
+			nil,
+		},
+		{
+			"unattended unregistered class", domain.ModeUnattended, "fake-runner",
+			nil, domain.ErrInvalidRunnerBackendClass,
+		},
+		{
+			"unattended zero class", domain.ModeUnattended, "",
+			nil, domain.ErrInvalidRunnerBackendClass,
+		},
+		{
+			"attended ward", domain.ModeAttendedDev, domain.BackendFreshVMReadOnlyVolumeHandoff,
+			floor, nil,
+		},
+		{
+			"attended host verification", domain.ModeAttendedDev, domain.BackendCredentialFreeHostVerification,
+			nil, nil,
+		},
+		{
+			"attended test backend", domain.ModeAttendedDev, "fake-runner",
+			floor, nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := domain.RequiredCapabilities(tc.mode, tc.class, floor)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("RequiredCapabilities error = %v, want %v", err, tc.wantErr)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("RequiredCapabilities = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAdmittedUnderHostVerification proves the re-gate holds an unattended
+// executor admission to the executor's own declaration: it admits one that
+// declares it, refuses one that does not by naming it, and refuses an
+// unattended record whose backend is no registered class.
+func TestAdmittedUnderHostVerification(t *testing.T) {
+	profile := domain.Digest("sha256:profile-v1")
+	backupHealth := healthyBackupHealth()
+	policy := domain.AdmissionPolicy{
+		Floors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealth:            &backupHealth,
+	}
+	record := func(backend string, caps ...domain.RunnerCapability) domain.ExecutionAdmission {
+		in := admissionInput()
+		in.Backend = backend
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = domain.NewCapabilitySnapshot(caps...)
+		in.TrustProfileDigest = &profile
+		return mustAdmission(t, in)
+	}
+	host := string(domain.BackendCredentialFreeHostVerification)
+
+	if err := domain.AdmittedUnder(record(host, domain.CapCredentialFreeHostVerification), policy); err != nil {
+		t.Fatalf("declared executor admission = %v, want admitted", err)
+	}
+	err := domain.AdmittedUnder(record(host), policy)
+	if !errors.Is(err, domain.ErrCapabilityBelowFloor) {
+		t.Fatalf("undeclared executor admission = %v, want ErrCapabilityBelowFloor", err)
+	}
+	if !strings.Contains(err.Error(), string(domain.CapCredentialFreeHostVerification)) {
+		t.Errorf("refusal %q does not name the missing capability", err)
+	}
+	if err := domain.AdmittedUnder(record("fake-runner", domain.AllRunnerCapabilities...), policy); !errors.Is(err, domain.ErrInvalidRunnerBackendClass) {
+		t.Errorf("unregistered unattended class = %v, want ErrInvalidRunnerBackendClass", err)
+	}
+}
+
 // TestAdmittedUnderDoesNotMutateTheFloor pins that the plan-mandated
 // unattended addition is applied to a copy: appending to a caller's snapshot
 // in place could grow the stored policy map's slice.

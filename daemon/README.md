@@ -3180,7 +3180,14 @@ conformance holds the janitor's latest completed coverage stable for its
 authenticated fetch, so the janitor's deliberate mid-pass withdrawal cannot
 terminate the daemon. Doctor applies the selected mode's full capability floor; unattended
 health therefore requires the networkless-export and enforced-provider-egress
-proofs in addition to the attended handoff floor. Pass `-operating-mode
+proofs in addition to the attended handoff floor. The minimum is per backend
+class: the one host-side class `unattended` admits, the credential-free macOS
+verification executor (`credential_free_host_verification`, package
+`internal/macverify`), needs only its own
+`supports_credential_free_host_verification` declaration, earned by its own
+conformance pass, and runs only a run's verification job. The class is
+declared, but nothing builds its room, runs its pass, or places a job on it
+yet (#2877, #2879, #2882), and doctor does not check it. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
 unattended daemon. Use the `digest` field from that daemon's startup log record
 whose message is `effective reviewer configuration`; it is computed from the
@@ -3393,7 +3400,9 @@ judgment still raises an attention item, and nothing depends on an operator
 watching stderr.
 
 Operational results always state the operating mode and isolation class.
-`attended_dev` is the default; unattended operation is an explicit
+A verification job admitted on the host names the executor class
+`credential_free_host_verification` as its isolation class. `attended_dev` is
+the default; unattended operation is an explicit
 `-operating-mode unattended` choice. An attended admission resolves the
 currently active trust profile at import, where its protected paths are
 applied; an unattended admission remains bound to the exact profile digest it

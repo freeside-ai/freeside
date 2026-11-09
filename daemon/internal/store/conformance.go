@@ -248,14 +248,55 @@ func (tx *ReadTx) requireBackendConformant(
 	if admission.OperatingMode != domain.ModeUnattended {
 		return nil
 	}
-	record, found, err := tx.LatestBackendConformance(
-		ctx, domain.RunnerBackendClass(admission.Backend))
+	return tx.requireConformantDeclaration(ctx, conformanceSubject{
+		label:        fmt.Sprintf("admission %q", admission.InvocationID),
+		class:        domain.RunnerBackendClass(admission.Backend),
+		digest:       admission.BackendConfigurationDigest,
+		capabilities: admission.Capabilities,
+	}, gate)
+}
+
+// RequireHostVerificationConformant is the conformance half of §5.7's
+// unattended condition for the credential-free macOS verification executor:
+// the executor class's current durable declaration must exist, record a pass,
+// be bound to the executor's configuration digest, and cover the capabilities
+// the executor declares now. It applies the same checks and refusals as the
+// mint gate for a ward admission, against the executor's own record. The class
+// is fixed here rather than taken from the caller, so a host verification job
+// can never be re-gated against the ward's record. There is no authenticate
+// variant: a host verification admission is not yet persisted (#2882), so no
+// recorded admission has to survive a recheck window.
+func (tx *ReadTx) RequireHostVerificationConformant(
+	ctx context.Context, digest domain.Digest, capabilities domain.CapabilitySnapshot,
+) error {
+	return tx.requireConformantDeclaration(ctx, conformanceSubject{
+		label:        "host verification",
+		class:        domain.BackendCredentialFreeHostVerification,
+		digest:       digest,
+		capabilities: capabilities,
+	}, backendConformanceMint)
+}
+
+// conformanceSubject is what requireConformantDeclaration gates: a declaration
+// a backend of class made under configuration digest. label prefixes every
+// refusal so the caller's record is named.
+type conformanceSubject struct {
+	label        string
+	class        domain.RunnerBackendClass
+	digest       domain.Digest
+	capabilities domain.CapabilitySnapshot
+}
+
+func (tx *ReadTx) requireConformantDeclaration(
+	ctx context.Context, subject conformanceSubject, gate backendConformanceGate,
+) error {
+	record, found, err := tx.LatestBackendConformance(ctx, subject.class)
 	if err != nil {
-		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
+		return fmt.Errorf("%s: %w", subject.label, err)
 	}
 	if !found {
-		return fmt.Errorf("admission %q backend %q: %w",
-			admission.InvocationID, admission.Backend, ErrBackendNotConformant)
+		return fmt.Errorf("%s backend %q: %w",
+			subject.label, subject.class, ErrBackendNotConformant)
 	}
 	if record.Outcome != domain.ConformancePassed {
 		// A same-configuration supersession marker, in the authenticate gate
@@ -264,32 +305,33 @@ func (tx *ReadTx) requireBackendConformant(
 		// configuration) refuses exactly as the mint gate does. The recovered
 		// proof carries the same-digest capability ceiling; the shared checks
 		// below then run against it unchanged.
-		passed, recovered, err := tx.supersededSameConfigurationProof(ctx, admission, record, gate)
+		passed, recovered, err := tx.supersededSameConfigurationProof(
+			ctx, subject.class, subject.digest, record, gate)
 		if err != nil {
-			return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
+			return fmt.Errorf("%s: %w", subject.label, err)
 		}
 		if !recovered {
-			return fmt.Errorf("admission %q backend %q conformance generation %d records %q: %w",
-				admission.InvocationID, admission.Backend, record.Generation,
+			return fmt.Errorf("%s backend %q conformance generation %d records %q: %w",
+				subject.label, subject.class, record.Generation,
 				record.Outcome, ErrBackendNotConformant)
 		}
 		record = passed
 	}
 	if !record.ConfigurationBound() {
-		return fmt.Errorf("admission %q backend %q conformance generation %d: %w",
-			admission.InvocationID, admission.Backend, record.Generation,
+		return fmt.Errorf("%s backend %q conformance generation %d: %w",
+			subject.label, subject.class, record.Generation,
 			domain.ErrConformanceConfigurationUnbound)
 	}
-	if admission.BackendConfigurationDigest != record.ConfigurationDigest {
+	if subject.digest != record.ConfigurationDigest {
 		return fmt.Errorf(
-			"admission %q backend %q configuration %s differs from conformance generation %d configuration %s: %w",
-			admission.InvocationID, admission.Backend, admission.BackendConfigurationDigest,
+			"%s backend %q configuration %s differs from conformance generation %d configuration %s: %w",
+			subject.label, subject.class, subject.digest,
 			record.Generation, record.ConfigurationDigest,
 			domain.ErrAdmissionConfigurationMismatch)
 	}
-	if excess := domain.ExcessCapabilities(admission.Capabilities, record.Capabilities); len(excess) > 0 {
-		return fmt.Errorf("admission %q backend %q claims %v beyond conformance generation %d: %w",
-			admission.InvocationID, admission.Backend, excess, record.Generation,
+	if excess := domain.ExcessCapabilities(subject.capabilities, record.Capabilities); len(excess) > 0 {
+		return fmt.Errorf("%s backend %q claims %v beyond conformance generation %d: %w",
+			subject.label, subject.class, excess, record.Generation,
 			domain.ErrAdmissionExceedsConformance)
 	}
 	return nil
@@ -320,7 +362,8 @@ func (tx *ReadTx) requireBackendConformant(
 // declaration it superseded must itself be a pass for that configuration.
 func (tx *ReadTx) supersededSameConfigurationProof(
 	ctx context.Context,
-	admission domain.ExecutionAdmission,
+	class domain.RunnerBackendClass,
+	digest domain.Digest,
 	latest domain.BackendConformance,
 	gate backendConformanceGate,
 ) (domain.BackendConformance, bool, error) {
@@ -331,16 +374,15 @@ func (tx *ReadTx) supersededSameConfigurationProof(
 		return domain.BackendConformance{}, false, nil
 	}
 	if !latest.ConfigurationBound() ||
-		latest.ConfigurationDigest != admission.BackendConfigurationDigest {
+		latest.ConfigurationDigest != digest {
 		return domain.BackendConformance{}, false, nil
 	}
-	superseded, found, err := tx.latestBackendConformanceBefore(
-		ctx, domain.RunnerBackendClass(admission.Backend), latest.Generation)
+	superseded, found, err := tx.latestBackendConformanceBefore(ctx, class, latest.Generation)
 	if err != nil {
 		return domain.BackendConformance{}, false, err
 	}
 	if !found || superseded.Outcome != domain.ConformancePassed ||
-		superseded.ConfigurationDigest != admission.BackendConfigurationDigest {
+		superseded.ConfigurationDigest != digest {
 		return domain.BackendConformance{}, false, nil
 	}
 	return superseded, true, nil
