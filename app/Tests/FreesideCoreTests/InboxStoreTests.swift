@@ -45,6 +45,72 @@ import Testing
         #expect(store.conversationsByID.isEmpty)
     }
 
+    /// The local clear of the unviewed mark (#2930) holds while sync keeps
+    /// serving the same surface unviewed, and retires once sync serves the
+    /// surface viewed or moves to a new one.
+    @Test func localSurfaceViewHoldsUntilSyncSaysOtherwise() throws {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let unviewed = AttentionFixtures.fixture(type: .spec_approval)
+        let id = unviewed.item.id
+        let digest = unviewed.item.decision_surface.digest
+        let openedAt = Date(timeIntervalSince1970: 1_767_400_000)
+        store.replaceAll(with: [unviewed])
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == nil)
+
+        store.markSurfaceViewedLocally(itemID: id, digest: "sha256:another-surface", at: openedAt)
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == nil)
+        store.markSurfaceViewedLocally(itemID: id, digest: digest, at: openedAt)
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == openedAt)
+
+        // The telemetry has not landed: sync still serves the surface
+        // unviewed, by partial read and by bootstrap alike.
+        #expect(store.apply(unviewed))
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == openedAt)
+        store.replaceAll(with: [unviewed])
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == openedAt)
+
+        // The daemon's time replaces the local one at the view's higher
+        // revision, entity_version unchanged.
+        var viewed = unviewed
+        viewed.as_of_revision += 1
+        viewed.item.surface_first_opened_at = openedAt.addingTimeInterval(5)
+        #expect(store.apply(viewed))
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == viewed.item.surface_first_opened_at)
+
+        // An older read finishing late can't bring the mark back, by partial
+        // read or by bootstrap.
+        #expect(!store.apply(unviewed))
+        store.replaceAll(with: [unviewed])
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == viewed.item.surface_first_opened_at)
+
+        // A revised surface rewrites the item and drops any local clear: the
+        // item reads unviewed again.
+        store.markSurfaceViewedLocally(itemID: id, digest: digest, at: openedAt)
+        var revised = unviewed
+        revised.entity_version += 1
+        revised.as_of_revision = viewed.as_of_revision + 1
+        revised.item.decision_surface.digest = "sha256:revised-surface"
+        #expect(store.apply(revised))
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == nil)
+    }
+
+    @Test func epochChangeDropsLocalSurfaceView() throws {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let unviewed = AttentionFixtures.fixture(type: .spec_approval)
+        let id = unviewed.item.id
+        store.replaceAll(with: [unviewed])
+        store.markSurfaceViewedLocally(
+            itemID: id, digest: unviewed.item.decision_surface.digest,
+            at: Date(timeIntervalSince1970: 1_767_400_000))
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at != nil)
+
+        // A restored daemon may hold no record of the open, so after the
+        // epoch change this device shows what sync serves, like the others.
+        store.discardSnapshots()
+        store.replaceAll(with: [unviewed])
+        #expect(store.snapshotsByID[id]?.item.surface_first_opened_at == nil)
+    }
+
     @Test func refreshFailureIsSurfacedNotMasked() async {
         let server = MockServer()
         await server.setBeforeRespond { operationID in

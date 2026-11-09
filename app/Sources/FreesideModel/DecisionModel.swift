@@ -313,6 +313,7 @@ public final class DecisionModel {
             let digest = store.snapshotsByID[itemID]?.item.decision_surface.digest
         else { return }
         cardOpenedEmitted = true
+        store.markSurfaceViewedLocally(itemID: itemID, digest: digest, at: Date())
         store.enqueueComprehensionEvent(
             kind: .card_opened, itemID: itemID, itemDecisionSurfaceDigest: digest,
             decisionActionSurfaceDigest: nil, commandID: nil)
