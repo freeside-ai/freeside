@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -197,7 +196,7 @@ func RecordProductionExecutionExport(
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(string(executionExport.InvocationID), "inv-operator-feedback-") {
+		if domain.HasOperatorFeedbackInvocationPrefix(executionExport.InvocationID) {
 			entry, err := tx.GetOutbox(ctx, string(executionExport.InvocationID))
 			if err != nil {
 				return err

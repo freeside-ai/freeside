@@ -47,8 +47,8 @@ func (r OperatorFeedbackInvocationIntent) Validate() error {
 		}
 	} else {
 		if r.Version != OperatorFeedbackRetryIntentVersion || r.Retry.CommandID == "" ||
-			r.Retry.ItemID != ItemID("execution-failure-"+string(r.Retry.FailedInvocationID)) ||
-			!strings.HasPrefix(string(r.Retry.FailedInvocationID), "inv-operator-feedback-") ||
+			r.Retry.ItemID != ExecutionFailureItemID(r.Retry.FailedInvocationID) ||
+			!HasOperatorFeedbackInvocationPrefix(r.Retry.FailedInvocationID) ||
 			r.Retry.FailedInvocationID == r.InvocationID {
 			return ErrParentKeyMismatch
 		}
@@ -56,7 +56,7 @@ func (r OperatorFeedbackInvocationIntent) Validate() error {
 	}
 	if r.RunID == "" || r.CommandID == "" ||
 		r.ItemID == "" || r.SourceInvocationID == "" ||
-		r.InvocationID != InvocationID("inv-operator-feedback-"+invocationCommand) ||
+		r.InvocationID != OperatorFeedbackInvocationID(invocationCommand) ||
 		r.StageID != StageID("operator-feedback-"+string(r.InvocationID)) ||
 		r.InputArtifactID != ArtifactID("operator-feedback-"+r.CommandID) ||
 		!contentaddr.Valid(string(r.InputArtifactDigest)) {

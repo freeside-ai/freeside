@@ -285,7 +285,7 @@ func findRemediationStage(run domain.Run, round int) (domain.Stage, bool) {
 func productionStageForInvocation(
 	run domain.Run, invocationID domain.InvocationID,
 ) (domain.Stage, bool) {
-	if strings.HasPrefix(string(invocationID), "inv-operator-feedback-") {
+	if domain.HasOperatorFeedbackInvocationPrefix(invocationID) {
 		return findOperatorFeedbackStage(run, invocationID)
 	}
 	if invocationID == productionInvocationID(run.ID) {

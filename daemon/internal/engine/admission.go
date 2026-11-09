@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -793,7 +792,7 @@ func productionDeliveryInvocation(
 ) (production, remediation bool) {
 	production = invocationID == productionInvocationID(admission.RunID) &&
 		admission.StageID == productionStageID(admission.RunID)
-	production = production || (strings.HasPrefix(string(invocationID), "inv-operator-feedback-") &&
+	production = production || (domain.HasOperatorFeedbackInvocationPrefix(invocationID) &&
 		admission.StageID == operatorFeedbackStageID(invocationID))
 	round, remediation := remediationRoundForInvocation(admission.RunID, invocationID)
 	remediation = remediation && admission.StageID == remediationStageID(admission.RunID, round)
@@ -1122,7 +1121,7 @@ func handoffConflictTipAdmission(
 	_, remediation := remediationRoundForInvocation(runID, invocationID)
 	// The stage, not the prefix alone, makes an operator-feedback writer: a
 	// specification discussion's ID can carry the same prefix.
-	feedback := strings.HasPrefix(string(invocationID), "inv-operator-feedback-") &&
+	feedback := domain.HasOperatorFeedbackInvocationPrefix(invocationID) &&
 		stage.ID == operatorFeedbackStageID(invocationID) && stage.Name == productionStageName
 	if !remediation && !feedback {
 		return domain.BaseRevision{}, false, nil

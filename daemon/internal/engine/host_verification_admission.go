@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -180,7 +179,7 @@ func wardInvocationRole(runID domain.RunID, id domain.InvocationID) (domain.Role
 	switch {
 	case id == productionInvocationID(runID):
 		return domain.RoleImplementer, true
-	case strings.HasPrefix(string(id), "inv-operator-feedback-"):
+	case domain.HasOperatorFeedbackInvocationPrefix(id):
 		return domain.RoleRemediator, true
 	}
 	if _, ok := remediationRoundForInvocation(runID, id); ok {
