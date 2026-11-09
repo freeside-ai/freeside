@@ -173,7 +173,11 @@ longer fails the stage, and the decoder still gates every byte of it. `file_v5`
 also explicitly disables the pinned CLI's bundled `agents-md` plugin through
 `--settings`: `--safe-mode` leaves built-in plugins enabled, and this plugin
 can load repository instructions outside the daemon's instruction bundle.
-The conformance transcript must still report no plugins. `file_v6` delivers
+The conformance transcript must still report no plugins. From 2.1.319 the
+agent image's managed settings disable every built-in plugin the pinned CLI
+registers, because the policy-only `cc-plugin-sec-default` ignores
+`--settings` (#2922; `images/agent-claude/README.md`). The flag stays, now
+redundant, so every delivery's command stays byte-identical. `file_v6` delivers
 it as `file_v5` does and, off a specification run's stage, also asks the CLI
 for its usage answer after the turn (#2543). The root shell installs a small
 Node driver, `usage_driver.cjs`, in a root-owned, world-readable directory
@@ -222,6 +226,20 @@ answer timeout. It reports the routes the CLI tried besides inference:
 
 ```sh
 go test ./internal/exec/claude -run '^TestPinnedClaudeUsageDriverLive$' -count=1 -v
+```
+
+`TestPinnedClaudeInitSeveranceLive` runs the agent line new launches select,
+for a specification and a non-specification stage, the same way and under
+the same variables, with `FREESIDE_INIT_SEVERANCE_LIVE=1`. It passes the
+launch's transcript to the conformance judge and fails unless the judge
+reports context severance: `plugins: []` and `mcp_servers: []` on the init
+event. The image's own managed settings seat `cc-plugin-sec-default` without
+a login, so this credential-free run loads the plugin that broke severance
+on 2.1.319 unless the image disables it (#2922). Run it after any change to
+the image's managed settings or CLI pin:
+
+```sh
+go test ./internal/exec/claude -run '^TestPinnedClaudeInitSeveranceLive$' -count=1 -v
 ```
 
 `TestPinnedClaudeInputReadLive` runs the same `file_v6` lines, implementation
