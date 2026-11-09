@@ -2066,6 +2066,157 @@ public struct Client: APIProtocol {
             }
         )
     }
+    /// Turn a device's notifications on or off
+    ///
+    /// Sets the device's notifications switch (plan §4: notifications are
+    /// hints; the inbox is canonical). A device's switch is off until an
+    /// operator turns it on, and the daemon sends nothing to a device whose
+    /// switch is off. Turning a device on notifies it only for attention
+    /// items created after that moment: items already open stay in the
+    /// inbox, unnotified. Any active device may set any active device's
+    /// switch, as any may revoke any (`POST /devices/{device_id}/revoke`).
+    /// A revoked device has no switch. Idempotent: a call that asks for the
+    /// stored value writes nothing, moves no revision, and returns the same
+    /// entry, so the instant the switch was turned on never moves on a
+    /// replay. Deliberately not a ClientCommand: it is a delivery
+    /// preference, not a decision on an attention item.
+    ///
+    ///
+    /// - Remark: HTTP `PUT /devices/{device_id}/notifications`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)`.
+    public func setDeviceNotifications(_ input: Operations.setDeviceNotifications.Input) async throws -> Operations.setDeviceNotifications.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.setDeviceNotifications.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/devices/{}/notifications",
+                    parameters: [
+                        input.path.device_id
+                    ]
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .put
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                let body: OpenAPIRuntime.HTTPBody?
+                switch input.body {
+                case let .json(value):
+                    body = try converter.setRequiredRequestBodyAsJSON(
+                        value,
+                        headerFields: &request.headerFields,
+                        contentType: "application/json; charset=utf-8"
+                    )
+                }
+                return (request, body)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.setDeviceNotifications.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.DeviceListEntry.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                case 400:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.setDeviceNotifications.Output.BadRequest.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .badRequest(.init(body: body))
+                case 403:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.setDeviceNotifications.Output.Forbidden.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .forbidden(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
     /// Register the device's action capability contract
     ///
     /// Records the set of decision actions the authenticated device's app

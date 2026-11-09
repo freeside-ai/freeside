@@ -52,6 +52,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("POST /pairing/preview", http.HandlerFunc(h.previewPairing))
 	mux.Handle("GET /devices", h.authenticated(h.listDevices))
 	mux.Handle("POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice))
+	mux.Handle("PUT /devices/{device_id}/notifications", h.authenticated(h.setDeviceNotifications))
 	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))

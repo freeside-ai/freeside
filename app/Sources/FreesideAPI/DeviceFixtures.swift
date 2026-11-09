@@ -5,7 +5,8 @@ import OpenAPIRuntime
 /// the fixed identity `currentDeviceID`, which never pairs with the mock, so
 /// without a seed the device list could not show the device reading it.
 /// Three rows cover every state the Devices screen renders: the current
-/// device, another active one, and a revoked one that was never seen.
+/// device with notifications off, another active one with them on, and a
+/// revoked one that was never seen.
 public enum DeviceFixtures {
     public static let currentDeviceID = "device-mock"
     public static let otherDeviceID = "device-mock-phone"
@@ -24,14 +25,16 @@ public enum DeviceFixtures {
                 device: active(
                     id: currentDeviceID, name: "Studio Mac",
                     pairedAt: referenceInstant.addingTimeInterval(-21 * day)),
-                last_seen_at: referenceInstant.addingTimeInterval(-120)),
+                last_seen_at: referenceInstant.addingTimeInterval(-120),
+                notifications_enabled: false),
             .init(
                 as_of_revision: 1,
                 entity_version: 1,
                 device: active(
                     id: otherDeviceID, name: "Ben's iPhone",
                     pairedAt: referenceInstant.addingTimeInterval(-9 * day)),
-                last_seen_at: referenceInstant.addingTimeInterval(-5 * 3600)),
+                last_seen_at: referenceInstant.addingTimeInterval(-5 * 3600),
+                notifications_enabled: true),
             // Revoked before the daemon recorded activity: no last-seen
             // instant, and a second entity version from the revoking write.
             .init(
@@ -44,7 +47,8 @@ public enum DeviceFixtures {
                         status: .revoked,
                         paired_at: referenceInstant.addingTimeInterval(-120 * day),
                         revoked_at: referenceInstant.addingTimeInterval(-45 * day))),
-                last_seen_at: nil),
+                last_seen_at: nil,
+                notifications_enabled: false),
         ]
     }
 

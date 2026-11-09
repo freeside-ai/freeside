@@ -321,6 +321,34 @@ public struct MockServerTransport: ClientTransport {
                         message: "no entity exists under the identifier")
                 )
             }
+        case "setDeviceNotifications":
+            guard let deviceID = Self.deviceID(inNotificationsPath: request.path) else {
+                return (HTTPResponse(status: .badRequest), nil)
+            }
+            guard let body else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "request body is required"))
+            }
+            let data = try await Data(collecting: body, upTo: 1 << 20)
+            guard
+                let input = try? Self.decoder.decode(
+                    Components.Schemas.DeviceNotificationsInput.self, from: data)
+            else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "malformed request body"))
+            }
+            switch await server.setDeviceNotifications(id: deviceID, enabled: input.enabled) {
+            case .set(let entry):
+                return try Self.json(status: .ok, body: entry)
+            case .unknown:
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier")
+                )
+            }
         case "submitCommand":
             guard let body else {
                 return (HTTPResponse(status: .badRequest), nil)
@@ -829,6 +857,12 @@ public struct MockServerTransport: ClientTransport {
     private static func deviceID(inRevokePath path: String?) -> String? {
         let parts = path?.split(separator: "/") ?? []
         guard parts.count >= 2, parts.last == "revoke" else { return nil }
+        return String(parts[parts.count - 2]).removingPercentEncoding
+    }
+
+    private static func deviceID(inNotificationsPath path: String?) -> String? {
+        let parts = path?.split(separator: "/") ?? []
+        guard parts.count >= 2, parts.last == "notifications" else { return nil }
         return String(parts[parts.count - 2]).removingPercentEncoding
     }
 

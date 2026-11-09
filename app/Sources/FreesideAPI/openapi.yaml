@@ -795,6 +795,58 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /devices/{device_id}/notifications:
+    put:
+      operationId: setDeviceNotifications
+      tags: [devices]
+      summary: Turn a device's notifications on or off
+      description: |
+        Sets the device's notifications switch (plan §4: notifications are
+        hints; the inbox is canonical). A device's switch is off until an
+        operator turns it on, and the daemon sends nothing to a device whose
+        switch is off. Turning a device on notifies it only for attention
+        items created after that moment: items already open stay in the
+        inbox, unnotified. Any active device may set any active device's
+        switch, as any may revoke any (`POST /devices/{device_id}/revoke`).
+        A revoked device has no switch. Idempotent: a call that asks for the
+        stored value writes nothing, moves no revision, and returns the same
+        entry, so the instant the switch was turned on never moves on a
+        replay. Deliberately not a ClientCommand: it is a delivery
+        preference, not a decision on an attention item.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+      requestBody:
+        required: true
+        description: The switch's new value.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceNotificationsInput"
+      responses:
+        "200":
+          description: The device's list entry after the write.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceListEntry"
+        "400":
+          description: The request body is not a single `DeviceNotificationsInput`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >
+            The calling device was revoked after the request was
+            authenticated; the gate runs again inside the writing
+            transaction, as `POST /devices/{device_id}/revoke` does.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /devices/{device_id}/capability-contract:
     put:
       operationId: registerCapabilityContract
@@ -4385,11 +4437,12 @@ components:
       type: object
       description: >
         One row of the device list (plan §5.14): a device's resource
-        snapshot plus when the daemon last saw it. as_of_revision,
-        entity_version, and device are exactly the DeviceSnapshot fields and
-        are synchronized state. last_seen_at is not: it is advisory
-        bookkeeping the daemon keeps beside the device.
-      required: [as_of_revision, entity_version, device, last_seen_at]
+        snapshot plus when the daemon last saw it and whether it is
+        notified. as_of_revision, entity_version, and device are exactly the
+        DeviceSnapshot fields and are synchronized state. last_seen_at and
+        notifications_enabled are not part of the device: the daemon keeps
+        them beside it.
+      required: [as_of_revision, entity_version, device, last_seen_at, notifications_enabled]
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -4411,6 +4464,16 @@ components:
             entity_version, so a change here is observable only by reading
             the list again. A revoked device keeps the instant it was last
             seen while active.
+        notifications_enabled:
+          type: boolean
+          description: >
+            Whether the daemon notifies this device of new attention items.
+            Off by default: a newly paired device, and any device whose
+            switch was never set, reads false and is sent nothing. Set
+            through `PUT /devices/{device_id}/notifications`, which moves the
+            server revision but not this device's entity_version. Turning a
+            device on does not deliver items already open; only items created
+            after that moment are sent.
       example:
         as_of_revision: 42
         entity_version: 1
@@ -4421,6 +4484,7 @@ components:
           paired_at: "2026-01-02T03:04:05Z"
           revoked_at: null
         last_seen_at: "2026-01-03T09:15:00Z"
+        notifications_enabled: false
 
     AsOfRevision:
       type: integer
@@ -6272,6 +6336,18 @@ components:
         - action_taken
         - recommendation_override
         - not_decidable_here_shown
+
+    DeviceNotificationsInput:
+      type: object
+      description: The new value of a device's notifications switch.
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          description: True to notify the device of new attention items.
+      example:
+        enabled: true
 
     ClientCapabilityContractInput:
       type: object

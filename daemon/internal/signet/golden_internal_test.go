@@ -266,11 +266,15 @@ func TestSignetWireGoldens(t *testing.T) {
 			},
 		},
 		{
-			// One active device with recorded activity and one revoked device
-			// with none: last_seen_at renders an instant and an explicit null.
+			// One active device with recorded activity and notifications on,
+			// and one revoked device with neither: last_seen_at renders an
+			// instant and an explicit null, notifications_enabled both values.
 			name: "device-list",
 			value: []DeviceListEntry{
-				{AsOfRevision: 24, EntityVersion: 1, Device: device, LastSeenAt: new(createdAt.Add(24 * time.Hour))},
+				{
+					AsOfRevision: 24, EntityVersion: 1, Device: device, LastSeenAt: new(createdAt.Add(24 * time.Hour)),
+					NotificationsEnabled: true,
+				},
 				{AsOfRevision: 26, EntityVersion: 2, Device: revokedDevice},
 			},
 		},

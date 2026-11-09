@@ -261,7 +261,10 @@ private func client(server: MockServer, token: String? = nil) -> Client {
         let entries = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
         #expect(entries.count == 2)
         for entry in entries {
-            #expect(Set(entry.keys) == ["as_of_revision", "entity_version", "device", "last_seen_at"])
+            #expect(
+                Set(entry.keys) == [
+                    "as_of_revision", "entity_version", "device", "last_seen_at", "notifications_enabled",
+                ])
             let device = try #require(entry["device"] as? [String: Any])
             #expect(Set(device.keys) == ["id", "display_name", "status", "paired_at", "revoked_at"])
         }
@@ -300,6 +303,51 @@ private func client(server: MockServer, token: String? = nil) -> Client {
         #expect(after[1].device == revoked.device)
         #expect(after[1].entity_version == 2)
         #expect(after[1].last_seen_at == seeded[1].last_seen_at)
+    }
+
+    @Test func notificationsSwitchIsOffByDefaultAndMovesTheRevisionOnlyOnChange() async throws {
+        let server = MockServer()
+        let api = client(server: server)
+        let seeded = try await api.listDevices().ok.body.json
+        #expect(seeded.map(\.notifications_enabled) == [false, true, false])
+
+        let current = DeviceFixtures.currentDeviceID
+        let before = try await api.getSyncRevision().ok.body.json.revision
+        let on = try await api.setDeviceNotifications(
+            path: .init(device_id: current), body: .json(.init(enabled: true))
+        ).ok.body.json
+        #expect(on.notifications_enabled)
+        #expect(on.entity_version == seeded[0].entity_version)
+        let afterOn = try await api.getSyncRevision().ok.body.json.revision
+        #expect(afterOn == before + 1)
+        #expect(try await api.listDevices().ok.body.json[0].notifications_enabled)
+
+        // A replay writes nothing and moves no revision.
+        let replay = try await api.setDeviceNotifications(
+            path: .init(device_id: current), body: .json(.init(enabled: true))
+        ).ok.body.json
+        #expect(replay == on)
+        #expect(try await api.getSyncRevision().ok.body.json.revision == afterOn)
+
+        // A revoked or unknown device has no switch.
+        for id in [DeviceFixtures.revokedDeviceID, "device-ghost"] {
+            let output = try await api.setDeviceNotifications(
+                path: .init(device_id: id), body: .json(.init(enabled: true)))
+            guard case .notFound = output else {
+                Issue.record("set notifications of \(id) = \(output), want 404")
+                continue
+            }
+        }
+
+        // Revoking a device that was on lists it off.
+        let other = DeviceFixtures.otherDeviceID
+        _ = try await api.revokeDevice(path: .init(device_id: other)).ok
+        let listed = try await api.listDevices().ok.body.json
+        let revoked = try #require(
+            listed.first {
+                if case .revoked(let device) = $0.device { device.id == other } else { false }
+            })
+        #expect(!revoked.notifications_enabled)
     }
 
     @Test func enforcingModeFailsClosedExceptForPairing() async throws {
