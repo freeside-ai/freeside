@@ -428,7 +428,8 @@ public final class NavigationModel {
     /// the row stays selected and the page stays, its card gone. A closed
     /// item opened on
     /// purpose stays, and so does a system health finding's card, which no
-    /// row holds (the stopped notice opens one). A selection with no row left
+    /// row holds (a `-FreesideSelect` launch or a viewed concluded item can
+    /// still open one in the main route). A selection with no row left
     /// clears, taking any run with it. A task with an open item settles on
     /// the item leading its page, so a newer item can't swap the card under
     /// an operator working on it. `previouslyOpen` is the open item ids

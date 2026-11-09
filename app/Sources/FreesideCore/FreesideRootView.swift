@@ -172,8 +172,18 @@ public struct FreesideRootView: View {
             onRePair: bannerRePair(coordinator.store.freshness),
             operation: coordinator.unattendedOperation,
             reason: { coordinator.store.openItemReason($0) },
-            onOpenItem: openItem,
+            onOpenSystemHealth: openSystemHealth,
             placement: placement)
+    }
+
+    /// The stopped notice's action: System Health, over it the card of the
+    /// item the stop names when one is open. The Mac opens the Settings
+    /// window on it, as the toolbar gear does; the iPhone pushes it.
+    private func openSystemHealth(_ itemID: String?) {
+        navigation.openSystemHealth(finding: itemID)
+        #if os(macOS)
+            openSettings()
+        #endif
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {

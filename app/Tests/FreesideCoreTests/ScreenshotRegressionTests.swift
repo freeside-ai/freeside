@@ -3450,8 +3450,9 @@
                 freshness: InboxStore.Freshness = .fresh,
                 operation: Components.Schemas.UnattendedOperationSnapshot,
                 lastUpdatedAt: Date,
-                reason: String = "The daemon stopped unattended operation after repeated restarts",
+                reason: String? = "The daemon stopped unattended operation after repeated restarts",
                 colorScheme: ColorScheme = .light,
+                paintsGround: Bool = false,
                 content: AnyView = AnyView(Text("Inbox").padding())
             ) -> Surface {
                 let inDetailColumn = width > 390
@@ -3460,19 +3461,21 @@
                     freshness: freshness, lastUpdatedAt: lastUpdatedAt, onRePair: nil,
                     operation: operation,
                     reason: { _ in reason },
-                    onOpenItem: { _ in },
+                    onOpenSystemHealth: { _ in },
                     placement: inDetailColumn ? .detailColumn : .window)
+                let view =
+                    inDetailColumn
+                    ? AnyView(StandingDetailColumn(notices: notices) { _ in content })
+                    : AnyView(
+                        VStack(spacing: 0) {
+                            notices
+                            content
+                        })
                 return Surface(
                     name: name,
                     width: width,
                     colorScheme: colorScheme,
-                    view: inDetailColumn
-                        ? AnyView(StandingDetailColumn(notices: notices) { _ in content })
-                        : AnyView(
-                            VStack(spacing: 0) {
-                                notices
-                                content
-                            }))
+                    view: paintsGround ? AnyView(view.background(Color.ground)) : view)
             }
             let stoppedFresh = Date().addingTimeInterval(3_600)
             let stoppedStale = Date().addingTimeInterval(
@@ -3491,6 +3494,17 @@
                 stoppedSurface(
                     name: "unattended-stopped-finding", width: Self.detailColumnWidth,
                     operation: findingStopped, lastUpdatedAt: stoppedFresh))
+            // A stop whose item is not open here (#2921): the action opens
+            // System Health alone, where it was withheld before.
+            for (suffix, width) in [("", Self.detailColumnWidth), ("-phone", CGFloat(390))] {
+                for (schemeSuffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                    surfaces.append(
+                        stoppedSurface(
+                            name: "unattended-stopped-system-health" + suffix + schemeSuffix, width: width,
+                            operation: operatorStopped, lastUpdatedAt: stoppedFresh, reason: nil,
+                            colorScheme: scheme, paintsGround: true))
+                }
+            }
             // The exit run's phone state (#2313): the daemon unreachable over
             // a cached finding stop whose reason is a ten-line Go error
             // chain, the shape that once pushed the inbox below the fold.
@@ -4111,7 +4125,7 @@
                                 notices: StandingNotices(
                                     saveWarning: nil, onDismissSaveWarning: {},
                                     freshness: .unauthenticated, lastUpdatedAt: nil, onRePair: nil,
-                                    operation: nil, reason: { _ in nil }, onOpenItem: nil,
+                                    operation: nil, reason: { _ in nil }, onOpenSystemHealth: nil,
                                     placement: .detailColumn)
                             ) { _ in
                                 RevokedPane(onRePair: {}).frame(height: 320)
@@ -4136,7 +4150,7 @@
                                 reason: { _ in
                                     "The daemon stopped unattended operation after repeated restarts"
                                 },
-                                onOpenItem: { _ in },
+                                onOpenSystemHealth: { _ in },
                                 placement: .detailColumn)
                         ) { topMargin in
                             recommendedDetail.screenshotCard(
@@ -4156,7 +4170,7 @@
                                 reason: { _ in
                                     "The daemon stopped unattended operation after repeated restarts"
                                 },
-                                onOpenItem: { _ in })
+                                onOpenSystemHealth: { _ in })
                             FreshnessBanner(freshness: .unauthenticated, onRePair: {})
                             FreshnessBanner(freshness: mismatch)
                             Text("Inbox").padding()
