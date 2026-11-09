@@ -83,6 +83,62 @@ func (task productionPublicationTask) intentKey() string {
 	return productionPublicationTaskKey(task.RunID)
 }
 
+// productionPublicationRoute names the path reconcileTask sends a task down.
+// The route is computed from the task on each pass and never stored. The
+// zero value "" is invalid.
+type productionPublicationRoute string
+
+const (
+	// productionPublicationRouteReentryInPlace re-earns readiness for an
+	// already published pull request: reconcileReentryTask.
+	productionPublicationRouteReentryInPlace productionPublicationRoute = "reentry_in_place"
+	// productionPublicationRouteRetireUnpublishedReentry retires a legacy
+	// re-entry of an unpublished head: retireReentryTask.
+	productionPublicationRouteRetireUnpublishedReentry productionPublicationRoute = "retire_unpublished_reentry"
+	// productionPublicationRouteContinuation starts a remediation
+	// continuation after import: startPublicationContinuation.
+	productionPublicationRouteContinuation productionPublicationRoute = "continuation"
+	// productionPublicationRouteForward imports, verifies, reviews, and
+	// publishes the task's head: the rest of reconcileTask.
+	productionPublicationRouteForward productionPublicationRoute = "forward"
+)
+
+var allProductionPublicationRoutes = []productionPublicationRoute{
+	productionPublicationRouteReentryInPlace,
+	productionPublicationRouteRetireUnpublishedReentry,
+	productionPublicationRouteContinuation,
+	productionPublicationRouteForward,
+}
+
+func (r productionPublicationRoute) valid() bool {
+	switch r {
+	case productionPublicationRouteReentryInPlace, productionPublicationRouteRetireUnpublishedReentry,
+		productionPublicationRouteContinuation, productionPublicationRouteForward:
+		return true
+	default:
+		return false
+	}
+}
+
+// route picks the task's path from its fields alone; the first match wins,
+// in the order reconcileTask dispatches. Two checks there are not routes,
+// because they read the store: the completed-publication check, which runs
+// in front of every route, and scope-conflict recovery, which runs in front
+// of every route but in-place re-entry and, once a conflict is answered,
+// falls through to the route.
+func (task productionPublicationTask) route() productionPublicationRoute {
+	switch {
+	case task.reentersInPlace():
+		return productionPublicationRouteReentryInPlace
+	case task.Successor != nil && task.Successor.ReentersUnpublishedHead():
+		return productionPublicationRouteRetireUnpublishedReentry
+	case task.continuation != nil:
+		return productionPublicationRouteContinuation
+	default:
+		return productionPublicationRouteForward
+	}
+}
+
 func (task productionPublicationTask) readyItemID() domain.ItemID {
 	if task.Successor != nil {
 		return task.Successor.ReadyItemID()
