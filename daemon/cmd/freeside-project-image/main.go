@@ -48,6 +48,7 @@ type config struct {
 	DNS               []string
 	BuildProxy        string
 	GoModuleDir       string
+	SwiftPackageDir   string
 }
 
 func main() {
@@ -108,7 +109,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		BaseImageRef: domain.ImageRef(cfg.BaseImageRef), BaseBuildRef: cfg.BaseBuildRef,
 		Registry: cfg.Registry, LocalRegistryPort: cfg.LocalRegistryPort,
 		ImageName: cfg.ImageName, RefTag: cfg.RefTag, DNS: cfg.DNS,
-		BuildProxy: cfg.BuildProxy, GoModuleDir: cfg.GoModuleDir,
+		BuildProxy: cfg.BuildProxy, GoModuleDir: cfg.GoModuleDir, SwiftPackageDir: cfg.SwiftPackageDir,
 	})
 	if err != nil {
 		return err
@@ -151,6 +152,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.StringVar(&cfg.GoModuleDir, "go-module-dir", "",
 		"repository-relative Go module directory to build a Go image for "+
 			"(default: Go at the root when it holds go.mod and no package.json, npm otherwise)")
+	flags.StringVar(&cfg.SwiftPackageDir, "swift-package-dir", "",
+		"repository-relative Swift package directory to build a Swift image for; exclusive with -go-module-dir "+
+			"(default: Swift at the root when it holds Package.swift and no package.json or go.mod)")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}

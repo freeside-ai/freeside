@@ -67,18 +67,24 @@ const (
 	// supports, usually a deliberate change a repair could only revert. It
 	// opens neither a proposal nor a task.
 	ImageUpkeepRefusalUnsupportedNPMInput ImageUpkeepRefusalClass = "unsupported_npm_input"
+	// ImageUpkeepRefusalSwiftPackageDelta: any Package.swift or
+	// Package.resolved change, a Swift input no image supports, or a manifest
+	// the gate cannot read. It opens neither a proposal nor a task.
+	ImageUpkeepRefusalSwiftPackageDelta ImageUpkeepRefusalClass = "swift_package_delta"
 )
 
 // AllImageUpkeepRefusalClasses lists every valid ImageUpkeepRefusalClass.
 var AllImageUpkeepRefusalClasses = []ImageUpkeepRefusalClass{
 	ImageUpkeepRefusalPolicy, ImageUpkeepRefusalRepair, ImageUpkeepRefusalHostFault,
 	ImageUpkeepRefusalGoModuleDelta, ImageUpkeepRefusalUnsupportedNPMInput,
+	ImageUpkeepRefusalSwiftPackageDelta,
 }
 
 func (c ImageUpkeepRefusalClass) valid() bool {
 	switch c {
 	case ImageUpkeepRefusalPolicy, ImageUpkeepRefusalRepair, ImageUpkeepRefusalHostFault,
-		ImageUpkeepRefusalGoModuleDelta, ImageUpkeepRefusalUnsupportedNPMInput:
+		ImageUpkeepRefusalGoModuleDelta, ImageUpkeepRefusalUnsupportedNPMInput,
+		ImageUpkeepRefusalSwiftPackageDelta:
 		return true
 	default:
 		return false

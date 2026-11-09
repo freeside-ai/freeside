@@ -36,6 +36,14 @@ const (
 	// line not of Go's own shape. Records written before Go module changes
 	// were bounded also hold it for any go.mod or go.sum change.
 	RebuildRefusalGoDependencyChanged RebuildRefusal = "go_dependency_changed"
+	// RebuildRefusalSwiftDependencyChanged: the candidate changes its
+	// Package.swift or Package.resolved, holds a Swift input no project image
+	// supports (a .swiftpm/configuration/mirrors.json, or a Package.resolved
+	// of version 1 or holding a pin that is not a remote revision), or holds
+	// a Package.swift or Package.resolved no build reads: absent or not a
+	// regular file. No rule bounds a Swift dependency change, so any change
+	// refuses.
+	RebuildRefusalSwiftDependencyChanged RebuildRefusal = "swift_dependency_changed"
 	// RebuildRefusalNoRegistrySet: the run's policy declares no registry set,
 	// or a malformed one.
 	RebuildRefusalNoRegistrySet RebuildRefusal = "no_registry_set"
@@ -55,7 +63,7 @@ var AllRebuildRefusals = []RebuildRefusal{
 	RebuildRefusalRecipeChanged, RebuildRefusalLockfileInconsistent,
 	RebuildRefusalUnsupportedInput, RebuildRefusalNoRegistrySet,
 	RebuildRefusalNotConfigured, RebuildRefusalProofFailed,
-	RebuildRefusalGoDependencyChanged,
+	RebuildRefusalGoDependencyChanged, RebuildRefusalSwiftDependencyChanged,
 }
 
 func (r RebuildRefusal) valid() bool {
@@ -64,7 +72,7 @@ func (r RebuildRefusal) valid() bool {
 		RebuildRefusalRecipeChanged, RebuildRefusalLockfileInconsistent,
 		RebuildRefusalUnsupportedInput, RebuildRefusalNoRegistrySet,
 		RebuildRefusalNotConfigured, RebuildRefusalProofFailed,
-		RebuildRefusalGoDependencyChanged:
+		RebuildRefusalGoDependencyChanged, RebuildRefusalSwiftDependencyChanged:
 		return true
 	default:
 		return false

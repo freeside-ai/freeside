@@ -844,6 +844,7 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 		t.Fatal("CheckProvenance ran without an input layout to select the toolchain")
 	}
 	t.Run("Go image", testAppleCheckProvenanceBindsGoImage)
+	t.Run("Swift image", testAppleCheckProvenanceBindsSwiftImage)
 }
 
 // A Go image carries the Go, golangci-lint, vacuum, shellcheck, Python, and
@@ -1032,6 +1033,145 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 	swapped.GoModSHA256, swapped.GoSumSHA256 = spec.GoSumSHA256, spec.GoModSHA256
 	if err := backend.CheckProvenance(t.Context(), ref, swapped); err == nil {
 		t.Error("CheckProvenance accepted Go manifest hashes bound to the wrong seed files")
+	}
+}
+
+// A Swift image carries the Swift archive, the Swift launcher, the
+// package-specific preparation helper, and the Package.swift and
+// Package.resolved seeds; CheckProvenance proves each against the spec, and
+// the four Swift labels, the apt snapshot and package set among them.
+func testAppleCheckProvenanceBindsSwiftImage(t *testing.T) {
+	swiftArchive := []byte("pinned Swift archive")
+	packageSwift, packageResolved := []byte(testPackageSwift), []byte(testPackageResolved)
+	spec := provenanceSpec{
+		ImageDigest:  testImageDigest,
+		BaseBuildRef: "base:local", BaseDigest: testBaseDigest,
+		Repository:   "freeside-ai/freeside",
+		RepositoryID: 1023456789, CommitSHA: testCommit,
+		RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		Layout: domain.ProjectImageInputLayout{
+			Toolchain: domain.ProjectToolchainSwift, SwiftPackageDir: "app",
+		},
+		SwiftVersion:                swiftToolchainVersion,
+		SwiftToolchainArchiveSHA256: fmt.Sprintf("%x", sha256.Sum256(swiftArchive)),
+		SwiftAptSnapshot:            swiftAptSnapshot,
+		SwiftAptPackages:            strings.Join(swiftAptPackages, " "),
+		PackageSwiftSHA256:          manifestSHA256(packageSwift),
+		PackageResolvedSHA256:       manifestSHA256(packageResolved),
+	}
+	ref := "project:local"
+	labels := map[string]string{
+		"org.opencontainers.image.title":                     "freeside-project-image",
+		"ai.freeside.base.digest":                            spec.BaseDigest,
+		"ai.freeside.project.repository":                     spec.Repository,
+		"ai.freeside.project.repository-id":                  "1023456789",
+		"ai.freeside.project.commit":                         spec.CommitSHA,
+		"ai.freeside.project.recipe-digest":                  string(spec.RecipeDigest),
+		"ai.freeside.project.toolchain.swift.version":        spec.SwiftVersion,
+		"ai.freeside.project.toolchain.swift.archive-sha256": spec.SwiftToolchainArchiveSHA256,
+		"ai.freeside.project.toolchain.swift.apt-snapshot":   spec.SwiftAptSnapshot,
+		"ai.freeside.project.toolchain.swift.apt-packages":   spec.SwiftAptPackages,
+	}
+	runner := &recordingRunner{run: func(call commandSpec) (commandOutput, error) {
+		if len(call.Args) >= 3 && call.Args[0] == "image" && call.Args[1] == "inspect" {
+			if call.Args[2] == spec.BaseBuildRef {
+				return inspectOutputFor(spec.BaseBuildRef, testBaseDigest), nil
+			}
+			return inspectOutputFor(ref, testImageDigest), nil
+		}
+		return commandOutput{}, nil
+	}}
+	var baseConfig, projectConfig ociImageConfig
+	baseConfig.RootFS.DiffIDs = []string{"sha256:base-layer"}
+	projectConfig.Config.Labels = labels
+	projectConfig.RootFS.DiffIDs = []string{"sha256:base-layer", "sha256:project-layer"}
+	busybox := []byte("approved static BusyBox")
+	files := map[string][]byte{
+		ward.ProjectRecipePath:    []byte(testRecipe),
+		PreparationPath:           []byte(swiftPrepareScript("app")),
+		swiftToolchainArchivePath: swiftArchive,
+		swiftLauncherPath:         []byte(swiftToolchainLauncher),
+		busyboxPath:               busybox,
+		seedPackageSwiftPath:      packageSwift,
+		seedPackageResolvedPath:   packageResolved,
+	}
+	modes := map[string]int64{
+		ward.ProjectRecipePath: 0o600, PreparationPath: 0o700,
+		swiftToolchainArchivePath: 0o644, swiftLauncherPath: 0o755, busyboxPath: 0o755,
+	}
+	var requested map[string]int64
+	backend := appleBackend{
+		containerPath: "container", runner: runner,
+		readEvidence: func(_ context.Context, imageRef, _ string, wanted map[string]int64) (ociEvidence, error) {
+			if imageRef == spec.BaseBuildRef {
+				return ociEvidence{
+					Config: baseConfig, Files: map[string][]byte{busyboxPath: busybox},
+					FileModes: map[string]int64{busyboxPath: 0o755},
+				}, nil
+			}
+			requested = wanted
+			return ociEvidence{Config: projectConfig, Files: files, FileModes: modes}, nil
+		},
+	}
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err != nil {
+		t.Fatal(err)
+	}
+	for path := range files {
+		if _, ok := requested[path]; !ok {
+			t.Errorf("Swift evidence targets omit %s", path)
+		}
+	}
+	// The 1 GiB layer cap is what admits the Swift archive at all.
+	if requested[swiftToolchainArchivePath] != maxOCILayerBytes {
+		t.Errorf("Swift archive read cap = %d, want %d", requested[swiftToolchainArchivePath], maxOCILayerBytes)
+	}
+	for _, other := range []string{nodeToolchainArchivePath, goToolchainArchivePath} {
+		if _, ok := requested[other]; ok {
+			t.Errorf("Swift evidence targets require %s, which a Swift image does not carry", other)
+		}
+	}
+
+	reject := func(what string, mutate, restore func()) {
+		t.Helper()
+		mutate()
+		if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+			t.Errorf("CheckProvenance accepted %s", what)
+		}
+		restore()
+	}
+	for _, label := range []string{
+		"ai.freeside.project.toolchain.swift.version",
+		"ai.freeside.project.toolchain.swift.archive-sha256",
+		"ai.freeside.project.toolchain.swift.apt-snapshot",
+		"ai.freeside.project.toolchain.swift.apt-packages",
+	} {
+		original := labels[label]
+		reject("a mismatched "+label+" label",
+			func() { labels[label] = "0" }, func() { labels[label] = original })
+	}
+	for _, path := range []string{
+		swiftToolchainArchivePath, swiftLauncherPath, seedPackageSwiftPath, seedPackageResolvedPath, PreparationPath,
+	} {
+		original := files[path]
+		reject("tampered "+path,
+			func() { files[path] = []byte("tampered") }, func() { files[path] = original })
+		reject("missing "+path,
+			func() { delete(files, path) }, func() { files[path] = original })
+	}
+	for _, path := range []string{swiftToolchainArchivePath, swiftLauncherPath} {
+		original := modes[path]
+		reject("a wrong mode on "+path,
+			func() { modes[path] = 0o4755 }, func() { modes[path] = original })
+	}
+	// The helper is rendered for the recorded package directory: an image
+	// whose helper checks another directory hydrates another package.
+	reject("a preparation helper for another package directory",
+		func() { files[PreparationPath] = []byte(swiftPrepareScript("")) },
+		func() { files[PreparationPath] = []byte(swiftPrepareScript("app")) })
+	swapped := spec
+	swapped.PackageSwiftSHA256, swapped.PackageResolvedSHA256 = spec.PackageResolvedSHA256, spec.PackageSwiftSHA256
+	if err := backend.CheckProvenance(t.Context(), ref, swapped); err == nil {
+		t.Error("CheckProvenance accepted Swift manifest hashes bound to the wrong seed files")
 	}
 }
 

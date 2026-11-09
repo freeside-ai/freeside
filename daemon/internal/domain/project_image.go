@@ -26,6 +26,11 @@ const (
 	// Go record cannot share an address with any npm record.
 	projectImageGoEncodingVersion    = "freeside.project-image/v3"
 	projectImageGoEnvironmentVersion = "freeside.project-image-environment/v2"
+	// projectImageSwiftEncodingVersion and projectImageSwiftEnvironmentVersion
+	// address a Swift record the same way, so no Swift record shares an
+	// address with an npm or Go one.
+	projectImageSwiftEncodingVersion    = "freeside.project-image/v4"
+	projectImageSwiftEnvironmentVersion = "freeside.project-image-environment/v3"
 )
 
 // ProjectToolchain names the toolchain path a project image bakes (plan §5.7,
@@ -39,14 +44,18 @@ const (
 	// ProjectToolchainGo bakes a pinned Go distribution, golangci-lint, and
 	// the module cache one module's go.mod and go.sum pin.
 	ProjectToolchainGo ProjectToolchain = "go"
+	// ProjectToolchainSwift bakes a pinned Swift distribution and bare
+	// mirrors of every repository one package's Package.swift and
+	// Package.resolved resolve to.
+	ProjectToolchainSwift ProjectToolchain = "swift"
 )
 
 // AllProjectToolchains lists every valid ProjectToolchain.
-var AllProjectToolchains = []ProjectToolchain{ProjectToolchainNPM, ProjectToolchainGo}
+var AllProjectToolchains = []ProjectToolchain{ProjectToolchainNPM, ProjectToolchainGo, ProjectToolchainSwift}
 
 func (t ProjectToolchain) valid() bool {
 	switch t {
-	case ProjectToolchainNPM, ProjectToolchainGo:
+	case ProjectToolchainNPM, ProjectToolchainGo, ProjectToolchainSwift:
 		return true
 	default:
 		return false
@@ -54,11 +63,13 @@ func (t ProjectToolchain) valid() bool {
 }
 
 // ProjectImageInputLayout says where a project image's environment inputs
-// live in a tree: the toolchain and, for Go, the module directory relative
-// to the repository root ("" is the root).
+// live in a tree: the toolchain and, for Go, the module directory or, for
+// Swift, the package directory, relative to the repository root ("" is the
+// root). A layout names only its own toolchain's directory.
 type ProjectImageInputLayout struct {
-	Toolchain   ProjectToolchain
-	GoModuleDir string
+	Toolchain       ProjectToolchain
+	GoModuleDir     string
+	SwiftPackageDir string
 }
 
 // Validate rejects a layout no project image can record.
@@ -67,8 +78,12 @@ func (l ProjectImageInputLayout) Validate() error {
 		return fmt.Errorf("project image toolchain %q: %w", l.Toolchain, ErrProjectImageInvalid)
 	}
 	if !ValidProjectGoModuleDir(l.GoModuleDir) ||
-		(l.Toolchain == ProjectToolchainNPM && l.GoModuleDir != "") {
+		(l.Toolchain != ProjectToolchainGo && l.GoModuleDir != "") {
 		return fmt.Errorf("project image go_module_dir %q: %w", l.GoModuleDir, ErrProjectImageInvalid)
+	}
+	if !ValidProjectSwiftPackageDir(l.SwiftPackageDir) ||
+		(l.Toolchain != ProjectToolchainSwift && l.SwiftPackageDir != "") {
+		return fmt.Errorf("project image swift_package_dir %q: %w", l.SwiftPackageDir, ErrProjectImageInvalid)
 	}
 	return nil
 }
@@ -95,6 +110,12 @@ func ValidProjectGoModuleDir(dir string) bool {
 		}
 	}
 	return true
+}
+
+// ValidProjectSwiftPackageDir reports whether dir can name a Swift image's
+// package directory, by the same grammar as ValidProjectGoModuleDir.
+func ValidProjectSwiftPackageDir(dir string) bool {
+	return ValidProjectGoModuleDir(dir)
 }
 
 var (
@@ -155,12 +176,16 @@ type ProjectImage struct {
 // its ID and environment digest hash those bytes.
 type ProjectImageEnvironment struct {
 	// Toolchain is empty for npm, which every record built before the Go
-	// path carries, and "go" for a Go image; an explicit "npm" is invalid so
-	// one environment has one encoding. ResolvedToolchain reads it.
+	// path carries, "go" for a Go image, and "swift" for a Swift image; an
+	// explicit "npm" is invalid so one environment has one encoding.
+	// ResolvedToolchain reads it.
 	Toolchain ProjectToolchain `json:"toolchain,omitempty"`
 	// GoModuleDir is a Go image's module directory relative to the
 	// repository root, empty for the root.
 	GoModuleDir string `json:"go_module_dir,omitempty"`
+	// SwiftPackageDir is a Swift image's package directory relative to the
+	// repository root, empty for the root.
+	SwiftPackageDir string `json:"swift_package_dir,omitempty"`
 	// PackageJSONSHA256 and PackageLockSHA256 are the lowercase hex SHA-256
 	// of the exact npm manifest bytes baked as the image's dependency seed.
 	PackageJSONSHA256 string `json:"package_json_sha256,omitempty"`
@@ -168,6 +193,10 @@ type ProjectImageEnvironment struct {
 	// GoModSHA256 and GoSumSHA256 are the same for a Go image's module.
 	GoModSHA256 string `json:"go_mod_sha256,omitempty"`
 	GoSumSHA256 string `json:"go_sum_sha256,omitempty"`
+	// PackageSwiftSHA256 and PackageResolvedSHA256 are the same for a Swift
+	// image's package.
+	PackageSwiftSHA256    string `json:"package_swift_sha256,omitempty"`
+	PackageResolvedSHA256 string `json:"package_resolved_sha256,omitempty"`
 	// PreparationDigest addresses the builder's fixed toolchain and
 	// preparation sources at build time.
 	PreparationDigest Digest `json:"preparation_digest"`
@@ -193,14 +222,20 @@ type ProjectImageBaseInputs struct {
 	// GoModSHA256 and GoSumSHA256 hash the layout's module go.mod and go.sum.
 	GoModSHA256 string
 	GoSumSHA256 string
+	// PackageSwiftSHA256 and PackageResolvedSHA256 hash the layout's package
+	// Package.swift and Package.resolved.
+	PackageSwiftSHA256    string
+	PackageResolvedSHA256 string
 	// RecipeDigest addresses the recipe the base declares in its own tree. It
 	// is empty for a repository whose recipe is supplied outside the tree,
 	// which declares nothing an image's baked recipe could contradict.
 	RecipeDigest Digest
 	// UnsupportedInputs names the inputs present at the base that no project
 	// image of the layout's toolchain supports: npm's lock and configuration
-	// files, or a Go module's vendor directory, a go.work file, or a go.mod
-	// replace whose target is a local path.
+	// files; a Go module's vendor directory, a go.work file, or a go.mod
+	// replace whose target is a local path; or a Swift package's
+	// .swiftpm/configuration/mirrors.json, or a Package.resolved of an
+	// unsupported version or holding a pin that is not a remote revision.
 	UnsupportedInputs []string
 }
 
@@ -270,8 +305,8 @@ func NewProjectImage(in ProjectImageInput) (ProjectImage, error) {
 // digests, and each produced artifact needs its own truthful record.
 //
 // A record without an environment keeps the v1 preimage so its existing ID
-// still validates. A record with one uses the v2 preimage for npm and v3 for
-// Go, which include it, so the environment cannot be added to, removed from,
+// still validates. A record with one uses the v2 preimage for npm, v3 for
+// Go, and v4 for Swift, which include it, so the environment cannot be added to, removed from,
 // or altered in a stored record without changing the ID.
 func (p ProjectImage) ComputeID() (Digest, error) {
 	canonical := canonicalProjectImage{
@@ -286,9 +321,13 @@ func (p ProjectImage) ComputeID() (Digest, error) {
 	}
 	var preimage any = canonical
 	if p.Environment != nil {
-		canonical.Version = projectImageEnvironmentEncodingVersion
-		if p.Environment.ResolvedToolchain() == ProjectToolchainGo {
+		switch p.Environment.ResolvedToolchain() {
+		case ProjectToolchainNPM:
+			canonical.Version = projectImageEnvironmentEncodingVersion
+		case ProjectToolchainGo:
 			canonical.Version = projectImageGoEncodingVersion
+		case ProjectToolchainSwift:
+			canonical.Version = projectImageSwiftEncodingVersion
 		}
 		preimage = canonicalProjectImageWithEnvironment{
 			canonicalProjectImage: canonical, Environment: *p.Environment,
@@ -304,9 +343,14 @@ func (p ProjectImage) ComputeID() (Digest, error) {
 // Digest returns the versioned content address of the environment alone, the
 // lookup value a store keeps beside the record body.
 func (e ProjectImageEnvironment) Digest() (Digest, error) {
-	version := projectImageEnvironmentVersion
-	if e.ResolvedToolchain() == ProjectToolchainGo {
+	var version string
+	switch e.ResolvedToolchain() {
+	case ProjectToolchainNPM:
+		version = projectImageEnvironmentVersion
+	case ProjectToolchainGo:
 		version = projectImageGoEnvironmentVersion
+	case ProjectToolchainSwift:
+		version = projectImageSwiftEnvironmentVersion
 	}
 	body, err := json.Marshal(canonicalProjectImageEnvironment{
 		Version: version, ProjectImageEnvironment: e,
@@ -318,33 +362,32 @@ func (e ProjectImageEnvironment) Digest() (Digest, error) {
 }
 
 func (e ProjectImageEnvironment) validate() error {
-	goImage := false
-	switch e.Toolchain {
-	case "":
-		if e.GoModuleDir != "" {
-			return fmt.Errorf("project image npm environment names go_module_dir %q: %w",
-				e.GoModuleDir, ErrProjectImageInvalid)
-		}
-	case ProjectToolchainGo:
-		goImage = true
-		if !ValidProjectGoModuleDir(e.GoModuleDir) {
-			return fmt.Errorf("project image environment go_module_dir %q: %w",
-				e.GoModuleDir, ErrProjectImageInvalid)
-		}
-	default:
+	if e.Toolchain == ProjectToolchainNPM || (e.Toolchain != "" && !e.Toolchain.valid()) {
 		return fmt.Errorf("project image environment toolchain %q: %w",
 			e.Toolchain, ErrProjectImageInvalid)
 	}
-	// Exactly the toolchain's own pair: the other pair's presence would make
+	toolchain := e.ResolvedToolchain()
+	// The layout rule: each directory belongs to its own toolchain alone.
+	if err := (ProjectImageInputLayout{
+		Toolchain: toolchain, GoModuleDir: e.GoModuleDir, SwiftPackageDir: e.SwiftPackageDir,
+	}).Validate(); err != nil {
+		return fmt.Errorf("project image %s environment: %w", toolchain, err)
+	}
+	npmImage := toolchain == ProjectToolchainNPM
+	goImage := toolchain == ProjectToolchainGo
+	swiftImage := toolchain == ProjectToolchainSwift
+	// Exactly the toolchain's own pair: another pair's presence would make
 	// the record claim inputs it never baked.
 	for _, hash := range []struct {
 		name, value string
 		required    bool
 	}{
-		{"package_json_sha256", e.PackageJSONSHA256, !goImage},
-		{"package_lock_sha256", e.PackageLockSHA256, !goImage},
+		{"package_json_sha256", e.PackageJSONSHA256, npmImage},
+		{"package_lock_sha256", e.PackageLockSHA256, npmImage},
 		{"go_mod_sha256", e.GoModSHA256, goImage},
 		{"go_sum_sha256", e.GoSumSHA256, goImage},
+		{"package_swift_sha256", e.PackageSwiftSHA256, swiftImage},
+		{"package_resolved_sha256", e.PackageResolvedSHA256, swiftImage},
 	} {
 		if hash.required && !projectSHA256Pattern.MatchString(hash.value) {
 			return fmt.Errorf("project image environment %s %q: %w",
@@ -370,15 +413,18 @@ func (p ProjectImage) InputLayout() ProjectImageInputLayout {
 		return ProjectImageInputLayout{Toolchain: ProjectToolchainNPM}
 	}
 	return ProjectImageInputLayout{
-		Toolchain: p.Environment.ResolvedToolchain(), GoModuleDir: p.Environment.GoModuleDir,
+		Toolchain:       p.Environment.ResolvedToolchain(),
+		GoModuleDir:     p.Environment.GoModuleDir,
+		SwiftPackageDir: p.Environment.SwiftPackageDir,
 	}
 }
 
 // ChangedManifests names, in a fixed order, each dependency manifest of the
 // environment's toolchain whose hash at base differs from the baked one: the
 // root package.json and package-lock.json for npm, the module's go.mod and
-// go.sum (as repository-relative paths) for Go. Empty means the base holds
-// exactly the baked manifests.
+// go.sum for Go, and the package's Package.swift and Package.resolved for
+// Swift (as repository-relative paths). Empty means the base holds exactly
+// the baked manifests.
 func (e ProjectImageEnvironment) ChangedManifests(base ProjectImageBaseInputs) []string {
 	type manifest struct{ name, baked, observed string }
 	var manifests []manifest
@@ -392,6 +438,11 @@ func (e ProjectImageEnvironment) ChangedManifests(base ProjectImageBaseInputs) [
 		manifests = []manifest{
 			{path.Join(e.GoModuleDir, "go.mod"), e.GoModSHA256, base.GoModSHA256},
 			{path.Join(e.GoModuleDir, "go.sum"), e.GoSumSHA256, base.GoSumSHA256},
+		}
+	case ProjectToolchainSwift:
+		manifests = []manifest{
+			{path.Join(e.SwiftPackageDir, "Package.swift"), e.PackageSwiftSHA256, base.PackageSwiftSHA256},
+			{path.Join(e.SwiftPackageDir, "Package.resolved"), e.PackageResolvedSHA256, base.PackageResolvedSHA256},
 		}
 	}
 	var changed []string
@@ -409,6 +460,8 @@ func (t ProjectToolchain) displayName() string {
 		return "npm"
 	case ProjectToolchainGo:
 		return "Go"
+	case ProjectToolchainSwift:
+		return "Swift"
 	}
 	return string(t)
 }
@@ -421,7 +474,8 @@ func (t ProjectToolchain) displayName() string {
 // The image's own build commit is always admissible, and for a record without
 // an environment it is the only admissible base. Any other base is admissible
 // only when every recorded input is unchanged there: both dependency
-// manifests of the record's toolchain (for Go, in its module directory), the
+// manifests of the record's toolchain (for Go and Swift, in its module or
+// package directory), the
 // absence of inputs that toolchain does not support, and the preparation
 // implementation; and when the base declares no recipe that contradicts the
 // baked one. base must be observed under the image's InputLayout; a base read

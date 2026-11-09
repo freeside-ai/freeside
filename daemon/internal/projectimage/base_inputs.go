@@ -56,6 +56,7 @@ func observeBaseInputs(
 		unsupported []string
 		manifests   map[string]*string
 		goMod       string
+		resolved    string
 	)
 	switch layout.Toolchain {
 	case domain.ProjectToolchainNPM:
@@ -70,6 +71,13 @@ func observeBaseInputs(
 		manifests = map[string]*string{
 			goMod:                                   &inputs.GoModSHA256,
 			path.Join(layout.GoModuleDir, "go.sum"): &inputs.GoSumSHA256,
+		}
+	case domain.ProjectToolchainSwift:
+		unsupported = swiftUnsupportedEntries(layout.SwiftPackageDir)
+		resolved = path.Join(layout.SwiftPackageDir, "Package.resolved")
+		manifests = map[string]*string{
+			path.Join(layout.SwiftPackageDir, "Package.swift"): &inputs.PackageSwiftSHA256,
+			resolved: &inputs.PackageResolvedSHA256,
 		}
 	}
 	for _, name := range unsupported {
@@ -100,6 +108,10 @@ func observeBaseInputs(
 		if name == goMod && goModHasLocalReplace(content) {
 			inputs.UnsupportedInputs = append(inputs.UnsupportedInputs,
 				goLocalReplaceInput(layout.GoModuleDir))
+		}
+		if name == resolved && checkSwiftPackageResolved(content) != nil {
+			inputs.UnsupportedInputs = append(inputs.UnsupportedInputs,
+				swiftUnsupportedResolvedInput(layout.SwiftPackageDir))
 		}
 	}
 	recipe, present, err := reader.ReadFile(

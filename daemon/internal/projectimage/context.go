@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -24,8 +25,9 @@ const (
 	seedPackageLockPath = "/opt/freeside/project-seed/package-lock.json"
 
 	// v2 added the Go toolchain sources to the digested set; v3 added the
-	// vacuum, shellcheck, Python, and procps pins a Go image bakes (#2376).
-	preparationDigestVersion = "freeside.project-image-preparation/v3"
+	// vacuum, shellcheck, Python, and procps pins a Go image bakes (#2376);
+	// v4 added the Swift toolchain sources (#2183).
+	preparationDigestVersion = "freeside.project-image-preparation/v4"
 )
 
 const nodeToolchainLauncher = `#!/usr/bin/busybox sh
@@ -94,7 +96,7 @@ exec npm ci --ignore-scripts
 // implementation for every toolchain it builds: each preparation helper,
 // launcher, and Containerfile template (which carry the toolchain base image
 // and the npm configuration), and each pinned toolchain version and archive
-// hash. One digest covers both toolchains, so an edit to either path retires
+// hash. One digest covers every toolchain, so an edit to any path retires
 // cross-commit reuse of every image built before it. A project image records the
 // value it was built with, and reuse at another commit requires the running
 // binary's to equal it: these sources decide what an image's environment is as
@@ -108,9 +110,10 @@ func PreparationDigest() domain.Digest {
 }
 
 // preparationSources lists, in digest order, every builder source
-// PreparationDigest addresses. The Go preparation helper and Containerfile
-// enter as templates rendered without a module directory or request: the
-// module directory is recorded in the image's environment on its own.
+// PreparationDigest addresses. The Go and Swift preparation helpers and
+// Containerfiles enter as templates rendered without a module or package
+// directory or a request: the directory is recorded in the image's
+// environment on its own.
 func preparationSources() []string {
 	return []string{
 		preparationDigestVersion,
@@ -136,6 +139,15 @@ func preparationSources() []string {
 		procpsSnapshot,
 		procpsArchiveSHA256,
 		libproc2ArchiveSHA256,
+		swiftPrepareScript(""),
+		swiftToolchainLauncher,
+		swiftMirrorDiscovery,
+		swiftMirrorBake,
+		renderSwiftContainerfile(Request{}, ""),
+		swiftToolchainVersion,
+		swiftToolchainArchiveSHA256,
+		swiftAptSnapshot,
+		strings.Join(swiftAptPackages, " "),
 	}
 }
 
@@ -158,6 +170,8 @@ func renderContainerfile(
 		return renderNPMContainerfile(request, recipeDigest)
 	case domain.ProjectToolchainGo:
 		return renderGoContainerfile(request, recipeDigest)
+	case domain.ProjectToolchainSwift:
+		return renderSwiftContainerfile(request, recipeDigest)
 	}
 	return ""
 }

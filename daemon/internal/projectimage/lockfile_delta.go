@@ -23,15 +23,16 @@ type RebuildRefusal = domain.RebuildRefusal
 
 // The refusal clauses, re-exported from domain.
 const (
-	RebuildRefusalUndeclaredAuthority  = domain.RebuildRefusalUndeclaredAuthority
-	RebuildRefusalUnpinnedSource       = domain.RebuildRefusalUnpinnedSource
-	RebuildRefusalRecipeChanged        = domain.RebuildRefusalRecipeChanged
-	RebuildRefusalLockfileInconsistent = domain.RebuildRefusalLockfileInconsistent
-	RebuildRefusalUnsupportedInput     = domain.RebuildRefusalUnsupportedInput
-	RebuildRefusalGoDependencyChanged  = domain.RebuildRefusalGoDependencyChanged
-	RebuildRefusalNoRegistrySet        = domain.RebuildRefusalNoRegistrySet
-	RebuildRefusalNotConfigured        = domain.RebuildRefusalNotConfigured
-	RebuildRefusalProofFailed          = domain.RebuildRefusalProofFailed
+	RebuildRefusalUndeclaredAuthority    = domain.RebuildRefusalUndeclaredAuthority
+	RebuildRefusalUnpinnedSource         = domain.RebuildRefusalUnpinnedSource
+	RebuildRefusalRecipeChanged          = domain.RebuildRefusalRecipeChanged
+	RebuildRefusalLockfileInconsistent   = domain.RebuildRefusalLockfileInconsistent
+	RebuildRefusalUnsupportedInput       = domain.RebuildRefusalUnsupportedInput
+	RebuildRefusalGoDependencyChanged    = domain.RebuildRefusalGoDependencyChanged
+	RebuildRefusalSwiftDependencyChanged = domain.RebuildRefusalSwiftDependencyChanged
+	RebuildRefusalNoRegistrySet          = domain.RebuildRefusalNoRegistrySet
+	RebuildRefusalNotConfigured          = domain.RebuildRefusalNotConfigured
+	RebuildRefusalProofFailed            = domain.RebuildRefusalProofFailed
 )
 
 // AllRebuildRefusals is domain.AllRebuildRefusals.
