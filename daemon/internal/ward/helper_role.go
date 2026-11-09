@@ -36,32 +36,56 @@ type helperRole struct {
 	// leaves the container for teardown.
 	readProof  func(context.Context) ([]byte, error)
 	checkProof func([]byte) error
+	// journal, when set, runs after the fingerprint and before the start,
+	// so the run's durable record binds the object before it can execute;
+	// the Codex roles write their fingerprint mark here.
+	journal func(fingerprint string) error
+	// recheckStopped, when set, makes the runner inspect the stopped
+	// container again and passes that report in before the proof read, so a
+	// role can refuse a container whose shape changed while it ran.
+	recheckStopped func(InspectReport) error
+	// wrapRuntimeFailure, when set, wraps the ConformanceFailure of each
+	// runtime step: create, inspect, start, the stopped wait, the stopped
+	// re-inspect, and delete. The Codex roles mark those failures
+	// operational, so the review retries them. It never wraps the
+	// fingerprint failure, a role-supplied step, helperStopped's error, or
+	// the absence check: each of those can report a contradiction, which a
+	// retry must not mask.
+	wrapRuntimeFailure func(error) error
 }
 
 // runHelperRole runs one helper role: mark attempted, create, mark owned,
-// inspect, verify, fingerprint, start, afterStart, wait for stop,
-// helperStopped, readProof, checkProof, delete, verify absent, clear the
-// claim.
+// inspect, verify, fingerprint, journal, start, afterStart, wait for stop,
+// helperStopped, re-inspect and recheckStopped, readProof, checkProof,
+// delete, verify absent, clear the claim. The optional steps run only when
+// the role sets them.
 //
 // Every failure of a runtime step is a ConformanceFailure for the role's
-// check, built with failw so the cause stays reachable. Steps the role
-// supplies (verify, afterStart, readProof, checkProof) and the absence check
-// return their own errors, and helperStopped's *MemoryLimitError passes
-// through unwrapped because callers detect it. The runner never marks
-// content evidence; only a role's proof check may.
+// check, built with failw so the cause stays reachable, and passed through
+// the role's wrapRuntimeFailure when it sets one. Steps the role supplies
+// (verify, journal, afterStart, recheckStopped, readProof, checkProof) and
+// the absence check return their own errors, and helperStopped's
+// *MemoryLimitError passes through unwrapped because callers detect it.
+// The runner never marks content evidence; only a role's proof check may.
 func (o runtimeOps) runHelperRole(ctx context.Context, r helperRole) error {
 	if r.verify == nil || r.claim == nil || r.timeout <= 0 {
 		return fmt.Errorf("helper role %s is incomplete: it needs an allowlist check, a claim, and a timeout", r.label)
 	}
+	runtimeFailure := func(err error) error {
+		if r.wrapRuntimeFailure == nil {
+			return err
+		}
+		return r.wrapRuntimeFailure(err)
+	}
 	name := r.spec.Name
 	r.claim.attempted = true
 	if err := o.rt.CreateContainer(ctx, cloneContainerSpec(r.spec)); err != nil {
-		return failw(r.check, err, "create %s: %v", r.label, err)
+		return runtimeFailure(failw(r.check, err, "create %s: %v", r.label, err))
 	}
 	r.claim.owned = true
 	rep, err := o.rt.Inspect(ctx, name)
 	if err != nil {
-		return failw(r.check, err, "inspect %s before execution: %v", r.label, err)
+		return runtimeFailure(failw(r.check, err, "inspect %s before execution: %v", r.label, err))
 	}
 	if err := r.verify(rep); err != nil {
 		return err
@@ -70,8 +94,13 @@ func (o runtimeOps) runHelperRole(ctx context.Context, r helperRole) error {
 	if err != nil {
 		return failw(r.check, err, "%s ownership: %v", r.label, err)
 	}
+	if r.journal != nil {
+		if err := r.journal(r.claim.fingerprint); err != nil {
+			return err
+		}
+	}
 	if err := o.rt.StartContainer(ctx, name); err != nil {
-		return failw(r.check, err, "start %s: %v", r.label, err)
+		return runtimeFailure(failw(r.check, err, "start %s: %v", r.label, err))
 	}
 	if r.afterStart != nil {
 		if err := r.afterStart(ctx); err != nil {
@@ -79,10 +108,19 @@ func (o runtimeOps) runHelperRole(ctx context.Context, r helperRole) error {
 		}
 	}
 	if err := o.waitStopped(ctx, name, *r.claim, r.owner, r.timeout); err != nil {
-		return failw(r.check, err, "%s: %v", r.label, err)
+		return runtimeFailure(failw(r.check, err, "%s: %v", r.label, err))
 	}
 	if err := o.helperStopped(ctx, r.class, r.spec.Size, name); err != nil {
 		return err
+	}
+	if r.recheckStopped != nil {
+		stopped, err := o.rt.Inspect(ctx, name)
+		if err != nil {
+			return runtimeFailure(failw(r.check, err, "inspect stopped %s: %v", r.label, err))
+		}
+		if err := r.recheckStopped(stopped); err != nil {
+			return err
+		}
 	}
 	if r.readProof != nil {
 		proof, err := r.readProof(ctx)
@@ -96,7 +134,7 @@ func (o runtimeOps) runHelperRole(ctx context.Context, r helperRole) error {
 		}
 	}
 	if err := o.rt.DeleteContainer(ctx, name); err != nil {
-		return failw(r.check, err, "delete stopped %s: %v", r.label, err)
+		return runtimeFailure(failw(r.check, err, "delete stopped %s: %v", r.label, err))
 	}
 	if err := o.verifyContainerAbsent(ctx, name, *r.claim, r.owner, r.check); err != nil {
 		return err

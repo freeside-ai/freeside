@@ -1,0 +1,237 @@
+# Successful Codex review launch with inputs: runtime calls and journal marks in order.
+inspect-volume freeside-handoff-review-1-ws
+mark freeside-review-review-1-ws-obs token=set fingerprint=empty
+create-container freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+mark freeside-review-review-1-ws-obs token=set fingerprint=set
+start-container freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+export freeside-review-review-1-ws-obs
+delete-container freeside-review-review-1-ws-obs
+list-containers
+create-volume freeside-review-review-1-agents
+inspect-volume freeside-review-review-1-agents
+mark freeside-review-review-1-agents token=set fingerprint=set
+create-container freeside-review-review-1-agents-init
+inspect freeside-review-review-1-agents-init
+mark freeside-review-review-1-agents-init token=set fingerprint=set
+start-container freeside-review-review-1-agents-init
+inspect freeside-review-review-1-agents-init
+inspect freeside-review-review-1-agents-init
+delete-container freeside-review-review-1-agents-init
+list-containers
+mark freeside-review-review-1-agents-obs token=set fingerprint=empty
+create-container freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+mark freeside-review-review-1-agents-obs token=set fingerprint=set
+start-container freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+export freeside-review-review-1-agents-obs
+delete-container freeside-review-review-1-agents-obs
+list-containers
+create-volume freeside-review-review-1-snap
+inspect-volume freeside-review-review-1-snap
+mark freeside-review-review-1-snap token=set fingerprint=set
+create-container freeside-review-review-1-snap-init
+inspect freeside-review-review-1-snap-init
+mark freeside-review-review-1-snap-init token=set fingerprint=set
+start-container freeside-review-review-1-snap-init
+copy freeside-review-review-1-snap-init <host-dir> /seed
+copy freeside-review-review-1-snap-init <host-dir> /seed-ready
+inspect freeside-review-review-1-snap-init
+inspect freeside-review-review-1-snap-init
+delete-container freeside-review-review-1-snap-init
+list-containers
+mark freeside-review-review-1-snap-obs token=set fingerprint=empty
+create-container freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+mark freeside-review-review-1-snap-obs token=set fingerprint=set
+start-container freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+export freeside-review-review-1-snap-obs
+delete-container freeside-review-review-1-snap-obs
+list-containers
+create-volume freeside-review-review-1-inputs
+inspect-volume freeside-review-review-1-inputs
+mark freeside-review-review-1-inputs token=set fingerprint=set
+create-container freeside-review-review-1-inputs-init
+inspect freeside-review-review-1-inputs-init
+mark freeside-review-review-1-inputs-init token=set fingerprint=set
+start-container freeside-review-review-1-inputs-init
+copy freeside-review-review-1-inputs-init <host-dir> /inputs-input
+copy freeside-review-review-1-inputs-init <host-dir> /inputs-ready
+inspect freeside-review-review-1-inputs-init
+inspect freeside-review-review-1-inputs-init
+delete-container freeside-review-review-1-inputs-init
+list-containers
+mark freeside-review-review-1-inputs-obs token=set fingerprint=empty
+create-container freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+mark freeside-review-review-1-inputs-obs token=set fingerprint=set
+start-container freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+export freeside-review-review-1-inputs-obs
+delete-container freeside-review-review-1-inputs-obs
+list-containers
+create-network freeside-review-review-1-egress
+inspect-network freeside-review-review-1-egress
+mark freeside-review-review-1-egress token=set fingerprint=set
+create-container freeside-review-review-1-codex
+inspect freeside-review-review-1-codex
+mark freeside-review-review-1-codex token=set fingerprint=set
+inspect-volume freeside-handoff-review-1-ws
+mark freeside-review-review-1-ws-obs token=set fingerprint=empty
+create-container freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+mark freeside-review-review-1-ws-obs token=set fingerprint=set
+start-container freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+export freeside-review-review-1-ws-obs
+delete-container freeside-review-review-1-ws-obs
+list-containers
+inspect-volume freeside-review-review-1-agents
+mark freeside-review-review-1-agents-obs token=set fingerprint=empty
+create-container freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+mark freeside-review-review-1-agents-obs token=set fingerprint=set
+start-container freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+export freeside-review-review-1-agents-obs
+delete-container freeside-review-review-1-agents-obs
+list-containers
+inspect-volume freeside-review-review-1-snap
+mark freeside-review-review-1-snap-obs token=set fingerprint=empty
+create-container freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+mark freeside-review-review-1-snap-obs token=set fingerprint=set
+start-container freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+export freeside-review-review-1-snap-obs
+delete-container freeside-review-review-1-snap-obs
+list-containers
+inspect-volume freeside-review-review-1-inputs
+mark freeside-review-review-1-inputs-obs token=set fingerprint=empty
+create-container freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+mark freeside-review-review-1-inputs-obs token=set fingerprint=set
+start-container freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+export freeside-review-review-1-inputs-obs
+delete-container freeside-review-review-1-inputs-obs
+list-containers
+inspect-network freeside-review-review-1-egress
+list-containers
+inspect freeside-review-review-1-codex
+inspect-volume freeside-handoff-review-1-ws
+mark freeside-review-review-1-ws-obs token=set fingerprint=empty
+create-container freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+mark freeside-review-review-1-ws-obs token=set fingerprint=set
+start-container freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+inspect freeside-review-review-1-ws-obs
+export freeside-review-review-1-ws-obs
+delete-container freeside-review-review-1-ws-obs
+list-containers
+inspect-volume freeside-review-review-1-agents
+mark freeside-review-review-1-agents-obs token=set fingerprint=empty
+create-container freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+mark freeside-review-review-1-agents-obs token=set fingerprint=set
+start-container freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+inspect freeside-review-review-1-agents-obs
+export freeside-review-review-1-agents-obs
+delete-container freeside-review-review-1-agents-obs
+list-containers
+inspect-volume freeside-review-review-1-snap
+mark freeside-review-review-1-snap-obs token=set fingerprint=empty
+create-container freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+mark freeside-review-review-1-snap-obs token=set fingerprint=set
+start-container freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+inspect freeside-review-review-1-snap-obs
+export freeside-review-review-1-snap-obs
+delete-container freeside-review-review-1-snap-obs
+list-containers
+inspect-volume freeside-review-review-1-inputs
+mark freeside-review-review-1-inputs-obs token=set fingerprint=empty
+create-container freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+mark freeside-review-review-1-inputs-obs token=set fingerprint=set
+start-container freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+inspect freeside-review-review-1-inputs-obs
+export freeside-review-review-1-inputs-obs
+delete-container freeside-review-review-1-inputs-obs
+list-containers
+inspect-network freeside-review-review-1-egress
+inspect freeside-review-review-1-codex
+list-containers
+inspect freeside-review-review-1-codex
+start-container freeside-review-review-1-codex
+
+# Injected failures: role, step, error class, operational, content evidence, journal, runtime.
+workspace-observer create conformance:observed_base_identity operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+workspace-observer inspect conformance:observed_base_identity operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+workspace-observer allowlist conformance:observed_base_identity not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+workspace-observer start conformance:observed_base_identity operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+workspace-observer stopped conformance:observed_base_identity operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+workspace-observer journal conformance:observed_base_identity operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+shadow-initializer create conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+shadow-initializer inspect conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+shadow-initializer allowlist conformance:control_plane_isolation not-operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+shadow-initializer start conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+shadow-initializer stopped conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+shadow-initializer journal conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+shadow-observer create conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+shadow-observer inspect conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+shadow-observer allowlist conformance:control_plane_isolation not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+shadow-observer start conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+shadow-observer stopped conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+shadow-observer journal conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+snapshot-seeder create conformance:credential_separation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+snapshot-seeder inspect conformance:credential_separation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+snapshot-seeder allowlist conformance:credential_separation not-operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+snapshot-seeder start conformance:credential_separation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+snapshot-seeder stopped conformance:credential_separation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+snapshot-seeder journal conformance:credential_separation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer create conformance:credential_separation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer inspect conformance:credential_separation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer allowlist conformance:credential_separation not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer start conformance:credential_separation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer stopped conformance:credential_separation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+snapshot-observer journal conformance:credential_separation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+inputs-seeder create conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+inputs-seeder inspect conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+inputs-seeder allowlist conformance:control_plane_isolation not-operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+inputs-seeder start conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+inputs-seeder stopped conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+inputs-seeder journal conformance:control_plane_isolation operational no-evidence journal=none leftover=volume:freeside-handoff-review-1-ws
+inputs-observer create conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+inputs-observer inspect conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+inputs-observer allowlist conformance:control_plane_isolation not-operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws
+inputs-observer start conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+inputs-observer stopped conformance:control_plane_isolation operational no-evidence journal=fingerprint leftover=volume:freeside-handoff-review-1-ws
+inputs-observer journal conformance:control_plane_isolation operational no-evidence journal=token leftover=volume:freeside-handoff-review-1-ws

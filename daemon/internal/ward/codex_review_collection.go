@@ -437,6 +437,14 @@ func codexReviewOperationalCheckf(check Check, format string, args ...any) error
 	return fmt.Errorf("%w: %w", ErrCodexReviewOperational, failf(check, format, args...))
 }
 
+// codexReviewOperational marks a runtime step's ConformanceFailure
+// operational: the same error text codexReviewOperationalCheckf builds,
+// with the failure's cause kept in Err. It is the Codex roles'
+// helperRole.wrapRuntimeFailure.
+func codexReviewOperational(err error) error {
+	return fmt.Errorf("%w: %w", ErrCodexReviewOperational, err)
+}
+
 func codexReviewJournalCheckf(check Check, format string, err error) error {
 	if errors.Is(err, ErrConformance) {
 		return failw(check, err, format, err)

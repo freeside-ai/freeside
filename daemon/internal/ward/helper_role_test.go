@@ -3,6 +3,7 @@ package ward
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 )
@@ -189,5 +190,217 @@ func TestHelperRolePassesTheMemoryLimitErrorThrough(t *testing.T) {
 	}
 	if fx.rt.callIndex("read-proof") >= 0 || fx.rt.callIndex("delete-container "+helperRoleTestName) >= 0 {
 		t.Errorf("a memory-limit kill still read the proof or deleted: %q", fx.rt.calls)
+	}
+}
+
+func TestHelperRoleJournalsTheFingerprintBeforeStart(t *testing.T) {
+	t.Parallel()
+	fx, ops, role := newHelperRoleTest(t)
+	var journaled string
+	role.journal = func(fingerprint string) error {
+		journaled = fingerprint
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		fx.rt.record("journal")
+		return nil
+	}
+	if err := ops.runHelperRole(t.Context(), role); err != nil {
+		t.Fatalf("runHelperRole = %v, want success", err)
+	}
+	n := helperRoleTestName
+	if journalAt, startAt := fx.rt.callIndex("journal"), fx.rt.callIndex("start-container "+n); journalAt < 0 ||
+		journalAt != fx.rt.callIndex("inspect "+n)+1 || startAt != journalAt+1 {
+		t.Errorf("journal did not run between the pre-start inspect and the start: %q", fx.rt.calls)
+	}
+	if journaled == "" {
+		t.Error("journal received no fingerprint")
+	}
+	if *role.claim != (objectClaim{}) {
+		t.Errorf("claim = %+v after success, want cleared", *role.claim)
+	}
+}
+
+func TestHelperRoleJournalFailureStopsBeforeStart(t *testing.T) {
+	t.Parallel()
+	fx, ops, role := newHelperRoleTest(t)
+	injected := errors.New("injected")
+	var journaled string
+	role.journal = func(fingerprint string) error { journaled = fingerprint; return injected }
+	err := ops.runHelperRole(t.Context(), role)
+	var cf *ConformanceFailure
+	if !errors.Is(err, injected) || errors.As(err, &cf) {
+		t.Errorf("error = %v, want the journal's own error unwrapped", err)
+	}
+	if !role.claim.attempted || !role.claim.owned || role.claim.fingerprint == "" ||
+		role.claim.fingerprint != journaled {
+		t.Errorf("claim = %+v, want attempted, owned, and the journaled fingerprint %q", *role.claim, journaled)
+	}
+	if fx.rt.callIndex("start-container "+helperRoleTestName) >= 0 {
+		t.Errorf("a failed journal still started the role: %q", fx.rt.calls)
+	}
+}
+
+// TestHelperRoleRechecksTheStoppedContainer checks that the re-check sees a
+// fresh inspection taken after helperStopped and before the proof read,
+// and that its refusal stops the role before the proof read and delete.
+func TestHelperRoleRechecksTheStoppedContainer(t *testing.T) {
+	t.Parallel()
+	n := helperRoleTestName
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		fx, ops, role := newHelperRoleTest(t)
+		role.recheckStopped = func(rep InspectReport) error {
+			if rep.ID != n || rep.State != StateStopped {
+				t.Errorf("recheck saw %+v, want the stopped role", rep)
+			}
+			fx.rt.mu.Lock()
+			defer fx.rt.mu.Unlock()
+			fx.rt.record("recheck")
+			return nil
+		}
+		if err := ops.runHelperRole(t.Context(), role); err != nil {
+			t.Fatalf("runHelperRole = %v, want success", err)
+		}
+		want := []string{
+			"create-container " + n, "inspect " + n, "start-container " + n, "after-start",
+			"inspect " + n, "inspect " + n, "inspect " + n, "recheck", "read-proof", "check-proof",
+			"delete-container " + n, "list-containers",
+		}
+		if !slices.Equal(fx.rt.calls, want) {
+			t.Errorf("calls = %q, want %q", fx.rt.calls, want)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+		fx, ops, role := newHelperRoleTest(t)
+		injected := errors.New("injected")
+		role.recheckStopped = func(InspectReport) error { return injected }
+		err := ops.runHelperRole(t.Context(), role)
+		var cf *ConformanceFailure
+		if !errors.Is(err, injected) || errors.As(err, &cf) {
+			t.Errorf("error = %v, want the re-check's own error unwrapped", err)
+		}
+		if fx.rt.callIndex("read-proof") >= 0 || fx.rt.callIndex("delete-container "+n) >= 0 {
+			t.Errorf("a refused re-check still read the proof or deleted: %q", fx.rt.calls)
+		}
+		if !role.claim.attempted || !role.claim.owned || role.claim.fingerprint == "" {
+			t.Errorf("claim = %+v, want it left for teardown", *role.claim)
+		}
+	})
+}
+
+// TestHelperRoleWrapsOnlyRuntimeStepFailures fails each step of a role that
+// sets every optional step and a wrapper, and checks the wrapper covers
+// exactly the six runtime steps: never the fingerprint failure, a
+// role-supplied step, or the absence check.
+func TestHelperRoleWrapsOnlyRuntimeStepFailures(t *testing.T) {
+	t.Parallel()
+	injected := errors.New("injected")
+	wrapped := errors.New("wrapped")
+	for _, tc := range []struct {
+		step    string
+		wrapped bool
+	}{
+		{step: "create", wrapped: true},
+		{step: "inspect", wrapped: true},
+		{step: "verify"},
+		{step: "fingerprint"},
+		{step: "journal"},
+		{step: "start", wrapped: true},
+		{step: "after-start"},
+		{step: "stopped", wrapped: true},
+		{step: "stopped-inspect", wrapped: true},
+		{step: "recheck"},
+		{step: "read-proof"},
+		{step: "check-proof"},
+		{step: "delete", wrapped: true},
+		{step: "absent"},
+	} {
+		t.Run(tc.step, func(t *testing.T) {
+			t.Parallel()
+			fx, ops, role := newHelperRoleTest(t)
+			role.journal = func(string) error { return nil }
+			role.recheckStopped = func(InspectReport) error { return nil }
+			role.wrapRuntimeFailure = func(err error) error { return fmt.Errorf("%w: %w", wrapped, err) }
+			inspects := 0
+			switch tc.step {
+			case "create":
+				fx.rt.onCreateContainer = func(ContainerSpec) error { return injected }
+			case "inspect", "stopped", "stopped-inspect":
+				// The first inspect is the pre-start one, the second the
+				// stopped wait's first poll, the third helperStopped's, and
+				// the fourth the re-check's.
+				fail := map[string]int{"inspect": 1, "stopped": 2, "stopped-inspect": 4}[tc.step]
+				fx.rt.onInspect = func(_ string, rep InspectReport) (InspectReport, error) {
+					inspects++
+					if inspects == fail {
+						return InspectReport{}, injected
+					}
+					return rep, nil
+				}
+			case "verify":
+				role.verify = func(InspectReport) error { return injected }
+			case "fingerprint":
+				role.owner = Label{Key: ownershipLabelKey, Value: "another-invocation"}
+			case "journal":
+				role.journal = func(string) error { return injected }
+			case "start":
+				fx.rt.onStart = func(string) error { return injected }
+			case "after-start":
+				role.afterStart = func(context.Context) error { return injected }
+			case "recheck":
+				role.recheckStopped = func(InspectReport) error { return injected }
+			case "read-proof":
+				role.readProof = func(context.Context) ([]byte, error) { return nil, injected }
+			case "check-proof":
+				role.checkProof = func([]byte) error { return injected }
+			case "delete":
+				fx.rt.onDeleteContainer = func(string) (bool, error) { return false, injected }
+			case "absent":
+				fx.rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) { return nil, injected }
+			}
+			err := ops.runHelperRole(t.Context(), role)
+			if err == nil {
+				t.Fatal("runHelperRole succeeded, want the injected failure")
+			}
+			if got := errors.Is(err, wrapped); got != tc.wrapped {
+				t.Errorf("wrapped = %t, want %t: %v", got, tc.wrapped, err)
+			}
+			// Each row must fail at its own step: the injected error is the
+			// cause, directly or as a runtime step's ConformanceFailure. The
+			// fingerprint row injects no error, so it must stop with the
+			// container owned but not fingerprinted.
+			var cf *ConformanceFailure
+			isFailure := errors.As(err, &cf)
+			switch {
+			case tc.step == "fingerprint":
+				if !isFailure || cf.Check != CheckControlPlaneIsolation ||
+					!role.claim.owned || role.claim.fingerprint != "" {
+					t.Errorf("error = %v, claim = %+v, want an ownership failure before the fingerprint",
+						err, *role.claim)
+				}
+			case !errors.Is(err, injected) && (!isFailure || !errors.Is(cf.Err, injected)):
+				t.Errorf("error = %v, want one caused by the injected %s failure", err, tc.step)
+			case tc.wrapped && (!isFailure || cf.Check != CheckControlPlaneIsolation || !errors.Is(cf.Err, injected)):
+				t.Errorf("error = %v, want the wrapper around a %s ConformanceFailure caused by the injected error",
+					err, CheckControlPlaneIsolation)
+			}
+		})
+	}
+}
+
+func TestHelperRolePassesTheMemoryLimitErrorThroughTheWrapper(t *testing.T) {
+	t.Parallel()
+	fx, ops, role := newHelperRoleTest(t)
+	wrapped := errors.New("wrapped")
+	role.wrapRuntimeFailure = func(err error) error { return fmt.Errorf("%w: %w", wrapped, err) }
+	fx.rt.bootLogs = map[string][]byte{helperRoleTestName: bootLogKilling(t, helperRoleTestName)}
+	err := ops.runHelperRole(t.Context(), role)
+	var limit *MemoryLimitError
+	if !errors.As(err, &limit) || limit.Class != LaunchWriter || limit.Size != role.spec.Size {
+		t.Fatalf("error = %v, want the helper's MemoryLimitError", err)
+	}
+	if errors.Is(err, wrapped) || errors.Is(err, ErrConformance) {
+		t.Errorf("memory-limit error was wrapped: %v", err)
 	}
 }

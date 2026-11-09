@@ -431,51 +431,28 @@ func (a *credentialVolumeAuthor) runSeeder(
 	ctx context.Context, spec ContainerSpec, input, ready string, claim *objectClaim,
 ) error {
 	b := a.backend
-	claim.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "create credential seeder: %v", err)
-	}
-	claim.owned = true
-	rep, err := b.rt.Inspect(ctx, spec.Name)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err, "inspect credential seeder: %v", err)
-	}
-	if err := verifySeedRoleAllowlist(rep, spec, a.cfg.Volume, claudeCredentialVolumeTarget,
-		CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, a.owner)
-	if err != nil {
-		return failw(CheckControlPlaneIsolation, err, "credential seeder ownership: %v", err)
-	}
-	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "start credential seeder: %v", err)
-	}
-	for _, copy := range []struct{ source, target string }{
-		{input, claudeCredentialStageDir}, {ready, claudeCredentialReadyDir},
-	} {
-		copyCtx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
-		err := b.rt.CopyIntoContainer(copyCtx, spec.Name, copy.source, copy.target)
-		cancel()
-		if err != nil {
-			// The runtime's error names paths, never file contents.
-			return failw(CheckControlPlaneIsolation, err, "copy credential input: %v", err)
-		}
-	}
-	if err := b.waitStopped(ctx, spec.Name, *claim, a.owner, b.cfg.SeedTimeout); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "credential seeder: %v", err)
-	}
-	if err := b.helperStopped(ctx, LaunchConformance, spec.Size, spec.Name); err != nil {
-		return err
-	}
-	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
-		return failw(CheckControlPlaneIsolation, err, "delete credential seeder: %v", err)
-	}
-	if err := b.verifyContainerAbsent(ctx, spec.Name, *claim, a.owner, CheckControlPlaneIsolation); err != nil {
-		return err
-	}
-	*claim = objectClaim{}
-	return nil
+	return b.runtimeOps.runHelperRole(ctx, helperRole{
+		spec: spec, label: "credential seeder", claim: claim, owner: a.owner,
+		check: CheckControlPlaneIsolation, class: LaunchConformance, timeout: b.cfg.SeedTimeout,
+		verify: func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, a.cfg.Volume, claudeCredentialVolumeTarget,
+				CheckControlPlaneIsolation)
+		},
+		afterStart: func(ctx context.Context) error {
+			for _, copy := range []struct{ source, target string }{
+				{input, claudeCredentialStageDir}, {ready, claudeCredentialReadyDir},
+			} {
+				copyCtx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
+				err := b.rt.CopyIntoContainer(copyCtx, spec.Name, copy.source, copy.target)
+				cancel()
+				if err != nil {
+					// The runtime's error names paths, never file contents.
+					return failw(CheckControlPlaneIsolation, err, "copy credential input: %v", err)
+				}
+			}
+			return nil
+		},
+	})
 }
 
 // buildCredentialSeederSpec is the seeder for a setup-token volume: it
