@@ -554,7 +554,8 @@ struct TaskPageView: View {
             // to one is the operator's choice, never a fallback.
             let offers = TaskDisplay.moveOffers(position)
             if !offers.isEmpty {
-                ParkedTaskMoveView(model: coordinator.parkedTaskMove, taskID: task.id, offers: offers)
+                ParkedTaskMoveView(
+                    model: coordinator.parkedTaskMove, taskID: task.id, offers: offers, pools: coordinator.usagePools)
             }
             switch lines.visibleGuidance(attention: position?.attention == true) {
             case .link(let title):

@@ -421,6 +421,7 @@ public struct FreesideRootView: View {
             onSelectItem: openItem,
             tasks: coordinator.tasks,
             onSelectTask: { navigation.route(to: .task($0)) },
+            usagePools: coordinator.usagePools,
             onConclusion: { conclusion in
                 handleConclusion(conclusion, coordinator: coordinator)
             })

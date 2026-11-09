@@ -78,6 +78,89 @@ public enum UsageFixtures {
         ]
     }
 
+    /// The pool `-FreesideAlternates` moves `readingSecondEnrollmentID` to,
+    /// whose reading is current.
+    public static let currentPoolID = "claude-team"
+    /// The pool of the enrollment `-FreesideAlternates` adds, whose reading
+    /// is stale.
+    public static let stalePoolID = "claude-b"
+    /// The undiscovered enrollment `-FreesideAlternates` adds to the
+    /// catalog on `stalePoolID`.
+    public static let staleEnrollmentID = "enrollment-claude-b-mac"
+
+    /// The pools for `-FreesideAlternates` (#1722). The lineup implementer,
+    /// `readingCollectorID`, keeps `readingPoolID`, whose weekly window its
+    /// provider refused. Every other enrollment draws on another pool, and
+    /// they read three ways at `now`: `readingSecondEnrollmentID` current
+    /// on `currentPoolID`, `staleEnrollmentID` stale on `stalePoolID`, and
+    /// `unsupportedCollectorID` unsupported.
+    public static func alternatesUsagePools(now: Date) -> [Components.Schemas.UsagePoolSnapshot] {
+        var pools = defaultUsagePools()
+        pools[0].pool.enrollments.removeAll { $0.enrollment_id == readingSecondEnrollmentID }
+        pools.append(
+            oneEnrollmentPool(
+                currentPoolID, readingSecondEnrollmentID, usedPercent: 35, observed: now.addingTimeInterval(-300),
+                staleAt: now.addingTimeInterval(12 * 3_600)))
+        pools.append(
+            oneEnrollmentPool(
+                stalePoolID, staleEnrollmentID, usedPercent: 80, observed: now.addingTimeInterval(-26 * 3_600),
+                staleAt: now.addingTimeInterval(-25 * 3_600)))
+        return pools
+    }
+
+    /// An anthropic pool whose one enrollment collects one five-hour
+    /// reading observed at `observed`.
+    private static func oneEnrollmentPool(
+        _ id: String, _ enrollmentID: String, usedPercent: Int, observed: Date, staleAt: Date
+    ) -> Components.Schemas.UsagePoolSnapshot {
+        .init(
+            as_of_revision: 11, entity_version: 1,
+            pool: .init(
+                id: id, provider: "anthropic", max_parallel_executions: 1, plan: "team", collector: enrollmentID,
+                last_attempt: .init(value1: .init(status: .succeeded, at: observed, detail: "")),
+                enrollments: [
+                    .init(
+                        enrollment_id: enrollmentID, auth_identity_id: "identity-\(id)", harness_client: .claude_code,
+                        availability: .init(value1: .init(answer: .supported, observed_at: observed)))
+                ],
+                model_windows: [],
+                windows: [
+                    .init(
+                        window: "five_hour", enrollment_id: enrollmentID, generation: 1, status: .allowed,
+                        used_percent: usedPercent, resets_at: observed.addingTimeInterval(4 * 3_600),
+                        length_seconds: 18_000, observed_at: observed, stale_at: staleAt)
+                ],
+                recorded_exhausted_marks: []))
+    }
+
+    /// The default catalog with `staleEnrollmentID` enrolled and not
+    /// discovered yet, for `-FreesideAlternates`.
+    public static func alternatesAgentCatalog() -> Components.Schemas.AgentCatalog {
+        var catalog = defaultAgentCatalog()
+        catalog.enrollments.append(
+            .init(enrollment_id: staleEnrollmentID, harness_client: .claude_code, discovery: nil))
+        catalog.enrollments.sort { $0.enrollment_id < $1.enrollment_id }
+        return catalog
+    }
+
+    /// The offers `-FreesideAlternates` puts on its quota failure and its
+    /// parked task: every enrollment but the refused implementer's, on the
+    /// pool that lists it in `alternatesUsagePools`, sorted by enrollment as
+    /// the daemon sends them.
+    public static func alternateAgentOffers() -> [Components.Schemas.AlternateAgentOffer] {
+        [
+            .init(
+                enrollment: readingSecondEnrollmentID, pool: currentPoolID, harness: .claude_code,
+                model: "claude-opus", qualification: .different_pool),
+            .init(
+                enrollment: staleEnrollmentID, pool: stalePoolID, harness: .claude_code, model: "claude-opus",
+                qualification: .different_pool),
+            .init(
+                enrollment: unsupportedCollectorID, pool: unsupportedPoolID, harness: .codex_cli, model: "gpt-codex",
+                qualification: .different_pool),
+        ]
+    }
+
     /// Set from the other paired device fixture, so a client names it.
     public static func defaultRoutingPolicy() -> Components.Schemas.RoutingPolicy {
         .init(

@@ -11,6 +11,8 @@ struct ParkedTaskMoveView: View {
     let model: ParkedTaskMoveModel
     let taskID: String
     let offers: [Components.Schemas.AlternateAgentOffer]
+    /// The synced usage pools each entry's reading comes from.
+    let pools: [Components.Schemas.UsagePoolSnapshot]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -33,9 +35,9 @@ struct ParkedTaskMoveView: View {
 
     private var menu: some View {
         Menu {
-            ForEach(offers, id: \.enrollment) { offer in
-                Button(AgentChoiceDisplay.offerLabel(offer)) {
-                    Task { await model.move(taskID: taskID, to: AgentChoiceDisplay.choice(offer)) }
+            ForEach(AgentChoiceDisplay.offerOptions(offers, pools: pools, now: Date())) { option in
+                Button(option.label) {
+                    Task { await model.move(taskID: taskID, to: option.choice) }
                 }
             }
         } label: {
