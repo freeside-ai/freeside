@@ -14,8 +14,10 @@ import (
 // enrolls one harness client for an identity, `auth list` shows identities
 // and their enrollments, and `auth adopt` enrolls the flag-selected identities
 // over the stores they already hold and emits the tree patch selecting them.
-// `auth refresh-usage` refreshes a pool's usage record through the running
-// daemon, and `auth set-collector` reassigns the enrollment that collects it.
+// `auth migrate-tree` prints the patch that moves a committed tree off agent
+// and offer documents (#2599). `auth refresh-usage` refreshes a pool's usage
+// record through the running daemon, and `auth set-collector` reassigns the
+// enrollment that collects it.
 // `auth seed-exhausted` is an exit-run fixture that marks a pool's window
 // exhausted.
 func runAuthMain(args []string) {
@@ -29,7 +31,7 @@ func runAuthMain(args []string) {
 
 func runAuthCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: freesided auth add|adopt|list|refresh-usage|seed-exhausted|set-collector [flags]")
+		return errors.New("usage: freesided auth add|adopt|list|migrate-tree|refresh-usage|seed-exhausted|set-collector [flags]")
 	}
 	switch args[0] {
 	case "add":
@@ -38,6 +40,8 @@ func runAuthCommand(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runAuthAdoptCommand(ctx, args[1:], stdout, stderr, productionAuthAdoptDeps())
 	case "list":
 		return runAuthListCommand(ctx, args[1:], stdout, stderr)
+	case "migrate-tree":
+		return runAuthMigrateTreeCommand(ctx, args[1:], stdout, stderr)
 	case "refresh-usage":
 		return runAuthRefreshUsageCommand(ctx, args[1:], stdout, stderr)
 	case "seed-exhausted":
@@ -45,5 +49,5 @@ func runAuthCommand(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case "set-collector":
 		return runAuthSetCollectorCommand(ctx, args[1:], stdout, stderr)
 	}
-	return fmt.Errorf("unknown auth command %q (want add, adopt, list, refresh-usage, seed-exhausted, or set-collector)", args[0])
+	return fmt.Errorf("unknown auth command %q (want add, adopt, list, migrate-tree, refresh-usage, seed-exhausted, or set-collector)", args[0])
 }
