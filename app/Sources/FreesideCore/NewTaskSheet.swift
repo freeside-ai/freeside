@@ -29,11 +29,16 @@ import UniformTypeIdentifiers
 /// folder inside it adds its repository path to the text instead, since the
 /// agent already has the checkout.
 ///
-/// The draft lives in this sheet's own state and no failure clears it: a
-/// lost response keeps the text and points to separate recovery, a daemon
-/// rejection keeps the text and shows the reason under the composer. The
-/// sheet expects a sentence or a paragraph, not a document; the follow-up
-/// conversation happens on the task's cards.
+/// The draft lives in the coordinator's `NewTaskDraftStore`, not this
+/// sheet (#2935): closing the sheet by any route keeps it, and every route
+/// that opens New Task restores it. Submit takes the draft out of the store
+/// while the request is in flight, so a composer reopened meanwhile can't
+/// send it again. A created task or a lost response, whose request may have
+/// committed and is saved in Unconfirmed submissions, leaves it out; the
+/// frozen sheet keeps showing what it sent. A daemon rejection puts it back
+/// and shows the reason under the composer. Discard clears it at once. The sheet expects a sentence or a
+/// paragraph, not a document; the follow-up conversation happens on the
+/// task's cards.
 struct NewTaskSheet: View {
     typealias Role = AgentChoiceDisplay.Role
 
@@ -62,16 +67,14 @@ struct NewTaskSheet: View {
     /// stand-ins that still show the draft and the chips.
     var rendersInteractiveControls = true
 
-    @State private var projectID: String
-    @State private var source: String
+    /// The draft: text, project, agent choices, the Agents chip's state,
+    /// and attachments. A chosen agent the newer catalog drops stays chosen
+    /// and blocks Submit until changed; a role left out goes to the daemon.
+    let draftStore: NewTaskDraftStore
+    /// What Submit took out of the store, shown while the request is in
+    /// flight and while the sheet stays frozen on a lost response.
+    @State private var sentDraft: NewTaskDraft?
     @State private var promptBrowse = TaskPromptBrowseState()
-    /// The chosen agent per role; a role left out goes to the daemon. A
-    /// choice a newer catalog drops stays chosen and blocks Submit until
-    /// changed.
-    @State private var choices: [Role: AgentChoiceDisplay.Selection]
-    /// Whether the Agents chip shows the role chips.
-    @State private var agentsOpen: Bool
-    @State private var attachments: TaskAttachmentDraft
     /// Each image attachment's chip thumbnail, by digest, decoded once when
     /// it is added.
     @State private var thumbnails: [String: CGImage]
@@ -95,33 +98,97 @@ struct NewTaskSheet: View {
         projects: [String],
         projectRepositories: [String: String] = [:],
         model: TaskSubmissionModel,
+        draftStore: NewTaskDraftStore,
         onSubmitted: @escaping (String) -> Void,
         rendersInteractiveControls: Bool = true,
-        initialProjectID: String? = nil,
-        initialSource: String = "",
-        initialChoices: [Role: AgentChoiceDisplay.Selection] = [:],
-        initialAgentsOpen: Bool = false,
-        initialAttachments: TaskAttachmentDraft = TaskAttachmentDraft(),
         initialRefusals: [String] = []
     ) {
         self.projects = projects
         self.projectRepositories = projectRepositories
         _model = State(initialValue: model)
+        self.draftStore = draftStore
         self.onSubmitted = onSubmitted
         self.rendersInteractiveControls = rendersInteractiveControls
-        _projectID = State(initialValue: initialProjectID ?? projects.first ?? "")
-        _source = State(initialValue: initialSource)
-        _choices = State(initialValue: initialChoices)
-        _agentsOpen = State(initialValue: initialAgentsOpen)
-        _attachments = State(initialValue: initialAttachments)
         _thumbnails = State(
-            initialValue: initialAttachments.items.reduce(into: [:]) { thumbnails, item in
+            initialValue: draftStore.draft.attachments.items.reduce(into: [:]) { thumbnails, item in
                 if item.isImage { thumbnails[item.digest] = ComposerAttachmentIntake.thumbnail(item.bytes) }
             })
         _refusals = State(initialValue: initialRefusals)
     }
 
     static let sourcePlaceholder = "What should the agent work on?"
+
+    /// The draft the sheet draws: the store's, or what a settled submit sent.
+    private var shown: NewTaskDraft { sentDraft ?? draftStore.draft }
+    private var source: String { shown.source }
+    private var choices: [Role: AgentChoiceDisplay.Selection] { shown.choices }
+    private var agentsOpen: Bool { shown.agentsOpen }
+    private var attachments: TaskAttachmentDraft { shown.attachments }
+    /// The draft's project when the synced projects still hold it, else the
+    /// first of them, as a fresh composer starts.
+    private var projectID: String { Self.resolvedProject(shown.projectID, in: projects) }
+
+    static func resolvedProject(_ stored: String?, in projects: [String]) -> String {
+        if let stored, projects.contains(stored) { return stored }
+        return projects.first ?? ""
+    }
+
+    private var sourceBinding: Binding<String> {
+        Binding(get: { shown.source }, set: { draftStore.draft.source = $0 })
+    }
+
+    private var projectBinding: Binding<String> {
+        Binding(get: { projectID }, set: { draftStore.draft.projectID = $0 })
+    }
+
+    /// Whether a submit's result ends the draft: a created task, or a lost
+    /// response whose request may have committed and is saved for Retry, so
+    /// a restored draft must not offer to send it again. A rejection
+    /// recorded nothing, and an idle result was canceled before sending;
+    /// both keep the draft for another try.
+    static func settles(_ state: TaskSubmissionModel.SubmissionState, taskID: String?) -> Bool {
+        if taskID != nil { return true }
+        switch state {
+        case .lost, .submitted: return true
+        case .idle, .submitting, .rejected: return false
+        }
+    }
+
+    /// Takes the draft out of the store as Submit sends it, so nothing can
+    /// send it twice while the request is in flight.
+    static func detach(_ draftStore: NewTaskDraftStore) -> NewTaskDraft {
+        let sent = draftStore.draft
+        draftStore.clear()
+        return sent
+    }
+
+    /// Puts a sent draft back when the submit's result doesn't settle it,
+    /// and says whether it settled.
+    @discardableResult
+    static func settle(
+        _ draftStore: NewTaskDraftStore, sent: NewTaskDraft, after state: TaskSubmissionModel.SubmissionState,
+        taskID: String?
+    ) -> Bool {
+        guard settles(state, taskID: taskID) else {
+            draftStore.restore(sent)
+            return false
+        }
+        return true
+    }
+
+    /// Closing mid-browse keeps the operator's own text, not the recalled
+    /// prompt the editor shows, unless a submit already took the draft.
+    static func close(_ draftStore: NewTaskDraftStore, browse: TaskPromptBrowseState, submitted: Bool) {
+        guard let typed = browse.end(), !submitted else { return }
+        draftStore.draft.source = typed
+    }
+
+    /// Discard offers itself only while there is a draft to lose.
+    static func canDiscard(_ draft: NewTaskDraft, isFrozen: Bool) -> Bool {
+        !draft.isEmpty && !isFrozen
+    }
+
+    static let droppedAttachmentsSentence = "Attachments didn't survive the relaunch. Add them again."
 
     /// What the text area draws: the muted placeholder while the draft holds
     /// no characters, otherwise the draft exactly as typed. Whitespace is
@@ -193,9 +260,19 @@ struct NewTaskSheet: View {
             // presentation while a submit is still in flight; cancel the task
             // so its completion does not route the operator to a task they
             // navigated away from.
-            .onDisappear { submitTask?.cancel() }
+            .onDisappear {
+                submitTask?.cancel()
+                Self.close(draftStore, browse: promptBrowse, submitted: sentDraft != nil)
+            }
+            // Pin the project the composer shows, so a later sync can't
+            // move a draft whose stored project is gone or was never chosen.
+            .onAppear {
+                if draftStore.draft.projectID != projectID, !projectID.isEmpty {
+                    draftStore.draft.projectID = projectID
+                }
+            }
             .onChange(of: projectID) {
-                if let draft = promptBrowse.end() { source = draft }
+                if let draft = promptBrowse.end() { draftStore.draft.source = draft }
             }
             .modifier(AttachmentPickers(sheet: self))
     }
@@ -219,6 +296,10 @@ struct NewTaskSheet: View {
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Cancel") { dismiss() }
+                        }
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Discard", role: .destructive) { discard() }
+                                .disabled(!Self.canDiscard(draftStore.draft, isFrozen: isFrozen))
                         }
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Submit") { performSubmit() }
@@ -285,6 +366,7 @@ struct NewTaskSheet: View {
                 return true
             }
             status
+            draftNotices
         }
     }
 
@@ -354,7 +436,7 @@ struct NewTaskSheet: View {
     @ViewBuilder private func sourceEditor(cap: CGFloat) -> some View {
         #if os(macOS)
             TaskPromptEditor(
-                text: $source, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse,
+                text: sourceBinding, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse,
                 onSubmit: performSubmit, contentHeight: $textHeight, onAttach: attach(pasted:)
             )
             .frame(height: min(max(textHeight, TaskPromptEditor.height(lines: 4)), cap))
@@ -372,7 +454,7 @@ struct NewTaskSheet: View {
             .hidden()
             .frame(maxWidth: .infinity, maxHeight: cap, alignment: .topLeading)
             .overlay {
-                TextEditor(text: $source)
+                TextEditor(text: sourceBinding)
                     .font(FreesideFont.statement)
                     .scrollContentBackground(.hidden)
                     .accessibilityLabel("Work to do")
@@ -412,7 +494,7 @@ struct NewTaskSheet: View {
             Menu {
                 RoleSelectionMenu(
                     offer: Self.roleMenuOffer(role, choices: choices, model: model), lineupLabel: defaultLabel
-                ) { choices[role] = $0 }
+                ) { draftStore.draft.choices[role] = $0 }
             } label: {
                 chip
             }
@@ -546,7 +628,7 @@ struct NewTaskSheet: View {
                 case .refused(let sentence):
                     batchRefusals.append(sentence)
                 case .attachment(let name, let claim, let bytes):
-                    switch attachments.add(name: name, claimedMediaType: claim, bytes: bytes) {
+                    switch draftStore.draft.attachments.add(name: name, claimedMediaType: claim, bytes: bytes) {
                     case .added(let added):
                         if added.isImage, thumbnails[added.digest] == nil {
                             thumbnails[added.digest] = ComposerAttachmentIntake.thumbnail(bytes)
@@ -555,7 +637,7 @@ struct NewTaskSheet: View {
                         batchRefusals.append(sentence)
                     }
                 case .folder(let name, let files, let links):
-                    switch attachments.addFolder(name: name, files: files) {
+                    switch draftStore.draft.attachments.addFolder(name: name, files: files) {
                     // A folder's chip draws no thumbnails, so none are
                     // decoded for its files.
                     case .added(let folder, _):
@@ -566,7 +648,7 @@ struct NewTaskSheet: View {
                         batchRefusals.append(sentence)
                     }
                 case .repositoryPath(let path):
-                    source = Self.appendingPath(path, to: source)
+                    draftStore.draft.source = Self.appendingPath(path, to: draftStore.draft.source)
                 }
             }
             refusals = batchRefusals
@@ -601,12 +683,12 @@ struct NewTaskSheet: View {
     }
 
     private func remove(_ item: DraftAttachment) {
-        attachments.remove(name: item.name)
+        draftStore.draft.attachments.remove(name: item.name)
         dropUnheldThumbnails()
     }
 
     private func removeFolder(_ name: String) {
-        attachments.removeFolder(name: name)
+        draftStore.draft.attachments.removeFolder(name: name)
         dropUnheldThumbnails()
     }
 
@@ -669,10 +751,25 @@ struct NewTaskSheet: View {
     // MARK: Foot
 
     private var foot: some View {
-        WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
-            projectChip
-            agentsChip
-            attachChip
+        HStack(alignment: .top, spacing: 6) {
+            WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
+                projectChip
+                agentsChip
+                attachChip
+            }
+            #if os(macOS)
+                // The goldens leave it out, as they leave out iPhone's bar.
+                if rendersInteractiveControls {
+                    Spacer(minLength: 0)
+                    Button("Discard") { discard() }
+                        .buttonStyle(.plain)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .padding(.vertical, 4)
+                        .disabled(!Self.canDiscard(draftStore.draft, isFrozen: isFrozen))
+                        .help("Discard this draft")
+                }
+            #endif
         }
         .padding(.top, 8)
         .padding(.horizontal, 10)
@@ -684,7 +781,7 @@ struct NewTaskSheet: View {
         let chip = ComposerChip(glyph: "▣", text: projectLabel)
         if rendersInteractiveControls {
             Menu {
-                Picker("Project", selection: $projectID) {
+                Picker("Project", selection: projectBinding) {
                     ForEach(projects, id: \.self) { project in
                         Text(project).tag(project)
                     }
@@ -728,7 +825,7 @@ struct NewTaskSheet: View {
             .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         if rendersInteractiveControls {
             Button {
-                agentsOpen.toggle()
+                draftStore.draft.agentsOpen.toggle()
             } label: {
                 chip
             }
@@ -761,6 +858,27 @@ struct NewTaskSheet: View {
         }
     }
 
+    /// What the draft says about itself under the composer: attachments a
+    /// relaunch left out, and a draft this device couldn't save. Neither
+    /// blocks composing or submitting.
+    @ViewBuilder private var draftNotices: some View {
+        if draftStore.attachmentsDroppedAtRelaunch, sentDraft == nil {
+            Text(Self.droppedAttachmentsSentence)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let warning = draftStore.saveWarning {
+            Notice(tone: .wax, keyword: "Not saved", sentence: warning)
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func discard() {
+        draftStore.clear()
+        dismiss()
+    }
+
     /// True whether the response was lost or an attachment's upload was:
     /// either way the request is saved for Retry.
     static let unconfirmedSentence =
@@ -771,11 +889,17 @@ struct NewTaskSheet: View {
     @discardableResult private func performSubmit() -> Bool {
         guard canSubmit else { return false }
         isSubmitting = true
+        let projectID = projectID
+        let sent = Self.detach(draftStore)
+        sentDraft = sent
         submitTask = Task {
             let taskID = await Self.send(
-                Self.submission(source: source), projectID: projectID, choices: choices, attachments: attachments,
-                through: model)
+                Self.submission(source: sent.source), projectID: projectID, choices: sent.choices,
+                attachments: sent.attachments, through: model)
             isSubmitting = false
+            // Settled before the cancel check: a sheet closed mid-submit
+            // still puts back a draft the daemon didn't take.
+            if !Self.settle(draftStore, sent: sent, after: model.state, taskID: taskID) { sentDraft = nil }
             guard !Task.isCancelled else { return }
             if let taskID {
                 onSubmitted(taskID)

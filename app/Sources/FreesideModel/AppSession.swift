@@ -338,15 +338,17 @@ public final class AppSession {
         client: any APIProtocol, cache: any CacheStore, submissionAttachments: any SubmissionAttachmentStore,
         credential: DeviceCredential, deploymentURL: URL?, cacheRoot: URL?
     ) -> SyncCoordinator {
-        SyncCoordinator(
+        let deploymentID = deploymentURL.map { deploymentKey(for: $0) } ?? "mock"
+        let directory = deploymentURL.flatMap { url in cacheRoot.map { cacheDirectory(for: url, in: $0) } }
+        return SyncCoordinator(
             client: client,
             device: DeviceIdentity(deviceID: credential.deviceID),
             cache: cache,
-            submissionDaemonID: deploymentURL.map { deploymentKey(for: $0) } ?? "mock",
+            submissionDaemonID: deploymentID,
             promptHistory: TaskPromptHistory(
-                deploymentID: deploymentURL.map { deploymentKey(for: $0) } ?? "mock",
-                deviceID: credential.deviceID,
-                directory: deploymentURL.flatMap { url in cacheRoot.map { cacheDirectory(for: url, in: $0) } }),
+                deploymentID: deploymentID, deviceID: credential.deviceID, directory: directory),
+            newTaskDraft: NewTaskDraftStore(
+                deploymentID: deploymentID, deviceID: credential.deviceID, directory: directory),
             submissionAttachments: submissionAttachments
         )
     }

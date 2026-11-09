@@ -10,7 +10,9 @@ import SwiftUI
 
 /// The one list both clients draw: Needs You, then Working and Finished
 /// behind their disclosures, under a tools row. The list is a projection of
-/// what the client already holds (`UnifiedList`).
+/// what the client already holds (`UnifiedList`). An unsent New Task draft
+/// sits above Needs You as a line of its own, outside the projection and
+/// its selection (#2935).
 struct UnifiedListView: View {
     /// The Needs You count: the rows the filtered list draws. Absent until
     /// the list has loaded, when a zero would read as nothing needing you.
@@ -66,6 +68,9 @@ struct UnifiedListView: View {
     /// Why New Task is disabled, shown above the list so the disabled action
     /// explains itself; nil while the composer is available.
     var newTaskBlockedReason: String?
+    /// The New Task draft, drawn as a row while there is one. Only that
+    /// row reads it, so typing in the composer redraws nothing else.
+    var draftStore: NewTaskDraftStore?
     var lastUpdatedAt: Date?
     var onRefresh: @MainActor () async -> Void = {}
     var onRevealTechnicalDetails: (String) -> Void = { _ in }
@@ -268,6 +273,9 @@ struct UnifiedListView: View {
     @ViewBuilder
     private func sections(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
         @Bindable var preferences = preferences
+        if let draftStore {
+            DraftListRow(draftStore: draftStore, navigation: navigation)
+        }
         if list.needsYou.isEmpty {
             sectionRow { needsYouEmptyState }
         } else {
@@ -291,11 +299,7 @@ struct UnifiedListView: View {
 
     /// A line of the list that selection passes over.
     private func sectionRow(@ViewBuilder content: () -> some View) -> some View {
-        content()
-            .selectionDisabled()
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+        content().unifiedListLine()
     }
 
     private var needsYouEmptyState: some View {
@@ -401,6 +405,10 @@ struct UnifiedListView: View {
         return VStack(alignment: .leading, spacing: 8) {
             tools(list)
                 .padding(.horizontal, -16)
+            if let row = draftStore?.draft.row {
+                DraftRowView(row: row)
+                    .padding(.bottom, DraftRowView.gapBelow)
+            }
             if list.needsYou.isEmpty {
                 needsYouEmptyState
             }
@@ -420,6 +428,73 @@ struct UnifiedListView: View {
         }
         .padding()
         .background(Color.sidebarGround)
+    }
+}
+
+/// The Draft line of the list, present only while a draft exists. It opens
+/// the composer on the draft; its menu, and a swipe on iPhone, discard it.
+/// A line selection passes over, like the section heads.
+private struct DraftListRow: View {
+    let draftStore: NewTaskDraftStore
+    let navigation: NavigationModel
+
+    var body: some View {
+        if let row = draftStore.draft.row {
+            Button {
+                navigation.newTaskComposerPresented = true
+            } label: {
+                DraftRowView(row: row)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens New Task with this draft")
+            .contextMenu {
+                Button("Discard Draft", role: .destructive) { draftStore.clear() }
+            }
+            #if os(iOS)
+                .swipeActions(edge: .trailing) {
+                    Button("Discard", role: .destructive) { draftStore.clear() }
+                }
+            #endif
+            .unifiedListLine(bottomInset: 4 + DraftRowView.gapBelow)
+        }
+    }
+}
+
+extension View {
+    /// A line of the list that selection passes over.
+    fileprivate func unifiedListLine(bottomInset: CGFloat = 4) -> some View {
+        selectionDisabled()
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: bottomInset, trailing: 16))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
+/// The unsent New Task draft on the shared row: the `Draft` keyword, the
+/// first line of its text, and its project on the context line. Its frame
+/// is dashed and unfilled, the way a decision card frames text that would be
+/// sent, and a gap sets it apart from Needs You, so it never reads as an item
+/// waiting on the operator.
+struct DraftRowView: View {
+    let row: NewTaskDraft.Row
+
+    /// The space the row adds below itself, past the list's row gap.
+    static let gapBelow: CGFloat = 12
+
+    var body: some View {
+        SidebarRow(keyword: .init(text: "Draft", color: .inkDim), isDraft: true) {
+            EmptyView()
+        } title: {
+            Text(row.title)
+                .font(FreesideFont.rowTitle)
+                .foregroundStyle(Color.ink)
+                .lineLimit(1)
+        } context: {
+            SidebarRowContext(text: row.project)
+        } closing: {
+            EmptyView()
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -516,9 +591,12 @@ struct ListSectionHead: View {
 /// bordered item on ground-2; the selected row drops the border for the
 /// accent wash under a 4pt accent bar, so selection adds geometry as well as
 /// color and reads the same with Differentiate Without Color. On macOS an
-/// unselected row takes the hover cut under the pointer.
+/// unselected row takes the hover cut under the pointer. The unsent draft's
+/// row has no fill and a dashed strong-rule border, geometry again rather
+/// than color alone.
 struct SidebarRowSurface: ViewModifier {
     let isSelected: Bool
+    var isDraft = false
 
     /// The row's padding as the frames draw it: 10 by 12 on the Mac, 11 by
     /// 13 on iPhone.
@@ -551,10 +629,14 @@ struct SidebarRowSurface: ViewModifier {
                     .padding(.trailing, Self.padding.width)
                     .frame(maxWidth: .infinity, alignment: .leading))
         }
-        .background(RoundedRectangle(cornerRadius: 8).fill(isSelected ? Color.accentWash : .ground2))
+        .background(
+            RoundedRectangle(cornerRadius: 8).fill(isSelected ? Color.accentWash : isDraft ? .clear : .ground2)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.clear : .itemBorder, lineWidth: 1)
+                .strokeBorder(
+                    isSelected ? Color.clear : isDraft ? .ruleStrong : .itemBorder,
+                    style: StrokeStyle(lineWidth: 1, dash: isDraft ? [4, 3] : []))
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
@@ -589,6 +671,8 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     /// the hairlines between rows: the row takes a group row's padding in
     /// place of its own surface.
     var grouped = false
+    /// True for the unsent New Task draft, which takes the draft surface.
+    var isDraft = false
     @ViewBuilder var badges: Badges
     @ViewBuilder var title: Title
     @ViewBuilder var context: Context
@@ -602,7 +686,7 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            lines.modifier(SidebarRowSurface(isSelected: isSelected))
+            lines.modifier(SidebarRowSurface(isSelected: isSelected, isDraft: isDraft))
         }
     }
 
