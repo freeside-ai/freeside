@@ -26,6 +26,9 @@ import (
 //   - The sudoers drop-in and LaunchDaemon are removed only when their bytes
 //     are exactly what install writes; the executor root only when it holds a
 //     slot-run helper.
+//   - The Swift cache under the root is the operator's: install creates it
+//     empty and takes over only one root owns, and removal deletes it, entries
+//     and all, with the rest of the root.
 
 // ErrInvalidSpec refuses an install spec the helper could not act on.
 var ErrInvalidSpec = errors.New("macverify: invalid install spec")
@@ -147,8 +150,11 @@ func (s InstallSpec) homePath(slot string) string {
 	return s.path("homes", slot)
 }
 
-// rootEntries are the names install creates directly under the root.
-var rootEntries = []string{"bin", "jobs", "homes", "template", "pf"}
+// rootEntries are the names install creates directly under the root, in
+// removal order. The Swift cache goes first: the operator can make it fail to
+// delete (an immutable file), and the helper in bin is what lets a rerun
+// removal recognize the root as install's.
+var rootEntries = []string{swiftCacheDirName, "bin", "jobs", "homes", "template", "pf"}
 
 func (s InstallSpec) treeDirs() []string {
 	return []string{
@@ -231,6 +237,7 @@ func (in installer) pieces() []piece {
 		ps = append(ps, in.dirPiece(dir))
 	}
 	ps = append(ps,
+		in.swiftCachePiece(),
 		in.filePiece("helper", helperPath(s.Root), helperScript, 0o755, nil),
 		in.filePiece("slot list", s.slotsConfPath(), renderSlotsConf(s.Slots()), 0o644, nil),
 		in.groupPiece(),
@@ -455,6 +462,55 @@ func isTempEntry(entry string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// swiftCachePiece holds <root>/swift-cache to what populate fills as the
+// operator and slot-run seeds from: a directory the operator owns at 0755.
+// It is the one tree directory root does not own. A root-owned one, as an
+// interrupted Mkdir leaves, is install's to repair; one another user owns is
+// foreign, so install never hands that user's entries to the operator.
+func (in installer) swiftCachePiece() piece {
+	s := in.spec
+	dir := s.path(swiftCacheDirName)
+	var exists bool
+	var uid int
+	return piece{
+		name: "Swift cache " + dir,
+		inspect: func() (State, string, error) {
+			operator, ok, err := in.host.User(s.Operator)
+			if err != nil {
+				return "", "", err
+			}
+			if !ok || operator.UID == 0 {
+				return StateMisconfigured, fmt.Sprintf("operator %s is unknown or root", s.Operator), nil
+			}
+			uid = operator.UID
+			info, err := in.host.Stat(dir)
+			if err != nil {
+				return "", "", err
+			}
+			exists = info.Kind != FileMissing
+			switch {
+			case !exists:
+				return StateMissing, "", nil
+			case info.Kind != FileDir:
+				return StateForeign, "not a directory", nil
+			case info.UID != uid && info.UID != 0:
+				return StateForeign, fmt.Sprintf("owned by uid %d, not operator %s (uid %d); delete it for install to recreate",
+					info.UID, s.Operator, uid), nil
+			case info.UID != uid || info.Mode != 0o755:
+				return StateMisconfigured, fmt.Sprintf("owner %d mode %v, want %d %v",
+					info.UID, info.Mode, uid, fs.FileMode(0o755)), nil
+			}
+			return StatePresent, "", nil
+		},
+		repair: func() error {
+			if exists {
+				return in.host.SetOwnerMode(dir, uid, 0, 0o755)
+			}
+			return in.host.Mkdir(dir, uid, 0, 0o755)
+		},
+	}
 }
 
 // homePiece holds a slot's home to what slot-run's reset leaves: the slot's,
@@ -775,8 +831,8 @@ type RemoveReport struct {
 // Remove deletes what install created and nothing else: the sudoers drop-in
 // and boot LaunchDaemon only when their bytes are exactly install's, each
 // account listed in the root's slots.conf that the adoption rule marks as a
-// slot, the group once nothing names it, and the executor root only when it
-// holds a slot-run helper. Anything else is reported in Left. An absent
+// slot, the group once nothing names it, and the executor root, Swift cache
+// included, only when it holds a slot-run helper. Anything else is reported in Left. An absent
 // install is a no-op. The sudoers rule goes first, so the daemon starts no
 // job while removal runs.
 func Remove(spec InstallSpec, host Host) (RemoveReport, error) {

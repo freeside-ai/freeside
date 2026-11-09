@@ -4306,6 +4306,7 @@ world-writable unless noted, and so is every ancestor of the root:
   jobs/<slot>/<job-id>/    a job's directory, holding workspace/ (slot, 0700)
   jobs/<slot>/<job-id>.sb  the job's sandbox profile
   pf/anchor.conf           the slots' packet-filter anchor, mode 0644
+  swift-cache/             the offline Swift dependency cache (the operator, 0755)
 ```
 
 **Profile.** `macverify.DefaultSandboxProfile()` denies all network access,
@@ -4338,7 +4339,8 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   with shell `/usr/bin/false`, password `*`, primary group `fvslots`, and home
   `<root>/homes/<slot>`.
 - **The executor root** (`/Library/Freeside/macverify`) in the layout above,
-  plus `pf/`, and each slot's home (the slot's, `0700`). It creates a missing
+  plus `pf/`, each slot's home (the slot's, `0700`), and an empty
+  `swift-cache/` (the operator's, `0755`). It creates a missing
   `/Library/Freeside` but never changes an existing ancestor.
 - **The helper and slot list:** `bin/slot-run` from the daemon's embedded copy
   and `bin/slots.conf`. Rerun install after upgrading the daemon: it rewrites a
@@ -4366,7 +4368,9 @@ id is held by something it did not create, when the operator is root or
 unknown, when an ancestor of the root is not root-owned or is group- or
 world-writable, or when the root or a directory in it is owned by another
 user or holds anything install does not write (so `-root /usr/local` is
-refused, not adopted). An existing account counts as a slot only when its primary
+refused, not adopted). The Swift cache is the operator's instead: install
+refuses one another user owns and hands a root-owned one to the operator,
+and never reads what is in it. An existing account counts as a slot only when its primary
 group id is the slot group's and its home is `<root>/homes/<slot>`; install
 then repairs its other attributes but never renumbers it. The group counts as
 install's only when every member, and every account with it as primary group,
@@ -4408,7 +4412,8 @@ Removal deletes the sudoers drop-in first, so the daemon starts no job while
 it runs, then the LaunchDaemon, each slot account listed in
 `<root>/bin/slots.conf` that the adoption rule marks as a slot (after killing
 its processes), the loaded anchor rules, the group once nothing names it, the
-entries install writes under the root, and the root and `/Library/Freeside`
+entries install writes under the root (the Swift cache with every entry in
+it), and the root and `/Library/Freeside`
 if that leaves each empty. It deletes the sudoers drop-in and LaunchDaemon
 only when their content is exactly what install writes, the group only when
 it found a root-owned `slots.conf` or helper, and the root's entries only when
