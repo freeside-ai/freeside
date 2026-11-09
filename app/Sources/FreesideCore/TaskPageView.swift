@@ -1223,7 +1223,7 @@ struct TaskPageView: View {
         _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline,
         schedules: [Components.Schemas.ScheduleSnapshot]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        FactGroup(spacing: 8) {
             if let role = run.role?.value1 {
                 FactRow(label: "Role", value: TaskTimelinePresentation.label(role))
             }

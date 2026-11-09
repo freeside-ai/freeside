@@ -808,7 +808,7 @@ struct DecisionDetailView: View {
             let facts = ConclusionDisplay.facts(
                 item, thisDeviceID: model.deviceID, now: now, locale: locale, timeZone: timeZone)
             if !facts.isEmpty {
-                keywordSection("Outcome") {
+                factSection("Outcome") {
                     ForEach(facts) { fact in
                         factRow(fact)
                     }
@@ -958,7 +958,7 @@ struct DecisionDetailView: View {
             detailsReason(item, register: register)
             cardModules(modules.composition.foldedModules, modules)
             if !content.readingRows.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
+                FactGroup(spacing: 6) {
                     ForEach(Array(content.readingRows.enumerated()), id: \.offset) { _, row in
                         factRow(row.label, value: row.value)
                     }
@@ -1041,7 +1041,7 @@ struct DecisionDetailView: View {
             // own (#2607).
             let placement = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
             if !placement.folded.isEmpty {
-                keywordSection(DecisionFactPlacement.foldedTitle) {
+                factSection(DecisionFactPlacement.foldedTitle) {
                     ForEach(placement.folded) { fact in
                         factRow(fact)
                     }
@@ -1053,11 +1053,11 @@ struct DecisionDetailView: View {
                 includesCommitPlan: !composition.modules.contains(.checklist),
                 drawsFold: !composition.modules.contains(.foldedFacts))
             if let proposalFacts {
-                keywordSection("Facts") {
+                factSection("Facts") {
                     proposalRows(proposalFacts)
                 }
                 if let prior = proposalFacts.supersedes?.value1 {
-                    keywordSection("Revision Context") {
+                    factSection("Revision Context") {
                         proposalRevisionRows(prior)
                     }
                 }
@@ -1085,7 +1085,7 @@ struct DecisionDetailView: View {
                 case let effectRows = AttentionDisplay.effectProposalCardRows(effectProposalFacts),
                 !effectRows.isEmpty
             {
-                keywordSection("Facts") {
+                factSection("Facts") {
                     ForEach(effectRows) { fact in
                         factRow(fact)
                     }
@@ -1467,7 +1467,7 @@ struct DecisionDetailView: View {
             DecisionChangeRow(diff: change)
         }
         if !rows.isEmpty {
-            keywordSection(DecisionCardComposition.factsKeyword(for: item._type)) {
+            factSection(DecisionCardComposition.factsKeyword(for: item._type)) {
                 ForEach(rows) { fact in
                     factRow(fact)
                 }
@@ -1486,7 +1486,7 @@ struct DecisionDetailView: View {
                 label: DecisionFactPlacement.foldedTitle,
                 isExpanded: disclosure(.runDetails)
             ) {
-                VStack(alignment: .leading, spacing: 8) {
+                FactGroup(spacing: 8) {
                     ForEach(placement.folded) { fact in
                         factRow(fact)
                     }
@@ -1516,7 +1516,7 @@ struct DecisionDetailView: View {
         }
 
         if let comparison = graphics.comparison, !comparison.verifiableFacts.isEmpty {
-            keywordSection("Daemon Facts") {
+            factSection("Daemon Facts") {
                 ForEach(comparison.verifiableFacts) { fact in
                     FactRow(label: fact.label, value: fact.value)
                 }
@@ -1524,7 +1524,7 @@ struct DecisionDetailView: View {
         }
 
         if let attemptTimings = graphics.attemptTimings {
-            keywordSection(attemptTimings.title) {
+            factSection(attemptTimings.title) {
                 ForEach(attemptTimings.facts) { fact in
                     FactRow(label: fact.label, value: fact.value)
                 }
@@ -2009,7 +2009,7 @@ struct DecisionDetailView: View {
             label: "Source and Supporting Details",
             isExpanded: disclosure(.claimSource(claim))
         ) {
-            VStack(alignment: .leading, spacing: 6) {
+            FactGroup(spacing: 6) {
                 ForEach(
                     Array(Self.claimSourceRows(claim, text: text).enumerated()), id: \.offset
                 ) { _, row in
@@ -2339,7 +2339,7 @@ struct DecisionDetailView: View {
             // The finding's coordinates are daemon-authenticated, so they
             // keep their own register inside the disclosure, never mixed
             // into the producer's content around them (#892).
-            keywordSection("Daemon Facts") {
+            factSection("Daemon Facts") {
                 ForEach(card.daemonFacts) { factRow($0) }
             }
             findingStatements(
@@ -3031,7 +3031,7 @@ struct DecisionDetailView: View {
             // does not draw it. The fold sits above the action, so the
             // action and the controls after it read as one block (#2608).
             SentenceDisclosure(label: "Provenance", isExpanded: $provenanceExpanded) {
-                VStack(alignment: .leading, spacing: 4) {
+                FactGroup(spacing: 4) {
                     if let reason = recommendation.provenanceReason(for: item) {
                         StackedFact(label: "Reason") {
                             Text(reason)
@@ -3242,6 +3242,17 @@ struct DecisionDetailView: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A keyword section of fact rows, striped as one fact group.
+    private func factSection(
+        _ title: String, @ViewBuilder rows: () -> some View
+    ) -> some View {
+        keywordSection(title) {
+            FactGroup(spacing: CardScale.moduleGap) {
+                rows()
+            }
+        }
     }
 
     /// The card foot's measures.

@@ -153,6 +153,23 @@ import Testing
             "diffRemove", FreesidePalette.diffRemove, on: "diffRemoveWash",
             FreesidePalette.diffRemoveWash),
 
+        // Every color a fact value draws in, on the stripe behind every
+        // other row of a fact group: ink for a plain value, inkDim for a
+        // technical value and the hold code, accentText for a linked value,
+        // the urgent pairing expiry, and the copy control, waxText for a
+        // blocking posture chip, which has no fill, and the diff cuts for
+        // the diff-count row.
+        text("ink", FreesidePalette.ink, on: "factStripe", FreesidePalette.factStripe),
+        text("inkDim", FreesidePalette.inkDim, on: "factStripe", FreesidePalette.factStripe),
+        text(
+            "accentText", FreesidePalette.accentText, on: "factStripe",
+            FreesidePalette.factStripe),
+        text("waxText", FreesidePalette.waxText, on: "factStripe", FreesidePalette.factStripe),
+        text("diffAdd", FreesidePalette.diffAdd, on: "factStripe", FreesidePalette.factStripe),
+        text(
+            "diffRemove", FreesidePalette.diffRemove, on: "factStripe",
+            FreesidePalette.factStripe),
+
         // Disabled and validating text. It must stay readable while reading
         // as unavailable, so it clears the disabled floor rather than the
         // body one, on every ground a disabled control can sit on. This is
