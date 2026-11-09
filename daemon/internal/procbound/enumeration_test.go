@@ -27,6 +27,9 @@ var unboundSites = map[string]string{
 		"converging it is a follow-up, not this unit (#544)",
 	"internal/ward/runtime_cli.go:runTo": "builds the command and hands it straight to " +
 		"runPrepared in the same file, which binds it",
+	"internal/macverify/launcher.go:command": "sudo runs slot-run as root, so the daemon can " +
+		"neither signal nor kill its process group; both callers set WaitDelay, and the " +
+		"room proves the slot's processes gone by uid instead (#2877)",
 }
 
 // TestEveryCommandSiteIsBound is the enumeration as a ratchet. The bug is

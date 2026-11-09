@@ -3303,8 +3303,9 @@ verification executor (`credential_free_host_verification`, package
 `internal/macverify`), needs only its own
 `supports_credential_free_host_verification` declaration, earned by its own
 conformance pass, and runs only a run's verification job. The class is
-declared, but nothing builds its room, runs its pass, or places a job on it
-yet (#2877, #2879, #2882), and doctor does not check it. Pass `-operating-mode
+declared and its room exists (Set Up the macOS Verification Executor by
+Hand), but nothing runs its pass or places a job on it yet (#2879, #2882), and
+doctor does not check it. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
 unattended daemon. Use the `digest` field from that daemon's startup log record
 whose message is `effective reviewer configuration`; it is computed from the
@@ -4219,6 +4220,121 @@ pointer.
 
 A failed scheduled pass logs and waits for the next one; it does not stop
 the daemon.
+
+### Set Up the macOS Verification Executor by Hand
+
+The credential-free macOS verification executor (`internal/macverify`) runs
+one trusted recipe command per job as an unprivileged slot account on the
+daemon host. Its `Room` is the executor's `verify.Room`. The installer that
+sets it up is #2878; until then a developer sets it up by hand as below. The
+packet-filter rules, the conformance pass, and the pre-job probe are #2879.
+
+**Launch path.** `freesided` runs as the operator's LaunchAgent, so it has no
+root, yet launching as a slot needs root. The room reaches root through one
+door: the `slot-run` helper, invoked as `sudo -n <root>/bin/slot-run` under a
+sudoers rule naming that path only. The helper launches the command with
+`launchctl asuser <uid> sudo -u <slot>`, in the slot's own launchd context.
+That matters: a plain `sudo -u` child of the operator's session still sees the
+operator's window-server session (spike 1 in
+`devlog/2026-10-22-1205-macos-verifier-executor.md`). Decision record:
+`devlog/2026-11-09-0700-macos-slot-launch-path.md`.
+
+- **The helper owns the slot set.** It acts only on accounts listed in
+  `slots.conf` beside it, refuses root, the caller, administrators, and an
+  account whose home is not `<root>/homes/<slot>`, and derives the executor
+  root from its own location. It refuses to run unless every directory from
+  its own up to `/` is root-owned and not group- or world-writable.
+- **The daemon checks the helper.** Before each job the room refuses the job
+  unless `<root>/bin/slot-run` is root-owned, not group- or world-writable,
+  and byte-identical to the copy the daemon embeds. Reinstall the helper
+  after upgrading the daemon.
+- **Absence goes by uid.** After every command the room reaps everything the
+  slot owns and checks, through the `kern.proc.uid` and `kern.proc.ruid`
+  sysctls, that the slot's uid owns no live process. That catches a
+  descendant that left its process group or session. A slot that cannot be
+  proved empty is quarantined until the daemon restarts, and the helper's
+  `prepare` refuses it after a restart until it is empty.
+
+**Executor root.** Every directory is root-owned and not group- or
+world-writable unless noted, and so is every ancestor of the root:
+
+```text
+<root>/
+  bin/slot-run             the helper, mode 0755
+  bin/slots.conf           one slot account name per line, mode 0644
+  template/home/           copied into a slot's home before and after each job
+  homes/<slot>/            the slot's home and its account's NFSHomeDirectory (slot, 0700)
+  jobs/<slot>/<job-id>/    a job's directory, holding workspace/ (slot, 0700)
+  jobs/<slot>/<job-id>.sb  the job's sandbox profile
+```
+
+**Profile.** `macverify.DefaultSandboxProfile()` denies all network access,
+loopback and the system resolver included, and confines writes to four
+`sandbox-exec -D` parameters: `JOB_DIR`, `SLOT_HOME`, `SLOT_TMP`, and
+`SLOT_CACHE` (the slot's `DARWIN_USER_TEMP_DIR` and `DARWIN_USER_CACHE_DIR`).
+The helper resets all four every job. The command's environment is exactly
+`HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`. A
+SwiftPM recipe command must pass `--disable-sandbox`: SwiftPM sandboxes its
+manifest build with `sandbox-exec`, which cannot nest inside the room's.
+
+**Set it up.** The steps use `/Library/Freeside/macverify` and two slots;
+pick unused ids (`dscl . -list /Users UniqueID`):
+
+```sh
+R=/Library/Freeside/macverify
+sudo dseditgroup -o create -i 460 fvslots
+for n in 1 2; do
+  s=fvslot$n
+  sudo dscl . -create /Users/$s
+  sudo dscl . -create /Users/$s UniqueID $((460 + n))
+  sudo dscl . -create /Users/$s PrimaryGroupID 460
+  sudo dscl . -create /Users/$s UserShell /usr/bin/false
+  sudo dscl . -create /Users/$s NFSHomeDirectory "$R/homes/$s"
+  sudo dscl . -create /Users/$s Password '*'
+  sudo dscl . -create /Users/$s IsHidden 1
+done
+sudo install -d -o root -g wheel -m 0755 /Library/Freeside "$R" "$R/bin" \
+  "$R/jobs" "$R/homes" "$R/template" "$R/template/home"
+# The helper from the same commit as the daemon binary:
+sudo install -o root -g wheel -m 0755 daemon/internal/macverify/slot-run.sh "$R/bin/slot-run"
+printf 'fvslot1\nfvslot2\n' | sudo tee "$R/bin/slots.conf" >/dev/null
+sudo chmod 0644 "$R/bin/slots.conf"
+# The sudoers drop-in, for the user the daemon runs as:
+sudo grep includedir /etc/sudoers   # expect /private/etc/sudoers.d
+echo "$(id -un) ALL=(root) NOPASSWD: $R/bin/slot-run" >/tmp/freeside-slot-run
+sudo visudo -cf /tmp/freeside-slot-run &&
+  sudo install -o root -g wheel -m 0440 /tmp/freeside-slot-run /etc/sudoers.d/freeside-slot-run
+rm /tmp/freeside-slot-run
+```
+
+The daemon's `macverify.Config` then names `ExecutorRoot: "$R"` and
+`Slots: ["fvslot1", "fvslot2"]`.
+
+**Run the live suite.** It runs a probe through the production room as a real
+slot: loopback refused, resolver empty, writes outside the job directory
+refused, no window-server session, the home reset between jobs, a signal death
+read as `-1`, a timeout that reaps a descendant that left its session, and the
+helper refusing accounts outside `slots.conf`:
+
+```sh
+FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify \
+  FREESIDE_MACVERIFY_SLOTS=fvslot1,fvslot2 \
+  bash scripts/check.sh daemon test -- ./internal/macverify/... -run Live -v
+```
+
+**Remove it:**
+
+```sh
+R=/Library/Freeside/macverify
+sudo rm /etc/sudoers.d/freeside-slot-run
+for s in fvslot1 fvslot2; do
+  sudo pkill -9 -U "$s"
+  sudo dscl . -delete /Users/$s
+done
+sudo dseditgroup -o delete fvslots
+sudo rm -rf "$R"
+sudo rmdir /Library/Freeside 2>/dev/null
+```
 
 ## External Review Replies
 

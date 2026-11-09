@@ -1,0 +1,28 @@
+;; The macOS verification executor's default sandbox profile (#2877).
+;;
+;; A recipe command runs under this profile as a slot account. It may not use
+;; the network at all, local sockets included, and it may write only to the
+;; job directory and to the slot's home, temporary, and cache directories,
+;; each of which slot-run resets between jobs. It may not create launchd
+;; jobs or open applications through Launch Services. The paths arrive as
+;; sandbox-exec -D parameters, so the profile's bytes stay fixed per
+;; configuration and the configuration digest names exactly what every job
+;; runs under.
+(version 1)
+(allow default)
+(deny network*)
+;; A launchd job the command submits would run outside this sandbox and could
+;; outlive the job without owning a process the absence proof would see.
+(deny job-creation)
+(deny lsopen)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "JOB_DIR"))
+  (subpath (param "SLOT_HOME"))
+  (subpath (param "SLOT_TMP"))
+  (subpath (param "SLOT_CACHE"))
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/tty")
+  (literal "/dev/dtracehelper")
+  (regex #"^/dev/fd/[0-9]+$"))
