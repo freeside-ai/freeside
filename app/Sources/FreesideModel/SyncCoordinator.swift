@@ -71,6 +71,9 @@ public final class SyncCoordinator {
     @ObservationIgnored package lazy var taskLineChange = TaskLineChangeModel(coordinator: self)
     private let submissionDaemonID: String
     public let promptHistory: TaskPromptHistory
+    /// The New Task composer's unsent draft, held here so it outlives the
+    /// sheet (#2935).
+    public let newTaskDraft: NewTaskDraftStore
     public private(set) var cursors: SyncCursors?
     public private(set) var runs: [Components.Schemas.RunSnapshot] = []
     public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
@@ -219,6 +222,7 @@ public final class SyncCoordinator {
         cache: CacheStore,
         submissionDaemonID: String = "mock",
         promptHistory: TaskPromptHistory? = nil,
+        newTaskDraft: NewTaskDraftStore? = nil,
         submissionAttachments: any SubmissionAttachmentStore = InMemorySubmissionAttachmentStore(),
     ) {
         store = InboxStore(client: client, device: device)
@@ -227,6 +231,8 @@ public final class SyncCoordinator {
         self.submissionDaemonID = submissionDaemonID
         self.promptHistory =
             promptHistory ?? TaskPromptHistory(deploymentID: submissionDaemonID, deviceID: device.deviceID)
+        self.newTaskDraft =
+            newTaskDraft ?? NewTaskDraftStore(deploymentID: submissionDaemonID, deviceID: device.deviceID)
         if let cached = cache.load() {
             if cached.stopDaemonID == submissionDaemonID {
                 pendingTaskStops = (cached.pendingTaskStops ?? [:]).filter { id, entry in

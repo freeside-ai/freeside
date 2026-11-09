@@ -130,6 +130,31 @@ the agent choices and sends nothing. Only a confirmed submission (including
 a successful recovery) enters history. A history-save failure reports a
 notice without changing task success.
 
+## New Task Draft
+
+Closing New Task without submitting keeps the draft: its text, project,
+agent choices, whether the Agents chip is open, and attachments. Escape,
+Cancel, a swipe-down, and quitting all keep it, and every route into New Task
+restores it. A draft is non-blank text, an attachment, or an agent choice;
+a project alone isn't one.
+
+The live app keeps one draft per paired device and deployment in the same
+cache directory as the prompt history (`new-task-draft-*.json`), written on
+each edit and removed when the draft clears. Attachments stay in
+memory only: after a relaunch the draft comes back without them, and the
+composer says so until you attach something, submit, or discard. Mock and
+ephemeral sessions keep the draft in memory only. The draft never reaches
+the daemon.
+
+Submit takes the draft out while the request is in flight, so a composer
+reopened meanwhile can't send it twice. A created task leaves it out, and so
+does a lost response, because its request may have committed and waits in
+Unconfirmed submissions; a restored draft would offer to send it again. A
+rejection puts the draft back, unless a new one was started meanwhile.
+**Discard** in the composer clears it at once.
+A draft-save failure shows a notice in the composer and blocks neither
+composing nor submitting.
+
 ## New Task Recovery
 
 Each Submit creates separate work, even with identical

@@ -403,6 +403,7 @@ public struct FreesideRootView: View {
                     projects: TaskDisplay.knownProjects(in: coordinator.tasks),
                     projectRepositories: TaskDisplay.projectRepositories(in: coordinator.tasks),
                     model: TaskSubmissionModel(coordinator: coordinator),
+                    draftStore: coordinator.newTaskDraft,
                     onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
                 )
                 .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
@@ -570,6 +571,7 @@ public struct FreesideRootView: View {
                                 projects: TaskDisplay.knownProjects(in: coordinator.tasks),
                                 projectRepositories: TaskDisplay.projectRepositories(in: coordinator.tasks),
                                 model: TaskSubmissionModel(coordinator: coordinator),
+                                draftStore: coordinator.newTaskDraft,
                                 onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
                             )
                             .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)

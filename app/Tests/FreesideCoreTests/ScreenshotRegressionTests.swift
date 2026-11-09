@@ -532,6 +532,36 @@
             return navigation
         }
 
+        /// A memory-only draft holding what a composer golden draws.
+        private func screenshotDraft(
+            source: String, choices: [NewTaskSheet.Role: AgentChoiceDisplay.Selection] = [:],
+            agentsOpen: Bool = false, attachments: TaskAttachmentDraft = TaskAttachmentDraft()
+        ) -> NewTaskDraftStore {
+            let store = NewTaskDraftStore(deploymentID: "mock", deviceID: "screenshot")
+            store.draft.source = source
+            store.draft.choices = choices
+            store.draft.agentsOpen = agentsOpen
+            store.draft.attachments = attachments
+            return store
+        }
+
+        /// A draft loaded from a file that recorded attachments, as a
+        /// relaunch restores one.
+        private func restoredScreenshotDraft(
+            source: String, choices: [NewTaskSheet.Role: AgentChoiceDisplay.Selection]
+        ) throws -> NewTaskDraftStore {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("FreesideScreenshotDraft-\(UUID().uuidString)")
+            let writer = NewTaskDraftStore(deploymentID: "mock", deviceID: "screenshot", directory: directory)
+            writer.draft.source = source
+            writer.draft.choices = choices
+            _ = writer.draft.attachments.add(
+                name: "Layout bug.png", claimedMediaType: "image/png", bytes: AttentionFixtures.fixtureImagePNG)
+            let restored = NewTaskDraftStore(deploymentID: "mock", deviceID: "screenshot", directory: directory)
+            try #require(restored.attachmentsDroppedAtRelaunch)
+            return restored
+        }
+
         private func screenshotListPreferences(expanded: Bool = false) throws -> ListSectionPreferences {
             let defaults = try #require(UserDefaults(suiteName: "FreesideScreenshotList-\(UUID().uuidString)"))
             let preferences = ListSectionPreferences(defaults: defaults)
@@ -766,9 +796,9 @@
                             NewTaskSheet(
                                 projects: newTaskProjects,
                                 model: newTaskModel,
+                                draftStore: screenshotDraft(source: draftSource),
                                 onSubmitted: { _ in },
-                                rendersInteractiveControls: false,
-                                initialSource: draftSource))))
+                                rendersInteractiveControls: false))))
             }
             // The agent choices: one writer and a reviewer chosen, so the
             // open composer draws the four role chips; a daemon with no
@@ -818,9 +848,9 @@
                         name: name, width: width, colorScheme: scheme,
                         view: AnyView(
                             NewTaskSheet(
-                                projects: newTaskProjects, model: model, onSubmitted: { _ in },
-                                rendersInteractiveControls: false, initialSource: filledSource,
-                                initialChoices: choices, initialAgentsOpen: open))))
+                                projects: newTaskProjects, model: model,
+                                draftStore: screenshotDraft(source: filledSource, choices: choices, agentsOpen: open),
+                                onSubmitted: { _ in }, rendersInteractiveControls: false))))
             }
             // A long draft grows the text area to its cap; the foot stays
             // under it, and the closed Agents chip reads the choices.
@@ -840,9 +870,9 @@
                         name: name, width: 380, colorScheme: scheme,
                         view: AnyView(
                             NewTaskSheet(
-                                projects: newTaskProjects, model: newTaskModel, onSubmitted: { _ in },
-                                rendersInteractiveControls: false, initialSource: grownSource,
-                                initialChoices: writerAndReviewer))))
+                                projects: newTaskProjects, model: newTaskModel,
+                                draftStore: screenshotDraft(source: grownSource, choices: writerAndReviewer),
+                                onSubmitted: { _ in }, rendersInteractiveControls: false))))
             }
 
             // Attachments in the composer (#2590): an image chip with its
@@ -878,9 +908,30 @@
                         name: name, width: width, colorScheme: scheme,
                         view: AnyView(
                             NewTaskSheet(
-                                projects: newTaskProjects, model: newTaskModel, onSubmitted: { _ in },
-                                rendersInteractiveControls: false, initialSource: filledSource,
-                                initialAttachments: composerAttachments, initialRefusals: refusals))))
+                                projects: newTaskProjects, model: newTaskModel,
+                                draftStore: screenshotDraft(source: filledSource, attachments: composerAttachments),
+                                onSubmitted: { _ in }, rendersInteractiveControls: false,
+                                initialRefusals: refusals))))
+            }
+
+            // A draft restored after a relaunch (#2935): its text and agent
+            // choices came back, its attachments didn't, and the composer
+            // says so under the box.
+            for (name, width, scheme) in [
+                ("new-task-sheet-restored", CGFloat(380), ColorScheme.light),
+                ("new-task-sheet-restored-dark", CGFloat(380), ColorScheme.dark),
+                ("new-task-sheet-phone-restored", CGFloat(390), ColorScheme.light),
+                ("new-task-sheet-phone-restored-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width, colorScheme: scheme,
+                        view: AnyView(
+                            NewTaskSheet(
+                                projects: newTaskProjects, model: newTaskModel,
+                                draftStore: try restoredScreenshotDraft(
+                                    source: filledSource, choices: writerAndReviewer),
+                                onSubmitted: { _ in }, rendersInteractiveControls: false))))
             }
 
             let recoveryModel = try await TaskSubmissionRecoveryScreenshots.model(client: client)
