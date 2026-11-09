@@ -414,8 +414,10 @@ func readProvenanceLayer(
 			if header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > limit {
 				return fmt.Errorf("project image rootfs has invalid %s", absoluteName)
 			}
-			body, err := io.ReadAll(io.LimitReader(reader, limit+1))
-			if err != nil || int64(len(body)) != header.Size {
+			// One allocation of the checked size: io.ReadAll's growth would
+			// hold two copies of a 1 GiB Swift archive at once.
+			body := make([]byte, header.Size)
+			if _, err := io.ReadFull(reader, body); err != nil {
 				return fmt.Errorf("project image rootfs truncated %s", absoluteName)
 			}
 			files[absoluteName] = body
