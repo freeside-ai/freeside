@@ -130,8 +130,10 @@ import Testing
             path: .init(item_id: p.itemID)
         ).ok.body.json
         let before = try await p.client.getSyncRevision().ok.body.json
+        // Only a first card_opened moves the revision
+        // (firstCardOpenedMarksTheItemViewed); every other kind stays put.
         let input = Components.Schemas.ComprehensionEventInput(
-            item_id: p.itemID, kind: .card_opened,
+            item_id: p.itemID, kind: .drill_down_opened,
             item_decision_surface_digest: surface.item_decision_surface_digest,
             occurred_at: Date(), sequence: 1)
         let first = try await p.client.recordComprehensionEvent(
@@ -147,6 +149,42 @@ import Testing
         #expect(replayed.sequence == first.sequence)
         let after = try await p.client.getSyncRevision().ok.body.json
         #expect(after.revision == before.revision)
+    }
+
+    /// Daemon parity for the unviewed mark (#2930): the first card_opened
+    /// for the served surface stamps surface_first_opened_at and moves the
+    /// revision once without touching entity_version; a repeat open from
+    /// another event, and an open of an older surface, move nothing.
+    @Test func firstCardOpenedMarksTheItemViewed() async throws {
+        let p = try await paired()
+        let unviewed = try await item(p)
+        #expect(unviewed.item.surface_first_opened_at == nil)
+        func open(_ eventID: String, digest: String) async throws {
+            _ = try await p.client.recordComprehensionEvent(
+                path: .init(event_id: eventID),
+                body: .json(
+                    .init(
+                        item_id: p.itemID, kind: .card_opened, item_decision_surface_digest: digest,
+                        occurred_at: Date(), sequence: 1))
+            ).ok
+        }
+        let before = try await p.client.getSyncRevision().ok.body.json
+
+        try await open("event-stale", digest: "sha256:older-surface")
+        #expect(try await p.client.getSyncRevision().ok.body.json.revision == before.revision)
+        #expect(try await item(p).item.surface_first_opened_at == nil)
+
+        try await open("event-1", digest: unviewed.item.decision_surface.digest)
+        let viewed = try await item(p)
+        let afterFirst = try await p.client.getSyncRevision().ok.body.json
+        #expect(afterFirst.revision == before.revision + 1)
+        #expect(viewed.item.surface_first_opened_at != nil)
+        #expect(viewed.as_of_revision == afterFirst.revision)
+        #expect(viewed.entity_version == unviewed.entity_version)
+
+        try await open("event-2", digest: unviewed.item.decision_surface.digest)
+        #expect(try await p.client.getSyncRevision().ok.body.json.revision == afterFirst.revision)
+        #expect(try await item(p).item.surface_first_opened_at == viewed.item.surface_first_opened_at)
     }
 
     @Test func actionTakenRequiresAMatchingCommand() async throws {

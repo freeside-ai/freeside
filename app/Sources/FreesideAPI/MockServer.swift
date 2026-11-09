@@ -1397,9 +1397,12 @@ public actor MockServer {
         return .ok(surface)
     }
 
-    /// Ingests one comprehension event, idempotent by (device, event_id) and
-    /// without moving the revision. Action-bearing kinds must reference a
-    /// matching accepted command.
+    /// Ingests one comprehension event, idempotent by (device, event_id).
+    /// Action-bearing kinds must reference a matching accepted command. As the
+    /// daemon does, the first `card_opened` bound to the served item's current
+    /// decision-surface digest stamps `surface_first_opened_at` and moves the
+    /// revision once, leaving `entity_version` alone; every other event, a
+    /// repeat open, and an open of an older surface move nothing.
     func recordComprehensionEvent(
         deviceID: String, eventID: String, input: Components.Schemas.ComprehensionEventInput
     ) throws -> ComprehensionEventOutcome {
@@ -1437,6 +1440,15 @@ public actor MockServer {
             command_id: input.command_id ?? "", occurred_at: input.occurred_at,
             sequence: input.sequence, received_at: currentTime)
         comprehensionEventsByKey[key] = event
+        if input.kind == .card_opened, var snapshot = itemsByID[input.item_id],
+            snapshot.item.decision_surface.digest == input.item_decision_surface_digest,
+            snapshot.item.surface_first_opened_at == nil
+        {
+            revision += 1
+            snapshot.item.surface_first_opened_at = currentTime
+            snapshot.as_of_revision = revision
+            itemsByID[input.item_id] = snapshot
+        }
         return .ok(event)
     }
 
@@ -1592,7 +1604,10 @@ public actor MockServer {
         guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .task_proposal,
             let digest = snapshot.item.evidence_snapshot.first?.digest
         else { return nil }
-        if let facts = proposalFactsByItemID[itemID] {
+        if var facts = proposalFactsByItemID[itemID] {
+            // As the daemon does, stamp the served item's revision, which a
+            // first card open raises (#2930); the card requires them equal.
+            facts.as_of_revision = snapshot.as_of_revision
             return facts
         }
         return .init(
@@ -1619,7 +1634,9 @@ public actor MockServer {
     ) throws -> Components.Schemas.EffectProposalFactsSnapshot? {
         guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .effect_proposal
         else { return nil }
-        if let facts = effectProposalFactsByItemID[itemID] {
+        if var facts = effectProposalFactsByItemID[itemID] {
+            // Stamped with the served item's revision, as task facts are.
+            facts.as_of_revision = snapshot.as_of_revision
             return facts
         }
         return AttentionFixtures.effectProposalFacts(for: snapshot)
@@ -2102,6 +2119,8 @@ public actor MockServer {
             replacement.as_of_revision = revision
             replacement.entity_version = 1
             replacement.item.id = replacementID
+            // A new item on a new surface: nobody has opened it (#2930).
+            replacement.item.surface_first_opened_at = nil
             replacement.item.reason = "Approve the revised source-issue-closure proposal"
             replacement.item.evidence_snapshot = [artifact]
             replacement.item.agent_claims = []
@@ -2165,6 +2184,8 @@ public actor MockServer {
             replacement.as_of_revision = revision
             replacement.entity_version = 1
             replacement.item.id = replacementID
+            // A new item on a new surface: nobody has opened it (#2930).
+            replacement.item.surface_first_opened_at = nil
             replacement.item.reason = "Start the revised daemon-enumerated work subject"
             replacement.item.evidence_snapshot = [artifact]
             replacement.item.agent_claims = []

@@ -109,8 +109,21 @@ public enum AttentionFixtures {
     /// does, so the System Health pane and the stopped indicator both have
     /// something to show.
     public static func defaultInbox() -> [Components.Schemas.AttentionItemSnapshot] {
-        phase1Types.map { fixture(type: $0) } + [blockingSystemHealth()] + closedInbox()
+        phase1Types.map { type in
+            var snapshot = fixture(type: type)
+            // A mixed inbox (#2930): these open items' cards were already
+            // opened on some device, so they render without the unviewed mark.
+            if viewedTypes.contains(type) {
+                snapshot.item.surface_first_opened_at = createdInstant.addingTimeInterval(600)
+            }
+            return snapshot
+        } + [blockingSystemHealth()] + closedInbox()
     }
+
+    /// The open default-inbox types served as already viewed.
+    public static let viewedTypes: Set<Components.Schemas.AttentionType> = [
+        .execution_failure, .publish_blocked,
+    ]
 
     /// The durable stop as an open blocking finding, created before the
     /// advisory one, so the System Health pane's posture-first order is the
