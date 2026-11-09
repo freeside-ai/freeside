@@ -35,12 +35,15 @@
             #expect(SettingsSummary.devices(devices, client: .mac) == "Loading…")
         }
 
-        @Test func notificationsNameTheIPhoneOnTheMac() {
-            #expect(SettingsSummary.notifications(nil, client: .mac) == "On iPhone")
-            #expect(SettingsSummary.notifications(.mock, client: .mac) == "On iPhone")
-            #expect(SettingsSummary.notifications(nil, client: .iPhone) == "Not set up")
-            #expect(SettingsSummary.notifications(.mock, client: .iPhone) == "ntfy · topic set")
-            #expect(SettingsSummary.notifications(nil, client: .iPad) == "Not set up")
+        @Test func notificationsReadThisDevicesSwitch() async {
+            let coordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer()), cache: InMemoryCacheStore())
+            #expect(SettingsSummary.notifications(DevicesModel(coordinator: coordinator, signOut: {})) == "Loading…")
+
+            let devices = await DevicesScreenshots.model()
+            #expect(SettingsSummary.notifications(devices) == "Off")
+            await devices.setNotifications(DeviceFixtures.currentDeviceID, enabled: true)
+            #expect(SettingsSummary.notifications(devices) == "On")
         }
 
         @Test func theDaemonRowReadsFreshness() {

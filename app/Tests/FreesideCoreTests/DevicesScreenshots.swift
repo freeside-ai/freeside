@@ -10,8 +10,11 @@
         /// The phone surfaces pass the subscription the iPhone app shows on
         /// this device's card; the Mac app passes none. `openedAt` is when
         /// this device last opened a notification, or nil for never.
+        /// `notificationsOn` turns this device's switch on, which the seed
+        /// leaves off.
         static func model(
-            notificationSubscription: DeviceNtfySubscription? = nil, openedAt: Date? = nil
+            notificationSubscription: DeviceNtfySubscription? = nil, openedAt: Date? = nil,
+            notificationsOn: Bool = false
         ) async -> DevicesModel {
             let coordinator = SyncCoordinator(
                 client: APIClientFactory.mock(server: MockServer()), cache: InMemoryCacheStore())
@@ -23,6 +26,9 @@
                 coordinator: coordinator, notificationSubscription: notificationSubscription,
                 notificationOpens: opens, signOut: {})
             await model.load()
+            if notificationsOn {
+                await model.setNotifications(coordinator.store.device.deviceID, enabled: true)
+            }
             return model
         }
     }

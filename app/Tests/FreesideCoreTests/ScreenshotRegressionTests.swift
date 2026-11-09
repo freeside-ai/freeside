@@ -966,13 +966,18 @@
             // Settings (#2580), as canvas band 1 of the 4 Nov 2026 handoff
             // draws it: the Mac window at 760 with each pane selected, and
             // the iPhone's list and pushed panes at 390, by day and by dusk.
-            // Devices shows this device, another active one, and a revoked
-            // one never seen (#981); the phone's Notifications pane also
-            // shows how to set its notifications up (#1924), here on a
-            // server that is not ntfy's own, after a notification was opened.
+            // Devices shows this device with notifications off, another
+            // active one with them on, and a revoked one never seen (#981).
+            // The Mac's Notifications pane shows this device off; the
+            // phone's has it on, so it shows how to set notifications up
+            // (#1924), here on a server that is not ntfy's own, after a
+            // notification was opened.
             let devicesModel = await DevicesScreenshots.model()
             let phoneDevicesModel = await DevicesScreenshots.model(
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
+            let phoneNotificationsModel = await DevicesScreenshots.model(
+                notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600),
+                notificationsOn: true)
             let routing = await RoutingPolicyScreenshots.model(.policy)
             let usage = await AccountUsageScreenshots.model(.usage)
             let settingsDefaults = try #require(
@@ -1059,13 +1064,17 @@
                                 client: .iPhone, rendersInteractiveControls: false))))
                 for (surface, page) in [
                     ("general-phone", NavigationModel.SettingsPage.general), ("devices-phone", .devices),
-                    ("notifications-phone", .notifications), ("daemon-phone", .daemon),
+                    ("daemon-phone", .daemon),
                 ] {
                     surfaces.append(
                         Surface(
                             name: surface + suffix, width: 390, colorScheme: scheme,
                             view: phonePane(page, sync: phoneSync)))
                 }
+                surfaces.append(
+                    Surface(
+                        name: "notifications-phone" + suffix, width: 390, colorScheme: scheme,
+                        view: phonePane(.notifications, sync: settingsSync(phoneNotificationsModel))))
                 // Inside the staleness threshold, so the gate reads current.
                 let healthSync = settingsSync(devicesModel, age: 30)
                 let phoneHealthSync = settingsSync(phoneDevicesModel, age: 30)

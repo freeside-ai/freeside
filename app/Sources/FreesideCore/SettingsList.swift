@@ -63,7 +63,7 @@ struct SettingsList: View {
         case .agents: SettingsSummary.agents(sync.routing)
         case .usage: SettingsSummary.usage(sync.usage)
         case .devices: SettingsSummary.devices(sync.devices, client: client)
-        case .notifications: SettingsSummary.notifications(sync.devices.notificationSubscription, client: client)
+        case .notifications: SettingsSummary.notifications(sync.devices)
         case .daemon: SettingsSummary.daemon(sync.freshness)
         case .systemHealth: SettingsSummary.systemHealth(sync.findings)
         }

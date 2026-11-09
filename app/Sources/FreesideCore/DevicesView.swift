@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The Devices pane of Settings: every device paired with this daemon as
 /// grouped rows, this device first with a faint chip, revoked ones grouped
-/// apart, and revocation behind a confirmation. The window and the iPhone's
+/// apart, each active device's notifications switch, and revocation behind a
+/// confirmation. The window and the iPhone's
 /// pushed page host it (`SettingsPaneView`) and own the model's loading.
 struct DevicesView: View {
     @Environment(\.locale) private var locale
@@ -17,6 +18,7 @@ struct DevicesView: View {
     /// confirmation for revoking this device says they will not be retried.
     let unresolvedActionCount: Int
     var client: SettingsClient = .current
+    var rendersInteractiveControls = true
 
     var body: some View {
         content
@@ -41,6 +43,10 @@ struct DevicesView: View {
         VStack(alignment: .leading, spacing: SettingsPaneInsets.sectionSpacing(client)) {
             SettingsPaneHead(title: "Devices", line: "Paired with \(host ?? "this daemon").")
             if let failure = model.revokeFailure {
+                Notice(tone: .wax, keyword: "Failed", sentence: failure)
+                    .accessibilityElement(children: .combine)
+            }
+            if let failure = model.notificationsFailure {
                 Notice(tone: .wax, keyword: "Failed", sentence: failure)
                     .accessibilityElement(children: .combine)
             }
@@ -79,9 +85,28 @@ struct DevicesView: View {
         }
     }
 
-    /// An active device: when it paired and was last seen, and its control,
-    /// the chip that marks this device, and Revoke… behind the confirmation.
+    /// An active device: when it paired and was last seen, the chip that
+    /// marks this device, and Revoke… behind the confirmation, with its
+    /// notifications switch on a labelled line below, where a phone-width
+    /// row has room for it.
     private func activeRow(_ row: DevicesModel.Row) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            activeHead(row)
+            HStack(spacing: 16) {
+                Text("Notifications")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+                DeviceNotificationsSwitch(
+                    model: model, row: row, rendersInteractiveControls: rendersInteractiveControls)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func activeHead(_ row: DevicesModel.Row) -> some View {
         SettingsRow(label: row.name, line: activeLine(row)) {
             HStack(spacing: 10) {
                 if row.isCurrent {
@@ -140,5 +165,35 @@ struct DevicesView: View {
         let actions =
             unresolvedActionCount == 1 ? "1 unresolved action" : "\(unresolvedActionCount) unresolved actions"
         return "\(base) \(actions) made under this pairing won't be retried."
+    }
+}
+
+/// One device's notifications switch, on the Devices and Notifications
+/// panes. While a change is in flight it shows the requested value, the
+/// opposite of the stored one, and takes no other change.
+struct DeviceNotificationsSwitch: View {
+    let model: DevicesModel
+    let row: DevicesModel.Row
+    var rendersInteractiveControls = true
+
+    private var isOn: Bool {
+        model.notificationsChangingID == row.id ? !row.notificationsEnabled : row.notificationsEnabled
+    }
+
+    var body: some View {
+        if rendersInteractiveControls {
+            Toggle(
+                "Notifications",
+                isOn: Binding(
+                    get: { isOn },
+                    set: { enabled in Task { await model.setNotifications(row.id, enabled: enabled) } })
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .disabled(model.notificationsChangingID != nil)
+            .accessibilityLabel("Notifications for \(row.name)")
+        } else {
+            SettingsToggleStandIn(isOn: isOn)
+        }
     }
 }
