@@ -95,6 +95,10 @@ func TestInstallFresh(t *testing.T) {
 	if home := h.files["/Library/Freeside/macverify/homes/fvslot1"].info; home.UID != 461 || home.Mode != 0o700 {
 		t.Errorf("home = %+v", home)
 	}
+	if cache := h.files["/Library/Freeside/macverify/swift-cache"].info; cache.Kind != FileDir || cache.UID != 501 ||
+		cache.Mode != 0o755 {
+		t.Errorf("Swift cache = %+v, want the operator's directory at 0755", cache)
+	}
 	if !h.pf || !h.services["ai.freeside.macverify.pf"] {
 		t.Errorf("pf enabled %v, job loaded %v", h.pf, h.services)
 	}
@@ -265,6 +269,15 @@ func TestInstallRefusesWithoutChanging(t *testing.T) {
 			}
 			h.files["/Library/Freeside/macverify/template/home/.ssh"] = fakeFile{info: FileInfo{Kind: FileDir, Mode: 0o700}}
 		},
+		"Swift cache owned by another user": func(h *fakeHost) {
+			seedRoot(h)
+			h.users["other"] = Account{Name: "other", UID: 502, PrimaryGID: 20, Home: "/Users/other"}
+			h.files["/Library/Freeside/macverify/swift-cache"] = fakeFile{info: FileInfo{Kind: FileDir, UID: 502, Mode: 0o755}}
+		},
+		"Swift cache is a file": func(h *fakeHost) {
+			seedRoot(h)
+			h.files["/Library/Freeside/macverify/swift-cache"] = fakeFile{info: FileInfo{Kind: FileRegular, UID: 501, Mode: 0o644}}
+		},
 		"slot is an administrator": func(h *fakeHost) {
 			h.groups["admin"] = Group{Name: "admin", GID: 80, Members: []string{"benja", "fvslot1"}}
 			h.groups["fvslots"] = Group{Name: "fvslots", GID: 460}
@@ -290,6 +303,72 @@ func TestInstallRefusesWithoutChanging(t *testing.T) {
 	}
 }
 
+// seedRoot gives the fake host an empty, root-owned executor root.
+func seedRoot(h *fakeHost) {
+	for _, dir := range []string{"/Library/Freeside", "/Library/Freeside/macverify"} {
+		h.files[dir] = fakeFile{info: FileInfo{Kind: FileDir, Mode: 0o755}}
+	}
+}
+
+// Install repairs the Swift cache to the operator's at 0755: a root-owned one
+// is what an install interrupted between creating it and handing it over
+// leaves, and slot-run refuses to seed from a group-writable one.
+func TestInstallRepairsSwiftCache(t *testing.T) {
+	t.Parallel()
+	for name, info := range map[string]FileInfo{
+		"root-owned":            {Kind: FileDir, Mode: 0o700},
+		"group-writable":        {Kind: FileDir, UID: 501, Mode: 0o775},
+		"closed to other users": {Kind: FileDir, UID: 501, Mode: 0o700},
+	} {
+		h, spec := installed(t)
+		cache := spec.path("swift-cache")
+		h.files[cache] = fakeFile{info: info}
+		if _, err := Install(spec, h); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !slices.Equal(h.changes, []string{"chown/chmod " + cache}) {
+			t.Errorf("%s: changes = %q, want the Swift cache repaired only", name, h.changes)
+		}
+		if got := h.files[cache].info; got.UID != 501 || got.Mode != 0o755 {
+			t.Errorf("%s: Swift cache = %+v", name, got)
+		}
+	}
+}
+
+// Install leaves what populate wrote in the operator's cache alone.
+func TestInstallKeepsSwiftCacheEntries(t *testing.T) {
+	t.Parallel()
+	h, spec := installed(t)
+	entry := spec.path("swift-cache", strings.Repeat("a", 64))
+	h.files[entry] = fakeFile{info: FileInfo{Kind: FileDir, UID: 501, Mode: 0o755}}
+	if _, err := Install(spec, h); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.changes) != 0 {
+		t.Fatalf("rerun changed %q", h.changes)
+	}
+	if _, ok := h.files[entry]; !ok {
+		t.Error("install deleted a Swift cache entry")
+	}
+}
+
+func TestInspectSwiftCacheNeedsAKnownOperator(t *testing.T) {
+	t.Parallel()
+	h, spec := installed(t)
+	delete(h.users, spec.Operator)
+	findings, err := Inspect(spec, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(findings, func(f Finding) bool { return f.Piece == "Swift cache "+spec.path("swift-cache") })
+	if i < 0 {
+		t.Fatal("no Swift cache finding")
+	}
+	if f := findings[i]; f.State != StateMisconfigured {
+		t.Errorf("Swift cache with no operator account: %s %s, want misconfigured", f.State, f.Detail)
+	}
+}
+
 func TestInspectNamesEachMissingPiece(t *testing.T) {
 	t.Parallel()
 	findings, err := Inspect(testSpec(), newFakeHost())
@@ -308,7 +387,7 @@ func TestInspectNamesEachMissingPiece(t *testing.T) {
 		"directory /Library/Freeside/macverify", "directory /Library/Freeside/macverify/bin",
 		"directory /Library/Freeside/macverify/jobs", "directory /Library/Freeside/macverify/homes",
 		"directory /Library/Freeside/macverify/template", "directory /Library/Freeside/macverify/template/home",
-		"directory /Library/Freeside/macverify/pf",
+		"directory /Library/Freeside/macverify/pf", "Swift cache /Library/Freeside/macverify/swift-cache",
 		"helper /Library/Freeside/macverify/bin/slot-run", "slot list /Library/Freeside/macverify/bin/slots.conf",
 		"group fvslots", "account fvslot1", "account fvslot2", "home fvslot1", "home fvslot2",
 		"sudoers file /etc/sudoers.d/freeside-slot-run", "anchor file /Library/Freeside/macverify/pf/anchor.conf",
@@ -348,6 +427,10 @@ func TestRemoveDeletesTheInstall(t *testing.T) {
 	t.Parallel()
 	h, spec := installed(t)
 	h.live[461] = true
+	// Populated entries go with the cache: populate can fill them again.
+	entry := spec.path("swift-cache", strings.Repeat("a", 64))
+	h.files[entry] = fakeFile{info: FileInfo{Kind: FileDir, UID: 501, Mode: 0o755}}
+	h.files[entry+"/record.json"] = fakeFile{info: FileInfo{Kind: FileRegular, UID: 501, Mode: 0o644}}
 	report, err := Remove(spec, h)
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +452,12 @@ func TestRemoveDeletesTheInstall(t *testing.T) {
 	// The sudoers rule goes before any slot is touched.
 	if !strings.HasPrefix(h.changes[0], "remove "+spec.sudoersPath()) {
 		t.Errorf("first change %q, want the sudoers file removed", h.changes[0])
+	}
+	// The Swift cache goes before the helper, so a cache that will not delete
+	// leaves a root a rerun removal still recognizes.
+	if cache, helper := slices.Index(h.changes, "remove "+spec.path("swift-cache")),
+		slices.Index(h.changes, "remove "+spec.path("bin")); cache < 0 || cache > helper {
+		t.Errorf("changes %q, want the Swift cache removed before bin", h.changes)
 	}
 }
 

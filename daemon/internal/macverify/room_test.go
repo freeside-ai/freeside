@@ -38,8 +38,10 @@ type fakeLauncher struct {
 	// prepare's result.
 	prepareHook func(ctx context.Context) error
 	prepareErr  error
-	reapErr     error
-	cleanupErr  error
+	// reportSwiftCache overrides the Swift cache key prepare reports.
+	reportSwiftCache *string
+	reapErr          error
+	cleanupErr       error
 	// command plays the command; reaped closes on the first reap.
 	command  func(req runRequest, out io.Writer, reaped <-chan struct{}) runOutcome
 	reaped   chan struct{}
@@ -49,8 +51,8 @@ type fakeLauncher struct {
 }
 
 type prepareCall struct {
-	slot, jobID, workdir string
-	profile              []byte
+	slot, jobID, workdir, swiftCache string
+	profile                          []byte
 }
 
 func newFakeLauncher() *fakeLauncher {
@@ -75,10 +77,12 @@ func (f *fakeLauncher) slotUID() int {
 	return os.Getuid()
 }
 
-func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte) (preparedJob, error) {
+func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, swiftCache string) (preparedJob, error) {
 	f.record("prepare " + slot)
 	f.mu.Lock()
-	f.prepares = append(f.prepares, prepareCall{slot: slot, jobID: jobID, workdir: workdir, profile: slices.Clone(profile)})
+	f.prepares = append(f.prepares, prepareCall{
+		slot: slot, jobID: jobID, workdir: workdir, swiftCache: swiftCache, profile: slices.Clone(profile),
+	})
 	f.mu.Unlock()
 	if f.prepareHook != nil {
 		if err := f.prepareHook(ctx); err != nil {
@@ -102,12 +106,17 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 	if err := os.Chmod(jobDir, mode); err != nil {
 		return preparedJob{}, err
 	}
+	reported := swiftCache
+	if f.reportSwiftCache != nil {
+		reported = *f.reportSwiftCache
+	}
 	return preparedJob{
-		Root:  f.root,
-		UID:   f.slotUID(),
-		Home:  filepath.Join(f.root, "homes", slot),
-		Tmp:   "/private/var/folders/ab/" + slot + "/T",
-		Cache: "/private/var/folders/ab/" + slot + "/C",
+		Root:       f.root,
+		UID:        f.slotUID(),
+		Home:       filepath.Join(f.root, "homes", slot),
+		Tmp:        "/private/var/folders/ab/" + slot + "/T",
+		Cache:      "/private/var/folders/ab/" + slot + "/C",
+		SwiftCache: reported,
 	}, nil
 }
 
@@ -153,6 +162,8 @@ func (f *fakeLauncher) snapshot() ([]string, []prepareCall, []runRequest) {
 
 const testProfile = "(version 1)(allow default)(deny network*)"
 
+var testToolchain = Toolchain{XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"}
+
 func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 	t.Helper()
 	if len(slots) == 0 {
@@ -164,7 +175,7 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 		SandboxProfile:    []byte(testProfile),
 		PacketFilterRules: []byte("block drop quick user slot1"),
 		Slots:             slots,
-		ToolchainIdentity: "xcode-26.0@sha256:abc",
+		Toolchain:         testToolchain,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -178,6 +189,7 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 	room.launcher = fake
 	room.helperOwner = uint32(os.Getuid()) //nolint:gosec // G115: a uid fits
 	room.hostSupported = true
+	room.hostToolchain = func(context.Context) (Toolchain, error) { return testToolchain, nil }
 	room.prepareTimeout = 200 * time.Millisecond
 	room.teardownTimeout = 200 * time.Millisecond
 	room.cancelGrace = 200 * time.Millisecond
@@ -395,7 +407,7 @@ func TestRoomsOverOneBackendShareSlots(t *testing.T) {
 	t.Parallel()
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
-		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, ToolchainIdentity: "xcode",
+		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -641,7 +653,7 @@ func TestNewRoomRefusesToRunOffMacOS(t *testing.T) {
 	}
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
-		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, ToolchainIdentity: "xcode",
+		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -659,7 +671,7 @@ func TestNewRoomRejectsInvalidOptions(t *testing.T) {
 	t.Parallel()
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
-		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, ToolchainIdentity: "xcode",
+		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
 	})
 	if err != nil {
 		t.Fatal(err)

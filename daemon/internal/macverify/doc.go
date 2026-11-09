@@ -37,7 +37,11 @@
 // digest, and only on darwin. A fresh backend declares nothing, and a record
 // for another class, another configuration, or a non-passing outcome is
 // refused rather than published. The Room refuses a job unless the
-// installed helper is the embedded one and root-owned, re-checks the job
-// directory prepare reports, and releases a slot only once its uid owns no
-// process.
+// installed helper is the embedded one and root-owned, the host's Xcode and
+// Swift match the configuration's pin, and a workspace holding a
+// Package.resolved has a complete offline Swift dependency cache entry for its
+// key (swiftcache.go); it re-checks the job directory and cache entry prepare
+// reports, and releases a slot only once its uid owns no process. Populate
+// (swiftcache_populate.go) admits only https dependency URLs and writes an
+// entry's record last, after proving the entry resolves offline.
 package macverify

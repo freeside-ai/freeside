@@ -35,12 +35,16 @@ func liveRoom(t *testing.T) (*Room, Config) {
 	if root == "" || slots == "" {
 		t.Skip(liveSkip)
 	}
+	toolchain, err := HostToolchain(t.Context())
+	if err != nil {
+		t.Fatalf("HostToolchain: %v", err)
+	}
 	cfg := Config{
 		ExecutorRoot:      root,
 		SandboxProfile:    DefaultSandboxProfile(),
 		PacketFilterRules: []byte("# the live suite does not load packet-filter rules (#2879)\n"),
 		Slots:             strings.Split(slots, ","),
-		ToolchainIdentity: "live-test",
+		Toolchain:         toolchain,
 	}
 	b, err := New(cfg)
 	if err != nil {
@@ -167,6 +171,8 @@ func TestLiveHelperRefusesMalformedArguments(t *testing.T) {
 		{"cleanup", slot, "not-a-job-id"},
 		{"cleanup", slot, strings.Repeat("A", 32)},
 		{"prepare", slot, strings.Repeat("a", 32), "relative/workspace"},
+		{"prepare", slot, strings.Repeat("a", 32), "/private/tmp", "not-a-swift-cache-key"},
+		{"prepare", slot, strings.Repeat("a", 32), "/private/tmp", strings.Repeat("A", 64)},
 		{"bogus", slot},
 	} {
 		cmd := exec.Command(sudoPath, append([]string{"-n", helperPath(cfg.ExecutorRoot)}, args...)...) //nolint:gosec // G204: fixed sudo and helper path; the refusal under test is the point
