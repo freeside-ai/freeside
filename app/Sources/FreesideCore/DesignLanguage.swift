@@ -229,6 +229,7 @@ extension Color {
 /// card is set on. The Mac sets on its native sizes; the iPhone keeps the
 /// survey card's scale a point smaller. Both are values, so a test pins
 /// either platform's steps from one host; `current` is the one a build draws.
+/// The mono value step departs from the handoff (#2912); its doc says why.
 struct FreesideLadder: Equatable, Sendable {
     /// The smallest text the platform draws at the default size.
     let floor: CGFloat
@@ -244,7 +245,9 @@ struct FreesideLadder: Equatable, Sendable {
     let label: CGFloat
     /// The card body: sans.
     let body: CGFloat
-    /// A fact's value: mono.
+    /// A fact's value: mono. Set under the handoff's 12 and 13.5 (#2912) so
+    /// a Plex Mono letter is about as wide as an average Plex Sans letter at
+    /// the label size, and a value no longer reads larger than its label.
     let monoValue: CGFloat
     /// The dim summary trailing a disclosure, and a row's context: mono.
     let trailingSummary: CGFloat
@@ -272,14 +275,14 @@ struct FreesideLadder: Equatable, Sendable {
     let foldLead: CGFloat
 
     static let mac = FreesideLadder(
-        floor: 11, ask: 20, sheetAsk: 20, statement: 15, rowTitle: 14, label: 13, body: 13, monoValue: 12,
+        floor: 11, ask: 20, sheetAsk: 20, statement: 15, rowTitle: 14, label: 13, body: 13, monoValue: 11.5,
         trailingSummary: 12, keyword: 11, chip: 11, link: 13, actionLabel: 13, infoMark: 15,
         actionHeight: 28, accessibilityActionHeight: 40,
         actionPadding: CGSize(width: 14, height: 4),
         sectionGap: 18, moduleGap: 9, controlGap: 8, foldLead: 14)
 
     static let phone = FreesideLadder(
-        floor: 11.5, ask: 24, sheetAsk: 22, statement: 16, rowTitle: 15.5, label: 15, body: 13.5, monoValue: 13.5,
+        floor: 11.5, ask: 24, sheetAsk: 22, statement: 16, rowTitle: 15.5, label: 15, body: 13.5, monoValue: 12.5,
         trailingSummary: 12.5, keyword: 11.5, chip: 11.5, link: 14, actionLabel: 15, infoMark: 16,
         actionHeight: 44, accessibilityActionHeight: 56,
         actionPadding: CGSize(width: 16, height: 7),
@@ -454,10 +457,21 @@ enum FreesideFont {
     /// `screenshotMetricBase` applies the iOS ratio inside the screenshot
     /// bridge, where `relativeTo:` scales nothing, so the accessibility
     /// digests still render enlarged.
+    ///
+    /// SwiftUI rounds a `relativeTo:` size to whole points, so a half step
+    /// such as the Mac's 11.5 mono value would draw at 12 (#2912). macOS
+    /// never scales `relativeTo:` with the environment's Dynamic Type size,
+    /// so the Mac takes a fixed size and loses nothing. iOS keeps the scaled
+    /// size, and with it the rounding, because a fixed size there would stop
+    /// following Dynamic Type.
     private static func fixed(
         _ name: String, _ size: CGFloat, relativeTo style: Font.TextStyle
     ) -> Font {
-        .custom(name, size: screenshotMetricBase(size, relativeTo: style), relativeTo: style)
+        #if os(macOS)
+            .custom(name, fixedSize: screenshotMetricBase(size, relativeTo: style))
+        #else
+            .custom(name, size: size, relativeTo: style)
+        #endif
     }
 
     // The ladder's faces. Mono states a fact; sans speaks to the operator;
