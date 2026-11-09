@@ -286,6 +286,11 @@ func readOCIBlob(archivePath string, descriptor ociDescriptor, limit int64) ([]b
 	return body, nil
 }
 
+// extractOCILayers writes each manifest layer's archive blob to a private
+// file and returns one path per layer, in manifest order. Every blob is
+// checked against its descriptor's size and digest as it is written. A blob
+// the manifest lists more than once is written once and shared by each of
+// its positions, which must carry the identical descriptor.
 func extractOCILayers(
 	archivePath string,
 	layers []ociDescriptor,
@@ -301,8 +306,16 @@ func extractOCILayers(
 			return nil, fmt.Errorf("OCI layer descriptor %d is invalid", index)
 		}
 		entry := "blobs/sha256/" + contentaddr.Hex(descriptor.Digest)
-		if _, duplicate := byEntry[entry]; duplicate {
-			return nil, fmt.Errorf("OCI image repeats layer %s", descriptor.Digest)
+		if first, repeated := byEntry[entry]; repeated {
+			// An image may place one blob at several positions: two build
+			// steps that change nothing each add the same empty layer. The
+			// later position reads the file the first one extracted and
+			// verified, so it needs the identical descriptor.
+			if layers[first] != descriptor {
+				return nil, fmt.Errorf("OCI image repeats layer %s with another descriptor", descriptor.Digest)
+			}
+			paths[index] = paths[first]
+			continue
 		}
 		byEntry[entry] = index
 		paths[index] = filepath.Join(destination, strconv.Itoa(index)+".layer")
@@ -350,9 +363,9 @@ func extractOCILayers(
 		}
 		found[index] = true
 	}
-	for index, ok := range found {
-		if !ok {
-			return nil, fmt.Errorf("OCI archive lacks layer %s", layers[index].Digest)
+	for _, descriptor := range layers {
+		if !found[byEntry["blobs/sha256/"+contentaddr.Hex(descriptor.Digest)]] {
+			return nil, fmt.Errorf("OCI archive lacks layer %s", descriptor.Digest)
 		}
 	}
 	return paths, nil
