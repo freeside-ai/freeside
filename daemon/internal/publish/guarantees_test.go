@@ -44,15 +44,15 @@ func TestOnlyGitNetImportsExec(t *testing.T) {
 	}
 }
 
-// TestOnlyApprovedStreamingReaders keeps publish's structural JSON walker,
+// TestOnlyApprovedStreamingReaders keeps publish's JSON token readers,
 // unmarshal seams, and whole-reader paths attributable. Typed single-value
 // decoders are centralized and ratcheted by internal/strictjson.
 func TestOnlyApprovedStreamingReaders(t *testing.T) {
 	t.Parallel()
 	approved := map[string]map[string]int{
-		"encoding/json.NewDecoder": {
-			"janitor_snapshot.go.rejectDuplicateJSONKeys": 1,
-		},
+		// Empty, but kept: only call names listed here are policed, so the key
+		// makes any new json.NewDecoder call in publish fail this test.
+		"encoding/json.NewDecoder": {},
 		"encoding/json.Unmarshal": {
 			"janitor_snapshot.go.jsonArray":        1,
 			"janitor_snapshot.go.jsonObject":       1,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // authorityFixture is the canonical snapshot the golden pins: one registration
@@ -306,12 +307,25 @@ func TestDecodeInstallationAuthorityDocumentRejectsDuplicateKeys(t *testing.T) {
 		"duplicated owner field": strings.Replace(validAuthorityJSON,
 			`{"login": "example-org", "id": 4242}`,
 			`{"login": "example-org", "login": "other-org", "id": 4242}`, 1),
+		// The key-presence check reads last-wins maps, so it would refuse this
+		// as an omitted key if it ran before the duplicate refusal.
+		"later pending copy omits keys": strings.Replace(validAuthorityJSON,
+			`"pending": null`,
+			`"pending": {"active_epoch": 2, "durable_intent_revision": 5,
+      "expected_account": "other-org", "expected_account_id": 4343, "installation_id": 0,
+      "current_repository_ids": [], "expected_repository_ids": [90],
+      "required_repository_mode": "selected", "expires_at": "2026-07-25T12:00:00Z"},
+      "pending": {"active_epoch": 2}`, 1),
 	}
 
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := publish.DecodeInstallationAuthorityDocument([]byte(payload)); err == nil {
-				t.Fatal("a document naming a key twice was accepted")
+			_, err := publish.DecodeInstallationAuthorityDocument([]byte(payload))
+			if !errors.Is(err, strictjson.ErrDuplicateName) {
+				t.Fatalf("error = %v, want strictjson.ErrDuplicateName", err)
+			}
+			if !errors.Is(err, publish.ErrInstallationAuthoritySnapshot) {
+				t.Fatalf("error = %v, want ErrInstallationAuthoritySnapshot", err)
 			}
 		})
 	}

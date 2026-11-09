@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -373,16 +372,12 @@ func DecodeInstallationAuthorityDocument(payload []byte) (InstallationAuthorityD
 			ErrInstallationAuthoritySnapshot,
 		)
 	}
-	if err := rejectDuplicateJSONKeys(payload); err != nil {
-		return InstallationAuthorityDocument{}, fmt.Errorf(
-			"installation authority: decode: %w: %w", err, ErrInstallationAuthoritySnapshot,
-		)
-	}
-	if err := requireAuthoredKeys(payload); err != nil {
-		return InstallationAuthorityDocument{}, fmt.Errorf(
-			"installation authority: decode: %w: %w", err, ErrInstallationAuthoritySnapshot,
-		)
-	}
+	// strictjson refuses a repeated key at any depth. encoding/json would
+	// keep the last copy and merge nested objects, so a hand-edited file that
+	// repeats a stanza would decode to something no stanza authored, and the
+	// surviving copy is routinely the narrower one, which on this path means
+	// deletions. Decode runs before requireAuthoredKeys because that check
+	// reads last-wins maps: it must only ever see duplicate-free input.
 	var document InstallationAuthorityDocument
 	if err := strictjson.Decode(payload, &document, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
 		if errors.Is(err, strictjson.ErrInvalidUTF8) {
@@ -397,6 +392,11 @@ func DecodeInstallationAuthorityDocument(payload []byte) (InstallationAuthorityD
 				ErrInstallationAuthoritySnapshot,
 			)
 		}
+		return InstallationAuthorityDocument{}, fmt.Errorf(
+			"installation authority: decode: %w: %w", err, ErrInstallationAuthoritySnapshot,
+		)
+	}
+	if err := requireAuthoredKeys(payload); err != nil {
 		return InstallationAuthorityDocument{}, fmt.Errorf(
 			"installation authority: decode: %w: %w", err, ErrInstallationAuthoritySnapshot,
 		)
@@ -481,61 +481,6 @@ func newSnapshotError(format string, args ...any) error {
 		fmt.Sprintf(format, args...),
 		ErrInstallationAuthoritySnapshot,
 	)
-}
-
-// rejectDuplicateJSONKeys refuses an object that names the same key twice.
-// RFC 8259 leaves the meaning implementation-defined, and encoding/json resolves
-// it silently: the last scalar or array wins, and nested objects are merged. A
-// hand-edited file that repeats a key would therefore decode to something no
-// stanza in it authored, and the value that survives is routinely the narrower
-// one, which on this path means deletions. Neither DisallowUnknownFields nor
-// field validation can see it, since the collapse happens first.
-func rejectDuplicateJSONKeys(payload []byte) error {
-	type frame struct {
-		object    bool
-		expectKey bool
-		keys      map[string]struct{}
-	}
-	var stack []*frame
-	valueComplete := func() {
-		if depth := len(stack); depth > 0 && stack[depth-1].object {
-			stack[depth-1].expectKey = true
-		}
-	}
-
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	for {
-		token, err := dec.Token()
-		if err != nil {
-			// Malformed input is the strict decoder's to report, with its own
-			// message; this pass only answers the duplicate-key question.
-			return nil
-		}
-		if depth := len(stack); depth > 0 && stack[depth-1].object && stack[depth-1].expectKey {
-			if key, ok := token.(string); ok {
-				if _, duplicate := stack[depth-1].keys[key]; duplicate {
-					return fmt.Errorf("object names %q twice", key)
-				}
-				stack[depth-1].keys[key] = struct{}{}
-				stack[depth-1].expectKey = false
-				continue
-			}
-		}
-		delim, ok := token.(json.Delim)
-		if !ok {
-			valueComplete()
-			continue
-		}
-		switch delim {
-		case '{':
-			stack = append(stack, &frame{object: true, expectKey: true, keys: map[string]struct{}{}})
-		case '[':
-			stack = append(stack, &frame{})
-		case '}', ']':
-			stack = stack[:len(stack)-1]
-			valueComplete()
-		}
-	}
 }
 
 // requireAuthoredKeys rejects a document that omits any field of the shapes it
