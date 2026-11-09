@@ -17,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const (
@@ -348,6 +349,29 @@ func TestUnusableJournalDeniesTheAuthority(t *testing.T) {
 			t.Fatalf("compound-invalid journal error = %v, want UTF-8 refusal", err)
 		}
 	})
+
+	duplicates := map[string]string{
+		"duplicated version": strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1),
+		// The key-presence check reads last-wins maps, so it would refuse this
+		// as an omitted timestamp if it ran before the duplicate refusal.
+		"later quarantine set omits a timestamp": strings.Replace(valid, `"entries":`,
+			`"quarantined":[{"registration_id":501,"installation_id":701}],"entries":`, 1),
+	}
+	for name, payload := range duplicates {
+		t.Run(name, func(t *testing.T) {
+			dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
+			if err := os.WriteFile(filepath.Join(dir, journalFileName), []byte(payload), 0o600); err != nil {
+				t.Fatalf("write journal: %v", err)
+			}
+			_, err := store.InstallationAuthority(t.Context(), 501)
+			if !errors.Is(err, strictjson.ErrDuplicateName) {
+				t.Fatalf("error = %v, want strictjson.ErrDuplicateName", err)
+			}
+			if !strings.HasPrefix(err.Error(), "installation janitor journal: decode: ") {
+				t.Fatalf("error = %v, want the journal decode prefix", err)
+			}
+		})
+	}
 
 	t.Run("valid journal still serves", func(t *testing.T) {
 		dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))

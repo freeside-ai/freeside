@@ -30,9 +30,6 @@ var structuralTokenWalkers = map[string]map[string]bool{
 	"internal/inference/client.go": {
 		"rejectDuplicateKeys": true,
 	},
-	"internal/publish/janitor_snapshot.go": {
-		"rejectDuplicateJSONKeys": true,
-	},
 	"internal/store/local_backup.go": {
 		"rejectBackupDuplicateJSONKeys": true,
 		"checkBackupJSONValue":          true,

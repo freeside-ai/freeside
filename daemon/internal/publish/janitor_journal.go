@@ -173,12 +173,9 @@ func decodeJanitorJournal(payload []byte) (janitorJournal, error) {
 	if !utf8.Valid(payload) {
 		return janitorJournal{}, errors.New("installation janitor journal: decode: payload is not valid UTF-8")
 	}
-	if err := rejectDuplicateJSONKeys(payload); err != nil {
-		return janitorJournal{}, fmt.Errorf("installation janitor journal: decode: %w", err)
-	}
-	if err := requireJournalKeys(payload); err != nil {
-		return janitorJournal{}, fmt.Errorf("installation janitor journal: decode: %w", err)
-	}
+	// strictjson refuses a repeated key at any depth, so a repeated
+	// quarantine set can't collapse to its last, narrower copy. Decode runs
+	// before requireJournalKeys because that check reads last-wins maps.
 	var journal janitorJournal
 	if err := strictjson.Decode(payload, &journal, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
 		if errors.Is(err, strictjson.ErrInvalidUTF8) {
@@ -187,6 +184,9 @@ func decodeJanitorJournal(payload []byte) (janitorJournal, error) {
 		if errors.Is(err, strictjson.ErrTrailingData) {
 			return janitorJournal{}, errors.New("installation janitor journal: decode: trailing data after the journal")
 		}
+		return janitorJournal{}, fmt.Errorf("installation janitor journal: decode: %w", err)
+	}
+	if err := requireJournalKeys(payload); err != nil {
 		return janitorJournal{}, fmt.Errorf("installation janitor journal: decode: %w", err)
 	}
 	if err := journal.validate(); err != nil {
