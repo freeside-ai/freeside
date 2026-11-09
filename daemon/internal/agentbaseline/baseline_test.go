@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 func must[T any](value T, err error) T {
@@ -631,6 +632,61 @@ func TestHarnessBuildsMatchTheImagePins(t *testing.T) {
 		if want := tc.prefix + string(match[1]); tc.build != want {
 			t.Fatalf("harness build %q, image pins %q", tc.build, want)
 		}
+	}
+}
+
+// claudeBuiltinPluginsMeasuredOn names the CLI build whose registered
+// built-in plugins claudeBuiltinPlugins lists (#2922).
+const claudeBuiltinPluginsMeasuredOn = "claude-code 2.1.319"
+
+// claudeBuiltinPlugins is every built-in plugin the pinned CLI's bundle
+// registers, not only those one init event showed: which ones load depends
+// on the entrypoint, account, and machine, so no single run proves a shorter
+// list complete.
+var claudeBuiltinPlugins = []string{
+	"cc-plugin-sec-default", "cc-plugin-agents-md", "cc-plugin-telemetry",
+	"cc-plugin-privacy", "cc-plugin-plugin-authoring", "cc-plugin-mods-guide",
+	"cc-plugin-tips", "cc-plugin-mermaid", "cc-plugin-responsive-mode",
+	"cc-plugin-diff", "cc-plugin-you-should-know", "cc-plugin-easel",
+	"cc-plugin-claude-platform", "cc-plugin-claude-test",
+}
+
+// The agent image's managed settings disable every built-in plugin the
+// pinned CLI registers, because a loaded plugin makes the init event's
+// plugins list non-empty and admission then refuses context_severance
+// (#2922). Managed settings are the only tier the policy-only
+// cc-plugin-sec-default reads, so the image file, not the launch's
+// --settings flag, carries the disable. A CLI pin bump fails here until
+// someone re-measures the new bundle's registered built-ins.
+func TestClaudeImageDisablesEveryBuiltinPlugin(t *testing.T) {
+	if claudeBuiltinPluginsMeasuredOn != agentbaseline.ClaudeCodeHarnessBuild {
+		t.Fatalf("the Claude CLI pin moved to %q, but the built-in plugin list was measured on %q. "+
+			"List the cc-plugin-* ids the new bundle's built-in plugin registration names "+
+			"(the strings of the npm linux-arm64 binary, near builtinPluginsInitialized), "+
+			"set them all to false under enabledPlugins in images/agent-claude/managed-settings.json, "+
+			"and update claudeBuiltinPlugins and this constant together",
+			agentbaseline.ClaudeCodeHarnessBuild, claudeBuiltinPluginsMeasuredOn)
+	}
+	path := filepath.Join("..", "..", "..", "images", "agent-claude", "managed-settings.json")
+	body, err := os.ReadFile(path) //nolint:gosec // G304: fixed repository path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := strictjson.Decode(body, &got, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	plugins := map[string]any{}
+	for _, name := range claudeBuiltinPlugins {
+		plugins[name+"@builtin"] = false
+	}
+	want := map[string]any{
+		"autoUpdates":    false,
+		"env":            map[string]any{"DISABLE_AUTOUPDATER": "1"},
+		"enabledPlugins": plugins,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %v, want %v", path, got, want)
 	}
 }
 

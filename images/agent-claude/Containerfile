@@ -108,15 +108,22 @@ COPY --from=build /usr/local /usr/local
 # survives a run that has provider egress; the image cannot set DISABLE_AUTOUPDATER
 # itself, because ENV is forbidden above. See images/agent-claude/README.md for
 # the environment the daemon must supply.
-RUN set -eux; \
-	mkdir -p /etc/claude-code; \
-	printf '%s\n' \
-		'{' \
-		'  "autoUpdates": false,' \
-		'  "env": {' \
-		'    "DISABLE_AUTOUPDATER": "1"' \
-		'  }' \
-		'}' > /etc/claude-code/managed-settings.json
+#
+# The same file disables every built-in plugin the pinned CLI registers, so a
+# writer launch's init event reports `plugins: []`, the conformance judge's
+# proof of context severance. Managed settings are the only tier the
+# policy-only cc-plugin-sec-default built-in reads (--settings cannot reach
+# it), and this file's presence is what seats that plugin in the first place.
+# The file lives beside this Containerfile so the daemon's offline guard
+# (daemon/internal/agentbaseline) checks the bytes the image carries.
+#
+# The CLI runs under the launch's privilege drop, so the agent user must be
+# able to read the file; one it cannot read is skipped, while the plugin it
+# seats still loads. The directory is made first because COPY --chmod would
+# give a parent it creates the file's 0644, which no other user can traverse
+# (measured on Apple container 1.1.0).
+RUN install -d -m 0755 /etc/claude-code
+COPY --chmod=0644 managed-settings.json /etc/claude-code/managed-settings.json
 
 # The manifest records what the pinned inputs actually resolved to. Running the
 # CLI here also proves it starts in this image; the state it writes under HOME
