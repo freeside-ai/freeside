@@ -14,6 +14,7 @@ import (
 // opens no task either, though no gate verdict mixes one with a clause.
 var upkeepClassPrecedence = []domain.ImageUpkeepRefusalClass{
 	domain.ImageUpkeepRefusalGoModuleDelta,
+	domain.ImageUpkeepRefusalSwiftPackageDelta,
 	domain.ImageUpkeepRefusalUnsupportedNPMInput,
 	domain.ImageUpkeepRefusalHostFault,
 	domain.ImageUpkeepRefusalRepair,
@@ -44,6 +45,8 @@ func upkeepClauseClass(clause RebuildRefusal) domain.ImageUpkeepRefusalClass {
 	switch clause {
 	case RebuildRefusalGoDependencyChanged:
 		return domain.ImageUpkeepRefusalGoModuleDelta
+	case RebuildRefusalSwiftDependencyChanged:
+		return domain.ImageUpkeepRefusalSwiftPackageDelta
 	case RebuildRefusalUnsupportedInput:
 		return domain.ImageUpkeepRefusalUnsupportedNPMInput
 	case RebuildRefusalUnpinnedSource, RebuildRefusalLockfileInconsistent, RebuildRefusalProofFailed:

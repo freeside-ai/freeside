@@ -3004,12 +3004,14 @@ path, so an agent's edit to them draws no import finding. A match in
 repository-change finding; a match in any other class holds publication as a
 non-waivable control-plane finding.
 
-**Each project image bakes one toolchain.** `-go-module-dir <dir>`, on both
-`freesided onboard` and `freeside-project-image`, declares a
-repository-relative Go module directory, which the review shows and the
-approval digest binds. Without it, a root `package.json` selects npm, and
-otherwise a root `go.mod` selects Go at the root. A root `package.json` beside
-a declared module is refused.
+**Each project image bakes one toolchain.** `-go-module-dir <dir>` and
+`-swift-package-dir <dir>`, on both `freesided onboard` and
+`freeside-project-image`, declare a repository-relative Go module or Swift
+package directory, which the review shows and the approval digest binds.
+Declaring both is refused. Without either, a root `package.json` selects npm,
+otherwise a root `go.mod` selects Go at the root, and otherwise a root
+`Package.swift` selects Swift at the root. A root `package.json` beside a
+declared module or package is refused.
 
 A Go image bakes Go 1.27.3 and golangci-lint 2.15.0 from pinned archives,
 and a module cache warmed from the commit's `go.mod` and `go.sum` at
@@ -3055,9 +3057,58 @@ rebuild gate report, the Go inputs no image serves:
 
 A `go.mod` or `go.sum` that is missing or not a regular file is refused too.
 
+A Swift image bakes the Swift 6.3.1 `debian12-aarch64` release archive,
+checksum-verified at build, and the libraries and headers it needs from
+Debian trixie: `binutils-gold`, `gcc`, `libc6-dev`, `libcurl4-openssl-dev`,
+`libedit-dev`, `libicu-dev`, `libncurses-dev`, `libsqlite3-dev`,
+`libstdc++-14-dev`, `libxml2-dev`, `pkg-config`, `tzdata`, `uuid-dev`, and
+`zlib1g-dev`. apt reads only snapshot.debian.org at `20261108T000000Z`, so
+the package versions are fixed; a base rebuilt with a newer `libc6` than the
+snapshot holds fails the install until the snapshot moves forward. The
+archive, launcher, and seeds are rehashed by the host-side provenance check,
+and the snapshot and package set are labeled.
+
+`/usr/local/bin/swift` extracts the archive once per room into
+`/tmp/freeside-project-swift`, about 40 seconds, and sets
+`GIT_CONFIG_GLOBAL` to `/opt/freeside/swiftpm-mirrors/gitconfig`. At build,
+a discovery stage the image does not ship resolves the package's
+`Package.resolved` through the build proxy and lists every repository that
+resolve cloned, submodules included. A resolve runs manifest code, so the
+shipped stage reads only that URL list, through a read-only bind mount, and
+copies nothing from the discovery stage. The discovery stage proves a fresh
+resolve succeeds from mirrors of those URLs alone; the shipped stage then
+checks the list is a regular file and each URL is `https` and printable,
+clones it again into
+`/opt/freeside/swiftpm-mirrors`, and writes an `insteadOf` rewrite for each,
+running no Swift. SwiftPM's own clones then read the mirrors with no
+network. In a room, the preparation helper checks the manifests against the
+baked seeds, refuses a local path dependency, and runs
+`swift package resolve --only-use-versions-from-resolved-file`; a recipe's
+`swift build` and `swift test` then build from those checkouts. No build
+products are baked.
+
+The build refuses, and admission and the rebuild gate report, the Swift
+inputs no image serves:
+
+- A `.swiftpm/configuration/mirrors.json` or legacy `.swiftpm/config` in
+  the package, which would route fetches past the baked mirrors.
+- A `Package.resolved` that is not version 2 or 3, or holds a pin that is
+  not remote source control at an `https` URL and an exact revision: a
+  registry or local pin, a branch pin, or another transport.
+- A `Package.swift` that declares a local path dependency. The build and
+  the room's preparation evaluate the manifest to find out, as any resolve
+  does; admission and the gate see it only as a changed `Package.swift`.
+- A version-specific manifest such as `Package@swift-6.swift`, which
+  SwiftPM would read instead of the baked `Package.swift`. The build and the
+  room's preparation refuse it; admission and the gate do not list the
+  package directory yet, so a commit that adds one fails in the room.
+
+A `Package.swift` or `Package.resolved` that is missing or not a regular file
+is refused too.
+
 **A daemon upgrade that changes these pins rebuilds every image.** The pins
-are part of the preparation digest, which one value covers for npm and Go
-images alike, so a new daemon treats every image an earlier one built as not
+are part of the preparation digest, which one value covers for every
+toolchain's images alike, so a new daemon treats every image an earlier one built as not
 current, even at its own build commit. Attempts hold under
 `image_upkeep_pending` until the image-upkeep start pass rebuilds the image
 at the tip, with the same proofs and one-hour bound as a publication
@@ -3069,7 +3120,11 @@ re-approval is needed: onboarding approval binds the recipe digest and the
 image request, not the preparation digest. A module whose `toolchain`
 directive names the old Go stops being served.
 The masked-cache probe runs `go mod download` from the module directory and
-passes only on Go's offline refusal.
+passes only on Go's offline refusal. For a Swift image it masks the mirrors,
+runs the same resolve from the package directory with
+`--disable-dependency-cache`, and passes only on git's refusal to reach the
+host; without that flag SwiftPM 6.3.1 reports a shared-cache error that
+hides the refusal.
 
 **A recipe must fit 4 CPUs and 2048 MiB with no network,** whatever its
 toolchain. Every proof container (the offline preflight, the preparation and
@@ -3109,6 +3164,16 @@ passing:
 Each step started from a cold build cache on a host at load average 5 to
 8. The decision and the rejected options are in
 `devlog/2026-10-22-1241-proof-memory-bound.md`.
+
+A Swift image for Freeside's `app` package, with the recipe
+`swift build --package-path app --only-use-versions-from-resolved-file
+--target FreesideModel` then `swift test` over `FreesideAPITests` and
+`FreesideModelTests`, measured at `c68d534c8` in one room with no network:
+preparation (the archive's extraction and the offline resolve) took 41 s,
+the build 55 s, and the 639 tests 31 s. Used memory (`MemTotal` minus
+`MemAvailable`) peaked at 1328 MiB. The whole image build, every proof included,
+took 19 minutes, and the builder process peaked at 1.36 GB resident. Measures and the reasoning are in
+`devlog/2026-11-08-1653-swift-project-images.md`.
 
 If the installation was terminally quarantined, start a fresh native
 installation with `-recover-installation <quarantined-id> -installation-id 0`
@@ -3984,6 +4049,7 @@ A refused gate names one clause:
 | `lockfile_inconsistent` | Has a lockfile that is unreadable, repeats a key or holds two that differ only by case, is not v2 or v3, disagrees with `package.json`, lacks an entry for a dependency, or nests a peer dependency under its dependent; or its base's manifests cannot be read to compare with. |
 | `unsupported_npm_input` | Holds `npm-shrinkwrap.json` or `.npmrc`, or changes `package.json`'s `overrides`, `workspaces`, or `packageManager`. |
 | `go_dependency_changed` | Holds a Go input no image serves (`vendor`, `go.work`, a filesystem `replace`), or a `go.mod` or `go.sum` the gate cannot read: absent, not a regular file, a `go` or `toolchain` directive the baked Go refuses, a version that is not canonical, conflicting `replace` directives, or a line not of Go's shape. The detail names the input or the first line refused. Records from before Go module changes were bounded also hold it for any `go.mod` or `go.sum` change. |
+| `swift_dependency_changed` | For a Swift image, changes `Package.swift` or `Package.resolved`, or holds a Swift input no image serves (`.swiftpm/configuration/mirrors.json`, `.swiftpm/config`, an unsupported pin), or a manifest the gate cannot read. No rebuild serves a Swift dependency change yet; the operator rebuilds the image. |
 | `no_registry_set` | Runs under a policy with no registry set, or a malformed one. |
 | `rebuild_not_configured` | Passed the gate, but the daemon has no `-base-build-ref`. |
 | `build_or_proof_failed` | Passed the gate, but the image's dependency install failed on the candidate's own manifests, a build-time proof ran and failed, or the build did not finish within one hour. The evidence leads with the installer's error lines for a failed install: npm's, or Go's for a `go.sum` checksum mismatch, a module version `proxy.golang.org` does not serve, or a `go.mod` Go refuses to read. |
@@ -4072,7 +4138,7 @@ Each pass reads the tip, fetches it into a scratch checkout under
   even when the tip is the image's build commit.
 - **Refused.** The gate refuses. The job evaluates every clause, classes
   the refusal `policy`, `repair`, `go_module_delta`,
-  `unsupported_npm_input`, or `host_fault`, and records one
+  `swift_package_delta`, `unsupported_npm_input`, or `host_fault`, and records one
   content-addressed refusal. A scheduled pass takes a refusal already
   recorded for the image at the tip as standing and does not fetch or
   build again; the start pass measures again, since a new daemon can

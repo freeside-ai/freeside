@@ -1128,7 +1128,10 @@ const (
 	maxLintArchiveBytes = 64 << 20
 	maxToolArchiveBytes = 64 << 20
 	maxDebArchiveBytes  = 4 << 20
-	maxBusyboxBytes     = 8 << 20
+	// The Swift archive is just under 1 GiB; it is held to the OCI layer
+	// limit that already bounds the layer carrying it.
+	maxSwiftArchiveBytes = maxOCILayerBytes
+	maxBusyboxBytes      = 8 << 20
 )
 
 // toolchainEvidence is what a project image of one toolchain carries beyond
@@ -1220,6 +1223,27 @@ func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
 			seeds: map[string]string{
 				seedGoModPath: want.GoModSHA256,
 				seedGoSumPath: want.GoSumSHA256,
+			},
+		}
+	case domain.ProjectToolchainSwift:
+		return toolchainEvidence{
+			name: "Swift toolchain",
+			labels: map[string]string{
+				"ai.freeside.project.toolchain.swift.version":        want.SwiftVersion,
+				"ai.freeside.project.toolchain.swift.archive-sha256": want.SwiftToolchainArchiveSHA256,
+				"ai.freeside.project.toolchain.swift.apt-snapshot":   want.SwiftAptSnapshot,
+				"ai.freeside.project.toolchain.swift.apt-packages":   want.SwiftAptPackages,
+			},
+			archives: []pinnedArchive{{
+				name: "Swift toolchain", path: swiftToolchainArchivePath,
+				sha256: want.SwiftToolchainArchiveSHA256, maxBytes: maxSwiftArchiveBytes,
+			}},
+			launcher:  swiftToolchainLauncher,
+			launchers: []string{swiftLauncherPath},
+			prepare:   swiftPrepareScript(want.Layout.SwiftPackageDir),
+			seeds: map[string]string{
+				seedPackageSwiftPath:    want.PackageSwiftSHA256,
+				seedPackageResolvedPath: want.PackageResolvedSHA256,
 			},
 		}
 	}

@@ -144,6 +144,8 @@ func rebuildRefusalMeaning(clause projectimage.RebuildRefusal) string {
 		return "The dependency change is within policy, but the rebuilt image failed its dependency install or its proofs, or did not finish building in time."
 	case projectimage.RebuildRefusalGoDependencyChanged:
 		return "The candidate holds a Go input no project image supports, or a go.mod or go.sum no build can read."
+	case projectimage.RebuildRefusalSwiftDependencyChanged:
+		return "The candidate changes its Package.swift or Package.resolved, which no project-image rebuild bounds, or holds a Swift input no project image supports."
 	}
 	return "The project image could not be rebuilt for this candidate."
 }

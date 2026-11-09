@@ -20,13 +20,13 @@ import (
 // This digest is recorded in every project image and compared with the running
 // binary's before an image is reused at another commit. It changes whenever a
 // preparation helper, a launcher, a Containerfile template, or a toolchain pin
-// of either toolchain does, and from then on every image built by an earlier
+// of any toolchain does, and from then on every image built by an earlier
 // binary is usable only at its build commit until the operator rebuilds it.
 // Update the pin when that is the intended cost of the edit, and say so in the
 // change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 	t.Parallel()
-	const want = "sha256:57639435ef148c79630300ab053a2513af84fc96e3fd98b7879c46dba23272b4"
+	const want = "sha256:21414f18c37d55560cb3f9c9deff3d17468fa1be6d1b69b614706e2581957d67"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
 		t.Fatalf("PreparationDigest() = %q, want a content address", got)
@@ -59,6 +59,15 @@ func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 		"procps snapshot":            procpsSnapshot,
 		"procps archive hash":        procpsArchiveSHA256,
 		"libproc2 archive hash":      libproc2ArchiveSHA256,
+		"Swift preparation helper":   swiftPrepareScript(""),
+		"Swift launcher":             swiftToolchainLauncher,
+		"Swift mirror discovery":     swiftMirrorDiscovery,
+		"Swift mirror bake":          swiftMirrorBake,
+		"Swift Containerfile":        renderSwiftContainerfile(Request{}, ""),
+		"Swift version":              swiftToolchainVersion,
+		"Swift archive hash":         swiftToolchainArchiveSHA256,
+		"Swift apt snapshot":         swiftAptSnapshot,
+		"Swift apt packages":         strings.Join(swiftAptPackages, " "),
 	} {
 		if !slices.Contains(sources, source) {
 			t.Errorf("PreparationDigest does not address the %s", name)

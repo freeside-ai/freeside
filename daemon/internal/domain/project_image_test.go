@@ -161,6 +161,9 @@ func TestProjectImageEnvironmentValidation(t *testing.T) {
 		"empty preparation digest":  func(e *domain.ProjectImageEnvironment) { e.PreparationDigest = "" },
 		"bare preparation digest":   func(e *domain.ProjectImageEnvironment) { e.PreparationDigest = domain.Digest(strings.Repeat("56", 32)) },
 		"malformed preparation hex": func(e *domain.ProjectImageEnvironment) { e.PreparationDigest = "sha256:abc" },
+		"npm record with a Swift hash": func(e *domain.ProjectImageEnvironment) {
+			e.PackageSwiftSHA256 = strings.Repeat("bc", 32)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			legacy := projectImageFixture(t)
@@ -276,6 +279,14 @@ func TestProjectImageAdmissibleAt(t *testing.T) {
 			domain.Digest("sha256:" + strings.Repeat("ab", 32)), "preparation",
 		},
 		{"unknown preparation", func(*domain.ProjectImageBaseInputs) {}, "", "preparation"},
+		{"inputs observed under the Swift layout", func(b *domain.ProjectImageBaseInputs) {
+			*b = domain.ProjectImageBaseInputs{
+				CommitSHA:             otherBase,
+				PackageSwiftSHA256:    strings.Repeat("bc", 32),
+				PackageResolvedSHA256: strings.Repeat("de", 32),
+				RecipeDigest:          image.RecipeDigest,
+			}
+		}, current, "package.json"},
 	}
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {

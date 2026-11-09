@@ -1912,6 +1912,25 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	projectImageSwiftEnvironment, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "freeside-ai/freeside", RepositoryID: 1023456789,
+		CommitSHA: projectImage.CommitSHA, RecipeDigest: projectImage.RecipeDigest,
+		PreparationCommand: projectImage.PreparationCommand,
+		BaseImageRef:       projectImage.BaseImageRef,
+		ImageRef: domain.ImageRef("127.0.0.1:5100/freeside-project-freeside-ai-freeside@sha256:" +
+			strings.Repeat("ef", 32)),
+		Environment: &domain.ProjectImageEnvironment{
+			Toolchain:             domain.ProjectToolchainSwift,
+			SwiftPackageDir:       "app",
+			PackageSwiftSHA256:    strings.Repeat("bc", 32),
+			PackageResolvedSHA256: strings.Repeat("de", 32),
+			PreparationDigest:     domain.Digest("sha256:" + strings.Repeat("56", 32)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	admittedImagePointer := domain.AdmittedImagePointer{
 		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
 		Harness: domain.HarnessClientClaudeCode, ImageID: projectImage.ID,
@@ -2684,6 +2703,7 @@ func TestGolden(t *testing.T) {
 		{"project_image", projectImage},
 		{"project_image_environment", projectImageWithEnvironment},
 		{"project_image_go_environment", projectImageGoEnvironment},
+		{"project_image_swift_environment", projectImageSwiftEnvironment},
 		{"admitted_image_pointer", admittedImagePointer},
 		{"image_upkeep_refusal", upkeepRefusal},
 		{"image_upkeep_refusal_host_fault", hostFaultRefusal},

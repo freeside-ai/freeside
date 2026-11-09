@@ -112,6 +112,10 @@ func hostDelta(
 		}
 		delta, findings = evaluateGoModuleDelta(base, tip, nil)
 		return delta, len(findings) == 0, nil
+	case domain.ProjectToolchainSwift:
+		// No rule measures a Swift dependency change yet, so no adoption
+		// answers one: the operator rebuilds the image.
+		return LockfileDelta{}, false, nil
 	}
 	return LockfileDelta{}, false, fmt.Errorf("project image toolchain %q: %w", layout.Toolchain, domain.ErrProjectImageInvalid)
 }

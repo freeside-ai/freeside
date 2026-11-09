@@ -171,6 +171,50 @@ func TestRebuiltGoImageServesOnlyItsModuleManifests(t *testing.T) {
 	}
 }
 
+func swiftRebuildEnvironment(packageDir string) *domain.ProjectImageEnvironment {
+	return &domain.ProjectImageEnvironment{
+		Toolchain: domain.ProjectToolchainSwift, SwiftPackageDir: packageDir,
+		PackageSwiftSHA256: strings.Repeat("4", 64), PackageResolvedSHA256: strings.Repeat("5", 64),
+		PreparationDigest: projectimage.PreparationDigest(),
+	}
+}
+
+// A Swift image is held to its package's manifests and package directory,
+// the way a Go image is held to its module's.
+func TestRebuiltSwiftImageServesOnlyItsPackageManifests(t *testing.T) {
+	t.Parallel()
+	admitted := rebuildTestImage(t, func(input *domain.ProjectImageInput) {
+		input.Environment = swiftRebuildEnvironment("app")
+		input.Environment.PackageResolvedSHA256 = strings.Repeat("3", 64)
+	})
+	head := domain.ProjectImageBaseInputs{
+		CommitSHA:          strings.Repeat("b", 40),
+		PackageSwiftSHA256: strings.Repeat("4", 64), PackageResolvedSHA256: strings.Repeat("5", 64),
+	}
+	rebuilt := func(edit func(*domain.ProjectImageEnvironment)) domain.ProjectImage {
+		return rebuildTestImage(t, func(input *domain.ProjectImageInput) {
+			input.CommitSHA = head.CommitSHA
+			input.ImageRef = domain.ImageRef("ghcr.io/owner/project@sha256:" + strings.Repeat("f", 64))
+			input.Environment = swiftRebuildEnvironment("app")
+			if edit != nil {
+				edit(input.Environment)
+			}
+		})
+	}
+	if err := rebuiltImageServes(rebuilt(nil), admitted, head, projectimage.PreparationDigest()); err != nil {
+		t.Fatalf("a Swift image baking the head's package manifests was refused: %v", err)
+	}
+	for name, edit := range map[string]func(*domain.ProjectImageEnvironment){
+		"another Package.resolved":  func(e *domain.ProjectImageEnvironment) { e.PackageResolvedSHA256 = strings.Repeat("7", 64) },
+		"another package directory": func(e *domain.ProjectImageEnvironment) { e.SwiftPackageDir = "tools" },
+	} {
+		if err := rebuiltImageServes(rebuilt(edit), admitted, head, projectimage.PreparationDigest()); !errors.Is(
+			err, domain.ErrProjectImageIncompatible) {
+			t.Errorf("%s: err = %v, want ErrProjectImageIncompatible", name, err)
+		}
+	}
+}
+
 // Every clause a person can be shown has its own sentence; none falls through
 // to the fallback an invalid clause gets.
 func TestRebuildRefusalMeaningCoversEveryClause(t *testing.T) {

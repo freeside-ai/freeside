@@ -73,6 +73,7 @@ type onboardConfig struct {
 	DNS                   []string
 	BuildProxy            string
 	GoModuleDir           string
+	SwiftPackageDir       string
 }
 
 type stringList []string
@@ -375,6 +376,7 @@ func runOnboardCommand(
 				Registry: cfg.Registry, LocalRegistryPort: cfg.LocalRegistryPort,
 				ImageName: cfg.ImageName, RefTag: cfg.RefTag,
 				DNS: cfg.DNS, BuildProxy: cfg.BuildProxy, GoModuleDir: cfg.GoModuleDir,
+				SwiftPackageDir: cfg.SwiftPackageDir,
 			},
 		})
 		if runErr != nil {
@@ -543,6 +545,9 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&cfg.GoModuleDir, "go-module-dir", "",
 		"repository-relative Go module directory to build a Go image for "+
 			"(default: Go at the root when it holds go.mod and no package.json, npm otherwise)")
+	flags.StringVar(&cfg.SwiftPackageDir, "swift-package-dir", "",
+		"repository-relative Swift package directory to build a Swift image for; exclusive with -go-module-dir "+
+			"(default: Swift at the root when it holds Package.swift and no package.json or go.mod)")
 	// The repository may come first or after the flags. A repository name
 	// never starts with "-", so a leading flag means the flags-first form.
 	flagArgs := args

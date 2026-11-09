@@ -189,8 +189,12 @@ func evaluateGate(
 		// oversized blob). Whether the manifests changed cannot be told, and
 		// no image could be built from them, so this is the gate's refusal.
 		clause := RebuildRefusalLockfileInconsistent
-		if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
+		switch image.InputLayout().Toolchain {
+		case domain.ProjectToolchainNPM:
+		case domain.ProjectToolchainGo:
 			clause = RebuildRefusalGoDependencyChanged
+		case domain.ProjectToolchainSwift:
+			clause = RebuildRefusalSwiftDependencyChanged
 		}
 		findings.add(refuseLockfile(clause,
 			"a dependency manifest or the recipe at the candidate is not a readable regular file"))
@@ -234,6 +238,28 @@ func evaluateGate(
 	}
 	read := func(commitSHA, name string) ([]byte, error) {
 		return readManifest(ctx, reader, commitSHA, name)
+	}
+	if image.InputLayout().Toolchain == domain.ProjectToolchainSwift {
+		// No rebuild bounds a Swift dependency change: any change to either
+		// manifest refuses by name, and so does an unsupported input a head
+		// adds while keeping both, which would otherwise fail only inside the
+		// room, at the preparation helper.
+		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
+			return RebuildDecision{Head: head}, nil
+		}
+		if len(head.UnsupportedInputs) != 0 {
+			findings.add(refuseLockfile(RebuildRefusalSwiftDependencyChanged,
+				"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")))
+		}
+		if len(changed) != 0 {
+			findings.add(refuseLockfile(RebuildRefusalSwiftDependencyChanged,
+				"the candidate changes %s", strings.Join(changed, ", ")))
+		}
+		if err := recipeClause(); err != nil {
+			return RebuildDecision{}, err
+		}
+		// With nothing changed, the toolchain-only delta, as for Go and npm.
+		return decide(head, LockfileDelta{}), nil
 	}
 	if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
 		// A Go head that keeps its manifests but adds a vendor directory or a
@@ -456,6 +482,7 @@ func imageRequest(
 	}
 	if image.Environment != nil {
 		request.GoModuleDir = image.Environment.GoModuleDir
+		request.SwiftPackageDir = image.Environment.SwiftPackageDir
 	}
 	registry := destination[:separator]
 	if port, local := strings.CutPrefix(registry, "127.0.0.1:"); local {

@@ -211,7 +211,8 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 	if preferredReview.ApprovalDigest == singleCommitReview.ApprovalDigest {
 		t.Fatal("plan-preferred review reused the single-commit approval digest")
 	}
-	// The declared Go module directory is part of what the owner approves.
+	// The declared Go module and Swift package directories are part of what
+	// the owner approves.
 	req.Image.GoModuleDir = "daemon"
 	goReview, err := onboard.Run(ctx, req)
 	if err != nil {
@@ -221,6 +222,17 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 		t.Fatalf("Go module review = %+v, want the module shown and its own approval digest", goReview.ImageRequest)
 	}
 	req.Image.GoModuleDir = ""
+	req.Image.SwiftPackageDir = "app"
+	swiftReview, err := onboard.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("Swift package review pass: %v", err)
+	}
+	if swiftReview.ImageRequest.SwiftPackageDir != "app" ||
+		swiftReview.ApprovalDigest == preferredReview.ApprovalDigest ||
+		swiftReview.ApprovalDigest == goReview.ApprovalDigest {
+		t.Fatalf("Swift package review = %+v, want the package shown and its own approval digest", swiftReview.ImageRequest)
+	}
+	req.Image.SwiftPackageDir = ""
 	req.ApprovalDigest = preferredReview.ApprovalDigest
 	complete, err := onboard.Run(ctx, req)
 	if err != nil {

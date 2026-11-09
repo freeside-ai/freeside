@@ -32,6 +32,9 @@ const (
 	// GoModuleCachePath is the baked module cache the proofs exercise for a
 	// Go image. Only modules are baked; the build cache stays per room.
 	GoModuleCachePath = "/opt/freeside/go-mod-cache"
+	// SwiftMirrorsPath holds a Swift image's bare dependency mirrors and the
+	// git configuration that redirects fetches to them; the proofs mask it.
+	SwiftMirrorsPath = "/opt/freeside/swiftpm-mirrors"
 
 	maxRecipeBytes   = 1 << 20
 	maxManifestBytes = 32 << 20
@@ -86,7 +89,12 @@ type Request struct {
 	// the repository root. Empty with a root package.json selects npm, empty
 	// with a root go.mod and no package.json selects Go at the root, and any
 	// other value selects Go at that directory.
-	GoModuleDir       string
+	GoModuleDir string
+	// SwiftPackageDir declares the Swift package the recipe verifies,
+	// relative to the repository root, and selects Swift there. Empty with
+	// no root package.json or go.mod and a root Package.swift selects Swift
+	// at the root. It excludes GoModuleDir: an image carries one toolchain.
+	SwiftPackageDir   string
 	Recipe            []byte
 	BaseImageRef      domain.ImageRef
 	BaseBuildRef      string
@@ -173,33 +181,39 @@ type buildSpec struct {
 }
 
 type provenanceSpec struct {
-	ImageDigest                string
-	BaseBuildRef               string
-	BaseDigest                 string
-	Repository                 string
-	RepositoryID               int64
-	CommitSHA                  string
-	RecipeDigest               domain.Digest
-	Layout                     domain.ProjectImageInputLayout
-	NodeVersion                string
-	NodeToolchainArchiveSHA256 string
-	PackageJSONSHA256          string
-	PackageLockSHA256          string
-	GoVersion                  string
-	GoToolchainArchiveSHA256   string
-	GolangciLintVersion        string
-	GolangciLintArchiveSHA256  string
-	VacuumVersion              string
-	VacuumArchiveSHA256        string
-	ShellcheckVersion          string
-	ShellcheckArchiveSHA256    string
-	PythonVersion              string
-	PythonArchiveSHA256        string
-	ProcpsVersion              string
-	ProcpsArchiveSHA256        string
-	Libproc2ArchiveSHA256      string
-	GoModSHA256                string
-	GoSumSHA256                string
+	ImageDigest                 string
+	BaseBuildRef                string
+	BaseDigest                  string
+	Repository                  string
+	RepositoryID                int64
+	CommitSHA                   string
+	RecipeDigest                domain.Digest
+	Layout                      domain.ProjectImageInputLayout
+	NodeVersion                 string
+	NodeToolchainArchiveSHA256  string
+	PackageJSONSHA256           string
+	PackageLockSHA256           string
+	GoVersion                   string
+	GoToolchainArchiveSHA256    string
+	GolangciLintVersion         string
+	GolangciLintArchiveSHA256   string
+	VacuumVersion               string
+	VacuumArchiveSHA256         string
+	ShellcheckVersion           string
+	ShellcheckArchiveSHA256     string
+	PythonVersion               string
+	PythonArchiveSHA256         string
+	ProcpsVersion               string
+	ProcpsArchiveSHA256         string
+	Libproc2ArchiveSHA256       string
+	GoModSHA256                 string
+	GoSumSHA256                 string
+	SwiftVersion                string
+	SwiftToolchainArchiveSHA256 string
+	SwiftAptSnapshot            string
+	SwiftAptPackages            string
+	PackageSwiftSHA256          string
+	PackageResolvedSHA256       string
 }
 
 type runSpec struct {
@@ -544,6 +558,13 @@ func expectedProvenance(spec provenanceSpec, environment domain.ProjectImageEnvi
 		spec.Libproc2ArchiveSHA256 = libproc2ArchiveSHA256
 		spec.GoModSHA256 = environment.GoModSHA256
 		spec.GoSumSHA256 = environment.GoSumSHA256
+	case domain.ProjectToolchainSwift:
+		spec.SwiftVersion = swiftToolchainVersion
+		spec.SwiftToolchainArchiveSHA256 = swiftToolchainArchiveSHA256
+		spec.SwiftAptSnapshot = swiftAptSnapshot
+		spec.SwiftAptPackages = strings.Join(swiftAptPackages, " ")
+		spec.PackageSwiftSHA256 = environment.PackageSwiftSHA256
+		spec.PackageResolvedSHA256 = environment.PackageResolvedSHA256
 	}
 	return spec
 }
@@ -557,6 +578,8 @@ func maskedProbe(layout domain.ProjectImageInputLayout) ([]string, string, *rege
 		return []string{"npm", "ci", "--ignore-scripts"}, NPMCachePath, networkFailure
 	case domain.ProjectToolchainGo:
 		return goMaskedProbe(layout.GoModuleDir), GoModuleCachePath, goOfflineRefusal
+	case domain.ProjectToolchainSwift:
+		return swiftMaskedProbe(layout.SwiftPackageDir), SwiftMirrorsPath, swiftOfflineRefusal
 	}
 	return nil, "", nil
 }
@@ -701,6 +724,15 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	if !domain.ValidProjectGoModuleDir(request.GoModuleDir) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("go module directory %q: %w", request.GoModuleDir, ErrInvalidRequest)
 	}
+	if !domain.ValidProjectSwiftPackageDir(request.SwiftPackageDir) {
+		return Request{}, verify.Recipe{}, "", fmt.Errorf("swift package directory %q: %w",
+			request.SwiftPackageDir, ErrInvalidRequest)
+	}
+	if request.GoModuleDir != "" && request.SwiftPackageDir != "" {
+		return Request{}, verify.Recipe{}, "", fmt.Errorf(
+			"go module directory and swift package directory are exclusive; an image carries one toolchain: %w",
+			ErrInvalidRequest)
+	}
 	if !commitPattern.MatchString(request.CommitSHA) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("commit %q is not a full lowercase SHA-1: %w",
 			request.CommitSHA, ErrInvalidRequest)
@@ -790,7 +822,7 @@ func createBuildContext(
 	request Request,
 	recipeDigest domain.Digest,
 ) (domain.ProjectImageInputLayout, error) {
-	layout, err := selectInputLayout(sourceDir, request.GoModuleDir)
+	layout, err := selectInputLayout(sourceDir, request.GoModuleDir, request.SwiftPackageDir)
 	if err != nil {
 		return domain.ProjectImageInputLayout{}, err
 	}
@@ -802,6 +834,9 @@ func createBuildContext(
 	case domain.ProjectToolchainGo:
 		preparation, launcher = goPrepareScript(layout.GoModuleDir), goToolchainLauncher
 		err = stageGoInputs(contextDir, sourceDir, layout.GoModuleDir)
+	case domain.ProjectToolchainSwift:
+		preparation, launcher = swiftPrepareScript(layout.SwiftPackageDir), swiftToolchainLauncher
+		err = stageSwiftInputs(contextDir, sourceDir, layout.SwiftPackageDir)
 	}
 	if err != nil {
 		return domain.ProjectImageInputLayout{}, err
@@ -829,29 +864,48 @@ func createBuildContext(
 }
 
 // selectInputLayout decides which toolchain builds the source. A declared
-// module directory selects Go there and refuses a root package.json, since
-// one image carries one toolchain. Without one, a root package.json keeps
-// the npm path every existing image takes, and only a tree with no
-// package.json but a root go.mod selects Go at the root; a tree with
-// neither takes the npm path and fails on its missing manifest as before.
-func selectInputLayout(sourceDir, goModuleDir string) (domain.ProjectImageInputLayout, error) {
+// module or package directory selects Go or Swift there and refuses a root
+// package.json, and declaring both is refused, since one image carries one
+// toolchain. Without one, a root package.json keeps the npm path every
+// existing image takes; with no package.json, a root go.mod selects Go at the
+// root, and otherwise a root Package.swift selects Swift at the root; a tree
+// with none of them takes the npm path and fails on its missing manifest as
+// before.
+func selectInputLayout(sourceDir, goModuleDir, swiftPackageDir string) (domain.ProjectImageInputLayout, error) {
 	if !domain.ValidProjectGoModuleDir(goModuleDir) {
 		return domain.ProjectImageInputLayout{}, fmt.Errorf("go module directory %q: %w", goModuleDir, ErrInvalidRequest)
+	}
+	if !domain.ValidProjectSwiftPackageDir(swiftPackageDir) {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("swift package directory %q: %w",
+			swiftPackageDir, ErrInvalidRequest)
+	}
+	if goModuleDir != "" && swiftPackageDir != "" {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf(
+			"source declares both Go module %s and Swift package %s; an image carries one toolchain: %w",
+			goModuleDir, swiftPackageDir, ErrInvalidRequest)
 	}
 	packageJSON, err := entryExists(filepath.Join(sourceDir, "package.json"))
 	if err != nil {
 		return domain.ProjectImageInputLayout{}, fmt.Errorf("inspect package.json: %w", err)
 	}
 	goLayout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainGo, GoModuleDir: goModuleDir}
-	if goModuleDir != "" {
-		if packageJSON {
-			return domain.ProjectImageInputLayout{}, fmt.Errorf(
-				"source contains a root package.json beside the declared Go module %s; an image carries one toolchain",
-				goModuleDir)
-		}
-		return goLayout, nil
+	swiftLayout := domain.ProjectImageInputLayout{
+		Toolchain: domain.ProjectToolchainSwift, SwiftPackageDir: swiftPackageDir,
 	}
-	if packageJSON {
+	switch {
+	case goModuleDir != "" && packageJSON:
+		return domain.ProjectImageInputLayout{}, fmt.Errorf(
+			"source contains a root package.json beside the declared Go module %s; an image carries one toolchain",
+			goModuleDir)
+	case goModuleDir != "":
+		return goLayout, nil
+	case swiftPackageDir != "" && packageJSON:
+		return domain.ProjectImageInputLayout{}, fmt.Errorf(
+			"source contains a root package.json beside the declared Swift package %s; an image carries one toolchain",
+			swiftPackageDir)
+	case swiftPackageDir != "":
+		return swiftLayout, nil
+	case packageJSON:
 		return domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}, nil
 	}
 	goMod, err := entryExists(filepath.Join(sourceDir, "go.mod"))
@@ -860,6 +914,13 @@ func selectInputLayout(sourceDir, goModuleDir string) (domain.ProjectImageInputL
 	}
 	if goMod {
 		return goLayout, nil
+	}
+	packageSwift, err := entryExists(filepath.Join(sourceDir, "Package.swift"))
+	if err != nil {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("inspect Package.swift: %w", err)
+	}
+	if packageSwift {
+		return swiftLayout, nil
 	}
 	return domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}, nil
 }
@@ -919,6 +980,13 @@ func bakedEnvironment(
 		manifests = map[string]*string{
 			"go.mod": &environment.GoModSHA256,
 			"go.sum": &environment.GoSumSHA256,
+		}
+	case domain.ProjectToolchainSwift:
+		environment.Toolchain = domain.ProjectToolchainSwift
+		environment.SwiftPackageDir = layout.SwiftPackageDir
+		manifests = map[string]*string{
+			"Package.swift":    &environment.PackageSwiftSHA256,
+			"Package.resolved": &environment.PackageResolvedSHA256,
 		}
 	}
 	for name, hash := range manifests {

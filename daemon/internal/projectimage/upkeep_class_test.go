@@ -22,6 +22,8 @@ func TestClassifyUpkeepFindingsPrefersAClassThatOpensNoTask(t *testing.T) {
 		{[]RebuildRefusal{RebuildRefusalUnpinnedSource, RebuildRefusalUnsupportedInput}, domain.ImageUpkeepRefusalUnsupportedNPMInput},
 		{[]RebuildRefusal{RebuildRefusalUnsupportedInput, RebuildRefusalGoDependencyChanged}, domain.ImageUpkeepRefusalGoModuleDelta},
 		{[]RebuildRefusal{RebuildRefusalRecipeChanged, RebuildRefusalGoDependencyChanged}, domain.ImageUpkeepRefusalGoModuleDelta},
+		{[]RebuildRefusal{RebuildRefusalSwiftDependencyChanged}, domain.ImageUpkeepRefusalSwiftPackageDelta},
+		{[]RebuildRefusal{RebuildRefusalRecipeChanged, RebuildRefusalSwiftDependencyChanged}, domain.ImageUpkeepRefusalSwiftPackageDelta},
 		{[]RebuildRefusal{RebuildRefusalNotConfigured}, domain.ImageUpkeepRefusalHostFault},
 	} {
 		findings := make([]domain.ImageUpkeepClauseFinding, 0, len(test.clauses))

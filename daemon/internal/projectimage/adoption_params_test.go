@@ -140,3 +140,25 @@ func TestDeriveUpkeepAdoptionNamesTheGoModuleProxy(t *testing.T) {
 		t.Fatalf("decision with the proxy adopted = %+v, %v; want it admitted", decision, err)
 	}
 }
+
+// A Swift dependency change has no measured delta, so no adoption answers
+// it: the derivation reports it unadoptable instead of an error.
+func TestDeriveUpkeepAdoptionAnswersNoSwiftDependencyChange(t *testing.T) {
+	t.Parallel()
+	repo := newBaseInputsRepo(t)
+	base := repo.commit(map[string]string{
+		"app/Package.swift": testPackageSwift, "app/Package.resolved": testPackageResolved,
+		verify.DefaultRecipePath: testRecipe,
+	})
+	image := domain.ProjectImage{
+		CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		Environment: swiftTestEnvironment(),
+	}
+	tip := repo.commit(map[string]string{"app/Package.swift": testPackageSwift + "// edit\n"})
+
+	adoption, adoptable, err := DeriveUpkeepAdoption(
+		t.Context(), "git", repo.dir, image, tip, gatePolicy(t, `["registry.npmjs.org"]`), nil)
+	if err != nil || adoptable {
+		t.Fatalf("adoption = %+v, %v, %v; want unadoptable without an error", adoption, adoptable, err)
+	}
+}

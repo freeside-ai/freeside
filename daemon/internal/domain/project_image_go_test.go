@@ -47,6 +47,7 @@ func TestProjectImageInputLayoutValidate(t *testing.T) {
 		"unknown toolchain":       {Toolchain: "uv"},
 		"npm with a module dir":   {Toolchain: domain.ProjectToolchainNPM, GoModuleDir: "daemon"},
 		"Go with an invalid path": {Toolchain: domain.ProjectToolchainGo, GoModuleDir: "../daemon"},
+		"npm with a package dir":  {Toolchain: domain.ProjectToolchainNPM, SwiftPackageDir: "app"},
 	} {
 		if err := layout.Validate(); !errors.Is(err, domain.ErrProjectImageInvalid) {
 			t.Errorf("%s: Validate() = %v, want ErrProjectImageInvalid", name, err)
