@@ -131,6 +131,14 @@ func (a RoleAgent) describe() string {
 	return "the line's selection"
 }
 
+// Describe is what a refusal outside the engine may print for the choice:
+// the lineup's text, or an operator's selection once a recorded catalog
+// matched it (Select), and otherwise only that a line chose. Never print the
+// names themselves: a credential can be pasted into them.
+func (a RoleAgent) Describe() string {
+	return a.describe()
+}
+
 // refusalAgent is the agent text a stored refusal records, nil when the
 // choice may not be printed.
 func (a RoleAgent) refusalAgent() *string {
