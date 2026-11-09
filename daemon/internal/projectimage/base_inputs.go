@@ -11,9 +11,11 @@ import (
 )
 
 // ObserveBaseInputs reads, from one exact commit in checkoutDir, what that
-// commit holds for every input a project image of layout records: the root
-// npm manifests and npm's unsupported inputs, or the Go module's go.mod and
-// go.sum at its directory and Go's unsupported inputs. It is
+// commit holds for every input a project image of layout records, for each
+// toolchain the layout includes: the root npm manifests and npm's
+// unsupported inputs, the Go module's go.mod and go.sum at its directory and
+// Go's unsupported inputs, or the Swift package's Package.swift and
+// Package.resolved at its directory and Swift's unsupported inputs. It is
 // the base half of domain.ProjectImage.AdmissibleAt: the image record supplies
 // what was baked, this supplies what a run at commitSHA would bring.
 //
@@ -52,32 +54,39 @@ func observeBaseInputs(
 	layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
 	inputs := domain.ProjectImageBaseInputs{CommitSHA: commitSHA}
+	type manifest struct {
+		name string
+		hash *string
+	}
 	var (
 		unsupported []string
-		manifests   map[string]*string
-		goMod       string
-		resolved    string
+		// manifests is ordered, toolchain by toolchain in Members order, so
+		// the unsupported inputs a manifest reports come out in a fixed order.
+		manifests []manifest
+		goMod     string
+		resolved  string
 	)
-	switch layout.Toolchain {
-	case domain.ProjectToolchainNPM:
-		unsupported = unsupportedInputNames
-		manifests = map[string]*string{
-			"package.json":      &inputs.PackageJSONSHA256,
-			"package-lock.json": &inputs.PackageLockSHA256,
-		}
-	case domain.ProjectToolchainGo:
-		unsupported = goUnsupportedEntries(layout.GoModuleDir)
-		goMod = path.Join(layout.GoModuleDir, "go.mod")
-		manifests = map[string]*string{
-			goMod:                                   &inputs.GoModSHA256,
-			path.Join(layout.GoModuleDir, "go.sum"): &inputs.GoSumSHA256,
-		}
-	case domain.ProjectToolchainSwift:
-		unsupported = swiftUnsupportedEntries(layout.SwiftPackageDir)
-		resolved = path.Join(layout.SwiftPackageDir, "Package.resolved")
-		manifests = map[string]*string{
-			path.Join(layout.SwiftPackageDir, "Package.swift"): &inputs.PackageSwiftSHA256,
-			resolved: &inputs.PackageResolvedSHA256,
+	for _, member := range layout.Toolchain.Members() {
+		switch member {
+		case domain.ProjectToolchainNPM:
+			unsupported = append(unsupported, unsupportedInputNames...)
+			manifests = append(manifests,
+				manifest{"package.json", &inputs.PackageJSONSHA256},
+				manifest{"package-lock.json", &inputs.PackageLockSHA256})
+		case domain.ProjectToolchainGo:
+			unsupported = append(unsupported, goUnsupportedEntries(layout.GoModuleDir)...)
+			goMod = path.Join(layout.GoModuleDir, "go.mod")
+			manifests = append(manifests,
+				manifest{goMod, &inputs.GoModSHA256},
+				manifest{path.Join(layout.GoModuleDir, "go.sum"), &inputs.GoSumSHA256})
+		case domain.ProjectToolchainSwift:
+			unsupported = append(unsupported, swiftUnsupportedEntries(layout.SwiftPackageDir)...)
+			resolved = path.Join(layout.SwiftPackageDir, "Package.resolved")
+			manifests = append(manifests,
+				manifest{path.Join(layout.SwiftPackageDir, "Package.swift"), &inputs.PackageSwiftSHA256},
+				manifest{resolved, &inputs.PackageResolvedSHA256})
+		case domain.ProjectToolchainGoSwift:
+			// Members never yields a composite.
 		}
 	}
 	for _, name := range unsupported {
@@ -96,7 +105,8 @@ func observeBaseInputs(
 			inputs.UnsupportedInputs = append(inputs.UnsupportedInputs, name)
 		}
 	}
-	for name, hash := range manifests {
+	for _, m := range manifests {
+		name := m.name
 		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
 		if err != nil {
 			return domain.ProjectImageBaseInputs{}, fmt.Errorf("observe %s at run base: %w", name, err)
@@ -104,7 +114,7 @@ func observeBaseInputs(
 		if !present {
 			continue
 		}
-		*hash = manifestSHA256(content)
+		*m.hash = manifestSHA256(content)
 		if name == goMod && goModHasLocalReplace(content) {
 			inputs.UnsupportedInputs = append(inputs.UnsupportedInputs,
 				goLocalReplaceInput(layout.GoModuleDir))

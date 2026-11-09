@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -227,5 +228,118 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		map[string][]byte{}, map[string]int64{},
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted a launcher whiteout newer than the launcher layer")
+	}
+}
+
+// TestExtractOCILayersSharesARepeatedBlob covers an image that lists one
+// blob at several positions, as two build steps that change nothing each
+// add the same empty layer. The blob is verified once and shared, and a
+// repeat whose descriptor differs, a missing blob, a blob that does not
+// match, and an archive that carries a blob twice are each refused.
+func TestExtractOCILayersSharesARepeatedBlob(t *testing.T) {
+	t.Parallel()
+	gzipLayer := func(t *testing.T, body []byte) []byte {
+		t.Helper()
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		if _, err := writer.Write(body); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return compressed.Bytes()
+	}
+	empty := gzipLayer(t, make([]byte, 1024))
+	other := gzipLayer(t, []byte("other layer bytes"))
+	describe := func(body []byte) ociDescriptor {
+		return ociDescriptor{
+			MediaType: ociGzipMediaType,
+			Digest:    fmt.Sprintf("sha256:%x", sha256.Sum256(body)),
+			Size:      int64(len(body)),
+		}
+	}
+	emptyLayer, otherLayer := describe(empty), describe(other)
+	type blob struct {
+		digest string
+		body   []byte
+	}
+	writeArchive := func(t *testing.T, blobs ...blob) string {
+		t.Helper()
+		path := t.TempDir() + "/image.tar"
+		file, err := os.Create(path) //nolint:gosec // fixed filename under test-owned scratch
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := tar.NewWriter(file)
+		for _, entry := range blobs {
+			header := &tar.Header{
+				Name: "blobs/sha256/" + strings.TrimPrefix(entry.digest, "sha256:"),
+				Mode: 0o600, Size: int64(len(entry.body)), Typeflag: tar.TypeReg,
+			}
+			if err := writer.WriteHeader(header); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Write(entry.body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	both := []blob{{emptyLayer.Digest, empty}, {otherLayer.Digest, other}}
+
+	layers := []ociDescriptor{emptyLayer, otherLayer, emptyLayer}
+	paths, err := extractOCILayers(writeArchive(t, both...), layers, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 3 || paths[0] != paths[2] || paths[0] == paths[1] {
+		t.Fatalf("paths = %q, want the repeated blob's two positions to share one file", paths)
+	}
+	for index, want := range [][]byte{empty, other, empty} {
+		got, err := os.ReadFile(paths[index])
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("layer %d = %d bytes, %v; want the blob's %d bytes", index, len(got), err, len(want))
+		}
+	}
+	emptyDiffID := fmt.Sprintf("sha256:%x", sha256.Sum256(make([]byte, 1024)))
+	otherDiffID := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("other layer bytes")))
+	if err := verifyOCIDiffIDs(paths, layers, []string{emptyDiffID, otherDiffID, emptyDiffID}); err != nil {
+		t.Fatalf("verifyOCIDiffIDs over the shared blob: %v", err)
+	}
+	if err := verifyOCIDiffIDs(paths, layers, []string{emptyDiffID, otherDiffID, otherDiffID}); err == nil {
+		t.Fatal("verifyOCIDiffIDs bound a repeated position to another layer's diff ID")
+	}
+
+	resized := emptyLayer
+	resized.Size++
+	plain := emptyLayer
+	plain.MediaType = ociLayerMediaType
+	tampered := append([]byte(nil), empty...)
+	tampered[len(tampered)-1] ^= 0xff
+	for _, tc := range []struct {
+		name    string
+		archive []blob
+		layers  []ociDescriptor
+		want    string
+	}{
+		{"repeat with another size", both, []ociDescriptor{emptyLayer, resized}, "with another descriptor"},
+		{"repeat with another media type", both, []ociDescriptor{emptyLayer, plain}, "with another descriptor"},
+		{"repeated blob missing", both[1:], layers, "lacks layer " + emptyLayer.Digest},
+		{"repeated blob altered", []blob{{emptyLayer.Digest, tampered}, both[1]}, layers, "does not match its descriptor"},
+		{"blob carried twice", append(slices.Clone(both), both[0]), layers, "has invalid layer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := extractOCILayers(writeArchive(t, tc.archive...), tc.layers, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("extractOCILayers = %v, want a refusal containing %q", err, tc.want)
+			}
+		})
 	}
 }

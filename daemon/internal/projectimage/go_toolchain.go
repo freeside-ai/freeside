@@ -219,13 +219,20 @@ fi
 // metacharacter, so single quotes carry it and the paths built from it
 // verbatim.
 func goPrepareScript(moduleDir string) string {
+	return "#!/usr/bin/busybox sh\nset -eu\n" + goPrepareChecks(moduleDir) + `cd "$module_dir"
+exec go mod download
+`
+}
+
+// goPrepareChecks is the Go helper's body up to the module download: it sets
+// module_dir and refuses a workspace whose module inputs the image does not
+// serve. The Go and Swift helper runs it too.
+func goPrepareChecks(moduleDir string) string {
 	unsupported := goUnsupportedEntries(moduleDir)
 	for index, entry := range unsupported {
 		unsupported[index] = "'" + entry + "'"
 	}
-	return `#!/usr/bin/busybox sh
-set -eu
-module_dir='` + cmp.Or(moduleDir, ".") + `'
+	return `module_dir='` + cmp.Or(moduleDir, ".") + `'
 if ! /usr/bin/busybox cmp -s "$module_dir/go.mod" /opt/freeside/project-seed/go.mod ||
 	! /usr/bin/busybox cmp -s "$module_dir/go.sum" /opt/freeside/project-seed/go.sum; then
 	echo "project Go module manifests differ from the baked image inputs" >&2
@@ -237,8 +244,6 @@ for entry in ` + strings.Join(unsupported, " ") + `; do
 		exit 42
 	fi
 done
-cd "$module_dir"
-exec go mod download
 `
 }
 
@@ -254,10 +259,6 @@ func goMaskedProbe(moduleDir string) []string {
 }
 
 func renderGoContainerfile(request Request, recipeDigest domain.Digest) string {
-	var launcherCopies strings.Builder
-	for _, launcher := range goLauncherPaths {
-		launcherCopies.WriteString("COPY toolchain-launcher " + launcher + "\n")
-	}
 	// Every interpolated value is a builder constant or has passed
 	// validateRequest's restricted grammar. The module manifests and exact
 	// recipe bytes enter through COPY, never through instruction text.
@@ -266,7 +267,34 @@ func renderGoContainerfile(request Request, recipeDigest domain.Digest) string {
 # VOLUME: project images pass the same ward realized-shape gate as agent bases.
 ARG BASE_IMAGE
 ARG PROJECT_TOOLCHAIN_BASE_IMAGE=%s
-ARG PROJECT_GO_VERSION=%s
+`, request.Repository, request.CommitSHA, nodeToolchainBaseImage) +
+		goToolchainArgs() + "\n" +
+		goToolchainStage("project-toolchain") + `
+FROM ${BASE_IMAGE}
+
+ARG BASE_DIGEST
+ARG PROJECT_REPOSITORY
+ARG PROJECT_REPOSITORY_ID
+ARG PROJECT_COMMIT
+ARG PROJECT_RECIPE_DIGEST
+` + goFinalArgs + "\n" +
+		goToolchainInstall("project-toolchain", "toolchain-launcher") + "\n" +
+		goSeedCopy +
+		fmt.Sprintf("COPY recipe.json %s\nCOPY prepare %s\n\n", ward.ProjectRecipePath, PreparationPath) +
+		goModuleWarm() + `
+LABEL org.opencontainers.image.title="freeside-project-image" \
+	ai.freeside.base.digest="${BASE_DIGEST}" \
+` + goLabels() + projectLabels +
+		"# Bound recipe digest: " + string(recipeDigest) + "\n"
+}
+
+// The fragments below are the Go path's Containerfile text, shared by the Go
+// and the Go and Swift renderers so the two cannot drift.
+
+// goToolchainArgs declares the Go path's pinned versions and archive hashes
+// as global build arguments.
+func goToolchainArgs() string {
+	return fmt.Sprintf(`ARG PROJECT_GO_VERSION=%s
 ARG PROJECT_GO_SHA256=%s
 ARG PROJECT_GOLANGCI_LINT_VERSION=%s
 ARG PROJECT_GOLANGCI_LINT_SHA256=%s
@@ -280,13 +308,22 @@ ARG PROJECT_PROCPS_VERSION=%s
 ARG PROJECT_PROCPS_SNAPSHOT=%s
 ARG PROJECT_PROCPS_SHA256=%s
 ARG PROJECT_LIBPROC2_SHA256=%s
+`, goToolchainVersion, goToolchainArchiveSHA256,
+		golangciLintVersion, golangciLintArchiveSHA256,
+		vacuumVersion, vacuumArchiveSHA256, shellcheckVersion, shellcheckArchiveSHA256,
+		pythonVersion, pythonArchiveSHA256,
+		procpsVersion, procpsSnapshot, procpsArchiveSHA256, libproc2ArchiveSHA256)
+}
 
-# Verification toolchains belong to the project image, not the provider base.
+// goToolchainStage is the stage, named stage, that downloads and verifies
+// every Go path archive.
+func goToolchainStage(stage string) string {
+	return `# Verification toolchains belong to the project image, not the provider base.
 # This stage downloads and verifies every pinned archive independently and
 # proves each runs. The final image carries those compressed bytes plus a
 # fixed launcher, so host-side provenance can hash the runtime source instead
 # of trusting an extracted tree.
-FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS project-toolchain
+FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS ` + stage + `
 
 ARG PROJECT_GO_VERSION
 ARG PROJECT_GO_SHA256
@@ -345,7 +382,7 @@ RUN set -eux; \
 		"https://github.com/astral-sh/python-build-standalone/releases/download/${PROJECT_PYTHON_VERSION#*+}/cpython-${PROJECT_PYTHON_VERSION}-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"; \
 	echo "${PROJECT_PYTHON_SHA256}  python.tar.gz" | sha256sum -c -; \
 	tar -xzf python.tar.gz -C python-root --strip-components=1; \
-	test "$(python-root/bin/python3 --version)" = "Python ${PROJECT_PYTHON_VERSION%%+*}"; \
+	test "$(python-root/bin/python3 --version)" = "Python ${PROJECT_PYTHON_VERSION%+*}"; \
 	curl -fsSLo procps.deb \
 		"https://snapshot.debian.org/archive/debian/${PROJECT_PROCPS_SNAPSHOT}/pool/main/p/procps/procps_${PROJECT_PROCPS_VERSION}_arm64.deb"; \
 	echo "${PROJECT_PROCPS_SHA256}  procps.deb" | sha256sum -c -; \
@@ -355,16 +392,12 @@ RUN set -eux; \
 	dpkg-deb -x procps.deb procps-root; \
 	dpkg-deb -x libproc2.deb procps-root; \
 	test "$(LD_LIBRARY_PATH=procps-root/usr/lib/aarch64-linux-gnu procps-root/usr/bin/ps --version)" = \
-		"ps from procps-ng ${PROJECT_PROCPS_VERSION%%-*}"
+		"ps from procps-ng ${PROJECT_PROCPS_VERSION%-*}"
+`
+}
 
-FROM ${BASE_IMAGE}
-
-ARG BASE_DIGEST
-ARG PROJECT_REPOSITORY
-ARG PROJECT_REPOSITORY_ID
-ARG PROJECT_COMMIT
-ARG PROJECT_RECIPE_DIGEST
-ARG PROJECT_GO_VERSION
+// goFinalArgs brings the Go path's build arguments into the final stage.
+const goFinalArgs = `ARG PROJECT_GO_VERSION
 ARG PROJECT_GO_SHA256
 ARG PROJECT_GOLANGCI_LINT_VERSION
 ARG PROJECT_GOLANGCI_LINT_SHA256
@@ -377,35 +410,48 @@ ARG PROJECT_PYTHON_SHA256
 ARG PROJECT_PROCPS_VERSION
 ARG PROJECT_PROCPS_SHA256
 ARG PROJECT_LIBPROC2_SHA256
+`
 
-COPY --from=project-toolchain /opt/freeside/project-toolchain/go.tar.gz %s
-COPY --from=project-toolchain /opt/freeside/project-toolchain/golangci-lint.tar.gz %s
-COPY --from=project-toolchain /opt/freeside/project-toolchain/vacuum.tar.gz %s
-COPY --from=project-toolchain /opt/freeside/project-toolchain/shellcheck.tar.xz %s
-COPY --from=project-toolchain /opt/freeside/project-toolchain/python.tar.gz %s
-COPY --from=project-toolchain /opt/freeside/project-toolchain/procps.deb %s
-COPY --from=project-toolchain /opt/freeside/project-toolchain/libproc2.deb %s
-# Clear the launcher paths with the base's own already-trusted static BusyBox
+// goToolchainInstall copies the archives stage verified into the final
+// stage, installs the launcher the build context holds as launcher at every
+// Go launcher path, and proves each tool runs through it.
+func goToolchainInstall(stage, launcher string) string {
+	var copies strings.Builder
+	for _, path := range []string{
+		goToolchainArchivePath, golangciLintArchivePath,
+		vacuumArchivePath, shellcheckArchivePath, pythonArchivePath,
+		procpsArchivePath, libproc2ArchivePath,
+	} {
+		copies.WriteString("COPY --from=" + stage + " " + path + " " + path + "\n")
+	}
+	var launcherCopies strings.Builder
+	for _, path := range goLauncherPaths {
+		launcherCopies.WriteString("COPY " + launcher + " " + path + "\n")
+	}
+	return copies.String() + `# Clear the launcher paths with the base's own already-trusted static BusyBox
 # before each COPY, so COPY lands a fresh regular file and never writes
 # through a symlink an approved base may carry there (the Node path's #518).
-RUN ["/usr/bin/busybox", "rm", "-f", %s]
-%s
+RUN ["/usr/bin/busybox", "rm", "-f", "` + strings.Join(goLauncherPaths, `", "`) + `"]
+` + launcherCopies.String() + `
 RUN set -eux; \
 	test "$(go env GOVERSION)" = "go${PROJECT_GO_VERSION}"; \
-	test "$(go env GOTOOLCHAIN GOPROXY GOWORK GOMODCACHE)" = "$(printf '%%s\n' local off off %s)"; \
+	test "$(go env GOTOOLCHAIN GOPROXY GOWORK GOMODCACHE)" = "$(printf '%s\n' local off off ` + GoModuleCachePath + `)"; \
 	golangci-lint --version | grep -F "version ${PROJECT_GOLANGCI_LINT_VERSION} "; \
 	test "$(vacuum version)" = "${PROJECT_VACUUM_VERSION}"; \
 	shellcheck --version | grep -Fx "version: ${PROJECT_SHELLCHECK_VERSION}"; \
-	test "$(python3 --version)" = "Python ${PROJECT_PYTHON_VERSION%%+*}"; \
-	test "$(ps --version)" = "ps from procps-ng ${PROJECT_PROCPS_VERSION%%-*}"; \
-	mkdir -p %s /opt/freeside/project-seed; \
+	test "$(python3 --version)" = "Python ${PROJECT_PYTHON_VERSION%+*}"; \
+	test "$(ps --version)" = "ps from procps-ng ${PROJECT_PROCPS_VERSION%-*}"; \
+	mkdir -p ` + GoModuleCachePath + ` /opt/freeside/project-seed; \
 	rm -rf /tmp/freeside-project-*
+`
+}
 
-COPY go.mod go.sum /opt/freeside/project-seed/
-COPY recipe.json %s
-COPY prepare %s
+// goSeedCopy bakes the module manifests as the dependency seed.
+const goSeedCopy = "COPY go.mod go.sum /opt/freeside/project-seed/\n"
 
-# Cache warming builds and runs nothing from the repository: it downloads the
+// goModuleWarm fills the module cache from the seed.
+func goModuleWarm() string {
+	return `# Cache warming builds and runs nothing from the repository: it downloads the
 # module closure go.mod and go.sum pin into the module cache, verifying every
 # module against go.sum, and anything go.sum lacks against the checksum
 # database. The launcher pins GOPROXY=off for every later process, so this one
@@ -417,17 +463,19 @@ COPY prepare %s
 # image-owned preparation helper.
 RUN set -eux; \
 	warm=$(mktemp -d /tmp/freeside-go-warm.XXXXXX); \
-	tar -xzf %s -C "$warm"; \
+	tar -xzf ` + goToolchainArchivePath + ` -C "$warm"; \
 	cd /opt/freeside/project-seed; \
-	env GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS= GOPROXY=https://%s \
+	env GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS= GOPROXY=https://` + goModuleProxyHost + ` \
 		GONOPROXY= GOPRIVATE= GOINSECURE= GONOSUMDB= GOSUMDB=sum.golang.org \
-		GOMODCACHE=%s GOCACHE="$warm/cache" \
+		GOMODCACHE=` + GoModuleCachePath + ` GOCACHE="$warm/cache" \
 		"$warm/go/bin/go" mod download; \
 	rm -rf "$warm"
+`
+}
 
-LABEL org.opencontainers.image.title="freeside-project-image" \
-	ai.freeside.base.digest="${BASE_DIGEST}" \
-	ai.freeside.project.toolchain.go.version="${PROJECT_GO_VERSION}" \
+// goLabels are the Go path's provenance label lines, each continued.
+func goLabels() string {
+	return `	ai.freeside.project.toolchain.go.version="${PROJECT_GO_VERSION}" \
 	ai.freeside.project.toolchain.go.archive-sha256="${PROJECT_GO_SHA256}" \
 	ai.freeside.project.toolchain.golangci-lint.version="${PROJECT_GOLANGCI_LINT_VERSION}" \
 	ai.freeside.project.toolchain.golangci-lint.archive-sha256="${PROJECT_GOLANGCI_LINT_SHA256}" \
@@ -441,25 +489,7 @@ LABEL org.opencontainers.image.title="freeside-project-image" \
 	ai.freeside.project.toolchain.procps.archive-sha256="${PROJECT_PROCPS_SHA256}" \
 	ai.freeside.project.toolchain.libproc2.version="${PROJECT_PROCPS_VERSION}" \
 	ai.freeside.project.toolchain.libproc2.archive-sha256="${PROJECT_LIBPROC2_SHA256}" \
-	ai.freeside.project.repository="${PROJECT_REPOSITORY}" \
-	ai.freeside.project.repository-id="${PROJECT_REPOSITORY_ID}" \
-	ai.freeside.project.commit="${PROJECT_COMMIT}" \
-	ai.freeside.project.recipe-digest="${PROJECT_RECIPE_DIGEST}"
-`, request.Repository, request.CommitSHA,
-		nodeToolchainBaseImage, goToolchainVersion, goToolchainArchiveSHA256,
-		golangciLintVersion, golangciLintArchiveSHA256,
-		vacuumVersion, vacuumArchiveSHA256, shellcheckVersion, shellcheckArchiveSHA256,
-		pythonVersion, pythonArchiveSHA256,
-		procpsVersion, procpsSnapshot, procpsArchiveSHA256, libproc2ArchiveSHA256,
-		goToolchainArchivePath, golangciLintArchivePath,
-		vacuumArchivePath, shellcheckArchivePath, pythonArchivePath,
-		procpsArchivePath, libproc2ArchivePath,
-		`"`+strings.Join(goLauncherPaths, `", "`)+`"`,
-		launcherCopies.String(),
-		GoModuleCachePath, GoModuleCachePath,
-		ward.ProjectRecipePath, PreparationPath,
-		goToolchainArchivePath, goModuleProxyHost, GoModuleCachePath) +
-		"# Bound recipe digest: " + string(recipeDigest) + "\n"
+`
 }
 
 // stageGoInputs refuses a Go module no project image supports and copies
@@ -488,9 +518,6 @@ func stageGoInputs(contextDir, sourceDir, moduleDir string) error {
 		if present {
 			return fmt.Errorf("source contains unsupported Go input %s", name)
 		}
-	}
-	if err := os.Mkdir(contextDir, 0o700); err != nil {
-		return fmt.Errorf("create image build context: %w", err)
 	}
 	for _, name := range []string{"go.mod", "go.sum"} {
 		if err := copyRegularFile(

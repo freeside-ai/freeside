@@ -3074,14 +3074,16 @@ path, so an agent's edit to them draws no import finding. A match in
 repository-change finding; a match in any other class holds publication as a
 non-waivable control-plane finding.
 
-**Each project image bakes one toolchain.** `-go-module-dir <dir>` and
-`-swift-package-dir <dir>`, on both `freesided onboard` and
-`freeside-project-image`, declare a repository-relative Go module or Swift
-package directory, which the review shows and the approval digest binds.
-Declaring both is refused. Without either, a root `package.json` selects npm,
+**Each project image bakes one toolchain, or Go and Swift together.**
+`-go-module-dir <dir>` and `-swift-package-dir <dir>`, on both
+`freesided onboard` and `freeside-project-image`, declare a
+repository-relative Go module or Swift package directory, which the review
+shows and the approval digest binds. Declaring both builds one image that
+bakes both toolchains. Without either, a root `package.json` selects npm,
 otherwise a root `go.mod` selects Go at the root, and otherwise a root
-`Package.swift` selects Swift at the root. A root `package.json` beside a
-declared module or package is refused.
+`Package.swift` selects Swift at the root; detection never selects both. A
+root `package.json` beside a declared module, package, or both is refused:
+no image bakes npm beside another toolchain.
 
 A Go image bakes Go 1.27.3 and golangci-lint 2.15.0 from pinned archives,
 and a module cache warmed from the commit's `go.mod` and `go.sum` at
@@ -3176,6 +3178,21 @@ inputs no image serves:
 A `Package.swift` or `Package.resolved` that is missing or not a regular file
 is refused too.
 
+A Go and Swift image serves a repository with one Go module and one Swift
+package, such as Freeside's `daemon/` and `app/`. It starts from the Swift
+image's runtime and adds everything the Go image bakes, so it carries both
+toolchains' archives, launchers, seeds, and labels, the warmed module cache,
+and the Swift mirrors; the provenance check rehashes every one. Its
+preparation helper runs the Go helper's checks and `go mod download`, then
+the Swift helper's checks and resolve. Each toolchain's unsupported inputs
+are refused at its own directory, and admission refuses a change to any of
+the four manifests by name. The rebuild gate applies the Swift refusals to
+the package's inputs, then the Go clauses to the module's, so a Go change
+within policy rebuilds only while the package is unchanged, and a policy
+adoption answers only the module's proxy refusal. An empty flag declares
+nothing, so a module or a package at the repository root cannot share an
+image with the other toolchain.
+
 **A daemon upgrade that changes these pins rebuilds every image.** The pins
 are part of the preparation digest, which one value covers for every
 toolchain's images alike, so a new daemon treats every image an earlier one built as not
@@ -3194,7 +3211,9 @@ passes only on Go's offline refusal. For a Swift image it masks the mirrors,
 runs the same resolve from the package directory with
 `--disable-dependency-cache`, and passes only on git's refusal to reach the
 host; without that flag SwiftPM 6.3.1 reports a shared-cache error that
-hides the refusal.
+hides the refusal. A Go and Swift image runs both probes, Go first, each in
+its own fresh workspace with only its own cache masked; a probe that
+succeeds without its cache proves the recipe with that cache masked.
 
 **A recipe must fit 4 CPUs and 2048 MiB with no network,** whatever its
 toolchain. Every proof container (the offline preflight, the preparation and

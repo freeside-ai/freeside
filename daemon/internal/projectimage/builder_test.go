@@ -93,9 +93,13 @@ type fakeBackend struct {
 	probe          []string
 	negativeOutput []byte
 	negativeErr    error
-	maskedFailure  string
-	maskedRunErr   bool
-	failRecipe     string
+	// probes, when set, answers a layout with one probe per toolchain: it
+	// maps each masked cache to its probe, in place of probe and
+	// negativeOutput.
+	probes        map[string]fakeProbe
+	maskedFailure string
+	maskedRunErr  bool
+	failRecipe    string
 	// runFault, when it holds for a run, makes the runtime fail to run it.
 	runFault      func(runSpec) bool
 	preflightExit int
@@ -111,6 +115,13 @@ type fakeBackend struct {
 	discards              int
 	leaseReleases         int
 	publicationLog        []string
+}
+
+// fakeProbe is one toolchain's cache-masked negative probe and its answer.
+type fakeProbe struct {
+	argv     []string
+	output   []byte
+	exitCode int
 }
 
 func newFakeBackend() *fakeBackend {
@@ -177,7 +188,14 @@ func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 		return runResult{ExitCode: f.preflightExit}, nil
 	}
 	if spec.MaskedCache != "" {
-		if !slices.Equal(spec.Argv, f.probe) {
+		probe, output, exitCode := f.probe, f.negativeOutput, 1
+		if f.negativeErr == nil {
+			exitCode = 0
+		}
+		if answer, ok := f.probes[spec.MaskedCache]; ok {
+			probe, output, exitCode = answer.argv, answer.output, answer.exitCode
+		}
+		if !slices.Equal(spec.Argv, probe) {
 			if spec.Argv[0] == f.maskedFailure {
 				if f.maskedRunErr {
 					return runResult{}, errors.New("masked runtime failed")
@@ -186,11 +204,7 @@ func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 			}
 			return runResult{ExitCode: 0}, nil
 		}
-		exitCode := 1
-		if f.negativeErr == nil {
-			exitCode = 0
-		}
-		return runResult{Output: f.negativeOutput, ExitCode: exitCode}, nil
+		return runResult{Output: output, ExitCode: exitCode}, nil
 	}
 	if len(spec.Argv) > 0 && spec.Argv[0] == f.failRecipe {
 		return runResult{Output: []byte("recipe failed"), ExitCode: 1}, nil

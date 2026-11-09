@@ -845,6 +845,7 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 	}
 	t.Run("Go image", testAppleCheckProvenanceBindsGoImage)
 	t.Run("Swift image", testAppleCheckProvenanceBindsSwiftImage)
+	t.Run("Go and Swift image", testAppleCheckProvenanceBindsGoSwiftImage)
 }
 
 // A Go image carries the Go, golangci-lint, vacuum, shellcheck, Python, and
@@ -1172,6 +1173,194 @@ func testAppleCheckProvenanceBindsSwiftImage(t *testing.T) {
 	swapped.PackageSwiftSHA256, swapped.PackageResolvedSHA256 = spec.PackageResolvedSHA256, spec.PackageSwiftSHA256
 	if err := backend.CheckProvenance(t.Context(), ref, swapped); err == nil {
 		t.Error("CheckProvenance accepted Swift manifest hashes bound to the wrong seed files")
+	}
+}
+
+// A Go and Swift image carries everything a Go image and a Swift image
+// carry, and the Go and Swift helper in place of either one's; dropping or
+// tampering with any one toolchain's label or file fails the proof.
+func testAppleCheckProvenanceBindsGoSwiftImage(t *testing.T) {
+	sum := func(content []byte) string { return fmt.Sprintf("%x", sha256.Sum256(content)) }
+	archives := map[string][]byte{
+		goToolchainArchivePath: []byte("pinned Go archive"), golangciLintArchivePath: []byte("pinned golangci-lint"),
+		vacuumArchivePath: []byte("pinned vacuum"), shellcheckArchivePath: []byte("pinned shellcheck"),
+		pythonArchivePath: []byte("pinned Python"), procpsArchivePath: []byte("pinned procps"),
+		libproc2ArchivePath: []byte("pinned libproc2"), swiftToolchainArchivePath: []byte("pinned Swift archive"),
+	}
+	goMod, goSum := []byte(testGoMod), []byte(testGoSum)
+	packageSwift, packageResolved := []byte(testPackageSwift), []byte(testPackageResolved)
+	spec := provenanceSpec{
+		ImageDigest:  testImageDigest,
+		BaseBuildRef: "base:local", BaseDigest: testBaseDigest,
+		Repository:   "freeside-ai/freeside",
+		RepositoryID: 1023456789, CommitSHA: testCommit,
+		RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		Layout: domain.ProjectImageInputLayout{
+			Toolchain: domain.ProjectToolchainGoSwift, GoModuleDir: "daemon", SwiftPackageDir: "app",
+		},
+		GoVersion:                   goToolchainVersion,
+		GoToolchainArchiveSHA256:    sum(archives[goToolchainArchivePath]),
+		GolangciLintVersion:         golangciLintVersion,
+		GolangciLintArchiveSHA256:   sum(archives[golangciLintArchivePath]),
+		VacuumVersion:               vacuumVersion,
+		VacuumArchiveSHA256:         sum(archives[vacuumArchivePath]),
+		ShellcheckVersion:           shellcheckVersion,
+		ShellcheckArchiveSHA256:     sum(archives[shellcheckArchivePath]),
+		PythonVersion:               pythonVersion,
+		PythonArchiveSHA256:         sum(archives[pythonArchivePath]),
+		ProcpsVersion:               procpsVersion,
+		ProcpsArchiveSHA256:         sum(archives[procpsArchivePath]),
+		Libproc2ArchiveSHA256:       sum(archives[libproc2ArchivePath]),
+		SwiftVersion:                swiftToolchainVersion,
+		SwiftToolchainArchiveSHA256: sum(archives[swiftToolchainArchivePath]),
+		SwiftAptSnapshot:            swiftAptSnapshot,
+		SwiftAptPackages:            strings.Join(swiftAptPackages, " "),
+		GoModSHA256:                 manifestSHA256(goMod),
+		GoSumSHA256:                 manifestSHA256(goSum),
+		PackageSwiftSHA256:          manifestSHA256(packageSwift),
+		PackageResolvedSHA256:       manifestSHA256(packageResolved),
+	}
+	ref := "project:local"
+	labels := map[string]string{
+		"org.opencontainers.image.title":                             "freeside-project-image",
+		"ai.freeside.base.digest":                                    spec.BaseDigest,
+		"ai.freeside.project.repository":                             spec.Repository,
+		"ai.freeside.project.repository-id":                          "1023456789",
+		"ai.freeside.project.commit":                                 spec.CommitSHA,
+		"ai.freeside.project.recipe-digest":                          string(spec.RecipeDigest),
+		"ai.freeside.project.toolchain.go.version":                   spec.GoVersion,
+		"ai.freeside.project.toolchain.go.archive-sha256":            spec.GoToolchainArchiveSHA256,
+		"ai.freeside.project.toolchain.golangci-lint.version":        spec.GolangciLintVersion,
+		"ai.freeside.project.toolchain.golangci-lint.archive-sha256": spec.GolangciLintArchiveSHA256,
+		"ai.freeside.project.toolchain.vacuum.version":               spec.VacuumVersion,
+		"ai.freeside.project.toolchain.vacuum.archive-sha256":        spec.VacuumArchiveSHA256,
+		"ai.freeside.project.toolchain.shellcheck.version":           spec.ShellcheckVersion,
+		"ai.freeside.project.toolchain.shellcheck.archive-sha256":    spec.ShellcheckArchiveSHA256,
+		"ai.freeside.project.toolchain.python.version":               spec.PythonVersion,
+		"ai.freeside.project.toolchain.python.archive-sha256":        spec.PythonArchiveSHA256,
+		"ai.freeside.project.toolchain.procps.version":               spec.ProcpsVersion,
+		"ai.freeside.project.toolchain.procps.archive-sha256":        spec.ProcpsArchiveSHA256,
+		"ai.freeside.project.toolchain.libproc2.version":             spec.ProcpsVersion,
+		"ai.freeside.project.toolchain.libproc2.archive-sha256":      spec.Libproc2ArchiveSHA256,
+		"ai.freeside.project.toolchain.swift.version":                spec.SwiftVersion,
+		"ai.freeside.project.toolchain.swift.archive-sha256":         spec.SwiftToolchainArchiveSHA256,
+		"ai.freeside.project.toolchain.swift.apt-snapshot":           spec.SwiftAptSnapshot,
+		"ai.freeside.project.toolchain.swift.apt-packages":           spec.SwiftAptPackages,
+	}
+	runner := &recordingRunner{run: func(call commandSpec) (commandOutput, error) {
+		if len(call.Args) >= 3 && call.Args[0] == "image" && call.Args[1] == "inspect" {
+			if call.Args[2] == spec.BaseBuildRef {
+				return inspectOutputFor(spec.BaseBuildRef, testBaseDigest), nil
+			}
+			return inspectOutputFor(ref, testImageDigest), nil
+		}
+		return commandOutput{}, nil
+	}}
+	var baseConfig, projectConfig ociImageConfig
+	baseConfig.RootFS.DiffIDs = []string{"sha256:base-layer"}
+	projectConfig.Config.Labels = labels
+	projectConfig.RootFS.DiffIDs = []string{"sha256:base-layer", "sha256:project-layer"}
+	busybox := []byte("approved static BusyBox")
+	files := map[string][]byte{
+		ward.ProjectRecipePath:  []byte(testRecipe),
+		PreparationPath:         []byte(goSwiftPrepareScript("daemon", "app")),
+		swiftLauncherPath:       []byte(swiftToolchainLauncher),
+		busyboxPath:             busybox,
+		seedGoModPath:           goMod,
+		seedGoSumPath:           goSum,
+		seedPackageSwiftPath:    packageSwift,
+		seedPackageResolvedPath: packageResolved,
+	}
+	modes := map[string]int64{
+		ward.ProjectRecipePath: 0o600, PreparationPath: 0o700, swiftLauncherPath: 0o755, busyboxPath: 0o755,
+	}
+	for path, archive := range archives {
+		files[path], modes[path] = archive, 0o644
+	}
+	for _, path := range goLauncherPaths {
+		files[path], modes[path] = []byte(goToolchainLauncher), 0o755
+	}
+	var requested map[string]int64
+	backend := appleBackend{
+		containerPath: "container", runner: runner,
+		readEvidence: func(_ context.Context, imageRef, _ string, wanted map[string]int64) (ociEvidence, error) {
+			if imageRef == spec.BaseBuildRef {
+				return ociEvidence{
+					Config: baseConfig, Files: map[string][]byte{busyboxPath: busybox},
+					FileModes: map[string]int64{busyboxPath: 0o755},
+				}, nil
+			}
+			requested = wanted
+			return ociEvidence{Config: projectConfig, Files: files, FileModes: modes}, nil
+		},
+	}
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err != nil {
+		t.Fatal(err)
+	}
+	for path := range files {
+		if _, ok := requested[path]; !ok {
+			t.Errorf("Go and Swift evidence targets omit %s", path)
+		}
+	}
+	if _, ok := requested[nodeToolchainArchivePath]; ok {
+		t.Error("Go and Swift evidence targets require the Node archive a Go and Swift image does not carry")
+	}
+
+	reject := func(what string, mutate, restore func()) {
+		t.Helper()
+		mutate()
+		if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+			t.Errorf("CheckProvenance accepted %s", what)
+		}
+		restore()
+	}
+	for label, original := range labels {
+		reject("a mismatched "+label+" label",
+			func() { labels[label] = "0" }, func() { labels[label] = original })
+		reject("a missing "+label+" label",
+			func() { delete(labels, label) }, func() { labels[label] = original })
+	}
+	for path, original := range files {
+		if path == busyboxPath {
+			continue // the base's own file, proved against the base
+		}
+		reject("tampered "+path,
+			func() { files[path] = []byte("tampered") }, func() { files[path] = original })
+		reject("missing "+path,
+			func() { delete(files, path) }, func() { files[path] = original })
+	}
+	for path, original := range modes {
+		if path == busyboxPath || path == ward.ProjectRecipePath {
+			continue // proved against the base, or data whose mode grants nothing
+		}
+		reject("a wrong mode on "+path,
+			func() { modes[path] = 0o4755 }, func() { modes[path] = original })
+	}
+	// Either single toolchain's helper, or a mixed helper for other
+	// directories, hydrates something other than what the record names.
+	for what, helper := range map[string]string{
+		"the Go helper":                         goPrepareScript("daemon"),
+		"the Swift helper":                      swiftPrepareScript("app"),
+		"a helper for another module directory": goSwiftPrepareScript("", "app"),
+		"a helper for another package":          goSwiftPrepareScript("daemon", ""),
+		"a helper with the directories swapped": goSwiftPrepareScript("app", "daemon"),
+	} {
+		reject(what,
+			func() { files[PreparationPath] = []byte(helper) },
+			func() { files[PreparationPath] = []byte(goSwiftPrepareScript("daemon", "app")) })
+	}
+	// A single-toolchain spec does not prove a mixed image: its helper differs.
+	for _, toolchain := range []domain.ProjectToolchain{domain.ProjectToolchainGo, domain.ProjectToolchainSwift} {
+		single := spec
+		single.Layout.Toolchain = toolchain
+		if toolchain == domain.ProjectToolchainGo {
+			single.Layout.SwiftPackageDir = ""
+		} else {
+			single.Layout.GoModuleDir = ""
+		}
+		if err := backend.CheckProvenance(t.Context(), ref, single); err == nil {
+			t.Errorf("CheckProvenance proved a Go and Swift image against a %s spec", toolchain)
+		}
 	}
 }
 

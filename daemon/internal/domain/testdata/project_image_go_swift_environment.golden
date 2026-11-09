@@ -1,0 +1,22 @@
+{
+  "id": "sha256:adfdaeaf38a7324e35390c6c70aaead79d7c8d5185b549bb6f386e952e2020a9",
+  "repository": "freeside-ai/freeside",
+  "repository_id": 1023456789,
+  "commit_sha": "6ab4e3dff2be53f74bde9b8b3150290775152f9f",
+  "recipe_digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "preparation_command": [
+    "/usr/local/bin/freeside-project-prepare"
+  ],
+  "base_image_ref": "ghcr.io/freeside-ai/agent-claude@sha256:abababababababababababababababababababababababababababababababab",
+  "image_ref": "127.0.0.1:5100/freeside-project-freeside-ai-freeside@sha256:fafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafa",
+  "environment": {
+    "toolchain": "go+swift",
+    "go_module_dir": "daemon",
+    "swift_package_dir": "app",
+    "go_mod_sha256": "7878787878787878787878787878787878787878787878787878787878787878",
+    "go_sum_sha256": "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+    "package_swift_sha256": "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc",
+    "package_resolved_sha256": "dededededededededededededededededededededededededededededededede",
+    "preparation_digest": "sha256:5656565656565656565656565656565656565656565656565656565656565656"
+  }
+}

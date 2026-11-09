@@ -232,6 +232,21 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 		swiftReview.ApprovalDigest == goReview.ApprovalDigest {
 		t.Fatalf("Swift package review = %+v, want the package shown and its own approval digest", swiftReview.ImageRequest)
 	}
+	// Declaring both asks for one image that bakes both toolchains, which
+	// the owner approves apart from either alone.
+	req.Image.GoModuleDir = "daemon"
+	goSwiftReview, err := onboard.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("Go and Swift review pass: %v", err)
+	}
+	if goSwiftReview.ImageRequest.GoModuleDir != "daemon" || goSwiftReview.ImageRequest.SwiftPackageDir != "app" ||
+		slices.Contains([]domain.Digest{
+			preferredReview.ApprovalDigest, goReview.ApprovalDigest, swiftReview.ApprovalDigest,
+		}, goSwiftReview.ApprovalDigest) {
+		t.Fatalf("Go and Swift review = %+v, want both directories shown and its own approval digest",
+			goSwiftReview.ImageRequest)
+	}
+	req.Image.GoModuleDir = ""
 	req.Image.SwiftPackageDir = ""
 	req.ApprovalDigest = preferredReview.ApprovalDigest
 	complete, err := onboard.Run(ctx, req)

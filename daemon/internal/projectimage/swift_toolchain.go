@@ -98,13 +98,17 @@ exec "$toolchain/usr/bin/swift" "$@"
 // shell metacharacter, so single quotes carry it and the paths built from
 // it verbatim.
 func swiftPrepareScript(packageDir string) string {
+	return "#!/usr/bin/busybox sh\nset -eu\n" + swiftPrepareBody(packageDir)
+}
+
+// swiftPrepareBody is the Swift helper without its interpreter line, which
+// the Go and Swift helper runs after the Go module download.
+func swiftPrepareBody(packageDir string) string {
 	unsupported := swiftUnsupportedEntries(packageDir)
 	for index, entry := range unsupported {
 		unsupported[index] = "'" + entry + "'"
 	}
-	return `#!/usr/bin/busybox sh
-set -eu
-package_dir='` + cmp.Or(packageDir, ".") + `'
+	return `package_dir='` + cmp.Or(packageDir, ".") + `'
 if ! /usr/bin/busybox cmp -s "$package_dir/Package.swift" /opt/freeside/project-seed/Package.swift ||
 	! /usr/bin/busybox cmp -s "$package_dir/Package.resolved" /opt/freeside/project-seed/Package.resolved; then
 	echo "project Swift package manifests differ from the baked image inputs" >&2
@@ -174,7 +178,6 @@ func swiftAptInstall(packages string) string {
 }
 
 func renderSwiftContainerfile(request Request, recipeDigest domain.Digest) string {
-	packages := strings.Join(swiftAptPackages, " ")
 	// Every interpolated value is a builder constant or has passed
 	// validateRequest's restricted grammar. The package manifests and exact
 	// recipe bytes enter through COPY, never through instruction text.
@@ -183,53 +186,97 @@ func renderSwiftContainerfile(request Request, recipeDigest domain.Digest) strin
 # VOLUME: project images pass the same ward realized-shape gate as agent bases.
 ARG BASE_IMAGE
 ARG PROJECT_TOOLCHAIN_BASE_IMAGE=%s
-ARG PROJECT_SWIFT_VERSION=%s
+`, request.Repository, request.CommitSHA, nodeToolchainBaseImage) +
+		swiftToolchainArgs() + "\n" +
+		swiftToolchainStage("project-toolchain") + "\n" +
+		swiftRuntimeStage("project-toolchain", "toolchain-launcher") + "\n" +
+		swiftDiscoveryStage() + `
+FROM project-swift-runtime
+
+ARG BASE_DIGEST
+ARG PROJECT_REPOSITORY
+ARG PROJECT_REPOSITORY_ID
+ARG PROJECT_COMMIT
+ARG PROJECT_RECIPE_DIGEST
+` + swiftFinalArgs + "\n" +
+		swiftMirrorsBake() + "\n" +
+		swiftSeedCopy +
+		fmt.Sprintf("COPY recipe.json %s\nCOPY prepare %s\n", ward.ProjectRecipePath, PreparationPath) + `
+LABEL org.opencontainers.image.title="freeside-project-image" \
+	ai.freeside.base.digest="${BASE_DIGEST}" \
+` + swiftLabels + projectLabels +
+		"# Bound recipe digest: " + string(recipeDigest) + "\n"
+}
+
+// The fragments below are the Swift path's Containerfile text, shared by the
+// Swift and the Go and Swift renderers so the two cannot drift.
+
+// swiftToolchainArgs declares the Swift path's pins as global build
+// arguments.
+func swiftToolchainArgs() string {
+	return fmt.Sprintf(`ARG PROJECT_SWIFT_VERSION=%s
 ARG PROJECT_SWIFT_SHA256=%s
 ARG PROJECT_SWIFT_APT_SNAPSHOT=%s
 ARG PROJECT_SWIFT_APT_PACKAGES="%s"
+`, swiftToolchainVersion, swiftToolchainArchiveSHA256, swiftAptSnapshot, strings.Join(swiftAptPackages, " "))
+}
 
-# Verification toolchains belong to the project image, not the provider base.
+// swiftToolchainStage is the stage, named stage, that downloads and
+// verifies the Swift archive.
+func swiftToolchainStage(stage string) string {
+	return `# Verification toolchains belong to the project image, not the provider base.
 # This stage downloads and verifies the exact Swift archive independently. The
 # final image carries those compressed bytes plus a fixed launcher, so
 # host-side provenance can hash the runtime source instead of trusting an
 # extracted tree. The archive runs only beside the libraries the runtime stage
 # installs, so the runtime stage proves the version.
-FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS project-toolchain
+FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS ` + stage + `
 
 ARG PROJECT_SWIFT_VERSION
 ARG PROJECT_SWIFT_SHA256
 
-RUN %s
+RUN ` + swiftAptInstall("ca-certificates curl") + `
 
 RUN set -eux; \
 	mkdir -p /opt/freeside/project-toolchain; \
 	curl -fsSLo /opt/freeside/project-toolchain/swift.tar.gz \
 		"https://download.swift.org/swift-${PROJECT_SWIFT_VERSION}-release/debian12-aarch64/swift-${PROJECT_SWIFT_VERSION}-RELEASE/swift-${PROJECT_SWIFT_VERSION}-RELEASE-debian12-aarch64.tar.gz"; \
 	echo "${PROJECT_SWIFT_SHA256}  /opt/freeside/project-toolchain/swift.tar.gz" | sha256sum -c -
+`
+}
 
-# The Swift runtime both later stages start from.
+// swiftRuntimeStage is the project-swift-runtime stage: the approved base
+// with the archive toolchainStage verified, the libraries it links, and the
+// launcher the build context holds as launcher.
+func swiftRuntimeStage(toolchainStage, launcher string) string {
+	return `# The Swift runtime both later stages start from.
 FROM ${BASE_IMAGE} AS project-swift-runtime
 
 ARG PROJECT_SWIFT_VERSION
 ARG PROJECT_SWIFT_APT_PACKAGES
 
-COPY --from=project-toolchain /opt/freeside/project-toolchain/swift.tar.gz %s
+COPY --from=` + toolchainStage + ` /opt/freeside/project-toolchain/swift.tar.gz ` + swiftToolchainArchivePath + `
 
 # The shared libraries the toolchain links and the headers a build compiles
 # against, from the pinned snapshot.
-RUN %s
+RUN ` + swiftAptInstall("${PROJECT_SWIFT_APT_PACKAGES}") + `
 
 # Clear the launcher path with the base's own already-trusted static BusyBox
 # before the COPY, so COPY lands a fresh regular file and never writes
 # through a symlink an approved base may carry there (the Node path's #518).
-RUN ["/usr/bin/busybox", "rm", "-f", "%s"]
-COPY toolchain-launcher %s
+RUN ["/usr/bin/busybox", "rm", "-f", "` + swiftLauncherPath + `"]
+COPY ` + launcher + ` ` + swiftLauncherPath + `
 
 RUN set -eux; \
 	swift --version 2>&1 | grep -F "Swift version ${PROJECT_SWIFT_VERSION} (swift-${PROJECT_SWIFT_VERSION}-RELEASE)"; \
 	rm -rf /tmp/freeside-project-swift*
+`
+}
 
-# Discovery evaluates Package.swift and every dependency's manifest, as any
+// swiftDiscoveryStage is the stage that lists every repository the pinned
+// closure clones.
+func swiftDiscoveryStage() string {
+	return `# Discovery evaluates Package.swift and every dependency's manifest, as any
 # resolve does, and resolves the closure Package.resolved pins through the
 # build proxy; it builds and tests nothing. It lists every repository that
 # resolve cloned, submodules included, mirrors them, and proves a fresh
@@ -238,60 +285,46 @@ RUN set -eux; \
 # only its URL list leaves it.
 FROM project-swift-runtime AS project-swift-discovery
 
-COPY Package.swift Package.resolved /opt/freeside/project-seed/
-COPY bake-swift-mirrors %s
-COPY discover-swift-mirrors %s
-RUN ["/usr/bin/busybox", "sh", "%s"]
+` + swiftSeedCopy + `COPY bake-swift-mirrors ` + swiftMirrorBakePath + `
+COPY discover-swift-mirrors ` + swiftMirrorDiscoveryPath + `
+RUN ["/usr/bin/busybox", "sh", "` + swiftMirrorDiscoveryPath + `"]
+`
+}
 
-FROM project-swift-runtime
-
-ARG BASE_DIGEST
-ARG PROJECT_REPOSITORY
-ARG PROJECT_REPOSITORY_ID
-ARG PROJECT_COMMIT
-ARG PROJECT_RECIPE_DIGEST
-ARG PROJECT_SWIFT_VERSION
+// swiftFinalArgs brings the Swift path's build arguments into the final
+// stage.
+const swiftFinalArgs = `ARG PROJECT_SWIFT_VERSION
 ARG PROJECT_SWIFT_SHA256
 ARG PROJECT_SWIFT_APT_SNAPSHOT
 ARG PROJECT_SWIFT_APT_PACKAGES
+`
 
-# The shipped mirrors are cloned again here, from the URL list, by a script
+// swiftMirrorsBake clones the shipped mirrors from the discovery stage's URL
+// list.
+func swiftMirrorsBake() string {
+	return `# The shipped mirrors are cloned again here, from the URL list, by a script
 # that validates it and runs no project or dependency code. The list is read
 # through a bind mount, never copied, so nothing manifest code wrote in the
 # discovery stage, a directory or setuid file in the list's place included,
 # becomes part of the image. The fresh verification workspace hydrates
 # offline from the mirrors through the image-owned preparation helper, under
 # the launcher's insteadOf redirection.
-COPY bake-swift-mirrors %s
-RUN --mount=type=bind,from=project-swift-discovery,source=%s,target=%s ["/usr/bin/busybox", "sh", "%s", "%s"]
+COPY bake-swift-mirrors ` + swiftMirrorBakePath + `
+RUN --mount=type=bind,from=project-swift-discovery,source=` + swiftMirrorURLsPath + `,target=` +
+		swiftMirrorListMount + ` ["/usr/bin/busybox", "sh", "` + swiftMirrorBakePath + `", "` +
+		swiftMirrorListMount + `"]
+`
+}
 
-COPY Package.swift Package.resolved /opt/freeside/project-seed/
-COPY recipe.json %s
-COPY prepare %s
+// swiftSeedCopy bakes the package manifests as the dependency seed.
+const swiftSeedCopy = "COPY Package.swift Package.resolved /opt/freeside/project-seed/\n"
 
-LABEL org.opencontainers.image.title="freeside-project-image" \
-	ai.freeside.base.digest="${BASE_DIGEST}" \
-	ai.freeside.project.toolchain.swift.version="${PROJECT_SWIFT_VERSION}" \
+// swiftLabels are the Swift path's provenance label lines, each continued.
+const swiftLabels = `	ai.freeside.project.toolchain.swift.version="${PROJECT_SWIFT_VERSION}" \
 	ai.freeside.project.toolchain.swift.archive-sha256="${PROJECT_SWIFT_SHA256}" \
 	ai.freeside.project.toolchain.swift.apt-snapshot="${PROJECT_SWIFT_APT_SNAPSHOT}" \
 	ai.freeside.project.toolchain.swift.apt-packages="${PROJECT_SWIFT_APT_PACKAGES}" \
-	ai.freeside.project.repository="${PROJECT_REPOSITORY}" \
-	ai.freeside.project.repository-id="${PROJECT_REPOSITORY_ID}" \
-	ai.freeside.project.commit="${PROJECT_COMMIT}" \
-	ai.freeside.project.recipe-digest="${PROJECT_RECIPE_DIGEST}"
-`, request.Repository, request.CommitSHA,
-		nodeToolchainBaseImage, swiftToolchainVersion, swiftToolchainArchiveSHA256,
-		swiftAptSnapshot, packages,
-		swiftAptInstall("ca-certificates curl"),
-		swiftToolchainArchivePath,
-		swiftAptInstall("${PROJECT_SWIFT_APT_PACKAGES}"),
-		swiftLauncherPath, swiftLauncherPath,
-		swiftMirrorBakePath, swiftMirrorDiscoveryPath, swiftMirrorDiscoveryPath,
-		swiftMirrorBakePath, swiftMirrorURLsPath, swiftMirrorListMount,
-		swiftMirrorBakePath, swiftMirrorListMount,
-		ward.ProjectRecipePath, PreparationPath) +
-		"# Bound recipe digest: " + string(recipeDigest) + "\n"
-}
+`
 
 // stageSwiftInputs refuses a Swift package no project image supports and
 // copies its Package.swift and Package.resolved into the build context.
@@ -328,9 +361,6 @@ func stageSwiftInputs(contextDir, sourceDir, packageDir string) error {
 		if isSwiftVersionSpecificManifest(entry.Name()) {
 			return fmt.Errorf("source contains unsupported Swift input %s", path.Join(packageDir, entry.Name()))
 		}
-	}
-	if err := os.Mkdir(contextDir, 0o700); err != nil {
-		return fmt.Errorf("create image build context: %w", err)
 	}
 	for _, name := range []string{"Package.swift", "Package.resolved"} {
 		if err := copyRegularFile(

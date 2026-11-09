@@ -26,7 +26,7 @@ import (
 // change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 	t.Parallel()
-	const want = "sha256:21414f18c37d55560cb3f9c9deff3d17468fa1be6d1b69b614706e2581957d67"
+	const want = "sha256:ca124be8942ff2330b24d870c71dbe6889e52f518ef74ba4bb304420b0a6ff71"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
 		t.Fatalf("PreparationDigest() = %q, want a content address", got)
@@ -37,37 +37,39 @@ func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 
 	sources := preparationSources()
 	for name, source := range map[string]string{
-		"npm preparation helper":     prepareScript,
-		"Node launcher":              nodeToolchainLauncher,
-		"npm Containerfile":          renderNPMContainerfile(Request{}, ""),
-		"Node version":               nodeToolchainVersion,
-		"Node archive hash":          nodeToolchainArchiveSHA256,
-		"Go preparation helper":      goPrepareScript(""),
-		"Go launcher":                goToolchainLauncher,
-		"Go Containerfile":           renderGoContainerfile(Request{}, ""),
-		"Go version":                 goToolchainVersion,
-		"Go archive hash":            goToolchainArchiveSHA256,
-		"golangci-lint version":      golangciLintVersion,
-		"golangci-lint archive hash": golangciLintArchiveSHA256,
-		"vacuum version":             vacuumVersion,
-		"vacuum archive hash":        vacuumArchiveSHA256,
-		"shellcheck version":         shellcheckVersion,
-		"shellcheck archive hash":    shellcheckArchiveSHA256,
-		"Python version":             pythonVersion,
-		"Python archive hash":        pythonArchiveSHA256,
-		"procps version":             procpsVersion,
-		"procps snapshot":            procpsSnapshot,
-		"procps archive hash":        procpsArchiveSHA256,
-		"libproc2 archive hash":      libproc2ArchiveSHA256,
-		"Swift preparation helper":   swiftPrepareScript(""),
-		"Swift launcher":             swiftToolchainLauncher,
-		"Swift mirror discovery":     swiftMirrorDiscovery,
-		"Swift mirror bake":          swiftMirrorBake,
-		"Swift Containerfile":        renderSwiftContainerfile(Request{}, ""),
-		"Swift version":              swiftToolchainVersion,
-		"Swift archive hash":         swiftToolchainArchiveSHA256,
-		"Swift apt snapshot":         swiftAptSnapshot,
-		"Swift apt packages":         strings.Join(swiftAptPackages, " "),
+		"npm preparation helper":          prepareScript,
+		"Node launcher":                   nodeToolchainLauncher,
+		"npm Containerfile":               renderNPMContainerfile(Request{}, ""),
+		"Node version":                    nodeToolchainVersion,
+		"Node archive hash":               nodeToolchainArchiveSHA256,
+		"Go preparation helper":           goPrepareScript(""),
+		"Go launcher":                     goToolchainLauncher,
+		"Go Containerfile":                renderGoContainerfile(Request{}, ""),
+		"Go version":                      goToolchainVersion,
+		"Go archive hash":                 goToolchainArchiveSHA256,
+		"golangci-lint version":           golangciLintVersion,
+		"golangci-lint archive hash":      golangciLintArchiveSHA256,
+		"vacuum version":                  vacuumVersion,
+		"vacuum archive hash":             vacuumArchiveSHA256,
+		"shellcheck version":              shellcheckVersion,
+		"shellcheck archive hash":         shellcheckArchiveSHA256,
+		"Python version":                  pythonVersion,
+		"Python archive hash":             pythonArchiveSHA256,
+		"procps version":                  procpsVersion,
+		"procps snapshot":                 procpsSnapshot,
+		"procps archive hash":             procpsArchiveSHA256,
+		"libproc2 archive hash":           libproc2ArchiveSHA256,
+		"Swift preparation helper":        swiftPrepareScript(""),
+		"Swift launcher":                  swiftToolchainLauncher,
+		"Swift mirror discovery":          swiftMirrorDiscovery,
+		"Swift mirror bake":               swiftMirrorBake,
+		"Swift Containerfile":             renderSwiftContainerfile(Request{}, ""),
+		"Swift version":                   swiftToolchainVersion,
+		"Swift archive hash":              swiftToolchainArchiveSHA256,
+		"Swift apt snapshot":              swiftAptSnapshot,
+		"Swift apt packages":              strings.Join(swiftAptPackages, " "),
+		"Go and Swift preparation helper": goSwiftPrepareScript("", ""),
+		"Go and Swift Containerfile":      renderGoSwiftContainerfile(Request{}, ""),
 	} {
 		if !slices.Contains(sources, source) {
 			t.Errorf("PreparationDigest does not address the %s", name)

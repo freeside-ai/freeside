@@ -71,6 +71,15 @@ type RebuildDecision struct {
 //     module proxy when go.sum changes any module version or go.mod newly
 //     requires one (evaluateGoModuleDelta).
 //
+// For a Swift image no rebuild bounds a dependency change: a change to
+// either package manifest, or an unsupported Swift input, refuses by name.
+//
+// For a Go and Swift image each toolchain's clauses apply to its own inputs
+// alone: the Swift refusals first, for the package's manifests and
+// unsupported inputs, then the Go clauses above for the module's, with the
+// recipe and registry clauses once. It holds only when the Swift inputs are
+// unchanged, and then its delta is the Go module's.
+//
 // The manifests are compared with the base's, not with the image's, because
 // only hashes of the image's manifests are recorded. The caller has already
 // proved the image serves baseSHA, which makes the two the same bytes.
@@ -193,7 +202,9 @@ func evaluateGate(
 		case domain.ProjectToolchainNPM:
 		case domain.ProjectToolchainGo:
 			clause = RebuildRefusalGoDependencyChanged
-		case domain.ProjectToolchainSwift:
+		case domain.ProjectToolchainSwift, domain.ProjectToolchainGoSwift:
+			// Which toolchain's input is unreadable is not told apart; the
+			// Swift clause hands the image to a person, which serves both.
 			clause = RebuildRefusalSwiftDependencyChanged
 		}
 		findings.add(refuseLockfile(clause,
@@ -239,43 +250,36 @@ func evaluateGate(
 	read := func(commitSHA, name string) ([]byte, error) {
 		return readManifest(ctx, reader, commitSHA, name)
 	}
-	if image.InputLayout().Toolchain == domain.ProjectToolchainSwift {
-		// No rebuild bounds a Swift dependency change: any change to either
-		// manifest refuses by name, and so does an unsupported input a head
-		// adds while keeping both, which would otherwise fail only inside the
-		// room, at the preparation helper.
-		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
-			return RebuildDecision{Head: head}, nil
-		}
-		if len(head.UnsupportedInputs) != 0 {
+	// swiftClauses refuses a Swift package's changed manifests and
+	// unsupported inputs by name: no rebuild bounds a Swift dependency
+	// change, and an unsupported input a head adds while keeping both
+	// manifests would otherwise fail only inside the room, at the
+	// preparation helper.
+	swiftClauses := func(changed, unsupported []string) {
+		if len(unsupported) != 0 {
 			findings.add(refuseLockfile(RebuildRefusalSwiftDependencyChanged,
-				"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")))
+				"the candidate contains %s", strings.Join(unsupported, ", ")))
 		}
 		if len(changed) != 0 {
 			findings.add(refuseLockfile(RebuildRefusalSwiftDependencyChanged,
 				"the candidate changes %s", strings.Join(changed, ", ")))
 		}
-		if err := recipeClause(); err != nil {
-			return RebuildDecision{}, err
-		}
-		// With nothing changed, the toolchain-only delta, as for Go and npm.
-		return decide(head, LockfileDelta{}), nil
 	}
-	if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
-		// A Go head that keeps its manifests but adds a vendor directory or a
-		// go.work would otherwise fail only inside the room, at the
-		// preparation helper; the gate names it instead.
-		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
-			return RebuildDecision{Head: head}, nil
-		}
-		if len(head.UnsupportedInputs) != 0 {
+	// goClauses applies the Go clauses to a Go module's changed manifests
+	// and unsupported inputs, the recipe and registry clauses among them, and
+	// decides. A Go head that keeps its manifests but adds a vendor directory
+	// or a go.work would otherwise fail only inside the room, at the
+	// preparation helper; the gate names it instead.
+	goClauses := func(changed, unsupported []string) (RebuildDecision, error) {
+		if len(unsupported) != 0 {
 			findings.add(refuseLockfile(RebuildRefusalGoDependencyChanged,
-				"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")))
+				"the candidate contains %s", strings.Join(unsupported, ", ")))
 		}
 		var baseModule, headModule goModuleManifests
 		readable := false
 		if len(changed) != 0 {
 			var refusal *lockfileRefusal
+			var err error
 			baseModule, headModule, refusal, err = readGoModuleChange(
 				read, image.InputLayout().GoModuleDir, head, baseSHA)
 			if err != nil {
@@ -300,6 +304,33 @@ func evaluateGate(
 			findings.add(&finding)
 		}
 		return decide(head, delta), nil
+	}
+	layout := image.InputLayout()
+	switch layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+	case domain.ProjectToolchainSwift:
+		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
+			return RebuildDecision{Head: head}, nil
+		}
+		swiftClauses(changed, head.UnsupportedInputs)
+		if err := recipeClause(); err != nil {
+			return RebuildDecision{}, err
+		}
+		// With nothing changed, the toolchain-only delta, as for Go and npm.
+		return decide(head, LockfileDelta{}), nil
+	case domain.ProjectToolchainGo:
+		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
+			return RebuildDecision{Head: head}, nil
+		}
+		return goClauses(changed, head.UnsupportedInputs)
+	case domain.ProjectToolchainGoSwift:
+		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
+			return RebuildDecision{Head: head}, nil
+		}
+		goChanged, swiftChanged := splitGoSwiftInputs(layout, changed)
+		goUnsupported, swiftUnsupported := splitGoSwiftInputs(layout, head.UnsupportedInputs)
+		swiftClauses(swiftChanged, swiftUnsupported)
+		return goClauses(goChanged, goUnsupported)
 	}
 	if len(changed) == 0 && !upkeep {
 		return RebuildDecision{Head: head}, nil
