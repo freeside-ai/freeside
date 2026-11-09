@@ -92,6 +92,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			seedKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
 			first := startProcessFixture(t, root, ntfy.URL, tc.checkpoint, marker)
 			client := pairProcessDevice(t, first.ready)
+			client.turnNotificationsOn(t)
 			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
 			feedback := client.waitForItem(t, domain.ItemID("feedback-"+string(defaultFakeRunID)))
@@ -389,6 +390,29 @@ func pairProcessDevice(t *testing.T, ready daemonshell.Readiness) *processClient
 	return &processClient{
 		baseURL: ready.APIURL, token: grant.DeviceToken,
 		deviceID: grant.Device.Device.ID, client: client,
+	}
+}
+
+// turnNotificationsOn sets this device's switch through the route a
+// Devices pane calls: a newly paired device starts off (#2931), and the
+// sender owes it only items created after this call.
+func (c *processClient) turnNotificationsOn(t *testing.T) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPut,
+		c.baseURL+"/devices/"+string(c.deviceID)+"/notifications", strings.NewReader(`{"enabled":true}`))
+	if err != nil {
+		t.Fatalf("new notifications request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.client.Do(request)
+	if err != nil {
+		t.Fatalf("turn notifications on: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("turn notifications on status = %d body=%s", response.StatusCode, payload)
 	}
 }
 

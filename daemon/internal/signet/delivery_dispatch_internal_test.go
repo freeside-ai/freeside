@@ -9,9 +9,10 @@ import (
 )
 
 // TestOwedDeliveries pins the rule that decides who is notified of what, and
-// when: each open item notifies each active device once, an item older than
-// a device's pairing never does, and a failed attempt is retried on the
-// 1, 2, 4, 8, 16 minute schedule until the sixth attempt.
+// when: each open item notifies each active device whose switch is on once,
+// an item older than a device's pairing or its switch never does, and a
+// failed attempt is retried on the 1, 2, 4, 8, 16 minute schedule until the
+// sixth attempt.
 func TestOwedDeliveries(t *testing.T) {
 	t.Parallel()
 	paired := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -41,12 +42,23 @@ func TestOwedDeliveries(t *testing.T) {
 	open := []domain.AttentionItem{item("item", domain.StatusOpen, &after)}
 	phone := []domain.Device{device("phone", domain.DeviceActive)}
 	owedOnce := []owedDelivery{{itemID: "item", deviceID: "phone"}}
+	// switchedAt is a notifications switch set at the given instant; every
+	// case not about the switch has each device on since before it paired.
+	switchedAt := func(enabled bool, at time.Time, ids ...domain.DeviceID) map[domain.DeviceID]domain.DeviceNotificationPreference {
+		prefs := map[domain.DeviceID]domain.DeviceNotificationPreference{}
+		for _, id := range ids {
+			prefs[id] = domain.DeviceNotificationPreference{DeviceID: id, Enabled: enabled, UpdatedAt: at}
+		}
+		return prefs
+	}
+	allOn := switchedAt(true, before, "phone", "tablet")
 
 	for name, tc := range map[string]struct {
-		items      []domain.AttentionItem
-		devices    []domain.Device
-		deliveries []domain.AttentionDelivery
-		want       []owedDelivery
+		items       []domain.AttentionItem
+		devices     []domain.Device
+		preferences map[domain.DeviceID]domain.DeviceNotificationPreference
+		deliveries  []domain.AttentionDelivery
+		want        []owedDelivery
 	}{
 		"an open item owes an active device": {items: open, devices: phone, want: owedOnce},
 		"a resolved item owes nothing": {
@@ -64,8 +76,24 @@ func TestOwedDeliveries(t *testing.T) {
 		"an item created as the device paired is owed": {
 			items: []domain.AttentionItem{item("item", domain.StatusOpen, &paired)}, devices: phone, want: owedOnce,
 		},
-		"an item with no creation time is owed": {
-			items: []domain.AttentionItem{item("item", domain.StatusOpen, nil)}, devices: phone, want: owedOnce,
+		"an item with no creation time owes nothing": {
+			items: []domain.AttentionItem{item("item", domain.StatusOpen, nil)}, devices: phone,
+		},
+		"a device with no switch is owed nothing": {
+			items: open, devices: phone, preferences: map[domain.DeviceID]domain.DeviceNotificationPreference{},
+		},
+		"a device switched off is owed nothing": {
+			items: open, devices: phone, preferences: switchedAt(false, before, "phone"),
+		},
+		"a device switched off is owed no retry": {
+			items: open, devices: phone, preferences: switchedAt(false, before, "phone"),
+			deliveries: failures(1, now.Add(-time.Hour)),
+		},
+		"an item created before the switch went on owes nothing": {
+			items: open, devices: phone, preferences: switchedAt(true, after.Add(time.Second), "phone"),
+		},
+		"an item created as the switch went on is owed": {
+			items: open, devices: phone, preferences: switchedAt(true, after, "phone"), want: owedOnce,
 		},
 		"an accepted attempt settles the pair": {
 			items: open, devices: phone,
@@ -107,7 +135,11 @@ func TestOwedDeliveries(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := owedDeliveries(tc.items, tc.devices, tc.deliveries, now)
+			preferences := tc.preferences
+			if preferences == nil {
+				preferences = allOn
+			}
+			got := owedDeliveries(tc.items, tc.devices, preferences, tc.deliveries, now)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("owed = %v, want %v", got, tc.want)
 			}

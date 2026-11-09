@@ -89,7 +89,7 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 			Reason:            "start this work",
 			RequestedDecision: []domain.Action{domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze},
 			EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
-			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+			InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: new(*base.now), Status: domain.StatusOpen,
 		}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 		if err != nil {
 			return err

@@ -55,7 +55,7 @@ type deliveryFixture struct {
 
 func newDeliveryFixture(t *testing.T) deliveryFixture {
 	t.Helper()
-	f := newFixture(t)
+	f := newServiceFixture(t, true, true)
 	fake := &fakeNtfy{status: http.StatusOK}
 	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fake.mu.Lock()

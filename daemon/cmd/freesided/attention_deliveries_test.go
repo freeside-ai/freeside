@@ -153,16 +153,21 @@ func startNotifyingDaemon(t *testing.T, root, ntfyURL string, logs *lockedBuffer
 	return h
 }
 
-// pairDevice registers an active device that paired before any item existed,
-// so every open item owes it a notification.
+// pairDevice registers an active device that paired, and had its
+// notifications turned on, before any item existed, so every open item owes
+// it a notification.
 func pairDevice(t *testing.T, h *daemon, id domain.DeviceID) {
 	t.Helper()
 	ctx := t.Context()
+	paired := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutDevice(ctx, domain.Device{
-			ID: id, DisplayName: string(id),
-			Status: domain.DeviceActive, PairedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
-		})
+		if err := tx.PutDevice(ctx, domain.Device{
+			ID: id, DisplayName: string(id), Status: domain.DeviceActive, PairedAt: paired,
+		}); err != nil {
+			return err
+		}
+		return tx.SetDeviceNotificationPreference(ctx,
+			domain.DeviceNotificationPreference{DeviceID: id, Enabled: true, UpdatedAt: paired})
 	}); err != nil {
 		t.Fatalf("put device: %v", err)
 	}

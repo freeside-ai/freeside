@@ -32,6 +32,27 @@ func (f fixture) deliveries(t *testing.T) []domain.AttentionDelivery {
 	return rows
 }
 
+// newDispatchFixture is the delivery fixture with its device's
+// notifications on since it paired, so the fixture item is owed to it.
+func newDispatchFixture(t *testing.T) deliveryFixture {
+	t.Helper()
+	f := newDeliveryFixture(t)
+	f.setNotifications(t, f.device.ID, true, f.device.PairedAt)
+	return f
+}
+
+// setNotifications stores a device's notifications switch directly, as the
+// route would leave it.
+func (f fixture) setNotifications(t *testing.T, id domain.DeviceID, enabled bool, at time.Time) {
+	t.Helper()
+	if err := f.store.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.SetDeviceNotificationPreference(context.Background(),
+			domain.DeviceNotificationPreference{DeviceID: id, Enabled: enabled, UpdatedAt: at})
+	}); err != nil {
+		t.Fatalf("set notifications %q: %v", id, err)
+	}
+}
+
 // pass runs one sender pass and returns what it reported.
 func (f deliveryFixture) pass(t *testing.T, service *signet.Service) []error {
 	t.Helper()
@@ -48,7 +69,7 @@ func (f deliveryFixture) pass(t *testing.T, service *signet.Service) []error {
 // rows are the sender's only memory.
 func TestDeliverOwedNotifiesEachDeviceOnce(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 
 	if reported := f.pass(t, f.service); len(reported) != 0 {
 		t.Fatalf("first pass reported %v, want nothing", reported)
@@ -79,7 +100,7 @@ func TestDeliverOwedNotifiesEachDeviceOnce(t *testing.T) {
 // content, and the freeside:// link the iPhone app parses.
 func TestDeliverOwedPublishesTheGenericHint(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 	f.pass(t, f.service)
 
 	published := f.ntfy.recorded(t)
@@ -106,7 +127,7 @@ func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("resolved item", func(t *testing.T) {
-		f := newDeliveryFixture(t)
+		f := newDispatchFixture(t)
 		if _, err := f.service.Submit(ctx, f.command("cmd-resolve", domain.ActionStop)); err != nil {
 			t.Fatalf("Submit(stop): %v", err)
 		}
@@ -119,8 +140,9 @@ func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
 	})
 
 	t.Run("revoked device", func(t *testing.T) {
-		f := newDeliveryFixture(t)
+		f := newDispatchFixture(t)
 		f.seedDevice(t, "device-2")
+		f.setNotifications(t, "device-2", true, f.device.PairedAt)
 		if _, err := f.service.Revoke(ctx, "device-2", f.device.ID); err != nil {
 			t.Fatalf("Revoke: %v", err)
 		}
@@ -134,9 +156,9 @@ func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
 	})
 
 	t.Run("item created before the device paired", func(t *testing.T) {
-		f := newDeliveryFixture(t)
-		// The fixture item carries no creation time; this one does, and a
-		// device that pairs later was never asked about it.
+		f := newDispatchFixture(t)
+		// A device that pairs after this item was created was never asked
+		// about it.
 		createdAt := *f.now
 		runID := domain.RunID("run-2")
 		dated, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -167,6 +189,7 @@ func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
 		if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, late) }); err != nil {
 			t.Fatalf("seed device: %v", err)
 		}
+		f.setNotifications(t, late.ID, true, late.PairedAt)
 		*f.now = createdAt.Add(2 * time.Hour)
 
 		if reported := f.pass(t, f.service); len(reported) != 0 {
@@ -188,6 +211,109 @@ func TestDeliverOwedSkipsWhatIsNotOwed(t *testing.T) {
 	})
 }
 
+// TestDeliverOwedHonorsTheNotificationsSwitch: a device is notified only
+// while its switch is on, and only of items created since it was turned on.
+// Turning it off ends the retries of an attempt that already failed.
+func TestDeliverOwedHonorsTheNotificationsSwitch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a device never turned on", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		if reported := f.pass(t, f.service); len(reported) != 0 {
+			t.Errorf("reported %v, want nothing", reported)
+		}
+		if rows := f.deliveries(t); len(rows) != 0 {
+			t.Errorf("delivery rows = %+v, want none for a device with no switch", rows)
+		}
+	})
+
+	t.Run("a device turned off", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		f.setNotifications(t, f.device.ID, false, f.device.PairedAt)
+		f.pass(t, f.service)
+		if rows := f.deliveries(t); len(rows) != 0 {
+			t.Errorf("delivery rows = %+v, want none for a device turned off", rows)
+		}
+	})
+
+	t.Run("a device turned on after the item was created", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		f.setNotifications(t, f.device.ID, true, f.item.CreatedAt.Add(time.Second))
+		f.pass(t, f.service)
+		if rows := f.deliveries(t); len(rows) != 0 {
+			t.Errorf("delivery rows = %+v, want none for an item already open when the switch went on", rows)
+		}
+	})
+
+	t.Run("a device turned off while a retry is due", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		f.ntfy.status = http.StatusServiceUnavailable
+		if reported := f.pass(t, f.service); len(reported) != 1 {
+			t.Fatalf("first pass reported %v, want one failure", reported)
+		}
+		f.setNotifications(t, f.device.ID, false, *f.now)
+		f.ntfy.status = http.StatusOK
+		*f.now = (*f.now).Add(time.Hour)
+		if reported := f.pass(t, f.service); len(reported) != 0 {
+			t.Errorf("reported %v, want nothing", reported)
+		}
+		if rows := f.deliveries(t); len(rows) != 1 {
+			t.Errorf("delivery rows = %+v, want only the first failed attempt", rows)
+		}
+	})
+}
+
+// TestDeliverOwedAfterTurningADeviceOn drives the switch through the
+// service another client's Devices pane calls: once turned on, the device is
+// notified of a new item and not of the item already open.
+func TestDeliverOwedAfterTurningADeviceOn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	f.seedDevice(t, "device-2")
+	*f.now = (*f.now).Add(time.Hour)
+	if _, err := f.service.SetDeviceNotifications(ctx, "device-2", f.device.ID, true); err != nil {
+		t.Fatalf("SetDeviceNotifications: %v", err)
+	}
+	f.pass(t, f.service)
+	if rows := f.deliveries(t); len(rows) != 0 {
+		t.Fatalf("delivery rows = %+v, want none for the item open before the switch went on", rows)
+	}
+
+	*f.now = (*f.now).Add(time.Minute)
+	createdAt := *f.now
+	runID := domain.RunID("run-2")
+	fresh, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-fresh", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-2", RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "checks are green and the diff is ready",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss},
+		PRHeadSHA:         "cafebabe",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 124},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		CreatedAt:         &createdAt, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &fresh) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.PutItem(ctx, fresh); err != nil {
+		t.Fatalf("PutItem: %v", err)
+	}
+	if reported := f.pass(t, f.service); len(reported) != 0 {
+		t.Fatalf("reported %v, want nothing", reported)
+	}
+	rows := f.deliveries(t)
+	if len(rows) != 1 || rows[0].ItemID != fresh.ID || rows[0].DeviceID != f.device.ID ||
+		rows[0].Status != domain.DeliveryChannelAccepted {
+		t.Errorf("delivery rows = %+v, want the new item notified to the device turned on, and only that", rows)
+	}
+}
+
 // TestDeliverOwedSkipsASnoozedProposal: a proposal the operator snoozed asks
 // for nothing until the snooze ends, so it sends no notification and records
 // no attempt meanwhile.
@@ -195,6 +321,7 @@ func TestDeliverOwedSkipsASnoozedProposal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newProposalDecisionFixture(t)
+	f.setNotifications(t, f.device.ID, true, f.device.PairedAt)
 	sink := newDeliveryFixture(t)
 	service := signet.NewService(f.store,
 		signet.WithClock(func() time.Time { return *f.now }),
@@ -240,7 +367,7 @@ func TestDeliverOwedSkipsASnoozedProposal(t *testing.T) {
 // failure is the last: nothing more is sent, even once the provider recovers.
 func TestDeliverOwedRetriesAFailedSend(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 	f.ntfy.status = http.StatusServiceUnavailable
 
 	waits := []time.Duration{0, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 16 * time.Minute}
@@ -294,7 +421,7 @@ func TestDeliverOwedRetriesAFailedSend(t *testing.T) {
 // the attempts for that item and device.
 func TestDeliverOwedStopsRetryingOnceAccepted(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 	f.ntfy.status = http.StatusBadGateway
 	if reported := f.pass(t, f.service); len(reported) != 1 {
 		t.Fatalf("first pass reported %v, want one failure", reported)
@@ -319,8 +446,9 @@ func TestDeliverOwedStopsRetryingOnceAccepted(t *testing.T) {
 // device is reported and the pass goes on, so the next device is still told.
 func TestDeliverOwedOneFailureDoesNotHoldBackAnother(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 	f.seedDevice(t, "device-2")
+	f.setNotifications(t, "device-2", true, f.device.PairedAt)
 	f.ntfy.status = http.StatusInternalServerError
 	// onPublish runs under the fake's lock, before it answers: the first
 	// request is rejected and every later one accepted.
@@ -349,13 +477,50 @@ func TestDeliverOwedOneFailureDoesNotHoldBackAnother(t *testing.T) {
 	}
 }
 
+// TestDeliverOwedStopsMidPassWhenTurnedOff: a pass reads every switch once,
+// then submits its attempts one by one. Devices turned off while the pass's
+// first notification is in flight get no further attempt from that pass.
+func TestDeliverOwedStopsMidPassWhenTurnedOff(t *testing.T) {
+	t.Parallel()
+	f := newDispatchFixture(t)
+	f.seedDevice(t, "device-2")
+	f.setNotifications(t, "device-2", true, f.device.PairedAt)
+	// onPublish runs on the fake's handler goroutine, before it answers the
+	// first publish and after the pass has read both switches on, so it
+	// reports with Errorf rather than through the Fatalf helper.
+	f.ntfy.onPublish = func() {
+		if len(f.ntfy.requests) != 1 {
+			return
+		}
+		ctx := context.Background()
+		for _, id := range []domain.DeviceID{f.device.ID, "device-2"} {
+			if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.SetDeviceNotificationPreference(ctx,
+					domain.DeviceNotificationPreference{DeviceID: id, Enabled: false, UpdatedAt: *f.now})
+			}); err != nil {
+				t.Errorf("turn %q off: %v", id, err)
+			}
+		}
+	}
+
+	if reported := f.pass(t, f.service); len(reported) != 0 {
+		t.Fatalf("reported %v, want nothing: a device turned off is owed nothing", reported)
+	}
+	if rows := f.deliveries(t); len(rows) != 1 {
+		t.Errorf("delivery rows = %+v, want only the attempt submitted before the switches went off", rows)
+	}
+	if got := len(f.ntfy.recorded(t)); got != 1 {
+		t.Errorf("published %d notifications, want 1", got)
+	}
+}
+
 // TestDeliverOwedEndsWithItsContext: a pass cut short by shutdown returns
 // the context's error and reports no failed send. The clock ends the context
 // on its second read, which is SubmitDelivery's, after the pass has decided
 // the notification is owed.
 func TestDeliverOwedEndsWithItsContext(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reads := 0
@@ -386,7 +551,7 @@ func TestDeliverOwedEndsWithItsContext(t *testing.T) {
 // device's topic or the publish URL (#1924).
 func TestDeliverOwedReportsNoTopic(t *testing.T) {
 	t.Parallel()
-	f := newDeliveryFixture(t)
+	f := newDispatchFixture(t)
 	// A rejected first send shows the fake the device's topic, and leaves the
 	// pair owed a retry.
 	f.ntfy.status = http.StatusInternalServerError
