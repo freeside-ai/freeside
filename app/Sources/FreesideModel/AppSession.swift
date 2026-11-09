@@ -213,6 +213,12 @@ public final class AppSession {
     /// navigates and marks this device's own delivery attempt opened. An
     /// unpaired session ignores it.
     ///
+    /// An item link lands where the item lives: a `system_health` finding's
+    /// card over the System Health pane, any other item's card in the
+    /// inbox. The type comes from the synced store, never the link, so an
+    /// item the store doesn't hold yet (a cold start) opens as an inbox
+    /// card.
+    ///
     /// The receipt goes first and navigation waits for it, up to
     /// `receiptBound`. The receipt raises the item's version, so a card
     /// loaded before it landed would have its first decision refused as
@@ -265,7 +271,11 @@ public final class AppSession {
             guard navigation.operatorNavigationRevision == arrival else { return }
             // The wait can outlive the pairing the link arrived under.
             guard case .ready(let current) = phase, current === coordinator else { return }
-            navigation.route(toLinkedItem: itemID)
+            if coordinator.store.snapshotsByID[itemID]?.item._type == .system_health {
+                navigation.openSystemHealth(finding: itemID)
+            } else {
+                navigation.route(toLinkedItem: itemID)
+            }
         }
     }
 
