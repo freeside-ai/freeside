@@ -3147,7 +3147,7 @@ enrolled credential generation are used. Other implementer adapters are
 skipped. No synthetic provider substitutes for this observation.
 
 The opt-in live test requires Apple `container` running, the pinned Claude
-2.1.282 agent image, the exporter image, and an existing setup token supplied
+2.1.319 agent image, the exporter image, and an existing setup token supplied
 through `CLAUDE_CODE_OAUTH_TOKEN`. It fails on missing inputs once opted in:
 
 ```sh

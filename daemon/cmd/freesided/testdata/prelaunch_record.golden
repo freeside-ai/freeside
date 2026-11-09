@@ -35,7 +35,7 @@
       "group": "agent_tree",
       "name": "agent_tree",
       "status": "passed",
-      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:bcdce6e5a4648b2c8b3a71efffbf5b9eda7f0d426ebfe7bbc6c3d38dc3ff0dfd with 4 agents"
+      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:fdfcd21095d3a2e32121ff665b0982de89209fc13461a724194d7ed024dd6266 with 4 agents"
     },
     {
       "group": "inputs",
@@ -260,8 +260,8 @@
         "model": "claude-fable-5-1",
         "requested_effort": "high",
         "native_effort": "high",
-        "pinned_build": "claude-code 2.1.282",
-        "observed_build": "2.1.282 (Claude Code)",
+        "pinned_build": "claude-code 2.1.319",
+        "observed_build": "2.1.319 (Claude Code)",
         "verdict": "pass",
         "refusal": null,
         "usage": {
@@ -281,8 +281,8 @@
         "model": "claude-opus-5-5",
         "requested_effort": "max",
         "native_effort": "max",
-        "pinned_build": "claude-code 2.1.282",
-        "observed_build": "2.1.282 (Claude Code)",
+        "pinned_build": "claude-code 2.1.319",
+        "observed_build": "2.1.319 (Claude Code)",
         "verdict": "pass",
         "refusal": null,
         "usage": {

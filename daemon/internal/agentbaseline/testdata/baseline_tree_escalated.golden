@@ -1,10 +1,10 @@
 === agents.lock
-adapter claude_code_ward_v1 sha256:3c329c68f06f3906b7e3c920bb711940903742291e1ba269735d53badffdd6fb
+adapter claude_code_ward_v1 sha256:f41bbe7b4410ac02faddf827d6148172283dd0d40d7ac70eed27f034cfa860f1
 adapter codex_review_v2 sha256:88c6e7dba275e65302faada1faf8e89727fa4141daa984dcb4a38ec5c254f335
-agent claude-code-implementer sha256:5ed4c555088830cdf67e1e9b87a18d516b7509fa716cc01ccf333dc90ed65fde
-agent claude-code-specifier sha256:a7c3eb5a4c916a64cad7c2931f3320e4b2a2da8e3190e53a6c541f6d264cc5c9
-agent claude-code-specifier-escalated sha256:f4a289b251bb70f1ce8d1e77ae0514c327381df1ad0f5dbd0e0453ca99ffd96e
-agent claude-shadow-review-default sha256:6b490137920f7482bcdc7c757a70c4a97a2323eb8cc95e554c409bd6307bfec8
+agent claude-code-implementer sha256:604d03d2421cf6a22429e47cceab3f177e8eae2b531c9ccc97214d64ab9905e2
+agent claude-code-specifier sha256:211bec1bc4d77a376aff230f06b48a5b0fb6fe2fa12b6dbb2477ac7e2b4c7379
+agent claude-code-specifier-escalated sha256:936b203aabce77f3b61ddbef71f221954bd9f8f57da1707e09637c63490ca94b
+agent claude-shadow-review-default sha256:210865f55f88101d1b418d4a45e37da4bd6d774f54224670424ff69a385df12d
 agent codex-review-default sha256:e810d1f10a0bd579f74927f27358585b4b6610bfe39bdf7b862c066972d77133
 offer anthropic_claude_subscription/claude-code-implementer sha256:04f7f2c0c37187d93ac66825a6268dfc215f346ff62a6e91465019a7960d42e5
 offer anthropic_claude_subscription/claude-code-specifier sha256:0669209bfdfbe6e4a7dcee2c53ed2be7e4138f6182a11ffa6b12dc1784a0f714
@@ -39,7 +39,7 @@ through  route       openai_chatgpt_codex
 running  adapter     codex_review_v2
 asking   offer       codex-review-default, effort max
 === fragments/adapters/claude_code_ward_v1
-{"encoding_version":1,"adapter_build":"claude_code_ward_v1","harness_build":"claude-code 2.1.282","client_kind":"claude_code","vendor":"claude","launch_capabilities":["context_severance","instruction_delivery","mutation_tools","read_tools","route_store_contract","structured_output"],"sendable_efforts":["harness_default","low","medium","high","max"],"digest":"sha256:3c329c68f06f3906b7e3c920bb711940903742291e1ba269735d53badffdd6fb"}
+{"encoding_version":1,"adapter_build":"claude_code_ward_v1","harness_build":"claude-code 2.1.319","client_kind":"claude_code","vendor":"claude","launch_capabilities":["context_severance","instruction_delivery","mutation_tools","read_tools","route_store_contract","structured_output"],"sendable_efforts":["harness_default","low","medium","high","max"],"digest":"sha256:f41bbe7b4410ac02faddf827d6148172283dd0d40d7ac70eed27f034cfa860f1"}
 === fragments/adapters/codex_review_v2
 {"encoding_version":1,"adapter_build":"codex_review_v2","harness_build":"codex-cli 0.162.1","client_kind":"codex_cli","vendor":"codex","launch_capabilities":["context_severance","instruction_delivery","read_tools","route_store_contract","structured_output"],"sendable_efforts":["harness_default","low","medium","high","max"],"digest":"sha256:88c6e7dba275e65302faada1faf8e89727fa4141daa984dcb4a38ec5c254f335"}
 === fragments/offers/anthropic_claude_subscription/claude-code-implementer

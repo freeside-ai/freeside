@@ -7,7 +7,7 @@ import "github.com/freeside-ai/freeside/daemon/internal/domain"
 // Containerfiles, so an image bump that forgets the adapter fails there: a
 // new harness build is a new adapter digest with no conformance record.
 const (
-	ClaudeCodeHarnessBuild = "claude-code 2.1.282"
+	ClaudeCodeHarnessBuild = "claude-code 2.1.319"
 	CodexHarnessBuild      = "codex-cli 0.162.1"
 )
 
