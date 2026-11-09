@@ -30,6 +30,9 @@ case "$*" in
 "run --rm --network none freeside-agent-claude:local claude --version")
 	printf '%s\n' '2.1.220 (Claude Code)'
 	;;
+"run --rm --network none freeside-agent-claude:local setpriv --reuid=1001 --regid=1001 --clear-groups jq -e "*" /etc/claude-code/managed-settings.json")
+	[ "${BUILD_IMAGE_TEST_PLUGINS_ENABLED:-0}" -ne 1 ]
+	;;
 "run --rm --network none freeside-agent-codex:local codex --version")
 	printf '%s\n' 'codex-cli 0.147.0'
 	;;
@@ -212,6 +215,23 @@ for builder in "${builders[@]}"; do
 		"image pull --scheme auto $expected_ref" \
 		"image inspect $expected_ref" \
 		"push, exact pull, and digest verification were not ordered"
+
+	if [ "$script" = build-agent-claude-image.sh ]; then
+		assert_contains "$case_name" "$call_log" \
+			"run --rm --network none freeside-agent-claude:local setpriv --reuid=1001 --regid=1001 --clear-groups jq -e" \
+			"managed-settings plugin check"
+
+		case_name="$script enabled built-in plugin"
+		: >"$LOG"
+		BUILD_IMAGE_TEST_PLUGINS_ENABLED=1 run_builder "$script" "${args[@]}"
+		assert_equal "$case_name" 1 "$RC" "exit status"
+		assert_equal "$case_name" '' "$OUT" "stdout"
+		assert_contains "$case_name" "$ERR" "is not readable by the agent user or does not set every enabledPlugins entry to false" "plugin check error"
+		case "$(cat "$LOG")" in
+		*"image push"*) report_failure "$case_name" "an image that fails the plugin check must not be pushed" ;;
+		*) pass=$((pass + 1)) ;;
+		esac
+	fi
 
 	case_name="$script operator proxy"
 	: >"$LOG"

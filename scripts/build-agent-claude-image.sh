@@ -9,7 +9,9 @@
 # The pin is asserted, not assumed: after the build, the script runs
 # `claude --version` inside the built image with networking disabled and fails
 # unless it reports the pinned version. A label alone would only record what the
-# build intended.
+# build intended. It also checks, the same way, that the image's managed
+# settings parse and set every listed built-in plugin to false (#2922); the
+# daemon's offline guard in daemon/internal/agentbaseline pins the exact list.
 #
 # The ward allowlist check is a separate step, scripts/check-agent-image.sh, and
 # applies to every agent image: this base, and any image later built on it (a
@@ -219,6 +221,20 @@ if [ "$reported_version" != "$claude_version" ]; then
 	exit 1
 fi
 echo "build-agent-claude-image: image reports: ${reported}" >&2
+
+# Context severance needs the init event's plugins list empty, and the managed
+# settings are the only tier every built-in plugin reads (#2922). Check the
+# file the image actually carries, not the one in the build context, and read
+# it as the uid the launch drops to (daemon/internal/exec/claude), because the
+# CLI skips a managed-settings file its user cannot read.
+echo "build-agent-claude-image: asserting the managed settings disable the built-in plugins" >&2
+if ! container run --rm --network none "$image_name:local" \
+	setpriv --reuid=1001 --regid=1001 --clear-groups \
+	jq -e '(.enabledPlugins | length > 0) and all(.enabledPlugins[]; . == false)' \
+	/etc/claude-code/managed-settings.json >/dev/null; then
+	echo "build-agent-claude-image: /etc/claude-code/managed-settings.json in the built image is not readable by the agent user or does not set every enabledPlugins entry to false" >&2
+	exit 1
+fi
 
 digest=$(digest_of "$image_name:local")
 [ -n "${digest:-}" ] || {
