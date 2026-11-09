@@ -454,10 +454,21 @@ enum FreesideFont {
     /// `screenshotMetricBase` applies the iOS ratio inside the screenshot
     /// bridge, where `relativeTo:` scales nothing, so the accessibility
     /// digests still render enlarged.
+    ///
+    /// SwiftUI rounds a `relativeTo:` size to whole points, so a half step
+    /// such as the Mac's 11.5 mono value would draw at 12 (#2912). macOS
+    /// never scales `relativeTo:` with the environment's Dynamic Type size,
+    /// so the Mac takes a fixed size and loses nothing. iOS keeps the scaled
+    /// size, and with it the rounding, because a fixed size there would stop
+    /// following Dynamic Type.
     private static func fixed(
         _ name: String, _ size: CGFloat, relativeTo style: Font.TextStyle
     ) -> Font {
-        .custom(name, size: screenshotMetricBase(size, relativeTo: style), relativeTo: style)
+        #if os(macOS)
+            .custom(name, fixedSize: screenshotMetricBase(size, relativeTo: style))
+        #else
+            .custom(name, size: size, relativeTo: style)
+        #endif
     }
 
     // The ladder's faces. Mono states a fact; sans speaks to the operator;
