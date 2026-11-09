@@ -87,7 +87,11 @@ type Backend struct {
 	// requires a fresh pass.
 	daemonIdentity string
 	initialized    bool
-	proven         atomic.Bool
+	// slots is shared by every Room built over this backend, so leases and
+	// quarantine hold across them: the uid absence proof assumes one job per
+	// slot at a time.
+	slots  *slotPool
+	proven atomic.Bool
 	// proofMu makes the generation check and the publication one decision,
 	// so a restore cannot race a later live pass (#2879).
 	proofMu         sync.Mutex
@@ -122,7 +126,7 @@ func New(cfg Config) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: daemon executable identity: %w", ErrInvalidConfig, err)
 	}
-	return &Backend{cfg: cfg, daemonIdentity: daemonIdentity, initialized: true}, nil
+	return &Backend{cfg: cfg, daemonIdentity: daemonIdentity, initialized: true, slots: newSlotPool(cfg.Slots)}, nil
 }
 
 // Name identifies the backend in policy, refusals, and audit records.
