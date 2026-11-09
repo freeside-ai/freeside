@@ -153,6 +153,10 @@ public actor MockServer {
     /// activity is server bookkeeping outside the synchronized device row,
     /// so recording it moves no entity version and no server revision.
     private var lastSeenByDeviceID: [String: Date] = [:]
+    /// Each device's notifications switch. Daemon parity: the switch lives
+    /// beside the device row, so setting it moves the server revision but
+    /// not the device's entity version, and a device with none is off.
+    private var notificationsEnabledByDeviceID: [String: Bool] = [:]
     /// Pairing-grant test hooks. Defaults satisfy the contract; callers can
     /// inject malformed values to exercise client-side returned-object gates.
     private let pairingNtfyServerURL: String
@@ -356,6 +360,7 @@ public actor MockServer {
                     entity_version: entry.entity_version,
                     device: entry.device)
                 lastSeenByDeviceID[id] = entry.last_seen_at
+                notificationsEnabledByDeviceID[id] = entry.notifications_enabled
             }
         }
         self.approvedRecipes = approvedRecipes
@@ -784,18 +789,42 @@ public actor MockServer {
     }
 
     /// Every paired device, active or revoked, in id order with its
-    /// last-seen instant (GET /devices). The entry is built from the device
-    /// snapshot alone, so no token can reach it.
+    /// last-seen instant and notifications switch (GET /devices). The entry
+    /// is built from the device snapshot alone, so no token can reach it.
     func listDevices() -> [Components.Schemas.DeviceListEntry] {
-        devicesByID.keys.sorted().compactMap { id in
-            devicesByID[id].map {
-                .init(
-                    as_of_revision: $0.as_of_revision,
-                    entity_version: $0.entity_version,
-                    device: $0.device,
-                    last_seen_at: lastSeenByDeviceID[id])
-            }
+        devicesByID.keys.sorted().compactMap(listEntry(id:))
+    }
+
+    /// A revoked device lists off whatever its stored switch says, as the
+    /// daemon's list does.
+    private func listEntry(id: String) -> Components.Schemas.DeviceListEntry? {
+        devicesByID[id].map {
+            let active = if case .active = $0.device { true } else { false }
+            return .init(
+                as_of_revision: $0.as_of_revision,
+                entity_version: $0.entity_version,
+                device: $0.device,
+                last_seen_at: lastSeenByDeviceID[id],
+                notifications_enabled: active && (notificationsEnabledByDeviceID[id] ?? false))
         }
+    }
+
+    enum NotificationsOutcome {
+        case set(Components.Schemas.DeviceListEntry)
+        /// No such device, or a revoked one: a revoked device has no switch.
+        case unknown
+    }
+
+    /// Sets a device's notifications switch (PUT
+    /// /devices/{device_id}/notifications). Daemon parity: a request for
+    /// the stored value writes nothing and moves no revision.
+    func setDeviceNotifications(id: String, enabled: Bool) -> NotificationsOutcome {
+        guard let current = devicesByID[id], case .active = current.device else { return .unknown }
+        if (notificationsEnabledByDeviceID[id] ?? false) != enabled {
+            revision += 1
+            notificationsEnabledByDeviceID[id] = enabled
+        }
+        return listEntry(id: id).map { .set($0) } ?? .unknown
     }
 
     private static func id(of device: Components.Schemas.Device) -> String {

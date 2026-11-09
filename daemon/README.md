@@ -613,10 +613,11 @@ freesided notify-test -state-dir /path/to/existing/daemon-state
 ```
 
 The running daemon publishes one test notification to the ntfy topic of each
-active paired device. The command prints a line per device: its name, its ID,
-and either `accepted by ntfy` or `not sent:` with the provider's status or a
-failure class. `-device ID` tests one device. The command fails when a notice
-was not accepted or no active device matched.
+active paired device, whether or not its notifications switch is on, so a phone
+can be checked before it is turned on. The command prints a line per device:
+its name, its ID, and either `accepted by ntfy` or `not sent:` with the
+provider's status or a failure class. `-device ID` tests one device. The
+command fails when a notice was not accepted or no active device matched.
 
 Acceptance is the provider's, not the phone's. Whether the notification
 appeared, and whether tapping it opened Freeside, is what the operator checks;
@@ -625,15 +626,17 @@ output and the daemon log never name a topic: a topic is the capability to
 read that device's notifications. A test notice records no delivery and
 changes no item.
 
-The sender that notifies each active device once for each open item lives in
-`internal/signet` (`RunDeliveries`), with up to six attempts per item and
-device on waits of 1, 2, 4, 8, and 16 minutes. The `freesided` command starts
-it and looks for owed notifications every `-attention-delivery-interval`
-(default 5s; `0` turns the sender off). A delivery or an opened receipt
-changes its item's `timing` and raises the row's `entity_version`, and leaves
-`item_version` alone, so engine work bound to an item's exact version is
-unaffected by it. A command that names the `entity_version` its client read
-before a delivery gets a 409 carrying the current item.
+The sender that notifies each active device whose notifications switch is on,
+once for each item opened since the switch went on, lives in `internal/signet`
+(`RunDeliveries`), with up to six attempts per item and device on waits of 1,
+2, 4, 8, and 16 minutes. A device with no stored switch is off, and turning a
+device off stops its retries too. The `freesided` command starts it and looks
+for owed notifications every `-attention-delivery-interval` (default 5s; `0`
+turns the sender off). A delivery or an opened receipt changes its item's
+`timing` and raises the row's `entity_version`, and leaves `item_version`
+alone, so engine work bound to an item's exact version is unaffected by it. A
+command that names the `entity_version` its client read before a delivery gets
+a 409 carrying the current item.
 
 ## Testing conventions
 

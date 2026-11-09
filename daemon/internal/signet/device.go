@@ -203,9 +203,10 @@ func (s *Service) recordDeviceActivity(ctx context.Context, id domain.DeviceID) 
 }
 
 // ListDevices returns every paired device, active or revoked, with its sync
-// metadata and last-seen instant (api/openapi.yaml GET /devices). Devices and
-// activity are read at one snapshot. The entries carry no credential
-// material: neither store read touches device_credentials.
+// metadata, last-seen instant, and notifications switch (api/openapi.yaml GET
+// /devices). Devices, activity, and switches are read at one snapshot. The
+// entries carry no credential material: no store read touches
+// device_credentials.
 func (s *Service) ListDevices(ctx context.Context) ([]DeviceListEntry, error) {
 	var out []DeviceListEntry
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -221,19 +222,16 @@ func (s *Service) ListDevices(ctx context.Context) ([]DeviceListEntry, error) {
 		if err != nil {
 			return err
 		}
+		prefs, err := tx.ListDeviceNotificationPreferences(ctx)
+		if err != nil {
+			return err
+		}
 		out = make([]DeviceListEntry, 0, len(devices))
 		for _, device := range devices {
 			if err := validateSnapshot(state, device.Snapshot); err != nil {
 				return fmt.Errorf("device %q: %w", device.Value.ID, err)
 			}
-			entry := DeviceListEntry{
-				AsOfRevision: device.Snapshot.AsOfRevision, EntityVersion: device.Snapshot.EntityVersion,
-				Device: device.Value,
-			}
-			if lastSeenAt, ok := activity[device.Value.ID]; ok {
-				entry.LastSeenAt = &lastSeenAt
-			}
-			out = append(out, entry)
+			out = append(out, deviceListEntry(device.Value, device.Snapshot, activity, prefs[device.Value.ID].Enabled))
 		}
 		return nil
 	})

@@ -36,6 +36,11 @@ var ErrNotifierUnavailable = errors.New("notification channel is not configured"
 // recorded attempts are different — see RecordDeliveryOpened.)
 var ErrItemNotOpenForDelivery = errors.New("item is not open for delivery")
 
+// errNotificationsOff refuses one of the sender's attempts for a device whose
+// notifications switch no longer owes it the item: turned off, or turned on
+// again after the item was created, since the pass read it.
+var errNotificationsOff = errors.New("device notifications are off for this item")
+
 // SubmitDelivery records one notification attempt for item to device over the
 // ntfy channel. The pipeline is two transactions around the external call, so
 // external I/O never runs inside a Write and every committed state is honest:
@@ -46,7 +51,20 @@ var ErrItemNotOpenForDelivery = errors.New("item is not open for delivery")
 // have happened — and a later retry is the next attempt number. The provider's
 // acceptance populates channel_accepted_at and nothing stronger: "delivered"
 // does not exist in this vocabulary (plan §4).
+//
+// It ignores the device's notifications switch: its callers outside the
+// sender (the dev harness) notify one device on purpose.
 func (s *Service) SubmitDelivery(ctx context.Context, itemID domain.ItemID, deviceID domain.DeviceID) (domain.AttentionDelivery, error) {
+	return s.submitDelivery(ctx, itemID, deviceID, false)
+}
+
+// submitDelivery is SubmitDelivery. With honorSwitch, as the sender's passes
+// call it, the attempt's write re-reads the device's notifications switch and
+// refuses with errNotificationsOff when it no longer owes the item, so a
+// device turned off mid-pass records no further attempt.
+func (s *Service) submitDelivery(
+	ctx context.Context, itemID domain.ItemID, deviceID domain.DeviceID, honorSwitch bool,
+) (domain.AttentionDelivery, error) {
 	if s.ntfy == nil {
 		return domain.AttentionDelivery{}, fmt.Errorf("submit delivery %s/%s: %w", itemID, deviceID, ErrNotifierUnavailable)
 	}
@@ -71,6 +89,15 @@ func (s *Service) SubmitDelivery(ctx context.Context, itemID domain.ItemID, devi
 		}
 		if item.Status != domain.StatusOpen {
 			return fmt.Errorf("item %q is %s: %w", itemID, item.Status, ErrItemNotOpenForDelivery)
+		}
+		if honorSwitch {
+			pref, err := tx.GetDeviceNotificationPreference(ctx, deviceID)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			if !switchOwes(pref, err == nil, item) {
+				return errNotificationsOff
+			}
 		}
 		if snoozed, err := proposalSnoozed(ctx, tx, item, s.now().UTC()); err != nil {
 			return err

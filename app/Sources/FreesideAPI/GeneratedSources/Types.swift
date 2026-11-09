@@ -334,6 +334,25 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /devices/{device_id}/revoke`.
     /// - Remark: Generated from `#/paths//devices/{device_id}/revoke/post(revokeDevice)`.
     func revokeDevice(_ input: Operations.revokeDevice.Input) async throws -> Operations.revokeDevice.Output
+    /// Turn a device's notifications on or off
+    ///
+    /// Sets the device's notifications switch (plan §4: notifications are
+    /// hints; the inbox is canonical). A device's switch is off until an
+    /// operator turns it on, and the daemon sends nothing to a device whose
+    /// switch is off. Turning a device on notifies it only for attention
+    /// items created after that moment: items already open stay in the
+    /// inbox, unnotified. Any active device may set any active device's
+    /// switch, as any may revoke any (`POST /devices/{device_id}/revoke`).
+    /// A revoked device has no switch. Idempotent: a call that asks for the
+    /// stored value writes nothing, moves no revision, and returns the same
+    /// entry, so the instant the switch was turned on never moves on a
+    /// replay. Deliberately not a ClientCommand: it is a delivery
+    /// preference, not a decision on an attention item.
+    ///
+    ///
+    /// - Remark: HTTP `PUT /devices/{device_id}/notifications`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)`.
+    func setDeviceNotifications(_ input: Operations.setDeviceNotifications.Input) async throws -> Operations.setDeviceNotifications.Output
     /// Register the device's action capability contract
     ///
     /// Records the set of decision actions the authenticated device's app
@@ -853,6 +872,35 @@ extension APIProtocol {
         try await revokeDevice(Operations.revokeDevice.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// Turn a device's notifications on or off
+    ///
+    /// Sets the device's notifications switch (plan §4: notifications are
+    /// hints; the inbox is canonical). A device's switch is off until an
+    /// operator turns it on, and the daemon sends nothing to a device whose
+    /// switch is off. Turning a device on notifies it only for attention
+    /// items created after that moment: items already open stay in the
+    /// inbox, unnotified. Any active device may set any active device's
+    /// switch, as any may revoke any (`POST /devices/{device_id}/revoke`).
+    /// A revoked device has no switch. Idempotent: a call that asks for the
+    /// stored value writes nothing, moves no revision, and returns the same
+    /// entry, so the instant the switch was turned on never moves on a
+    /// replay. Deliberately not a ClientCommand: it is a delivery
+    /// preference, not a decision on an attention item.
+    ///
+    ///
+    /// - Remark: HTTP `PUT /devices/{device_id}/notifications`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)`.
+    public func setDeviceNotifications(
+        path: Operations.setDeviceNotifications.Input.Path,
+        headers: Operations.setDeviceNotifications.Input.Headers = .init(),
+        body: Operations.setDeviceNotifications.Input.Body
+    ) async throws -> Operations.setDeviceNotifications.Output {
+        try await setDeviceNotifications(Operations.setDeviceNotifications.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// Register the device's action capability contract
@@ -9340,7 +9388,7 @@ public enum Components {
                 case device
             }
         }
-        /// One row of the device list (plan §5.14): a device's resource snapshot plus when the daemon last saw it. as_of_revision, entity_version, and device are exactly the DeviceSnapshot fields and are synchronized state. last_seen_at is not: it is advisory bookkeeping the daemon keeps beside the device.
+        /// One row of the device list (plan §5.14): a device's resource snapshot plus when the daemon last saw it and whether it is notified. as_of_revision, entity_version, and device are exactly the DeviceSnapshot fields and are synchronized state. last_seen_at and notifications_enabled are not part of the device: the daemon keeps them beside it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/DeviceListEntry`.
@@ -9356,6 +9404,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DeviceListEntry/last_seen_at`.
             public var last_seen_at: Foundation.Date?
+            /// Whether the daemon notifies this device of new attention items. Off by default: a newly paired device, and any device whose switch was never set, reads false and is sent nothing. Set through `PUT /devices/{device_id}/notifications`, which moves the server revision but not this device's entity_version. Turning a device on does not deliver items already open; only items created after that moment are sent.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceListEntry/notifications_enabled`.
+            public var notifications_enabled: Swift.Bool
             /// Creates a new `DeviceListEntry`.
             ///
             /// - Parameters:
@@ -9363,22 +9416,26 @@ public enum Components {
             ///   - entity_version:
             ///   - device:
             ///   - last_seen_at: The device's most recent authenticated request, at a coarse granularity: the daemon refreshes it only once the recorded instant is several minutes old, so it can trail the true last request by that much. Null means the device has made no authenticated request since the daemon began recording activity. Recording it never moves the server revision or this device's entity_version, so a change here is observable only by reading the list again. A revoked device keeps the instant it was last seen while active.
+            ///   - notifications_enabled: Whether the daemon notifies this device of new attention items. Off by default: a newly paired device, and any device whose switch was never set, reads false and is sent nothing. Set through `PUT /devices/{device_id}/notifications`, which moves the server revision but not this device's entity_version. Turning a device on does not deliver items already open; only items created after that moment are sent.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 entity_version: Components.Schemas.EntityVersion,
                 device: Components.Schemas.Device,
-                last_seen_at: Foundation.Date? = nil
+                last_seen_at: Foundation.Date? = nil,
+                notifications_enabled: Swift.Bool
             ) {
                 self.as_of_revision = as_of_revision
                 self.entity_version = entity_version
                 self.device = device
                 self.last_seen_at = last_seen_at
+                self.notifications_enabled = notifications_enabled
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
                 case entity_version
                 case device
                 case last_seen_at
+                case notifications_enabled
             }
         }
         /// The server revision of the transaction that last wrote this entity (plan §5.14); lets a client detect revision gaps per resource.
@@ -13829,6 +13886,35 @@ public enum Components {
             case action_taken = "action_taken"
             case recommendation_override = "recommendation_override"
             case not_decidable_here_shown = "not_decidable_here_shown"
+        }
+        /// The new value of a device's notifications switch.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceNotificationsInput`.
+        public struct DeviceNotificationsInput: Codable, Hashable, Sendable {
+            /// True to notify the device of new attention items.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceNotificationsInput/enabled`.
+            public var enabled: Swift.Bool
+            /// Creates a new `DeviceNotificationsInput`.
+            ///
+            /// - Parameters:
+            ///   - enabled: True to notify the device of new attention items.
+            public init(enabled: Swift.Bool) {
+                self.enabled = enabled
+            }
+            public enum CodingKeys: String, CodingKey {
+                case enabled
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.enabled = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .enabled
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "enabled"
+                ])
+            }
         }
         /// The actions the device's app build can present and submit (plan §5.14, §8), registered by the device so the daemon can derive its action surface. The daemon content-addresses the action set, so every device on one app build shares a digest.
         ///
@@ -24269,6 +24355,285 @@ public enum Operations {
             /// No entity exists under the identifier.
             ///
             /// - Remark: Generated from `#/paths//devices/{device_id}/revoke/post(revokeDevice)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Turn a device's notifications on or off
+    ///
+    /// Sets the device's notifications switch (plan §4: notifications are
+    /// hints; the inbox is canonical). A device's switch is off until an
+    /// operator turns it on, and the daemon sends nothing to a device whose
+    /// switch is off. Turning a device on notifies it only for attention
+    /// items created after that moment: items already open stay in the
+    /// inbox, unnotified. Any active device may set any active device's
+    /// switch, as any may revoke any (`POST /devices/{device_id}/revoke`).
+    /// A revoked device has no switch. Idempotent: a call that asks for the
+    /// stored value writes nothing, moves no revision, and returns the same
+    /// entry, so the instant the switch was turned on never moves on a
+    /// replay. Deliberately not a ClientCommand: it is a delivery
+    /// preference, not a decision on an attention item.
+    ///
+    ///
+    /// - Remark: HTTP `PUT /devices/{device_id}/notifications`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)`.
+    public enum setDeviceNotifications {
+        public static let id: Swift.String = "setDeviceNotifications"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/path`.
+            public struct Path: Sendable, Hashable {
+                /// The paired device's identifier.
+                ///
+                /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/path/device_id`.
+                public var device_id: Components.Parameters.DeviceID
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - device_id: The paired device's identifier.
+                public init(device_id: Components.Parameters.DeviceID) {
+                    self.device_id = device_id
+                }
+            }
+            public var path: Operations.setDeviceNotifications.Input.Path
+            /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.setDeviceNotifications.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.setDeviceNotifications.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.setDeviceNotifications.Input.Headers
+            /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/requestBody/content/application\/json`.
+                case json(Components.Schemas.DeviceNotificationsInput)
+            }
+            public var body: Operations.setDeviceNotifications.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            public init(
+                path: Operations.setDeviceNotifications.Input.Path,
+                headers: Operations.setDeviceNotifications.Input.Headers = .init(),
+                body: Operations.setDeviceNotifications.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/responses/200/content/application\/json`.
+                    case json(Components.Schemas.DeviceListEntry)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.DeviceListEntry {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.setDeviceNotifications.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.setDeviceNotifications.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The device's list entry after the write.
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.setDeviceNotifications.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.setDeviceNotifications.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct BadRequest: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/responses/400/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/responses/400/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.setDeviceNotifications.Output.BadRequest.Body
+                /// Creates a new `BadRequest`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.setDeviceNotifications.Output.BadRequest.Body) {
+                    self.body = body
+                }
+            }
+            /// The request body is not a single `DeviceNotificationsInput`.
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Operations.setDeviceNotifications.Output.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Operations.setDeviceNotifications.Output.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct Forbidden: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/responses/403/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/notifications/PUT/responses/403/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.setDeviceNotifications.Output.Forbidden.Body
+                /// Creates a new `Forbidden`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.setDeviceNotifications.Output.Forbidden.Body) {
+                    self.body = body
+                }
+            }
+            /// The calling device was revoked after the request was authenticated; the gate runs again inside the writing transaction, as `POST /devices/{device_id}/revoke` does.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Operations.setDeviceNotifications.Output.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Operations.setDeviceNotifications.Output.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)/responses/404`.
             ///
             /// HTTP response code: `404 notFound`.
             case notFound(Components.Responses.NotFound)

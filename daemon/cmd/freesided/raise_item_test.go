@@ -334,12 +334,18 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 		t.Fatalf("skill order %v does not name the alerts of raise-item -list %v", skillAlertOrder, AllRaiseAlerts)
 	}
 
-	// A device owes only items created at or after its pairing, so pairing
-	// now keeps the delivery pass to the raised items.
+	// A device owes only items created at or after its pairing and its
+	// notifications switch going on, so pairing and turning it on now keeps
+	// the delivery pass to the raised items.
 	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutDevice(ctx, domain.Device{
-			ID: "phone", DisplayName: "phone", Status: domain.DeviceActive, PairedAt: time.Now().UTC(),
-		})
+		paired := time.Now().UTC()
+		if err := tx.PutDevice(ctx, domain.Device{
+			ID: "phone", DisplayName: "phone", Status: domain.DeviceActive, PairedAt: paired,
+		}); err != nil {
+			return err
+		}
+		return tx.SetDeviceNotificationPreference(ctx,
+			domain.DeviceNotificationPreference{DeviceID: "phone", Enabled: true, UpdatedAt: paired})
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -138,7 +138,7 @@ func assertNoCredentialMaterial(t *testing.T, f fixture, body string, tokens ...
 		t.Fatalf("decode raw device list: %v", err)
 	}
 	for _, entry := range raw {
-		if got, want := slices.Sorted(maps.Keys(entry)), []string{"as_of_revision", "device", "entity_version", "last_seen_at"}; !slices.Equal(got, want) {
+		if got, want := slices.Sorted(maps.Keys(entry)), []string{"as_of_revision", "device", "entity_version", "last_seen_at", "notifications_enabled"}; !slices.Equal(got, want) {
 			t.Errorf("entry fields = %v, want %v", got, want)
 		}
 		var device map[string]json.RawMessage

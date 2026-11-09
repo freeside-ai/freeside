@@ -114,12 +114,12 @@ enum SettingsSummary {
         }
     }
 
-    /// Notifications. Only iOS holds a subscription, so the Mac names where
-    /// the setup lives.
-    static func notifications(_ subscription: DeviceNtfySubscription?, client: SettingsClient) -> String {
-        switch client {
-        case .mac: "On iPhone"
-        case .iPhone, .iPad: subscription == nil ? "Not set up" : "ntfy · topic set"
+    /// Notifications: this device's switch, once the list has loaded.
+    static func notifications(_ devices: DevicesModel) -> String {
+        switch devices.loadState {
+        case .loading: "Loading…"
+        case .failed: "Unavailable"
+        case .loaded: devices.currentDeviceNotificationsEnabled ? "On" : "Off"
         }
     }
 
@@ -467,19 +467,23 @@ struct SettingsPaneView: View {
             if let sync {
                 DevicesView(
                     model: sync.devices, host: host, unresolvedActionCount: sync.unresolvedActionCount,
-                    client: client
+                    client: client, rendersInteractiveControls: rendersInteractiveControls
                 )
                 .padding(SettingsPaneInsets.grammar(client))
             } else {
                 unpaired
             }
         case .notifications:
-            NotificationsPane(
-                subscription: sync?.devices.notificationSubscription,
-                openedAt: sync.flatMap { $0.devices.notificationOpens?.openedAt(deviceID: $0.deviceID) },
-                client: client
-            )
-            .padding(SettingsPaneInsets.grammar(client))
+            if let sync {
+                NotificationsPane(
+                    model: sync.devices,
+                    openedAt: sync.devices.notificationOpens?.openedAt(deviceID: sync.deviceID),
+                    client: client, rendersInteractiveControls: rendersInteractiveControls
+                )
+                .padding(SettingsPaneInsets.grammar(client))
+            } else {
+                unpaired
+            }
         case .daemon:
             daemonPane
         case .systemHealth:

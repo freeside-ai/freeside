@@ -643,6 +643,9 @@ func TestGolden(t *testing.T) {
 	credential := domain.DeviceCredential{ //nolint:gosec // fixture digest of a fixture string, not a credential
 		DeviceID: "device-1", Kind: domain.CredentialHash, Credential: "sha256:4d1566a1d7df42a8517456d60ea06ed284e535cfe4c956aa6ee172dbcdf945f7",
 	}
+	notificationPreference := domain.DeviceNotificationPreference{
+		DeviceID: "device-1", Enabled: true, UpdatedAt: ts.Add(time.Hour),
+	}
 	consumedAt := ts.Add(time.Minute)
 	consumingDevice := domain.DeviceID("device-1")
 	pairingCode := domain.PairingCode{
@@ -2538,6 +2541,7 @@ func TestGolden(t *testing.T) {
 		{"head_independent_provenance", indepProvenance},
 		{"device", device},
 		{"device_credential", credential},
+		{"device_notification_preference", notificationPreference},
 		{"pairing_code", pairingCode},
 		{"finding", finding},
 		{"finding_external", findingExternal},

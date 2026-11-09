@@ -259,14 +259,94 @@ private final class SignOutSpy {
         #expect(model.rows.isEmpty)
     }
 
+    @Test func turningNotificationsOnAndOffFollowsTheDaemon() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let model = DevicesModel(coordinator: coordinator, signOut: {})
+        await model.load()
+        // The daemon's default: this device is off until someone turns it on.
+        #expect(!model.currentDeviceNotificationsEnabled)
+
+        await model.setNotifications(DeviceFixtures.currentDeviceID, enabled: true)
+
+        #expect(model.notificationsFailure == nil)
+        #expect(model.notificationsChangingID == nil)
+        #expect(model.currentDeviceNotificationsEnabled)
+        // The change moved the server revision; the cache caught up.
+        #expect(coordinator.store.freshness == .fresh)
+
+        await model.setNotifications(DeviceFixtures.otherDeviceID, enabled: false)
+
+        #expect(model.notificationsFailure == nil)
+        #expect(model.otherDevices.map(\.notificationsEnabled) == [false])
+        #expect(model.currentDeviceNotificationsEnabled)
+    }
+
+    @Test func aRefusedCredentialWhileSettingNotificationsFlagsThePairing() async throws {
+        let server = MockServer()
+        let transport = StatusOverrideTransport(
+            base: MockServerTransport(server: server), operationID: "setDeviceNotifications", status: 401,
+            once: OneShot())
+        let coordinator = await coordinator(server, transport: transport)
+        let model = DevicesModel(coordinator: coordinator, signOut: {})
+        await model.load()
+
+        await model.setNotifications(DeviceFixtures.currentDeviceID, enabled: true)
+
+        #expect(model.loadState == .failed(DevicesModel.unauthenticatedMessage))
+        #expect(model.rows.isEmpty)
+        #expect(coordinator.store.freshness == .unauthenticated)
+    }
+
+    @Test func aFailedNotificationsChangeKeepsTheStoredSwitchAndSaysSo() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let model = DevicesModel(coordinator: coordinator, signOut: {})
+        await model.load()
+        await server.setBeforeRespond { operationID in
+            if operationID == "setDeviceNotifications" { throw MockServer.ForcedStatus(503) }
+        }
+
+        await model.setNotifications(DeviceFixtures.currentDeviceID, enabled: true)
+
+        #expect(model.notificationsFailure == DevicesModel.notificationsFailureMessage)
+        #expect(model.notificationsChangingID == nil)
+        #expect(!model.currentDeviceNotificationsEnabled)
+
+        // A request that never reaches the daemon reads the same way.
+        await model.load()
+        await server.setBeforeRespond { operationID in
+            if operationID == "setDeviceNotifications" { throw URLError(.notConnectedToInternet) }
+        }
+        await model.setNotifications(DeviceFixtures.currentDeviceID, enabled: true)
+        #expect(model.notificationsFailure == DevicesModel.notificationsFailureMessage)
+        #expect(!model.currentDeviceNotificationsEnabled)
+
+        // Reading the list again answers the failure's ask.
+        await server.setBeforeRespond(nil)
+        await model.load()
+        #expect(model.notificationsFailure == nil)
+    }
+
+    @Test func aRevokedDeviceHasNoSwitchToSet() async throws {
+        let server = MockServer()
+        let model = DevicesModel(coordinator: await coordinator(server), signOut: {})
+        await model.load()
+
+        await model.setNotifications(DeviceFixtures.revokedDeviceID, enabled: true)
+
+        #expect(model.notificationsFailure == DevicesModel.notificationsFailureMessage)
+        #expect(model.revokedDevices.map(\.notificationsEnabled) == [false])
+    }
+
     @Test func confirmationCopyWarnsBeforeRevokingThisDevice() {
         let paired = Date(timeIntervalSince1970: 1_767_323_045)
         let current = DevicesModel.Row(
             id: "device-1", name: "Studio Mac", pairedAt: paired, lastSeenAt: nil, revokedAt: nil,
-            isCurrent: true)
+            isCurrent: true, notificationsEnabled: false)
         let other = DevicesModel.Row(
             id: "device-2", name: "Ben's iPhone", pairedAt: paired, lastSeenAt: nil, revokedAt: nil,
-            isCurrent: false)
+            isCurrent: false, notificationsEnabled: false)
 
         #expect(DevicesView.confirmationTitle(for: current) == "Revoke this device?")
         #expect(DevicesView.confirmationTitle(for: other) == "Revoke Ben's iPhone?")

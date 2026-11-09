@@ -2,10 +2,12 @@ import SwiftUI
 
 /// How this iPhone gets its notifications: the steps that subscribe the ntfy
 /// app to this device's topic. Settings' Notifications pane shows it on the
-/// iPhone. The last line says whether a notification's link has been
-/// opened on this phone since it paired. That is the one sign on the phone
-/// that setup worked, and it is an observation: any app can open such a
-/// link, and so can a notification sent before the phone paired again.
+/// iPhone once this device's notifications switch is on, the only place the
+/// steps appear: pairing offers none, since a new device starts off. The
+/// last line says whether a notification's link has been opened on this
+/// phone since it paired. That is the one sign on the phone that setup
+/// worked, and it is an observation: any app can open such a link, and so
+/// can a notification sent before the phone paired again.
 ///
 /// The ntfy iPhone app takes no link that would subscribe it, so the
 /// operator pastes the topic there by hand. The topic is a secret (whoever
@@ -23,7 +25,7 @@ struct PhoneNotificationSetup: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @Environment(\.pinnedNow) private var pinnedNow
-    /// False where a sheet's own header already names the steps.
+    /// False where the pane's own head already names the steps.
     var showsHeading = true
     @State private var copiedTopic = false
 
@@ -96,50 +98,6 @@ struct PhoneNotificationSetup: View {
                 .foregroundStyle(Color.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
             control()
-        }
-    }
-}
-
-/// The setup steps as their own sheet, which the iPhone offers once after a
-/// pairing (`AppSession.offersNotificationSetup`): the operator has just
-/// been given a topic, and nothing else would lead them to the Notifications
-/// pane that holds it.
-struct PhoneNotificationSetupSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let subscription: DeviceNtfySubscription
-    let opens: NotificationOpenLog
-    let deviceID: String
-    var rendersInteractiveControls = true
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if rendersInteractiveControls {
-                ScrollView { content }
-            } else {
-                content
-            }
-            FreesideSheetActionRow.done { dismiss() }
-        }
-        .background(Color.ground2)
-        .freesideSheetPresentation()
-    }
-
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            FreesideSheetHeader(
-                eyebrow: "Notifications",
-                ask: "Get notified on this phone",
-                consequence:
-                    "Freeside notifies this phone through the ntfy app when an item needs you. These steps stay in Settings, under Notifications.",
-                askLineLimit: nil)
-            // Read here, when the sheet draws, so a test notification tapped
-            // while it is open shows at once.
-            PhoneNotificationSetup(
-                subscription: subscription, openedAt: opens.openedAt(deviceID: deviceID), showsHeading: false
-            )
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

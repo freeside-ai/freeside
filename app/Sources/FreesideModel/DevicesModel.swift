@@ -3,7 +3,8 @@ import FreesideAPI
 import Observation
 
 /// The Devices screen's state: the daemon's paired devices, read through
-/// `GET /devices`, and the one action the screen offers, revocation.
+/// `GET /devices`, and the two actions the screen offers, revocation and
+/// each device's notifications switch.
 ///
 /// The list is a partial read outside bootstrap, so the model owns it and
 /// never caches it: a last-seen instant changes without moving the server
@@ -28,6 +29,9 @@ package final class DevicesModel {
         /// Non-nil exactly when the device is revoked.
         package let revokedAt: Date?
         package let isCurrent: Bool
+        /// Whether the daemon notifies this device. Off until an operator
+        /// turns it on; a revoked device reads off.
+        package let notificationsEnabled: Bool
 
         package var isRevoked: Bool { revokedAt != nil }
     }
@@ -36,11 +40,17 @@ package final class DevicesModel {
     package private(set) var loadState: LoadState = .loading
     package private(set) var revokingID: String?
     package private(set) var revokeFailure: String?
+    /// The device whose notifications switch is being set. One change runs
+    /// at a time, and the switch shows the requested value meanwhile.
+    package private(set) var notificationsChangingID: String?
+    package private(set) var notificationsFailure: String?
 
     static let loadFailureMessage = "Couldn't load devices. Check the connection to the daemon and try again."
     static let unauthenticatedMessage = "This device is no longer paired with the daemon."
     static let revokeFailureMessage =
         "The daemon didn't confirm the revocation. Refresh to see whether the device is still paired."
+    static let notificationsFailureMessage =
+        "The daemon didn't confirm the change to notifications. Refresh to see the current setting."
     static let signOutFailureMessage =
         "This device was revoked, but its stored credential couldn't be removed. Close this sheet and choose Pair Again."
 
@@ -80,6 +90,8 @@ package final class DevicesModel {
     package var currentDevice: Row? { rows.first { $0.isCurrent && !$0.isRevoked } }
     package var otherDevices: [Row] { rows.filter { !$0.isCurrent && !$0.isRevoked } }
     package var revokedDevices: [Row] { rows.filter(\.isRevoked) }
+    /// Off until the list has loaded: the daemon's default.
+    package var currentDeviceNotificationsEnabled: Bool { currentDevice?.notificationsEnabled ?? false }
 
     /// Loads on first appearance and again whenever the observed server
     /// revision has moved since the rows were read: pairing and revocation
@@ -105,8 +117,9 @@ package final class DevicesModel {
                 }
                 loadedAtRevision = observedRevision
                 loadState = .loaded
-                // The failure asks for this read; the rows now answer it.
+                // The failures ask for this read; the rows now answer them.
                 revokeFailure = nil
+                notificationsFailure = nil
             case .undocumented(let status, _):
                 fail(status: status)
             }
@@ -164,6 +177,47 @@ package final class DevicesModel {
         }
     }
 
+    /// Turns a device's notifications on or off. The daemon's answer is the
+    /// row; a change moves the server revision, so the cache catches up and
+    /// the list is read again, as after a revocation.
+    package func setNotifications(_ id: String, enabled: Bool) async {
+        guard notificationsChangingID == nil else { return }
+        notificationsChangingID = id
+        notificationsFailure = nil
+        // Released early on success, after which another change may start;
+        // the defer must not clear that one's marker.
+        var holdsMarker = true
+        defer { if holdsMarker { notificationsChangingID = nil } }
+        do {
+            let output = try await coordinator.store.client.setDeviceNotifications(
+                path: .init(device_id: id), body: .json(.init(enabled: enabled)))
+            switch output {
+            case .ok(let ok):
+                let entry = try ok.body.json
+                let row = Self.row(entry, currentDeviceID: currentDeviceID)
+                if let index = rows.firstIndex(where: { $0.id == row.id }) {
+                    rows[index] = row
+                }
+                // The row now holds the answer, so the switch reads it rather
+                // than the requested value through the reload below.
+                notificationsChangingID = nil
+                holdsMarker = false
+                _ = await coordinator.refreshAfterCommit()
+                await load()
+            case .notFound:
+                // The device was revoked or forgotten since the list was read.
+                await load()
+                notificationsFailure = Self.notificationsFailureMessage
+            case .undocumented(let status, _) where status == 401:
+                fail(status: status)
+            case .badRequest, .forbidden, .undocumented:
+                notificationsFailure = Self.notificationsFailureMessage
+            }
+        } catch {
+            notificationsFailure = Self.notificationsFailureMessage
+        }
+    }
+
     /// A failed read shows no rows: a list that may be out of date would
     /// misreport which devices can still act.
     private func fail(status: Int) {
@@ -183,12 +237,13 @@ package final class DevicesModel {
         case .active(let device):
             Row(
                 id: device.id, name: device.display_name, pairedAt: device.paired_at,
-                lastSeenAt: entry.last_seen_at, revokedAt: nil, isCurrent: device.id == currentDeviceID)
+                lastSeenAt: entry.last_seen_at, revokedAt: nil, isCurrent: device.id == currentDeviceID,
+                notificationsEnabled: entry.notifications_enabled)
         case .revoked(let device):
             Row(
                 id: device.id, name: device.display_name, pairedAt: device.paired_at,
                 lastSeenAt: entry.last_seen_at, revokedAt: device.revoked_at,
-                isCurrent: device.id == currentDeviceID)
+                isCurrent: device.id == currentDeviceID, notificationsEnabled: entry.notifications_enabled)
         }
     }
 }

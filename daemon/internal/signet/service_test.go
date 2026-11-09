@@ -51,15 +51,18 @@ var testPairingKey = []byte("signet-test-pairing-key")
 var testTopicKey = []byte("0123456789abcdef0123456789abcdef")
 
 func newFixture(t *testing.T) fixture {
-	return newServiceFixture(t, true)
+	return newServiceFixture(t, true, false)
 }
 
 // Run projection tests supply their own run graph and attention items.
 func newRunFixture(t *testing.T) fixture {
-	return newServiceFixture(t, false)
+	return newServiceFixture(t, false, false)
 }
 
-func newServiceFixture(t *testing.T, seedItem bool) fixture {
+// newServiceFixture seeds the item, when seedItem, with no creation time
+// unless datedItem, which dates it at the fixture's start: the delivery
+// sender owes nothing for an undated item.
+func newServiceFixture(t *testing.T, seedItem, datedItem bool) fixture {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/signet.db"
@@ -89,6 +92,9 @@ func newServiceFixture(t *testing.T, seedItem bool) fixture {
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	if datedItem {
+		item.CreatedAt = &start
 	}
 	now := start
 	blobs, err := signet.NewBlobStore(t.TempDir())
