@@ -70,12 +70,30 @@ What the runtime supplies, and what the daemon must:
 - **Auto-update is turned off in the image**, through the managed policy
   settings at `/etc/claude-code/managed-settings.json` (`autoUpdates: false`
   plus `DISABLE_AUTOUPDATER=1` in the settings' `env` block), so the pinned
-  version is what a run with provider egress executes. What is verified here:
-  the file parses in the image, and the pinned CLI binary carries the
-  `/etc/claude-code` managed-settings path and both keys. End-to-end
-  enforcement needs an authenticated session, so it is #237's authenticated
-  runs that confirm it; supplying `DISABLE_AUTOUPDATER=1` in `AgentSpec.Env` is
-  the belt-and-braces path until then.
+  version is what a run with provider egress executes. The pinned CLI binary
+  carries the `/etc/claude-code` managed-settings path and both keys.
+  End-to-end enforcement needs an authenticated session, so it is #237's
+  authenticated runs that confirm it; supplying `DISABLE_AUTOUPDATER=1` in
+  `AgentSpec.Env` is the belt-and-braces path until then.
+- **Built-in plugins are turned off in the image**, in the same file: its
+  `enabledPlugins` block sets every built-in plugin the pinned CLI registers
+  (fourteen `cc-plugin-*@builtin` ids on 2.1.319) to `false`, so a writer's
+  init event reports `plugins: []`, the conformance judge's proof of context
+  severance (#2922). Managed settings are the only tier the policy-only
+  `cc-plugin-sec-default` reads, and the file's presence is what seats that
+  plugin, so the launch's `--settings` flag cannot do this. The list names
+  every registered id, not only those one init event showed, because which
+  ones load depends on the entrypoint, account, and machine. The file is
+  `images/agent-claude/managed-settings.json`, copied root-owned and `0644`
+  into a `0755` directory: the CLI runs as the launch's unprivileged user and
+  skips a file that user can't read, while the plugin it seats still loads.
+  Three checks hold it: `TestClaudeImageDisablesEveryBuiltinPlugin`
+  (`daemon/internal/agentbaseline`) pins the file's exact contents and fails
+  on a CLI pin bump until the list is re-measured; the build script reads
+  the file in the built image as uid 1001 and requires every `enabledPlugins`
+  value to be `false`; and the opt-in `TestPinnedClaudeInitSeveranceLive`
+  (`daemon/README.md`) runs the writer launch on the image and requires the
+  judge to report severance.
 - **Credentials arrive as a read-only mount** at their own target outside the
   workspace (ward check 1). Pointing the CLI at that target, and the leased
   mutation of the auth store the mode needs, are the driver's decisions
