@@ -4239,13 +4239,15 @@ pointer.
 A failed scheduled pass logs and waits for the next one; it does not stop
 the daemon.
 
-### Set Up the macOS Verification Executor by Hand
+### Install the macOS Verification Executor
 
 The credential-free macOS verification executor (`internal/macverify`) runs
 one trusted recipe command per job as an unprivileged slot account on the
-daemon host. Its `Room` is the executor's `verify.Room`. The installer that
-sets it up is #2878; until then a developer sets it up by hand as below. The
-packet-filter rules, the conformance pass, and the pre-job probe are #2879.
+daemon host. Its `Room` is the executor's `verify.Room`. The executor needs
+host state only an administrator can create, so `freesided macverify` installs
+it as a one-shot operator step under `sudo`, like the installers in
+`app/README.md`; the daemon never holds root. The conformance pass and the
+pre-job probe are #2879.
 
 **Launch path.** `freesided` runs as the operator's LaunchAgent, so it has no
 root, yet launching as a slot needs root. The room reaches root through one
@@ -4264,8 +4266,8 @@ operator's window-server session (spike 1 in
   its own up to `/` is root-owned and not group- or world-writable.
 - **The daemon checks the helper.** Before each job the room refuses the job
   unless `<root>/bin/slot-run` is root-owned, not group- or world-writable,
-  and byte-identical to the copy the daemon embeds. Reinstall the helper
-  after upgrading the daemon.
+  and byte-identical to the copy the daemon embeds. Rerun install after
+  upgrading the daemon.
 - **Absence goes by uid.** After every command the room reaps everything the
   slot owns and checks, through the `kern.proc.uid` and `kern.proc.ruid`
   sysctls, that the slot's uid owns no live process. That catches a
@@ -4284,6 +4286,7 @@ world-writable unless noted, and so is every ancestor of the root:
   homes/<slot>/            the slot's home and its account's NFSHomeDirectory (slot, 0700)
   jobs/<slot>/<job-id>/    a job's directory, holding workspace/ (slot, 0700)
   jobs/<slot>/<job-id>.sb  the job's sandbox profile
+  pf/anchor.conf           the slots' packet-filter anchor, mode 0644
 ```
 
 **Profile.** `macverify.DefaultSandboxProfile()` denies all network access,
@@ -4295,44 +4298,69 @@ The helper resets all four every job. The command's environment is exactly
 SwiftPM recipe command must pass `--disable-sandbox`: SwiftPM sandboxes its
 manifest build with `sandbox-exec`, which cannot nest inside the room's.
 
-**Set it up.** The steps use `/Library/Freeside/macverify` and two slots;
-pick unused ids (`dscl . -list /Users UniqueID`):
+**Install it.** Run from the build whose daemon will use it, since the helper
+it writes is the one that binary embeds:
 
 ```sh
-R=/Library/Freeside/macverify
-sudo dseditgroup -o create -i 460 fvslots
-for n in 1 2; do
-  s=fvslot$n
-  sudo dscl . -create /Users/$s
-  sudo dscl . -create /Users/$s UniqueID $((460 + n))
-  sudo dscl . -create /Users/$s PrimaryGroupID 460
-  sudo dscl . -create /Users/$s UserShell /usr/bin/false
-  sudo dscl . -create /Users/$s NFSHomeDirectory "$R/homes/$s"
-  sudo dscl . -create /Users/$s Password '*'
-  sudo dscl . -create /Users/$s IsHidden 1
-done
-sudo install -d -o root -g wheel -m 0755 /Library/Freeside "$R" "$R/bin" \
-  "$R/jobs" "$R/homes" "$R/template" "$R/template/home"
-# The helper from the same commit as the daemon binary:
-sudo install -o root -g wheel -m 0755 daemon/internal/macverify/slot-run.sh "$R/bin/slot-run"
-printf 'fvslot1\nfvslot2\n' | sudo tee "$R/bin/slots.conf" >/dev/null
-sudo chmod 0644 "$R/bin/slots.conf"
-# The sudoers drop-in, for the user the daemon runs as:
-sudo grep includedir /etc/sudoers   # expect /private/etc/sudoers.d
-echo "$(id -un) ALL=(root) NOPASSWD: $R/bin/slot-run" >/tmp/freeside-slot-run
-sudo visudo -cf /tmp/freeside-slot-run &&
-  sudo install -o root -g wheel -m 0440 /tmp/freeside-slot-run /etc/sudoers.d/freeside-slot-run
-rm /tmp/freeside-slot-run
+sudo freesided macverify install    # create or complete the install
+freesided macverify check           # name each missing or misconfigured piece
+sudo freesided macverify check      # also read the loaded pf rules and pf state
 ```
 
-The daemon's `macverify.Config` then names `ExecutorRoot: "$R"` and
-`Slots: ["fvslot1", "fvslot2"]`.
+`install` and `remove` need root; `check` runs as anyone but needs root to
+read the sudoers drop-in and pf, and reports those pieces `unread` without it.
+`check` exits nonzero when any piece is missing, misconfigured, or foreign.
+Every name has a flag (`-root`, `-slots`, `-slot-prefix`, `-group`,
+`-first-id`, `-operator`, `-anchor`, `-label`, `-sudoers-name`); the defaults
+are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
 
-**Run the live suite.** It runs a probe through the production room as a real
-slot: loopback refused, resolver empty, writes outside the job directory
-refused, no window-server session, the home reset between jobs, a signal death
-read as `-1`, a timeout that reaps a descendant that left its session, and the
-helper refusing accounts outside `slots.conf`:
+- **The slot group and accounts:** group `fvslots` (gid 460) and accounts
+  `fvslot1` to `fvslot<N>` (uid 460+n, `-slots 2` by default), each hidden,
+  with shell `/usr/bin/false`, password `*`, primary group `fvslots`, and home
+  `<root>/homes/<slot>`.
+- **The executor root** (`/Library/Freeside/macverify`) in the layout above,
+  plus `pf/`, and each slot's home (the slot's, `0700`). It creates a missing
+  `/Library/Freeside` but never changes an existing ancestor.
+- **The helper and slot list:** `bin/slot-run` from the daemon's embedded copy
+  and `bin/slots.conf`. Rerun install after upgrading the daemon: it rewrites a
+  helper that differs, and the room refuses jobs until it does.
+- **The sudoers drop-in:** `/etc/sudoers.d/freeside-slot-run` (`0440`), one
+  rule letting the operator run `<root>/bin/slot-run` as root with no
+  password, checked with `visudo -cf` before it lands. Stock macOS includes
+  `/private/etc/sudoers.d`.
+- **The packet-filter anchor:** `<root>/pf/anchor.conf`, holding
+  `block drop out quick user <slot>` and its `in` twin per slot (the bytes
+  `macverify.PacketFilterRules` renders for `Config.PacketFilterRules`),
+  loaded as `com.apple/freeside-macverify`. The stock `/etc/pf.conf`
+  evaluates every `com.apple/*` child, beside a VPN client's anchor.
+- **The boot LaunchDaemon:** `/Library/LaunchDaemons/ai.freeside.macverify.pf.plist`
+  runs `pfctl -E -a com.apple/freeside-macverify -f <root>/pf/anchor.conf` at
+  load. Stock macOS loads `/etc/pf.conf` at boot but never enables pf, and the
+  anchor does not survive a reboot, so the job reloads it and takes a pf
+  enable reference each boot.
+
+Install prints the `macverify.Config` values it determines (`ExecutorRoot`
+and `Slots`). A rerun changes nothing when nothing is missing.
+
+**Adoption.** Install refuses, changing nothing, when a slot or group name or
+id is held by something it did not create, when the operator is root or
+unknown, when an ancestor of the root is not root-owned or is group- or
+world-writable, or when the root or a directory in it is owned by another
+user or holds anything install does not write (so `-root /usr/local` is
+refused, not adopted). An existing account counts as a slot only when its primary
+group id is the slot group's and its home is `<root>/homes/<slot>`; install
+then repairs its other attributes but never renumbers it. The group counts as
+install's only when every member, and every account with it as primary group,
+is a slot. An account in `admin` is refused. So install completes the earlier
+hand setup in place, and refuses a real user who shares a slot's name. To change the slot count, remove and
+install again.
+
+**Run the live suites.** The room suite runs a probe through the production
+room as a real slot of an installed executor: loopback refused, resolver
+empty, writes outside the job directory refused, no window-server session,
+the home reset between jobs, a signal death read as `-1`, a timeout that
+reaps a descendant that left its session, and the helper refusing accounts
+outside `slots.conf`:
 
 ```sh
 FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify \
@@ -4340,19 +4368,36 @@ FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macveri
   bash scripts/check.sh daemon test -- ./internal/macverify/... -run Live -v
 ```
 
-**Remove it:**
+The install suite builds `freesided`, installs two slots under names disjoint
+from the default install (`fvtest1` and `fvtest2`, ids from 470, root
+`/Library/Freeside/macverify-livetest`), checks the accounts, files, and
+loaded anchor, runs the confinement probe as an installed slot, and removes
+everything. It runs `sudo -n`, so refresh sudo in the same terminal first:
 
 ```sh
-R=/Library/Freeside/macverify
-sudo rm /etc/sudoers.d/freeside-slot-run
-for s in fvslot1 fvslot2; do
-  sudo pkill -9 -U "$s"
-  sudo dscl . -delete /Users/$s
-done
-sudo dseditgroup -o delete fvslots
-sudo rm -rf "$R"
-sudo rmdir /Library/Freeside 2>/dev/null
+sudo -v && FREESIDE_MACVERIFY_INSTALL_LIVE_TEST=1 \
+  bash scripts/check.sh daemon test -- ./internal/macverify/... -run LiveInstall -v
 ```
+
+**Remove it.** Stop the daemon's verification jobs first:
+
+```sh
+sudo freesided macverify remove
+```
+
+Removal deletes the sudoers drop-in first, so the daemon starts no job while
+it runs, then the LaunchDaemon, each slot account listed in
+`<root>/bin/slots.conf` that the adoption rule marks as a slot (after killing
+its processes), the loaded anchor rules, the group once nothing names it, the
+entries install writes under the root, and the root and `/Library/Freeside`
+if that leaves each empty. It deletes the sudoers drop-in and LaunchDaemon
+only when their content is exactly what install writes, the group only when
+it found a root-owned `slots.conf` or helper, and the root's entries only when
+the root is a root-owned directory holding a `slot-run` helper below
+ancestors that pass install's check. It reports anything else as left, and an
+absent install is a no-op. The pf enable reference the boot job took stays until the next
+reboot; pf then runs only the stock rules. Each slot's per-user temporary and
+cache directories under `/private/var/folders` stay too.
 
 ## External Review Replies
 

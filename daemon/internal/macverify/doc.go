@@ -26,6 +26,12 @@
 // descendant that left its session included. A slot without that proof is
 // quarantined.
 //
+// Install, Inspect, and Remove create, check, and delete the host state the
+// room needs (the slot accounts and group, the executor root and helper, the
+// sudoers rule, and the packet-filter anchor with its boot LaunchDaemon),
+// behind freesided macverify. They act through a Host, and every decision
+// about what they may adopt or delete is theirs (install.go).
+//
 // Tier A gates. The backend declares the capability only from a passed
 // BackendConformance record for its own class and current configuration
 // digest, and only on darwin. A fresh backend declares nothing, and a record
