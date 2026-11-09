@@ -249,7 +249,19 @@ public final class NavigationModel {
     /// A System Health row: its finding's card over the pane, pushed on the
     /// iPhone and seated in the pane on the Mac.
     public func openFinding(_ itemID: String) {
-        setSettingsRoute([.list, .pane(.systemHealth), .finding(itemID)])
+        openSystemHealth(finding: itemID)
+    }
+
+    /// Where every ambient health signal lands (the stopped notice, the Mac
+    /// menu bar line, a notification link): the System Health pane, with
+    /// `itemID`'s card over it when one is named. The iPhone pushes this
+    /// path; the Mac's Settings window reads the selected pane and seated
+    /// finding from it, so the caller still opens that window.
+    public func openSystemHealth(finding itemID: String? = nil) {
+        setSettingsRoute([.list, .pane(.systemHealth)] + (itemID.map { [.finding($0)] } ?? []))
+        // The Mac source list selects a pane without moving the path, so a
+        // path that is already the pane's leaves another pane selected.
+        settingsPane = .systemHealth
     }
 
     /// The seated card's back control: return to the System Health pane.
