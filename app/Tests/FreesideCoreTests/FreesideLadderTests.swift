@@ -5,7 +5,7 @@ import Testing
 
 struct FreesideLadderTests {
     /// R10 as the 8 Oct 2026 interfaces handoff states it: the Mac sets on
-    /// its native sizes.
+    /// its native sizes. The mono value step departs from it (#2912).
     @Test func theMacLadderIsTheHandoffs() {
         let mac = FreesideLadder.mac
         #expect(mac.ask == 20)
@@ -14,7 +14,7 @@ struct FreesideLadderTests {
         #expect(mac.rowTitle == 14)
         #expect(mac.label == 13)
         #expect(mac.body == 13)
-        #expect(mac.monoValue == 12)
+        #expect(mac.monoValue == 11.5)
         #expect(mac.trailingSummary == 12)
         #expect(mac.keyword == 11)
         #expect(mac.chip == 11)
@@ -27,7 +27,8 @@ struct FreesideLadderTests {
         #expect(mac.floor == 11)
     }
 
-    /// The iPhone keeps the survey card's scale a point smaller.
+    /// The iPhone keeps the survey card's scale a point smaller. The mono
+    /// value step departs from the handoff (#2912).
     @Test func thePhoneLadderIsTheHandoffs() {
         let phone = FreesideLadder.phone
         #expect(phone.ask == 24)
@@ -36,7 +37,7 @@ struct FreesideLadderTests {
         #expect(phone.rowTitle == 15.5)
         #expect(phone.label == 15)
         #expect(phone.body == 13.5)
-        #expect(phone.monoValue == 13.5)
+        #expect(phone.monoValue == 12.5)
         #expect(phone.trailingSummary == 12.5)
         #expect(phone.keyword == 11.5)
         #expect(phone.chip == 11.5)
@@ -76,6 +77,17 @@ struct FreesideLadderTests {
     #if os(macOS)
         @Test func aMacBuildDrawsTheMacLadder() {
             #expect(FreesideLadder.current == .mac)
+        }
+
+        /// A half step draws at its own size, not rounded to a whole point
+        /// (#2912): Plex Mono's advance is 0.6em, so ten letters at 11.5pt
+        /// run 69pt where 12pt would run 72.
+        @MainActor @Test func aMacHalfStepIsNotRounded() {
+            _ = FreesideFont.registration
+            let host = NSHostingView(
+                rootView: Text("abcdefghij").font(FreesideFont.monoValue).fixedSize()
+                    .environment(\.dynamicTypeSize, .large))
+            #expect(abs(host.fittingSize.width - 10 * 0.6 * FreesideLadder.mac.monoValue) <= 1)
         }
     #endif
 }
