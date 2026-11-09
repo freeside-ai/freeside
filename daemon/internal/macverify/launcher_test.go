@@ -13,7 +13,8 @@ import (
 
 func TestParsePrepared(t *testing.T) {
 	t.Parallel()
-	valid := "root=/opt/fv\nuid=401\nhome=/opt/fv/homes/slot1\ntmp=/private/var/folders/ab/x/T\ncache=/private/var/folders/ab/x/C\n"
+	valid := "root=/opt/fv\nuid=401\nhome=/opt/fv/homes/slot1\ntmp=/private/var/folders/ab/x/T\ncache=/private/var/folders/ab/x/C\n" +
+		"swift_cache=none\n"
 	got, err := parsePrepared([]byte(valid))
 	if err != nil {
 		t.Fatalf("parsePrepared: %v", err)
@@ -25,17 +26,26 @@ func TestParsePrepared(t *testing.T) {
 	if got != want {
 		t.Fatalf("parsePrepared = %+v, want %+v", got, want)
 	}
+	key := strings.Repeat("ab", 32)
+	got, err = parsePrepared([]byte(strings.Replace(valid, "swift_cache=none", "swift_cache="+key, 1)))
+	if err != nil || got.SwiftCache != key {
+		t.Fatalf("parsePrepared with a Swift cache = %+v, %v; want key %s", got, err, key)
+	}
 	for name, report := range map[string]string{
-		"missing key":   strings.Replace(valid, "cache=/private/var/folders/ab/x/C\n", "", 1),
-		"duplicate key": valid + "uid=401\n",
-		"extra key":     valid + "shell=/bin/sh\n",
-		"not key=value": valid + "noise\n",
-		"relative path": strings.Replace(valid, "home=/opt/fv/homes/slot1", "home=homes/slot1", 1),
-		"unclean path":  strings.Replace(valid, "tmp=/private/var/folders/ab/x/T", "tmp=/private/var/folders/ab/x/T/", 1),
-		"root uid":      strings.Replace(valid, "uid=401", "uid=0", 1),
-		"signed uid":    strings.Replace(valid, "uid=401", "uid=+401", 1),
-		"padded uid":    strings.Replace(valid, "uid=401", "uid=0401", 1),
-		"empty":         "",
+		"missing key":       strings.Replace(valid, "cache=/private/var/folders/ab/x/C\n", "", 1),
+		"duplicate key":     valid + "uid=401\n",
+		"extra key":         valid + "shell=/bin/sh\n",
+		"not key=value":     valid + "noise\n",
+		"relative path":     strings.Replace(valid, "home=/opt/fv/homes/slot1", "home=homes/slot1", 1),
+		"unclean path":      strings.Replace(valid, "tmp=/private/var/folders/ab/x/T", "tmp=/private/var/folders/ab/x/T/", 1),
+		"root uid":          strings.Replace(valid, "uid=401", "uid=0", 1),
+		"signed uid":        strings.Replace(valid, "uid=401", "uid=+401", 1),
+		"padded uid":        strings.Replace(valid, "uid=401", "uid=0401", 1),
+		"no swift cache":    strings.Replace(valid, "swift_cache=none\n", "", 1),
+		"empty swift cache": strings.Replace(valid, "swift_cache=none", "swift_cache=", 1),
+		"short swift cache": strings.Replace(valid, "swift_cache=none", "swift_cache=abc", 1),
+		"upper swift cache": strings.Replace(valid, "swift_cache=none", "swift_cache="+strings.Repeat("AB", 32), 1),
+		"empty":             "",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, err := parsePrepared([]byte(report)); err == nil {

@@ -71,6 +71,9 @@ type Room struct {
 	// host's (HostToolchain outside tests).
 	toolchain     Toolchain
 	hostToolchain func(context.Context) (Toolchain, error)
+	// swiftCacheMasked makes the room serve no Swift dependency cache, so
+	// the live suite can show a job without it attempts the network.
+	swiftCacheMasked bool
 }
 
 var _ verify.Room = (*Room)(nil)
@@ -122,11 +125,13 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 //
 // Tier A gates, each checked on every call: the installed helper is the
 // embedded one (checkInstalledHelper); the host's Xcode and Swift are the
-// configuration's pin (checkToolchain); the prepared job directory is the
-// slot's own at 0700 (checkPrepared); and, before the slot is released, no
-// process owned by the slot's uid survives (teardown). A slot that fails the
-// last, or whose helper the room stopped waiting for, is quarantined and Run
-// returns ErrAbsenceUnproven.
+// configuration's pin (checkToolchain); a workspace holding a
+// Package.resolved has a complete Swift dependency cache entry for its key,
+// and prepare seeded exactly that entry (swiftCacheFor, checkPrepared); the
+// prepared job directory is the slot's own at 0700 (checkPrepared); and,
+// before the slot is released, no process owned by the slot's uid survives
+// (teardown). A slot that fails the last, or whose helper the room stopped
+// waiting for, is quarantined and Run returns ErrAbsenceUnproven.
 func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.StepResult, error) {
 	if r == nil || r.launcher == nil || r.pool == nil {
 		return verify.StepResult{}, errors.New("macverify room is not initialized")
@@ -146,6 +151,10 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 	if err := r.checkToolchain(ctx); err != nil {
 		return verify.StepResult{}, err
 	}
+	swiftCache, err := r.swiftCacheFor(workdir)
+	if err != nil {
+		return verify.StepResult{}, err
+	}
 	jobID, err := newJobID()
 	if err != nil {
 		return verify.StepResult{}, err
@@ -157,7 +166,7 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 	if err != nil {
 		return verify.StepResult{}, err
 	}
-	result, preparedUID, runErr := r.runJob(ctx, slot, jobID, workdir, argv)
+	result, preparedUID, runErr := r.runJob(ctx, slot, jobID, workdir, swiftCache, argv)
 	if errors.Is(runErr, errHelperAbandoned) {
 		// Tearing down under a live helper would race it, and the teardown
 		// could not prove the helper would not touch the slot afterwards.
@@ -178,15 +187,15 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 // runJob prepares the slot and runs the command. It returns the uid prepare
 // reported (zero if prepare failed), for the teardown to cross-check. An
 // error wrapping errHelperAbandoned means a helper may still be running.
-func (r *Room) runJob(ctx context.Context, slot, jobID, workdir string, argv []string) (verify.StepResult, int, error) {
+func (r *Room) runJob(ctx context.Context, slot, jobID, workdir, swiftCache string, argv []string) (verify.StepResult, int, error) {
 	prepareCtx, cancelPrepare := context.WithTimeout(context.WithoutCancel(ctx), r.prepareTimeout)
-	prepared, err := r.launcher.prepare(prepareCtx, slot, jobID, workdir, r.profile)
+	prepared, err := r.launcher.prepare(prepareCtx, slot, jobID, workdir, r.profile, swiftCache)
 	cancelPrepare()
 	if err != nil {
 		return verify.StepResult{}, 0, fmt.Errorf("prepare slot %s: %w", slot, err)
 	}
 	jobDir := filepath.Join(r.root, "jobs", slot, jobID)
-	if err := r.checkPrepared(slot, jobDir, prepared); err != nil {
+	if err := r.checkPrepared(slot, jobDir, swiftCache, prepared); err != nil {
 		return verify.StepResult{}, prepared.UID, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -232,11 +241,15 @@ func (r *Room) runJob(ctx context.Context, slot, jobID, workdir string, argv []s
 }
 
 // checkPrepared re-checks what prepare reported against this room's
-// configuration and the job directory on disk, which the daemon can inspect
-// without privilege: the slot's own at 0700, not a symlink.
-func (r *Room) checkPrepared(slot, jobDir string, p preparedJob) error {
+// configuration, the Swift dependency cache entry the room chose, and the
+// job directory on disk, which the daemon can inspect without privilege: the
+// slot's own at 0700, not a symlink.
+func (r *Room) checkPrepared(slot, jobDir, swiftCache string, p preparedJob) error {
 	if p.Root != r.root {
 		return fmt.Errorf("slot-run acted on executor root %s, configured %s", p.Root, r.root)
+	}
+	if p.SwiftCache != swiftCache {
+		return fmt.Errorf("slot-run seeded Swift cache %q, want %q", p.SwiftCache, swiftCache)
 	}
 	if want := filepath.Join(r.root, "homes", slot); p.Home != want {
 		return fmt.Errorf("slot-run prepared home %s for slot %s, want %s", p.Home, slot, want)
@@ -264,6 +277,24 @@ func (r *Room) checkToolchain(ctx context.Context) error {
 		return fmt.Errorf("%w: host has %s, configuration pins %s", ErrToolchainMismatch, host, r.toolchain)
 	}
 	return nil
+}
+
+// swiftCacheFor returns the Swift dependency cache key prepare seeds the job
+// from, or "" for a workspace with no Package.resolved. A workspace whose
+// key has no complete entry is refused with ErrSwiftCacheMissing before any
+// slot is leased.
+func (r *Room) swiftCacheFor(workdir string) (string, error) {
+	key, err := workspaceSwiftCacheKey(workdir)
+	if err != nil {
+		return "", err
+	}
+	if key.Key == "" || r.swiftCacheMasked {
+		return "", nil
+	}
+	if err := lookupSwiftCache(r.root, key); err != nil {
+		return "", err
+	}
+	return key.Key, nil
 }
 
 // teardown proves the slot is free again: reap, wait until the slot's uid

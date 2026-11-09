@@ -171,6 +171,8 @@ func TestLiveHelperRefusesMalformedArguments(t *testing.T) {
 		{"cleanup", slot, "not-a-job-id"},
 		{"cleanup", slot, strings.Repeat("A", 32)},
 		{"prepare", slot, strings.Repeat("a", 32), "relative/workspace"},
+		{"prepare", slot, strings.Repeat("a", 32), "/private/tmp", "not-a-swift-cache-key"},
+		{"prepare", slot, strings.Repeat("a", 32), "/private/tmp", strings.Repeat("A", 64)},
 		{"bogus", slot},
 	} {
 		cmd := exec.Command(sudoPath, append([]string{"-n", helperPath(cfg.ExecutorRoot)}, args...)...) //nolint:gosec // G204: fixed sudo and helper path; the refusal under test is the point

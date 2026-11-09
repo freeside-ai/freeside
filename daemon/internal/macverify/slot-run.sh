@@ -12,14 +12,18 @@
 # Operations (every slot argument must be listed in slots.conf beside this
 # script; a job id is 32 lowercase hex characters):
 #
-#   prepare <slot> <job-id> <workdir>   sandbox profile on stdin
+#   prepare <slot> <job-id> <workdir> [<swift-cache-key>]
+#                                       sandbox profile on stdin
 #   run     <slot> <job-id> HOME=… TMPDIR=… PATH=… LC_ALL=C
 #                 JOB_DIR=… SLOT_HOME=… SLOT_TMP=… SLOT_CACHE=… -- <argv>…
 #   reap    <slot>
 #   cleanup <slot> <job-id>
 #
 # prepare and reap print key=value lines the daemon checks; run replaces this
-# process with the command and exits with its status.
+# process with the command and exits with its status. A Swift cache key
+# (64 lowercase hex characters) names an entry under <root>/swift-cache
+# whose seed prepare copies into the job directory and the slot's home
+# (#2880); the mirrors the seed points at stay in the entry, read in place.
 #
 # Trust: the executor root is the parent of this script's directory, never an
 # argument, and every directory from here to / must be root-owned and not
@@ -138,6 +142,35 @@ select_slot() {
 	[ "$recorded" = "NFSHomeDirectory: $home" ] || refuse "the home of $slot is not $home"
 }
 
+# caller_owned refuses a path that is not owned by the caller or that group
+# or others may write.
+caller_owned() {
+	meta=$(stat -f '%u %Lp' "$1") || refuse "cannot inspect $1"
+	owner=${meta% *}
+	perm=${meta#* }
+	[ "$owner" = "$caller" ] || refuse "$1 is not owned by the caller"
+	[ $((0$perm & 022)) -eq 0 ] || refuse "$1 is writable by group or others"
+}
+
+# select_swift_cache sets entry for a Swift dependency cache key. The cache
+# belongs to the caller and is read as the caller, as the workspace is, so
+# the check is that no one else, a slot included, could have written the
+# directories the seed is read from, and that the entry is complete.
+select_swift_cache() {
+	key=$1
+	case $key in
+	*[!0-9a-f]*) refuse "malformed Swift cache key" ;;
+	esac
+	[ "${#key}" -eq 64 ] || refuse "malformed Swift cache key"
+	entry=$root/swift-cache/$key
+	for dir in "$root/swift-cache" "$entry" "$entry/seed" "$entry/seed/job" "$entry/seed/home"; do
+		[ -d "$dir" ] && [ ! -L "$dir" ] || refuse "$dir is not a directory"
+		caller_owned "$dir"
+	done
+	[ -f "$entry/record.json" ] && [ ! -L "$entry/record.json" ] ||
+		refuse "Swift cache entry $key is incomplete"
+}
+
 select_job() {
 	job=$1
 	case $job in
@@ -218,10 +251,12 @@ reset_home() {
 }
 
 op_prepare() {
-	[ "$#" -eq 3 ] || refuse "usage: prepare <slot> <job-id> <workdir>"
+	[ "$#" -eq 3 ] || [ "$#" -eq 4 ] || refuse "usage: prepare <slot> <job-id> <workdir> [<swift-cache-key>]"
 	select_slot "$1"
 	select_job "$2"
 	src=$3
+	entry=
+	[ "$#" -eq 3 ] || select_swift_cache "$4"
 	case $src in
 	/*) ;;
 	*) refuse "workdir must be absolute" ;;
@@ -266,9 +301,31 @@ op_prepare() {
 	# shellcheck disable=SC2024
 	sudo -u "$slot" tar -x -f - --no-xattrs --no-acls --no-fflags --no-mac-metadata \
 		-C "$jobdir/workspace" <"$archive"
+	swift_cache=none
+	if [ -n "$entry" ]; then
+		# The seed goes the way the workspace did. It names its members, so
+		# no archive entry for . resets the job directory's or the home's
+		# mode, and tar's refusal to extract through a symlink stops a
+		# workspace that makes a package's .swiftpm a symlink from
+		# redirecting the write.
+		# shellcheck disable=SC2024
+		sudo -u "#$caller" tar -c -f - --no-xattrs --no-acls --no-fflags --no-mac-metadata \
+			-C "$entry/seed/job" workspace source-packages >"$archive"
+		# shellcheck disable=SC2024
+		sudo -u "$slot" tar -x -f - --no-xattrs --no-acls --no-fflags --no-mac-metadata \
+			-C "$jobdir" <"$archive"
+		# shellcheck disable=SC2024
+		sudo -u "#$caller" tar -c -f - --no-xattrs --no-acls --no-fflags --no-mac-metadata \
+			-C "$entry/seed/home" .gitconfig >"$archive"
+		# shellcheck disable=SC2024
+		sudo -u "$slot" tar -x -f - --no-xattrs --no-acls --no-fflags --no-mac-metadata \
+			-C "$home" <"$archive"
+		swift_cache=$key
+	fi
 	rm -f "$archive"
 	assert_idle
-	printf 'root=%s\nuid=%s\nhome=%s\ntmp=%s\ncache=%s\n' "$root" "$uid" "$home" "$tmp" "$cache"
+	printf 'root=%s\nuid=%s\nhome=%s\ntmp=%s\ncache=%s\nswift_cache=%s\n' \
+		"$root" "$uid" "$home" "$tmp" "$cache" "$swift_cache"
 }
 
 op_run() {
