@@ -27,9 +27,6 @@ var structuralTokenWalkers = map[string]map[string]bool{
 		"skipJSONValue":             true,
 		"skipUntilJSONClose":        true,
 	},
-	"internal/inference/client.go": {
-		"rejectDuplicateKeys": true,
-	},
 	"internal/store/local_backup.go": {
 		"rejectBackupDuplicateJSONKeys": true,
 		"checkBackupJSONValue":          true,

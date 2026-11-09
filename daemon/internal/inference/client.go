@@ -645,52 +645,5 @@ func (c *Client) Maintain(ctx context.Context) error {
 }
 
 func decodeStrictObject(data []byte, dst any, max int) error {
-	if err := rejectDuplicateKeys(data); err != nil {
-		return err
-	}
 	return strictjson.Decode(data, dst, strictjson.RejectInvalidUTF8, strictjson.Limit(max))
-}
-
-func rejectDuplicateKeys(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	var visit func() error
-	visit = func() error {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		delim, compound := token.(json.Delim)
-		if !compound {
-			return nil
-		}
-		switch delim {
-		case '{':
-			seen := map[string]bool{}
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return err
-				}
-				key, ok := keyToken.(string)
-				if !ok || seen[key] {
-					return errors.New("duplicate object key")
-				}
-				seen[key] = true
-				if err := visit(); err != nil {
-					return err
-				}
-			}
-		case '[':
-			for decoder.More() {
-				if err := visit(); err != nil {
-					return err
-				}
-			}
-		default:
-			return fmt.Errorf("unexpected JSON delimiter %q", delim)
-		}
-		_, err = decoder.Token()
-		return err
-	}
-	return visit()
 }
