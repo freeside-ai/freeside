@@ -39,6 +39,18 @@ import Testing
         #expect(!attached.isEmpty)
     }
 
+    @Test func theRowShowsOnlyForADraftWithItsProjectAndFirstLine() {
+        var draft = NewTaskDraft()
+        draft.projectID = "freeside"
+        #expect(draft.row == nil)
+        draft.source = "\n   \n  Repair the acceptance rig  \nwith a test"
+        #expect(draft.row == .init(project: "freeside", title: "Repair the acceptance rig"))
+
+        var untitled = NewTaskDraft()
+        untitled.choices[.implementer] = UsageFixtures.agentSelection("claude-secondary")
+        #expect(untitled.row == .init(project: "No project", title: "Untitled draft"))
+    }
+
     @Test func aProjectSwitchKeepsTheText() {
         let drafts = NewTaskDraftStore(deploymentID: "daemon", deviceID: "device")
         drafts.draft.source = "Keep me"

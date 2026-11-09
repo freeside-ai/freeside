@@ -467,6 +467,7 @@ public struct FreesideRootView: View {
             launchProjectID: launchProjectID,
             newTaskBlockedReason: TaskSubmissionModel.composeBlockedReason(
                 freshness: coordinator.store.freshness),
+            draftStore: coordinator.newTaskDraft,
             lastUpdatedAt: coordinator.lastUpdatedAt,
             onRefresh: coordinator.refresh,
             onRevealTechnicalDetails: revealTechnicalDetails)

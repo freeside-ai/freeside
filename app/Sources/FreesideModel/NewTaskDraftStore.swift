@@ -21,6 +21,20 @@ public struct NewTaskDraft: Equatable, Sendable {
         source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty && choices.isEmpty
     }
 
+    /// The task list's Draft row: the project and the first line of the
+    /// text. Nil while the draft is empty, so the row draws only for one.
+    package struct Row: Equatable {
+        package let project: String
+        package let title: String
+    }
+
+    package var row: Row? {
+        guard !isEmpty else { return nil }
+        let firstLine = source.split(whereSeparator: \.isNewline)
+            .lazy.map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        return Row(project: projectID ?? "No project", title: firstLine ?? "Untitled draft")
+    }
 }
 
 /// The device's one New Task draft, kept for the app session and, without

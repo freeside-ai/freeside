@@ -590,14 +590,21 @@
                     }
                     return snapshot
                 })
-            func list(_ store: InboxStore, expanded: Bool = false) throws -> AnyView {
+            func list(
+                _ store: InboxStore, expanded: Bool = false, draftStore: NewTaskDraftStore? = nil
+            ) throws -> AnyView {
                 try AnyView(
                     UnifiedListView(
                         store: store, tasks: tasks, runs: runs,
                         navigation: screenshotNavigation(selecting: "item-spec_approval"),
-                        preferences: screenshotListPreferences(expanded: expanded)
+                        preferences: screenshotListPreferences(expanded: expanded),
+                        draftStore: draftStore
                     ).screenshotContent(now: screenshotNow))
             }
+            // An unsent New Task draft (#2935) above Needs You.
+            let draft = screenshotDraft(
+                source: "Add a /health endpoint returning the daemon version and uptime, with a test.\nKeep it cheap.")
+            draft.draft.projectID = "freeside"
             var surfaces: [Surface] = []
             for colorScheme in [ColorScheme.light, .dark] {
                 let suffix = colorScheme == .dark ? "-dark" : ""
@@ -610,6 +617,12 @@
                     Surface(
                         name: "unified-list-phone" + suffix, width: 390, colorScheme: colorScheme,
                         view: list(store, expanded: true)),
+                    Surface(
+                        name: "unified-list-draft" + suffix, width: 320, colorScheme: colorScheme,
+                        view: list(store, draftStore: draft)),
+                    Surface(
+                        name: "unified-list-phone-draft" + suffix, width: 390, colorScheme: colorScheme,
+                        view: list(store, draftStore: draft)),
                     Surface(
                         name: "project-filter-popover" + suffix, width: 288, colorScheme: colorScheme,
                         view: AnyView(
