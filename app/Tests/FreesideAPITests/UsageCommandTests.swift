@@ -311,7 +311,6 @@ import Testing
         var changed = UsageFixtures.defaultAgentCatalog()
         changed.lineup_revision = .init(value1: "sha256:" + String(repeating: "e", count: 64))
         changed.enrollments.removeAll { $0.enrollment_id == UsageFixtures.unsupportedCollectorID }
-        changed.agents.removeAll { $0.enrollment_id == UsageFixtures.unsupportedCollectorID }
         await server.setAgentCatalog(changed)
 
         // An enrollment the default fixtures carry but the served catalog does not.

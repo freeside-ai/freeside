@@ -45,27 +45,20 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
 
     /// A role the policy orders by enrollment starts with those ids. A role
     /// stored before policies ordered enrollments (#2736) holds agent names,
-    /// which the client wire never translates; the draft starts it with the
-    /// enrollment each name's catalog agent runs, dropping a name the catalog
-    /// lacks, so the operator's first save sends enrollments. The schema
+    /// which order nothing since the tree dropped its agents (#2599); the
+    /// draft starts it empty, so the operator's first save sends
+    /// enrollments. The schema
     /// promises one order per role and no repeated entry, but the policy
     /// comes from the daemon or the cache: the first of a repeated role or
     /// entry wins rather than trapping.
-    public init(
-        policy: Components.Schemas.RoutingPolicy?, catalog: Components.Schemas.AgentCatalog?, syncEpoch: String
-    ) {
+    public init(policy: Components.Schemas.RoutingPolicy?, syncEpoch: String) {
         baseRevision = policy?.revision
         drainFirstAccount = policy?.drain_first_account
         self.syncEpoch = syncEpoch
         var orders: [Role: [String]] = [:]
         for role in policy?.roles ?? [] where orders[role.role] == nil {
-            let enrollments =
-                role.enrollments
-                ?? (role.agents ?? []).compactMap { name in
-                    catalog?.agents.first { $0.name == name }?.enrollment_id
-                }
             var seen = Set<String>()
-            let unique = enrollments.filter { seen.insert($0).inserted }
+            let unique = (role.enrollments ?? []).filter { seen.insert($0).inserted }
             if !unique.isEmpty { orders[role.role] = unique }
         }
         self.orders = orders
@@ -202,8 +195,8 @@ package final class RoutingPolicyModel {
     /// enrollment the draft orders sits on, or, with no draft open, one the
     /// current policy orders.
     package var drainFirstPools: [RoutingDrainFirstPool] {
-        guard let catalog else { return [] }
-        let orders = draft ?? RoutingPolicyDraft(policy: policy, catalog: catalog, syncEpoch: "")
+        guard catalog != nil else { return [] }
+        let orders = draft ?? RoutingPolicyDraft(policy: policy, syncEpoch: "")
         return Self.drainFirstPools(coordinator.usagePools, ordered: orders.orderedEnrollments)
     }
 
@@ -225,14 +218,6 @@ package final class RoutingPolicyModel {
             let enrollments = snapshot.pool.enrollments.map(\.enrollment_id).filter(ordered.contains)
             return enrollments.isEmpty ? nil : RoutingDrainFirstPool(pool: snapshot.pool, enrollments: enrollments)
         }
-    }
-
-    /// The synced usage pool the catalog agent's enrollment sits on, by the
-    /// join `drainFirstPools` uses, or nil when no synced pool carries it.
-    package func pool(for entry: Components.Schemas.AgentCatalogEntry) -> String? {
-        coordinator.usagePools.first { snapshot in
-            snapshot.pool.enrollments.contains { $0.enrollment_id == entry.enrollment_id }
-        }?.pool.id
     }
 
     /// The role's order as the policy stores it: its enrollment ids, or the
@@ -350,7 +335,7 @@ package final class RoutingPolicyModel {
         failure = nil
         choiceBlocker = nil
         coordinator.clearConfirmedRoutingPolicyChange()
-        return RoutingPolicyDraft(policy: policy, catalog: catalog, syncEpoch: epoch)
+        return RoutingPolicyDraft(policy: policy, syncEpoch: epoch)
     }
 
     package func cancelEditing() { draft = nil }

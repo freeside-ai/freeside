@@ -108,6 +108,52 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 		})
 	}
 
+	// The route's models/<name> list binds wherever Select runs (#2599): an
+	// allow list refuses a model it omits, a deny list refuses one it names,
+	// and a route with no list admits any model.
+	allow := func(models ...string) *domain.RouteModelList {
+		return &domain.RouteModelList{Mode: domain.ModelListAllow, Models: models}
+	}
+	deny := func(models ...string) *domain.RouteModelList {
+		return &domain.RouteModelList{Mode: domain.ModelListDeny, Models: models}
+	}
+	for _, tc := range []struct {
+		name string
+		list *domain.RouteModelList
+		want string // empty: admitted
+	}{
+		{"a route with no model list admits", nil, ""},
+		{"an allow list naming the model admits", allow("claude-implementer-test"), ""},
+		{"an allow list omitting the model refuses", allow("claude-other-test"), "does not admit the model"},
+		{"a deny list naming the model refuses", deny("claude-implementer-test"), "does not admit the model"},
+		{"a deny list omitting the model admits", deny("claude-other-test"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAgentAdmissionFixture(t)
+			routes := slices.Clone(f.selection.Tree.Routes)
+			i := slices.IndexFunc(routes, func(r agenttree.Route) bool { return r.Name == f.enrollment.Route })
+			if i < 0 {
+				t.Fatalf("the tree has no route %s", f.enrollment.Route)
+			}
+			routes[i].Models = tc.list
+			f.selection.Tree.Routes = routes
+			admitted, err := admit(t, f)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSelected(t, f, admitted)
+				return
+			}
+			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
+			}
+			assertAdmissionDetail(t, err, domain.AdmissionCheckAgentResolution,
+				agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer))
+		})
+	}
+
 	t.Run("two adapters covering the launch refuse as ambiguous", func(t *testing.T) {
 		t.Parallel()
 		f := newAgentAdmissionFixture(t)
@@ -270,8 +316,7 @@ func (f *agentAdmissionFixture) codexReviewTree(t *testing.T) ReviewRole {
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: f.enrollment, CodexEnrollment: &enrollment,
 		Writers: agentTestWriters(), ReviewModel: "gpt-review-test", ReviewEffort: domain.EffortMax,
-		TermsBasisDate: "2026-08-01", PricingRevision: "pricing-2026-08",
-		OfferNotAfter: agentTestAt.Add(24 * time.Hour), Prompts: prompts,
+		TermsBasisDate: "2026-08-01", Prompts: prompts,
 	})
 	if err != nil {
 		t.Fatal(err)

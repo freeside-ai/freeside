@@ -393,13 +393,6 @@ func TestDeputyStartAdoptsASecondWriterOverItsExistingVolume(t *testing.T) {
 	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); !ok {
 		t.Fatalf("committed tree: %+v", result)
 	}
-	lock := deputyTestGit(t, checkout, "show", "HEAD:policy/agents.lock")
-	for _, name := range []string{"claude-code-implementer", "claude-code-implementer-second"} {
-		if !strings.Contains(lock, "agent "+name+" ") {
-			t.Fatalf("committed agents.lock lacks agent %s:\n%s", name, lock)
-		}
-	}
-
 	slices.Sort(observed)
 	if got := slices.Compact(observed); !slices.Equal(got, []string{"claude-auth", "claude-auth-second"}) {
 		t.Fatalf("observed volumes %v, want both writer volumes", got)

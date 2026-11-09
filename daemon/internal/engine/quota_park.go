@@ -282,7 +282,7 @@ func implementerMovedOffPool(
 	if err != nil || !found {
 		return false, nil
 	}
-	candidate, ok, err := lineRoute(ctx, tx, selection.Tree, line)
+	candidate, ok, err := lineRoute(ctx, tx, line)
 	if err != nil || !ok {
 		return false, err
 	}

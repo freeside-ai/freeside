@@ -64,7 +64,7 @@ func TestCallLaunchRefusesEveryOtherLaunch(t *testing.T) {
 // the launch position (plan §5.4), so the same agent's ward and call
 // treatments differ by that position alone.
 func TestCallTreatmentDiffersFromWardTreatmentByLaunchOnly(t *testing.T) {
-	route, adapter, offer := routeFragment(t), adapterFragment(t), offerFragment(t)
+	route, adapter := routeFragment(t), adapterFragment(t)
 	call, err := domain.NewCallLaunch()
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestCallTreatmentDiffersFromWardTreatmentByLaunchOnly(t *testing.T) {
 	digest := func(launch domain.Digest) domain.Digest {
 		t.Helper()
 		got, err := domain.ComputeTreatmentDigest(
-			route, adapter.Digest, launch, offer.RouteModelID, string(domain.EffortHarnessDefault), string(domain.EffortHarnessDefault))
+			route, adapter.Digest, launch, "gpt-5.6-sol", string(domain.EffortHarnessDefault), string(domain.EffortHarnessDefault))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -270,10 +270,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["EffortLevel"] = append(valids["EffortLevel"], v.valid)
 	}
 	invalids["EffortLevel"] = EffortLevel("").valid
-	for _, v := range AllIdentityStabilities {
-		valids["IdentityStability"] = append(valids["IdentityStability"], v.valid)
+	for _, v := range AllModelListModes {
+		valids["ModelListMode"] = append(valids["ModelListMode"], v.valid)
 	}
-	invalids["IdentityStability"] = IdentityStability("").valid
+	invalids["ModelListMode"] = ModelListMode("").valid
 	for _, v := range AllSessionModes {
 		valids["SessionMode"] = append(valids["SessionMode"], v.valid)
 	}

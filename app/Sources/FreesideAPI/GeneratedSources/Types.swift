@@ -2185,7 +2185,7 @@ public enum Components {
                 ])
             }
         }
-        /// What a client can choose for a task line (plan §5.4). It is always present. enrollments is every enrollment the daemon holds, each with the models the daemon discovered for it; it is store state, so a new discovery record moves the sync revision. agents and lineup are the committed agent tree's agents and the lineup that runs a role when no task line or routing policy chooses; both are empty, and lineup_revision null, when the daemon holds no committed tree. The daemon loads the tree once at startup, so that half changes only when the daemon restarts on a changed tree; lineup_revision, the tree's digest and the value a RoutingPolicy records as its lineup_revision, then changes with it, and the heartbeat carries it too. The daemon records a task line whose enrollment it holds and whose model and effort that enrollment's discovery serves, but until admission resolves a selection without a tree agent (#2734) a role admits only a selection one of agents runs, so a client offers those.
+        /// What a client can choose for a task line (plan §5.4). It is always present. enrollments is every enrollment the daemon holds, each with the models the daemon discovered for it; it is store state, so a new discovery record moves the sync revision. lineup is the committed agent tree's lineup, which runs a role when no task line or routing policy chooses; it is empty, and lineup_revision null, when the daemon holds no committed tree. The daemon loads the tree once at startup, so that half changes only when the daemon restarts on a changed tree; lineup_revision, the tree's digest and the value a RoutingPolicy records as its lineup_revision, then changes with it, and the heartbeat carries it too. The daemon records a task line whose enrollment it holds and whose model and effort that enrollment's discovery serves; admission also refuses a model its route's model list in the tree does not admit.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AgentCatalog`.
@@ -2218,10 +2218,6 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentCatalog/enrollments`.
             public var enrollments: [Components.Schemas.AgentCatalogEnrollment]
-            /// Every agent the tree carries, in name order.
-            ///
-            /// - Remark: Generated from `#/components/schemas/AgentCatalog/agents`.
-            public var agents: [Components.Schemas.AgentCatalogEntry]
             /// One line per TaskLineRole the lineup binds, in TaskLineRole order. A role the lineup does not bind has no entry.
             ///
             ///
@@ -2232,23 +2228,19 @@ public enum Components {
             /// - Parameters:
             ///   - lineup_revision: The committed tree's digest; null when the daemon holds no committed tree.
             ///   - enrollments: Every enrollment the daemon holds, in enrollment_id order.
-            ///   - agents: Every agent the tree carries, in name order.
             ///   - lineup: One line per TaskLineRole the lineup binds, in TaskLineRole order. A role the lineup does not bind has no entry.
             public init(
                 lineup_revision: Components.Schemas.AgentCatalog.lineup_revisionPayload? = nil,
                 enrollments: [Components.Schemas.AgentCatalogEnrollment],
-                agents: [Components.Schemas.AgentCatalogEntry],
                 lineup: [Components.Schemas.AgentCatalogLineupLine]
             ) {
                 self.lineup_revision = lineup_revision
                 self.enrollments = enrollments
-                self.agents = agents
                 self.lineup = lineup
             }
             public enum CodingKeys: String, CodingKey {
                 case lineup_revision
                 case enrollments
-                case agents
                 case lineup
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -2261,10 +2253,6 @@ public enum Components {
                     [Components.Schemas.AgentCatalogEnrollment].self,
                     forKey: .enrollments
                 )
-                self.agents = try container.decode(
-                    [Components.Schemas.AgentCatalogEntry].self,
-                    forKey: .agents
-                )
                 self.lineup = try container.decode(
                     [Components.Schemas.AgentCatalogLineupLine].self,
                     forKey: .lineup
@@ -2272,7 +2260,6 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "lineup_revision",
                     "enrollments",
-                    "agents",
                     "lineup"
                 ])
             }
@@ -2470,97 +2457,6 @@ public enum Components {
                     "resolved_model",
                     "display_name",
                     "effort_levels"
-                ])
-            }
-        }
-        /// One agent of the committed tree with its route offer's facts. effort is the effort the agent's source sets. selection is what a task line records to run the agent.
-        ///
-        ///
-        /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry`.
-        public struct AgentCatalogEntry: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/name`.
-            public var name: Swift.String
-            /// The enrollment the agent runs as; joins UsagePoolEnrollment.enrollment_id.
-            ///
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/enrollment_id`.
-            public var enrollment_id: Swift.String
-            /// The model the agent's route passes to the harness.
-            ///
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/model`.
-            public var model: Swift.String
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/effort`.
-            public var effort: Components.Schemas.EffortLevel
-            /// The offer's lineage group; null when the offer declares none.
-            ///
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/lineage_group`.
-            public var lineage_group: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/selection`.
-            public var selection: Components.Schemas.TaskLineSelection
-            /// Creates a new `AgentCatalogEntry`.
-            ///
-            /// - Parameters:
-            ///   - name:
-            ///   - enrollment_id: The enrollment the agent runs as; joins UsagePoolEnrollment.enrollment_id.
-            ///   - model: The model the agent's route passes to the harness.
-            ///   - effort:
-            ///   - lineage_group: The offer's lineage group; null when the offer declares none.
-            ///   - selection:
-            public init(
-                name: Swift.String,
-                enrollment_id: Swift.String,
-                model: Swift.String,
-                effort: Components.Schemas.EffortLevel,
-                lineage_group: Swift.String? = nil,
-                selection: Components.Schemas.TaskLineSelection
-            ) {
-                self.name = name
-                self.enrollment_id = enrollment_id
-                self.model = model
-                self.effort = effort
-                self.lineage_group = lineage_group
-                self.selection = selection
-            }
-            public enum CodingKeys: String, CodingKey {
-                case name
-                case enrollment_id
-                case model
-                case effort
-                case lineage_group
-                case selection
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.name = try container.decode(
-                    Swift.String.self,
-                    forKey: .name
-                )
-                self.enrollment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.model = try container.decode(
-                    Swift.String.self,
-                    forKey: .model
-                )
-                self.effort = try container.decode(
-                    Components.Schemas.EffortLevel.self,
-                    forKey: .effort
-                )
-                self.lineage_group = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .lineage_group
-                )
-                self.selection = try container.decode(
-                    Components.Schemas.TaskLineSelection.self,
-                    forKey: .selection
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "name",
-                    "enrollment_id",
-                    "model",
-                    "effort",
-                    "lineage_group",
-                    "selection"
                 ])
             }
         }

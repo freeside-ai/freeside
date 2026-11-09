@@ -16,11 +16,10 @@ struct AgentCatalogSyncTests {
     }
 
     /// The default catalog as a daemon restarted on a changed tree serves it:
-    /// a new revision, one agent fewer, and a reviewer moved to another agent.
+    /// a new revision and a reviewer moved to another selection.
     private static func changedCatalog() -> Components.Schemas.AgentCatalog {
         var catalog = UsageFixtures.defaultAgentCatalog()
         catalog.lineup_revision = .init(value1: "sha256:" + String(repeating: "e", count: 64))
-        catalog.agents.removeAll { $0.name == "codex-primary" }
         catalog.lineup = catalog.lineup.map {
             $0.role == .reviewer
                 ? .init(role: .reviewer, selection: UsageFixtures.agentSelection("claude-secondary"))

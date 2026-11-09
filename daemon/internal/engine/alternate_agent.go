@@ -198,7 +198,7 @@ func (s AgentSelection) alternateCandidates(
 		if err != nil || !found {
 			return nil, err
 		}
-		ordered = roleOrder(s.Tree, policy, failure.role)
+		ordered = roleOrder(policy, failure.role)
 	}
 	identities, err := tx.ListAuthIdentities(ctx)
 	if err != nil {

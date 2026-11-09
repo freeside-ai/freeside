@@ -42,8 +42,11 @@ func ReadCommit(ctx context.Context, checkoutDir, scratch, commit string) (Files
 	if err != nil || strings.TrimSpace(string(peeled)) != commit {
 		return nil, fmt.Errorf("%s: %w", commit, errors.Join(ErrCommit, err))
 	}
+	// The removed agents/ directory is still read, so a leftover document
+	// reaches Parse and is refused with the fix instead of being skipped.
 	listing, err := runner.Run(ctx, nil, "ls-tree", "-r", "-z", "-l", "--full-tree", commit, "--",
-		Root+"/agents", Root+"/fragments", Root+"/"+lineupPath, Root+"/"+lockPath)
+		Root+"/"+strings.TrimSuffix(removedAgentsDir, "/"), Root+"/fragments",
+		Root+"/"+strings.TrimSuffix(modelsDir, "/"), Root+"/"+lineupPath, Root+"/"+lockPath)
 	if err != nil {
 		return nil, fmt.Errorf("list agent tree at %s: %w", commit, err)
 	}

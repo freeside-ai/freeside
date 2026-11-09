@@ -443,9 +443,9 @@ type Request struct {
 	// data a driver serializes.
 	RolePrompt       []byte        `json:"-"`
 	RolePromptDigest domain.Digest `json:"-"`
-	// Model and NativeEffort are what the admitted agent's launch passes
-	// (domain.DeriveAgentLaunchSelection). Model is never empty: admission
-	// refuses a line whose offer names no model. An empty NativeEffort means
+	// Model and NativeEffort are what the admitted line's launch passes
+	// (domain.AgentLaunchSelection). Model is never empty: admission
+	// refuses a line that names no model. An empty NativeEffort means
 	// the launch sends no effort. Like the role prompt, they come from the
 	// admission and are no part of the task data.
 	Model        string `json:"-"`

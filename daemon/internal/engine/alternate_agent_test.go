@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -154,29 +151,25 @@ func TestAlternateOffersNeedTheLineupServed(t *testing.T) {
 }
 
 // TestParkedOffersReadAPreUnitPolicy: a revision stored before #2736 orders
-// agent names, and a parked task's offers are the enrollments those agents
-// reduce to through the tree (roleOrder), at the role's lineup model, as
-// under a revision that orders enrollments.
+// agent names, which the tree no longer carries (#2599), so it orders no
+// enrollment and a parked task under it is offered none.
 func TestParkedOffersReadAPreUnitPolicy(t *testing.T) {
 	t.Parallel()
 	f := newAgentAdmissionFixture(t)
-	_, second := f.addSecondAgent(t)
+	f.addSecondAgent(t)
 	failure := f.failImplementer(t, domain.FailureCauseQuota)
 	f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent)
-	want := []domain.AlternateAgentOffer{{
-		Enrollment: second.ID, Pool: routerSecondPool, Harness: domain.HarnessClientClaudeCode,
-		Model: "claude-implementer-test", Qualification: domain.AlternateAgentDifferentPool,
-	}}
-	if got := f.offers(t, parkedTaskFailure(failure.taskID, failure.invocationID)); !reflect.DeepEqual(got, want) {
-		t.Fatalf("parked offers = %+v, want %+v", got, want)
+	if got := f.offers(t, parkedTaskFailure(failure.taskID, failure.invocationID)); len(got) != 0 {
+		t.Fatalf("parked offers = %+v, want none", got)
 	}
 }
 
 // TestCardAdmissionRegatesTheChosenAgent: admission holds a card's selection
 // to the record against the failed invocation's own admission and outcome.
 // The failed credential, another pool than the one chosen, and a rule the
-// cause does not name are each refused. A v1 record, which names a tree
-// agent, re-gates the same way.
+// cause does not name are each refused. A v1 record names a tree agent,
+// which the tree no longer carries (#2599), so admission refuses it by its id
+// before any re-gate, and never prints the name it holds.
 func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -196,7 +189,7 @@ func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	}
 	regate := func(record domain.AlternateAgentRetry, agent string) error {
 		return f.store.Read(ctx, func(tx *store.ReadTx) error {
-			return regateCardAgent(ctx, tx, record, cardRoleAgent(t, ctx, tx, f.selection.Tree, agent))
+			return regateCardAgent(ctx, tx, record, f.cardRoleAgent(t, ctx, tx, agent))
 		})
 	}
 	chosen := record(agentTestSecondAgent, routerSecondPool, domain.AlternateAgentDifferentPool)
@@ -212,8 +205,15 @@ func TestCardAdmissionRegatesTheChosenAgent(t *testing.T) {
 	if err := v1.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := regate(v1, agentTestSecondAgent); err != nil {
-		t.Fatalf("a v1 record's agent was refused: %v", err)
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := resolveCardAgent(ctx, tx, f.selection.Tree, domain.RoleImplementer, v1)
+		if err == nil || !strings.Contains(err.Error(), "card record "+string(v1.ID)+" names a tree agent") ||
+			!strings.Contains(err.Error(), "choose again") || strings.Contains(err.Error(), agentTestSecondAgent) {
+			t.Errorf("a v1 record = %v, want refused by its id without its agent", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	for name, tc := range map[string]struct {
 		record domain.AlternateAgentRetry
@@ -353,16 +353,15 @@ func TestMovedLineAnchorsToItsCommand(t *testing.T) {
 	}
 }
 
-// TestMovedLineKeepsAPreUnitAgentMark: a move made before #2736 cites a
-// revision in the agents form, and its passed-over mark names an agent.
-// The anchor admits the mark while that revision orders the agent, and
-// refuses one naming an agent it does not order, on a task that never
-// escalated.
-func TestMovedLineKeepsAPreUnitAgentMark(t *testing.T) {
+// TestMovedLineRefusesAPreUnitRevision: a move made before #2736 cites a
+// revision in the agents form, and its passed-over mark names an agent. The
+// tree no longer carries agents (#2599), so the revision orders nothing and
+// the anchor refuses the moved line, whatever agent its mark names.
+func TestMovedLineRefusesAPreUnitRevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	resetsAt := agentTestAt.Add(time.Hour)
-	for agent, admits := range map[string]bool{agentTestWriterAgent: true, "claude-unordered": false} {
+	for _, agent := range []string{agentTestWriterAgent, "claude-unordered"} {
 		f := newAgentAdmissionFixture(t)
 		f.addSecondAgent(t)
 		f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent)
@@ -381,11 +380,8 @@ func TestMovedLineKeepsAPreUnitAgentMark(t *testing.T) {
 		}
 		f.moveTask(t, policy, left, false)
 		admission, err := f.admitRun(t, f.run, agentTestAt.Add(time.Minute))
-		switch {
-		case admits && err != nil:
-			t.Errorf("%s: a mark the revision orders was refused: %v", agent, err)
-		case !admits && (err == nil || !strings.Contains(err.Error(), "orders nothing the line passed over")):
-			t.Errorf("%s: a mark the revision does not order = %+v, %v; want refused", agent, admission.AgentBinding, err)
+		if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "routing policy revision 1 does not order") {
+			t.Errorf("%s: moved line = %+v, %v; want refused as unordered", agent, admission.AgentBinding, err)
 		}
 	}
 }
@@ -469,30 +465,14 @@ func TestMoveNamesTheEnrollmentItLeft(t *testing.T) {
 
 const agentTestSiblingAgent = "claude-sibling"
 
-// addSiblingAgent adds an agent on the fixture's own enrollment, and so on
-// the failed agent's credential, under the specifier's model offer, so it is
-// a different agent from the implementer's.
+// addSiblingAgent names agentTestSiblingAgent the specifier's model at high
+// on the fixture's own enrollment, and so on the failed selection's
+// credential, so it is a different selection from the implementer's.
 func (f *agentAdmissionFixture) addSiblingAgent(t *testing.T) {
 	t.Helper()
-	tree := f.selection.Tree
-	tree.Agents = append(slices.Clone(tree.Agents), domain.AgentSource{
-		Name: agentTestSiblingAgent, Enrollment: string(f.enrollment.ID), Route: f.enrollment.Route,
-		Adapter: agentbaseline.ClaudeAdapterName, Offer: agentbaseline.WriterAgentName(domain.RoleSpecifier),
-		Effort: domain.EffortHigh,
-	})
-	tree.Sort()
-	files, err := agenttree.Render(tree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.selection.LineupRevision, err = agenttree.Revision(files); err != nil {
-		t.Fatal(err)
-	}
-	if f.selection.Tree, err = agenttree.Parse(files); err != nil {
-		t.Fatal(err)
-	}
-	selection := f.selection
-	f.engine.admission.environment.Agents = &selection
+	sibling := *f.lineSelection(t, agentTestSpecifierAgent)
+	sibling.EnrollmentID, sibling.Effort = f.enrollment.ID, "high"
+	f.nameSelection(agentTestSiblingAgent, sibling)
 }
 
 // TestCredentialAlternateNeedsAnotherCredential: a credential failure offers
@@ -522,7 +502,7 @@ func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = f.store.Read(ctx, func(tx *store.ReadTx) error {
-		sibling := cardRoleAgent(t, ctx, tx, f.selection.Tree, agentTestSiblingAgent)
+		sibling := f.cardRoleAgent(t, ctx, tx, agentTestSiblingAgent)
 		return regateCardAgent(ctx, tx, record, sibling)
 	})
 	if err == nil || !strings.Contains(err.Error(), "chose the credential that failed") {
@@ -530,16 +510,11 @@ func TestCredentialAlternateNeedsAnotherCredential(t *testing.T) {
 	}
 }
 
-// cardRoleAgent resolves the selection a card record's tree agent reduces
-// to, with its generation, as resolveCardAgent does before it re-gates the
-// record.
-func cardRoleAgent(t *testing.T, ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, name string) RoleAgent {
+// cardRoleAgent resolves the named selection, with its generation, as
+// resolveCardAgent does before it re-gates the record.
+func (f *agentAdmissionFixture) cardRoleAgent(t *testing.T, ctx context.Context, tx *store.ReadTx, name string) RoleAgent {
 	t.Helper()
-	selection, err := tree.SelectionOfAgent(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent, err := resolveNames(ctx, tx, tree, selection.Names(), &name)
+	agent, err := resolveNames(ctx, tx, f.selection.Tree, f.lineSelection(t, name).Names(), &name)
 	if err != nil {
 		t.Fatal(err)
 	}

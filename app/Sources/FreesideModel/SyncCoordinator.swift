@@ -82,13 +82,12 @@ public final class SyncCoordinator {
     /// never direct adoption. Like every restored row it is only as current as
     /// `store.freshness` says.
     public private(set) var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
-    /// The committed agent tree's agents and lineup from the last adopted
-    /// bootstrap: the agents the daemon will accept, so the only ones a
-    /// client offers. Nil until a bootstrap supplies one; a daemon that holds
-    /// no tree serves one with a null lineup revision and no agents. A daemon
-    /// restarted on a changed tree moves no revision,
-    /// so a heartbeat whose lineup revision differs triggers another
-    /// bootstrap, never direct adoption.
+    /// The enrollments and the committed agent tree's lineup from the last
+    /// adopted bootstrap, which say what a client offers. Nil until a
+    /// bootstrap supplies one; a daemon that holds no tree serves one with a
+    /// null lineup revision and no lineup. A daemon restarted on a changed
+    /// tree moves no revision, so a heartbeat whose lineup revision differs
+    /// triggers another bootstrap, never direct adoption.
     public private(set) var agentCatalog: Components.Schemas.AgentCatalog?
     /// The current routing policy; nil when none was ever set. Every change
     /// advances the revision, so the revision check alone refreshes it.

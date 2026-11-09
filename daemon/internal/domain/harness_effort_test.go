@@ -4,52 +4,9 @@ import (
 	"errors"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
-
-// claudeAgentResolution is agentResolution's Claude counterpart: an
-// enrollment and adapter on claude_code, the adapter declaring every effort
-// the translation can send, and an offer passing an explicit model.
-func claudeAgentResolution(t *testing.T) domain.AgentResolutionInput {
-	t.Helper()
-	in := agentResolution(t)
-	in.Source = domain.AgentSource{
-		Name: "opus-via-claude", Enrollment: "anthropic-A/claude",
-		Route: "anthropic_claude_code", Adapter: "claude_code_v1",
-		Offer: "claude-opus-5-5", Effort: domain.EffortMax,
-	}
-	in.Enrollment.HarnessClient = domain.HarnessClientClaudeCode
-	in.Enrollment.Route = "anthropic_claude_code"
-	in.OfferRoute = "anthropic_claude_code"
-	in.Route = domain.RouteFragment{
-		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		ServiceOperator: "anthropic", Protocol: "anthropic_messages",
-		InferenceAuthorities: []string{"api.anthropic.com"},
-		BillingMode:          "subscription", FallbackPolicy: "fail_closed",
-		TermsBasisDate: "2026-08-22",
-	}
-	in.Route.Digest = mustComputeDigest(t, in.Route.ComputeDigest)
-	in.Adapter = domain.AdapterFragment{
-		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		AdapterBuild:    "claude_code_v1@build-1", HarnessBuild: "claude-code 2.1.220",
-		ClientKind: domain.HarnessClientClaudeCode, Vendor: domain.AgentVendorClaude,
-		LaunchCapabilities: adapterFragment(t).LaunchCapabilities,
-		SendableEfforts:    domain.ClaudeCodeSendableEfforts(),
-	}
-	in.Adapter.Digest = mustComputeDigest(t, in.Adapter.ComputeDigest)
-	in.Offer = domain.OfferFragment{
-		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		RouteModelID:    "claude-opus-5-5", LineageGroup: "anthropic",
-		IdentityStability: domain.IdentityPinned,
-		AllowedEfforts:    []domain.EffortLevel{domain.EffortHarnessDefault, domain.EffortHigh, domain.EffortMax},
-		PricingRevision:   "2026-09",
-		NotAfter:          time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-	in.Offer.Digest = mustComputeDigest(t, in.Offer.ComputeDigest)
-	return in
-}
 
 func mustComputeDigest(t *testing.T, compute func() (domain.Digest, error)) domain.Digest {
 	t.Helper()
@@ -179,71 +136,4 @@ func TestClaudeCodeLaunchModel(t *testing.T) {
 	if got := domain.ClaudeCodeLaunchModel("claude-opus-5-5"); got != "claude-opus-5-5" {
 		t.Fatalf("explicit model passes %q, want claude-opus-5-5", got)
 	}
-}
-
-func TestDeriveAgentLaunchSelection(t *testing.T) {
-	resolve := func(t *testing.T, in domain.AgentResolutionInput) domain.AgentDefinition {
-		t.Helper()
-		agent, err := domain.ResolveAgentDefinition(in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return agent
-	}
-
-	t.Run("claude explicit model and effort", func(t *testing.T) {
-		in := claudeAgentResolution(t)
-		got, err := domain.DeriveAgentLaunchSelection(resolve(t, in), in.Adapter, in.Offer)
-		want := domain.AgentLaunchSelection{
-			RouteModelID: "claude-opus-5-5", RequestedEffort: domain.EffortMax, NativeEffort: "max",
-		}
-		if err != nil || got != want {
-			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want %+v", got, err, want)
-		}
-	})
-
-	t.Run("claude native default at harness_default passes neither", func(t *testing.T) {
-		in := claudeAgentResolution(t)
-		in.Offer.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID
-		in.Offer.Digest = mustComputeDigest(t, in.Offer.ComputeDigest)
-		in.Source.Effort = domain.EffortHarnessDefault
-		got, err := domain.DeriveAgentLaunchSelection(resolve(t, in), in.Adapter, in.Offer)
-		if err != nil || got != (domain.AgentLaunchSelection{}) {
-			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want empty", got, err)
-		}
-	})
-
-	t.Run("codex offer model and clamped effort", func(t *testing.T) {
-		in := agentResolution(t)
-		got, err := domain.DeriveAgentLaunchSelection(resolve(t, in), in.Adapter, in.Offer)
-		want := domain.AgentLaunchSelection{
-			RouteModelID: in.Offer.RouteModelID, RequestedEffort: domain.EffortMax, NativeEffort: "xhigh",
-		}
-		if err != nil || got != want {
-			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want %+v", got, err, want)
-		}
-	})
-
-	t.Run("codex at harness_default passes the model alone", func(t *testing.T) {
-		in := agentResolution(t)
-		in.Source.Effort = domain.EffortHarnessDefault
-		in.Offer.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
-		in.Offer.Digest = mustComputeDigest(t, in.Offer.ComputeDigest)
-		in.Adapter.SendableEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
-		in.Adapter.Digest = mustComputeDigest(t, in.Adapter.ComputeDigest)
-		got, err := domain.DeriveAgentLaunchSelection(resolve(t, in), in.Adapter, in.Offer)
-		if want := (domain.AgentLaunchSelection{RouteModelID: in.Offer.RouteModelID}); err != nil || got != want {
-			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want %+v", got, err, want)
-		}
-	})
-
-	t.Run("offer the agent does not pin", func(t *testing.T) {
-		in := claudeAgentResolution(t)
-		agent := resolve(t, in)
-		in.Offer.RouteModelID = "claude-fable-5-1"
-		in.Offer.Digest = mustComputeDigest(t, in.Offer.ComputeDigest)
-		if _, err := domain.DeriveAgentLaunchSelection(agent, in.Adapter, in.Offer); !errors.Is(err, domain.ErrAgentJoinInvalid) {
-			t.Fatalf("DeriveAgentLaunchSelection = %v, want %v", err, domain.ErrAgentJoinInvalid)
-		}
-	})
 }

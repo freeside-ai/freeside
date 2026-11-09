@@ -69,7 +69,7 @@ import Testing
         #expect(codex.map(\.id) == ["gpt-codex", "gpt-mini"])
         // A model with no effort levels takes only the harness default.
         #expect(codex[1].efforts == ["harness_default"])
-        // Not discovered yet: what the tree's agents run on it, by id.
+        // Not discovered yet: what the lineup runs on it, by id.
         #expect(
             AgentChoiceDisplay.models(on: UsageFixtures.readingSecondEnrollmentID, catalog: catalog) == [
                 .init(id: "claude-opus", name: "claude-opus", efforts: ["max"])
@@ -231,7 +231,7 @@ import Testing
             #expect(options.map(\.isPickable) == [true, true, true])
             #expect(options.map(\.isDiscovered) == [true, false, true])
         }
-        // Only an undiscovered enrollment no tree agent runs on is disabled,
+        // Only an undiscovered enrollment the lineup doesn't run on is disabled,
         // whatever its reading.
         for pools in [pools, []] {
             #expect(
@@ -248,7 +248,7 @@ import Testing
                 timeZone: Self.utc) == "claude-code 2.1.0 · discovered \(time(600))")
         #expect(
             AgentChoiceDisplay.discoveryNote(on: UsageFixtures.readingSecondEnrollmentID, catalog: catalog, now: now)
-                == "Not discovered yet; lists what the tree's agents run on it")
+                == "Not discovered yet; lists what the lineup runs on it")
         #expect(AgentChoiceDisplay.discoveryNote(on: "enrollment-unknown", catalog: catalog, now: now) == nil)
     }
 
@@ -319,8 +319,8 @@ import Testing
         AgentChoiceDisplay.missingChoices(choices: choices, catalog: catalog ?? self.catalog)
     }
 
-    @Test func everyTreeSelectionAndEveryPickIsOffered() {
-        #expect(catalog.agents.allSatisfy { AgentChoiceDisplay.offers(catalog, $0.selection) })
+    @Test func everyLineupSelectionAndEveryPickIsOffered() {
+        #expect(catalog.lineup.allSatisfy { AgentChoiceDisplay.offers(catalog, $0.selection) })
         for role in AgentChoiceDisplay.roleOrder {
             for enrollment in catalog.enrollments {
                 let chosen = AgentChoiceDisplay.choosing(
@@ -351,7 +351,7 @@ import Testing
             missing([.implementer: gone])[0].sentence
                 == "\(UsageFixtures.readingCollectorID) no longer offers claude-retired; choose another model or "
                 + "Default to submit.")
-        // On an enrollment not discovered yet, a model no tree agent runs.
+        // On an enrollment not discovered yet, a model the lineup doesn't run.
         let sonnet = UsageFixtures.selection(UsageFixtures.readingSecondEnrollmentID, "claude-sonnet", "max")
         #expect(missing([.implementer: sonnet]).map(\.part) == [.model])
     }
@@ -365,15 +365,14 @@ import Testing
                 + "effort or Default to submit.")
         let miniLow = UsageFixtures.selection(UsageFixtures.unsupportedCollectorID, "gpt-mini", "low")
         #expect(missing([.reviewer: miniLow]).map(\.part) == [.effort])
-        // On an enrollment not discovered yet, an effort no tree agent runs
-        // the model at.
+        // On an enrollment not discovered yet, an effort the lineup doesn't
+        // run the model at.
         let opusHigh = UsageFixtures.selection(UsageFixtures.readingSecondEnrollmentID, "claude-opus", "high")
         #expect(missing([.implementer: opusHigh]).map(\.part) == [.effort])
     }
 
-    @Test func anUndiscoveredEnrollmentWithNoAgentLeftSaysToChooseAnotherEnrollment() {
+    @Test func anUndiscoveredEnrollmentWithNoLineupSelectionLeftSaysToChooseAnotherEnrollment() {
         var bare = catalog
-        bare.agents.removeAll { $0.enrollment_id == UsageFixtures.readingSecondEnrollmentID }
         bare.lineup.removeAll { $0.selection.enrollment_id == UsageFixtures.readingSecondEnrollmentID }
         let opusMax = UsageFixtures.selection(UsageFixtures.readingSecondEnrollmentID, "claude-opus", "max")
         #expect(missing([.remediator: opusMax], catalog: bare) == [.init(selection: opusMax, part: .everyModel)])
@@ -454,11 +453,6 @@ import Testing
             AgentChoiceDisplay.clearLabel(role: .implementer, policy: policy, catalog: catalog)
                 == "Clear · lineup \(UsageFixtures.readingCollectorID) · Opus · high or routing policy")
         #expect(AgentChoiceDisplay.clearLabel(role: .reviewer, policy: nil, catalog: nil) == "Clear · lineup")
-    }
-
-    @Test func theAgentsPaneFactsNameModelEffortAndLineageGroup() {
-        #expect(AgentChoiceDisplay.facts(catalog.agents[1]) == "claude-opus · Max · anthropic")
-        #expect(AgentChoiceDisplay.facts(catalog.agents[2]) == "gpt-codex · Harness default · No lineage group")
     }
 
     // MARK: Summary

@@ -1159,13 +1159,11 @@ func TestGolden(t *testing.T) {
 		StoreManifestDigest: enrollmentGeneration.StoreManifestDigest,
 	}
 
-	// The admitted-agent configuration objects (§5.4): fragments, the
-	// stage-owned launch, and a resolved agent. The digests inside these
-	// goldens pin the canonical encodings — a field-order or encoding change
-	// moves them visibly.
+	// The admitted-agent configuration objects (§5.4): fragments and the
+	// stage-owned launch. The digests inside these goldens pin the canonical
+	// encodings — a field-order or encoding change moves them visibly.
 	goldenRoute := routeFragment(t)
 	goldenAdapter := adapterFragment(t)
-	goldenOffer := offerFragment(t)
 	goldenLaunch := launchSpec(t)
 	agentIdentity := domain.AuthIdentity{
 		ID: "auth-openai-A", Provider: "openai", AccountBinding: "acct-openai-a",
@@ -1179,19 +1177,15 @@ func TestGolden(t *testing.T) {
 		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		AccountBinding: agentIdentity.AccountBinding,
 	}
-	goldenAgent, err := domain.ResolveAgentDefinition(domain.AgentResolutionInput{
-		Source: domain.AgentSource{
-			Name: "sol-via-codex", Enrollment: "openai-chatgpt-A/codex",
-			Route: "openai_chatgpt_codex", Adapter: "codex_proto_v1",
-			Offer: "gpt-5.6-sol", Effort: domain.EffortMax,
-		},
-		Identity: agentIdentity, Enrollment: agentEnrollment,
-		Route: goldenRoute, Adapter: goldenAdapter, Offer: goldenOffer,
-		OfferRoute: "openai_chatgpt_codex",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A binding admitted under an agent document, before #2599 removed the
+	// documents, recorded that agent's digest and its offer's pricing
+	// revision. These literals are the ones the removed agent_definition and
+	// offer_fragment goldens held, so the stored-binding goldens below keep
+	// their bytes.
+	const (
+		legacyAgentDigest     domain.Digest = "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a"
+		legacyPricingRevision string        = "2026-08"
+	)
 
 	// The stage inputs of the durable execution record for that attempt; the
 	// base admission itself comes from domaintest.ExecutionAdmission.
@@ -1507,10 +1501,10 @@ func TestGolden(t *testing.T) {
 		StageInputs:    &codexStageInput,
 		AuthIdentityID: &agentIdentityID,
 		AgentBinding: &domain.AdmissionAgentBinding{
-			AgentDigest:          goldenAgent.Digest,
+			AgentDigest:          legacyAgentDigest,
 			LaunchDigest:         goldenLaunch.Digest,
 			TreatmentDigest:      stageDigest("d"),
-			PricingRevision:      goldenOffer.PricingRevision,
+			PricingRevision:      legacyPricingRevision,
 			LineupRevision:       stageDigest("c"),
 			EnrollmentID:         agentEnrollment.ID,
 			EnrollmentGeneration: 2,
@@ -1617,10 +1611,10 @@ func TestGolden(t *testing.T) {
 		InvocationID: "review-run-1-1", RunID: "run-1", Role: domain.RoleReviewer,
 		AuthIdentityID: agentIdentityID, LineageGroup: "openai",
 		AgentBinding: domain.AdmissionAgentBinding{
-			AgentDigest:          goldenAgent.Digest,
+			AgentDigest:          legacyAgentDigest,
 			LaunchDigest:         goldenLaunch.Digest,
 			TreatmentDigest:      stageDigest("d"),
-			PricingRevision:      goldenOffer.PricingRevision,
+			PricingRevision:      legacyPricingRevision,
 			LineupRevision:       stageDigest("c"),
 			EnrollmentID:         agentEnrollment.ID,
 			EnrollmentGeneration: 2,
@@ -1669,8 +1663,11 @@ func TestGolden(t *testing.T) {
 	// from the client and model, and neither an offer's pricing revision
 	// nor a Freeside effort level. Every fixture derived from the agent
 	// bindings above keeps the bytes it had before selections existed.
-	goldenSelection, err := domain.ReduceAgentSelection(goldenAgent, goldenAdapter, goldenOffer)
-	if err != nil {
+	goldenSelection := domain.AgentSelection{
+		EncodingVersion: domain.AgentSelectionEncodingVersion, EnrollmentID: agentEnrollment.ID,
+		ModelID: "gpt-5.6-sol", Effort: "xhigh", AdapterDigest: goldenAdapter.Digest,
+	}
+	if goldenSelection.Digest, err = goldenSelection.ComputeDigest(); err != nil {
 		t.Fatal(err)
 	}
 	selected := func(binding domain.AdmissionAgentBinding, client domain.HarnessClientKind, model, effort string) domain.AdmissionAgentBinding {
@@ -2664,9 +2661,7 @@ func TestGolden(t *testing.T) {
 		{"generation_integrity_mark", generationIntegrityMark},
 		{"route_fragment", goldenRoute},
 		{"adapter_fragment", goldenAdapter},
-		{"offer_fragment", goldenOffer},
 		{"launch_spec", goldenLaunch},
-		{"agent_definition", goldenAgent},
 		{"agent_selection", goldenSelection},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},

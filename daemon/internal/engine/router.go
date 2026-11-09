@@ -7,7 +7,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -171,7 +170,7 @@ func (s AgentSelection) planRoute(
 	}
 	order := candidates[role]
 	if escalated {
-		if order, err = s.escalatedOrder(ctx, tx, roleOrder(s.Tree, policy, role)); err != nil || len(order) == 0 {
+		if order, err = s.escalatedOrder(ctx, tx, roleOrder(policy, role)); err != nil || len(order) == 0 {
 			return nil, err
 		}
 	}
@@ -270,25 +269,15 @@ func policyRole(policy domain.RoutingPolicy, role domain.RoleName) (domain.Routi
 
 // roleOrder returns the enrollments the policy orders for the role, nil when
 // it orders none. A role in the agents form, from a revision stored before
-// routing policy ordered enrollments (#2736), reads each agent's enrollment
-// through tree, the daemon's current one; an agent the tree no longer
-// carries, or that reduces to no selection, is skipped, and an enrollment
-// two agents share keeps its first position. #2599 removes this bridge with
-// the agent documents.
-func roleOrder(tree agenttree.Tree, policy domain.RoutingPolicy, role domain.RoleName) []domain.ClientEnrollmentID {
+// routing policy ordered enrollments (#2736), names tree agents, which the
+// tree no longer carries (#2599), so it orders none; the operator sets a new
+// revision with `freesided routing`.
+func roleOrder(policy domain.RoutingPolicy, role domain.RoleName) []domain.ClientEnrollmentID {
 	ordered, ok := policyRole(policy, role)
-	if !ok || !ordered.AgentsForm() {
-		return ordered.Enrollments
+	if !ok || ordered.AgentsForm() {
+		return nil
 	}
-	var enrollments []domain.ClientEnrollmentID
-	for _, name := range ordered.Agents {
-		selection, err := tree.SelectionOfAgent(name)
-		if err != nil || slices.Contains(enrollments, selection.EnrollmentID) {
-			continue
-		}
-		enrollments = append(enrollments, selection.EnrollmentID)
-	}
-	return enrollments
+	return ordered.Enrollments
 }
 
 // admittedThroughLineup reports whether any run of the task holds an execution
@@ -342,7 +331,7 @@ func (s AgentSelection) routeCandidates(
 		if err != nil {
 			continue
 		}
-		for _, enrollment := range roleOrder(s.Tree, policy, role.Role) {
+		for _, enrollment := range roleOrder(policy, role.Role) {
 			selection := line.TaskLineSelection()
 			selection.EnrollmentID = enrollment
 			candidate, ok, err := resolveRouteCandidate(ctx, tx, selection)
@@ -396,21 +385,19 @@ func resolveRouteCandidate(
 // lineRoute resolves the selection a task line runs (lineSelection) as a
 // route candidate: the pool it meters and the model whose windows hold it.
 // It reports false when the line selects nothing the store resolves.
-func lineRoute(
-	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, line domain.TaskLine,
-) (routeCandidate, bool, error) {
-	selection, err := lineSelection(tree, line)
+func lineRoute(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) (routeCandidate, bool, error) {
+	selection, err := lineSelection(line)
 	if err != nil {
 		return routeCandidate{}, false, nil
 	}
 	return resolveRouteCandidate(ctx, tx, selection)
 }
 
-// lineSelection is the selection a line runs: the one a v2 line holds, or
-// the one the agent a v1 line names reduces to in tree.
-func lineSelection(tree agenttree.Tree, line domain.TaskLine) (domain.TaskLineSelection, error) {
+// lineSelection is the selection a line runs: the one a v2 line holds. A
+// v1 line names a tree agent and is refused (legacyTaskLine).
+func lineSelection(line domain.TaskLine) (domain.TaskLineSelection, error) {
 	if line.Encoding == domain.TaskLineEncodingV1 {
-		return tree.SelectionOfAgent(line.Agent)
+		return domain.TaskLineSelection{}, legacyTaskLine(line)
 	}
 	if line.Selection == nil {
 		return domain.TaskLineSelection{}, fmt.Errorf("task line %s selects nothing: %w",
@@ -689,7 +676,7 @@ func (s AgentSelection) requireRoutedPoolOpen(
 			// An unreadable or unanchored line is admission's to refuse.
 			return nil
 		}
-		candidate, ok, err := lineRoute(ctx, tx, s.Tree, line)
+		candidate, ok, err := lineRoute(ctx, tx, line)
 		if err != nil || !ok {
 			return err
 		}

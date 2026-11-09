@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -16,18 +17,22 @@ import (
 const Root = "policy"
 
 const (
-	agentsDir    = "agents/"
 	routesDir    = "fragments/routes/"
 	adaptersDir  = "fragments/adapters/"
-	offersDir    = "fragments/offers/"
+	modelsDir    = "models/"
 	lineupPath   = "lineup"
 	lockPath     = "agents.lock"
 	maxTreeFiles = 4096
-	// removedMarkSuffix named an agent's attended marks until plan revision
-	// 97 removed the attended first run. A leftover file is refused with
-	// the fix rather than as an unknown agent name.
-	removedMarkSuffix = ".attended"
+	// removedAgentsDir and removedOffersDir held the agent and offer
+	// documents until #2599 removed them. A leftover file, an attended mark
+	// among them, is refused with the fix rather than as a path outside the
+	// layout.
+	removedAgentsDir = "agents/"
+	removedOffersDir = "fragments/offers/"
 )
+
+// migrateFix is what a refusal of a removed document tells the operator.
+const migrateFix = "agent and offer documents were removed; run `freesided auth migrate-tree` and commit its patch"
 
 var (
 	// ErrMalformed marks a tree file that does not parse or a tree whose
@@ -38,30 +43,26 @@ var (
 	// names: a missing or extra entry, or a digest the content does not hash
 	// to.
 	ErrLockMismatch = errors.New("agents.lock disagrees with the tree")
-	// ErrUnknownAgent marks a lookup of an agent name the tree does not carry.
-	ErrUnknownAgent = errors.New("agent is not in the tree")
 )
 
-// Files maps a tree-relative slash path ("agents/x", "lineup") to its bytes.
+// Files maps a tree-relative slash path ("lineup", "fragments/routes/x") to
+// its bytes.
 type Files map[string][]byte
 
-// Route, Adapter, and Offer pair a fragment with its tree name. The name is
-// the file name and enters no digest.
+// Route and Adapter pair a fragment with its tree name. The name is the file
+// name and enters no digest.
 type Route struct {
 	Name     string
 	Fragment domain.RouteFragment
+	// Models is the route's models/<name> list, nil when the tree has none.
+	// It is operator text outside agents.lock, like the lineup, and binds
+	// at admission only (domain.ResolveAgentSelection).
+	Models *domain.RouteModelList
 }
 
 type Adapter struct {
 	Name     string
 	Fragment domain.AdapterFragment
-}
-
-// Offer also carries the route it is authored under, which is its directory.
-type Offer struct {
-	Route    string
-	Name     string
-	Fragment domain.OfferFragment
 }
 
 // LineupLine is one line of the lineup file. Key is the part after
@@ -75,10 +76,8 @@ type LineupLine struct {
 // Tree is one parsed revision. Every slice is sorted by name, so two trees
 // with the same content are equal and render to the same bytes.
 type Tree struct {
-	Agents   []domain.AgentSource
 	Routes   []Route
 	Adapters []Adapter
-	Offers   []Offer
 	Lineup   []LineupLine
 }
 
@@ -86,12 +85,8 @@ type Tree struct {
 // order), so a tree built in code compares equal to its own round trip. The
 // lineup keeps its authored order, which is the file's line order.
 func (t *Tree) Sort() {
-	slices.SortFunc(t.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
 	slices.SortFunc(t.Routes, func(a, b Route) int { return strings.Compare(a.Name, b.Name) })
 	slices.SortFunc(t.Adapters, func(a, b Adapter) int { return strings.Compare(a.Name, b.Name) })
-	slices.SortFunc(t.Offers, func(a, b Offer) int {
-		return strings.Compare(a.Route+"/"+a.Name, b.Route+"/"+b.Name)
-	})
 }
 
 // Revision is the content address of a tree revision's files, recorded on an
@@ -117,34 +112,41 @@ func Revision(files Files) (domain.Digest, error) {
 }
 
 // Parse reads one revision. It fails closed on a file outside the layout, a
-// document that does not parse, an agent naming a fragment the tree lacks, a
-// lineup the role rules refuse, a leftover attended-mark file, and an
-// agents.lock that disagrees with the content.
+// document that does not parse, a leftover agent or offer document (an
+// attended mark among them), a model list for a route the tree lacks, a
+// lineup the role rules refuse, and an agents.lock that disagrees with the
+// content.
 func Parse(files Files) (Tree, error) {
 	if len(files) > maxTreeFiles {
 		return Tree{}, fmt.Errorf("%d files: %w", len(files), ErrMalformed)
 	}
 	var tree Tree
 	var lineupSeen, lockSeen bool
+	models := map[string]*domain.RouteModelList{}
 	for _, path := range sortedPaths(files) {
 		body := files[path]
 		if len(body) > domain.MaxAgentFragmentBytes {
 			return Tree{}, fmt.Errorf("%s is %d bytes: %w", path, len(body), ErrMalformed)
 		}
-		if err := tree.parseFile(path, body, &lineupSeen, &lockSeen); err != nil {
+		if err := tree.parseFile(path, body, models, &lineupSeen, &lockSeen); err != nil {
 			return Tree{}, err
 		}
 	}
 	if !lineupSeen || !lockSeen {
 		return Tree{}, fmt.Errorf("lineup or agents.lock is missing: %w", ErrMalformed)
 	}
+	for i, route := range tree.Routes {
+		tree.Routes[i].Models = models[route.Name]
+		delete(models, route.Name)
+	}
+	if orphans := slices.Sorted(maps.Keys(models)); len(orphans) > 0 {
+		return Tree{}, fmt.Errorf("%s%s lists models for a route the tree lacks: %w",
+			modelsDir, orphans[0], ErrMalformed)
+	}
 	if err := tree.validate(); err != nil {
 		return Tree{}, err
 	}
-	want, err := tree.lockEntries()
-	if err != nil {
-		return Tree{}, err
-	}
+	want := tree.lockEntries()
 	got, err := parseLock(files[lockPath])
 	if err != nil {
 		return Tree{}, err
@@ -156,7 +158,9 @@ func Parse(files Files) (Tree, error) {
 	return tree, nil
 }
 
-func (t *Tree) parseFile(path string, body []byte, lineupSeen, lockSeen *bool) error {
+func (t *Tree) parseFile(
+	path string, body []byte, models map[string]*domain.RouteModelList, lineupSeen, lockSeen *bool,
+) error {
 	switch {
 	case path == lineupPath:
 		lines, err := parseLineup(body)
@@ -167,17 +171,18 @@ func (t *Tree) parseFile(path string, body []byte, lineupSeen, lockSeen *bool) e
 	case path == lockPath:
 		// Compared against the content once every document is read.
 		*lockSeen = true
-	case strings.HasPrefix(path, agentsDir):
-		name := strings.TrimPrefix(path, agentsDir)
-		if strings.HasSuffix(name, removedMarkSuffix) {
-			return fmt.Errorf("%s: attended marks were removed in plan revision 97; delete the file and commit: %w",
-				path, ErrMalformed)
+	case strings.HasPrefix(path, removedAgentsDir), strings.HasPrefix(path, removedOffersDir):
+		return fmt.Errorf("%s: %s: %w", path, migrateFix, ErrMalformed)
+	case strings.HasPrefix(path, modelsDir):
+		route := strings.TrimPrefix(path, modelsDir)
+		if !validName(route) {
+			return fmt.Errorf("%s: route name %q: %w", path, route, ErrMalformed)
 		}
-		source, err := parseAgent(name, body)
+		list, err := parseModelList(path, body)
 		if err != nil {
 			return err
 		}
-		t.Agents = append(t.Agents, source)
+		models[route] = &list
 	case strings.HasPrefix(path, routesDir):
 		name := strings.TrimPrefix(path, routesDir)
 		fragment, err := decodeNamed(path, name, body, domain.DecodeRouteFragment)
@@ -192,16 +197,6 @@ func (t *Tree) parseFile(path string, body []byte, lineupSeen, lockSeen *bool) e
 			return err
 		}
 		t.Adapters = append(t.Adapters, Adapter{Name: name, Fragment: fragment})
-	case strings.HasPrefix(path, offersDir):
-		route, name, ok := strings.Cut(strings.TrimPrefix(path, offersDir), "/")
-		if !ok || !validName(route) {
-			return fmt.Errorf("%s is not fragments/offers/<route>/<offer>: %w", path, ErrMalformed)
-		}
-		fragment, err := decodeNamed(path, name, body, domain.DecodeOfferFragment)
-		if err != nil {
-			return err
-		}
-		t.Offers = append(t.Offers, Offer{Route: route, Name: name, Fragment: fragment})
 	default:
 		return fmt.Errorf("%s is outside the tree layout: %w", path, ErrMalformed)
 	}
@@ -225,33 +220,17 @@ func decodeNamed[T any](path, name string, body []byte, decode func([]byte) (T, 
 	return fragment, nil
 }
 
-// validate checks what one file cannot: every agent's fragments are present,
-// and the lineup follows the role rules.
+// validate checks what one file cannot: the lineup follows the role rules.
 func (t Tree) validate() error {
-	for _, agent := range t.Agents {
-		if _, err := t.closure(agent); err != nil {
-			return err
-		}
-	}
 	if _, err := t.ResolveLineup(); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Agent returns the named agent's source lines.
-func (t Tree) Agent(name string) (domain.AgentSource, bool) {
-	for _, agent := range t.Agents {
-		if agent.Name == name {
-			return agent, true
-		}
-	}
-	return domain.AgentSource{}, false
-}
-
 // ResolveLineup applies the lineup contract's key rules, the escalated
-// pairing rule among them, to the lineup file. It reads no agent: a line's
-// selection resolves at admission against the enrollment's catalog.
+// pairing rule among them, to the lineup file. A line's selection resolves
+// at admission against the enrollment's catalog.
 func (t Tree) ResolveLineup() (domain.Lineup, error) {
 	keys := make([]domain.PolicyKey, 0, len(t.Lineup))
 	for _, line := range t.Lineup {
@@ -267,7 +246,7 @@ func (t Tree) ResolveLineup() (domain.Lineup, error) {
 }
 
 // Route returns the named route's fragment. Admission reads the route an
-// enrollment's Route field names this way, with no agent in the path.
+// enrollment's Route field names this way.
 func (t Tree) Route(name string) (domain.RouteFragment, bool) {
 	i := slices.IndexFunc(t.Routes, func(r Route) bool { return r.Name == name })
 	if i < 0 {
@@ -276,60 +255,14 @@ func (t Tree) Route(name string) (domain.RouteFragment, bool) {
 	return t.Routes[i].Fragment, true
 }
 
-// agentClosure is the fragments an agent's lines name.
-type agentClosure struct {
-	route   domain.RouteFragment
-	adapter domain.AdapterFragment
-	offer   domain.OfferFragment
-}
-
-func (t Tree) closure(agent domain.AgentSource) (agentClosure, error) {
-	var closure agentClosure
-	missing := func(kind, name string) (agentClosure, error) {
-		return agentClosure{}, fmt.Errorf("agent %s names %s %q, which the tree lacks: %w",
-			agent.Name, kind, name, ErrMalformed)
+// RouteModels returns the named route's model list, nil when the route has
+// none or the tree lacks the route.
+func (t Tree) RouteModels(name string) *domain.RouteModelList {
+	i := slices.IndexFunc(t.Routes, func(r Route) bool { return r.Name == name })
+	if i < 0 {
+		return nil
 	}
-	route, ok := t.Route(agent.Route)
-	if !ok {
-		return missing("route", agent.Route)
-	}
-	closure.route = route
-	adapter := slices.IndexFunc(t.Adapters, func(a Adapter) bool { return a.Name == agent.Adapter })
-	if adapter < 0 {
-		return missing("adapter", agent.Adapter)
-	}
-	closure.adapter = t.Adapters[adapter].Fragment
-	// The offer is looked up under the agent's own route: an offer of the
-	// same name under another route is another offer.
-	offer := slices.IndexFunc(t.Offers, func(o Offer) bool {
-		return o.Route == agent.Route && o.Name == agent.Offer
-	})
-	if offer < 0 {
-		return missing("offer", agent.Route+"/"+agent.Offer)
-	}
-	closure.offer = t.Offers[offer].Fragment
-	return closure, nil
-}
-
-// AgentDigest computes the agent's digest from the tree alone. The canonical
-// body holds the enrollment id and the fragment digests, all of which the
-// tree carries; whether the join holds against the enrollment record is
-// ResolveAgent's question.
-func (t Tree) AgentDigest(name string) (domain.Digest, error) {
-	agent, ok := t.Agent(name)
-	if !ok {
-		return "", fmt.Errorf("agent %q: %w", name, ErrUnknownAgent)
-	}
-	closure, err := t.closure(agent)
-	if err != nil {
-		return "", err
-	}
-	return domain.AgentDefinition{
-		EncodingVersion: domain.AgentEncodingVersion,
-		EnrollmentID:    domain.ClientEnrollmentID(agent.Enrollment),
-		RouteDigest:     closure.route.Digest, AdapterDigest: closure.adapter.Digest,
-		OfferDigest: closure.offer.Digest, Effort: agent.Effort,
-	}.ComputeDigest()
+	return t.Routes[i].Models
 }
 
 // Render emits the tree's files, agents.lock included. Parse of the result
@@ -339,19 +272,16 @@ func Render(tree Tree) (Files, error) {
 		return nil, err
 	}
 	files := Files{}
-	for _, agent := range tree.Agents {
-		if _, dup := files[agentsDir+agent.Name]; dup {
-			return nil, fmt.Errorf("agent %s is authored twice: %w", agent.Name, ErrMalformed)
-		}
-		body, err := renderAgent(agent)
-		if err != nil {
-			return nil, err
-		}
-		files[agentsDir+agent.Name] = body
-	}
 	for _, route := range tree.Routes {
 		if err := putFragment(files, routesDir, route.Name, route.Fragment.Encode); err != nil {
 			return nil, err
+		}
+		if route.Models != nil {
+			body, err := renderModelList(*route.Models)
+			if err != nil {
+				return nil, fmt.Errorf("%s%s: %w", modelsDir, route.Name, err)
+			}
+			files[modelsDir+route.Name] = body
 		}
 	}
 	for _, adapter := range tree.Adapters {
@@ -359,20 +289,8 @@ func Render(tree Tree) (Files, error) {
 			return nil, err
 		}
 	}
-	for _, offer := range tree.Offers {
-		if !validName(offer.Route) {
-			return nil, fmt.Errorf("offer route %q: %w", offer.Route, ErrMalformed)
-		}
-		if err := putFragment(files, offersDir+offer.Route+"/", offer.Name, offer.Fragment.Encode); err != nil {
-			return nil, err
-		}
-	}
 	files[lineupPath] = renderLineup(tree.Lineup)
-	lock, err := tree.lockEntries()
-	if err != nil {
-		return nil, err
-	}
-	files[lockPath] = renderLock(lock)
+	files[lockPath] = renderLock(tree.lockEntries())
 	return files, nil
 }
 
@@ -402,8 +320,7 @@ func sortedPaths(files Files) []string {
 
 // validName is the rule for a fragment's tree name, which is a file name:
 // lowercase ASCII alphanumeric, with '-', '_', and '.' as interior
-// separators ("gpt-5.6-sol"). An agent's name follows the stricter
-// domain.AgentSource rule.
+// separators ("gpt-5.6-sol").
 func validName(name string) bool {
 	if name == "" || len(name) > 255 {
 		return false

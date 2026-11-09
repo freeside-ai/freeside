@@ -236,7 +236,7 @@ func routedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReview
 // still holds a current credential, and still selects the agent the request's
 // snapshot names (engine.CheckReviewRole). The tree is fixed for the daemon's
 // run, so what can change is the store (a disabled identity, a credential that
-// expired, a task line) and the clock (an offer past its not_after).
+// expired, a task line) and the clock (a credential window that closed).
 //
 // The engine admitted the request's invocation once, before it asked the
 // source, and the request carries that snapshot. This check is not that
@@ -462,7 +462,7 @@ func activateAgentSelection(
 	if failure != nil {
 		causes[roleCausePrefix+string(failure.Role)] = fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon admits no work "+
-				"until the admitted-agent tree and the store agree; fix the line or the enrollment and restart.",
+				"until the agent tree and the store agree; fix the line or the enrollment and restart.",
 			failure.Role, failure.Err)
 	}
 	for _, retired := range work {

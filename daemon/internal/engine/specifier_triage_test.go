@@ -52,7 +52,6 @@ func (f *agentAdmissionFixture) addTriagerLine(t *testing.T) {
 	prompts[domain.RoleTriager] = agentbaseline.Prompt{Name: "triager", Digest: agentTestDigest("9")}
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: f.enrollment, Writers: agentTestWriters(), TermsBasisDate: "2026-08-01",
-		PricingRevision: "pricing-2026-08", OfferNotAfter: agentTestAt.Add(30 * 24 * time.Hour),
 		JudgmentModel: "claude-judgment-test", JudgmentEffort: domain.EffortLow, Prompts: prompts,
 	})
 	if err != nil {
@@ -148,23 +147,13 @@ func (f *agentAdmissionFixture) triageState(t *testing.T) (*domain.TaskTriage, [
 	return record, lines
 }
 
-// bindingRuns reports whether binding was admitted on the selection the
-// tree agent name reduces to: a selection admission names no agent, so the
-// agent a test means is the one whose enrollment, model, and effort it ran.
+// bindingRuns reports whether binding was admitted on the named selection
+// (nameSelection): the enrollment, model, and effort it ran.
 func (f *agentAdmissionFixture) bindingRuns(t *testing.T, binding *domain.AdmissionAgentBinding, name string) bool {
 	t.Helper()
 	return binding != nil && binding.SelectionAdmitted() && *f.lineSelection(t, name) == (domain.TaskLineSelection{
 		EnrollmentID: binding.EnrollmentID, ModelID: binding.SelectionModelID, Effort: binding.SelectionEffort,
 	})
-}
-
-func (f *agentAdmissionFixture) agentDigest(t *testing.T, name string) domain.Digest {
-	t.Helper()
-	digest, err := f.selection.Tree.AgentDigest(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return digest
 }
 
 // A standard answer records the tier, writes no line, and leaves the
@@ -186,7 +175,7 @@ func TestTriageStandardKeepsTheLineupSpecifier(t *testing.T) {
 		t.Fatalf("lines = %+v, want none", lines)
 	}
 	if admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceLineup ||
-		!f.bindingRuns(t, admission.AgentBinding, agentbaseline.WriterAgentName(domain.RoleSpecifier)) {
+		!f.bindingRuns(t, admission.AgentBinding, agentTestSpecifierAgent) {
 		t.Fatalf("binding = %+v, want the lineup's specifier", admission.AgentBinding)
 	}
 	if _, err := f.admitSpecifier(t, "inv-specification-2"); err != nil {
@@ -241,14 +230,14 @@ func TestTriageEscalatedAdmitsTheCounterpart(t *testing.T) {
 }
 
 // An escalated specifier on the implementer's model and effort is one
-// definition under two names, as the baseline tree writes it when settings
+// selection under two names, as the baseline tree writes it when settings
 // pick that pair. The triage line's selection is the implementer's too, and
 // it still runs the counterpart.
 func TestTriageEscalatesToTheImplementersSelection(t *testing.T) {
 	t.Parallel()
 	f, _ := triageFixtureOn(t, `{"tier":"escalated","reason":"Changes the API schema."}`, "claude-implementer-test")
-	if f.agentDigest(t, agentTestEscalatedAgent) != f.agentDigest(t, agentTestWriterAgent) {
-		t.Fatal("the counterpart is not the implementer's definition")
+	if *f.lineSelection(t, agentTestEscalatedAgent) != *f.lineSelection(t, agentTestWriterAgent) {
+		t.Fatal("the counterpart is not the implementer's selection")
 	}
 	admission, err := f.admitSpecifier(t, "inv-specification-1")
 	if err != nil {
@@ -423,7 +412,7 @@ func TestTaskLineChangeSupersedesTriage(t *testing.T) {
 	if _, err := f.admitSpecifier(t, "inv-specification-1"); err != nil {
 		t.Fatal(err)
 	}
-	specifier := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	specifier := agentTestSpecifierAgent
 	line := f.changeLine(t, domain.RoleSpecifier, specifier, false).Line
 	admission, err := f.admitSpecifier(t, "inv-specification-2")
 	if err != nil {

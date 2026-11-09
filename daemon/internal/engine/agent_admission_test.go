@@ -53,6 +53,9 @@ type agentAdmissionFixture struct {
 	run        domain.Run
 	binding    invocationBinding
 	stage      domain.Stage
+	// names maps the names the tests route and pin by to the selection each
+	// stands for (nameSelection).
+	names map[string]domain.TaskLineSelection
 }
 
 var agentTestPrompts = map[domain.RoleName]agentbaseline.Prompt{
@@ -62,7 +65,7 @@ var agentTestPrompts = map[domain.RoleName]agentbaseline.Prompt{
 }
 
 // agentTestWriters puts the specifier on its own model and the implementer
-// and remediator on one, so the tree carries two writer agents; the
+// and remediator on one, so the lineup names two writer selections; the
 // implementer's, agentTestWriterAgent, is the one the tests resolve.
 func agentTestWriters() map[domain.RoleName]agentbaseline.Selection {
 	return map[domain.RoleName]agentbaseline.Selection{
@@ -72,7 +75,15 @@ func agentTestWriters() map[domain.RoleName]agentbaseline.Selection {
 	}
 }
 
-var agentTestWriterAgent = agentbaseline.WriterAgentName(domain.RoleImplementer)
+// The tests name the selections they route and pin. The names were tree
+// agents until #2599 removed agent documents; a fixture now records the
+// selection each name stands for (nameSelection). agentTestWriterAgent is the
+// implementer lineup line's selection and agentTestSpecifierAgent the
+// specifier's.
+const (
+	agentTestWriterAgent    = "claude-code-implementer"
+	agentTestSpecifierAgent = "claude-code-specifier"
+)
 
 // agentTestWriterLine is the implementer lineup line's selection as a stored
 // refusal records it: the lineup's own text, which is printable.
@@ -161,7 +172,6 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 	}
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: f.enrollment, Writers: agentTestWriters(), TermsBasisDate: "2026-08-01",
-		PricingRevision: "pricing-2026-08", OfferNotAfter: agentTestAt.Add(30 * 24 * time.Hour),
 		Prompts: agentTestPrompts,
 	})
 	if err != nil {
@@ -245,7 +255,24 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 			now: func() time.Time { return agentTestAt },
 		},
 	}
+	for name, role := range map[string]domain.RoleName{
+		agentTestWriterAgent: domain.RoleImplementer, agentTestSpecifierAgent: domain.RoleSpecifier,
+	} {
+		line, err := lineupLine(tree, role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.nameSelection(name, line.TaskLineSelection())
+	}
 	return f
+}
+
+// nameSelection records the selection a test name stands for.
+func (f *agentAdmissionFixture) nameSelection(name string, selection domain.TaskLineSelection) {
+	if f.names == nil {
+		f.names = map[string]domain.TaskLineSelection{}
+	}
+	f.names[name] = selection
 }
 
 // record stores the admission as the engine does, with its attempt, so the
@@ -864,8 +891,7 @@ func TestReviewCheckRefusesAMarkedGenerationAfterOtherChecks(t *testing.T) {
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: f.enrollment, ClaudeReviewEnrollment: &f.enrollment,
 		Writers: agentTestWriters(), ReviewModel: "claude-review-test", ReviewEffort: domain.EffortHigh,
-		TermsBasisDate: "2026-08-01", PricingRevision: "pricing-2026-08",
-		OfferNotAfter: agentTestAt.Add(24 * time.Hour), Prompts: prompts,
+		TermsBasisDate: "2026-08-01", Prompts: prompts,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -967,23 +993,31 @@ func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
 	}
 }
 
-// lineSelection is the selection a v2 line holds to run the named agent of
-// the fixture's tree as it stands now.
+// lineSelection is the selection a line holds to run the named selection
+// (nameSelection).
 func (f *agentAdmissionFixture) lineSelection(t *testing.T, name string) *domain.TaskLineSelection {
 	t.Helper()
-	selection, err := f.selection.Tree.SelectionOfAgent(name)
-	if err != nil {
-		t.Fatalf("selection of %s: %v", name, err)
+	selection, ok := f.names[name]
+	if !ok {
+		t.Fatalf("the fixture names no selection %s", name)
 	}
 	return &selection
 }
 
-// lineAgent is the agent of the fixture's tree a line runs (Tree.LineAgent),
-// "" when its selection maps to no one agent.
+// lineAgent is the name of the selection a line holds, "" when the line
+// holds none or no one name stands for its selection.
 func (f *agentAdmissionFixture) lineAgent(line domain.TaskLine) string {
-	name, err := f.selection.Tree.LineAgent(line)
-	if err != nil {
+	if line.Selection == nil {
 		return ""
 	}
-	return name
+	found := ""
+	for name, selection := range f.names {
+		if selection == *line.Selection {
+			if found != "" {
+				return ""
+			}
+			found = name
+		}
+	}
+	return found
 }

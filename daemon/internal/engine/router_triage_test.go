@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -20,34 +19,25 @@ import (
 
 const agentTestSecondEscalatedAgent = "claude-second-escalated"
 
-var agentTestSpecifierAgent = agentbaseline.WriterAgentName(domain.RoleSpecifier)
-
-// addSecondEscalated adds the second agent's escalated counterpart: an agent
-// like the fixture's escalated one on the second identity's enrollment, and
-// the lineup's escalated line pairing the second agent with it. Call it after
+// addSecondEscalated names agentTestSecondEscalatedAgent the second
+// enrollment's escalated counterpart, the fixture's escalated selection on
+// that enrollment, and adds the lineup's escalated line naming it. Call it after
 // addSecondAgent and addEscalatedSpecifier.
 func (f *agentAdmissionFixture) addSecondEscalated(t *testing.T) {
 	t.Helper()
 	tree := f.selection.Tree
-	second, ok := tree.Agent(agentTestSecondAgent)
-	if !ok {
-		t.Fatal("the tree has no second agent")
-	}
-	agent, ok := tree.Agent(agentTestEscalatedAgent)
-	if !ok {
-		t.Fatal("the tree has no escalated agent")
-	}
-	agent.Name, agent.Enrollment, agent.Route = agentTestSecondEscalatedAgent, second.Enrollment, second.Route
-	tree.Agents = append(slices.Clone(tree.Agents), agent)
-	tree.Sort()
+	second := string(f.lineSelection(t, agentTestSecondAgent).EnrollmentID)
+	escalated := *f.lineSelection(t, agentTestEscalatedAgent)
+	escalated.EnrollmentID = domain.ClientEnrollmentID(second)
+	f.nameSelection(agentTestSecondEscalatedAgent, escalated)
 	line, err := lineupLine(tree, domain.RoleSpecifier)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The second enrollment's counterpart: the escalated model on the second
-	// agent's enrollment.
-	line.Names.Enrollment, line.Names.Model = second.Enrollment, agentTestEscalatedModel
-	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second.Enrollment)
+	// enrollment.
+	line.Names.Enrollment, line.Names.Model = second, agentTestEscalatedModel
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +73,7 @@ func (f *agentAdmissionFixture) escalate(t *testing.T) domain.TaskLine {
 		TaskID: task.ID, Outcome: domain.TriageOutcomeCallFailed, Escalated: true, RecordedAt: agentTestAt,
 	})
 	return f.appendLine(t, domain.TaskLineInput{
-		TaskID: task.ID, Role: domain.RoleSpecifier, Agent: agentTestEscalatedAgent,
+		TaskID: task.ID, Role: domain.RoleSpecifier, Selection: f.lineSelection(t, agentTestEscalatedAgent),
 		Source: domain.TaskLineSourceTriage, SetBy: string(task.ID),
 	}, agentTestAt)
 }
@@ -222,7 +212,7 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 	}
 	routed := func(t *testing.T, f *agentAdmissionFixture, role domain.RoleName, agent string, p *domain.TaskLineProvenance) {
 		f.appendLine(t, domain.TaskLineInput{
-			TaskID: f.task(t, f.run.ID).ID, Role: role, Agent: agent, Source: domain.TaskLineSourceRouter,
+			TaskID: f.task(t, f.run.ID).ID, Role: role, Selection: f.lineSelection(t, agent), Source: domain.TaskLineSourceRouter,
 			SetBy: routerSetBy(f.task(t, f.run.ID).ID), Provenance: p,
 		}, agentTestAt.Add(time.Minute))
 	}
@@ -272,8 +262,8 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.escalate(t)
 				routed(t, f, domain.RoleSpecifier, agentTestSecondEscalatedAgent, provenance(t, f, routerSecondPool))
-				second, _ := f.selection.Tree.Agent(agentTestSecondAgent)
-				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second.Enrollment)
+				second := string(f.lineSelection(t, agentTestSecondAgent).EnrollmentID)
+				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -287,8 +277,8 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 				f.escalate(t)
 				routed(t, f, domain.RoleSpecifier, agentTestSecondEscalatedAgent, provenance(t, f, routerSecondPool))
 				tree := f.selection.Tree
-				second, _ := tree.Agent(agentTestSecondAgent)
-				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second.Enrollment)
+				second := string(f.lineSelection(t, agentTestSecondAgent).EnrollmentID)
+				key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, second)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -341,57 +331,39 @@ func TestEscalatedRouterLineAnchorRefusals(t *testing.T) {
 	}
 }
 
-// TestAPreUnitEscalatedSpecifierLineNeedsItsOrder: under a revision stored
-// before #2736, an escalated specifier's router line is ordered only while an
-// agent the revision orders for the specifier still resolves in the tree, and
-// its counterpart check then takes that agent's enrollment as its base. With
-// no such agent, or with an empty tree, the anchor refuses the line, and the
+// TestAPreUnitEscalatedSpecifierLineIsUnordered: a revision stored before
+// #2736 orders agent names, which the tree no longer carries (#2599). An
+// escalated specifier's router line citing it is unordered even while the
+// tree still holds the lineup line those names once reduced to, and the
 // counterpart check has no base to accept it under.
-func TestAPreUnitEscalatedSpecifierLineNeedsItsOrder(t *testing.T) {
+func TestAPreUnitEscalatedSpecifierLineIsUnordered(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for name, tc := range map[string]struct {
-		agent     string
-		emptyTree bool
-		ordered   bool
-	}{
-		"an ordered agent resolves": {agent: agentTestSpecifierAgent, ordered: true},
-		"no ordered agent resolves": {agent: "claude-gone"},
-		"the tree is empty":         {agent: agentTestSpecifierAgent, emptyTree: true},
-	} {
-		f := newAgentAdmissionFixture(t)
-		f.addEscalatedSpecifier(t, true)
-		triage := f.escalate(t)
-		f.setPreUnitPolicy(t, domain.RoleSpecifier, tc.agent)
-		line := domain.TaskLine{
-			TaskID: triage.TaskID, Role: domain.RoleSpecifier, Version: 2, Encoding: domain.TaskLineEncodingV2,
-			Selection: f.lineSelection(t, agentTestEscalatedAgent), Source: domain.TaskLineSourceRouter,
-			SetAt: agentTestAt.Add(time.Minute), Provenance: &domain.TaskLineProvenance{
-				PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: routerMainPool,
-				RankedBy: []domain.TaskLineRankingReading{},
-			},
+	f := newAgentAdmissionFixture(t)
+	f.addEscalatedSpecifier(t, true)
+	triage := f.escalate(t)
+	f.setPreUnitPolicy(t, domain.RoleSpecifier, agentTestSpecifierAgent)
+	line := domain.TaskLine{
+		TaskID: triage.TaskID, Role: domain.RoleSpecifier, Version: 2, Encoding: domain.TaskLineEncodingV2,
+		Selection: f.lineSelection(t, agentTestEscalatedAgent), Source: domain.TaskLineSourceRouter,
+		SetAt: agentTestAt.Add(time.Minute), Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: routerMainPool,
+			RankedBy: []domain.TaskLineRankingReading{},
+		},
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		if err := anchorLinePolicy(ctx, tx, f.selection.Tree, line); err == nil {
+			t.Error("anchor ordered a line under the agents form")
 		}
-		tree := f.selection.Tree
-		if tc.emptyTree {
-			tree = agenttree.Tree{}
+		bases, _, err := counterpartBases(ctx, tx, f.selection.Tree, domain.LineupSelection{}, line)
+		if err != nil {
+			return err
 		}
-		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
-			if err := anchorLinePolicy(ctx, tx, tree, line); (err == nil) != tc.ordered {
-				t.Errorf("%s: anchor = %v, want ordered %t", name, err, tc.ordered)
-			}
-			if tc.emptyTree {
-				return nil
-			}
-			bases, _, err := counterpartBases(ctx, tx, tree, domain.LineupSelection{}, line)
-			if err != nil {
-				return err
-			}
-			if bases == nil || (len(bases) > 0) != tc.ordered {
-				t.Errorf("%s: counterpart bases = %#v, want a required set, non-empty %t", name, bases, tc.ordered)
-			}
-			return nil
-		}); err != nil {
-			t.Fatal(err)
+		if bases == nil || len(bases) != 0 {
+			t.Errorf("counterpart bases = %#v, want a required, empty set", bases)
 		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

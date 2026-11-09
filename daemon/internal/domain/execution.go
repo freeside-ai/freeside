@@ -239,8 +239,8 @@ type ExecutionAdmission struct {
 // existing fields (identity, credential mode, endpoints, instruction
 // delivery) become derivations of these; the ones the pure closure expresses
 // are rechecked by the admission that records them
-// (ValidateAdmissionSelectionDerivations, or ValidateAdmissionAgentDerivations
-// for a binding admitted under an agent), while
+// (ValidateAdmissionSelectionDerivations; a binding admitted under an agent
+// document has no recheck since #2599 removed the documents), while
 // the image's build-to-image binding is the #867 resolver's, since no
 // closure fragment carries an image reference. This value is the authority
 // the derivations flow from.
@@ -270,8 +270,8 @@ type AdmissionAgentBinding struct {
 	// over.
 	LegacyAttended *bool `json:"attended,omitempty"`
 	// RouteModelID, RequestedEffort, and NativeEffort are the model and
-	// effort the launch passes (DeriveAgentLaunchSelection under an agent,
-	// AgentSelection.LaunchValues under a selection), recorded so
+	// effort the launch passes (derived from the agent's offer under an
+	// agent, AgentSelection.LaunchValues under a selection), recorded so
 	// exec.StartSpecFromAdmission can carry them without a closure lookup.
 	// Each is omitted when empty, so a binding that passes neither keeps the
 	// bytes and id it had before these fields existed. Under an agent the two
@@ -1228,231 +1228,9 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 	return nil
 }
 
-// ValidateAdmissionAgentDerivations rechecks a v4 admission's derived fields
-// against the closure its agent binding names. Since #2734 every admission
-// is under a selection (ValidateAdmissionSelectionDerivations), so no
-// production path produces a binding this checks; it stays, with its tests,
-// as the rule a recorded agent binding was admitted under, until #2599
-// removes the agent documents. It checks (§5.4 admission step 5:
-// "Reconstruction reads by digest and rechecks the derivations"). The caller
-// supplies the closure it resolved by digest — the agent, its adapter,
-// route, and offer fragments, the stage's launch with the role the
-// admission's stage resolves to, and the enrollment, generation, and identity
-// records — and every derived field must agree: the identity and credential mode with
-// the enrollment, the store manifest with the generation, the egress with
-// the route, the instruction-delivery vendor with the adapter, the model and
-// effort the launch passes with DeriveAgentLaunchSelection over the agent,
-// adapter, and offer (a stored model or effort is never trusted on its
-// own), the binding's launch digest with an authenticated launch for exactly that role, and the
-// agent's offer digest with an authenticated offer, so
-// launch-capability provenance, and the admitted model can never be
-// attributed to a fragment the admission did not run. The joins the closure
-// itself expresses are re-run: the agent's effort must be one the offer
-// allows and the adapter can send, the enrollment's client must be the one
-// the adapter drives, and the launch must require nothing beyond the
-// adapter's declared capability set (the proved-set gate needs the
-// conformance record and stays with admission step 3). The enrollment and
-// generation records carry no content address; their authenticity is the
-// re-gating store read's (identity binding, column/body cross-checks), which
-// is the only supported source for them. Tree facts outside every digest
-// (the route names the offer and enrollment are authored under, the lineup
-// revision's content) and admission-time policy gates (identity enabled,
-// offer expiry against the attempt deadline) are the #867 resolver's to
-// re-establish; a record of a past selection is not invalidated by current
-// configuration. Any disagreement fails closed with a
-// typed error; a legacy admission (no binding) never reaches this function,
-// because the legacy rule forbids resolving it against current configuration
-// at all.
-func ValidateAdmissionAgentDerivations(
-	a ExecutionAdmission, agent AgentDefinition, adapter AdapterFragment,
-	route RouteFragment, offer OfferFragment, launch LaunchSpec, role StageName,
-	enrollment ClientEnrollment, generation EnrollmentGeneration, identity AuthIdentity,
-) error {
-	if err := a.Validate(); err != nil {
-		return err
-	}
-	fail := func(format string, args ...any) error {
-		detail := fmt.Sprintf(format, args...)
-		return fmt.Errorf("execution admission %s: %s: %w",
-			a.InvocationID, detail, ErrAdmissionDerivationMismatch)
-	}
-	binding := a.AgentBinding
-	if binding == nil {
-		return fail("no agent binding to recheck")
-	}
-	if err := validateBindingClosure(
-		fail, *binding, agent, adapter, route, offer, launch, role, enrollment, generation, identity,
-	); err != nil {
-		return err
-	}
-	if missing := MissingLaunchCapabilities(adapter.LaunchCapabilities, launch.RequiredCapabilities()); len(missing) > 0 {
-		return fail("launch requires %v beyond the adapter's declared capabilities", missing)
-	}
-	if a.AuthIdentityID == nil || *a.AuthIdentityID != enrollment.AuthIdentityID {
-		return fail("admitted identity disagrees with enrollment identity %s", enrollment.AuthIdentityID)
-	}
-	if a.CredentialMode != enrollment.CredentialMode {
-		return fail("credential mode %q, enrollment carries %q", a.CredentialMode, enrollment.CredentialMode)
-	}
-	for _, authority := range binding.EffectiveEgress {
-		if !slices.Contains(route.InferenceAuthorities, authority) {
-			return fail("effective egress authority %q is outside the route's authorities", authority)
-		}
-	}
-	// Validate already required the explicit snapshot on every agent-bound
-	// admission, so absence cannot reach this comparison.
-	if a.StageInputs.VendorInstructions.Vendor != adapter.Vendor {
-		return fail("instruction delivery vendor %q, adapter derives %q",
-			a.StageInputs.VendorInstructions.Vendor, adapter.Vendor)
-	}
-	return nil
-}
-
-// validateBindingClosure re-runs the joins an admitted-agent binding shares
-// between an execution admission and a review admission: the fragments are
-// well-formed and authentic, the agent pins them, the launch is the one the
-// binding names and is for the role's stage, the effort is one the offer
-// allows and the adapter sends, the model and effort are the ones the closure
-// derives, the recorded selection is the one the agent reduces to and agrees
-// with the model and effort the launch passes (checkBindingSelection), the
-// enrollment and generation are the ones the binding names, and
-// the recorded harness, lineage group, and cost owner are the adapter's, the
-// offer's, and the enrollment identity's. What only one of the two records holds (launch capabilities, the egress
-// join, the credential mode, instruction delivery) stays with its caller.
-func validateBindingClosure(
-	fail func(format string, args ...any) error, binding AdmissionAgentBinding,
-	agent AgentDefinition, adapter AdapterFragment, route RouteFragment, offer OfferFragment,
-	launch LaunchSpec, role StageName, enrollment ClientEnrollment, generation EnrollmentGeneration,
-	identity AuthIdentity,
-) error {
-	if err := agent.Validate(); err != nil {
-		return err
-	}
-	if err := adapter.Validate(); err != nil {
-		return err
-	}
-	if err := route.Validate(); err != nil {
-		return err
-	}
-	if err := offer.Validate(); err != nil {
-		return err
-	}
-	if err := launch.Validate(); err != nil {
-		return err
-	}
-	if !role.valid() {
-		return fmt.Errorf("admitted agent binding stage role %q: %w", role, ErrInvalidStageName)
-	}
-	if err := enrollment.Validate(); err != nil {
-		return err
-	}
-	if err := ValidateEnrollmentGenerationBinding(enrollment, generation); err != nil {
-		return err
-	}
-	if binding.AgentDigest != agent.Digest {
-		return fail("binding names agent %s, closure resolves %s", binding.AgentDigest, agent.Digest)
-	}
-	if agent.AdapterDigest != adapter.Digest {
-		return fail("agent pins adapter %s, closure supplies %s", agent.AdapterDigest, adapter.Digest)
-	}
-	if agent.RouteDigest != route.Digest {
-		return fail("agent pins route %s, closure supplies %s", agent.RouteDigest, route.Digest)
-	}
-	if agent.OfferDigest != offer.Digest {
-		return fail("agent pins offer %s, closure supplies %s", agent.OfferDigest, offer.Digest)
-	}
-	if binding.LaunchDigest != launch.Digest {
-		return fail("binding names launch %s, closure resolves %s", binding.LaunchDigest, launch.Digest)
-	}
-	if launch.Stage != role {
-		return fail("launch is for stage %q, the admission's stage resolves to %q", launch.Stage, role)
-	}
-	if !slices.Contains(offer.AllowedEfforts, agent.Effort) {
-		return fail("effort %q is not allowed by the agent's offer", agent.Effort)
-	}
-	if !slices.Contains(adapter.SendableEfforts, agent.Effort) {
-		return fail("effort %q is not sendable by the agent's adapter", agent.Effort)
-	}
-	if enrollment.HarnessClient != adapter.ClientKind {
-		return fail("enrollment binds client %q, adapter drives %q",
-			enrollment.HarnessClient, adapter.ClientKind)
-	}
-	selection, err := DeriveAgentLaunchSelection(agent, adapter, offer)
-	if err != nil {
-		return fail("launch selection: %v", err)
-	}
-	if binding.RouteModelID != selection.RouteModelID ||
-		binding.RequestedEffort != selection.RequestedEffort ||
-		binding.NativeEffort != selection.NativeEffort {
-		return fail("binding passes model %q effort %q/%q, closure derives %q %q/%q",
-			binding.RouteModelID, binding.RequestedEffort, binding.NativeEffort,
-			selection.RouteModelID, selection.RequestedEffort, selection.NativeEffort)
-	}
-	if err := checkBindingSelection(fail, binding, agent, adapter, offer); err != nil {
-		return err
-	}
-	if agent.EnrollmentID != binding.EnrollmentID || enrollment.ID != binding.EnrollmentID {
-		return fail("enrollment %s disagrees with binding %s", enrollment.ID, binding.EnrollmentID)
-	}
-	if generation.Ordinal != binding.EnrollmentGeneration {
-		return fail("generation ordinal %d, binding names %d", generation.Ordinal, binding.EnrollmentGeneration)
-	}
-	if generation.StoreManifestDigest != binding.StoreManifestDigest {
-		return fail("store manifest %s, binding names %s",
-			generation.StoreManifestDigest, binding.StoreManifestDigest)
-	}
-	// The recorded run facts: a new admission must carry each as its closure
-	// derives it, so an empty value here is a resolver that forgot one.
-	if identity.ID != enrollment.AuthIdentityID {
-		return fail("identity %s is not the enrollment's identity %s", identity.ID, enrollment.AuthIdentityID)
-	}
-	if binding.HarnessClient != adapter.ClientKind {
-		return fail("binding records harness %q, adapter drives %q", binding.HarnessClient, adapter.ClientKind)
-	}
-	if binding.LineageGroup != offer.LineageGroup {
-		return fail("binding records lineage group %q, the offer carries %q", binding.LineageGroup, offer.LineageGroup)
-	}
-	if binding.CostOwner != identity.CostOwner {
-		return fail("binding records cost owner %q, the identity carries %q", binding.CostOwner, identity.CostOwner)
-	}
-	return nil
-}
-
-// checkBindingSelection holds the recorded selection to the closure: the
-// selection the agent reduces to must be the one recorded, by model, effort,
-// and digest, and the model and effort the launch passes must be the
-// selection's. A fresh admission always records a selection, so an absent
-// one is a resolver that forgot it.
-func checkBindingSelection(
-	fail func(format string, args ...any) error, binding AdmissionAgentBinding,
-	agent AgentDefinition, adapter AdapterFragment, offer OfferFragment,
-) error {
-	if binding.SelectionDigest == "" {
-		return fail("binding records no selection")
-	}
-	selection, err := ReduceAgentSelection(agent, adapter, offer)
-	if err != nil {
-		return fail("selection: %v", err)
-	}
-	if binding.SelectionModelID != selection.ModelID || binding.SelectionEffort != selection.Effort {
-		return fail("binding records selection model %q effort %q, closure reduces to %q %q",
-			binding.SelectionModelID, binding.SelectionEffort, selection.ModelID, selection.Effort)
-	}
-	if binding.SelectionDigest != selection.Digest {
-		return fail("binding records selection %s, closure reduces to %s", binding.SelectionDigest, selection.Digest)
-	}
-	model, nativeEffort := selection.LaunchValues(adapter.ClientKind)
-	if binding.RouteModelID != model || binding.NativeEffort != nativeEffort {
-		return fail("binding passes model %q effort %q, the selection passes %q %q",
-			binding.RouteModelID, binding.NativeEffort, model, nativeEffort)
-	}
-	return nil
-}
-
 // ValidateAdmissionSelectionDerivations rechecks a v4 admission whose binding
 // was admitted under a selection (SelectionAdmitted) against the closure the
-// selection names, as ValidateAdmissionAgentDerivations does for a binding
-// admitted under an agent: the selection, the adapter it pins, the route the
+// selection names: the selection, the adapter it pins, the route the
 // enrollment's route name resolved to, the stage's launch with the role the
 // admission's stage resolves to, and the enrollment, generation, and identity
 // records. Beyond the joins validateSelectionClosure shares with review
@@ -1461,7 +1239,7 @@ func checkBindingSelection(
 // enrollment's, the egress must stay within the route's authorities, and the
 // instruction-delivery vendor must be the adapter's. The route fragment
 // carries no name, so that the route is the enrollment's is the resolver's
-// join (tree facts outside every digest), as it is under an agent.
+// join (tree facts outside every digest).
 func ValidateAdmissionSelectionDerivations(
 	a ExecutionAdmission, selection AgentSelection, adapter AdapterFragment,
 	route RouteFragment, launch LaunchSpec, role StageName,

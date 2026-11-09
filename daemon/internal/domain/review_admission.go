@@ -24,10 +24,10 @@ type ReviewAdmission struct {
 	// one.
 	Role           RoleName       `json:"role"`
 	AuthIdentityID AuthIdentityID `json:"auth_identity_id"`
-	// LineageGroup is the lineage group of the agent's offer. It is the
-	// provider label a review record shows. Empty means the offer's lineage
-	// is unknown, which is a legal authored state (OfferFragment) and is
-	// recorded as unknown, never refused.
+	// LineageGroup is the lineage group of the selection's model
+	// (LineageGroupOf). It is the provider label a review record shows.
+	// Empty means the model's lineage is unknown, which is recorded as
+	// unknown, never refused.
 	LineageGroup string `json:"lineage_group"`
 	// AgentBinding is the binding an execution admission records, unchanged.
 	// Its launch digest is recorded but its coverage is not enforced for the

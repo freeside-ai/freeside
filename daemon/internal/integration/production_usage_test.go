@@ -175,8 +175,7 @@ func bindProductionWriters(t *testing.T, p *productionPublicationHarness) {
 		Writers: map[domain.RoleName]agentbaseline.Selection{
 			domain.RoleSpecifier: model, domain.RoleImplementer: model, domain.RoleRemediator: model,
 		},
-		TermsBasisDate: "2026-07-01", PricingRevision: "pricing-2026-07",
-		OfferNotAfter: fakePublicationTime.Add(30 * 24 * time.Hour),
+		TermsBasisDate: "2026-07-01",
 		Prompts: map[domain.RoleName]agentbaseline.Prompt{
 			domain.RoleImplementer: {Name: "implementer", Digest: productionDigest([]byte("prompt package"))},
 			domain.RoleRemediator:  {Name: "remediator", Digest: p.remediationPromptPackage},

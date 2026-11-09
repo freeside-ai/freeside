@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,16 +21,17 @@ import (
 // agentTestShadowPrompt is the shadow reviewer's prompt in the review tree.
 var agentTestShadowPrompt = agentbaseline.Prompt{Name: "shadow", Digest: agentTestDigest("1")}
 
+// agentTestReviewerAgent names the reviewer lineup line's selection in a
+// fixture reviewTree built.
+const agentTestReviewerAgent = "claude-review"
+
 // reviewTree gives the fixture a tree with a Claude reviewer and a shadow
-// reviewer on the fixture's identity, and the second agent addSecondAgent
-// seeds. It returns the routed and the shadow reviewer's ReviewRole.
+// reviewer on the fixture's identity, and the second selection
+// addSecondAgent seeds. It returns the routed and the shadow reviewer's
+// ReviewRole.
 func (f *agentAdmissionFixture) reviewTree(t *testing.T) (routed, shadow ReviewRole) {
 	t.Helper()
 	f.addSecondAgent(t)
-	second, ok := f.selection.Tree.Agent(agentTestSecondAgent)
-	if !ok {
-		t.Fatal("the fixture tree lacks the second agent")
-	}
 	prompts := make(map[domain.RoleName]agentbaseline.Prompt)
 	for role, prompt := range agentTestPrompts {
 		prompts[role] = prompt
@@ -42,14 +42,11 @@ func (f *agentAdmissionFixture) reviewTree(t *testing.T) (routed, shadow ReviewR
 		ClaudeEnrollment: f.enrollment, ClaudeReviewEnrollment: &f.enrollment,
 		Writers: agentTestWriters(), ReviewModel: "claude-review-test", ReviewEffort: domain.EffortHigh,
 		ShadowReviewModel: "claude-shadow-test", ShadowReviewEffort: domain.EffortHigh,
-		TermsBasisDate: "2026-08-01", PricingRevision: "pricing-2026-08",
-		OfferNotAfter: agentTestAt.Add(24 * time.Hour), Prompts: prompts,
+		TermsBasisDate: "2026-08-01", Prompts: prompts,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree.Agents = append(slices.Clone(tree.Agents), second)
-	tree.Sort()
 	files, err := agenttree.Render(tree)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +57,11 @@ func (f *agentAdmissionFixture) reviewTree(t *testing.T) (routed, shadow ReviewR
 	if f.selection.Tree, err = agenttree.Parse(files); err != nil {
 		t.Fatal(err)
 	}
+	reviewer, err := lineupLine(f.selection.Tree, domain.RoleReviewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.nameSelection(agentTestReviewerAgent, reviewer.TaskLineSelection())
 	routed = ReviewRole{
 		Role: domain.RoleReviewer, PromptName: "review", PromptDigest: agentTestDigest("6"),
 		HarnessClient: domain.HarnessClientClaudeCode, Vendor: domain.AgentVendorClaude,
@@ -95,10 +97,7 @@ func TestReviewerLineSelectsTheReviewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := f.selection.Tree.SelectionOfAgent(agentTestSecondAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := *f.lineSelection(t, agentTestSecondAgent)
 	if checked.TaskLine == nil || checked.TaskLine.ID != line.ID || checked.Line.Names != second.Names() ||
 		checked.Line.PromptName != routed.PromptName {
 		t.Fatalf("checked review agent = %+v, want the line's agent on the lineup's prompt", checked.RoleAgent)
@@ -135,10 +134,9 @@ func TestLinelessReviewAdmitsTheLineupReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewer, _ := f.selection.Tree.Agent(agentbaseline.ClaudeReviewAgentName)
 	if lineless.AgentBinding.SelectionSource != domain.AgentSelectionSourceLineup ||
 		lineless.AgentBinding.SelectionRecordID != "" || lineless.AuthIdentityID != f.identity.ID ||
-		lineless.AgentBinding.EnrollmentID != domain.ClientEnrollmentID(reviewer.Enrollment) ||
+		lineless.AgentBinding.EnrollmentID != f.enrollment.ID ||
 		lineless.AgentBinding.RouteModelID != "claude-review-test" {
 		t.Fatalf("lineless review admission = %+v, want the lineup reviewer", lineless)
 	}
@@ -161,7 +159,7 @@ func TestLinelessReviewAdmitsTheLineupReviewer(t *testing.T) {
 func TestReviewerLineRefusals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	// A name that passes the grammar and reads like a pasted credential.
+	// A model that passes the grammar and reads like a pasted credential.
 	const pasted = "sk-ant-oat01-fixture-not-a-token"
 	cases := []struct {
 		name  string
@@ -169,11 +167,13 @@ func TestReviewerLineRefusals(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "the line names an agent the tree lacks",
+			name: "the line selects an enrollment the store lacks",
 			setup: func(t *testing.T, f *agentAdmissionFixture) domain.TaskLine {
-				return f.submitLine(t, domain.RoleReviewer, pasted)
+				return f.submitLineSelection(t, domain.RoleReviewer, &domain.TaskLineSelection{
+					EnrollmentID: "enroll-foreign", ModelID: pasted, Effort: "high",
+				})
 			},
-			want: "names an agent the tree lacks",
+			want: "its enrollment cannot be read",
 		},
 		{
 			name: "the line's agent runs under a disabled identity",
@@ -202,7 +202,7 @@ func TestReviewerLineRefusals(t *testing.T) {
 				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID)
 				task := f.task(t, f.run.ID)
 				return f.appendLine(t, domain.TaskLineInput{
-					TaskID: task.ID, Role: domain.RoleReviewer, Agent: agentTestSecondAgent,
+					TaskID: task.ID, Role: domain.RoleReviewer, Selection: f.lineSelection(t, agentTestSecondAgent),
 					Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
 				}, task.CreatedAt.Add(time.Second))
 			},

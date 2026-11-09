@@ -222,104 +222,6 @@ func (f AdapterFragment) validateDigest() error {
 	return nil
 }
 
-// OfferFragment is one route's offer of one model (§5.4): the same model
-// through two routes is two offers. Which route an offer is authored under is
-// a tree fact supplied at resolution, not part of this body — no name enters
-// any digest.
-type OfferFragment struct {
-	EncodingVersion int `json:"encoding_version"`
-	// RouteModelID is the model identifier as the route's protocol names it.
-	RouteModelID string `json:"route_model_id"`
-	// LineageGroup is the vendor-family lineage the §7 review-independence
-	// record compares (curated conservatively; the same weights through any
-	// route are one group). Independence is a recorded fact and never an
-	// admission gate (plan revision 65): a same-lineage pairing is recorded,
-	// and empty means unknown, which is recorded as unknown.
-	LineageGroup      string            `json:"lineage_group"`
-	IdentityStability IdentityStability `json:"identity_stability"`
-	AllowedEfforts    []EffortLevel     `json:"allowed_efforts"`
-	PricingRevision   string            `json:"pricing_revision"`
-	// NotAfter is the authored expiry: an offer whose not_after precedes the
-	// attempt deadline does not resolve (§5.4 admission step 1).
-	NotAfter time.Time `json:"not_after"`
-	Digest   Digest    `json:"digest"`
-}
-
-type canonicalOfferFragment struct {
-	EncodingVersion   int               `json:"encoding_version"`
-	RouteModelID      string            `json:"route_model_id"`
-	LineageGroup      string            `json:"lineage_group"`
-	IdentityStability IdentityStability `json:"identity_stability"`
-	AllowedEfforts    []EffortLevel     `json:"allowed_efforts"`
-	PricingRevision   string            `json:"pricing_revision"`
-	NotAfter          time.Time         `json:"not_after"`
-}
-
-func (f OfferFragment) canonical() canonicalOfferFragment {
-	return canonicalOfferFragment{
-		EncodingVersion: f.EncodingVersion, RouteModelID: f.RouteModelID,
-		LineageGroup: f.LineageGroup, IdentityStability: f.IdentityStability,
-		AllowedEfforts: f.AllowedEfforts, PricingRevision: f.PricingRevision,
-		NotAfter: f.NotAfter,
-	}
-}
-
-// ComputeDigest hashes the explicit-version canonical encoding.
-func (f OfferFragment) ComputeDigest() (Digest, error) {
-	body, err := json.Marshal(f.canonical())
-	if err != nil {
-		return "", fmt.Errorf("offer fragment canonical encoding: %w", err)
-	}
-	return Digest(contentaddr.Sum(body)), nil
-}
-
-// Validate reports whether the fragment is well-formed and its digest
-// authentic. LineageGroup may be empty — unknown lineage is a legal authored
-// state that the review-independence record carries as unknown, not a
-// malformed document, and nothing gates on it.
-func (f OfferFragment) Validate() error {
-	if f.EncodingVersion != AgentFragmentEncodingVersion {
-		return fmt.Errorf("offer fragment encoding_version %d: %w", f.EncodingVersion, ErrAgentEncodingVersion)
-	}
-	if f.RouteModelID == "" {
-		return fmt.Errorf("offer fragment route_model_id: %w", ErrEmptyField)
-	}
-	if !f.IdentityStability.valid() {
-		return fmt.Errorf("offer fragment identity_stability %q: %w", f.IdentityStability, ErrInvalidIdentityStability)
-	}
-	if len(f.AllowedEfforts) == 0 {
-		return fmt.Errorf("offer fragment allowed_efforts: %w", ErrEmptyField)
-	}
-	if err := validateEffortList("offer fragment allowed_efforts", f.AllowedEfforts); err != nil {
-		return err
-	}
-	if f.PricingRevision == "" {
-		return fmt.Errorf("offer fragment pricing_revision: %w", ErrEmptyField)
-	}
-	if f.NotAfter.IsZero() {
-		return fmt.Errorf("offer fragment not_after: %w", ErrMissingTimestamp)
-	}
-	if f.NotAfter.Location() != time.UTC {
-		return fmt.Errorf("offer fragment not_after: %w", ErrTimestampNotUTC)
-	}
-	return f.validateDigest()
-}
-
-func (f OfferFragment) validateDigest() error {
-	if !contentaddr.Valid(string(f.Digest)) {
-		return fmt.Errorf("offer fragment digest %q: %w", f.Digest, ErrInvalidDigest)
-	}
-	computed, err := f.ComputeDigest()
-	if err != nil {
-		return err
-	}
-	if f.Digest != computed {
-		return fmt.Errorf("offer fragment digest %q, content resolves to %q: %w",
-			f.Digest, computed, ErrAgentDigestMismatch)
-	}
-	return nil
-}
-
 func validateEffortList(field string, efforts []EffortLevel) error {
 	seen := map[EffortLevel]struct{}{}
 	for _, effort := range efforts {
@@ -334,14 +236,13 @@ func validateEffortList(field string, efforts []EffortLevel) error {
 	return nil
 }
 
-// EncodeRouteFragment, EncodeAdapterFragment, and EncodeOfferFragment emit
-// the validated canonical persisted forms; the Decode functions reject
-// oversized, unknown-field, invalid-UTF8, and trailing-data payloads before
-// revalidating the content address.
+// EncodeRouteFragment and EncodeAdapterFragment emit the validated canonical
+// persisted forms; the Decode functions reject oversized, unknown-field,
+// invalid-UTF8, and trailing-data payloads before revalidating the content
+// address.
 
 func (f RouteFragment) Encode() ([]byte, error)   { return encodeFragment(f) }
 func (f AdapterFragment) Encode() ([]byte, error) { return encodeFragment(f) }
-func (f OfferFragment) Encode() ([]byte, error)   { return encodeFragment(f) }
 
 type fragmentValidator interface{ Validate() error }
 
@@ -373,10 +274,6 @@ func DecodeRouteFragment(body []byte) (RouteFragment, error) {
 
 func DecodeAdapterFragment(body []byte) (AdapterFragment, error) {
 	return decodeFragment[AdapterFragment](body, "adapter fragment")
-}
-
-func DecodeOfferFragment(body []byte) (OfferFragment, error) {
-	return decodeFragment[OfferFragment](body, "offer fragment")
 }
 
 // LaunchCapability is the adapter's closed launch-capability vocabulary
@@ -504,32 +401,6 @@ var AllEffortLevels = []EffortLevel{
 func (e EffortLevel) valid() bool {
 	switch e {
 	case EffortHarnessDefault, EffortLow, EffortMedium, EffortHigh, EffortMax:
-		return true
-	default:
-		return false
-	}
-}
-
-// IdentityStability is an offer's declared upstream stability (§5.4): whether
-// the served model identity is pinned, rolls forward under one id, or is
-// opaque. Records claim only what the route exposed; pre-proving a rolling
-// upstream would be fiction.
-type IdentityStability string
-
-const (
-	IdentityPinned  IdentityStability = "pinned"
-	IdentityRolling IdentityStability = "rolling"
-	IdentityOpaque  IdentityStability = "opaque"
-)
-
-// AllIdentityStabilities lists every valid IdentityStability.
-var AllIdentityStabilities = []IdentityStability{
-	IdentityPinned, IdentityRolling, IdentityOpaque,
-}
-
-func (s IdentityStability) valid() bool {
-	switch s {
-	case IdentityPinned, IdentityRolling, IdentityOpaque:
 		return true
 	default:
 		return false

@@ -36,30 +36,11 @@ const (
 	CodexReviewAdapterV1Build = "codex_review_v1"
 )
 
-// Tree names of the baseline documents. Names enter no digest. The writer
-// agents are named by WriterAgentName. ClaudeAgentName and ClaudeOfferName
-// are the writer agent and native-default offer of a tree adopted before the
-// writer roles named a model; the baseline no longer emits them, so a
-// re-adopted tree has no such agent for a line to name.
+// Tree names of the baseline adapters. Names enter no digest.
 const (
-	ClaudeAgentName             = "claude-code-default"
-	ClaudeCallAgentName         = "claude-code-call-default"
-	ClaudeShadowReviewAgentName = "claude-shadow-review-default"
-	ClaudeReviewAgentName       = "claude-review-default"
-	CodexReviewAgentName        = "codex-review-default"
-
-	// ClaudeSpecifierEscalatedAgentName is the specifier's escalated
-	// counterpart, emitted only when adoption is given its model and effort.
-	ClaudeSpecifierEscalatedAgentName = "claude-code-specifier-escalated"
-
-	ClaudeAdapterName           = ClaudeWardAdapterBuild
-	ClaudeCallAdapterName       = ClaudeCallAdapterBuild
-	CodexAdapterName            = CodexReviewAdapterBuild
-	ClaudeOfferName             = domain.ClaudeCodeNativeDefaultRouteModelID
-	ClaudeCallOfferName         = "claude-code-call-default"
-	ClaudeShadowReviewOfferName = "claude-shadow-review-default"
-	ClaudeReviewOfferName       = "claude-review-default"
-	CodexOfferName              = "codex-review-default"
+	ClaudeAdapterName     = ClaudeWardAdapterBuild
+	ClaudeCallAdapterName = ClaudeCallAdapterBuild
+	CodexAdapterName      = CodexReviewAdapterBuild
 	// DefaultClaudeRoute and DefaultCodexRoute name the route of an identity
 	// adoption enrolls. An identity `auth add` already enrolled keeps the
 	// route name its enrollment carries.

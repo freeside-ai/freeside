@@ -422,22 +422,27 @@ func TestCrossRoleSpecifierLineIsAdmitted(t *testing.T) {
 	}
 }
 
-// TestAgentRefusalNamesTheAgent: a specification attempt whose task line
-// names an agent, refused after that agent resolves. The hold
-// names the check, the agent, and the launch, a changed detail is written at
-// once, and the held-work notice names them too.
+// TestAgentRefusalNamesTheAgent: a specification attempt on the lineup's
+// selection, refused after that selection resolves. The hold names the
+// check, the selection (the lineup's own text, so printable), and the launch,
+// a changed detail is written at once, and the held-work notice names them
+// too. An operator's line prints only once its catalog matched it, which a
+// prompt refusal comes before.
 func TestAgentRefusalNamesTheAgent(t *testing.T) {
 	t.Parallel()
 	agents := newAgentAdmissionFixture(t)
-	agents.addSecondAgent(t)
-	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
-	// A prompt the line does not select is refused once the agent resolved.
+	lineup, err := lineupLine(agents.selection.Tree, domain.RoleSpecifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := *lineupText(lineup)
+	// A prompt the lineup does not select is refused once the agent resolved.
 	_, refusal := resolveAgentAdmission(
 		t.Context(), agents.store, agents.selection, agents.run.ID, domain.RoleSpecifier,
 		agentTestDigest("9"), agentTestAt,
 	)
 	launch := agentTestLaunch(t, agents, domain.RoleSpecifier)
-	assertAdmissionDetail(t, refusal, domain.AdmissionCheckAgentPrompt, agentTestSecondAgent, launch)
+	assertAdmissionDetail(t, refusal, domain.AdmissionCheckAgentPrompt, agent, launch)
 
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	engine := f.newEngine(t, f.driver)
@@ -476,7 +481,7 @@ func TestAgentRefusalNamesTheAgent(t *testing.T) {
 		t.Fatalf("open notices = %+v, want one", open)
 	}
 	want := fmt.Sprintf("When this notice was raised, admission check %s refused agent %s on the %s launch %s.",
-		domain.AdmissionCheckAgentPrompt, agentTestSecondAgent, launch.Stage, launch.Digest)
+		domain.AdmissionCheckAgentPrompt, agent, launch.Stage, launch.Digest)
 	if !strings.Contains(open[0].Reason, want) {
 		t.Errorf("notice reason %q does not contain %q", open[0].Reason, want)
 	}

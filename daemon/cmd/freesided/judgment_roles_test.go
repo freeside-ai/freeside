@@ -338,12 +338,9 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		}
 
 		// A marked generation fails the admission of every role on it.
-		source, ok := adopted.Agent(agentbaseline.ClaudeCallAgentName)
-		if !ok {
-			t.Fatal("the adopted tree has no call agent")
-		}
+		source := lineupSelection(t, adopted, agentbaseline.JudgmentRoles()[0])
 		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-			generation, err := tx.CurrentEnrollmentGeneration(ctx, domain.ClientEnrollmentID(source.Enrollment))
+			generation, err := tx.CurrentEnrollmentGeneration(ctx, source.EnrollmentID)
 			if err != nil {
 				return err
 			}

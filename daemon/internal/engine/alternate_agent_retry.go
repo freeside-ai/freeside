@@ -253,7 +253,7 @@ func (s AgentSelection) movedPastMark(
 		return nil, err
 	}
 	if !slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
-		return slices.Contains(roleOrder(s.Tree, policy, role.Role), binding.EnrollmentID)
+		return slices.Contains(roleOrder(policy, role.Role), binding.EnrollmentID)
 	}) {
 		return nil, nil
 	}
@@ -337,7 +337,7 @@ func (s AgentSelection) movedRoleLines(
 	for _, role := range policy.Roles {
 		head, held := heads[role.Role]
 		if role.Role == record.Role || held && !head.Source.CarriesProvenance() && head.Source != domain.TaskLineSourceTriage ||
-			!slices.Contains(roleOrder(s.Tree, policy, role.Role), enrollmentID) {
+			!slices.Contains(roleOrder(policy, role.Role), enrollmentID) {
 			continue
 		}
 		line, ok := lineup.Line(role.Role)

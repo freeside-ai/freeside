@@ -106,7 +106,6 @@ var (
 	ErrInvalidAgentVendor               = errors.New("invalid agent vendor")
 	ErrInvalidStageName                 = errors.New("invalid stage name")
 	ErrInvalidEffortLevel               = errors.New("invalid effort level")
-	ErrInvalidIdentityStability         = errors.New("invalid identity stability")
 	ErrInvalidLaunchCapability          = errors.New("invalid launch capability")
 	ErrInvalidAuxiliaryInference        = errors.New("invalid auxiliary inference policy")
 	ErrInvalidSessionMode               = errors.New("invalid launch session mode")
@@ -395,8 +394,6 @@ var (
 		"agent canonical body carries a name where a resolved reference belongs")
 	ErrInvalidAgentName = errors.New(
 		"agent name is not at most 246 bytes of lowercase ASCII alphanumeric with interior '-' or '_'")
-	ErrOfferExpired = errors.New(
-		"offer's authored not_after precedes the attempt deadline")
 	ErrLaunchCapabilityUnproved = errors.New(
 		"launch requires capabilities beyond the adapter build's proved set")
 	ErrInvalidLineupKey = errors.New(
@@ -413,6 +410,11 @@ var (
 		"task line source is not a path that may set a line")
 	ErrInvalidTaskLineSelection = errors.New(
 		"task line selection needs an enrollment, a model, and an effort, each one launch option value")
+	// ErrInvalidRouteModelList marks a route model list with an unknown mode,
+	// no model, a duplicate model, or a model that is not one launch option
+	// value.
+	ErrInvalidRouteModelList = errors.New(
+		"route model list needs allow or deny and distinct models, each one launch option value")
 	ErrInvalidTaskLineEncoding = errors.New(
 		"task line or change encoding is not v1 or v2, or its fields do not fit it")
 	ErrSyntheticWindow = errors.New(

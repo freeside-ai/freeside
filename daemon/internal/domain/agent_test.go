@@ -1,13 +1,11 @@
 package domain_test
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -26,24 +24,6 @@ func launchSpec(t *testing.T) domain.LaunchSpec {
 	}
 	l.Digest = digest
 	return l
-}
-
-func agentResolution(t *testing.T) domain.AgentResolutionInput {
-	t.Helper()
-	identity := authIdentity()
-	identity.AccountBinding = "acct-1"
-	identity.Enabled = true
-	e := enrollment()
-	return domain.AgentResolutionInput{
-		Source: domain.AgentSource{
-			Name: "sol-via-codex", Enrollment: "openai-chatgpt-A/codex",
-			Route: "openai_chatgpt_codex", Adapter: "codex_proto_v1",
-			Offer: "gpt-5.6-sol", Effort: domain.EffortMax,
-		},
-		Identity: identity, Enrollment: e,
-		Route: routeFragment(t), Adapter: adapterFragment(t), Offer: offerFragment(t),
-		OfferRoute: "openai_chatgpt_codex",
-	}
 }
 
 func TestLaunchSpecValidate(t *testing.T) {
@@ -131,127 +111,27 @@ func TestLaunchRequiredCapabilities(t *testing.T) {
 	}
 }
 
-func TestResolveAgentDefinition(t *testing.T) {
-	t.Run("resolves and digests the canonical body", func(t *testing.T) {
-		in := agentResolution(t)
-		agent, err := domain.ResolveAgentDefinition(in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if agent.EnrollmentID != in.Enrollment.ID || agent.Effort != domain.EffortMax {
-			t.Fatalf("resolved agent = %+v", agent)
-		}
-		if agent.RouteDigest != in.Route.Digest || agent.AdapterDigest != in.Adapter.Digest ||
-			agent.OfferDigest != in.Offer.Digest {
-			t.Fatalf("resolved digests disagree with fragments: %+v", agent)
-		}
-		if err := agent.Validate(); err != nil {
-			t.Fatal(err)
-		}
-		body, err := agent.Encode()
-		if err != nil {
-			t.Fatal(err)
-		}
-		decoded, err := domain.DecodeAgentDefinition(body)
-		if err != nil || decoded.Digest != agent.Digest {
-			t.Fatalf("round-trip = %+v, %v", decoded, err)
-		}
-		// A renamed agent is the same agent: the name is outside the digest.
-		renamed := agent
-		renamed.Name = "sol-prime"
-		recomputed, err := renamed.ComputeDigest()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if recomputed != agent.Digest {
-			t.Fatal("rename changed the agent digest")
-		}
-	})
-
-	joinCases := []struct {
-		name   string
-		mutate func(*domain.AgentResolutionInput)
-	}{
-		{"disabled identity", func(in *domain.AgentResolutionInput) { in.Identity.Enabled = false }},
-		{"enrollment through another route", func(in *domain.AgentResolutionInput) { in.Enrollment.Route = "openai_platform" }},
-		{"adapter for another client", func(in *domain.AgentResolutionInput) { in.Enrollment.HarnessClient = domain.HarnessClientClaudeCode }},
-		{"offer under another route", func(in *domain.AgentResolutionInput) { in.OfferRoute = "openai_platform" }},
-		{"effort the offer does not allow", func(in *domain.AgentResolutionInput) { in.Source.Effort = domain.EffortMedium }},
-		{"effort the adapter cannot send", func(in *domain.AgentResolutionInput) {
-			in.Offer.AllowedEfforts = []domain.EffortLevel{domain.EffortLow}
-			digest, err := in.Offer.ComputeDigest()
-			if err != nil {
-				t.Fatal(err)
-			}
-			in.Offer.Digest = digest
-			in.Source.Effort = domain.EffortLow
-		}},
-	}
-	for _, tc := range joinCases {
-		t.Run(tc.name, func(t *testing.T) {
-			in := agentResolution(t)
-			tc.mutate(&in)
-			if _, err := domain.ResolveAgentDefinition(in); !errors.Is(err, domain.ErrAgentJoinInvalid) {
-				t.Fatalf("ResolveAgentDefinition = %v, want %v", err, domain.ErrAgentJoinInvalid)
-			}
-		})
-	}
-
-	t.Run("credential for another account fails the join", func(t *testing.T) {
-		in := agentResolution(t)
-		in.Enrollment.AccountBinding = "acct-2"
-		if _, err := domain.ResolveAgentDefinition(in); !errors.Is(err, domain.ErrAccountBindingMismatch) {
-			t.Fatalf("ResolveAgentDefinition = %v, want %v", err, domain.ErrAccountBindingMismatch)
-		}
-	})
-
-	t.Run("claude agent resolves", func(t *testing.T) {
-		if _, err := domain.ResolveAgentDefinition(claudeAgentResolution(t)); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	// The pinned Claude build's table sends every valid level, so an authored
-	// list is the only way a valid Claude effort can be unsendable today;
-	// TestTranslateEffortRefusals covers the table's own refusal.
-	t.Run("claude effort missing from the authored list", func(t *testing.T) {
-		in := claudeAgentResolution(t)
-		in.Adapter.SendableEfforts = []domain.EffortLevel{domain.EffortHigh}
-		in.Adapter.Digest = mustComputeDigest(t, in.Adapter.ComputeDigest)
-		if _, err := domain.ResolveAgentDefinition(in); !errors.Is(err, domain.ErrAgentJoinInvalid) {
-			t.Fatalf("ResolveAgentDefinition = %v, want %v", err, domain.ErrAgentJoinInvalid)
-		}
-	})
-}
-
+// TestAgentNameValidation pins the name rule a v1 task line's agent, a
+// lineup shadow name, and a lineup prompt name share. A shadow key carries
+// the name with no other parsing, so it reaches the rule for every byte.
 func TestAgentNameValidation(t *testing.T) {
-	in := agentResolution(t)
-	in.Source.Name = ""
-	if err := in.Source.Validate(); !errors.Is(err, domain.ErrEmptyField) {
-		t.Fatalf("empty AgentSource.Validate() = %v, want %v", err, domain.ErrEmptyField)
+	shadowKey := func(name string) error {
+		_, err := domain.LineupShadowKey(domain.RoleTaskNamer, name)
+		return err
 	}
-
 	for _, name := range []string{"sol-via-codex", "a", "x_1-y"} {
-		t.Run("valid source "+name, func(t *testing.T) {
-			in := agentResolution(t)
-			in.Source.Name = name
-			if err := in.Source.Validate(); err != nil {
-				t.Fatalf("Validate() = %v", err)
-			}
-		})
+		if err := shadowKey(name); err != nil {
+			t.Fatalf("shadow name %q = %v", name, err)
+		}
 	}
 	for _, name := range []string{
-		"sol@codex", "Sol-via-codex", "sol-Via-codex", "sol.via", "sol/via", "sol\\via",
+		"", "sol@codex", "Sol-via-codex", "sol-Via-codex", "sol.via", "sol/via", "sol\\via",
 		"-sol", "sol-", "_sol", "sol_", "-", "_", "sol via", "sol\tvia", "sol\nvia",
 		"sol:via", "søl",
 	} {
-		t.Run("invalid source "+name, func(t *testing.T) {
-			in := agentResolution(t)
-			in.Source.Name = name
-			if err := in.Source.Validate(); !errors.Is(err, domain.ErrInvalidAgentName) {
-				t.Fatalf("Validate() = %v, want %v", err, domain.ErrInvalidAgentName)
-			}
-		})
+		if err := shadowKey(name); !errors.Is(err, domain.ErrInvalidAgentName) {
+			t.Fatalf("shadow name %q = %v, want %v", name, err, domain.ErrInvalidAgentName)
+		}
 	}
 
 	// Enumerate the byte vocabulary at both name positions. Bytes outside
@@ -266,33 +146,14 @@ func TestAgentNameValidation(t *testing.T) {
 			{string([]byte{char}), alphanumeric},
 			{string([]byte{'a', char, 'z'}), alphanumeric || char == '-' || char == '_'},
 		} {
-			in := agentResolution(t)
-			in.Source.Name = tc.name
-			err := in.Source.Validate()
+			err := shadowKey(tc.name)
 			if tc.valid && err != nil {
-				t.Fatalf("Validate(%q) = %v", tc.name, err)
+				t.Fatalf("shadow name %q = %v", tc.name, err)
 			}
 			if !tc.valid && !errors.Is(err, domain.ErrInvalidAgentName) {
-				t.Fatalf("Validate(%q) = %v, want %v", tc.name, err, domain.ErrInvalidAgentName)
+				t.Fatalf("shadow name %q = %v, want %v", tc.name, err, domain.ErrInvalidAgentName)
 			}
 		}
-	}
-
-	in = agentResolution(t)
-	agent, err := domain.ResolveAgentDefinition(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent.Name = "sol@codex"
-	if err := agent.Validate(); !errors.Is(err, domain.ErrInvalidAgentName) {
-		t.Fatalf("AgentDefinition.Validate() = %v, want %v", err, domain.ErrInvalidAgentName)
-	}
-	body, err := json.Marshal(agent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := domain.DecodeAgentDefinition(body); !errors.Is(err, domain.ErrInvalidAgentName) {
-		t.Fatalf("DecodeAgentDefinition() = %v, want %v", err, domain.ErrInvalidAgentName)
 	}
 
 	for _, tc := range []struct {
@@ -303,22 +164,9 @@ func TestAgentNameValidation(t *testing.T) {
 		{strings.Repeat("a", 247), domain.ErrInvalidAgentName},
 	} {
 		t.Run(fmt.Sprintf("length %d", len(tc.name)), func(t *testing.T) {
-			in := agentResolution(t)
-			in.Source.Name = tc.name
-			assertAgentNameError(t, "AgentSource.Validate", in.Source.Validate(), tc.wantErr)
-
-			candidate := agent
-			candidate.Name = tc.name
-			assertAgentNameError(t, "AgentDefinition.Validate", candidate.Validate(), tc.wantErr)
-			body, err := json.Marshal(candidate)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = domain.DecodeAgentDefinition(body)
-			assertAgentNameError(t, "DecodeAgentDefinition", err, tc.wantErr)
-
+			assertAgentNameError(t, "LineupShadowKey", shadowKey(tc.name), tc.wantErr)
 			// A lineup line's prompt name follows the agent name rule.
-			_, err = domain.ParseLineupSelection(lineupSelection + "/" + tc.name + "@" + lineupPromptDigest)
+			_, err := domain.ParseLineupSelection(lineupSelection + "/" + tc.name + "@" + lineupPromptDigest)
 			assertAgentNameError(t, "ParseLineupSelection prompt", err, tc.wantErr)
 		})
 	}
@@ -331,39 +179,6 @@ func assertAgentNameError(t *testing.T, operation string, got, want error) {
 	}
 	if want != nil && !errors.Is(got, want) {
 		t.Fatalf("%s = %v, want %v", operation, got, want)
-	}
-}
-
-// TestAgentBodyRejectsNames is the acceptance fixture: a canonical body that
-// hashes names instead of resolved references fails validation.
-func TestAgentBodyRejectsNames(t *testing.T) {
-	in := agentResolution(t)
-	agent, err := domain.ResolveAgentDefinition(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	named := agent
-	named.RouteDigest = domain.Digest("openai_chatgpt_codex")
-	digest, err := named.ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	named.Digest = digest
-	if err := named.Validate(); !errors.Is(err, domain.ErrAgentBodyUnresolved) {
-		t.Fatalf("Validate() = %v, want %v", err, domain.ErrAgentBodyUnresolved)
-	}
-}
-
-func TestValidateOfferCoversDeadline(t *testing.T) {
-	offer := offerFragment(t)
-	if err := domain.ValidateOfferCoversDeadline(offer, offer.NotAfter.Add(-time.Hour)); err != nil {
-		t.Fatalf("covered deadline = %v", err)
-	}
-	if err := domain.ValidateOfferCoversDeadline(offer, offer.NotAfter.Add(time.Hour)); !errors.Is(err, domain.ErrOfferExpired) {
-		t.Fatalf("expired offer = %v, want %v", err, domain.ErrOfferExpired)
-	}
-	if err := domain.ValidateOfferCoversDeadline(offer, time.Time{}); !errors.Is(err, domain.ErrMissingTimestamp) {
-		t.Fatalf("zero deadline = %v, want %v", err, domain.ErrMissingTimestamp)
 	}
 }
 

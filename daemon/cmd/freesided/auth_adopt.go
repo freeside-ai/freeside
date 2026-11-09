@@ -56,36 +56,41 @@ type authAdoptConfig struct {
 	// SecondAuthIdentityID, SecondCostOwner, and SecondClaudeAccount are a
 	// second Claude writer subscription (#2653), all three or none: an
 	// identity adopted over its own volume with its own attested account,
-	// whose writer agents the tree adds beside the first identity's.
+	// whose enrollment task lines can name beside the first identity's.
 	SecondAuthIdentityID, SecondCostOwner, SecondClaudeAccount string
 
 	ClaudeRoute, CodexRoute, ReviewModel string
-	// ReviewHarness is the harness the reviewer line's agent runs (#397):
+	// ReviewHarness is the harness the reviewer line runs (#397):
 	// codex_cli adopts the review identity's Codex store, and claude_code
 	// its setup-token volume.
-	ReviewHarness                                  domain.HarnessClientKind
-	TermsBasisDate, PricingRevision, OfferNotAfter string
+	ReviewHarness  domain.HarnessClientKind
+	TermsBasisDate string
+	// PricingRevision and OfferNotAfter are accepted and ignored. They were
+	// authored onto offer documents, which the tree no longer carries
+	// (#2599); the flags stay because the deputy still passes
+	// -offer-not-after from its settings.
+	PricingRevision, OfferNotAfter string
 	// ReviewEffort, ShadowReviewModel, and ShadowReviewEffort are what the
-	// review agents name beside ReviewModel. An effort is a Freeside level.
+	// review lines name beside ReviewModel. An effort is a Freeside level.
 	ReviewEffort, ShadowReviewEffort domain.EffortLevel
 	ShadowReviewModel                string
 	// The daemon's three prompt-package files; the lineup lines record their
 	// digests. The review prompt is code-owned and needs no file.
 	PromptPackage, SpecificationPromptPackage, RemediationPromptPackage string
-	// Writers is what each writer role's agent launches with: the exact
-	// Claude model id its offer names and the effort it asks. Every writer
+	// Writers is what each writer role's line launches with: the exact
+	// Claude model id and the effort it asks. Every writer
 	// role is required, because a writer launch passes both and the tree
 	// refuses a line that would leave either to the CLI.
 	Writers map[domain.RoleName]agentbaseline.Selection
 	// SpecifierEscalatedModel and SpecifierEscalatedEffort are the
 	// specifier's escalated counterpart (plan §5.13, Specifier Triage), both
-	// or neither; empty leaves the tree without an escalated agent or line.
+	// or neither; empty leaves the tree without an escalated line.
 	SpecifierEscalatedModel  string
 	SpecifierEscalatedEffort domain.EffortLevel
-	// JudgmentModel is the exact Claude model id the call offer names, and
-	// JudgmentEffort the effort every judgment call asks. The daemon has no
-	// flag for either: a judgment call launches with what its lineup line's
-	// agent and offer name. An empty model means no judgment lines.
+	// JudgmentModel is the exact Claude model id every judgment line names,
+	// and JudgmentEffort the effort every judgment call asks. The daemon has
+	// no flag for either: a judgment call launches with what its lineup line
+	// names. An empty model means no judgment lines.
 	JudgmentModel  string
 	JudgmentEffort domain.EffortLevel
 	// JudgmentPublicationAuthorPrompt is the daemon's flag of the same name.
@@ -152,10 +157,6 @@ func runAuthAdoptCommand(
 	prompts, err := readAdoptPrompts(cfg)
 	if err != nil {
 		return err
-	}
-	notAfter, err := time.Parse(time.RFC3339, cfg.OfferNotAfter)
-	if err != nil {
-		return fmt.Errorf("-offer-not-after: %w", err)
 	}
 	lock, err := requireNoDaemon("auth adopt", cfg.DBPath)
 	if err != nil {
@@ -248,13 +249,13 @@ func runAuthAdoptCommand(
 	switch {
 	case reviewID == claudeID && cfg.ReviewHarness == domain.HarnessClientClaudeCode:
 		// One identity under both flags is one adoption. A Claude reviewer
-		// then runs on the writer's enrollment, under its own agent.
+		// then runs on the writer's enrollment, under its own line.
 		if claudeErr == nil {
 			claudeReviewEnrollment = &claude.Enrollment
 		}
 	case reviewID == claudeID:
 		// The one store is the Claude one, so a Codex reviewer has no store
-		// and the tree carries no review agent.
+		// and the tree carries no reviewer line.
 	case cfg.ReviewHarness == domain.HarnessClientClaudeCode:
 		// The review identity is a Claude setup-token identity auth add
 		// enrolled; adoption reuses that enrollment. An identity with none
@@ -276,7 +277,7 @@ func runAuthAdoptCommand(
 		}
 	}
 	if codexEnrollment != nil || claudeReviewEnrollment != nil {
-		// With no review agent there is no reviewer line; the cutover's
+		// With no review enrollment there is no reviewer line; the cutover's
 		// startup check names the role when policy still asks review from ward.
 		prompts[domain.RoleReviewer] = reviewPrompt()
 	}
@@ -301,7 +302,7 @@ func runAuthAdoptCommand(
 		}
 	}
 	if claudeErr != nil {
-		// Every baseline writer role runs the Claude agent, so there is no
+		// Every baseline writer role runs the Claude enrollment, so there is no
 		// tree to emit without it.
 		return errors.Join(
 			writeAdoptReport(reportOut, report),
@@ -309,7 +310,7 @@ func runAuthAdoptCommand(
 		)
 	}
 	if secondErr != nil {
-		// A tree without the second writer's agents would pass for one the
+		// A tree adopted without the second writer would pass for one the
 		// operator asked for two subscriptions in.
 		return errors.Join(
 			writeAdoptReport(reportOut, report),
@@ -331,8 +332,7 @@ func runAuthAdoptCommand(
 		ShadowReviewModel: cfg.ShadowReviewModel, ShadowReviewEffort: cfg.ShadowReviewEffort,
 		Writers: cfg.Writers, SpecifierEscalated: specifierEscalated,
 		JudgmentModel: cfg.JudgmentModel, JudgmentEffort: cfg.JudgmentEffort,
-		TermsBasisDate: cfg.TermsBasisDate, PricingRevision: cfg.PricingRevision,
-		OfferNotAfter: notAfter, Prompts: prompts,
+		TermsBasisDate: cfg.TermsBasisDate, Prompts: prompts,
 	})
 	if err != nil {
 		return err
@@ -414,7 +414,7 @@ func retireUnadoptable(
 // refuseSharedVolume refuses a second writer whose recorded volume another
 // enabled identity also records, the first writer or a Claude reviewer
 // among them: two identities over one volume would be one subscription
-// counted as two pools, and the second writer's agents would mount the
+// counted as two pools, and the second writer's lines would mount the
 // other identity's credential.
 func refuseSharedVolume(ctx context.Context, st *store.Store, identity domain.AuthIdentity) error {
 	volume := identity.Interim.AuthStoreVolume
@@ -481,7 +481,7 @@ func adoptReportEntry(
 // each judgment role gets its code-owned prompt; the publication author gets
 // a prompt, and so a line, only when its prompt file is named, because
 // without the file the daemon leaves that role off. Without a judgment model
-// the tree has no call agent, so no judgment role gets a prompt or a line.
+// the tree has no call adapter, so no judgment role gets a prompt or a line.
 func readAdoptPrompts(cfg authAdoptConfig) (map[domain.RoleName]agentbaseline.Prompt, error) {
 	prompts := map[domain.RoleName]agentbaseline.Prompt{}
 	for _, entry := range []struct {
@@ -580,7 +580,7 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	flags.StringVar(&cfg.CodexRoute, "codex-route", agentbaseline.DefaultCodexRoute, "route name for the Codex enrollment")
 	for _, role := range agentbaseline.WriterRoles {
 		flags.Func(string(role)+"-model",
-			fmt.Sprintf("exact Claude model id the %s's offer names (required)", role),
+			fmt.Sprintf("exact Claude model id the %s's line names (required)", role),
 			func(model string) error {
 				selection := cfg.Writers[role]
 				selection.Model = model
@@ -597,7 +597,7 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 			})
 	}
 	flags.StringVar(&cfg.SpecifierEscalatedModel, "specifier-escalated-model", "",
-		"exact Claude model id the specifier's escalated counterpart's offer names "+
+		"exact Claude model id the specifier's escalated line names "+
 			"(optional; set with -specifier-escalated-effort)")
 	flags.StringVar((*string)(&cfg.SpecifierEscalatedEffort), "specifier-escalated-effort", "",
 		fmt.Sprintf("effort the specifier's escalated counterpart asks, one of %v; set with -specifier-escalated-model",
@@ -606,25 +606,24 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"harness the reviewer runs: codex_cli adopts the review identity's Codex store, "+
 			"claude_code its setup-token volume")
 	flags.StringVar(&cfg.ReviewModel, "review-model", "",
-		"model the review agent's offer names: a Codex model, or the exact Claude model id under -review-harness claude_code")
+		"model the reviewer line names: a Codex model, or the exact Claude model id under -review-harness claude_code")
 	flags.StringVar((*string)(&cfg.ReviewEffort), "review-effort", "",
-		fmt.Sprintf("effort the review agent asks, one of %v", explicitEfforts))
+		fmt.Sprintf("effort the reviewer asks, one of %v", explicitEfforts))
 	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "",
-		"exact Claude model id the shadow review offer names; set exactly while the shadow arm is on")
+		"exact Claude model id the shadow reviewer line names; set exactly while the shadow arm is on")
 	flags.StringVar((*string)(&cfg.ShadowReviewEffort), "shadow-review-effort", "",
-		fmt.Sprintf("effort the shadow review agent asks, one of %v; set exactly while the shadow arm is on", explicitEfforts))
+		fmt.Sprintf("effort the shadow reviewer asks, one of %v; set exactly while the shadow arm is on", explicitEfforts))
 	flags.StringVar(&cfg.TermsBasisDate, "terms-basis-date", now.Format(time.DateOnly),
 		"date of the operator's terms basis for both routes")
-	flags.StringVar(&cfg.PricingRevision, "pricing-revision", now.Format("2006-01"), "pricing revision authored onto both offers")
-	flags.StringVar(&cfg.OfferNotAfter, "offer-not-after", now.AddDate(1, 0, 0).Truncate(24*time.Hour).Format(time.RFC3339),
-		"instant after which both offers stop admitting (RFC 3339)")
+	flags.StringVar(&cfg.PricingRevision, "pricing-revision", "", "ignored: the tree carries no offers (#2599)")
+	flags.StringVar(&cfg.OfferNotAfter, "offer-not-after", "", "ignored: the tree carries no offers (#2599)")
 	flags.StringVar(&cfg.PromptPackage, "prompt-package", "", "the daemon's -prompt-package (required)")
 	flags.StringVar(&cfg.SpecificationPromptPackage, "specification-prompt-package", "",
 		"the daemon's -specification-prompt-package (required)")
 	flags.StringVar(&cfg.RemediationPromptPackage, "remediation-prompt-package", "",
 		"the daemon's -remediation-prompt-package (required)")
 	flags.StringVar(&cfg.JudgmentModel, "judgment-model", "",
-		"exact Claude model id the call offer names, which every judgment call launches with "+
+		"exact Claude model id every judgment line names and every judgment call launches with "+
 			"(optional; without it the patch has no judgment lines)")
 	flags.StringVar((*string)(&cfg.JudgmentEffort), "judgment-effort", "",
 		fmt.Sprintf("effort every judgment call asks, one of %v; set exactly with -judgment-model", explicitEfforts))
@@ -700,7 +699,7 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		return authAdoptConfig{}, fmt.Errorf(
 			"-judgment-model %s names no model: give the exact Claude model id", cfg.JudgmentModel)
 	}
-	// A call launch passes the effort too, so the call agent asks one; the
+	// A call launch passes the effort too, so every judgment line asks one; the
 	// effort is meaningless without the model it launches beside.
 	if (cfg.JudgmentModel == "") != (cfg.JudgmentEffort == "") {
 		return authAdoptConfig{}, errors.New(
@@ -731,8 +730,8 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 // validateReviewHarness holds the review flags to the harness the reviewer
 // runs. A Codex reviewer on its own identity needs the Codex store root; a
 // Claude reviewer adopts a setup-token volume, so a store root names nothing
-// it uses, and it always gets a review agent, so it always needs the model
-// and effort that agent's offer names.
+// it uses, and it always gets a reviewer line, so it always needs the model
+// and effort that line names.
 func validateReviewHarness(cfg authAdoptConfig, oneIdentity bool) error {
 	switch cfg.ReviewHarness {
 	case domain.HarnessClientCodexCLI:
@@ -783,7 +782,7 @@ func validateSecondWriter(cfg authAdoptConfig) error {
 	return nil
 }
 
-// explicitEfforts are the efforts a baseline agent can ask: every Freeside
+// explicitEfforts are the efforts a baseline line can ask: every Freeside
 // level but harness_default, which sends no effort, and every baseline
 // launch passes one.
 var explicitEfforts = slices.DeleteFunc(slices.Clone(domain.AllEffortLevels), func(effort domain.EffortLevel) bool {
@@ -865,7 +864,7 @@ func validClaudeLaunchModel(model string) bool {
 
 // validateShadowReviewSelection holds the shadow reviewer's model and effort
 // to the shadow arm: both are needed exactly while -shadow-review-cost-owner
-// turns the arm on, because the tree has a shadow reviewer agent only then.
+// turns the arm on, because the tree has a shadow reviewer line only then.
 func validateShadowReviewSelection(cfg authAdoptConfig) error {
 	if cfg.ShadowReviewCostOwner == "" {
 		if cfg.ShadowReviewModel != "" || cfg.ShadowReviewEffort != "" {
@@ -893,7 +892,7 @@ func validateShadowReviewSelection(cfg authAdoptConfig) error {
 // validReviewLaunchModel reports whether a review launch can pass the model
 // as one command-line argument: the shape every launch value has, and the
 // review launch's own rule. Adoption holds its flags to it and the daemon
-// holds a review role's offer to it (reviewRoleAgent), so a tree adoption
+// holds a review role's line to it (reviewRoleAgent), so a tree adoption
 // wrote is never refused for its model's shape.
 func validReviewLaunchModel(model string) bool {
 	return inference.ValidLaunchValue(model) &&
