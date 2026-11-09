@@ -1,0 +1,133 @@
+diff --git a/policy/agents.lock b/policy/agents.lock
+--- a/policy/agents.lock
++++ b/policy/agents.lock
+@@ -1,19 +1,5 @@
+-adapter claude_code_call_v2 sha256:b6b0ddc8d05d55d198a72b7a15824c943b702cf7a50a855b040c2436bab55a5b
+-adapter claude_code_ward_v1 sha256:f41bbe7b4410ac02faddf827d6148172283dd0d40d7ac70eed27f034cfa860f1
+-adapter codex_review_v2 sha256:88c6e7dba275e65302faada1faf8e89727fa4141daa984dcb4a38ec5c254f335
+-agent claude-code-call-default sha256:d2e86cfe307d3acebf93b7793e9e8126ce434e038581e18c4800a8a03547c669
+-agent claude-code-implementer sha256:604d03d2421cf6a22429e47cceab3f177e8eae2b531c9ccc97214d64ab9905e2
+-agent claude-code-implementer-second sha256:0894e040738b8251a88d5400ae255e166a544acad73db60cb022eaa6aa9abfa5
+-agent claude-code-specifier sha256:211bec1bc4d77a376aff230f06b48a5b0fb6fe2fa12b6dbb2477ac7e2b4c7379
+-agent claude-code-specifier-second sha256:419d380dd8acecb2c4dbee17d67732d23406af6e0a82a1732320cee0f46e44db
+-agent claude-shadow-review-default sha256:210865f55f88101d1b418d4a45e37da4bd6d774f54224670424ff69a385df12d
+-agent codex-review-default sha256:e810d1f10a0bd579f74927f27358585b4b6610bfe39bdf7b862c066972d77133
+-offer anthropic_claude_subscription/claude-code-call-default sha256:5993cdf86f854efc72240683c7a4b780d0a8957949fc9a571589df84621da2c1
+-offer anthropic_claude_subscription/claude-code-implementer sha256:04f7f2c0c37187d93ac66825a6268dfc215f346ff62a6e91465019a7960d42e5
+-offer anthropic_claude_subscription/claude-code-implementer-second sha256:04f7f2c0c37187d93ac66825a6268dfc215f346ff62a6e91465019a7960d42e5
+-offer anthropic_claude_subscription/claude-code-specifier sha256:0669209bfdfbe6e4a7dcee2c53ed2be7e4138f6182a11ffa6b12dc1784a0f714
+-offer anthropic_claude_subscription/claude-code-specifier-second sha256:0669209bfdfbe6e4a7dcee2c53ed2be7e4138f6182a11ffa6b12dc1784a0f714
+-offer anthropic_claude_subscription/claude-shadow-review-default sha256:7fc9d6a6029f16ea71bf4f7ab6b217a17e032cfd84446cc88fcdaa5858f5a646
+-offer openai_chatgpt_codex/codex-review-default sha256:ae47a0fb01cf8ec058d54d148b113a91326cea0b3460f1666c1f68c34926301e
+-route anthropic_claude_subscription sha256:c9f50a440a9d5e6520051465ea4932800abf5f8413bac859f14a81f14e6691b6
+-route openai_chatgpt_codex sha256:d219cf830f10769891a12cc948c27c8d235983980adaaaf665997eb9574c04a3
++adapter claude_code_call_v2 sha256:b6b0ddc8d05d55d198a72b7a15824c943b702cf7a50a855b040c2436bab55a5b
++adapter claude_code_ward_v1 sha256:f41bbe7b4410ac02faddf827d6148172283dd0d40d7ac70eed27f034cfa860f1
++adapter codex_review_v2 sha256:88c6e7dba275e65302faada1faf8e89727fa4141daa984dcb4a38ec5c254f335
++route anthropic_claude_subscription sha256:c9f50a440a9d5e6520051465ea4932800abf5f8413bac859f14a81f14e6691b6
++route openai_chatgpt_codex sha256:d219cf830f10769891a12cc948c27c8d235983980adaaaf665997eb9574c04a3
+diff --git a/policy/agents/claude-code-call-default b/policy/agents/claude-code-call-default
+deleted file mode 100644
+--- a/policy/agents/claude-code-call-default
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  claude-a/claude_code
+-through  route       anthropic_claude_subscription
+-running  adapter     claude_code_call_v2
+-asking   offer       claude-code-call-default, effort medium
+diff --git a/policy/agents/claude-code-implementer b/policy/agents/claude-code-implementer
+deleted file mode 100644
+--- a/policy/agents/claude-code-implementer
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  claude-a/claude_code
+-through  route       anthropic_claude_subscription
+-running  adapter     claude_code_ward_v1
+-asking   offer       claude-code-implementer, effort high
+diff --git a/policy/agents/claude-code-implementer-second b/policy/agents/claude-code-implementer-second
+deleted file mode 100644
+--- a/policy/agents/claude-code-implementer-second
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  claude-b/claude_code
+-through  route       anthropic_claude_subscription
+-running  adapter     claude_code_ward_v1
+-asking   offer       claude-code-implementer-second, effort high
+diff --git a/policy/agents/claude-code-specifier b/policy/agents/claude-code-specifier
+deleted file mode 100644
+--- a/policy/agents/claude-code-specifier
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  claude-a/claude_code
+-through  route       anthropic_claude_subscription
+-running  adapter     claude_code_ward_v1
+-asking   offer       claude-code-specifier, effort high
+diff --git a/policy/agents/claude-code-specifier-second b/policy/agents/claude-code-specifier-second
+deleted file mode 100644
+--- a/policy/agents/claude-code-specifier-second
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  claude-b/claude_code
+-through  route       anthropic_claude_subscription
+-running  adapter     claude_code_ward_v1
+-asking   offer       claude-code-specifier-second, effort high
+diff --git a/policy/agents/claude-shadow-review-default b/policy/agents/claude-shadow-review-default
+deleted file mode 100644
+--- a/policy/agents/claude-shadow-review-default
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  claude-a/claude_code
+-through  route       anthropic_claude_subscription
+-running  adapter     claude_code_ward_v1
+-asking   offer       claude-shadow-review-default, effort high
+diff --git a/policy/agents/codex-review-default b/policy/agents/codex-review-default
+deleted file mode 100644
+--- a/policy/agents/codex-review-default
++++ /dev/null
+@@ -1,4 +0,0 @@
+-who      enrollment  codex-a/codex_cli
+-through  route       openai_chatgpt_codex
+-running  adapter     codex_review_v2
+-asking   offer       codex-review-default, effort max
+diff --git a/policy/fragments/offers/anthropic_claude_subscription/claude-code-call-default b/policy/fragments/offers/anthropic_claude_subscription/claude-code-call-default
+deleted file mode 100644
+--- a/policy/fragments/offers/anthropic_claude_subscription/claude-code-call-default
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"claude-judgment-test","lineage_group":"anthropic","identity_stability":"pinned","allowed_efforts":["medium"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:5993cdf86f854efc72240683c7a4b780d0a8957949fc9a571589df84621da2c1"}
+diff --git a/policy/fragments/offers/anthropic_claude_subscription/claude-code-implementer b/policy/fragments/offers/anthropic_claude_subscription/claude-code-implementer
+deleted file mode 100644
+--- a/policy/fragments/offers/anthropic_claude_subscription/claude-code-implementer
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"claude-implementer-test","lineage_group":"anthropic","identity_stability":"pinned","allowed_efforts":["high"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:04f7f2c0c37187d93ac66825a6268dfc215f346ff62a6e91465019a7960d42e5"}
+diff --git a/policy/fragments/offers/anthropic_claude_subscription/claude-code-implementer-second b/policy/fragments/offers/anthropic_claude_subscription/claude-code-implementer-second
+deleted file mode 100644
+--- a/policy/fragments/offers/anthropic_claude_subscription/claude-code-implementer-second
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"claude-implementer-test","lineage_group":"anthropic","identity_stability":"pinned","allowed_efforts":["high"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:04f7f2c0c37187d93ac66825a6268dfc215f346ff62a6e91465019a7960d42e5"}
+diff --git a/policy/fragments/offers/anthropic_claude_subscription/claude-code-specifier b/policy/fragments/offers/anthropic_claude_subscription/claude-code-specifier
+deleted file mode 100644
+--- a/policy/fragments/offers/anthropic_claude_subscription/claude-code-specifier
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"claude-specifier-test","lineage_group":"anthropic","identity_stability":"pinned","allowed_efforts":["high"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:0669209bfdfbe6e4a7dcee2c53ed2be7e4138f6182a11ffa6b12dc1784a0f714"}
+diff --git a/policy/fragments/offers/anthropic_claude_subscription/claude-code-specifier-second b/policy/fragments/offers/anthropic_claude_subscription/claude-code-specifier-second
+deleted file mode 100644
+--- a/policy/fragments/offers/anthropic_claude_subscription/claude-code-specifier-second
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"claude-specifier-test","lineage_group":"anthropic","identity_stability":"pinned","allowed_efforts":["high"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:0669209bfdfbe6e4a7dcee2c53ed2be7e4138f6182a11ffa6b12dc1784a0f714"}
+diff --git a/policy/fragments/offers/anthropic_claude_subscription/claude-shadow-review-default b/policy/fragments/offers/anthropic_claude_subscription/claude-shadow-review-default
+deleted file mode 100644
+--- a/policy/fragments/offers/anthropic_claude_subscription/claude-shadow-review-default
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"claude-shadow-review-test","lineage_group":"anthropic","identity_stability":"pinned","allowed_efforts":["high"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:7fc9d6a6029f16ea71bf4f7ab6b217a17e032cfd84446cc88fcdaa5858f5a646"}
+diff --git a/policy/fragments/offers/openai_chatgpt_codex/codex-review-default b/policy/fragments/offers/openai_chatgpt_codex/codex-review-default
+deleted file mode 100644
+--- a/policy/fragments/offers/openai_chatgpt_codex/codex-review-default
++++ /dev/null
+@@ -1,1 +0,0 @@
+-{"encoding_version":1,"route_model_id":"gpt-5.6-sol","lineage_group":"openai","identity_stability":"pinned","allowed_efforts":["max"],"pricing_revision":"2026-10","not_after":"2027-10-01T00:00:00Z","digest":"sha256:ae47a0fb01cf8ec058d54d148b113a91326cea0b3460f1666c1f68c34926301e"}

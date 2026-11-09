@@ -2019,17 +2019,20 @@ either all of `-enrollment`, `-model`, and `-effort`, or `-clear`.
 - **The same line records nothing.** Asking for the selection the role
   already has, or clearing a role with no line or a cleared one, prints
   `"recorded": false` and moves nothing. A line recorded before lines held
-  selections names its agent instead, so a selection over it always records
-  a new version, even one that runs the same agent. `line` is the role's newest version, `null` if it never
-  had one, and a version with `"cleared": true` names no agent. The exception
-  is a newest version admission would refuse against the action that set it:
-  asking for the same thing records a version that holds, which recovers a
-  line submitted before submissions stored their lines.
+  selections names a tree agent instead, so a selection over it always
+  records a new version. `line` is the role's newest version, `null` if it
+  never had one, and a version with `"cleared": true` selects nothing. The
+  exception is a newest version admission would refuse against the action
+  that set it: asking for the same thing records a version that holds, which
+  recovers a line submitted before submissions stored their lines.
 - **The selection isn't checked here.** Admission resolves it at the next
-  attempt, as it does a line set at submission: it runs the tree agent
-  with that enrollment, model, and effort. Names that share one definition
-  are one agent. A selection no agent runs, or agents of different
-  definitions do, refuses that attempt and doesn't fall back to the lineup.
+  attempt, as it does a line set at submission: it runs that enrollment,
+  model, and effort, checked against the store's enrollment, its discovered
+  model catalog, and the route's model list. A selection that doesn't
+  resolve refuses that attempt and doesn't fall back to the lineup. A line
+  recorded before lines held selections names a tree agent, which the tree
+  no longer carries (#2599): admission refuses it by its record id, and
+  setting a new line for the role replaces it.
 - **Changes apply to later admissions.** An admission that read the old line
   before the change committed may still run on it.
 - **It starts nothing.** A task parked on a refused attempt stays parked until
@@ -2083,9 +2086,9 @@ optional and takes a usage pool id, as `freesided auth list` prints it.
   disabled, and one that can't run the role's lineup model and effort, as
   admission judges it: its discovered model catalog must list them, and an
   enrollment with no catalog yet needs only an effort its client produces.
-  The native-default model needs a `claude_code` enrollment. The
-  refusal names the role and the enrollment's position in its order, not the
-  enrollment. It exits non-zero and records nothing. An enrollment that
+  The model `claude-code-native-default` needs a `claude_code` enrollment.
+  The refusal names the role and the enrollment's position in its order, not
+  the enrollment. It exits non-zero and records nothing. An enrollment that
   later stops serving the lineup, or a lineup whose model or effort later
   changes, is the router's to handle at admission: it skips the enrollment.
 - **The drain-first account must be an ordered enrollment's pool.** `set`
@@ -2099,10 +2102,13 @@ optional and takes a usage pool id, as `freesided auth list` prints it.
   from a newer tree. The tree and the account are still checked first.
 - **`show` prints what's set.** It prints the current revision, or `null` when
   none was set. With `-revisions` it prints every revision in order, or `[]`.
-  A revision set before policies ordered enrollments holds `agents` instead
-  of `enrollments`. It is never rewritten: the router reads it by mapping
-  each agent to its enrollment in the daemon's current tree, skipping one
-  the tree no longer carries. A new revision always orders enrollments.
+  A revision set before policies ordered enrollments (#2736) holds `agents`
+  instead of `enrollments`. It is never rewritten, and it now orders
+  nothing, because the tree carries no agents (#2599): the router falls
+  back to the lineup, a parked task is offered no alternate enrollment, and
+  a moved line under it is refused with `routing policy revision N does not
+  order the line's selection for its role`. Set a new policy that orders
+  enrollments to restore routing. A new revision always orders enrollments.
 
 A paired client sets the same policy with the `set_routing_policy` command,
 and changes a task's line with `change_task_line`. Each role orders
@@ -2252,8 +2258,10 @@ either path.
   A moved line counts only with the record and the command receipt that set
   it, on the record's enrollment and the tuple the move would write, under a
   cited policy that orders that enrollment for the role, and it holds on its
-  pool's windows like a routed line. A record stored before #2735 names its
-  tree agent and still admits through the tree.
+  pool's windows like a routed line. A record stored before #2735 names a
+  tree agent, which the tree no longer carries (#2599), so it refuses by
+  its record id: a card's retry fails with `card record <id> names a tree
+  agent`, and a line moved under such a record is refused too.
 - **A stale offer is refused, not replaced.** When the enrollment no longer
   qualifies, it doesn't serve the chosen model or effort, or the task is no
   longer parked, the command is 400 and records nothing; a refusal names the
@@ -2416,19 +2424,40 @@ The effort is the harness's own string. The line resolves when a role is
 admitted, against the enrollment and identity the store holds, the adapter
 the role's launch picks, and the enrollment's discovered model catalog. A
 line whose model the harness no longer reports fails that role's admission
-by name and raises the ordinary card; the daemon still starts. The tree's
-agent documents and offers stay for the clients' agent names, the routing
-policy, and the alternate-agent retry; admission reads none of them.
+by name and raises the ordinary card; the daemon still starts.
+
+The tree holds route and adapter fragments, optional route model lists,
+the lineup, and `agents.lock`, which lists only `adapter` and `route` lines
+(`policy/README.md`). It holds no agent documents and no offers (#2599). A
+revision that still holds a file under `policy/agents/` or
+`policy/fragments/offers/`, or an `agent` or `offer` line in `agents.lock`,
+is refused, naming the file or line and the fix: run `freesided auth
+migrate-tree` and commit its patch (Migrate a Tree That Carries Agents).
+The daemon, `preflight`, and `freesided deputy`'s self-check all refuse it.
+
+**A route may restrict its models.** `policy/models/<route-name>` holds one
+`allow <model-id>` or `deny <model-id>` line per model, every line the same
+verb, with at least one line and no model repeated. A list for a route the
+tree lacks is refused. Admission refuses a selection whose model an allow
+list omits or a deny list names, with `route <route>'s model list
+(models/<route>) does not admit the model`; a route with no list admits
+every model its enrollments discover. Ids match exactly as the line names
+them, so an alias and the model it resolves to are different ids.
+`agents.lock` does not cover the list; the tree revision (the lineup
+revision) does, so an edit to it changes the lineup revision.
 
 **Upgrade a lineup that names agents.** The new build refuses a lineup line
 in the earlier form, `<agent-name>@<agent-digest>/<prompt-name>@<prompt-digest>`,
 naming the line, so the daemon, `preflight`, and `freesided deputy` stop
-until the lineup changes. Stop the daemon and rewrite `policy/lineup`:
+until the lineup changes. Such a tree also still holds its agent and offer
+documents, and the hand rewrite below reads them, so rewrite the lineup
+first and migrate the tree after. Stop the daemon and rewrite
+`policy/lineup`:
 
 1. On a tree with no hand-authored line, run `freesided auth adopt` again
    with the original adoption's flags and replace `policy/lineup` with the
-   patch's. The agents, fragments, and `agents.lock` stay as they are,
-   because the lock does not cover the lineup.
+   patch's. Leave every other file as it is, because the lock does not
+   cover the lineup.
 2. Otherwise rewrite each line by hand. The enrollment is the agent's `who`
    line, the model is its offer's `route_model_id`, and the effort is what
    the agent's adapter sends for its `asking` effort: the level itself,
@@ -2439,17 +2468,17 @@ until the lineup changes. Stop the daemon and rewrite `policy/lineup`:
 3. Rekey an escalated line from `specifier.escalated.<specifier-agent>` to
    `specifier.escalated.<enrollment-id>`, the enrollment of the escalated
    agent, which is the specifier's.
-4. Commit, pass the commit as `-agent-tree-commit`, and run preflight.
+4. Commit, then migrate that commit (Migrate a Tree That Carries Agents).
+   `freesided auth migrate-tree` refuses a commit whose lineup still names
+   agents, because the migrated tree must parse.
 
 An admission recorded before the upgrade keeps its bytes, its id, and its
 agent digest, and is never re-resolved against the new lineup.
 
-An agent needs no attended mark: plan revision 97 removed the attended
-first run. A tree committed before that may still hold
-`policy/agents/<agent>.attended` files. The daemon, `preflight`, and
-`freesided deputy` refuse such a tree, naming the file, until the mark
-files are deleted and the deletion is committed. The lock never listed
-them, so `agents.lock` stays as it is.
+A tree committed before plan revision 97 removed the attended first run may
+also hold `policy/agents/<agent>.attended` mark files. They are refused
+like any other file under `policy/agents/`, and `freesided auth
+migrate-tree` deletes them with the rest.
 
 `freesided auth adopt` moves an instance that ran on those flags. Stop the
 daemon, then name the identities and cost owners the flags carried:
@@ -2473,83 +2502,79 @@ freesided auth adopt \
 ```
 
 It enrolls each identity over the store it already holds, writes no
-credential, and emits a patch that adds the baseline tree: the writer
-agents, the review agent, a lineup line for `specifier`, `implementer`,
-`remediator`, and `reviewer`, and, when `-shadow-review-cost-owner` is given,
-the shadow reviewer's agent and its `shadow_reviewer` line. Review the patch,
-commit it in the checkout, and start the daemon with that commit. The report
-lists each identity as `adopted`, `reused`, or `unadoptable`; running the
-command again changes nothing. The review and shadow review configuration
-digests are the ones the flags produced, so existing approvals stand.
+credential, and emits a patch that adds the baseline tree: the route and
+adapter fragments, their `agents.lock` entries, a lineup line for
+`specifier`, `implementer`, `remediator`, and `reviewer`, and, when
+`-shadow-review-cost-owner` is given, a `shadow_reviewer` line. It writes no
+agent and no offer. `-pricing-revision` and `-offer-not-after` are still
+accepted and ignored, because the tree carries no offers (#2599). Review
+the patch, commit it in the checkout, and start the daemon with that
+commit. The report lists each identity as `adopted`, `reused`, or
+`unadoptable`; running the command again changes nothing. The review and
+shadow review configuration digests are the ones the flags produced, so
+existing approvals stand.
 
-Each line names the model and the effort its launch passes, and adoption
-writes an agent beside it for the clients' agent names:
+Each line names the model and the effort its launch passes:
 
 - **`-specifier-model`, `-implementer-model`, `-remediator-model`, and
-  their `-effort` flags** are required. Writer roles that ask one model and
-  effort share one agent, named `claude-code-<role>` for the first of
-  `specifier`, `implementer`, and `remediator` that asks it, on a pinned
-  offer of the same name whose `route_model_id` is the model and whose
-  `allowed_efforts` hold the effort. The patch has no agent on the offer
-  that names no model: a writer launch passes `--model` and `--effort` when
-  its agent names them, so a tree that left either out would run whatever
-  the CLI defaults to.
+  their `-effort` flags** are required. Each writer line selects the
+  implementation identity's `claude_code` enrollment at its role's model
+  and effort. A writer launch passes `--model` and `--effort` from its
+  line, so adoption never writes a writer line on the model
+  `claude-code-native-default`, which would run whatever the CLI defaults
+  to.
 - **`-specifier-escalated-model` and `-specifier-escalated-effort`** are
   optional and set together. They add the specifier's escalated
-  counterpart (plan §5.13, Specifier Triage): an agent
-  `claude-code-specifier-escalated` under the implementation identity, on a
-  pinned offer of the same name, and the lineup line
+  counterpart (plan §5.13, Specifier Triage): the lineup line
   `lineup.role.specifier.escalated.<enrollment-id>` that selects its model
-  and effort on that enrollment with the specifier's prompt. The pair must differ from the specifier's own model and
-  effort, since an escalation to the same launch would change nothing.
+  and effort on the implementation identity's enrollment with the
+  specifier's prompt. The pair must differ from the specifier's own model
+  and effort, since an escalation to the same launch would change nothing.
   Without them the tree has no escalated line, so triage never runs and the
   specifier runs on its own line.
 - **`-second-auth-identity`, `-second-cost-owner`, and
   `-second-claude-account`** are optional and set together. They adopt a
   second writer subscription over the volume its identity already records,
-  bound to its own account, and list it third in the report. The tree gains
-  a copy of each writer agent on the second identity's `claude_code`
-  enrollment, named with the suffix `-second`
-  (`claude-code-implementer-second`), each on a pinned offer of the same name
-  with the first agent's model, effort, and adapter. The copies get no lineup
-  line: the lineup still selects the first identity's agents, and the
-  routing policy reaches the copies by ordering both enrollments, as in
+  bound to its own account, and list it third in the report. The second
+  enrollment gets no writer line: the lineup still selects the first
+  identity's enrollment, and the routing policy reaches the second by
+  ordering both enrollments, as in
   `routing set -order implementer=<first-enrollment-id>,<second-enrollment-id>`
   (Set The Routing Policy). With the escalated pair, the tree also carries
-  `claude-code-specifier-escalated-second` on the second enrollment and one
-  added line, `lineup.role.specifier.escalated.<second-enrollment-id>`,
+  one added line, `lineup.role.specifier.escalated.<second-enrollment-id>`,
   so a specifier routed to the second identity escalates on it. The second
   identity must differ from both other identities, and its account from
   `-claude-account`. A second identity that records the first's volume is
   refused before anything is recorded; one whose account is already bound
   to another identity is reported `unadoptable`, and no patch is emitted.
 - **`-review-model` and `-review-effort`** are required with the review
-  identity. The review agent `codex-review-default` is on an offer whose
-  `route_model_id` is the model, and asks the effort.
+  identity. The `reviewer` line selects the review identity's enrollment
+  at that model and effort.
 - **`-shadow-review-model` and `-shadow-review-effort`** are required with
-  `-shadow-review-cost-owner` and refused without it. The shadow reviewer's
-  agent `claude-shadow-review-default` runs under the implementation
-  identity, on an offer of its own for the model.
+  `-shadow-review-cost-owner` and refused without it. The
+  `shadow_reviewer` line selects the implementation identity's
+  `claude_code` enrollment at that model and effort.
 - **An effort is a Freeside level:** `low`, `medium`, `high`, or `max`.
   Adoption refuses `harness_default`, because every baseline launch passes
   an effort. Codex has no `max`, so the review launch sends it as `xhigh`.
   The pinned Codex build passes the value on unchecked, so a model that does
   not accept `xhigh` fails at its first review, not at adoption.
 - **A model is written as given.** Adoption refuses a value the launch
-  cannot pass as one argument, and for a Claude agent the id
+  cannot pass as one argument, and for a Claude line the model
   `claude-code-native-default`, but it does not check that the model exists.
   Give the exact id the Claude CLI reports.
 
-The review agent runs through the adapter `codex_review_v2`, which can send
-every effort above. `codex_review_v1` sends `harness_default` only; it stays
-defined so a tree committed on it parses,
-but its reviewer asks no effort and is refused.
+A Codex review line runs through the adapter `codex_review_v2`, which can
+send every effort above. `codex_review_v1` sends `harness_default` only; it
+stays defined so a tree committed on it parses, but a reviewer on it sends
+no effort and is refused.
 
 **A Claude reviewer.** `-review-harness claude_code` (the default is
-`codex_cli`) writes the reviewer agent `claude-review-default` on the Claude
-ward adapter in place of the Codex agent, on an offer of its own for
-`-review-model`, asking `-review-effort`. It refuses `-auth-store-root`,
-which only a Codex store uses, and the model `claude-code-native-default`.
+`codex_cli`) writes the `reviewer` line on the review identity's
+`claude_code` enrollment at `-review-model` and `-review-effort`, launched
+through the Claude ward adapter, in place of the Codex line. It refuses
+`-auth-store-root`, which only a Codex store uses, and the model
+`claude-code-native-default`.
 
 - **The review identity is enrolled first.** Adopt cannot enroll a Claude
   review identity, because a Claude enrollment needs an attested account and
@@ -2577,12 +2602,14 @@ which only a Codex store uses, and the model `claude-code-native-default`.
 - **A Claude review binds the head only.** It checks out the head it
   reviews and records no base; a Codex review binds both.
 
-**Upgrade a deployment adopted before the review agents named a model and an
+**Upgrade a deployment adopted before the review lines named a model and an
 effort.** The daemon and `preflight` no longer take the four review model and
-effort flags. A tree adopted earlier has a reviewer that asks
-`harness_default` and, with the shadow arm on, a `shadow_reviewer` line on
-the writer agent, whose offer names no model. On the new build both roles are
-refused until the tree changes. Before starting the new build:
+effort flags. A tree adopted earlier has a reviewer at `harness_default`
+and, with the shadow arm on, a `shadow_reviewer` line on the model
+`claude-code-native-default`, which names no model. On the new build both
+roles are refused until the tree changes. Migrate the tree first if it
+still carries agents (Migrate a Tree That Carries Agents). Before starting
+the new build:
 
 1. Stop the daemon. Remove `-review-model`, `-review-reasoning-effort`,
    `-shadow-review-model`, and `-shadow-review-reasoning-effort` from the
@@ -2596,29 +2623,21 @@ refused until the tree changes. Before starting the new build:
    review configuration digests then stay as they were. Codex's `minimal`
    and Claude's `xhigh` have no level: pick another, and the review
    configuration digest that results needs its own approval.
-3. Pass the three dated inputs the committed tree carries, because each
-   defaults to today and an agent's digest covers its route and its offer:
-   `-terms-basis-date` (`terms_basis_date` in `policy/fragments/routes/`),
-   and `-pricing-revision` and `-offer-not-after` (`pricing_revision` and
-   `not_after` in `policy/fragments/offers/`). The command reports each
-   identity `reused` and prints the whole baseline tree as a patch of new
-   files, so the patch does not apply over the tree already committed.
-4. Take the review agents' parts from that patch. On a tree with no
-   hand-authored agent, replace the tree with the patch
+3. Pass `-terms-basis-date` with the date the committed route carries
+   (`terms_basis_date` in `policy/fragments/routes/`). It defaults to
+   today, and a route with another date is a changed route. The command
+   reports each identity `reused` and prints the whole baseline tree as a
+   patch of new files, so the patch does not apply over the tree already
+   committed.
+4. Take the review parts from that patch. On a tree with no hand-authored
+   line, replace the tree with the patch
    ([Enroll The Identities And Check The Agent Tree](../docs/production-walkthrough.md#enroll-the-identities-and-check-the-agent-tree)
    has the two commands) and check that the staged diff changes only what
    this list names. Otherwise copy each part:
-   - The adapter `policy/fragments/adapters/codex_review_v2`.
-   - The review offer
-     `policy/fragments/offers/<codex-route>/codex-review-default`, which now
-     allows the review effort.
-   - The agent `policy/agents/codex-review-default`.
-   - With the shadow arm on, the offer
-     `policy/fragments/offers/<claude-route>/claude-shadow-review-default`
-     and the agent `policy/agents/claude-shadow-review-default`.
    - The `reviewer` and `shadow_reviewer` lines in `policy/lineup`.
-   - The `policy/agents.lock` entries for each agent, offer, and adapter
-     above. `codex_review_v1` and its lock entry may stay or go together.
+   - The adapter `policy/fragments/adapters/codex_review_v2` and its
+     `policy/agents.lock` entry, if the tree lacks them. `codex_review_v1`
+     and its lock entry may stay or go together.
 5. Commit, pass the commit as `-agent-tree-commit`, and run preflight. A
    review role that still lacks a model or an effort fails it by name, and a
    tree whose lock disagrees with its content is refused.
@@ -2641,78 +2660,63 @@ run `freesided preflight` with the deployment's flags, take the manifest's
 A Claude reviewer's digest is unchanged.
 
 **Upgrade a deployment adopted before the writer roles named a model and an
-effort.** A tree adopted earlier has its three writer lines on the agent
-`claude-code-default`, whose offer `claude-code-native-default` names no
-model and whose effort is `harness_default`, so each writer runs on the
-Claude CLI's own default model. The new build still launches such a tree;
-it is the adoption that changed, and every re-adoption now needs the six
-writer flags, so a deployment doing the review upgrade above or the
-judgment upgrade below does this one in the same run. To move the writers:
+effort.** A tree adopted earlier has its three writer lines on the model
+`claude-code-native-default` at `harness_default`, so each writer runs on
+the Claude CLI's own default model. The new build still launches such a
+tree once it is migrated; it is the adoption that changed, and every
+re-adoption now needs the six writer flags, so a deployment doing the
+review upgrade above or the judgment upgrade below does this one in the
+same run. To move the writers:
 
 1. Run `freesided auth adopt` again with the original adoption's flags plus
-   the six writer flags, and the three dated inputs the committed tree
-   carries (step 3 above). The command reports each identity `reused` and
-   prints the whole baseline tree as a patch of new files.
-2. Take the writer agents' parts from that patch. On a tree with no
-   hand-authored agent, replace the tree with the patch and check that the
-   staged diff changes only what this list names. Otherwise copy each part:
-   - An offer `policy/fragments/offers/<claude-route>/claude-code-<role>`
-     for each distinct model and effort.
-   - The agent `policy/agents/claude-code-<role>` on each.
-   - The `specifier`, `implementer`, and `remediator` lines in
-     `policy/lineup`.
-   - The `policy/agents.lock` entries for each agent and offer above. The
-     agent `claude-code-default`, the offer `claude-code-native-default`,
-     and their lock entries go, unless a hand-authored line
-     still names the agent.
+   the six writer flags and `-terms-basis-date` (step 3 above). The command
+   reports each identity `reused` and prints the whole baseline tree as a
+   patch of new files.
+2. Take the `specifier`, `implementer`, and `remediator` lines from that
+   patch into `policy/lineup`. On a tree with no hand-authored line, you may
+   instead replace the tree with the patch and check that the staged diff
+   changes only those lines.
 3. Commit, pass the commit as `-agent-tree-commit`, and run preflight.
 
 `-judgment-model` is where the judgment roles get their model, and
 `-judgment-effort`, required with it and refused without it, their effort.
-With them, the patch also has the call agent `claude-code-call-default`,
-asking the effort, on an offer of the same name whose `route_model_id` is
-the model and whose `allowed_efforts` hold the effort, and a lineup line for
-each judgment role on that agent
+With them, the patch also has the call adapter `claude_code_call_v2` with
+its lock entry, and a lineup line for each judgment role that selects the
+implementation identity's `claude_code` enrollment at that model and effort
 ([Subscription-Backed Daemon Judgments](#subscription-backed-daemon-judgments)).
 Give the exact model id
 the Claude CLI reports for the model. Adoption refuses a value a launch
 cannot pass as one option value and refuses `claude-code-native-default`,
 but it does not check that the id is a real one: an alias or a short name is
 written as given and then fails every judgment call. Without the flag the
-patch has no call agent, no call offer, and no judgment line, and
+patch has no call adapter and no judgment line, and
 `-judgment-publication-author-prompt` is refused, because it asks for a line
 adoption cannot write.
 
-**Upgrade a deployment adopted before the call offer.** The daemon and
-`preflight` no longer take `-judgment-model`, and a judgment line on the
-offer `claude-code-native-default` is refused, because that offer names no
-model. A tree adopted earlier has every judgment line on that offer, so on
-the new build each judgment role is unbound until the tree changes: its
-sites return their fail-safe, the daemon raises a `system_health` item that
-says the offer names no model, and preflight's `judgment_roles` check fails.
-Before starting the new build:
+**Upgrade a deployment whose judgment lines name no model.** The daemon
+and `preflight` no longer take `-judgment-model`, and a judgment line on the
+model `claude-code-native-default` is refused, because that id names no
+model a call could pass. A tree adopted before the baseline named a
+judgment model has every judgment line on it, so on the new build each
+judgment role is unbound until the tree changes: its sites return their
+fail-safe, the daemon raises a `system_health` item that says the line
+names the native-default model, and preflight's `judgment_roles` check
+fails. Migrate the tree first if it still carries agents (Migrate a Tree
+That Carries Agents). Before starting the new build:
 
 1. Stop the daemon. Remove `-judgment-model` from the `freesided` and
    `freesided preflight` command lines; both now refuse it as an unknown
    flag.
 2. Run `freesided auth adopt` again with the original adoption's flags plus
    `-judgment-model <exact-Claude-model-id>` and `-judgment-effort
-   <effort>`. Pass `-terms-basis-date` with
-   the date the committed route carries (`terms_basis_date` in
-   `policy/fragments/routes/<claude-route>`). The flag defaults to today, and
-   an agent's digest covers its route, so a call agent adopted under another
-   date does not match the committed tree. The command reports each identity
-   `reused` and prints the whole baseline tree as a patch of new files, so
-   the patch does not apply over the tree already committed.
-3. Copy the call agent's parts from that patch into the checkout:
-   - The new offer `policy/fragments/offers/<claude-route>/claude-code-call-default`.
-   - The agent `policy/agents/claude-code-call-default`, whose `asking` line
-     now names that offer.
-   - Each judgment role's line in `policy/lineup`, which carries the agent's
-     new digest.
-   - The `policy/agents.lock` entries for that offer and that agent.
-   - On a tree still on the call adapter `claude_code_call_v1`, the adapter
-     `policy/fragments/adapters/claude_code_call_v2` and its lock entry too.
+   <effort>`, and `-terms-basis-date` as in the review upgrade's step 3.
+   The command reports each identity `reused` and prints the whole baseline
+   tree as a patch of new files, so the patch does not apply over the tree
+   already committed.
+3. Copy from that patch into the checkout:
+   - Each judgment role's line in `policy/lineup`.
+   - The call adapter `policy/fragments/adapters/claude_code_call_v2` and
+     its `policy/agents.lock` entry, if the tree lacks them.
 4. Commit, pass the commit as `-agent-tree-commit`, and run preflight. Its
    `judgment_roles` check lists no role `unbound` when the copy is complete
    (the publication author is `off` without its prompt file), and a tree
@@ -2724,6 +2728,53 @@ Before starting the new build:
 tree against `agent_tree.commit`; its sequence, and where to keep the
 checkout, are in
 [Enroll The Identities And Check The Agent Tree](../docs/production-walkthrough.md#enroll-the-identities-and-check-the-agent-tree).
+
+#### Migrate a Tree That Carries Agents
+
+A tree committed before #2599 holds agent documents under `policy/agents/`
+(and any `.attended` marks there), offers under `policy/fragments/offers/`,
+and `agent` and `offer` lines in `agents.lock`. The new build refuses such a
+revision, so the daemon and `preflight` fail and a deployed deputy stops at
+its self-check until `agent_tree.commit` names a migrated commit.
+`freesided auth migrate-tree` prints the patch that deletes exactly those
+files and lines and changes nothing else. The lineup needs no rewrite: its
+lines have held selections since #2734. A lineup that still names agents
+must be rewritten first (Upgrade a lineup that names agents, above),
+because the migrated tree must parse.
+
+The command reads the committed tree through git's object store, never the
+working tree, and changes no file, so it runs beside a running daemon:
+
+```sh
+freesided auth migrate-tree \
+  -agent-tree /absolute/path/to/checkout \
+  -agent-tree-commit <40-character-commit> \
+  -patch /path/outside/any/checkout/migrate.patch
+```
+
+`-agent-tree-commit` takes the full 40- or 64-hex commit id. `-patch`
+defaults to `-`, stdout; a path inside any git checkout is refused. The
+command also writes a JSON report, `{"patch": ..., "changed": ...,
+"lineup_revision": ...}`, to stderr when the patch goes to stdout and to
+stdout otherwise. An already-migrated commit gives an empty patch and
+`"changed": false`.
+
+1. Run the command against the commit the daemon or deputy runs (its
+   `-agent-tree-commit`, or the deputy's `agent_tree.commit`).
+2. Review the patch: it should only delete files under `policy/agents/` and
+   `policy/fragments/offers/`, and `agent` and `offer` lines from
+   `policy/agents.lock`.
+3. Apply it with `git apply --index`, commit, and land the commit through
+   review:
+   `git -C /absolute/path/to/checkout apply --index /path/outside/any/checkout/migrate.patch`.
+4. Restart the daemon with `-agent-tree-commit` set to the new commit, or
+   set the deputy's `agent_tree.commit` to it and restart the deputy.
+
+The migrated commit has a different lineup revision from the old one, and a
+routing policy records the lineup revision it was set against. Run
+`freesided routing show`: a revision that holds `agents` rather than
+`enrollments` orders nothing (Set The Routing Policy), so set a new policy
+that orders enrollments.
 
 #### Name The Cost Owner And The Account
 
@@ -2777,8 +2828,9 @@ login.
 
 At start the daemon checks every role its configuration asks work from:
 
-- **A writer role that fails admission** (no line, a line naming another
-  agent digest or prompt, no conformance record, an expired credential) holds
+- **A writer role that fails admission** (no line, a line whose selection
+  does not resolve or that names another prompt, no conformance record, an
+  expired credential) holds
   all admission. The daemon keeps running and raises one `system_health` item
   naming the role. Fix the tree or the enrollment and restart.
 - **A reviewer or shadow reviewer line that does not resolve** stops startup,
@@ -3320,14 +3372,14 @@ replays them and takes no `--task-line` of its own. The submission record
 stores the lines too, in role order, and so does a `submit_task` command's.
 
 Admission reads the task's line for `specifier`, `implementer`, and
-`remediator`: an attempt of that role runs the agent the line selects, on
-the lineup line's prompt, and its admission cites the line. That agent is
-the tree agent whose enrollment, model, and effort are the line's, where
-names sharing one definition count as one agent; a line recorded before
-lines held selections names its agent instead. A line picks the
-agent only, so the role still needs its lineup line. A line that cannot be
-honored refuses the attempt, and the lineup's agent never runs in its place:
-that covers a selection no tree agent runs or several definitions do, a disabled
+`remediator`: an attempt of that role runs the enrollment, model, and effort
+the line selects, on the lineup line's prompt, and its admission cites the
+line. A line recorded before lines held selections names a tree agent
+instead, and admission refuses it by its record id. A line picks the
+selection only, so the role still needs its lineup line. A line that cannot
+be honored refuses the attempt, and the lineup's selection never runs in its
+place: that covers a selection that does not resolve against the store's
+enrollment, its discovered catalog, or the route's model list, a disabled
 identity, and a line that does not hold against the submission that set it.
 A submitted line holds only when that submission's record makes the same
 choice for the role.
@@ -3579,7 +3631,7 @@ container volume, not a host path.
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
 | `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
-| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` and `second_writer` |
+| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` and `second_writer`. `pricing_revision` and `offer_not_after` are still required but ignored, because the tree carries no offers (#2599) |
 | `review` | `input_root`, `auth_mode` (`subscription` with a Codex reviewer, `setup_token` with a Claude one; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
 | `judgment` | `claude_bin`, `claude_sha256`, `model`, `publication_author_prompt`: all empty or all set |
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
@@ -3777,7 +3829,7 @@ is `not_run`, and the rest still run.
 - **`inputs`**: the files pass what `submit` checks of a new submission
   before it saves anything, including the work-unit requirement and the
   publication's `source_issue`; the `--task-line` set is well formed and
-  one agent definition of the tree runs each selection. `duplicate_source` makes `submit`'s refusal of
+  each selection resolves as admission would resolve it. `duplicate_source` makes `submit`'s refusal of
   a source an unfinished task in the project already holds, as for new
   work (a replay under that task's own `--submission-id` is not checked), and
   `launch_binding` compares the inputs with the composed manifest as
@@ -4393,8 +4445,8 @@ Configure both flags together:
 -judgment-claude-sha256 <sha256-of-that-native-executable>
 ```
 
-No flag names a model or a credential. Each call launches with the model of
-the offer its role's lineup line names, which `freesided auth adopt
+No flag names a model or a credential. Each call launches with the model
+its role's lineup line selects, which `freesided auth adopt
 -judgment-model` writes for the baseline lines. Each call authenticates with
 the setup token stored for the enrollment that line names, so no new API key
 or login is needed and judgment usage is billed to that enrollment's account.
@@ -4512,56 +4564,57 @@ both for `claude-code 2.1.267`:
   only, so its launch passes no `--effort`. The baseline named it before the
   call could send an effort, and a line adopted on it still admits.
 - **`claude_code_call_v2`, audited 2026-10-11.** It sends every effort the
-  `claude_code` table can. The baseline call agent is on it.
+  `claude_code` table can. Adoption writes it for the baseline judgment
+  lines.
 
 The role source hands admission the record that names the resolved adapter's
 digest, and none for any other call adapter, which admission then refuses for
 want of a launch proof. The client admits what the source returns and
 never takes its word, so a test or a later source cannot hand it an admitted
 call. `freesided auth adopt -judgment-model <id> -judgment-effort <effort>`
-writes the lines: one per judgment role with a built site, on the baseline
-call agent `claude-code-call-default`, which asks `<effort>`, whose call
-adapter pins the audited build, and whose offer, also
-`claude-code-call-default`, names `<id>` and allows `<effort>`. Without
-`-judgment-model` adoption writes no judgment line. The publication author
-gets its line only when adopt is also given
+writes the lines: one per judgment role with a built site, each selecting
+the implementation identity's `claude_code` enrollment, model `<id>`, and
+effort `<effort>`, and the call adapter `claude_code_call_v2`, which pins
+the audited build. Without `-judgment-model` adoption writes no judgment
+line. The publication author gets its line only when adopt is also given
 `-judgment-publication-author-prompt`. A deployment adopted before these
-lines existed, or before the call offer, adds them by patch
+lines existed, or whose judgment lines name no model, adds them by patch
 ([Select Agents Through The Lineup](#select-agents-through-the-lineup)).
 
-The lineup decides which agent a role is, which prompt it runs, and which
-model and effort its call launches with. Each call passes its own agent's
-selection, so two roles on different lines launch differently through the one
-driver:
+The lineup decides which enrollment a role runs, which prompt it runs, and
+which model and effort its call launches with. Each call passes its own
+line's selection, so two roles on different lines launch differently
+through the one driver:
 
-- **An explicit offer sends its model.** The launch passes `--model
-  <route_model_id>`. The driver refuses a completion that reports any other
-  model, so the offer's `route_model_id` must be the exact id the CLI reports
-  in `modelUsage`. An alias or a short name never matches, and every call on
-  that line then returns `inference unavailable` with no health item, because
-  the role is admitted.
-- **A line on the native-default offer is refused.** The offer
-  `claude-code-native-default` names no model, and no flag supplies one, so
-  admission leaves the role unbound: its sites return their fail-safe, the
-  role's `system_health` item says the offer names no model, and preflight
-  fails. A ward role on that offer still launches, with no `--model`;
-  adoption no longer writes one there. The baseline call agent is on
-  `claude-code-call-default`, which names the model `auth adopt
-  -judgment-model` was given, and asks the effort `-judgment-effort` gave.
+- **A line sends its model.** The launch passes `--model <model-id>`. The
+  driver refuses a completion that reports any other model, so the line's
+  model must be the exact id the CLI reports in `modelUsage`. An alias or a
+  short name never matches, and every call on that line then returns
+  `inference unavailable` with no health item, because the role is
+  admitted.
+- **A line on the model `claude-code-native-default` is refused.** That id
+  names no model, and no flag supplies one, so admission leaves the role
+  unbound: its sites return their fail-safe, the role's `system_health`
+  item says the line names the native-default model, and preflight fails.
+  A ward (writer) line on it still launches, with no `--model`; adoption no
+  longer writes one there. The baseline judgment lines name the model `auth
+  adopt -judgment-model` was given, and the effort `-judgment-effort`
+  gave.
 - **An effort other than `harness_default` is sent as `--effort <native
   value>`,** translated by the `claude_code` table
   (`domain.TranslateEffort`). `harness_default` sends no `--effort`. The
   call keeps `MAX_THINKING_TOKENS=0` and its output limit at every effort.
-  The agent must be on `claude_code_call_v2`: an agent on v1 that asks
-  another effort does not resolve, so its role is unbound.
-- **A model or effort that is not one plain option value leaves the role
-  unbound:** one that holds whitespace or a control or format character,
-  begins with `-`, or is longer than 256 bytes. An offer only has to name a
-  non-empty model, so admission checks this and the role gets its health
-  item; the driver checks it again before it starts any process.
+  Such a line needs `claude_code_call_v2` in the tree: v1 sends no other
+  effort, so with only v1 no adapter launches the line and its role is
+  unbound.
+- **A model or effort that is not one plain option value is refused:** one
+  that holds whitespace or a control or format character, begins with `-`,
+  or is longer than 256 bytes. The tree refuses such a lineup line when it
+  loads, and the driver checks the values again before it starts any
+  process.
 
 The lineup also decides which credential the call carries. It is the setup
-token of the agent's enrollment: the daemon reads it from the credential
+token of the line's enrollment: the daemon reads it from the credential
 volume that enrollment's current generation names, the one `auth add` or
 `auth adopt` recorded, and the call record's `credential_source` is
 `enrollment`. A record written before #1426 says `interim_flag`, for a token

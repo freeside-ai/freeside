@@ -582,8 +582,8 @@ func checkPrelaunchAgentTree(
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return unreadable(err, "could not read "+paths.Patch+": "+err.Error())
 	}
-	record.pass(prelaunchGroupAgentTree, "agent_tree", fmt.Sprintf("agent_tree.commit %s holds lineup revision %s with %d agents",
-		commit, revision, len(tree.Agents)))
+	record.pass(prelaunchGroupAgentTree, "agent_tree", fmt.Sprintf("agent_tree.commit %s holds lineup revision %s with %d lineup lines",
+		commit, revision, len(tree.Lineup)))
 	return tree, false, nil
 }
 

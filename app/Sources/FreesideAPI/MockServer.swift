@@ -2491,17 +2491,11 @@ public actor MockServer {
             .joined(separator: "/"))
         // The provenance names the enrollment the move left, with the hold's
         // mark, when the policy orders it (engine.movedPastMark): a v2 line's
-        // selection's enrollment, or the tree agent's for a v1 line's name.
-        // An agents-form role orders its agents' enrollments (engine.roleOrder).
-        let treeAgents = agentCatalog.agents
-        let enrollmentOf = { (agent: String) in treeAgents.first(where: { $0.name == agent })?.enrollment_id }
-        let leftEnrollment = head?.line.flatMap { line in
-            line.selection?.value1.enrollment_id ?? line.agent.flatMap(enrollmentOf)
-        }
+        // selection's enrollment. A v1 line names no enrollment, and an
+        // agents-form role orders nothing (engine.roleOrder, #2599).
+        let leftEnrollment = head?.line.flatMap { $0.selection?.value1.enrollment_id }
         let left = leftEnrollment.flatMap { enrollment -> String? in
-            let ordered = routingPolicy?.roles.contains {
-                ($0.enrollments ?? $0.agents?.compactMap(enrollmentOf) ?? []).contains(enrollment)
-            }
+            let ordered = routingPolicy?.roles.contains { ($0.enrollments ?? []).contains(enrollment) }
             return ordered == true ? enrollment : nil
         }
         let line = Components.Schemas.TaskLine(

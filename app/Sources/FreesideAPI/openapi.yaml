@@ -1647,20 +1647,19 @@ components:
         What a client can choose for a task line (plan §5.4). It is always
         present. enrollments is every enrollment the daemon holds, each with
         the models the daemon discovered for it; it is store state, so a new
-        discovery record moves the sync revision. agents and lineup are the
-        committed agent tree's agents and the lineup that runs a role when no
-        task line or routing policy chooses; both are empty, and
-        lineup_revision null, when the daemon holds no committed tree. The
-        daemon loads the tree once at startup, so that half changes only when
-        the daemon restarts on a changed tree; lineup_revision, the tree's
-        digest and the value a RoutingPolicy records as its lineup_revision,
-        then changes with it, and the heartbeat carries it too. The daemon
-        records a task line whose enrollment it holds and whose model and
-        effort that enrollment's discovery serves, but until admission
-        resolves a selection without a tree agent (#2734) a role admits only
-        a selection one of agents runs, so a client offers those.
+        discovery record moves the sync revision. lineup is the committed
+        agent tree's lineup, which runs a role when no task line or routing
+        policy chooses; it is empty, and lineup_revision null, when the
+        daemon holds no committed tree. The daemon loads the tree once at
+        startup, so that half changes only when the daemon restarts on a
+        changed tree; lineup_revision, the tree's digest and the value a
+        RoutingPolicy records as its lineup_revision, then changes with it,
+        and the heartbeat carries it too. The daemon records a task line
+        whose enrollment it holds and whose model and effort that
+        enrollment's discovery serves; admission also refuses a model its
+        route's model list in the tree does not admit.
       additionalProperties: false
-      required: [lineup_revision, enrollments, agents, lineup]
+      required: [lineup_revision, enrollments, lineup]
       properties:
         lineup_revision:
           nullable: true
@@ -1672,11 +1671,6 @@ components:
           description: Every enrollment the daemon holds, in enrollment_id order.
           items:
             $ref: "#/components/schemas/AgentCatalogEnrollment"
-        agents:
-          type: array
-          description: Every agent the tree carries, in name order.
-          items:
-            $ref: "#/components/schemas/AgentCatalogEntry"
         lineup:
           type: array
           description: >
@@ -1700,16 +1694,6 @@ components:
           - enrollment_id: "anthropic-b/claude_code"
             harness_client: claude_code
             discovery: null
-        agents:
-          - name: "claude-a"
-            enrollment_id: "anthropic-a/claude_code"
-            model: "claude-opus-5-5"
-            effort: high
-            lineage_group: "anthropic"
-            selection:
-              enrollment_id: "anthropic-a/claude_code"
-              model_id: "claude-opus-5-5"
-              effort: "high"
         lineup:
           - role: implementer
             selection:
@@ -1790,38 +1774,6 @@ components:
           items:
             type: string
             minLength: 1
-
-    AgentCatalogEntry:
-      type: object
-      description: >
-        One agent of the committed tree with its route offer's facts. effort
-        is the effort the agent's source sets. selection is what a task line
-        records to run the agent.
-      additionalProperties: false
-      required: [name, enrollment_id, model, effort, lineage_group, selection]
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 246
-          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
-        enrollment_id:
-          type: string
-          minLength: 1
-          description: The enrollment the agent runs as; joins UsagePoolEnrollment.enrollment_id.
-        model:
-          type: string
-          minLength: 1
-          description: The model the agent's route passes to the harness.
-        effort:
-          $ref: "#/components/schemas/EffortLevel"
-        lineage_group:
-          type: string
-          nullable: true
-          minLength: 1
-          description: The offer's lineage group; null when the offer declares none.
-        selection:
-          $ref: "#/components/schemas/TaskLineSelection"
 
     AgentCatalogLineupLine:
       type: object

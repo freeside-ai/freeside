@@ -56,15 +56,13 @@ import Testing
         #expect(policy.entity_version == Int64(policy.policy.revision))
         #expect(policy.policy.source == .client_routing_set)
 
-        // The catalog's agents run as the pools' enrollments, and the
+        // The catalog's lineup selects the pools' enrollments, and the
         // heartbeat carries its revision.
         let catalog = bootstrap.agent_catalog
         #expect(catalog == UsageFixtures.defaultAgentCatalog())
         let enrollments = Set(bootstrap.usage_pools.flatMap { $0.pool.enrollments.map(\.enrollment_id) })
-        #expect(catalog.agents.allSatisfy { enrollments.contains($0.enrollment_id) })
+        #expect(catalog.lineup.allSatisfy { enrollments.contains($0.selection.enrollment_id) })
         #expect(catalog.enrollments.allSatisfy { enrollments.contains($0.enrollment_id) })
-        // Each agent's selection runs on its own enrollment.
-        #expect(catalog.agents.allSatisfy { $0.selection.enrollment_id == $0.enrollment_id })
         #expect(catalog.lineup_revision?.value1 == policy.policy.lineup_revision)
         let heartbeat = try await client.getSyncRevision().ok.body.json
         #expect(heartbeat.lineup_revision?.value1 == catalog.lineup_revision?.value1)
@@ -98,7 +96,7 @@ import Testing
         #expect(bootstrap.routing_policy == nil)
         // A daemon with no tree still serves its enrollments.
         #expect(bootstrap.agent_catalog.lineup_revision == nil)
-        #expect(bootstrap.agent_catalog.agents.isEmpty && bootstrap.agent_catalog.lineup.isEmpty)
+        #expect(bootstrap.agent_catalog.lineup.isEmpty)
         #expect(!bootstrap.agent_catalog.enrollments.isEmpty)
         #expect(try await client.getSyncRevision().ok.body.json.lineup_revision == nil)
     }

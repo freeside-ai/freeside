@@ -8,8 +8,8 @@
     @MainActor enum TaskSubmissionRecoveryScreenshots {
         static func model(client: any APIProtocol) async throws -> TaskSubmissionModel {
             let coordinator = SyncCoordinator(client: client, cache: InMemoryCacheStore())
-            // Synced, so a saved request's lines read as the catalog agents
-            // that carry their selections.
+            // Synced, so a saved request's lines read against the catalog
+            // that offers their selections.
             await coordinator.refresh()
             // The first request attached files and a folder (#2591), so its
             // item lists the files' names and the folder as one line; the

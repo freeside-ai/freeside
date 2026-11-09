@@ -389,6 +389,10 @@ public struct DiskCacheStore: CacheStore {
     ///    would fail its section's decode; only that entry is dropped, since
     ///    the daemon refuses a name now, so its verbatim retry could only be
     ///    refused.
+    /// 10. The agent catalog lost its `agents` (#2599). A cached catalog
+    ///    still carrying them would throw and discard the cache, ledger
+    ///    included; it is dropped, and the next heartbeat's lineup revision
+    ///    differs from the absent catalog's, so the bootstrap restores it.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -513,7 +517,9 @@ public struct DiskCacheStore: CacheStore {
             }
         }
 
-        if let catalog = state["agentCatalog"] as? [String: Any], catalog["enrollments"] == nil {
+        if let catalog = state["agentCatalog"] as? [String: Any],
+            catalog["enrollments"] == nil || catalog["agents"] != nil
+        {
             state.removeValue(forKey: "agentCatalog")
             changed = true
         }

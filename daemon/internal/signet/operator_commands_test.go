@@ -39,17 +39,10 @@ var (
 		},
 	}}}
 	operatorTreeRev = domain.Digest("sha256:" + strings.Repeat("a", 64))
-	// operatorCatalog is operatorTree's catalog with the agents the wire
-	// names: codex-primary runs seedUsageEnrollment's enrollment, so pool-a
-	// is its drain-first account, and claude-primary a line enrollment on
-	// its identity's own pool.
+	// operatorCatalog is operatorTree's catalog.
 	operatorCatalog = signet.AgentCatalog{
 		LineupRevision: &operatorTreeRev,
-		Agents: []signet.AgentCatalogEntry{
-			operatorAgent("claude-primary", "line-claude-primary/codex_cli"),
-			operatorAgent("codex-primary", "enrollment-usage-1"),
-		},
-		Lineup: []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Selection: operatorLineup}},
+		Lineup:         []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Selection: operatorLineup}},
 	}
 	withOperatorCatalog = signet.WithAgentCatalog(func() *signet.AgentCatalog { return &operatorCatalog })
 	errOperatorFails    = errors.New("operator failed")
@@ -77,16 +70,6 @@ func (o *recordingUsageOperator) ReassignCollector(
 ) (func(), error) {
 	o.reassigns = append(o.reassigns, collector)
 	return func() { o.afters++ }, o.err
-}
-
-// operatorAgent is a catalog agent running enrollment on the implementer's
-// lineup model and effort.
-func operatorAgent(name string, enrollment domain.ClientEnrollmentID) signet.AgentCatalogEntry {
-	selection := operatorLineup
-	selection.EnrollmentID = enrollment
-	return signet.AgentCatalogEntry{
-		Name: name, EnrollmentID: enrollment, Model: selection.ModelID, Effort: domain.EffortHigh, Selection: selection,
-	}
 }
 
 // engineTaskLineChanger and engineRoutingPolicySetter bind the hooks the way

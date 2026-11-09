@@ -481,7 +481,7 @@ func TestEffectProposalFactsProvenanceGoldensDiffer(t *testing.T) {
 // one the daemon has not discovered yet, as agentCatalogSnapshot reads them.
 func bootstrapCatalogFixture(t *testing.T, tree *AgentCatalog, at time.Time) AgentCatalog {
 	t.Helper()
-	catalog := AgentCatalog{Agents: []AgentCatalogEntry{}, Lineup: []AgentCatalogLineupLine{}}
+	catalog := AgentCatalog{Lineup: []AgentCatalogLineupLine{}}
 	if tree != nil {
 		catalog = *tree
 	}

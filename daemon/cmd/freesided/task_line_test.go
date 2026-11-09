@@ -35,7 +35,9 @@ func TestTaskLineCommandChangesAndClears(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	st := storetest.Open(t, dbPath, store.Options{})
 	run := seedReviewedRun(t, st, "run-line")
-	first := setReviewedRunLine(t, st, run, domain.RoleReviewer, "claude-a", "cmd-run-line", 0)
+	first := setReviewedRunLine(t, st, run, domain.RoleReviewer, domain.TaskLineSelection{
+		EnrollmentID: "enroll-claude", ModelID: "claude-opus", Effort: "high",
+	}, "cmd-run-line", 0)
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}

@@ -139,6 +139,37 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(loaded.attentionItems == state.attentionItems)
     }
 
+    @Test func aCatalogStillCarryingAgentsIsDroppedAndTheRestLoads() throws {
+        // Before #2599 every catalog carried `agents`, which the strict
+        // decoder now rejects. The load path drops only the catalog, so the
+        // ledger, rows, and cursors survive, and the next heartbeat's lineup
+        // revision triggers the bootstrap that restores the catalog.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.agentCatalog = UsageFixtures.defaultAgentCatalog()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        var catalog = try #require(legacyState["agentCatalog"] as? [String: Any])
+        catalog["agents"] = [["name": "claude-primary", "enrollment": "enrollment-claude-a-mac"]]
+        legacyState["agentCatalog"] = catalog
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.agentCatalog == nil)
+        #expect(migrated.cursors == state.cursors)
+        #expect(migrated.attentionItems == state.attentionItems)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
     /// The task page's pending line change (#2651) is additive: it round-trips,
     /// and a cache without it, the shape every earlier cache has, loads its
     /// rows and no change.

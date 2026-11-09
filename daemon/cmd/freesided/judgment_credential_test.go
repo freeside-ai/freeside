@@ -313,10 +313,8 @@ func withJudgmentCredentialRig(t *testing.T, fn func(r *judgmentCredentialRig)) 
 		t.Fatalf("auth adopt: %v", err)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	source, ok := tree.Agent(agentbaseline.ClaudeCallAgentName)
-	if !ok {
-		t.Fatal("the adopted tree has no call agent")
-	}
+	// Every judgment role's line runs on the call enrollment.
+	source := lineupSelection(t, tree, agentbaseline.JudgmentRoles()[0])
 	f.withStore(t, func(st *store.Store) {
 		r := &judgmentCredentialRig{
 			t: t, st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
@@ -332,7 +330,7 @@ func withJudgmentCredentialRig(t *testing.T, fn func(r *judgmentCredentialRig)) 
 		}
 		if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 			var err error
-			r.first, err = tx.GetClientEnrollment(context.Background(), domain.ClientEnrollmentID(source.Enrollment))
+			r.first, err = tx.GetClientEnrollment(context.Background(), source.EnrollmentID)
 			return err
 		}); err != nil {
 			t.Fatal(err)

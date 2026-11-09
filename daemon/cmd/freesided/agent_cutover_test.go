@@ -360,37 +360,6 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		})
 	})
 
-	t.Run("offer past its not_after admits", func(t *testing.T) {
-		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.shadowArgs())
-		if err != nil {
-			t.Fatalf("auth adopt: %v", err)
-		}
-		tree := loadAdoptedPatch(t, patch)
-		for i := range tree.Offers {
-			if tree.Offers[i].Fragment.NotAfter.Before(now) {
-				t.Fatalf("adopted offer %s is already past its not_after", tree.Offers[i].Name)
-			}
-		}
-		f.withStore(t, func(st *store.Store) {
-			// The review agents' offers still sit in the tree for the wire's
-			// name translation, but admission reads the line's selection, so
-			// a moment past every offer's not_after admits.
-			var expired time.Time
-			for _, offer := range tree.Offers {
-				if offer.Fragment.NotAfter.After(expired) {
-					expired = offer.Fragment.NotAfter
-				}
-			}
-			expired = expired.Add(time.Second)
-			for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleShadowReviewer} {
-				if _, err := reviewRoleAgent(ctx, st, tree, role, expired); err != nil {
-					t.Fatalf("%s after the offer's not_after = %v, want it admitted", role, err)
-				}
-			}
-		})
-	})
-
 	t.Run("identity disabled after composition", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
 		_, patch, err := f.run(t, f.args())
@@ -453,23 +422,24 @@ func recordReviewedRunCommand(
 // submitReviewedRunLine records a line on the run's task as submit_task does:
 // set by a command that carried it, at the task's creation instant.
 func submitReviewedRunLine(
-	t *testing.T, st *store.Store, run domain.Run, role domain.RoleName, agent string,
+	t *testing.T, st *store.Store, run domain.Run, role domain.RoleName, selection domain.TaskLineSelection,
 ) domain.TaskLine {
 	t.Helper()
 	ctx := context.Background()
 	commandID := "cmd-" + string(run.ID) + "-" + string(role)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		return recordReviewedRunCommand(ctx, tx, run, commandID, domain.TaskLineChoice{Role: role, Agent: agent})
+		return recordReviewedRunCommand(ctx, tx, run, commandID, domain.TaskLineChoice{Role: role, Selection: &selection})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return setReviewedRunLine(t, st, run, role, agent, commandID, 0)
+	return setReviewedRunLine(t, st, run, role, selection, commandID, 0)
 }
 
 // setReviewedRunLine records a line on the run's task, set by setBy at the
 // task's creation instant plus skew.
 func setReviewedRunLine(
-	t *testing.T, st *store.Store, run domain.Run, role domain.RoleName, agent, setBy string, skew time.Duration,
+	t *testing.T, st *store.Store, run domain.Run, role domain.RoleName, selection domain.TaskLineSelection, setBy string,
+	skew time.Duration,
 ) domain.TaskLine {
 	t.Helper()
 	ctx := context.Background()
@@ -480,7 +450,7 @@ func setReviewedRunLine(
 			return err
 		}
 		line, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
-			TaskID: task.ID, Role: role, Agent: agent, Source: domain.TaskLineSourceSubmitTask, SetBy: setBy,
+			TaskID: task.ID, Role: role, Selection: &selection, Source: domain.TaskLineSourceSubmitTask, SetBy: setBy,
 		}, task.CreatedAt.Add(skew))
 		return err
 	}); err != nil {
@@ -504,9 +474,15 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	// A second agent on the reviewer's enrollment, which a line can select.
-	const second = "codex-review-second"
-	tree = withAgentCopy(t, tree, lineupAgent(t, tree, domain.RoleReviewer), second)
+	// A second selection on the reviewer's enrollment, at another effort,
+	// which a line can select.
+	second := lineupSelection(t, tree, domain.RoleReviewer)
+	for _, effort := range domain.CodexCLISendableEfforts() {
+		if string(effort) != second.Effort && effort != domain.EffortHarnessDefault {
+			second.Effort = string(effort)
+			break
+		}
+	}
 	now := time.Now().UTC()
 	f.withStore(t, func(st *store.Store) {
 		reviewer, err := reviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
@@ -532,7 +508,9 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		t.Run("no reviewer line", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-lineless")
 			// A line for another role is not the reviewer's.
-			submitReviewedRunLine(t, st, run, domain.RoleImplementer, "some-other-agent")
+			submitReviewedRunLine(t, st, run, domain.RoleImplementer, domain.TaskLineSelection{
+				EnrollmentID: "enroll-other", ModelID: "model-other", Effort: "high",
+			})
 			req := admittedReviewRequest(t, st, tree, domain.RoleReviewer, run.ID)
 			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission with no reviewer line: %v", err)
@@ -601,7 +579,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// The reviewer line of this task names an agent on another
 			// harness: the engine refuses the invocation before any snapshot
 			// exists. The shadow reviewer reads no line.
-			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleShadowReviewer))
+			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleShadowReviewer))
 			var failure *roleAdmissionError
 			if _, err := admitter(ctx, domain.RoleReviewer, run.ID, "review-admitted-refused", now); !errors.As(err, &failure) ||
 				failure.Role != domain.RoleReviewer || !errors.Is(err, engine.ErrAgentNotAdmissible) {
@@ -614,7 +592,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 
 		t.Run("the line names the agent the source runs", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-same-agent")
-			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer))
+			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleReviewer))
 			if err := admit(ctx, admittedReviewRequest(t, st, tree, domain.RoleReviewer, run.ID)); err != nil {
 				t.Fatalf("review admission with a line naming the composed agent: %v", err)
 			}
@@ -634,8 +612,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			if err != nil {
 				t.Fatalf("admit a review whose line selects another agent: %v", err)
 			}
-			// The copy's definition is the lineup agent's, so its digest is
-			// too; the selection is what shows the line chose it.
+			// The selection record is what shows the line chose it.
 			if admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceTaskLine ||
 				admission.AgentBinding.SelectionRecordID != line.ID {
 				t.Fatalf("admission = %+v, want the line's agent cited by the line", admission.AgentBinding)
@@ -650,10 +627,10 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// The other agent is a real one that passes every admission step
 			// for its own role: the refusal is the source's harness, not the
 			// agent.
-			if lineupAgent(t, tree, domain.RoleShadowReviewer) == lineupAgent(t, tree, domain.RoleReviewer) {
+			if lineupSelection(t, tree, domain.RoleShadowReviewer) == lineupSelection(t, tree, domain.RoleReviewer) {
 				t.Fatal("the fixture's two review roles share an agent")
 			}
-			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleShadowReviewer))
+			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleShadowReviewer))
 			req := exec.ReviewRequest{RunID: run.ID}
 			refused(t, req, string(line.ID))
 			refused(t, req, "harness client")
@@ -665,11 +642,13 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 
 		t.Run("the refusal never repeats the line's agent", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-pasted-agent")
-			// A credential pasted as the agent can pass the name grammar. The
-			// refusal becomes the review failure's recorded reason, so it
-			// names the line and not the text.
+			// A credential pasted as the model can pass the selection
+			// grammar. The refusal becomes the review failure's recorded
+			// reason, so it names the line and not the text.
 			const pasted = "0123456789abcdef0123456789abcdef"
-			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, pasted)
+			selection := lineupSelection(t, tree, domain.RoleReviewer)
+			selection.ModelID = pasted
+			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, selection)
 			req := exec.ReviewRequest{RunID: run.ID}
 			refused(t, req, string(line.ID))
 			if err := admit(ctx, req); strings.Contains(err.Error(), pasted) {
@@ -680,15 +659,15 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		t.Run("the line does not hold against its command", func(t *testing.T) {
 			// Each line names the composed agent, so only the anchor refuses.
 			unrecorded := seedReviewedRun(t, st, "run-unrecorded")
-			setReviewedRunLine(t, st, unrecorded, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer), "cmd-never-recorded", 0)
+			setReviewedRunLine(t, st, unrecorded, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleReviewer), "cmd-never-recorded", 0)
 			refused(t, exec.ReviewRequest{RunID: unrecorded.ID}, "cmd-never-recorded")
 
 			borrowed := seedReviewedRun(t, st, "run-borrowed")
-			setReviewedRunLine(t, st, borrowed, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer), "cmd-run-same-agent", 0)
+			setReviewedRunLine(t, st, borrowed, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleReviewer), "cmd-run-same-agent", 0)
 			refused(t, exec.ReviewRequest{RunID: borrowed.ID}, "that command created task")
 
 			late := seedReviewedRun(t, st, "run-late")
-			setReviewedRunLine(t, st, late, domain.RoleReviewer, lineupAgent(t, tree, domain.RoleReviewer), "cmd-run-late", time.Second)
+			setReviewedRunLine(t, st, late, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleReviewer), "cmd-run-late", time.Second)
 			refused(t, exec.ReviewRequest{RunID: late.ID}, "its task was created at")
 		})
 
@@ -760,7 +739,7 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 		"the task's line names an agent on another harness": {
 			roles: []domain.RoleName{domain.RoleReviewer},
 			breakIt: func(t *testing.T, f *fixture, role domain.RoleName, _ engine.ReviewRoleAgent) {
-				submitReviewedRunLine(t, f.st, f.run, role, lineupAgent(t, f.tree, other[role]))
+				submitReviewedRunLine(t, f.st, f.run, role, lineupSelection(t, f.tree, other[role]))
 			},
 			want: "harness client",
 		},
@@ -991,16 +970,7 @@ func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		name := agentbaseline.WriterAgentName(domain.RoleImplementer)
-		moved, err := tree.SelectionOfAgent(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := range tree.Agents {
-			if tree.Agents[i].Name == name {
-				tree.Agents[i].Enrollment = string(enrollment.ID)
-			}
-		}
+		moved := lineupSelection(t, tree, domain.RoleImplementer)
 		for i := range tree.Lineup {
 			if tree.Lineup[i].Selection.Names == moved.Names() {
 				tree.Lineup[i].Selection.Names.Enrollment = string(enrollment.ID)
@@ -1393,45 +1363,16 @@ func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
 	})
 }
 
-// lineupAgent is the tree agent that runs the selection the tree's lineup
-// line for role names (the first of twins), for a task line that names an
-// agent on the wire.
-func lineupAgent(t *testing.T, tree agenttree.Tree, role domain.RoleName) string {
+// lineupSelection is the selection the tree's lineup line for role names.
+func lineupSelection(t *testing.T, tree agenttree.Tree, role domain.RoleName) domain.TaskLineSelection {
 	t.Helper()
 	for _, line := range tree.Lineup {
 		if domain.RoleName(line.Key) == role {
-			name, err := tree.AgentForSelection(role, line.Selection.TaskLineSelection())
-			if err != nil {
-				t.Fatalf("no tree agent runs the %s line: %v", role, err)
-			}
-			return name
+			return line.Selection.TaskLineSelection()
 		}
 	}
 	t.Fatalf("the tree has no %s line", role)
-	return ""
-}
-
-// withAgentCopy adds an agent named name on the fragments of the agent named
-// source, so a task line can select an agent other than the lineup's on the
-// same enrollment.
-func withAgentCopy(t *testing.T, tree agenttree.Tree, source, name string) agenttree.Tree {
-	t.Helper()
-	agent, ok := tree.Agent(source)
-	if !ok {
-		t.Fatalf("the tree lacks agent %s", source)
-	}
-	agent.Name = name
-	tree.Agents = append(slices.Clone(tree.Agents), agent)
-	tree.Sort()
-	files, err := agenttree.Render(tree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := agenttree.Parse(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
+	return domain.TaskLineSelection{}
 }
 
 // TestReviewCredentialReadsTheAdmittedGeneration: the routed Claude source

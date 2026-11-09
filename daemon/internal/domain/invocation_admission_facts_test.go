@@ -70,7 +70,7 @@ func TestAdmittedFactsOfReviewIndependence(t *testing.T) {
 // could have produced, each refused.
 func TestInvocationAdmissionFactsValidate(t *testing.T) {
 	t.Parallel()
-	execution, _, _, _, _, _, _, _ := derivationClosure(t)
+	execution, _, _, _, _, _, _, _ := selectionClosure(t)
 	review, _, _, _, _, _, _ := reviewAdmissionClosure(t)
 	for _, kind := range domain.AllAdmissionKinds {
 		facts := domain.AdmittedFactsOfExecution(execution, domain.RoleImplementer)
@@ -123,7 +123,7 @@ func TestInvocationAdmissionFactsValidate(t *testing.T) {
 // or a review's.
 func TestExecutionFailureAdmittedFacts(t *testing.T) {
 	t.Parallel()
-	execution, _, _, _, _, _, _, _ := derivationClosure(t)
+	execution, _, _, _, _, _, _, _ := selectionClosure(t)
 	review, _, _, _, _, _, _ := reviewAdmissionClosure(t)
 	writer := domain.AdmittedFactsOfExecution(execution, domain.RoleImplementer)
 	failure := domain.ExecutionFailureFacts{

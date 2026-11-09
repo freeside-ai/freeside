@@ -5,7 +5,7 @@ import Foundation
 /// signet/golden_internal_test.go): a pool with readings and a window that
 /// holds both an older refusal and a newer exhausted reading resetting first,
 /// a pool whose collector cannot read usage, a pool with no record yet, and a
-/// catalog whose agents run as those pools' enrollments.
+/// catalog whose lineup selects those pools' enrollments.
 public enum UsageFixtures {
     public static let readingPoolID = "claude-a"
     public static let unsupportedPoolID = "codex-b"
@@ -172,17 +172,16 @@ public enum UsageFixtures {
     }
 
     /// The mock's agent catalog. Its enrollments are the ones
-    /// set_routing_policy accepts. Its tree half holds the agents: each
-    /// agent's enrollment joins a pool fixture's enrollment, one
-    /// offer declares no lineage group, and the lineup binds every task-line
-    /// role. Its enrollments are those pools' enrollments, two with a
+    /// set_routing_policy accepts: those pools' enrollments, two with a
     /// discovery record and one the daemon hasn't discovered yet, so a
     /// selection on it passes on shape alone. The two discovery records list
-    /// different models, and one model reports no effort levels.
+    /// different models, and one model reports no effort levels. Its tree
+    /// half is the lineup, which binds every task-line role to one of the
+    /// named selections.
     public static func defaultAgentCatalog() -> Components.Schemas.AgentCatalog {
-        let claudePrimary = selection(readingCollectorID, "claude-opus", "high")
-        let claudeSecondary = selection(readingSecondEnrollmentID, "claude-opus", "max")
-        let codexPrimary = selection(unsupportedCollectorID, "gpt-codex", "harness_default")
+        let claudePrimary = agentSelection("claude-primary")
+        let claudeSecondary = agentSelection("claude-secondary")
+        let codexPrimary = agentSelection("codex-primary")
         return .init(
             lineup_revision: .init(value1: lineupRevision),
             enrollments: [
@@ -214,17 +213,6 @@ public enum UsageFixtures {
                                     effort_levels: []),
                             ]))),
             ],
-            agents: [
-                .init(
-                    name: "claude-primary", enrollment_id: readingCollectorID, model: "claude-opus",
-                    effort: .high, lineage_group: "anthropic", selection: claudePrimary),
-                .init(
-                    name: "claude-secondary", enrollment_id: readingSecondEnrollmentID, model: "claude-opus",
-                    effort: .max, lineage_group: "anthropic", selection: claudeSecondary),
-                .init(
-                    name: "codex-primary", enrollment_id: unsupportedCollectorID, model: "gpt-codex",
-                    effort: .harness_default, lineage_group: nil, selection: codexPrimary),
-            ],
             lineup: [
                 .init(role: .specifier, selection: claudePrimary),
                 .init(role: .implementer, selection: claudePrimary),
@@ -234,9 +222,9 @@ public enum UsageFixtures {
     }
 
     /// The catalog of a daemon that holds no committed tree: the enrollments
-    /// still, and no agents, lineup, or revision.
+    /// still, and no lineup or revision.
     public static func treelessAgentCatalog() -> Components.Schemas.AgentCatalog {
-        .init(lineup_revision: nil, enrollments: defaultAgentCatalog().enrollments, agents: [], lineup: [])
+        .init(lineup_revision: nil, enrollments: defaultAgentCatalog().enrollments, lineup: [])
     }
 
     public static func selection(
@@ -245,13 +233,16 @@ public enum UsageFixtures {
         .init(enrollment_id: enrollment, model_id: model, effort: effort)
     }
 
-    /// The selection the default catalog's tree runs `agent` with, as a
-    /// client's choice of that agent sends it.
-    public static func agentSelection(_ agent: String) -> Components.Schemas.TaskLineSelection {
-        guard let entry = defaultAgentCatalog().agents.first(where: { $0.name == agent }) else {
-            preconditionFailure("no default catalog agent \(agent)")
+    /// One of the fixtures' named selections, as a client's choice of it
+    /// sends it. The names are those of the agents the default tree carried
+    /// before it dropped them (#2599), kept so fixtures choose by name.
+    public static func agentSelection(_ name: String) -> Components.Schemas.TaskLineSelection {
+        switch name {
+        case "claude-primary": selection(readingCollectorID, "claude-opus", "high")
+        case "claude-secondary": selection(readingSecondEnrollmentID, "claude-opus", "max")
+        case "codex-primary": selection(unsupportedCollectorID, "gpt-codex", "harness_default")
+        default: preconditionFailure("no fixture selection \(name)")
         }
-        return entry.selection
     }
 
     private static func date(_ offset: TimeInterval) -> Date {

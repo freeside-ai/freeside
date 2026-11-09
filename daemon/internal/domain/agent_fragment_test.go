@@ -4,7 +4,6 @@ import (
 	"errors"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -38,24 +37,6 @@ func adapterFragment(t *testing.T) domain.AdapterFragment {
 			domain.LaunchCapContextSeverance, domain.LaunchCapRouteStoreContract,
 		),
 		SendableEfforts: []domain.EffortLevel{domain.EffortMedium, domain.EffortHigh, domain.EffortMax},
-	}
-	digest, err := f.ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Digest = digest
-	return f
-}
-
-func offerFragment(t *testing.T) domain.OfferFragment {
-	t.Helper()
-	f := domain.OfferFragment{
-		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		RouteModelID:    "gpt-5.6-sol", LineageGroup: "openai",
-		IdentityStability: domain.IdentityPinned,
-		AllowedEfforts:    []domain.EffortLevel{domain.EffortHigh, domain.EffortMax},
-		PricingRevision:   "2026-08",
-		NotAfter:          time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	digest, err := f.ComputeDigest()
 	if err != nil {
@@ -141,50 +122,6 @@ func TestAdapterFragmentValidate(t *testing.T) {
 	}
 }
 
-func TestOfferFragmentValidate(t *testing.T) {
-	cases := []struct {
-		name    string
-		mutate  func(*domain.OfferFragment)
-		wantErr error
-	}{
-		{"valid", func(*domain.OfferFragment) {}, nil},
-		{
-			// Unknown lineage is a legal authored state the §7 independence
-			// rule fails closed on, not a malformed document.
-			"unknown lineage", func(f *domain.OfferFragment) {
-				f.LineageGroup = ""
-				digest, err := f.ComputeDigest()
-				if err != nil {
-					t.Fatal(err)
-				}
-				f.Digest = digest
-			}, nil,
-		},
-		{"no model id", func(f *domain.OfferFragment) { f.RouteModelID = "" }, domain.ErrEmptyField},
-		{"unknown stability", func(f *domain.OfferFragment) { f.IdentityStability = "wobbly" }, domain.ErrInvalidIdentityStability},
-		{"no efforts", func(f *domain.OfferFragment) { f.AllowedEfforts = nil }, domain.ErrEmptyField},
-		{"no pricing revision", func(f *domain.OfferFragment) { f.PricingRevision = "" }, domain.ErrEmptyField},
-		{"no expiry", func(f *domain.OfferFragment) { f.NotAfter = time.Time{} }, domain.ErrMissingTimestamp},
-		{"non-UTC expiry", func(f *domain.OfferFragment) {
-			f.NotAfter = f.NotAfter.In(time.FixedZone("PDT", -7*3600))
-		}, domain.ErrTimestampNotUTC},
-		{
-			"digest of different content",
-			func(f *domain.OfferFragment) { f.RouteModelID = "gpt-5.7" },
-			domain.ErrAgentDigestMismatch,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := offerFragment(t)
-			tc.mutate(&f)
-			if err := f.Validate(); !errors.Is(err, tc.wantErr) {
-				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
 func TestFragmentRoundTrips(t *testing.T) {
 	route := routeFragment(t)
 	routeBody, err := route.Encode()
@@ -201,14 +138,6 @@ func TestFragmentRoundTrips(t *testing.T) {
 	}
 	if decoded, err := domain.DecodeAdapterFragment(adapterBody); err != nil || decoded.Digest != adapter.Digest {
 		t.Fatalf("adapter round-trip = %+v, %v", decoded, err)
-	}
-	offer := offerFragment(t)
-	offerBody, err := offer.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decoded, err := domain.DecodeOfferFragment(offerBody); err != nil || decoded.Digest != offer.Digest {
-		t.Fatalf("offer round-trip = %+v, %v", decoded, err)
 	}
 	if _, err := domain.DecodeRouteFragment(append(routeBody, "trailing"...)); err == nil {
 		t.Fatal("trailing data decoded")
@@ -251,18 +180,6 @@ func TestLaunchCapabilitySet(t *testing.T) {
 		f.Digest = digest
 		if err := f.Validate(); err != nil {
 			t.Fatalf("effort %q: %v", effort, err)
-		}
-	}
-	for _, stability := range domain.AllIdentityStabilities {
-		f := offerFragment(t)
-		f.IdentityStability = stability
-		digest, err := f.ComputeDigest()
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.Digest = digest
-		if err := f.Validate(); err != nil {
-			t.Fatalf("stability %q: %v", stability, err)
 		}
 	}
 }

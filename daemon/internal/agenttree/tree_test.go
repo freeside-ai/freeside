@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -22,9 +21,14 @@ import (
 )
 
 const (
-	agentName = "sol-via-codex"
-	routeName = "openai_chatgpt_codex"
+	enrollmentID = "openai-chatgpt-a/codex_cli"
+	routeName    = "openai_chatgpt_codex"
 )
+
+// reviewerNames is the selection the fixture's reviewer line names.
+func reviewerNames() domain.AgentSelectionNames {
+	return domain.AgentSelectionNames{Enrollment: enrollmentID, Model: "gpt-5.6-sol", Effort: "xhigh"}
+}
 
 func digestOf(text string) domain.Digest { return domain.Digest(contentaddr.Sum([]byte(text))) }
 
@@ -37,8 +41,8 @@ func must[T any](value T, err error) T {
 	return value
 }
 
-// fixtureTree is one agent with its three fragments and a reviewer lineup
-// line that selects it.
+// fixtureTree is a route, an adapter, and a reviewer lineup line on an
+// enrollment of that route.
 func fixtureTree(t *testing.T) agenttree.Tree {
 	t.Helper()
 	route := domain.RouteFragment{
@@ -60,50 +64,18 @@ func fixtureTree(t *testing.T) agenttree.Tree {
 		SendableEfforts: []domain.EffortLevel{domain.EffortHigh, domain.EffortMax},
 	}
 	adapter.Digest = must(adapter.ComputeDigest())
-	offer := domain.OfferFragment{
-		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		RouteModelID:    "gpt-5.6-sol", LineageGroup: "openai",
-		IdentityStability: domain.IdentityPinned,
-		AllowedEfforts:    []domain.EffortLevel{domain.EffortHigh, domain.EffortMax},
-		PricingRevision:   "2026-08",
-		NotAfter:          time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-	offer.Digest = must(offer.ComputeDigest())
 	tree := agenttree.Tree{
-		Agents: []domain.AgentSource{{
-			Name: agentName, Enrollment: "openai-chatgpt-a/codex_cli",
-			Route: routeName, Adapter: "codex_proto_v1", Offer: "gpt-5.6-sol", Effort: domain.EffortMax,
-		}},
 		Routes:   []agenttree.Route{{Name: routeName, Fragment: route}},
 		Adapters: []agenttree.Adapter{{Name: "codex_proto_v1", Fragment: adapter}},
-		Offers:   []agenttree.Offer{{Route: routeName, Name: "gpt-5.6-sol", Fragment: offer}},
 	}
 	tree.Lineup = []agenttree.LineupLine{{
 		Key: string(domain.RoleReviewer),
 		Selection: domain.LineupSelection{
-			Names:      namesOf(must(tree.SelectionOfAgent(agentName))),
+			Names:      reviewerNames(),
 			PromptName: "review", PromptDigest: digestOf("prompt"),
 		},
 	}}
 	return tree
-}
-
-func namesOf(s domain.TaskLineSelection) domain.AgentSelectionNames {
-	return domain.AgentSelectionNames{Enrollment: string(s.EnrollmentID), Model: s.ModelID, Effort: s.Effort}
-}
-
-func fixtureRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
-	return domain.ClientEnrollment{
-		ID: "openai-chatgpt-a/codex_cli", AuthIdentityID: "openai-chatgpt-a",
-		HarnessClient: domain.HarnessClientCodexCLI, Route: routeName,
-		AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
-		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
-		AccountBinding: "acct-1",
-	}, domain.AuthIdentity{
-		ID: "openai-chatgpt-a", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
-		Enabled: true, AccountBinding: "acct-1", CostOwner: "owner",
-		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-store", RefreshStrategy: domain.RefreshOnDemand},
-	}
 }
 
 func TestRenderParseRoundTrip(t *testing.T) {
@@ -117,26 +89,10 @@ func TestRenderParseRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(again, files) {
 		t.Fatal("rendering the parsed tree changed its bytes")
 	}
-	want := "who      enrollment  openai-chatgpt-a/codex_cli\n" +
-		"through  route       openai_chatgpt_codex\n" +
-		"running  adapter     codex_proto_v1\n" +
-		"asking   offer       gpt-5.6-sol, effort max\n"
-	if got := string(files["agents/"+agentName]); got != want {
-		t.Fatalf("agent document =\n%s\nwant\n%s", got, want)
-	}
-	if lock := string(files["agents.lock"]); strings.Count(lock, "\n") != 4 ||
-		!strings.Contains(lock, "offer "+routeName+"/gpt-5.6-sol sha256:") {
+	if lock := string(files["agents.lock"]); strings.Count(lock, "\n") != 2 ||
+		!strings.HasPrefix(lock, "adapter codex_proto_v1 sha256:") ||
+		!strings.Contains(lock, "\nroute "+routeName+" sha256:") {
 		t.Fatalf("agents.lock =\n%s", lock)
-	}
-}
-
-func TestAgentDocumentToleratesSpacing(t *testing.T) {
-	files := must(agenttree.Render(fixtureTree(t)))
-	files["agents/"+agentName] = []byte("who enrollment openai-chatgpt-a/codex_cli\n" +
-		"through route openai_chatgpt_codex\nrunning\tadapter codex_proto_v1\n" +
-		"asking offer gpt-5.6-sol,  effort max\n")
-	if _, err := agenttree.Parse(files); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -149,26 +105,9 @@ func TestParseFailsClosed(t *testing.T) {
 		{"file outside the layout", func(f agenttree.Files) { f["notes"] = []byte("x\n") }, agenttree.ErrMalformed},
 		{"no lineup", func(f agenttree.Files) { delete(f, "lineup") }, agenttree.ErrMalformed},
 		{"no lock", func(f agenttree.Files) { delete(f, "agents.lock") }, agenttree.ErrMalformed},
-		{"missing fragment", func(f agenttree.Files) {
+		{"missing fragment the lock names", func(f agenttree.Files) {
 			delete(f, "fragments/routes/"+routeName)
-		}, agenttree.ErrMalformed},
-		{"offer under another route", func(f agenttree.Files) {
-			f["fragments/offers/other/gpt-5.6-sol"] = f["fragments/offers/"+routeName+"/gpt-5.6-sol"]
-			delete(f, "fragments/offers/"+routeName+"/gpt-5.6-sol")
-		}, agenttree.ErrMalformed},
-		{"agent document with a fifth line", func(f agenttree.Files) {
-			f["agents/"+agentName] = append(f["agents/"+agentName], "# note\n"...)
-		}, agenttree.ErrMalformed},
-		{"agent document with lines reordered", func(f agenttree.Files) {
-			lines := strings.SplitAfter(string(f["agents/"+agentName]), "\n")
-			f["agents/"+agentName] = []byte(lines[1] + lines[0] + lines[2] + lines[3])
-		}, agenttree.ErrMalformed},
-		{"unknown effort", func(f agenttree.Files) {
-			f["agents/"+agentName] = bytes.Replace(f["agents/"+agentName], []byte("effort max"), []byte("effort huge"), 1)
-		}, domain.ErrInvalidEffortLevel},
-		{"agent name outside the rule", func(f agenttree.Files) {
-			f["agents/Sol"] = f["agents/"+agentName]
-		}, domain.ErrInvalidAgentName},
+		}, agenttree.ErrLockMismatch},
 		{"fragment with an unknown field", func(f agenttree.Files) {
 			f["fragments/routes/"+routeName] = bytes.Replace(
 				f["fragments/routes/"+routeName], []byte("{"), []byte(`{"note":"x",`), 1)
@@ -188,7 +127,7 @@ func TestParseFailsClosed(t *testing.T) {
 			f["lineup"] = []byte("reviewer openai-chatgpt-a/codex_cli/gpt-5.6-sol/xhigh\n")
 		}, domain.ErrInvalidLineupKey},
 		{"lineup line naming an agent", func(f agenttree.Files) {
-			f["lineup"] = []byte("reviewer " + agentName + "@" + string(digestOf("a")) + "/review@" + string(digestOf("p")) + "\n")
+			f["lineup"] = []byte("reviewer sol-via-codex@" + string(digestOf("a")) + "/review@" + string(digestOf("p")) + "\n")
 		}, domain.ErrInvalidLineupKey},
 		{"lock missing an entry", func(f agenttree.Files) {
 			f["agents.lock"] = f["agents.lock"][bytes.IndexByte(f["agents.lock"], '\n')+1:]
@@ -214,14 +153,14 @@ func TestParseFailsClosed(t *testing.T) {
 	}
 }
 
-// escalatedTree adds to the fixture a specifier line on the fixture
-// agent's selection and the escalated line under keyEnrollment's key that
+// escalatedTree adds to the fixture a specifier line on the reviewer's
+// selection and the escalated line under keyEnrollment's key that
 // escalates value to effort.
 func escalatedTree(t *testing.T, keyEnrollment string, value domain.AgentSelectionNames) agenttree.Tree {
 	t.Helper()
 	tree := fixtureTree(t)
 	specifier := domain.LineupSelection{
-		Names:      namesOf(must(tree.SelectionOfAgent(agentName))),
+		Names:      reviewerNames(),
 		PromptName: "specifier", PromptDigest: digestOf("specifier"),
 	}
 	escalated := specifier
@@ -234,12 +173,12 @@ func escalatedTree(t *testing.T, keyEnrollment string, value domain.AgentSelecti
 }
 
 // An escalated line survives the round trip when it escalates its key's
-// enrollment to another effort on that enrollment, and the tree refuses it,
-// with no agent read, when its value runs another enrollment, whether it is
+// enrollment to another effort on that enrollment, and the tree refuses it
+// when its value runs another enrollment, whether it is
 // rendered that way or the lineup file is edited to say so, or when it
 // repeats the specifier line.
 func TestEscalatedLineFollowsThePairingRule(t *testing.T) {
-	const enrollment = "openai-chatgpt-a/codex_cli"
+	const enrollment = enrollmentID
 	high := domain.AgentSelectionNames{Enrollment: enrollment, Model: "gpt-5.6-sol", Effort: "high"}
 	tree := escalatedTree(t, enrollment, high)
 	files := must(agenttree.Render(tree))
@@ -257,7 +196,7 @@ func TestEscalatedLineFollowsThePairingRule(t *testing.T) {
 	if _, err := agenttree.Render(escalatedTree(t, enrollment, elsewhere)); !errors.Is(err, domain.ErrLineupEscalatedPair) {
 		t.Fatalf("Render with a value on another enrollment = %v", err)
 	}
-	own := namesOf(must(tree.SelectionOfAgent(agentName)))
+	own := reviewerNames()
 	if _, err := agenttree.Render(escalatedTree(t, enrollment, own)); !errors.Is(err, domain.ErrLineupEscalatedPair) {
 		t.Fatalf("Render with the specifier's own line = %v", err)
 	}
@@ -271,8 +210,8 @@ func TestEscalatedLineFollowsThePairingRule(t *testing.T) {
 	}
 }
 
-// An edit to a fragment changes the agent's digest, so the lock, which still
-// names the old digests, stops the load: nobody admits against content the
+// An edit to a fragment changes its digest, so the lock, which still names
+// the old digest, stops the load: nobody admits against content the
 // lock's reviewer did not see.
 func TestFragmentEditWithoutLockUpdateFails(t *testing.T) {
 	tree := fixtureTree(t)
@@ -286,55 +225,138 @@ func TestFragmentEditWithoutLockUpdateFails(t *testing.T) {
 	}
 }
 
-// TestLeftoverAttendedMarkIsRefused: plan revision 97 removed the attended
-// mark, so a committed tree that still has an agent's .attended file is
-// refused with the file named and the fix, not read past or reported as an
-// unknown agent.
-func TestLeftoverAttendedMarkIsRefused(t *testing.T) {
-	files := must(agenttree.Render(fixtureTree(t)))
-	path := "agents/" + agentName + ".attended"
-	if _, ok := files[path]; ok {
-		t.Fatalf("Render wrote %s", path)
+// TestRemovedDocumentsAreRefused: #2599 removed the agent and offer
+// documents, so a committed tree that still carries one, an attended mark
+// among them, or an agents.lock line of either kind is refused with the file
+// or line named and the fix, not read past or reported as a path outside
+// the layout.
+func TestRemovedDocumentsAreRefused(t *testing.T) {
+	agentDocument := []byte("who      enrollment  " + enrollmentID + "\n" +
+		"through  route       " + routeName + "\n" +
+		"running  adapter     codex_proto_v1\n" +
+		"asking   offer       gpt-5.6-sol, effort max\n")
+	cases := []struct {
+		name, names string
+		mutate      func(agenttree.Files)
+	}{
+		{"agent document", "agents/sol-via-codex", func(f agenttree.Files) {
+			f["agents/sol-via-codex"] = agentDocument
+		}},
+		{"attended mark", "agents/sol-via-codex.attended", func(f agenttree.Files) {
+			f["agents/sol-via-codex.attended"] = []byte(string(digestOf("agent")) + "\n")
+		}},
+		{"offer document", "fragments/offers/" + routeName + "/gpt-5.6-sol", func(f agenttree.Files) {
+			f["fragments/offers/"+routeName+"/gpt-5.6-sol"] = []byte("{}\n")
+		}},
+		{"agent lock line", "agent sol-via-codex", func(f agenttree.Files) {
+			f["agents.lock"] = append([]byte("agent sol-via-codex "+string(digestOf("agent"))+"\n"), f["agents.lock"]...)
+		}},
+		{"offer lock line", "offer " + routeName + "/gpt-5.6-sol", func(f agenttree.Files) {
+			f["agents.lock"] = append(f["agents.lock"], "offer "+routeName+"/gpt-5.6-sol "+string(digestOf("offer"))+"\n"...)
+		}},
 	}
-	files[path] = []byte(string(digestOf("agent")) + " " + string(digestOf("launch")) + "\n")
-	_, err := agenttree.Parse(files)
-	if !errors.Is(err, agenttree.ErrMalformed) || !strings.Contains(err.Error(), path) ||
-		!strings.Contains(err.Error(), "delete the file") {
-		t.Fatalf("Parse = %v, want %v naming %s and its removal", err, agenttree.ErrMalformed, path)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := must(agenttree.Render(fixtureTree(t)))
+			tc.mutate(files)
+			_, err := agenttree.Parse(files)
+			if !errors.Is(err, agenttree.ErrMalformed) || !strings.Contains(err.Error(), tc.names) ||
+				!strings.Contains(err.Error(), "freesided auth migrate-tree") {
+				t.Fatalf("Parse = %v, want %v naming %q and migrate-tree", err, agenttree.ErrMalformed, tc.names)
+			}
+		})
 	}
 }
 
-func TestResolveAgent(t *testing.T) {
+// A route's model list round-trips beside its route and stays outside the
+// lock; Parse refuses a list the tree cannot use, naming the file.
+func TestRouteModelLists(t *testing.T) {
 	tree := fixtureTree(t)
-	enrollment, identity := fixtureRecords()
-	resolved := must(tree.ResolveAgent(agentName, enrollment, identity))
-	if want := must(tree.AgentDigest(agentName)); resolved.Definition.Digest != want {
-		t.Fatalf("resolved digest %s, tree digest %s", resolved.Definition.Digest, want)
+	tree.Routes[0].Models = &domain.RouteModelList{
+		Mode: domain.ModelListAllow, Models: []string{"gpt-5.6-sol", "gpt-5.6-mini"},
 	}
-	if resolved.Offer.RouteModelID != "gpt-5.6-sol" {
-		t.Fatalf("resolved offer = %+v", resolved.Offer)
+	files := must(agenttree.Render(tree))
+	if got, want := string(files["models/"+routeName]), "allow gpt-5.6-sol\nallow gpt-5.6-mini\n"; got != want {
+		t.Fatalf("models/%s =\n%s\nwant\n%s", routeName, got, want)
 	}
-	// The agent's selection: its offer's model and the effort its adapter
-	// sends, which for Codex's max is xhigh.
-	if want := must(domain.ReduceAgentSelection(resolved.Definition, resolved.Adapter, resolved.Offer)); resolved.Selection != want {
-		t.Fatalf("resolved selection %+v, the agent reduces to %+v", resolved.Selection, want)
+	parsed := must(agenttree.Parse(files))
+	if !reflect.DeepEqual(parsed, tree) {
+		t.Fatalf("Parse(Render(tree)) =\n%+v\nwant\n%+v", parsed, tree)
 	}
-	if resolved.Selection.ModelID != "gpt-5.6-sol" || resolved.Selection.Effort != "xhigh" {
-		t.Fatalf("resolved selection = %+v", resolved.Selection)
+	if got := parsed.RouteModels(routeName); got == nil || !got.Admits("gpt-5.6-mini") || got.Admits("gpt-5.6-luna") {
+		t.Fatalf("RouteModels = %+v", got)
+	}
+	if strings.Contains(string(files["agents.lock"]), "models") {
+		t.Fatalf("agents.lock covers the model list:\n%s", files["agents.lock"])
+	}
+	if must(agenttree.Parse(must(agenttree.Render(fixtureTree(t))))).RouteModels(routeName) != nil {
+		t.Fatal("a route with no list file has a list")
 	}
 
-	if _, err := tree.ResolveAgent("ghost", enrollment, identity); !errors.Is(err, agenttree.ErrUnknownAgent) {
-		t.Fatalf("unknown agent = %v", err)
+	path := "models/" + routeName
+	for _, tc := range []struct {
+		name, path string
+		body       string
+		want       error
+	}{
+		{"a route the tree lacks", "models/other", "allow gpt-5.6-sol\n", agenttree.ErrMalformed},
+		{"an empty file", path, "", agenttree.ErrMalformed},
+		{"mixed verbs", path, "allow gpt-5.6-sol\ndeny gpt-5.6-mini\n", agenttree.ErrMalformed},
+		{"a duplicate id", path, "deny gpt-5.6-sol\ndeny gpt-5.6-sol\n", domain.ErrInvalidRouteModelList},
+		{"an unknown verb", path, "only gpt-5.6-sol\n", domain.ErrInvalidRouteModelList},
+		{"an id a launch reads as an option", path, "allow -gpt\n", domain.ErrInvalidRouteModelList},
+		{"a line with a third field", path, "allow gpt-5.6-sol high\n", agenttree.ErrMalformed},
+		{"a blank line", path, "allow gpt-5.6-sol\n\nallow gpt-5.6-mini\n", agenttree.ErrMalformed},
+		{"no final newline", path, "allow gpt-5.6-sol", agenttree.ErrMalformed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := must(agenttree.Render(fixtureTree(t)))
+			files[tc.path] = []byte(tc.body)
+			_, err := agenttree.Parse(files)
+			if !errors.Is(err, tc.want) || !errors.Is(err, agenttree.ErrMalformed) || !strings.Contains(err.Error(), tc.path) {
+				t.Fatalf("Parse = %v, want %v naming %s", err, tc.want, tc.path)
+			}
+		})
 	}
-	other := enrollment
-	other.ID = "openai-chatgpt-b/codex_cli"
-	if _, err := tree.ResolveAgent(agentName, other, identity); !errors.Is(err, domain.ErrAgentJoinInvalid) {
-		t.Fatalf("another enrollment = %v", err)
+}
+
+// Migrate drops the agent and offer documents and their lock lines, keeps
+// every other byte, and yields a revision that parses.
+func TestMigrate(t *testing.T) {
+	current := must(agenttree.Render(fixtureTree(t)))
+	old := agenttree.Files{}
+	for path, body := range current {
+		old[path] = body
 	}
-	disabled := identity
-	disabled.Enabled = false
-	if _, err := tree.ResolveAgent(agentName, enrollment, disabled); !errors.Is(err, domain.ErrAgentJoinInvalid) {
-		t.Fatalf("disabled identity = %v", err)
+	old["agents/sol-via-codex"] = []byte("who      enrollment  " + enrollmentID + "\n" +
+		"through  route       " + routeName + "\n" +
+		"running  adapter     codex_proto_v1\n" +
+		"asking   offer       gpt-5.6-sol, effort max\n")
+	old["agents/sol-via-codex.attended"] = []byte(string(digestOf("agent")) + "\n")
+	old["fragments/offers/"+routeName+"/gpt-5.6-sol"] = []byte("{}\n")
+	lock := strings.SplitAfter(string(current["agents.lock"]), "\n")
+	old["agents.lock"] = []byte(lock[0] + "agent sol-via-codex " + string(digestOf("agent")) + "\n" +
+		"offer " + routeName + "/gpt-5.6-sol " + string(digestOf("offer")) + "\n" + lock[1])
+	if _, err := agenttree.Parse(old); !errors.Is(err, agenttree.ErrMalformed) {
+		t.Fatalf("Parse(old layout) = %v, want %v", err, agenttree.ErrMalformed)
+	}
+
+	migrated := must(agenttree.Migrate(old))
+	if !reflect.DeepEqual(migrated, current) {
+		t.Fatalf("Migrate =\n%v\nwant\n%v", migrated, current)
+	}
+	if again := must(agenttree.Migrate(migrated)); !reflect.DeepEqual(again, current) {
+		t.Fatal("Migrate of a current revision changed it")
+	}
+
+	// A revision malformed for another reason stays refused.
+	broken := agenttree.Files{}
+	for path, body := range old {
+		broken[path] = body
+	}
+	delete(broken, "lineup")
+	if _, err := agenttree.Migrate(broken); !errors.Is(err, agenttree.ErrMalformed) {
+		t.Fatalf("Migrate of a tree with no lineup = %v, want %v", err, agenttree.ErrMalformed)
 	}
 }
 
@@ -448,18 +470,21 @@ func TestPatchAppliesAndReadsBackAtTheCommit(t *testing.T) {
 		t.Fatal("tree read at the commit differs from the rendered tree")
 	}
 
-	// A second revision: the agent is renamed, so its file goes, another
-	// arrives, and the lineup changes.
+	// A second revision: the adapter is renamed, so its file goes, another
+	// arrives, the lock changes, a model list arrives, and the lineup
+	// changes.
 	next := tree
-	renamed := tree.Agents[0]
-	renamed.Name = "max-via-codex"
-	next.Agents = []domain.AgentSource{renamed}
+	renamed := tree.Adapters[0]
+	renamed.Name = "codex_proto_v2"
+	next.Adapters = []agenttree.Adapter{renamed}
+	next.Routes = []agenttree.Route{tree.Routes[0]}
+	next.Routes[0].Models = &domain.RouteModelList{Mode: domain.ModelListDeny, Models: []string{"gpt-5.6-mini"}}
 	next.Lineup = []agenttree.LineupLine{tree.Lineup[0]}
 	next.Lineup[0].Selection.PromptName = "renamed-review"
 	nextFiles := must(agenttree.Render(next))
 	second := applyAndCommit(t, repo, must(agenttree.Patch(files, nextFiles)))
 	if read := must(agenttree.ReadCommit(ctx, repo, t.TempDir(), second)); !reflect.DeepEqual(read, nextFiles) {
-		t.Fatal("second revision read back differs from its rendered files")
+		t.Fatalf("second revision read back differs from its rendered files:\n%q\n%q", read, nextFiles)
 	}
 	// The first commit still reads as the first revision.
 	if read := must(agenttree.ReadCommit(ctx, repo, t.TempDir(), commit)); !reflect.DeepEqual(read, files) {
@@ -506,7 +531,7 @@ func TestReadCommitRefusals(t *testing.T) {
 	}
 
 	t.Run("symlink in the tree", func(t *testing.T) {
-		if err := os.Symlink("../README.md", filepath.Join(repo, "policy", "agents", "linked")); err != nil {
+		if err := os.Symlink("../README.md", filepath.Join(repo, "policy", "fragments", "routes", "linked")); err != nil {
 			t.Fatal(err)
 		}
 		git(t, repo, "add", ".")

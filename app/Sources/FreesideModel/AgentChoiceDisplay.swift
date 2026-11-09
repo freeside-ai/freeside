@@ -11,7 +11,7 @@ import FreesideAPI
 /// records. The operator picks an enrollment, then a model from that
 /// enrollment's discovery record, then an effort that model reports. An
 /// enrollment the daemon hasn't discovered yet offers only the selections
-/// the tree's agents run on it, since nothing else says what it can run.
+/// the lineup runs on it, since nothing else says what it can run.
 ///
 /// A role the operator leaves unchosen gets no line, so the daemon picks its
 /// agent at first admission. Today that is the lineup's agent; once the
@@ -102,13 +102,13 @@ public enum AgentChoiceDisplay {
         public let name: String
         /// The efforts the model takes, in the harness's order: on a
         /// discovered enrollment `harnessDefault` and then the model's
-        /// `effort_levels`; otherwise those the tree's agents run it at.
+        /// `effort_levels`; otherwise those the lineup runs it at.
         public let efforts: [String]
     }
 
     /// The models `enrollmentID` offers, in the harness's order: its
-    /// discovery record's, or, while it has none, those the tree's agents
-    /// run on it in tree order. Empty for an enrollment the catalog doesn't
+    /// discovery record's, or, while it has none, those the lineup runs on
+    /// it in lineup order. Empty for an enrollment the catalog doesn't
     /// list.
     public static func models(on enrollmentID: String, catalog: Catalog?) -> [ModelOption] {
         guard let catalog, let enrollment = catalog.enrollments.first(where: { $0.enrollment_id == enrollmentID })
@@ -120,7 +120,7 @@ public enum AgentChoiceDisplay {
                     efforts: unique([harnessDefault] + model.effort_levels))
             }
         }
-        let carried = catalog.agents.map(\.selection).filter { $0.enrollment_id == enrollmentID }
+        let carried = catalog.lineup.map(\.selection).filter { $0.enrollment_id == enrollmentID }
         return unique(carried.map(\.model_id)).map { model in
             ModelOption(
                 id: model, name: model, efforts: unique(carried.filter { $0.model_id == model }.map(\.effort)))
@@ -150,7 +150,7 @@ public enum AgentChoiceDisplay {
     public enum DroppedPart: Equatable, Sendable {
         case enrollment
         /// The enrollment is still listed but offers no model at all: one
-        /// not discovered yet whose last tree agent went away.
+        /// not discovered yet whose last lineup selection went away.
         case everyModel
         case model
         case effort
@@ -367,7 +367,7 @@ public enum AgentChoiceDisplay {
             return nil
         }
         guard let discovery = enrollment.discovery?.value1 else {
-            return "Not discovered yet; lists what the tree's agents run on it"
+            return "Not discovered yet; lists what the lineup runs on it"
         }
         let observed = FreesideFormat.shortTime(discovery.observed_at, now: now, locale: locale, timeZone: timeZone)
         return "\(discovery.harness_build) · discovered \(observed)"
@@ -438,13 +438,6 @@ public enum AgentChoiceDisplay {
             ?? "lineup"
         let policyListsTheRole = policy?.roles.contains { $0.role == role } == true
         return lineup + (policyListsTheRole ? " or routing policy" : "")
-    }
-
-    /// One catalog agent's facts as the Agents pane lists them: model,
-    /// effort, and lineage group.
-    public static func facts(_ agent: Components.Schemas.AgentCatalogEntry) -> String {
-        [agent.model, RunDisplay.label(agent.effort), agent.lineage_group ?? "No lineage group"]
-            .joined(separator: " · ")
     }
 
     private static func unique<T: Hashable>(_ values: [T]) -> [T] {

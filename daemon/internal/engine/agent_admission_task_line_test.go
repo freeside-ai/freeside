@@ -29,9 +29,10 @@ const (
 	agentTestPastedName = "sk-ant-oat01-fixture-not-a-token"
 )
 
-// addSecondAgent seeds a second adopted Claude identity and adds an agent on
-// it to the tree, so a task line can name an agent other than the lineup's.
-// It returns that identity and its enrollment.
+// addSecondAgent seeds a second adopted Claude identity and names
+// agentTestSecondAgent the implementer's model and effort on its enrollment,
+// so a task line can select other than the lineup. It returns that identity
+// and its enrollment.
 func (f *agentAdmissionFixture) addSecondAgent(t *testing.T) (domain.AuthIdentity, domain.ClientEnrollment) {
 	t.Helper()
 	ctx := context.Background()
@@ -66,25 +67,9 @@ func (f *agentAdmissionFixture) addSecondAgent(t *testing.T) (domain.AuthIdentit
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tree := f.selection.Tree
-	tree.Agents = append(slices.Clone(tree.Agents), domain.AgentSource{
-		Name: agentTestSecondAgent, Enrollment: string(enrollment.ID), Route: enrollment.Route,
-		Adapter: agentbaseline.ClaudeAdapterName, Offer: agentTestWriterAgent,
-		Effort: domain.EffortHigh,
-	})
-	tree.Sort()
-	files, err := agenttree.Render(tree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.selection.LineupRevision, err = agenttree.Revision(files); err != nil {
-		t.Fatal(err)
-	}
-	if f.selection.Tree, err = agenttree.Parse(files); err != nil {
-		t.Fatal(err)
-	}
-	selection := f.selection
-	f.engine.admission.environment.Agents = &selection
+	writer := *f.lineSelection(t, agentTestWriterAgent)
+	writer.EnrollmentID = enrollment.ID
+	f.nameSelection(agentTestSecondAgent, writer)
 	return identity, enrollment
 }
 
@@ -141,11 +126,9 @@ func (f *agentAdmissionFixture) appendLine(t *testing.T, in domain.TaskLineInput
 	return line
 }
 
-// submitLine records a line on the fixture run's task as submit_task does:
-// set by a recorded command that created the task and carried the line, at
-// the task's creation instant. Each role gets its own command so that a test
-// can give several roles a line.
-func (f *agentAdmissionFixture) submitLine(t *testing.T, role domain.RoleName, agent string) domain.TaskLine {
+// submitLegacyLine records a v1 line naming a tree agent on the fixture
+// run's task, as submit_task did before task lines held selections (#2734).
+func (f *agentAdmissionFixture) submitLegacyLine(t *testing.T, role domain.RoleName, agent string) domain.TaskLine {
 	t.Helper()
 	commandID := agentTestSubmitCommand + "-" + string(role)
 	f.recordSubmitCommand(t, commandID, f.run.ID, domain.TaskLineChoice{Role: role, Agent: agent})
@@ -156,9 +139,12 @@ func (f *agentAdmissionFixture) submitLine(t *testing.T, role domain.RoleName, a
 	}, task.CreatedAt)
 }
 
-// submitLineV2 records the v2 line a submission choosing the named agent writes
-// now: the selection the agent reduces to in the fixture's tree.
-func (f *agentAdmissionFixture) submitLineV2(t *testing.T, role domain.RoleName, agent string) domain.TaskLine {
+// submitLine records a line on the fixture run's task as submit_task does:
+// set by a recorded command that created the task and carried the line, at
+// the task's creation instant, holding the named selection
+// (nameSelection). Each role gets its own command so that a test can give
+// several roles a line.
+func (f *agentAdmissionFixture) submitLine(t *testing.T, role domain.RoleName, agent string) domain.TaskLine {
 	t.Helper()
 	commandID := agentTestSubmitCommand + "-" + string(role)
 	selection := f.lineSelection(t, agent)
@@ -232,10 +218,7 @@ func TestTaskLineAdmissionBindsTheLinesAgent(t *testing.T) {
 	if binding.SelectionSource != domain.AgentSelectionSourceTaskLine || binding.SelectionRecordID != line.ID {
 		t.Fatalf("selection = %q %q, want the task line %s", binding.SelectionSource, binding.SelectionRecordID, line.ID)
 	}
-	selection, err := f.selection.Tree.SelectionOfAgent(agentTestSecondAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	selection := *f.lineSelection(t, agentTestSecondAgent)
 	lineup, err := f.selection.Tree.ResolveLineup()
 	if err != nil {
 		t.Fatal(err)
@@ -328,9 +311,9 @@ func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
 		_, enrollment := f.addSecondAgent(t)
 		task := f.task(t, f.run.ID)
 		line := f.appendLine(t, domain.TaskLineInput{
-			TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+			TaskID: task.ID, Role: domain.RoleImplementer, Selection: f.lineSelection(t, agentTestSecondAgent),
 			Source: domain.TaskLineSourceCLISubmit, SetBy: f.recordCLISubmission(t, "submission-1", f.run.ID,
-				domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: agentTestSecondAgent}),
+				domain.TaskLineChoice{Role: domain.RoleImplementer, Selection: f.lineSelection(t, agentTestSecondAgent)}),
 		}, task.CreatedAt)
 		admission, admitted, err := f.admit(t)
 		if err != nil || !admitted {
@@ -357,11 +340,16 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 		}
 		return "run-other"
 	}
+	// pasted is a selection on the second enrollment whose model is operator
+	// text a credential can be pasted into.
+	pasted := func(suffix string) *domain.TaskLineSelection {
+		return &domain.TaskLineSelection{EnrollmentID: agentTestSecondEnrollment, ModelID: agentTestPastedName + suffix, Effort: "high"}
+	}
 	// line appends an implementer line naming the second agent, which admits.
 	line := func(t *testing.T, f *agentAdmissionFixture, source domain.TaskLineSource, setBy string, setAt time.Time) {
 		t.Helper()
 		f.appendLine(t, domain.TaskLineInput{
-			TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+			TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Selection: f.lineSelection(t, agentTestSecondAgent),
 			Source: source, SetBy: setBy,
 		}, setAt)
 	}
@@ -370,13 +358,6 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 		setup func(t *testing.T, f *agentAdmissionFixture)
 		want  string
 	}{
-		{
-			name: "the line names an agent the tree lacks",
-			setup: func(t *testing.T, f *agentAdmissionFixture) {
-				f.submitLine(t, domain.RoleImplementer, agentTestPastedName)
-			},
-			want: "names an agent the tree lacks",
-		},
 		{
 			name: "the line's agent runs under a disabled identity",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
@@ -449,17 +430,17 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 		},
 		{
 			// The swapped-agent attack: a real command, the right instant,
-			// and another credential. Both agents are pasted text, so the
+			// and another selection. Both models are pasted text, so the
 			// loop's check also proves the refusal repeats neither.
 			name: "the command recorded another agent for the role",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID, domain.TaskLineChoice{
-					Role: domain.RoleImplementer, Agent: agentTestPastedName + "-recorded",
+					Role: domain.RoleImplementer, Selection: pasted("-recorded"),
 				})
 				task := f.task(t, f.run.ID)
 				f.appendLine(t, domain.TaskLineInput{
-					TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestPastedName,
+					TaskID: task.ID, Role: domain.RoleImplementer, Selection: pasted(""),
 					Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
 				}, task.CreatedAt)
 			},
@@ -470,11 +451,11 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				identity := f.recordCLISubmission(t, "submission-1", f.run.ID, domain.TaskLineChoice{
-					Role: domain.RoleImplementer, Agent: agentTestPastedName + "-recorded",
+					Role: domain.RoleImplementer, Selection: pasted("-recorded"),
 				})
 				task := f.task(t, f.run.ID)
 				f.appendLine(t, domain.TaskLineInput{
-					TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestPastedName,
+					TaskID: task.ID, Role: domain.RoleImplementer, Selection: pasted(""),
 					Source: domain.TaskLineSourceCLISubmit, SetBy: identity,
 				}, task.CreatedAt)
 			},
@@ -485,7 +466,7 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID, domain.TaskLineChoice{
-					Role: domain.RoleReviewer, Agent: agentTestSecondAgent,
+					Role: domain.RoleReviewer, Selection: f.lineSelection(t, agentTestSecondAgent),
 				})
 				line(t, f, domain.TaskLineSourceSubmitTask, agentTestSubmitCommand, f.task(t, f.run.ID).CreatedAt)
 			},
@@ -496,7 +477,7 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				identity := f.recordCLISubmission(t, "submission-1", f.run.ID, domain.TaskLineChoice{
-					Role: domain.RoleReviewer, Agent: agentTestSecondAgent,
+					Role: domain.RoleReviewer, Selection: f.lineSelection(t, agentTestSecondAgent),
 				})
 				line(t, f, domain.TaskLineSourceCLISubmit, identity, f.task(t, f.run.ID).CreatedAt)
 			},
@@ -512,7 +493,7 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 				f.changeLine(t, domain.RoleImplementer, agentTestWriterAgent, false)
 				task := f.task(t, f.run.ID)
 				f.appendLine(t, domain.TaskLineInput{
-					TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+					TaskID: task.ID, Role: domain.RoleImplementer, Selection: f.lineSelection(t, agentTestSecondAgent),
 					Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand + "-" + string(domain.RoleImplementer),
 				}, task.CreatedAt)
 			},
@@ -807,7 +788,7 @@ func TestProposalTaskLineAnchorRefusals(t *testing.T) {
 				}
 			}
 			f.appendLine(t, domain.TaskLineInput{
-				TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+				TaskID: task.ID, Role: domain.RoleImplementer, Selection: f.lineSelection(t, agentTestSecondAgent),
 				Source: domain.TaskLineSourceProposalStart, SetBy: setBy,
 			}, setAt)
 			runID := proposalAdmissionPolicy(t).RunID
@@ -893,10 +874,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		f.submitLine(t, role, agentTestSecondAgent)
 	}
 	tree := f.selection.Tree
-	writer, err := tree.SelectionOfAgent(agentTestWriterAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writer := *f.lineSelection(t, agentTestWriterAgent)
 	prompt := agentTestDigest("a")
 	tree.Lineup = slices.Clone(tree.Lineup)
 	for _, role := range []domain.RoleName{domain.RoleShadowReviewer, domain.RoleTaskNamer} {
@@ -983,48 +961,30 @@ const agentTestEscalatedAgent = "claude-escalated"
 // agentTestEscalatedModel is the escalated counterpart's own model.
 const agentTestEscalatedModel = "claude-escalated-test"
 
-// addEscalatedSpecifier adds to the tree an escalated counterpart of the
-// specifier's lineup agent, on the same enrollment and adapter with an offer
-// of its own, and, when withLine, the escalated line pairing the two.
+// addEscalatedSpecifier names agentTestEscalatedAgent an escalated
+// counterpart of the specifier's lineup selection, on the same enrollment and
+// effort with a model of its own, and, when withLine, adds the escalated line
+// naming it to the lineup.
 func (f *agentAdmissionFixture) addEscalatedSpecifier(t *testing.T, withLine bool) {
 	t.Helper()
 	f.addEscalatedSpecifierOn(t, withLine, agentTestEscalatedModel)
 }
 
-// addEscalatedSpecifierOn is addEscalatedSpecifier with the counterpart's
-// offer on model.
+// addEscalatedSpecifierOn is addEscalatedSpecifier with the counterpart on
+// model.
 func (f *agentAdmissionFixture) addEscalatedSpecifierOn(t *testing.T, withLine bool, model string) {
 	t.Helper()
 	tree := f.selection.Tree
-	specifierAgent := agentbaseline.WriterAgentName(domain.RoleSpecifier)
-	specifier, ok := tree.Agent(specifierAgent)
-	if !ok {
-		t.Fatalf("the tree has no specifier agent %s", specifierAgent)
-	}
-	offers := slices.Clone(tree.Offers)
-	i := slices.IndexFunc(offers, func(o agenttree.Offer) bool { return o.Name == specifier.Offer })
-	if i < 0 {
-		t.Fatalf("the tree has no offer %s", specifier.Offer)
-	}
-	offer := offers[i]
-	offer.Name = agentTestEscalatedAgent
-	offer.Fragment.RouteModelID = model
-	var err error
-	if offer.Fragment.Digest, err = offer.Fragment.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	tree.Offers = append(offers, offer)
-	escalated := specifier
-	escalated.Name, escalated.Offer = agentTestEscalatedAgent, offer.Name
-	tree.Agents = append(slices.Clone(tree.Agents), escalated)
-	tree.Sort()
+	escalated := *f.lineSelection(t, agentTestSpecifierAgent)
+	escalated.ModelID = model
+	f.nameSelection(agentTestEscalatedAgent, escalated)
 	if withLine {
 		line, err := lineupLine(tree, domain.RoleSpecifier)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The counterpart runs the escalated agent's model on the
-		// specifier's own enrollment and effort.
+		// The counterpart runs the escalated model on the specifier's own
+		// enrollment and effort.
 		line.Names.Model = model
 		key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, line.Names.Enrollment)
 		if err != nil {
@@ -1110,7 +1070,7 @@ func TestTriageTaskLineAdmitsTheEscalatedSpecifier(t *testing.T) {
 		TaskID: task.ID, Outcome: domain.TriageOutcomeCallFailed, Escalated: true, RecordedAt: agentTestAt,
 	})
 	line := f.appendLine(t, domain.TaskLineInput{
-		TaskID: task.ID, Role: domain.RoleSpecifier, Agent: agentTestEscalatedAgent,
+		TaskID: task.ID, Role: domain.RoleSpecifier, Selection: f.lineSelection(t, agentTestEscalatedAgent),
 		Source: domain.TaskLineSourceTriage, SetBy: string(task.ID),
 	}, agentTestAt)
 
@@ -1200,7 +1160,7 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 				setBy = string(task.ID)
 			}
 			in := domain.TaskLineInput{
-				TaskID: task.ID, Role: tc.role, Agent: tc.agent, Source: domain.TaskLineSourceTriage, SetBy: setBy,
+				TaskID: task.ID, Role: tc.role, Selection: f.lineSelection(t, tc.agent), Source: domain.TaskLineSourceTriage, SetBy: setBy,
 			}
 			if tc.prior {
 				f.appendLine(t, in, agentTestAt)

@@ -4,13 +4,14 @@ import SwiftUI
 /// Settings' Agents pane on both platforms (`SettingsPaneView`), drawn as
 /// the 4 Nov 2026 handoff's "Settings Agents" frame: the routing policy
 /// (plan §5.4), which enrollment takes a new task for each role when the
-/// operator chose none, read from sync and changed as a saved command, then
-/// the daemon's agent tree, read-only. A popup per role puts the chosen
+/// operator chose none, read from sync and changed as a saved command. A
+/// popup per role puts the chosen
 /// enrollment first and saves at once; `Change order…` opens
 /// `RoutingPolicyEditor` as a sheet. The drain-first popup picks among the
 /// pools ordered enrollments sit on. A revision set before policies ordered
-/// enrollments reads its agent names until the operator changes it. The
-/// lineup itself still changes through the committed agent tree.
+/// enrollments reads its agent names, which order nothing since #2599, until
+/// the operator changes it. The lineup itself still changes through the
+/// committed agent tree.
 struct RoutingPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -35,7 +36,6 @@ struct RoutingPolicyView: View {
                     "A new task goes to the role's agent whose weekly usage resets soonest; the order decides when no reset is known."
             )
             routing
-            agentTree
         }
         .sheet(isPresented: editing) {
             ScrollView { RoutingPolicyEditor(model: model) }
@@ -185,61 +185,30 @@ struct RoutingPolicyView: View {
     }
 
     /// The enrollments the popup's roles order that the daemon no longer
-    /// holds, and the agent names an older revision orders that the catalog
-    /// no longer carries (a change drops them), each once. Without a catalog
-    /// none is called missing.
+    /// holds, and the agent names an older revision orders, which order
+    /// nothing since #2599 (a change drops them), each once. Without a
+    /// catalog none is called missing.
     private func missingEntries(_ popup: RoutingPopup) -> String? {
         guard let catalog = model.catalog else { return nil }
         let held = Set(catalog.enrollments.map(\.enrollment_id))
-        let known = Set(catalog.agents.map(\.name))
         let roles = popup.roles.compactMap { role in model.policy?.roles.first { $0.role == role } }
         func unique(_ entries: [String]) -> [String] {
             var seen = Set<String>()
             return entries.filter { seen.insert($0).inserted }
         }
         let enrollments = unique(roles.flatMap { $0.enrollments ?? [] }.filter { !held.contains($0) })
-        let agents = unique(roles.flatMap { $0.agents ?? [] }.filter { !known.contains($0) })
+        let agents = unique(roles.flatMap { $0.agents ?? [] })
         let lines =
             (enrollments.isEmpty ? [] : ["\(enrollments.joined(separator: ", ")) \(Self.notHeld)"])
-            + (agents.isEmpty ? [] : ["\(agents.joined(separator: ", ")) not in the agent tree"])
+            + (agents.isEmpty ? [] : ["\(Self.ordersNothing): \(agents.joined(separator: ", "))"])
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-
-    // MARK: Agent tree
-
-    @ViewBuilder private var agentTree: some View {
-        SettingsSection(keyword: "Agent tree") {
-            if let catalog = model.catalog {
-                SettingsGroup(elements: catalog.agents, id: \.name) { entry in
-                    SettingsRow(label: entry.name, line: AgentChoiceDisplay.facts(entry)) {
-                        if let pool = model.pool(for: entry) {
-                            Text(pool)
-                                .font(FreesideFont.monoValue)
-                                .foregroundStyle(Color.inkDim)
-                                .accessibilityLabel("Pool \(pool)")
-                        }
-                    }
-                }
-            } else {
-                dimLine("The daemon has no agent tree.")
-            }
-        }
-        if model.catalog != nil {
-            dimLine("The tree itself changes through the committed agent tree, not here.")
-        }
-    }
-
-    private func dimLine(_ text: String) -> some View {
-        Text(text)
-            .font(FreesideFont.cardBody)
-            .foregroundStyle(Color.inkDim)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Shared words
 
     static let staleAccount = "No ordered enrollment is on this account."
     static let notHeld = "not an enrollment the daemon holds"
+    static let ordersNothing = "Agent names order nothing; choose enrollments"
 
     /// The pool's provider and plan, as Account usage heads its card.
     static func poolDetail(_ pool: Components.Schemas.UsagePoolUsage) -> String {

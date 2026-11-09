@@ -170,7 +170,7 @@ func TestValidateReviewAdmissionDerivations(t *testing.T) {
 		enrollment domain.ClientEnrollment, generationEntry domain.EnrollmentGeneration,
 	) error {
 		return domain.ValidateReviewAdmissionDerivations(
-			a, selection, adapter, route, launch, enrollment, generationEntry, derivationIdentity(t))
+			a, selection, adapter, route, launch, enrollment, generationEntry, selectionInput(t).Identity)
 	}
 	admission, selection, adapter, route, launch, enrollment, generationEntry := reviewAdmissionClosure(t)
 	if err := check(admission, selection, adapter, route, launch, enrollment, generationEntry); err != nil {
@@ -194,7 +194,7 @@ func TestValidateReviewAdmissionDerivations(t *testing.T) {
 		Names: domain.AgentSelectionNames{
 			Enrollment: string(enrollment.ID), Model: selection.ModelID, Effort: "high",
 		},
-		Identity: derivationIdentity(t), Enrollment: enrollment, Adapter: adapter,
+		Identity: selectionInput(t).Identity, Enrollment: enrollment, Adapter: adapter,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,17 +8,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// selectionAgent is the shared resolution's agent with the fragments it pins.
-func selectionAgent(t *testing.T) (domain.AgentResolutionInput, domain.AgentDefinition) {
-	t.Helper()
-	in := agentResolution(t)
-	agent, err := domain.ResolveAgentDefinition(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return in, agent
-}
-
 // selectionCatalog is a catalog for the shared enrollment that lists the
 // shared offer's model with the Codex efforts.
 func selectionCatalog(enrollmentID domain.ClientEnrollmentID) *domain.DiscoveredModelCatalog {
@@ -34,13 +23,16 @@ func selectionCatalog(enrollmentID domain.ClientEnrollmentID) *domain.Discovered
 
 func selectionInput(t *testing.T) domain.AgentSelectionInput {
 	t.Helper()
-	in := agentResolution(t)
+	identity := authIdentity()
+	identity.AccountBinding = "acct-1"
+	identity.Enabled = true
+	e := enrollment()
 	return domain.AgentSelectionInput{
 		Names: domain.AgentSelectionNames{
-			Enrollment: string(in.Enrollment.ID), Model: "gpt-5.6-sol", Effort: "xhigh",
+			Enrollment: string(e.ID), Model: "gpt-5.6-sol", Effort: "xhigh",
 		},
-		Identity: in.Identity, Enrollment: in.Enrollment, Adapter: in.Adapter,
-		Catalog: selectionCatalog(in.Enrollment.ID),
+		Identity: identity, Enrollment: e, Adapter: adapterFragment(t),
+		Catalog: selectionCatalog(e.ID),
 	}
 }
 
@@ -75,36 +67,6 @@ func TestAgentSelectionDigest(t *testing.T) {
 	}
 }
 
-func TestReduceAgentSelection(t *testing.T) {
-	t.Parallel()
-	in, agent := selectionAgent(t)
-	offer := in.Offer
-	reduced, err := domain.ReduceAgentSelection(agent, in.Adapter, offer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Codex has no max: the agent's max reduces to the xhigh it sends.
-	if reduced.EnrollmentID != in.Enrollment.ID || reduced.ModelID != offer.RouteModelID ||
-		reduced.Effort != "xhigh" || reduced.AdapterDigest != in.Adapter.Digest {
-		t.Fatalf("reduced = %+v", reduced)
-	}
-	resolved, err := domain.ResolveAgentSelection(selectionInput(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved != reduced {
-		t.Fatalf("resolved %+v, the agent reduces to %+v", resolved, reduced)
-	}
-	other := adapterFragment(t)
-	other.AdapterBuild = "codex_proto_v2@build-1"
-	if other.Digest, err = other.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := domain.ReduceAgentSelection(agent, other, offer); !errors.Is(err, domain.ErrAgentJoinInvalid) {
-		t.Fatalf("an adapter the agent does not pin = %v, want ErrAgentJoinInvalid", err)
-	}
-}
-
 func TestResolveAgentSelectionRefusals(t *testing.T) {
 	t.Parallel()
 	claudeAdapter := adapterFragment(t)
@@ -134,6 +96,11 @@ func TestResolveAgentSelectionRefusals(t *testing.T) {
 		{"another enrollment", func(in *domain.AgentSelectionInput) {
 			in.Names.Enrollment = "enroll-2"
 		}, domain.ErrAgentJoinInvalid},
+		// An enrollment bound to another account would carry this identity's
+		// credential onto it.
+		{"a credential for another account", func(in *domain.AgentSelectionInput) {
+			in.Enrollment.AccountBinding = "acct-2"
+		}, domain.ErrAccountBindingMismatch},
 		{"an adapter for another client kind", func(in *domain.AgentSelectionInput) {
 			in.Adapter = claudeAdapter
 		}, domain.ErrAgentJoinInvalid},
@@ -152,6 +119,15 @@ func TestResolveAgentSelectionRefusals(t *testing.T) {
 		{"no effort", func(in *domain.AgentSelectionInput) {
 			in.Names.Effort = ""
 		}, domain.ErrEmptyField},
+		{"an allow list that omits the model", func(in *domain.AgentSelectionInput) {
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListAllow, Models: []string{"gpt-5.6-mini"}}
+		}, domain.ErrAgentJoinInvalid},
+		{"a deny list that names the model", func(in *domain.AgentSelectionInput) {
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListDeny, Models: []string{"gpt-5.6-sol"}}
+		}, domain.ErrAgentJoinInvalid},
+		{"a model list with no model", func(in *domain.AgentSelectionInput) {
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListAllow}
+		}, domain.ErrInvalidRouteModelList},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -212,6 +188,18 @@ func TestResolveAgentSelectionAdmits(t *testing.T) {
 		}, false},
 		// An entry with the exact id wins over an alias resolving to it, so
 		// the alias's efforts don't widen the exact entry's.
+		{"an allow list that names the model", func(in *domain.AgentSelectionInput) {
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListAllow, Models: []string{"gpt-5.6-mini", "gpt-5.6-sol"}}
+		}, true},
+		{"a deny list that omits the model", func(in *domain.AgentSelectionInput) {
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListDeny, Models: []string{"gpt-5.6-mini"}}
+		}, true},
+		// The list matches the id as the selection names it: denying the
+		// alias does not deny the model it resolves to.
+		{"a deny list naming an alias of the model", func(in *domain.AgentSelectionInput) {
+			in.Catalog.Models[0].ID, in.Catalog.Models[0].ResolvedModel = "sol", new("gpt-5.6-sol")
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListDeny, Models: []string{"sol"}}
+		}, true},
 		{"an exact id shadows an alias resolving to it", func(in *domain.AgentSelectionInput) {
 			alias := in.Catalog.Models[0]
 			alias.ID, alias.ResolvedModel = "sol", new("gpt-5.6-sol")
@@ -251,6 +239,38 @@ func TestResolveAgentSelectionAdmits(t *testing.T) {
 			t.Fatalf("native default at an effort claude_code has no native value for = %v", err)
 		}
 	})
+}
+
+func TestRouteModelList(t *testing.T) {
+	t.Parallel()
+	allow := domain.RouteModelList{Mode: domain.ModelListAllow, Models: []string{"a", "b"}}
+	deny := domain.RouteModelList{Mode: domain.ModelListDeny, Models: []string{"a"}}
+	for _, tc := range []struct {
+		list  domain.RouteModelList
+		model string
+		want  bool
+	}{
+		{allow, "a", true}, {allow, "c", false}, {deny, "a", false}, {deny, "c", true},
+	} {
+		if got := tc.list.Admits(tc.model); got != tc.want {
+			t.Errorf("%s %v admits %q = %v, want %v", tc.list.Mode, tc.list.Models, tc.model, got, tc.want)
+		}
+	}
+	for name, list := range map[string]domain.RouteModelList{
+		"unknown mode": {Mode: "only", Models: []string{"a"}},
+		"no model":     {Mode: domain.ModelListDeny},
+		"duplicate":    {Mode: domain.ModelListAllow, Models: []string{"a", "a"}},
+		"empty model":  {Mode: domain.ModelListAllow, Models: []string{""}},
+		"option model": {Mode: domain.ModelListAllow, Models: []string{"-a"}},
+		"spaced model": {Mode: domain.ModelListAllow, Models: []string{"a b"}},
+	} {
+		if err := list.Validate(); !errors.Is(err, domain.ErrInvalidRouteModelList) {
+			t.Errorf("%s: Validate() = %v, want %v", name, err, domain.ErrInvalidRouteModelList)
+		}
+	}
+	if err := allow.Validate(); err != nil {
+		t.Errorf("allow list: %v", err)
+	}
 }
 
 func TestSelectAdapterForLaunch(t *testing.T) {

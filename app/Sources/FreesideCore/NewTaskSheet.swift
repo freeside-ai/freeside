@@ -721,8 +721,9 @@ struct NewTaskSheet: View {
             ?? "Default agents"
         // An open chip stays enabled so it can close, even once clearing
         // the last stale choice leaves nothing to choose. A daemon with no
-        // tree serves a catalog with no agents, so there is nothing to choose.
-        let unavailable = (model.agentCatalog?.agents.isEmpty ?? true) && choices.isEmpty && !agentsOpen
+        // tree serves a catalog with no lineup revision, so there is nothing
+        // to choose.
+        let unavailable = model.agentCatalog?.lineup_revision == nil && choices.isEmpty && !agentsOpen
         let chip = ComposerChip(glyph: "◆", text: agentsOpen ? "Agents" : summary, isOpen: agentsOpen)
             .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         if rendersInteractiveControls {

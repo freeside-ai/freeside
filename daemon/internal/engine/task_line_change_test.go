@@ -252,7 +252,7 @@ func TestAskingForTheCurrentLineRecordsNothing(t *testing.T) {
 		}
 	}
 	unchanged("a clear of a role with no line", domain.RoleImplementer, "", true)
-	line := f.submitLineV2(t, domain.RoleImplementer, agentTestSecondAgent)
+	line := f.submitLine(t, domain.RoleImplementer, agentTestSecondAgent)
 	unchanged("the same agent", domain.RoleImplementer, agentTestSecondAgent, false)
 	if got := f.changeLine(t, domain.RoleImplementer, agentTestSecondAgent, false); got.Line == nil || got.Line.ID != line.ID {
 		t.Errorf("the report names %+v, want the current line %s", got.Line, line.ID)
@@ -269,7 +269,7 @@ func TestChangeIsRefusedWhileItsRoleRuns(t *testing.T) {
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
-	line := f.submitLineV2(t, domain.RoleImplementer, agentTestWriterAgent)
+	line := f.submitLine(t, domain.RoleImplementer, agentTestWriterAgent)
 	admission, admitted, err := f.admit(t)
 	if err != nil || !admitted {
 		t.Fatalf("admitAttempt = %t, %v", admitted, err)
@@ -620,7 +620,9 @@ func TestReviewerLineChangeLeavesARefusal(t *testing.T) {
 	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	routed, _ := f.reviewTree(t)
-	refused := f.submitLine(t, domain.RoleReviewer, "not-in-the-tree")
+	refused := f.submitLineSelection(t, domain.RoleReviewer, &domain.TaskLineSelection{
+		EnrollmentID: "enroll-foreign", ModelID: "model-foreign", Effort: "high",
+	})
 	if _, err := f.admitReview(t, routed); !errors.Is(err, ErrAgentNotAdmissible) {
 		t.Fatalf("the refused line admits: %v", err)
 	}
@@ -655,15 +657,15 @@ func TestClearedReviewerLineReviewsFromTheLineup(t *testing.T) {
 	}
 }
 
-// TestASelectionSupersedesAV1Head: the change path reads no tree, so a v1
-// head, which names an agent, never equals a requested selection, even the
-// one its agent reduces to. Asking for it records a v2 version that admits
-// the same agent; #2599 converts the v1 rows that make this reachable.
+// TestASelectionSupersedesAV1Head: a v1 head, which names an agent, never
+// equals a requested selection, so asking for any selection records a v2
+// version over it. That is the way out the v1 refusal names: admission then
+// admits the new version.
 func TestASelectionSupersedesAV1Head(t *testing.T) {
 	t.Parallel()
 	f := newAgentAdmissionFixture(t)
 	f.addSecondAgent(t)
-	v1 := f.submitLine(t, domain.RoleImplementer, agentTestSecondAgent)
+	v1 := f.submitLegacyLine(t, domain.RoleImplementer, agentTestSecondAgent)
 	result := f.changeLine(t, domain.RoleImplementer, agentTestSecondAgent, false)
 	if !result.Recorded || result.Line == nil || result.Line.Encoding != domain.TaskLineEncodingV2 ||
 		result.Line.PredecessorID == nil || *result.Line.PredecessorID != v1.ID ||

@@ -17,10 +17,9 @@ import (
 // model-effort.md): an enrollment, a model the enrollment's harness offers,
 // an effort that model reports, and the adapter the launch shape picks. The
 // route is not part of it, because the enrollment fixes the route; no name
-// is part of it either. The agent document stays beside it until the tree
-// format drops it (#2599): a tree agent reduces to the selection it stands
-// for (ReduceAgentSelection), and admission refuses an agent whose
-// reduction is not the selection resolution produces.
+// is part of it either. A route may narrow the models its enrollments run
+// with an operator-authored list (RouteModelList); the list is a refusal leg
+// of resolution and never part of the selection's identity.
 //
 // This is unrelated to engine.AgentSelection, the engine's lineup-admission
 // configuration, and to AgentSelectionSource, which records which record
@@ -176,6 +175,74 @@ type AgentSelectionInput struct {
 	Enrollment ClientEnrollment
 	Adapter    AdapterFragment
 	Catalog    *DiscoveredModelCatalog
+	// Models is the enrollment's route's model list, nil when the route has
+	// none, which admits every model the rest of resolution admits.
+	Models *RouteModelList
+}
+
+// ModelListMode is how a route's model list reads its ids: allow admits only
+// the listed models, deny admits every model but the listed ones.
+type ModelListMode string
+
+const (
+	ModelListAllow ModelListMode = "allow"
+	ModelListDeny  ModelListMode = "deny"
+)
+
+// AllModelListModes lists every valid ModelListMode.
+var AllModelListModes = []ModelListMode{ModelListAllow, ModelListDeny}
+
+func (m ModelListMode) valid() bool {
+	switch m {
+	case ModelListAllow, ModelListDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// RouteModelList is one route's operator-authored allow or deny list over
+// the models its enrollments discover (the tree's models/<route> file). It
+// matches the model id exactly as the selection names it, so a list naming
+// a catalog entry's alias and a selection naming the model the alias
+// resolves to are different ids.
+type RouteModelList struct {
+	Mode   ModelListMode
+	Models []string
+}
+
+// Validate reports whether the list has a known mode and at least one model,
+// with no duplicate and each a value a launch can pass as one option.
+func (l RouteModelList) Validate() error {
+	if !l.Mode.valid() {
+		return fmt.Errorf("route model list mode %q: %w", l.Mode, ErrInvalidRouteModelList)
+	}
+	if len(l.Models) == 0 {
+		return fmt.Errorf("route model list models: %w", ErrInvalidRouteModelList)
+	}
+	seen := make(map[string]struct{}, len(l.Models))
+	for _, model := range l.Models {
+		if model == "" || !ValidLaunchOptionValue(model) {
+			return fmt.Errorf("route model list model %q: %w", model, ErrInvalidRouteModelList)
+		}
+		if _, dup := seen[model]; dup {
+			return fmt.Errorf("route model list model %q repeated: %w", model, ErrInvalidRouteModelList)
+		}
+		seen[model] = struct{}{}
+	}
+	return nil
+}
+
+// Admits reports whether the list lets a selection name model.
+func (l RouteModelList) Admits(model string) bool {
+	listed := slices.Contains(l.Models, model)
+	switch l.Mode {
+	case ModelListAllow:
+		return listed
+	case ModelListDeny:
+		return !listed
+	}
+	return false
 }
 
 // ResolveAgentSelection builds and validates the selection the names stand
@@ -183,8 +250,9 @@ type AgentSelectionInput struct {
 // identity, an enrollment other than the one named, an adapter for another
 // client kind, a model or effort a launch could not pass as one option, a
 // model the catalog lacks (by id, or by the model an entry resolves to), or
-// an effort the model does not report. Errors quote the operator's names,
-// never the catalog's harness-reported strings.
+// an effort the model does not report, or a model the route's model list
+// does not admit. Errors quote the operator's names, never the catalog's
+// harness-reported strings.
 //
 // The reserved ClaudeCodeNativeDefaultRouteModelID names no catalog model:
 // it is accepted only for a claude_code enrollment, and then with an effort
@@ -232,6 +300,15 @@ func ResolveAgentSelection(in AgentSelectionInput) (AgentSelection, error) {
 	}
 	if !ValidLaunchOptionValue(in.Names.Effort) {
 		return fail("the effort is not a value a launch can pass as one option")
+	}
+	if in.Models != nil {
+		if err := in.Models.Validate(); err != nil {
+			return AgentSelection{}, fmt.Errorf("agent selection model list: %w", err)
+		}
+		if !in.Models.Admits(in.Names.Model) {
+			return fail("route %s's model list (models/%s) does not admit the model",
+				in.Enrollment.Route, in.Enrollment.Route)
+		}
 	}
 	if in.Catalog != nil {
 		if err := in.Catalog.Validate(); err != nil {
@@ -324,25 +401,6 @@ func nativeEfforts(client HarnessClientKind) []string {
 		}
 	}
 	return efforts
-}
-
-// ReduceAgentSelection is the selection a resolved agent document stands
-// for: its enrollment, its offer's route model id, the effort its adapter
-// translates to (so a Codex max reduces to xhigh), and its adapter. The
-// adapter and offer must be the ones the agent pins.
-func ReduceAgentSelection(agent AgentDefinition, adapter AdapterFragment, offer OfferFragment) (AgentSelection, error) {
-	if agent.AdapterDigest != adapter.Digest || agent.OfferDigest != offer.Digest {
-		return AgentSelection{}, fmt.Errorf(
-			"agent %s selection: adapter or offer is not the one the agent pins: %w", agent.Name, ErrAgentJoinInvalid)
-	}
-	effort, err := TranslateEffort(adapter.ClientKind, agent.Effort)
-	if err != nil {
-		return AgentSelection{}, fmt.Errorf("agent %s selection: %w", agent.Name, err)
-	}
-	return sealAgentSelection(AgentSelection{
-		EncodingVersion: AgentSelectionEncodingVersion, EnrollmentID: agent.EnrollmentID,
-		ModelID: offer.RouteModelID, Effort: effort.Effective(), AdapterDigest: adapter.Digest,
-	})
 }
 
 // SelectAdapterForLaunch picks, among adapters, the one for the client kind

@@ -28,7 +28,6 @@ import (
 
 const (
 	alternateRetryCommandID = "command-alternate-agent"
-	alternateRetryAgent     = "claude-second"
 	alternateRetryModel     = "claude-alternate-test"
 )
 
@@ -85,10 +84,10 @@ func (a alternateAgentIdentity) seed(t *testing.T, st *store.Store) {
 	}
 }
 
-// alternateAgentSelection is the baseline lineup on main's enrollment plus a
-// second agent on second's, at the same offer and route: only the identity,
-// and so the pool and the credential, differs. The offer outlives the real
-// clock the card is written under.
+// alternateAgentSelection is the baseline lineup on main's enrollment. The
+// alternate is the implementer's selection on second's enrollment, on the
+// same route (alternateSelection): only the identity, and so the pool and the
+// credential, differs.
 func alternateAgentSelection(
 	t *testing.T, main, second alternateAgentIdentity, implementerPrompt domain.Digest,
 ) engine.AgentSelection {
@@ -97,13 +96,12 @@ func alternateAgentSelection(
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: main.enrollment,
 		Writers: map[domain.RoleName]agentbaseline.Selection{
-			// The specifier asks its own model, so the implementer's agent is
-			// named for the implementer (agentbaseline.WriterAgentName).
+			// The specifier asks its own model, so its lineup line differs
+			// from the implementer's.
 			domain.RoleSpecifier:   {Model: "claude-specifier-test", Effort: domain.EffortHigh},
 			domain.RoleImplementer: model, domain.RoleRemediator: model,
 		},
-		TermsBasisDate: "2026-07-01", PricingRevision: "pricing-2026-07",
-		OfferNotAfter: admittedAt.Add(5 * 365 * 24 * time.Hour),
+		TermsBasisDate: "2026-07-01",
 		Prompts: map[domain.RoleName]agentbaseline.Prompt{
 			domain.RoleSpecifier:   {Name: "specifier", Digest: capabilityRetrySpecificationPrompt},
 			domain.RoleImplementer: {Name: "implementer", Digest: implementerPrompt},
@@ -113,14 +111,6 @@ func alternateAgentSelection(
 	if err != nil {
 		t.Fatal(err)
 	}
-	implementer, ok := tree.Agent(agentbaseline.WriterAgentName(domain.RoleImplementer))
-	if !ok {
-		t.Fatal("the baseline tree has no implementer agent")
-	}
-	alternate := implementer
-	alternate.Name, alternate.Enrollment = alternateRetryAgent, string(second.enrollment.ID)
-	tree.Agents = append(tree.Agents, alternate)
-	tree.Sort()
 	files, err := agenttree.Render(tree)
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +126,25 @@ func alternateAgentSelection(
 		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
 		EffectiveEgress: []string{"api.anthropic.com:443"}, AttemptBudget: time.Hour, ExpiryMargin: 5 * time.Minute,
 	}
+}
+
+// alternateSelection is the selection the operator chooses for the
+// implementer: the lineup's model and effort on second's enrollment.
+func alternateSelection(
+	t *testing.T, selection engine.AgentSelection, second alternateAgentIdentity,
+) domain.TaskLineSelection {
+	t.Helper()
+	lineup, err := selection.Tree.ResolveLineup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, ok := lineup.Line(domain.RoleImplementer)
+	if !ok {
+		t.Fatal("the baseline lineup has no implementer line")
+	}
+	chosen := line.TaskLineSelection()
+	chosen.EnrollmentID = second.enrollment.ID
+	return chosen
 }
 
 // openAlternateAgentFixture is the capability-retry composition admitting
@@ -252,10 +261,7 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read the operator's record: %v", err)
 	}
-	chosen, err := selection.Tree.SelectionOfAgent(alternateRetryAgent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chosen := alternateSelection(t, selection, second)
 	if record.Selection == nil || *record.Selection != chosen || record.ItemID != card.Item.ID ||
 		record.FailedInvocationID != failure.invocation || record.Pool != second.identity.EffectiveUsagePool() {
 		t.Fatalf("record = %+v", record)
@@ -377,11 +383,7 @@ func TestParkedTaskMovesToTheChosenAgent(t *testing.T) {
 			return err
 		}
 		moved = heads[domain.RoleImplementer]
-		movedAgent, err := selection.Tree.LineAgent(moved)
-		if err != nil {
-			return err
-		}
-		if movedAgent != alternateRetryAgent || moved.Source != domain.TaskLineSourceAlternateAgentMove ||
+		if moved.Selection == nil || *moved.Selection != alternateSelection(t, selection, second) || moved.Source != domain.TaskLineSourceAlternateAgentMove ||
 			moved.Provenance == nil || moved.Provenance.Pool != second.identity.EffectiveUsagePool() ||
 			moved.Provenance.PassedOver == nil ||
 			moved.Provenance.PassedOver.Enrollment != main.enrollment.ID {

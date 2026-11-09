@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
@@ -15,17 +14,15 @@ import (
 
 // AgentCatalog is what a client can choose for a task line, matching
 // api/openapi.yaml: every enrollment with the models the daemon discovered
-// for it, read from the store, and the committed agent tree's agents and
-// lineup, read from the tree loaded at startup. The daemon admits only
-// agents the tree carries, and a line's selection only on an enrollment it
-// holds. LineupRevision is the tree's digest, nil with no committed tree; it
+// for it, read from the store, and the committed agent tree's lineup, read
+// from the tree loaded at startup. The daemon admits a line's selection only
+// on an enrollment it holds. LineupRevision is the tree's digest, nil with no committed tree; it
 // changes only when the daemon restarts on a changed tree, which moves no
 // sync revision, so the heartbeat carries it too. A new discovery record is
 // store state and moves the sync revision.
 type AgentCatalog struct {
 	LineupRevision *domain.Digest           `json:"lineup_revision"`
 	Enrollments    []AgentCatalogEnrollment `json:"enrollments"`
-	Agents         []AgentCatalogEntry      `json:"agents"`
 	Lineup         []AgentCatalogLineupLine `json:"lineup"`
 }
 
@@ -46,24 +43,8 @@ type AgentCatalogDiscovery struct {
 	Models       []domain.DiscoveredModel `json:"models"`
 }
 
-// AgentCatalogEntry is one tree agent with its route offer's facts. Model and
-// LineageGroup carry InvocationAdmissionFacts' names because they are the
-// same facts; Effort is the source's setting, not an admission's request.
-// Selection is the tuple a task line records to run the agent, so a client
-// can send it while routing policy and offers still name agents.
-type AgentCatalogEntry struct {
-	Name         string                    `json:"name"`
-	EnrollmentID domain.ClientEnrollmentID `json:"enrollment_id"`
-	Model        string                    `json:"model"`
-	Effort       domain.EffortLevel        `json:"effort"`
-	// LineageGroup is nil when the offer declares none.
-	LineageGroup *string                  `json:"lineage_group"`
-	Selection    domain.TaskLineSelection `json:"selection"`
-}
-
 // AgentCatalogLineupLine is the selection the lineup binds to one task-line
-// role. It names no agent: a lineup line binds a selection, which need not be
-// any tree agent's.
+// role.
 type AgentCatalogLineupLine struct {
 	Role      domain.RoleName          `json:"role"`
 	Selection domain.TaskLineSelection `json:"selection"`
@@ -71,47 +52,14 @@ type AgentCatalogLineupLine struct {
 
 // AgentCatalogOf projects a parsed tree at its revision: the catalog's tree
 // half, with no enrollments, which the bootstrap reads from the store
-// (agentCatalogSnapshot). Agents come in name order and the lineup in
-// domain.TaskLineRoles order, with no entry for a role the lineup leaves
+// (agentCatalogSnapshot). The lineup comes in domain.TaskLineRoles order, with no entry for a role the lineup leaves
 // unbound. A parsed tree always resolves, so an error means the tree was not
 // one Parse accepted.
 func AgentCatalogOf(tree agenttree.Tree, revision domain.Digest) (AgentCatalog, error) {
 	catalog := AgentCatalog{
 		LineupRevision: &revision,
-		Agents:         make([]AgentCatalogEntry, 0, len(tree.Agents)),
 		Lineup:         make([]AgentCatalogLineupLine, 0, len(domain.TaskLineRoles)),
 	}
-	for _, agent := range tree.Agents {
-		// The offer is looked up under the agent's own route, as the tree's
-		// own closure does: an offer of the same name under another route is
-		// another offer.
-		offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool {
-			return o.Route == agent.Route && o.Name == agent.Offer
-		})
-		if offer < 0 {
-			return AgentCatalog{}, fmt.Errorf("agent catalog: agent %s names offer %s/%s, which the tree lacks",
-				agent.Name, agent.Route, agent.Offer)
-		}
-		fragment := tree.Offers[offer].Fragment
-		selection, err := tree.SelectionOfAgent(agent.Name)
-		if err != nil {
-			return AgentCatalog{}, fmt.Errorf("agent catalog: %w", err)
-		}
-		entry := AgentCatalogEntry{
-			Name:         agent.Name,
-			EnrollmentID: domain.ClientEnrollmentID(agent.Enrollment),
-			Model:        fragment.RouteModelID,
-			Effort:       agent.Effort,
-			Selection:    selection,
-		}
-		if fragment.LineageGroup != "" {
-			group := fragment.LineageGroup
-			entry.LineageGroup = &group
-		}
-		catalog.Agents = append(catalog.Agents, entry)
-	}
-	slices.SortFunc(catalog.Agents, func(a, b AgentCatalogEntry) int { return strings.Compare(a.Name, b.Name) })
-
 	lineup, err := tree.ResolveLineup()
 	if err != nil {
 		return AgentCatalog{}, fmt.Errorf("agent catalog: %w", err)
@@ -126,15 +74,15 @@ func AgentCatalogOf(tree agenttree.Tree, revision domain.Digest) (AgentCatalog, 
 	return catalog, nil
 }
 
-// agentCatalogSnapshot is the bootstrap's catalog: tree's agents and lineup,
+// agentCatalogSnapshot is the bootstrap's catalog: tree's lineup,
 // or none with no committed tree (tree nil), beside every enrollment the
 // store holds in enrollment id order, each with its discovered catalog when
 // one is recorded. It is never nil, so a client with no tree still sees what
 // it could select.
 func agentCatalogSnapshot(ctx context.Context, tx *store.ReadTx, tree *AgentCatalog) (AgentCatalog, error) {
-	catalog := AgentCatalog{Agents: []AgentCatalogEntry{}, Lineup: []AgentCatalogLineupLine{}}
+	catalog := AgentCatalog{Lineup: []AgentCatalogLineupLine{}}
 	if tree != nil {
-		catalog.LineupRevision, catalog.Agents, catalog.Lineup = tree.LineupRevision, tree.Agents, tree.Lineup
+		catalog.LineupRevision, catalog.Lineup = tree.LineupRevision, tree.Lineup
 	}
 	identities, err := tx.ListAuthIdentities(ctx)
 	if err != nil {

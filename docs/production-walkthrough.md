@@ -587,6 +587,11 @@ composition preflight:
    `agent_tree.checkout`: the mode and content of every file under
    `policy/agents` and `policy/fragments`, and of `policy/lineup` and
    `policy/agents.lock`. On a match it goes on to the composition preflight.
+   Adoption writes nothing under `policy/agents` since #2599, so a tree
+   committed before then fails the check, and the daemon refuses it too:
+   migrate it first (`daemon/README.md`, Migrate a Tree That Carries
+   Agents). Files under `policy/models` are not compared, so a route model
+   list the operator adds survives the check.
 
 The deputy never writes to the agent-tree checkout. It applies the patch only
 in a scratch repository under its root.
@@ -641,16 +646,17 @@ judgments on, `judgment.model`, `judgment.effort`, and
 `judgment.publication_author_prompt`. It doesn't depend on the state root,
 the cost owners, or the account.
 
-Keep `agent_tree.terms_basis_date`, `agent_tree.pricing_revision`, and
-`agent_tree.offer_not_after` at the values the commit was adopted with. A
-changed value is a different tree and fails the check.
+Keep `agent_tree.terms_basis_date` at the value the commit was adopted
+with. A changed value is a different tree and fails the check.
+`agent_tree.pricing_revision` and `agent_tree.offer_not_after` are still
+read but change nothing, because the tree carries no offers since #2599.
 
 The patch creates every file, so it doesn't apply over an existing tree. To
-replace a committed tree (a renewed offer, a new review model or effort, a
-changed prompt package), remove the old one in the same commit:
+replace a committed tree (a new review model or effort, a changed prompt
+package), remove the old one in the same commit:
 
 ```sh
-git -C <agent-tree-checkout> rm -r -q policy/agents policy/fragments policy/lineup policy/agents.lock
+git -C <agent-tree-checkout> rm -r -q policy/fragments policy/lineup policy/agents.lock
 git -C <agent-tree-checkout> apply --index <root>/daemon/agent-tree.patch
 ```
 

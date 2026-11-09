@@ -236,7 +236,7 @@ func routedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReview
 // still holds a current credential, and still selects the agent the request's
 // snapshot names (engine.CheckReviewRole). The tree is fixed for the daemon's
 // run, so what can change is the store (a disabled identity, a credential that
-// expired, a task line) and the clock (an offer past its not_after).
+// expired, a task line) and the clock (a credential window that closed).
 //
 // The engine admitted the request's invocation once, before it asked the
 // source, and the request carries that snapshot. This check is not that
@@ -262,10 +262,16 @@ func reviewAdmission(
 		if admitted.Role != role || admitted.AuthIdentityID != agent.Identity.ID ||
 			admitted.AgentBinding.RouteModelID != agent.Model ||
 			admitted.AgentBinding.NativeEffort != agent.NativeEffort {
+			// The refusal is a review failure's recorded reason, so it prints
+			// neither model: either can be an operator's line, and a
+			// credential can be pasted into one. It names the line instead.
+			chose := agent.Describe()
+			if agent.TaskLine != nil {
+				chose = fmt.Sprintf("%s (task line %s)", chose, agent.TaskLine.ID)
+			}
 			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
-				"the invocation was admitted as %s under identity %s with %s, the line now selects %s under %s with %s/%s: %w",
-				admitted.Role, admitted.AuthIdentityID, admitted.ModelConfiguration(),
-				role, agent.Identity.ID, agent.Model, agent.NativeEffort, engine.ErrAgentNotAdmissible)}
+				"the invocation was admitted as %s under identity %s, the line now selects %s for %s under %s: %w",
+				admitted.Role, admitted.AuthIdentityID, chose, role, agent.Identity.ID, engine.ErrAgentNotAdmissible)}
 		}
 		return nil
 	}
@@ -456,7 +462,7 @@ func activateAgentSelection(
 	if failure != nil {
 		causes[roleCausePrefix+string(failure.Role)] = fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon admits no work "+
-				"until the admitted-agent tree and the store agree; fix the line or the enrollment and restart.",
+				"until the agent tree and the store agree; fix the line or the enrollment and restart.",
 			failure.Role, failure.Err)
 	}
 	for _, retired := range work {

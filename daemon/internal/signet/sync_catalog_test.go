@@ -41,8 +41,7 @@ func TestSyncServesComposedAgentCatalog(t *testing.T) {
 	})
 	service := signet.NewService(st, signet.WithAgentCatalog(func() *signet.AgentCatalog { return current }))
 	empty := signet.AgentCatalog{
-		Enrollments: []signet.AgentCatalogEnrollment{}, Agents: []signet.AgentCatalogEntry{},
-		Lineup: []signet.AgentCatalogLineupLine{},
+		Enrollments: []signet.AgentCatalogEnrollment{}, Lineup: []signet.AgentCatalogLineupLine{},
 	}
 	if catalog, revision := catalogSync(t, service); !reflect.DeepEqual(catalog, empty) || revision != nil {
 		t.Fatalf("before the tree loads: catalog = %+v, lineup_revision = %v, want empty lists and null both",
@@ -53,11 +52,7 @@ func TestSyncServesComposedAgentCatalog(t *testing.T) {
 	selection := domain.TaskLineSelection{EnrollmentID: "anthropic-a/claude_code", ModelID: "claude-opus-5-5", Effort: "high"}
 	current = &signet.AgentCatalog{
 		LineupRevision: &rev,
-		Agents: []signet.AgentCatalogEntry{{
-			Name: "claude-a", EnrollmentID: "anthropic-a/claude_code",
-			Model: "claude-opus-5-5", Effort: domain.EffortHigh, Selection: selection,
-		}},
-		Lineup: []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Selection: selection}},
+		Lineup:         []signet.AgentCatalogLineupLine{{Role: domain.RoleImplementer, Selection: selection}},
 	}
 	seedLineEnrollments(t, st)
 	discovered := lineSelectionOf("codex")
@@ -71,7 +66,7 @@ func TestSyncServesComposedAgentCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog, revision := catalogSync(t, service)
-	if !reflect.DeepEqual(catalog.Agents, current.Agents) || !reflect.DeepEqual(catalog.Lineup, current.Lineup) ||
+	if !reflect.DeepEqual(catalog.Lineup, current.Lineup) ||
 		catalog.LineupRevision == nil || *catalog.LineupRevision != rev {
 		t.Fatalf("bootstrap catalog = %+v, want the tree half %+v", catalog, current)
 	}
@@ -123,7 +118,7 @@ func TestSyncServesCatalogWithoutTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const catalog = `"agent_catalog":{"lineup_revision":null,"enrollments":[],"agents":[],"lineup":[]}`
+	const catalog = `"agent_catalog":{"lineup_revision":null,"enrollments":[],"lineup":[]}`
 	if !strings.Contains(string(encodedBootstrap), catalog) {
 		t.Fatalf("bootstrap = %s, want %s", encodedBootstrap, catalog)
 	}

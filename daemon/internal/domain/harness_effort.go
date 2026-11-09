@@ -142,43 +142,11 @@ func ClaudeCodeLaunchModel(routeModelID string) string {
 	return routeModelID
 }
 
-// AgentLaunchSelection is the model and effort an admitted agent's launch
-// passes, as the admission's agent binding records them. Every field empty
-// means the launch passes neither, which only the Claude native-default
-// offer at harness_default derives. A codex_cli agent always names a model.
+// AgentLaunchSelection is the model and effort an admitted call's launch
+// passes: the model the line names, the level it asks, and the harness's own
+// effort string for that level.
 type AgentLaunchSelection struct {
 	RouteModelID    string
 	RequestedEffort EffortLevel
 	NativeEffort    string
-}
-
-// DeriveAgentLaunchSelection is the one derivation of what an agent's launch
-// passes, used by the admission resolver to fill the binding and by the
-// reconstruction recheck to refuse a binding that disagrees. The adapter and
-// offer must be the ones the agent pins. Codex has no native-default id, so
-// a codex_cli agent passes its offer's model as written.
-func DeriveAgentLaunchSelection(
-	agent AgentDefinition, adapter AdapterFragment, offer OfferFragment,
-) (AgentLaunchSelection, error) {
-	if agent.AdapterDigest != adapter.Digest || agent.OfferDigest != offer.Digest {
-		return AgentLaunchSelection{}, fmt.Errorf(
-			"agent %s launch selection: adapter or offer is not the one the agent pins: %w",
-			agent.Name, ErrAgentJoinInvalid)
-	}
-	var selection AgentLaunchSelection
-	switch adapter.ClientKind {
-	case HarnessClientClaudeCode:
-		selection.RouteModelID = ClaudeCodeLaunchModel(offer.RouteModelID)
-	case HarnessClientCodexCLI:
-		selection.RouteModelID = offer.RouteModelID
-	}
-	effort, err := TranslateEffort(adapter.ClientKind, agent.Effort)
-	if err != nil {
-		return AgentLaunchSelection{}, fmt.Errorf("agent %s: %w", agent.Name, err)
-	}
-	if effort.Native != "" {
-		selection.RequestedEffort = effort.Requested
-		selection.NativeEffort = effort.Native
-	}
-	return selection, nil
 }

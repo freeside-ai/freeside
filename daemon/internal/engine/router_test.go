@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -66,7 +65,7 @@ func order(role domain.RoleName, enrollments ...domain.ClientEnrollmentID) domai
 func routerLine(t *testing.T, f *agentAdmissionFixture, setBy string, provenance *domain.TaskLineProvenance, setAt time.Time) {
 	t.Helper()
 	f.appendLine(t, domain.TaskLineInput{
-		TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+		TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Selection: f.lineSelection(t, agentTestSecondAgent),
 		Source: domain.TaskLineSourceRouter, SetBy: setBy, Provenance: provenance,
 	}, setAt)
 }
@@ -90,15 +89,11 @@ func passedOver(
 	}
 }
 
-// routeModel returns the route model id the agent's selection runs, whose
+// routeModel returns the route model id the named selection runs, whose
 // windows mark its pool.
 func (f *agentAdmissionFixture) routeModel(t *testing.T, agent string) string {
 	t.Helper()
-	selection, err := f.selection.Tree.SelectionOfAgent(agent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return selection.ModelID
+	return f.lineSelection(t, agent).ModelID
 }
 
 // updatePoolUsage rewrites the pool's usage record at at, starting one under
@@ -603,7 +598,7 @@ func TestRoutedLaterRoleHoldsOnItsPool(t *testing.T) {
 			t.Fatal(err)
 		}
 		lines := wantRouterLines(t, f, f.run.ID, policyOrder(1, routerMainPool), agentTestAt, map[domain.RoleName]string{
-			domain.RoleImplementer: agentTestWriterAgent, domain.RoleReviewer: agentbaseline.ClaudeReviewAgentName,
+			domain.RoleImplementer: agentTestWriterAgent, domain.RoleReviewer: agentTestReviewerAgent,
 		})
 		routedLines := f.taskLines(t, f.run.ID)
 		mark := f.markPool(t, routerMainPool, f.routeModel(t, agentTestWriterAgent), &reset, agentTestAt.Add(time.Minute))
@@ -628,9 +623,9 @@ func TestRoutedLaterRoleHoldsOnItsPool(t *testing.T) {
 			t.Fatal(err)
 		}
 		lines := wantRouterLines(t, f, f.run.ID, policyOrder(1, routerMainPool), agentTestAt, map[domain.RoleName]string{
-			domain.RoleImplementer: agentTestWriterAgent, domain.RoleReviewer: agentbaseline.ClaudeReviewAgentName,
+			domain.RoleImplementer: agentTestWriterAgent, domain.RoleReviewer: agentTestReviewerAgent,
 		})
-		mark := f.markPool(t, routerMainPool, f.routeModel(t, agentbaseline.ClaudeReviewAgentName), &reset,
+		mark := f.markPool(t, routerMainPool, f.routeModel(t, agentTestReviewerAgent), &reset,
 			agentTestAt.Add(time.Minute))
 		_, err := f.selection.AdmitReview(context.Background(), f.store, routed, f.run.ID, "review-1",
 			agentTestAt.Add(2*time.Minute))
@@ -853,7 +848,7 @@ func TestRouterRanksPoolsByTier(t *testing.T) {
 
 // setPreUnitPolicy stores routing policy revision 1 as a daemon before #2736
 // wrote it: the role's order in agent names. No current write path produces
-// the form, so the row goes in by hand.
+// the form, so the row goes in by hand. Since #2599 the form orders nothing.
 func (f *agentAdmissionFixture) setPreUnitPolicy(t *testing.T, role domain.RoleName, agents ...string) {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
@@ -877,37 +872,40 @@ VALUES (1, 'cli_routing_set', 'cli:operator', '2026-09-01T11:00:00Z', ?, NULL, ?
 	}
 }
 
-// A revision stored before #2736 orders agent names. The router reads each
-// name as the enrollment its agent runs and routes it on the lineup's model
-// and effort, and the anchor admits both that line and a v1 router line a
-// pre-unit daemon wrote naming the agent.
-func TestRouterReadsAPreEnrollmentRevision(t *testing.T) {
+// A revision stored before #2736 orders agent names, which the tree no
+// longer carries (#2599), so it orders nothing: the router writes no line and
+// the role admits on the lineup, and a router line citing the revision is
+// refused as one the revision does not order.
+func TestAPreUnitRevisionOrdersNothing(t *testing.T) {
 	t.Parallel()
-	t.Run("routes the order", func(t *testing.T) {
+	t.Run("routes nothing", func(t *testing.T) {
 		t.Parallel()
 		f := newAgentAdmissionFixture(t)
-		_, second := f.addSecondAgent(t)
+		f.addSecondAgent(t)
 		f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestSecondAgent, agentTestWriterAgent)
 		admission, err := f.admitRun(t, f.run, agentTestAt)
 		if err != nil {
 			t.Fatal(err)
 		}
-		lines := wantRouterLines(t, f, f.run.ID, policyOrder(1, routerSecondPool), agentTestAt,
-			map[domain.RoleName]string{domain.RoleImplementer: agentTestSecondAgent})
-		wantCites(t, admission, lines[domain.RoleImplementer], second.ID)
+		if lines := f.taskLines(t, f.run.ID); len(lines) != 0 {
+			t.Fatalf("router lines = %+v, want none", lines)
+		}
+		if binding := admission.AgentBinding; binding == nil ||
+			binding.SelectionSource != domain.AgentSelectionSourceLineup || binding.EnrollmentID != f.enrollment.ID {
+			t.Fatalf("agent binding = %+v, want the lineup's on %s", binding, f.enrollment.ID)
+		}
 	})
-	t.Run("admits a pre-unit router line", func(t *testing.T) {
+	t.Run("refuses a pre-unit router line", func(t *testing.T) {
 		t.Parallel()
 		f := newAgentAdmissionFixture(t)
-		_, second := f.addSecondAgent(t)
+		f.addSecondAgent(t)
 		f.setPreUnitPolicy(t, domain.RoleImplementer, agentTestWriterAgent, agentTestSecondAgent)
 		routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), policyOrder(1, routerSecondPool), agentTestAt.Add(-time.Minute))
-		admission, err := f.admitRun(t, f.run, agentTestAt)
-		if err != nil {
-			t.Fatal(err)
+		_, err := f.admitRun(t, f.run, agentTestAt)
+		if !errors.Is(err, ErrAgentNotAdmissible) ||
+			!strings.Contains(err.Error(), "routing policy revision 1 does not order the line's selection for its role") {
+			t.Fatalf("admit = %v, want the line refused as unordered", err)
 		}
-		line := f.taskLines(t, f.run.ID)[0]
-		wantCites(t, admission, line, second.ID)
 	})
 }
 
