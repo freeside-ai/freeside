@@ -221,6 +221,9 @@ func main() {
 		case "rig":
 			runRigMain(os.Args[2:])
 			return
+		case "macverify":
+			runMacverifyMain(os.Args[2:])
+			return
 		case "deputy":
 			runDeputyMain(os.Args[2:])
 			return

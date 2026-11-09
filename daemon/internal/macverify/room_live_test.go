@@ -16,15 +16,15 @@ import (
 )
 
 // The live suite runs the probe in testdata/probe through the production
-// room as a real slot. It needs the executor installed by hand on the
-// reference host (daemon/README.md, Set Up the macOS Verification Executor
-// by Hand) and the daemon user's sudoers rule for the helper:
+// room as a real slot. It needs the executor installed on the reference host
+// (daemon/README.md, Install the macOS Verification Executor), which writes
+// the daemon user's sudoers rule for the helper:
 //
 //	FREESIDE_MACVERIFY_LIVE_TEST=1
 //	FREESIDE_MACVERIFY_ROOT=<executor root>
 //	FREESIDE_MACVERIFY_SLOTS=<slot>[,<slot>…]
 const liveSkip = "set FREESIDE_MACVERIFY_LIVE_TEST=1, FREESIDE_MACVERIFY_ROOT, and FREESIDE_MACVERIFY_SLOTS " +
-	"on a host with the executor installed by hand (daemon/README.md)"
+	"on a host with the executor installed (daemon/README.md)"
 
 func liveRoom(t *testing.T) (*Room, Config) {
 	t.Helper()
@@ -76,6 +76,13 @@ func probeWorkspace(t *testing.T) string {
 //nolint:paralleltest // Serial: each live test builds its own Backend, and Backends do not share leases, so parallel tests could lease one slot twice.
 func TestLiveRoomConfinesASlot(t *testing.T) {
 	room, _ := liveRoom(t)
+	runConfineProbe(t, room)
+}
+
+// runConfineProbe runs the probe's confinement checks as the room's first
+// free slot, then checks the next job finds that slot's home reset.
+func runConfineProbe(t *testing.T, room *Room) {
+	t.Helper()
 	workspace := probeWorkspace(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
