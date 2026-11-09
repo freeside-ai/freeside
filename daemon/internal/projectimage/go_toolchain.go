@@ -219,13 +219,20 @@ fi
 // metacharacter, so single quotes carry it and the paths built from it
 // verbatim.
 func goPrepareScript(moduleDir string) string {
+	return "#!/usr/bin/busybox sh\nset -eu\n" + goPrepareChecks(moduleDir) + `cd "$module_dir"
+exec go mod download
+`
+}
+
+// goPrepareChecks is the Go helper's body up to the module download: it sets
+// module_dir and refuses a workspace whose module inputs the image does not
+// serve. The Go and Swift helper runs it too.
+func goPrepareChecks(moduleDir string) string {
 	unsupported := goUnsupportedEntries(moduleDir)
 	for index, entry := range unsupported {
 		unsupported[index] = "'" + entry + "'"
 	}
-	return `#!/usr/bin/busybox sh
-set -eu
-module_dir='` + cmp.Or(moduleDir, ".") + `'
+	return `module_dir='` + cmp.Or(moduleDir, ".") + `'
 if ! /usr/bin/busybox cmp -s "$module_dir/go.mod" /opt/freeside/project-seed/go.mod ||
 	! /usr/bin/busybox cmp -s "$module_dir/go.sum" /opt/freeside/project-seed/go.sum; then
 	echo "project Go module manifests differ from the baked image inputs" >&2
@@ -237,8 +244,6 @@ for entry in ` + strings.Join(unsupported, " ") + `; do
 		exit 42
 	fi
 done
-cd "$module_dir"
-exec go mod download
 `
 }
 
@@ -513,9 +518,6 @@ func stageGoInputs(contextDir, sourceDir, moduleDir string) error {
 		if present {
 			return fmt.Errorf("source contains unsupported Go input %s", name)
 		}
-	}
-	if err := os.Mkdir(contextDir, 0o700); err != nil {
-		return fmt.Errorf("create image build context: %w", err)
 	}
 	for _, name := range []string{"go.mod", "go.sum"} {
 		if err := copyRegularFile(

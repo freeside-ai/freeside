@@ -223,7 +223,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if err := want.Layout.Validate(); err != nil {
 		return fmt.Errorf("provenance check requires a valid input layout: %w", err)
 	}
-	toolchain := expectedToolchainEvidence(want)
+	toolchains := expectedToolchainEvidence(want)
 	report, err := a.inspectImage(ctx, ref)
 	if err != nil {
 		return err
@@ -253,7 +253,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if user := baseEvidence.Config.Config.User; !rootImageUser(user) {
 		return fmt.Errorf("build base config sets user %q, want the runtime-default root user", user)
 	}
-	projectEvidence, err := readEvidence(ctx, ref, want.ImageDigest, projectEvidenceTargets(toolchain))
+	projectEvidence, err := readEvidence(ctx, ref, want.ImageDigest, projectEvidenceTargets(toolchains))
 	if err != nil {
 		return fmt.Errorf("host-verify project image: %w", err)
 	}
@@ -279,7 +279,9 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 		"ai.freeside.project.commit":        want.CommitSHA,
 		"ai.freeside.project.recipe-digest": string(want.RecipeDigest),
 	}
-	maps.Copy(expected, toolchain.labels)
+	for _, toolchain := range toolchains {
+		maps.Copy(expected, toolchain.labels)
+	}
 	for key, value := range expected {
 		if labels[key] != value {
 			return fmt.Errorf("image label %s = %q, want %q", key, labels[key], value)
@@ -294,33 +296,38 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	}
 	recipeDigest := contentaddr.Sum(recipeBytes)
 	if recipeDigest != string(want.RecipeDigest) ||
-		!bytes.Equal(prepareBytes, []byte(toolchain.prepare)) {
+		!bytes.Equal(prepareBytes, []byte(prepareScriptFor(want.Layout))) {
 		return fmt.Errorf("embedded provenance file digests do not match the build inputs")
-	}
-	for _, pinned := range toolchain.archives {
-		archive, archiveFound := files[pinned.path]
-		archiveDigest := fmt.Sprintf("%x", sha256.Sum256(archive))
-		if !archiveFound || archiveDigest != pinned.sha256 {
-			return fmt.Errorf("embedded %s archive does not match the pinned input", pinned.name)
-		}
-		if modes[pinned.path] != 0o644 {
-			return fmt.Errorf("embedded project-image provenance files have invalid modes")
-		}
 	}
 	if modes[PreparationPath] != 0o700 {
 		return fmt.Errorf("embedded project-image provenance files have invalid modes")
 	}
-	for _, launcher := range toolchain.launchers {
-		if !bytes.Equal(files[launcher], []byte(toolchain.launcher)) || modes[launcher] != 0o755 {
-			return fmt.Errorf("embedded %s launcher %s does not match the builder input", toolchain.name, launcher)
+	// Every toolchain the layout includes must be present in full: a mixed
+	// image missing one toolchain's archive, launcher, or seed fails here.
+	for _, toolchain := range toolchains {
+		for _, pinned := range toolchain.archives {
+			archive, archiveFound := files[pinned.path]
+			archiveDigest := fmt.Sprintf("%x", sha256.Sum256(archive))
+			if !archiveFound || archiveDigest != pinned.sha256 {
+				return fmt.Errorf("embedded %s archive does not match the pinned input", pinned.name)
+			}
+			if modes[pinned.path] != 0o644 {
+				return fmt.Errorf("embedded project-image provenance files have invalid modes")
+			}
 		}
-	}
-	// The recorded environment claims these exact seed bytes. Prove the claim
-	// against the image, not only against the context the build was given.
-	for path, wantHash := range toolchain.seeds {
-		seed, found := files[path]
-		if !found || manifestSHA256(seed) != wantHash {
-			return fmt.Errorf("baked dependency seed %s does not match the recorded environment", path)
+		for _, launcher := range toolchain.launchers {
+			if !bytes.Equal(files[launcher], []byte(toolchain.launcher)) || modes[launcher] != 0o755 {
+				return fmt.Errorf("embedded %s launcher %s does not match the builder input", toolchain.name, launcher)
+			}
+		}
+		// The recorded environment claims these exact seed bytes. Prove the
+		// claim against the image, not only against the context the build was
+		// given.
+		for path, wantHash := range toolchain.seeds {
+			seed, found := files[path]
+			if !found || manifestSHA256(seed) != wantHash {
+				return fmt.Errorf("baked dependency seed %s does not match the recorded environment", path)
+			}
 		}
 	}
 	return nil
@@ -1134,17 +1141,17 @@ const (
 	maxBusyboxBytes      = 8 << 20
 )
 
-// toolchainEvidence is what a project image of one toolchain carries beyond
+// toolchainEvidence is what a project image carries for one toolchain beyond
 // the shared provenance: its labels, its pinned archives, its launcher bytes
-// at each launcher path, its preparation helper, and its baked dependency
-// seeds with the hashes the record claims.
+// at each launcher path, and its baked dependency seeds with the hashes the
+// record claims. The preparation helper is the image's, not a toolchain's
+// (prepareScriptFor).
 type toolchainEvidence struct {
 	name      string
 	labels    map[string]string
 	archives  []pinnedArchive
 	launcher  string
 	launchers []string
-	prepare   string
 	seeds     map[string]string
 }
 
@@ -1155,8 +1162,18 @@ type pinnedArchive struct {
 	maxBytes int64
 }
 
-func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
-	switch want.Layout.Toolchain {
+// expectedToolchainEvidence lists the evidence of each toolchain the layout
+// includes, in Members order.
+func expectedToolchainEvidence(want provenanceSpec) []toolchainEvidence {
+	var evidence []toolchainEvidence
+	for _, member := range want.Layout.Toolchain.Members() {
+		evidence = append(evidence, expectedMemberEvidence(want, member))
+	}
+	return evidence
+}
+
+func expectedMemberEvidence(want provenanceSpec, member domain.ProjectToolchain) toolchainEvidence {
+	switch member {
 	case domain.ProjectToolchainNPM:
 		return toolchainEvidence{
 			name: "Node toolchain",
@@ -1170,7 +1187,6 @@ func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
 			}},
 			launcher:  nodeToolchainLauncher,
 			launchers: []string{nodeLauncherPath, npmLauncherPath, npxLauncherPath},
-			prepare:   prepareScript,
 			seeds: map[string]string{
 				seedPackageJSONPath: want.PackageJSONSHA256,
 				seedPackageLockPath: want.PackageLockSHA256,
@@ -1219,7 +1235,6 @@ func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
 			}},
 			launcher:  goToolchainLauncher,
 			launchers: goLauncherPaths,
-			prepare:   goPrepareScript(want.Layout.GoModuleDir),
 			seeds: map[string]string{
 				seedGoModPath: want.GoModSHA256,
 				seedGoSumPath: want.GoSumSHA256,
@@ -1240,30 +1255,33 @@ func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
 			}},
 			launcher:  swiftToolchainLauncher,
 			launchers: []string{swiftLauncherPath},
-			prepare:   swiftPrepareScript(want.Layout.SwiftPackageDir),
 			seeds: map[string]string{
 				seedPackageSwiftPath:    want.PackageSwiftSHA256,
 				seedPackageResolvedPath: want.PackageResolvedSHA256,
 			},
 		}
+	case domain.ProjectToolchainGoSwift:
+		// Members never yields a composite.
 	}
 	return toolchainEvidence{}
 }
 
-func projectEvidenceTargets(toolchain toolchainEvidence) map[string]int64 {
+func projectEvidenceTargets(toolchains []toolchainEvidence) map[string]int64 {
 	targets := map[string]int64{
 		ward.ProjectRecipePath: maxRecipeBytes,
 		PreparationPath:        maxPrepareBytes,
 		busyboxPath:            maxBusyboxBytes,
 	}
-	for _, pinned := range toolchain.archives {
-		targets[pinned.path] = pinned.maxBytes
-	}
-	for _, launcher := range toolchain.launchers {
-		targets[launcher] = maxPrepareBytes
-	}
-	for seed := range toolchain.seeds {
-		targets[seed] = maxManifestBytes
+	for _, toolchain := range toolchains {
+		for _, pinned := range toolchain.archives {
+			targets[pinned.path] = pinned.maxBytes
+		}
+		for _, launcher := range toolchain.launchers {
+			targets[launcher] = maxPrepareBytes
+		}
+		for seed := range toolchain.seeds {
+			targets[seed] = maxManifestBytes
+		}
 	}
 	return targets
 }

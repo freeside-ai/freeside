@@ -162,3 +162,51 @@ func TestDeriveUpkeepAdoptionAnswersNoSwiftDependencyChange(t *testing.T) {
 		t.Fatalf("adoption = %+v, %v, %v; want unadoptable without an error", adoption, adoptable, err)
 	}
 }
+
+// A Go and Swift image's adoption answers its Go module's proxy refusal
+// only while the Swift package is unchanged: no adoption answers a Swift
+// change, even beside a Go change one would.
+func TestDeriveUpkeepAdoptionAnswersAGoSwiftImageOnlyForItsModule(t *testing.T) {
+	t.Parallel()
+	const uuid = "require github.com/google/uuid v1.6.0\n"
+	withUUID := map[string]string{"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum}
+	policy := gatePolicy(t, `["registry.npmjs.org"]`)
+	for name, tc := range map[string]struct {
+		changes   map[string]string
+		adoptable bool
+	}{
+		"Go module only": {changes: withUUID, adoptable: true},
+		"Go module and Package.resolved": {changes: map[string]string{
+			"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum,
+			"app/Package.resolved": strings.Replace(testPackageResolved, "1.1.4", "1.1.5", 1),
+		}},
+		"Go module and a Swift unsupported input": {changes: map[string]string{
+			"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum, "app/.swiftpm/config": "{}",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo := newBaseInputsRepo(t)
+			base := repo.commit(goSwiftBaseTree())
+			image := domain.ProjectImage{
+				CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+				Environment: goSwiftTestEnvironment(),
+			}
+			tip := repo.commit(tc.changes)
+			adoption, adoptable, err := DeriveUpkeepAdoption(t.Context(), "git", repo.dir, image, tip, policy, nil)
+			if err != nil || adoptable != tc.adoptable {
+				t.Fatalf("adoption = %+v, %v, %v; want adoptable=%t", adoption, adoptable, err, tc.adoptable)
+			}
+			if !tc.adoptable {
+				return
+			}
+			if adoption.RecipeDigest != nil || !slices.Equal(adoption.Hosts, []string{goModuleProxyHost}) {
+				t.Fatalf("adoption = %+v, want only %s", adoption, goModuleProxyHost)
+			}
+			decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, image, tip, policy, adoption.Hosts)
+			if err != nil || len(decision.Findings) != 0 {
+				t.Fatalf("decision with the proxy adopted = %+v, %v; want it admitted", decision, err)
+			}
+		})
+	}
+}

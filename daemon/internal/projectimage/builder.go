@@ -93,7 +93,8 @@ type Request struct {
 	// SwiftPackageDir declares the Swift package the recipe verifies,
 	// relative to the repository root, and selects Swift there. Empty with
 	// no root package.json or go.mod and a root Package.swift selects Swift
-	// at the root. It excludes GoModuleDir: an image carries one toolchain.
+	// at the root. Declared beside GoModuleDir, it selects one image that
+	// bakes both toolchains.
 	SwiftPackageDir   string
 	Recipe            []byte
 	BaseImageRef      domain.ImageRef
@@ -532,11 +533,20 @@ func ValidatePublishedRef(request Request, ref domain.ImageRef) error {
 	return nil
 }
 
-// expectedProvenance completes spec with the layout toolchain's pins and the
-// baked manifest hashes. It leaves the other toolchain's fields empty, so a
-// spec never claims a toolchain the image does not carry.
+// expectedProvenance completes spec with the pins and baked manifest hashes
+// of each toolchain the layout includes. It leaves every other toolchain's
+// fields empty, so a spec never claims a toolchain the image does not carry.
 func expectedProvenance(spec provenanceSpec, environment domain.ProjectImageEnvironment) provenanceSpec {
-	switch spec.Layout.Toolchain {
+	for _, member := range spec.Layout.Toolchain.Members() {
+		spec = expectedMemberProvenance(spec, member, environment)
+	}
+	return spec
+}
+
+func expectedMemberProvenance(
+	spec provenanceSpec, member domain.ProjectToolchain, environment domain.ProjectImageEnvironment,
+) provenanceSpec {
+	switch member {
 	case domain.ProjectToolchainNPM:
 		spec.NodeVersion = nodeToolchainVersion
 		spec.NodeToolchainArchiveSHA256 = nodeToolchainArchiveSHA256
@@ -565,23 +575,40 @@ func expectedProvenance(spec provenanceSpec, environment domain.ProjectImageEnvi
 		spec.SwiftAptPackages = strings.Join(swiftAptPackages, " ")
 		spec.PackageSwiftSHA256 = environment.PackageSwiftSHA256
 		spec.PackageResolvedSHA256 = environment.PackageResolvedSHA256
+	case domain.ProjectToolchainGoSwift:
+		// Members never yields a composite.
 	}
 	return spec
 }
 
-// maskedProbe names a layout's cache-masked negative probe: the argv that
+// maskedProbe is one toolchain's cache-masked negative probe: the argv that
 // hydrates the workspace's dependencies, the baked cache the probe masks,
 // and the output that shows the hydration reached for the network.
-func maskedProbe(layout domain.ProjectImageInputLayout) ([]string, string, *regexp.Regexp) {
-	switch layout.Toolchain {
-	case domain.ProjectToolchainNPM:
-		return []string{"npm", "ci", "--ignore-scripts"}, NPMCachePath, networkFailure
-	case domain.ProjectToolchainGo:
-		return goMaskedProbe(layout.GoModuleDir), GoModuleCachePath, goOfflineRefusal
-	case domain.ProjectToolchainSwift:
-		return swiftMaskedProbe(layout.SwiftPackageDir), SwiftMirrorsPath, swiftOfflineRefusal
+type maskedProbe struct {
+	argv           []string
+	cache          string
+	networkAttempt *regexp.Regexp
+}
+
+// maskedProbes lists the layout's probes, one per toolchain it includes, in
+// Members order. Each masks only its own toolchain's cache.
+func maskedProbes(layout domain.ProjectImageInputLayout) []maskedProbe {
+	var probes []maskedProbe
+	for _, member := range layout.Toolchain.Members() {
+		switch member {
+		case domain.ProjectToolchainNPM:
+			probes = append(probes, maskedProbe{[]string{"npm", "ci", "--ignore-scripts"}, NPMCachePath, networkFailure})
+		case domain.ProjectToolchainGo:
+			probes = append(probes, maskedProbe{goMaskedProbe(layout.GoModuleDir), GoModuleCachePath, goOfflineRefusal})
+		case domain.ProjectToolchainSwift:
+			probes = append(probes, maskedProbe{
+				swiftMaskedProbe(layout.SwiftPackageDir), SwiftMirrorsPath, swiftOfflineRefusal,
+			})
+		case domain.ProjectToolchainGoSwift:
+			// Members never yields a composite.
+		}
 	}
-	return nil, "", nil
+	return probes
 }
 
 func (b *Builder) proveOffline(
@@ -591,7 +618,6 @@ func (b *Builder) proveOffline(
 	scratch string,
 	layout domain.ProjectImageInputLayout,
 ) error {
-	probe, cache, networkAttempt := maskedProbe(layout)
 	// A failed process result means something only after the runtime has proved
 	// it can start this image under the same no-network topology. The
 	// preflight proves nothing about the candidate: `true` comes from the
@@ -605,32 +631,43 @@ func (b *Builder) proveOffline(
 	if preflight.ExitCode != 0 {
 		return fmt.Errorf("offline preflight exited %d", preflight.ExitCode)
 	}
-	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, ""); err != nil {
+	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, "positive", ""); err != nil {
 		return err
 	}
 
-	negative := filepath.Join(scratch, "negative")
-	if err := b.source.Copy(ctx, sourceDir, commit, negative); err != nil {
-		return fmt.Errorf("materialize negative workspace: %w", err)
-	}
-	result, runErr := b.backend.Run(ctx, runSpec{
-		ImageRef: imageRef, Workspace: negative,
-		Argv: probe, MaskedCache: cache,
-	})
-	switch {
-	case runErr != nil:
-		return fmt.Errorf("cache-masked preparation could not execute: %w", runErr)
-	case result.ExitCode == 0:
-		// Hydration need not consume the cache, for example with no
-		// dependencies. Prove the complete recipe works without it rather than
-		// infer this from manifest shape or accept hydration alone as
-		// sufficient proof.
-		if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, cache); err != nil {
-			return fmt.Errorf("cache-independent verification: %w", err)
+	// Each toolchain's cache is proved on its own: masking one leaves the
+	// other in place, so a probe that reached for the network names the
+	// cache it needed.
+	for index, probe := range maskedProbes(layout) {
+		suffix := ""
+		if index > 0 {
+			suffix = fmt.Sprintf("-%d", index)
 		}
-	case !networkAttempt.Match(result.Output):
-		return fmt.Errorf("cache-masked preparation failed without a registry/network attempt (%s): %w",
-			boundedOutput(result.Output), ErrProofFailed)
+		negative := filepath.Join(scratch, "negative"+suffix)
+		if err := b.source.Copy(ctx, sourceDir, commit, negative); err != nil {
+			return fmt.Errorf("materialize negative workspace: %w", err)
+		}
+		result, runErr := b.backend.Run(ctx, runSpec{
+			ImageRef: imageRef, Workspace: negative,
+			Argv: probe.argv, MaskedCache: probe.cache,
+		})
+		switch {
+		case runErr != nil:
+			return fmt.Errorf("cache-masked preparation could not execute: %w", runErr)
+		case result.ExitCode == 0:
+			// Hydration need not consume the cache, for example with no
+			// dependencies. Prove the complete recipe works without it rather
+			// than infer this from manifest shape or accept hydration alone as
+			// sufficient proof.
+			if err := b.proveRecipe(
+				ctx, sourceDir, commit, imageRef, commands, scratch, "cache-masked"+suffix, probe.cache,
+			); err != nil {
+				return fmt.Errorf("cache-independent verification: %w", err)
+			}
+		case !probe.networkAttempt.Match(result.Output):
+			return fmt.Errorf("cache-masked preparation failed without a registry/network attempt (%s): %w",
+				boundedOutput(result.Output), ErrProofFailed)
+		}
 	}
 	return nil
 }
@@ -640,12 +677,9 @@ func (b *Builder) proveRecipe(
 	sourceDir, commit, imageRef string,
 	commands [][]string,
 	scratch string,
+	prefix string,
 	maskedCache string,
 ) error {
-	prefix := "positive"
-	if maskedCache != "" {
-		prefix = "cache-masked"
-	}
 	for index, argv := range commands {
 		workspace := filepath.Join(scratch, fmt.Sprintf("%s-%d", prefix, index))
 		if err := b.source.Copy(ctx, sourceDir, commit, workspace); err != nil {
@@ -727,11 +761,6 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	if !domain.ValidProjectSwiftPackageDir(request.SwiftPackageDir) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("swift package directory %q: %w",
 			request.SwiftPackageDir, ErrInvalidRequest)
-	}
-	if request.GoModuleDir != "" && request.SwiftPackageDir != "" {
-		return Request{}, verify.Recipe{}, "", fmt.Errorf(
-			"go module directory and swift package directory are exclusive; an image carries one toolchain: %w",
-			ErrInvalidRequest)
 	}
 	if !commitPattern.MatchString(request.CommitSHA) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("commit %q is not a full lowercase SHA-1: %w",
@@ -826,35 +855,49 @@ func createBuildContext(
 	if err != nil {
 		return domain.ProjectImageInputLayout{}, err
 	}
-	var preparation, launcher string
-	switch layout.Toolchain {
-	case domain.ProjectToolchainNPM:
-		preparation, launcher = prepareScript, nodeToolchainLauncher
-		err = stageNPMInputs(contextDir, sourceDir)
-	case domain.ProjectToolchainGo:
-		preparation, launcher = goPrepareScript(layout.GoModuleDir), goToolchainLauncher
-		err = stageGoInputs(contextDir, sourceDir, layout.GoModuleDir)
-	case domain.ProjectToolchainSwift:
-		preparation, launcher = swiftPrepareScript(layout.SwiftPackageDir), swiftToolchainLauncher
-		err = stageSwiftInputs(contextDir, sourceDir, layout.SwiftPackageDir)
+	if err := os.Mkdir(contextDir, 0o700); err != nil {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("create image build context: %w", err)
 	}
-	if err != nil {
-		return domain.ProjectImageInputLayout{}, err
+	// launchers maps each launcher's build-context name to its bytes.
+	launchers := map[string]string{}
+	for _, member := range layout.Toolchain.Members() {
+		switch member {
+		case domain.ProjectToolchainNPM:
+			launchers["toolchain-launcher"] = nodeToolchainLauncher
+			err = stageNPMInputs(contextDir, sourceDir)
+		case domain.ProjectToolchainGo:
+			launchers["toolchain-launcher"] = goToolchainLauncher
+			err = stageGoInputs(contextDir, sourceDir, layout.GoModuleDir)
+		case domain.ProjectToolchainSwift:
+			name := "toolchain-launcher"
+			if layout.Toolchain == domain.ProjectToolchainGoSwift {
+				name = swiftLauncherContextFile
+			}
+			launchers[name] = swiftToolchainLauncher
+			err = stageSwiftInputs(contextDir, sourceDir, layout.SwiftPackageDir)
+		case domain.ProjectToolchainGoSwift:
+			// Members never yields a composite.
+		}
+		if err != nil {
+			return domain.ProjectImageInputLayout{}, err
+		}
 	}
 	if err := os.WriteFile(filepath.Join(contextDir, "recipe.json"), request.Recipe, 0o600); err != nil {
 		return domain.ProjectImageInputLayout{}, fmt.Errorf("write trusted recipe to build context: %w", err)
 	}
 	// Executable by design: the image invokes this fixed, builder-owned helper.
-	if err := os.WriteFile(filepath.Join(contextDir, "prepare"), []byte(preparation), 0o700); err != nil { //nolint:gosec // G306
+	if err := os.WriteFile(filepath.Join(contextDir, "prepare"), []byte(prepareScriptFor(layout)), 0o700); err != nil { //nolint:gosec // G306
 		return domain.ProjectImageInputLayout{}, fmt.Errorf("write preparation helper: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(contextDir, "toolchain-launcher"), []byte(launcher), 0o755); err != nil { //nolint:gosec // G306: executable fixed builder-owned helper
-		return domain.ProjectImageInputLayout{}, fmt.Errorf("write toolchain launcher: %w", err)
-	}
-	// WriteFile's mode is filtered by the caller's umask; image provenance
-	// requires these fixed launcher bytes to be executable with exactly 0755.
-	if err := os.Chmod(filepath.Join(contextDir, "toolchain-launcher"), 0o755); err != nil { //nolint:gosec // G302: public fixed launcher inside the private build context
-		return domain.ProjectImageInputLayout{}, fmt.Errorf("set toolchain launcher mode: %w", err)
+	for name, launcher := range launchers {
+		if err := os.WriteFile(filepath.Join(contextDir, name), []byte(launcher), 0o755); err != nil { //nolint:gosec // G306: executable fixed builder-owned helper
+			return domain.ProjectImageInputLayout{}, fmt.Errorf("write toolchain launcher: %w", err)
+		}
+		// WriteFile's mode is filtered by the caller's umask; image provenance
+		// requires these fixed launcher bytes to be executable with exactly 0755.
+		if err := os.Chmod(filepath.Join(contextDir, name), 0o755); err != nil { //nolint:gosec // G302: public fixed launcher inside the private build context
+			return domain.ProjectImageInputLayout{}, fmt.Errorf("set toolchain launcher mode: %w", err)
+		}
 	}
 	containerfile := renderContainerfile(layout, request, recipeDigest)
 	if err := os.WriteFile(filepath.Join(contextDir, "Containerfile"), []byte(containerfile), 0o600); err != nil {
@@ -863,14 +906,30 @@ func createBuildContext(
 	return layout, nil
 }
 
-// selectInputLayout decides which toolchain builds the source. A declared
-// module or package directory selects Go or Swift there and refuses a root
-// package.json, and declaring both is refused, since one image carries one
-// toolchain. Without one, a root package.json keeps the npm path every
-// existing image takes; with no package.json, a root go.mod selects Go at the
-// root, and otherwise a root Package.swift selects Swift at the root; a tree
-// with none of them takes the npm path and fails on its missing manifest as
-// before.
+// prepareScriptFor is the preparation helper an image of layout bakes.
+func prepareScriptFor(layout domain.ProjectImageInputLayout) string {
+	switch layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		return prepareScript
+	case domain.ProjectToolchainGo:
+		return goPrepareScript(layout.GoModuleDir)
+	case domain.ProjectToolchainSwift:
+		return swiftPrepareScript(layout.SwiftPackageDir)
+	case domain.ProjectToolchainGoSwift:
+		return goSwiftPrepareScript(layout.GoModuleDir, layout.SwiftPackageDir)
+	}
+	return ""
+}
+
+// selectInputLayout decides which toolchains build the source. A declared
+// module or package directory selects Go or Swift there, and declaring both
+// selects one image that bakes the two; either refuses a root package.json,
+// since no image bakes npm beside another toolchain. Without one, a root
+// package.json keeps the npm path every existing image takes; with no
+// package.json, a root go.mod selects Go at the root, and otherwise a root
+// Package.swift selects Swift at the root; a tree with none of them takes the
+// npm path and fails on its missing manifest as before. Detection never
+// selects both toolchains: that takes both declarations.
 func selectInputLayout(sourceDir, goModuleDir, swiftPackageDir string) (domain.ProjectImageInputLayout, error) {
 	if !domain.ValidProjectGoModuleDir(goModuleDir) {
 		return domain.ProjectImageInputLayout{}, fmt.Errorf("go module directory %q: %w", goModuleDir, ErrInvalidRequest)
@@ -878,11 +937,6 @@ func selectInputLayout(sourceDir, goModuleDir, swiftPackageDir string) (domain.P
 	if !domain.ValidProjectSwiftPackageDir(swiftPackageDir) {
 		return domain.ProjectImageInputLayout{}, fmt.Errorf("swift package directory %q: %w",
 			swiftPackageDir, ErrInvalidRequest)
-	}
-	if goModuleDir != "" && swiftPackageDir != "" {
-		return domain.ProjectImageInputLayout{}, fmt.Errorf(
-			"source declares both Go module %s and Swift package %s; an image carries one toolchain: %w",
-			goModuleDir, swiftPackageDir, ErrInvalidRequest)
 	}
 	packageJSON, err := entryExists(filepath.Join(sourceDir, "package.json"))
 	if err != nil {
@@ -893,15 +947,25 @@ func selectInputLayout(sourceDir, goModuleDir, swiftPackageDir string) (domain.P
 		Toolchain: domain.ProjectToolchainSwift, SwiftPackageDir: swiftPackageDir,
 	}
 	switch {
+	case goModuleDir != "" && swiftPackageDir != "" && packageJSON:
+		return domain.ProjectImageInputLayout{}, fmt.Errorf(
+			"source contains a root package.json beside the declared Go module %s and Swift package %s; "+
+				"no image bakes npm beside another toolchain", goModuleDir, swiftPackageDir)
+	case goModuleDir != "" && swiftPackageDir != "":
+		return domain.ProjectImageInputLayout{
+			Toolchain: domain.ProjectToolchainGoSwift, GoModuleDir: goModuleDir, SwiftPackageDir: swiftPackageDir,
+		}, nil
 	case goModuleDir != "" && packageJSON:
 		return domain.ProjectImageInputLayout{}, fmt.Errorf(
-			"source contains a root package.json beside the declared Go module %s; an image carries one toolchain",
+			"source contains a root package.json beside the declared Go module %s; "+
+				"no image bakes npm beside another toolchain",
 			goModuleDir)
 	case goModuleDir != "":
 		return goLayout, nil
 	case swiftPackageDir != "" && packageJSON:
 		return domain.ProjectImageInputLayout{}, fmt.Errorf(
-			"source contains a root package.json beside the declared Swift package %s; an image carries one toolchain",
+			"source contains a root package.json beside the declared Swift package %s; "+
+				"no image bakes npm beside another toolchain",
 			swiftPackageDir)
 	case swiftPackageDir != "":
 		return swiftLayout, nil
@@ -944,9 +1008,6 @@ func stageNPMInputs(contextDir, sourceDir string) error {
 			return fmt.Errorf("inspect unsupported npm input %s: %w", name, err)
 		}
 	}
-	if err := os.Mkdir(contextDir, 0o700); err != nil {
-		return fmt.Errorf("create image build context: %w", err)
-	}
 	for _, name := range []string{"package.json", "package-lock.json"} {
 		if err := copyRegularFile(
 			filepath.Join(sourceDir, name), filepath.Join(contextDir, name), maxManifestBytes,
@@ -962,31 +1023,32 @@ func stageNPMInputs(contextDir, sourceDir string) error {
 // and this binary's preparation implementation. It hashes the context's
 // copies, not the source tree's, so the record describes what the image is
 // built from. An npm environment leaves the toolchain empty, as every record
-// written before the Go path did.
+// written before the Go path did. The context holds each toolchain's
+// manifests under their own names, so one context serves both halves of a Go
+// and Swift image.
 func bakedEnvironment(
 	contextDir string, layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageEnvironment, error) {
 	environment := domain.ProjectImageEnvironment{PreparationDigest: PreparationDigest()}
-	var manifests map[string]*string
-	switch layout.Toolchain {
-	case domain.ProjectToolchainNPM:
-		manifests = map[string]*string{
-			"package.json":      &environment.PackageJSONSHA256,
-			"package-lock.json": &environment.PackageLockSHA256,
-		}
-	case domain.ProjectToolchainGo:
-		environment.Toolchain = domain.ProjectToolchainGo
-		environment.GoModuleDir = layout.GoModuleDir
-		manifests = map[string]*string{
-			"go.mod": &environment.GoModSHA256,
-			"go.sum": &environment.GoSumSHA256,
-		}
-	case domain.ProjectToolchainSwift:
-		environment.Toolchain = domain.ProjectToolchainSwift
-		environment.SwiftPackageDir = layout.SwiftPackageDir
-		manifests = map[string]*string{
-			"Package.swift":    &environment.PackageSwiftSHA256,
-			"Package.resolved": &environment.PackageResolvedSHA256,
+	if layout.Toolchain != domain.ProjectToolchainNPM {
+		environment.Toolchain = layout.Toolchain
+	}
+	manifests := map[string]*string{}
+	for _, member := range layout.Toolchain.Members() {
+		switch member {
+		case domain.ProjectToolchainNPM:
+			manifests["package.json"] = &environment.PackageJSONSHA256
+			manifests["package-lock.json"] = &environment.PackageLockSHA256
+		case domain.ProjectToolchainGo:
+			environment.GoModuleDir = layout.GoModuleDir
+			manifests["go.mod"] = &environment.GoModSHA256
+			manifests["go.sum"] = &environment.GoSumSHA256
+		case domain.ProjectToolchainSwift:
+			environment.SwiftPackageDir = layout.SwiftPackageDir
+			manifests["Package.swift"] = &environment.PackageSwiftSHA256
+			manifests["Package.resolved"] = &environment.PackageResolvedSHA256
+		case domain.ProjectToolchainGoSwift:
+			// Members never yields a composite.
 		}
 	}
 	for name, hash := range manifests {

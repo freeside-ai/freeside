@@ -98,13 +98,17 @@ exec "$toolchain/usr/bin/swift" "$@"
 // shell metacharacter, so single quotes carry it and the paths built from
 // it verbatim.
 func swiftPrepareScript(packageDir string) string {
+	return "#!/usr/bin/busybox sh\nset -eu\n" + swiftPrepareBody(packageDir)
+}
+
+// swiftPrepareBody is the Swift helper without its interpreter line, which
+// the Go and Swift helper runs after the Go module download.
+func swiftPrepareBody(packageDir string) string {
 	unsupported := swiftUnsupportedEntries(packageDir)
 	for index, entry := range unsupported {
 		unsupported[index] = "'" + entry + "'"
 	}
-	return `#!/usr/bin/busybox sh
-set -eu
-package_dir='` + cmp.Or(packageDir, ".") + `'
+	return `package_dir='` + cmp.Or(packageDir, ".") + `'
 if ! /usr/bin/busybox cmp -s "$package_dir/Package.swift" /opt/freeside/project-seed/Package.swift ||
 	! /usr/bin/busybox cmp -s "$package_dir/Package.resolved" /opt/freeside/project-seed/Package.resolved; then
 	echo "project Swift package manifests differ from the baked image inputs" >&2
@@ -357,9 +361,6 @@ func stageSwiftInputs(contextDir, sourceDir, packageDir string) error {
 		if isSwiftVersionSpecificManifest(entry.Name()) {
 			return fmt.Errorf("source contains unsupported Swift input %s", path.Join(packageDir, entry.Name()))
 		}
-	}
-	if err := os.Mkdir(contextDir, 0o700); err != nil {
-		return fmt.Errorf("create image build context: %w", err)
 	}
 	for _, name := range []string{"Package.swift", "Package.resolved"} {
 		if err := copyRegularFile(

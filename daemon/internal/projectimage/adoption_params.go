@@ -73,7 +73,8 @@ func DeriveUpkeepAdoption(
 	// With no registry set the authority check is skipped, so every finding
 	// left is a clause no adoption answers, and the delta's hosts are every
 	// host the changed dependencies resolve from.
-	delta, answerable, err := hostDelta(ctx, reader, layout, head, image.CommitSHA, tipSHA)
+	delta, answerable, err := hostDelta(
+		ctx, reader, layout, head, measured.Environment.ChangedManifests(head), image.CommitSHA, tipSHA)
 	if err != nil || !answerable {
 		return UpkeepAdoption{}, false, err
 	}
@@ -87,9 +88,10 @@ func DeriveUpkeepAdoption(
 
 // hostDelta measures the dependency delta from baseSHA to tipSHA with the
 // authority check skipped. answerable is false when any other clause refuses.
+// changed names the manifests that differ at the tip.
 func hostDelta(
 	ctx context.Context, reader *verify.CommitReader, layout domain.ProjectImageInputLayout,
-	head domain.ProjectImageBaseInputs, baseSHA, tipSHA string,
+	head domain.ProjectImageBaseInputs, changed []string, baseSHA, tipSHA string,
 ) (delta LockfileDelta, answerable bool, err error) {
 	var findings gateFindings
 	switch layout.Toolchain {
@@ -99,8 +101,12 @@ func hostDelta(
 			return LockfileDelta{}, false, err
 		}
 		return delta, len(findings) == 0, nil
-	case domain.ProjectToolchainGo:
-		if len(head.UnsupportedInputs) != 0 {
+	case domain.ProjectToolchainGo, domain.ProjectToolchainGoSwift:
+		// A Go and Swift image's delta is its Go module's, and only while
+		// the Swift package is unchanged: no adoption answers a Swift
+		// change. Every manifest a Go image changes is its module's.
+		if _, swiftChanged := splitGoSwiftInputs(layout, changed); len(swiftChanged) != 0 ||
+			len(head.UnsupportedInputs) != 0 {
 			return LockfileDelta{}, false, nil
 		}
 		read := func(commitSHA, name string) ([]byte, error) {

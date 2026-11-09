@@ -196,101 +196,99 @@ func TestBuildContextRefusesUnsupportedSwiftInputs(t *testing.T) {
 	cases := []struct {
 		name       string
 		packageDir string
-		goDir      string
 		// extra edits the app-package fixture as applyTree does.
 		extra   tree
 		refusal string
 		invalid bool
 	}{
 		{
-			"root package.json beside a declared package", "app", "",
+			"root package.json beside a declared package", "app",
 			tree{"package.json": `{"scripts":{}}`},
 			"root package.json beside the declared Swift package", false,
 		},
-		{"declared Go module beside the package", "app", "daemon", nil, "", true},
-		{"missing Package.swift", "app", "", tree{"app/Package.swift": ""}, "copy app/Package.swift", false},
-		{"missing Package.resolved", "app", "", tree{"app/Package.resolved": ""}, "copy app/Package.resolved", false},
+		{"missing Package.swift", "app", tree{"app/Package.swift": ""}, "copy app/Package.swift", false},
+		{"missing Package.resolved", "app", tree{"app/Package.resolved": ""}, "copy app/Package.resolved", false},
 		{
-			"symlinked Package.resolved", "app", "",
+			"symlinked Package.resolved", "app",
 			tree{"real.resolved": testPackageResolved, "app/Package.resolved#": "->../real.resolved"},
 			"not a regular file", false,
 		},
 		{
-			"mirrors file", "app", "",
+			"mirrors file", "app",
 			tree{"app/.swiftpm/configuration/mirrors.json": `{"object":[],"version":1}`},
 			"unsupported Swift input app/.swiftpm/configuration/mirrors.json", false,
 		},
 		{
-			"legacy mirrors config", "app", "",
+			"legacy mirrors config", "app",
 			tree{"app/.swiftpm/config": `{"object":[],"version":1}`},
 			"unsupported Swift input app/.swiftpm/config", false,
 		},
 		{
-			"version-specific manifest", "app", "",
+			"version-specific manifest", "app",
 			tree{"app/Package@swift-6.swift": testPackageSwift},
 			"unsupported Swift input app/Package@swift-6.swift", false,
 		},
 		{
-			"mirrors file as a symlink", "app", "",
+			"mirrors file as a symlink", "app",
 			tree{"app/.swiftpm/configuration/a": "a", "app/.swiftpm/configuration/mirrors.json#": "->a"},
 			"unsupported Swift input app/.swiftpm/configuration/mirrors.json", false,
 		},
 		{
-			"version 1 Package.resolved", "app", "",
+			"version 1 Package.resolved", "app",
 			tree{"app/Package.resolved": `{"object":{"pins":[]},"version":1}`},
 			"version 1 is unsupported", false,
 		},
 		{
-			"branch pin", "app", "",
+			"branch pin", "app",
 			pin(`{"identity":"x","kind":"remoteSourceControl","location":"https://example.test/x",` +
 				`"state":{"branch":"main","revision":"671108c96644956dddcd89dd59c203dcdb36cec7"}}`),
 			`follows branch "main"`, false,
 		},
 		{
-			"local source control pin", "app", "",
+			"local source control pin", "app",
 			pin(`{"identity":"x","kind":"localSourceControl","location":"/src/x",` +
 				`"state":{"revision":"671108c96644956dddcd89dd59c203dcdb36cec7"}}`),
 			`kind "localSourceControl"`, false,
 		},
 		{
-			"registry pin", "app", "",
+			"registry pin", "app",
 			pin(`{"identity":"x.y","kind":"registry","location":"","state":{"version":"1.0.0"}}`),
 			`kind "registry"`, false,
 		},
 		{
-			"ssh location", "app", "",
+			"ssh location", "app",
 			pin(`{"identity":"x","kind":"remoteSourceControl","location":"git@github.com:x/x.git",` +
 				`"state":{"revision":"671108c96644956dddcd89dd59c203dcdb36cec7"}}`),
 			"is not an https URL", false,
 		},
 		{
-			"location with a newline", "app", "",
+			"location with a newline", "app",
 			pin(`{"identity":"x","kind":"remoteSourceControl","location":"https://example.test/x\n[core]",` +
 				`"state":{"revision":"671108c96644956dddcd89dd59c203dcdb36cec7"}}`),
 			"is not an https URL", false,
 		},
 		{
-			"abbreviated revision", "app", "",
+			"abbreviated revision", "app",
 			pin(`{"identity":"x","kind":"remoteSourceControl","location":"https://example.test/x",` +
 				`"state":{"revision":"671108c"}}`),
 			"has no exact revision", false,
 		},
 		{
-			"duplicate key", "app", "",
+			"duplicate key", "app",
 			tree{"app/Package.resolved": `{"pins":[],"version":3,"version":2}`},
 			"duplicate", false,
 		},
-		{"malformed Package.resolved", "app", "", tree{"app/Package.resolved": "{"}, "decode", false},
+		{"malformed Package.resolved", "app", tree{"app/Package.resolved": "{"}, "decode", false},
 		{
-			"package directory is a file", "app", "",
+			"package directory is a file", "app",
 			tree{"app#": "file"},
 			"is not a directory at the commit", false,
 		},
-		{"package directory is a symlink", "linked", "", tree{"linked#": "->app"}, "is not a directory at the commit", false},
-		{"package directory is missing", "absent", "", nil, "is not a directory at the commit", false},
-		{"absolute package directory", "/app", "", nil, "", true},
-		{"package directory climbs out", "app/../..", "", nil, "", true},
-		{"package directory is dot", ".", "", nil, "", true},
+		{"package directory is a symlink", "linked", tree{"linked#": "->app"}, "is not a directory at the commit", false},
+		{"package directory is missing", "absent", nil, "is not a directory at the commit", false},
+		{"absolute package directory", "/app", nil, "", true},
+		{"package directory climbs out", "app/../..", nil, "", true},
+		{"package directory is dot", ".", nil, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -300,7 +298,6 @@ func TestBuildContextRefusesUnsupportedSwiftInputs(t *testing.T) {
 			}
 			applyTree(t, source, tc.extra)
 			request := swiftRequest(tc.packageDir)
-			request.GoModuleDir = tc.goDir
 			_, err := createBuildContext(filepath.Join(t.TempDir(), "context"), source, request, "sha256:recipe")
 			if tc.invalid {
 				if !errors.Is(err, ErrInvalidRequest) {

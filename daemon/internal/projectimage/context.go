@@ -26,8 +26,9 @@ const (
 
 	// v2 added the Go toolchain sources to the digested set; v3 added the
 	// vacuum, shellcheck, Python, and procps pins a Go image bakes (#2376);
-	// v4 added the Swift toolchain sources (#2183).
-	preparationDigestVersion = "freeside.project-image-preparation/v4"
+	// v4 added the Swift toolchain sources (#2183); v5 added the Go and
+	// Swift helper and Containerfile (#2881).
+	preparationDigestVersion = "freeside.project-image-preparation/v5"
 )
 
 const nodeToolchainLauncher = `#!/usr/bin/busybox sh
@@ -110,8 +111,8 @@ func PreparationDigest() domain.Digest {
 }
 
 // preparationSources lists, in digest order, every builder source
-// PreparationDigest addresses. The Go and Swift preparation helpers and
-// Containerfiles enter as templates rendered without a module or package
+// PreparationDigest addresses. The Go, Swift, and Go and Swift preparation
+// helpers and Containerfiles enter as templates rendered without a module or package
 // directory or a request: the directory is recorded in the image's
 // environment on its own.
 func preparationSources() []string {
@@ -148,6 +149,8 @@ func preparationSources() []string {
 		swiftToolchainArchiveSHA256,
 		swiftAptSnapshot,
 		strings.Join(swiftAptPackages, " "),
+		goSwiftPrepareScript("", ""),
+		renderGoSwiftContainerfile(Request{}, ""),
 	}
 }
 
@@ -180,6 +183,8 @@ func renderContainerfile(
 		return renderGoContainerfile(request, recipeDigest)
 	case domain.ProjectToolchainSwift:
 		return renderSwiftContainerfile(request, recipeDigest)
+	case domain.ProjectToolchainGoSwift:
+		return renderGoSwiftContainerfile(request, recipeDigest)
 	}
 	return ""
 }
