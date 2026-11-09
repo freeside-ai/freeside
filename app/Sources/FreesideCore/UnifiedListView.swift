@@ -665,6 +665,9 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     let keyword: SidebarRowKeyword
     var time: SidebarRowTime? = nil
     var isSelected = false
+    /// True draws the unviewed dot at the keyword line's trailing end
+    /// (#2930). It takes no width when absent, so no other row reserves any.
+    var showsUnviewedDot = false
     /// False draws no chip line where the header stacks.
     var hasBadges = false
     /// True for a row inside a bordered group, which draws the border and
@@ -693,7 +696,13 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     private var lines: some View {
         VStack(alignment: .leading, spacing: SidebarRowSurface.lineGap) {
             if SidebarRowSurface.stacksHeader(at: dynamicTypeSize) {
-                keywordLine
+                HStack(alignment: .center, spacing: 10) {
+                    keywordLine
+                    if showsUnviewedDot {
+                        Spacer(minLength: 0)
+                        UnviewedDot()
+                    }
+                }
                 if hasBadges {
                     badges
                 }
@@ -702,6 +711,9 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
                     keywordLine
                     Spacer(minLength: 0)
                     badges
+                    if showsUnviewedDot {
+                        UnviewedDot()
+                    }
                 }
             }
             title
@@ -776,6 +788,21 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     }
 }
 
+/// The unviewed mark (#2930): an accent dot at the top right of the row, so
+/// it neither indents the row nor costs the title any width. Its color is the
+/// accent for every item, never the item's posture (devlog 2026-11-09-0820).
+/// VoiceOver reads it as Unviewed after the type and any chips.
+struct UnviewedDot: View {
+    static let diameter: CGFloat = 8
+
+    var body: some View {
+        Circle()
+            .fill(Color.accentText)
+            .frame(width: Self.diameter, height: Self.diameter)
+            .accessibilityLabel("Unviewed")
+    }
+}
+
 /// A sidebar row's keyword line: the leading word, with `AGENT` after it
 /// when the row's serif line is agent prose (plan §9).
 struct SidebarRowKeyword {
@@ -833,7 +860,7 @@ struct InboxRowView: View {
         // item (R27), so the row and the card it opens name the type alike.
         return SidebarRow(
             keyword: .init(text: DecisionCardComposition.eyebrow(for: item).keyword),
-            time: time, isSelected: isSelected, hasBadges: hasBadges
+            time: time, isSelected: isSelected, showsUnviewedDot: isUnviewed, hasBadges: hasBadges
         ) {
             rowBadges
         } title: {
@@ -887,6 +914,12 @@ struct InboxRowView: View {
                 StateChip(label: "Degraded", color: .waxText)
             }
         }
+    }
+
+    /// The unviewed mark (#2930): an open item whose current decision surface
+    /// no device has opened. A closed item never shows it.
+    private var isUnviewed: Bool {
+        AttentionDisplay.isUnviewed(item)
     }
 
     private var hasBadges: Bool {

@@ -5,6 +5,20 @@ import Testing
 @testable import FreesideModel
 
 @Suite struct AttentionDisplayTests {
+    /// The unviewed mark (#2930) is for open items no device has opened at
+    /// their current surface; a closed item never carries it, whatever the
+    /// daemon serves.
+    @Test func onlyAnOpenUnopenedItemIsUnviewed() {
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        for status in Components.Schemas.ItemStatus.allCases {
+            item.status = status
+            item.surface_first_opened_at = nil
+            #expect(AttentionDisplay.isUnviewed(item) == (status == .open), "\(status), never opened")
+            item.surface_first_opened_at = Date(timeIntervalSince1970: 1_767_400_000)
+            #expect(!AttentionDisplay.isUnviewed(item), "\(status), opened")
+        }
+    }
+
     @Test func externalReviewDecisionNamesItsEffects() {
         let item = AttentionFixtures.routedReviewDispute().item
         #expect(AttentionDisplay.ask(item) == "How should these external review findings be handled?")

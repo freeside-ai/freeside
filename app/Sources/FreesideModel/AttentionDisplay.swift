@@ -1238,6 +1238,13 @@ package enum AttentionDisplay {
         status != .open
     }
 
+    /// Whether the inbox marks an item unviewed (#2930): open, and no device
+    /// has opened its current decision surface. The value is a display hint the
+    /// daemon derives from card_opened; nothing else reads it.
+    package static func isUnviewed(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item.status == .open && item.surface_first_opened_at == nil
+    }
+
     package static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
         item.readiness?.value1._class == .ready_degraded
     }
