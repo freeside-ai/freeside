@@ -4307,6 +4307,7 @@ world-writable unless noted, and so is every ancestor of the root:
   jobs/<slot>/<job-id>.sb  the job's sandbox profile
   pf/anchor.conf           the slots' packet-filter anchor, mode 0644
   swift-cache/             the offline Swift dependency cache (the operator, 0755)
+  swift-cache/<key>/       one entry per dependency key (the operator, 0755)
 ```
 
 **Profile.** `macverify.DefaultSandboxProfile()` denies all network access,
@@ -4361,7 +4362,8 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   enable reference each boot.
 
 Install prints the `macverify.Config` values it determines (`ExecutorRoot`
-and `Slots`). A rerun changes nothing when nothing is missing.
+and `Slots`); the daemon's `Config` also names the `Toolchain` pin below. A
+rerun changes nothing when nothing is missing.
 
 **Adoption.** Install refuses, changing nothing, when a slot or group name or
 id is held by something it did not create, when the operator is root or
@@ -4378,6 +4380,81 @@ is a slot. An account in `admin` is refused. So install completes the earlier
 hand setup in place, and refuses a real user who shares a slot's name. To change the slot count, remove and
 install again.
 
+**Toolchain pin.** `Config.Toolchain` pins the operator-installed Xcode by its
+build number (`Build version` in `xcodebuild -version`, such as `27B52`) and
+Swift by its `swiftlang-` token (in `swift --version`, such as
+`swiftlang-6.4.2.1.9`). The room reads the host's before every job and refuses
+the job with `ErrToolchainMismatch`, naming both, when either differs. The pin
+is part of the configuration digest, so updating Xcode means updating the pin
+and earning the conformance record again.
+
+**Swift dependencies.** Verification never fetches. When a job's workspace
+holds any `Package.resolved`, its key is a SHA-256 over every
+`Package.resolved`'s path and digest, and the room refuses the job before its
+command runs unless `<root>/swift-cache/<key>/` holds a complete entry. The
+refusal is `ErrSwiftCacheMissing` and names the key and the files:
+
+```text
+macverify: no complete Swift dependency cache entry: key <key> for
+app/Freeside.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved,
+app/Package.resolved: the entry is incomplete: ...; run freesided swift-cache
+populate on a checkout of this commit
+```
+
+A workspace with no `Package.resolved` runs without a cache. Install creates
+`swift-cache/` empty; fill an entry as the operator, on the host, with
+network, from a checkout of the commit to verify, and again whenever a
+`Package.resolved` changes:
+
+```sh
+freesided swift-cache populate --executor-root /Library/Freeside/macverify --source <checkout>
+```
+
+Populate resolves the checkout online, mirrors every dependency repository
+and its submodules (https URLs only), writes the seed, then proves the seed
+resolves every `Package.resolved` unchanged with every proxy pointed at a
+closed port. It writes `record.json` last, so a failed populate leaves no
+entry. It prints `populated <key>`, or `already cached <key>` without fetching
+when the entry is complete. An entry holds:
+
+```text
+record.json                       written last; marks the entry complete
+mirrors/<h>/<name>.git            bare mirrors, read in place by the slot
+seed/home/.gitconfig              rewrites each dependency URL to its mirror
+seed/job/workspace/<pkg>/.swiftpm/configuration/mirrors.json
+seed/job/source-packages/         xcodebuild's pre-seeded SourcePackages
+```
+
+The helper's `prepare` copies `seed/job/` into the job directory and
+`.gitconfig` into the slot's home. It refuses an entry unless `swift-cache/`,
+the entry, and its seed directories are real directories the operator owns
+that are not group- or world-writable, and `record.json` is a regular file.
+The cache serves git dependencies only: populate refuses a registry pin and
+a resolve that downloads a binary artifact.
+
+Recipe commands run from the job's workspace. A recipe for Freeside's `app/`
+reads the seed through these flags:
+
+```sh
+swift test --package-path app --only-use-versions-from-resolved-file --disable-sandbox
+xcodebuild -project app/Freeside.xcodeproj -scheme FreesideMac \
+  -destination platform=macOS -derivedDataPath ../derived-data \
+  -clonedSourcePackagesDirPath ../source-packages \
+  -disablePackageRepositoryCache -onlyUsePackageVersionsFromResolvedFile \
+  -scmProvider system -skipPackagePluginValidation -skipMacroValidation \
+  -IDEPackageSupportDisableManifestSandbox=YES \
+  -IDEPackageSupportDisablePluginExecutionSandbox=YES \
+  'OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox' CODE_SIGNING_ALLOWED=NO build
+```
+
+SwiftPM reads the seeded `mirrors.json`. xcodebuild reads the seeded
+`source-packages/`, and `-scmProvider system` makes it fetch through git,
+which reads the seeded `.gitconfig`. The sandbox flags exist because SwiftPM
+and Xcode sandbox manifests, plugins, and macros with `sandbox-exec`, which
+cannot nest inside the room's profile. `-skipMacroValidation` and
+`-skipPackagePluginValidation` stand in for the trust prompt a fresh slot home
+has never answered. Decision record: `devlog/2026-11-09-0909-macos-swift-cache.md`.
+
 **Run the live suites.** The room suite runs a probe through the production
 room as a real slot of an installed executor: loopback refused, resolver
 empty, writes outside the job directory refused, no window-server session,
@@ -4389,6 +4466,18 @@ outside `slots.conf`:
 FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify \
   FREESIDE_MACVERIFY_SLOTS=fvslot1,fvslot2 \
   bash scripts/check.sh daemon test -- ./internal/macverify/... -run Live -v
+```
+
+The Swift live suite populates the cache for `app/` at a pinned commit, runs
+the two recipe commands above as a slot with networking denied, then runs them
+again with the cache masked and expects each to fail by trying the network.
+It takes minutes and leaves a few hundred megabytes in the cache:
+
+```sh
+FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_SWIFT_LIVE_TEST=1 \
+  FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify FREESIDE_MACVERIFY_SLOTS=fvslot1,fvslot2 \
+  bash scripts/check.sh daemon test -- ./internal/macverify/... \
+  -run LiveRoomServesSwift -v -timeout 90m
 ```
 
 The install suite builds `freesided`, installs two slots under names disjoint

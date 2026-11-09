@@ -242,6 +242,9 @@ func main() {
 		case "publication-formats":
 			runPublicationFormatsMain(os.Args[2:])
 			return
+		case "swift-cache":
+			runSwiftCacheMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
