@@ -4296,9 +4296,12 @@ struct DecisionDetailView: View {
         private var canTakeRecommendation: Bool {
             guard let item = model.snapshot?.item else { return false }
             let recommendation = DecisionRecommendationPresentation.of(item)
+            let ranking = actionRanking(item)
             return DecisionKeyboardGate.canTakeRecommendation(
-                rankedRecommendation: actionRanking(item).recommended,
+                rankedRecommendation: ranking.recommended,
                 presentedRecommendation: recommendation?.action,
+                recommendationHoldsFill: DecisionCardComposition.recommendationIsFilled(
+                    for: item, ranking: ranking, holdsPick: holdsPick(item)),
                 actionsEnabled: model.actionsEnabled,
                 isSubmittable: recommendation.map { model.isSubmittable($0.action) } ?? false,
                 inputIsReady: recommendation.map {

@@ -60,7 +60,7 @@ The daemon README lists [the production identifiers and persistent stores](../da
 
 - ⌘R refreshes; ⌘N opens the New Task composer (File > New Task), enabled only while the sync is fresh.
 - With the list focused, J selects the next Needs you row and K the previous one; the arrow keys keep their native list behavior.
-- Return takes only a validated authoritative recommendation. Esc dismisses pending action UI without resolving the item. Space is unbound.
+- Return takes only a validated authoritative recommendation, and only while its button holds the card's fill: a held finding pick moves the fill, and Return leaves the acceptance alone. Esc dismisses pending action UI without resolving the item. Space is unbound.
 
 ## Installing the Operator Client
 
