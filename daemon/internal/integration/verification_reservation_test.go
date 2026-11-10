@@ -366,3 +366,56 @@ func TestHandoffVerificationWaitsForMemory(t *testing.T) {
 		t.Fatal("the handoff kept its memory after verifying")
 	}
 }
+
+// TestRebuildRecipeReadWaitsForMemory: reading the recipe a rebuild keeps runs
+// a container at the verification size, so it reserves first. With the budget
+// full nothing is read or built and the run waits; once memory frees the
+// read holds the reservation, the build runs, and the job releases it. A read
+// that fails releases what it took.
+func TestRebuildRecipeReadWaitsForMemory(t *testing.T) {
+	t.Parallel()
+	p, builder := newProjectImageRebuildHarness(t, rebuildCandidate("registry.npmjs.org"), rebuildDeclaredSet)
+	size := ward.DefaultLaunchSize(ward.LaunchVerification).MemoryMiB
+	p.startAndRecordExport(t)
+	p.budgetMemory(t, size)
+	p.holdMemory(t, size, size)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("full budget = %#v, %v; want the task left waiting", result, err)
+	}
+	if p.room.reads != 0 || len(p.room.sizes) != 0 || len(builder.requests) != 0 {
+		t.Fatalf("a rebuild waiting for memory read %d recipes in %d rooms and built %d times",
+			p.room.reads, len(p.room.sizes), len(builder.requests))
+	}
+	id := p.capacityHold(t)
+	if !p.launchWaiting(t, id) {
+		t.Fatalf("hold names %q, which does not wait for memory", id)
+	}
+
+	p.freeMemory(t)
+	p.room.read = func(context.Context) ([]byte, error) { return nil, errors.New("recipe read timed out") }
+	p.now = p.now.Add(time.Hour)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 ||
+		result.BlockedItemsCreated != 0 {
+		t.Fatalf("failed recipe read = %#v, %v; want the task retried", result, err)
+	}
+	if len(builder.requests) != 0 || !p.memoryFits(t, size, size) {
+		t.Fatalf("a failed recipe read built %d times or kept its memory", len(builder.requests))
+	}
+
+	fits := p.probeMemoryOnRead(t, size)
+	p.now = p.now.Add(time.Hour)
+	p.reconcileUntilReady(t, 4)
+	if len(builder.requests) != 1 {
+		t.Fatalf("builds = %d, want 1", len(builder.requests))
+	}
+	// The rebuild's read, then the verification room's: each held the memory.
+	if len(*fits) != 2 || (*fits)[0] || (*fits)[1] {
+		t.Fatalf("memory fit during each recipe read = %v, want both reads holding it", *fits)
+	}
+	if !p.memoryFits(t, size, size) || p.launchWaiting(t, id) {
+		t.Fatal("the job kept its memory or its wait after verifying")
+	}
+}

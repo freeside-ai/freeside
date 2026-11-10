@@ -510,7 +510,16 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 			clause: projectimage.RebuildRefusalProofFailed, detail: boundedRebuildText(err.Error()),
 		}, nil
 	}
+	// Reading the recipe runs a container at the verification size, so it
+	// reserves as the verification room does, under the same invocation, and
+	// releases once the read proves its container gone.
+	if err := w.reserveVerification(ctx, task, binding); err != nil {
+		return domain.ProjectImage{}, nil, err
+	}
 	_, recipe, err := w.roomAndRecipe(ctx, task, binding, binding.image)
+	if releaseErr := w.releaseVerification(ctx, task, err); releaseErr != nil {
+		return domain.ProjectImage{}, nil, errors.Join(err, releaseErr)
+	}
 	if err != nil {
 		return domain.ProjectImage{}, nil, err
 	}
