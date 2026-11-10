@@ -61,7 +61,7 @@ public final class SyncCoordinator {
     /// time, so the task page finds it after a relaunch.
     public private(set) var pendingParkedTaskMove: PendingParkedTaskMove?
     package internal(set) var parkedTaskMoveSending = false
-    package internal(set) var parkedTaskMoveFailure: String?
+    package internal(set) var parkedTaskMoveFailure: ParkedTaskMoveFailure?
     @ObservationIgnored package lazy var parkedTaskMove = ParkedTaskMoveModel(coordinator: self)
     /// The change of a task's line sent and not yet settled by sync; one at
     /// a time, so the task page finds it after a relaunch.

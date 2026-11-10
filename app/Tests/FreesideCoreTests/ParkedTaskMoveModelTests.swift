@@ -68,7 +68,8 @@ import Testing
 
         await model.move(taskID: taskID, to: .init(enrollment_id: UsageFixtures.unsupportedCollectorID))
 
-        #expect(model.failure == "The daemon refused the move (status 400). Nothing was changed.")
+        #expect(model.failure?.message == "The daemon refused the move (status 400). Nothing was changed.")
+        #expect(model.failure?.taskID == taskID)
         #expect(coordinator.pendingParkedTaskMove == nil)
         #expect(implementerLine(coordinator, taskID) == before)
     }
@@ -86,7 +87,7 @@ import Testing
             taskID: taskID,
             to: .init(enrollment_id: UsageFixtures.readingCollectorID, model_id: "claude-sonnet", effort: "max"))
 
-        #expect(model.failure != nil)
+        #expect(model.failure?.message != nil)
         #expect(implementerLine(coordinator, taskID) == before)
     }
 
