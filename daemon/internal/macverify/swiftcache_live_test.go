@@ -66,7 +66,10 @@ func swiftLiveWorkspace(t *testing.T) string {
 		t.Fatal(err)
 	}
 	archive := filepath.Join(t.TempDir(), "tree.tar")
-	runGit(t, "archive", "-o", archive, commit)
+	// git archive run below the top level holds only that directory, so it
+	// runs at the top level for the whole tree.
+	top := strings.TrimSpace(runGit(t, "rev-parse", "--show-toplevel"))
+	runGit(t, "-C", top, "archive", "-o", archive, commit)
 	if out, err := exec.Command("/usr/bin/tar", "-x", "-f", archive, "-C", dir).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed tar extracting the archive this test wrote
 		t.Fatalf("extract the tree at %s: %v\n%s", commit, err, out)
 	}
