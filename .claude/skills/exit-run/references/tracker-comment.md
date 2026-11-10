@@ -1,6 +1,6 @@
 # Tracker Comment Templates
 
-Three records an exit run writes on the tracker. The diagram follows
+Four records an exit run writes on the tracker. The diagram follows
 `docs/tracker-format.md` (§status) with Freeside's additions in
 docs/coordination.md (Tracking Issues); this file only fixes the section
 order so consecutive runs read alike. Replace every bracketed placeholder;
@@ -28,6 +28,7 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 | Step | Result |
 | --- | --- |
 | Rehearsal | <fixture pass: the pass's build SHA, and when the real run started from a newer tip, that SHA and the `scripts/runtime-diff.sh` verdict line; root; settings digest; canonical issue; task and run ids; `billable_cost`; record checks, alerts raised, lease released: passed or the finding> |
+| Seeded pass, <gate> | <the mechanism and its command; build SHA; root and each difference from the rehearsal, or the scenario's name; task and run ids; the record fields that show the response; `billable_cost`> |
 | State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
 | Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes; the iPhone's notifications switch: off, or on from `<time>` for <gate>> |
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
@@ -44,7 +45,11 @@ recorded before launch.
 
 | Gate | Trigger | Expected on Mac | Expected on iPhone | When | Result |
 | --- | --- | --- | --- | --- | --- |
-| <gate> | <real, synthetic, or none> | <expected> | <expected> | <point in the run> | <result> |
+| <gate> | <real, synthetic, seeded, or none> | <expected> | <expected> | <point in the run> | <result> |
+
+**Exit-proof unit (#<n>):** <each Acceptance line in its own words:
+evidenced by <row or record>, or not evidenced and why> ... The unit's
+checkboxes and state are untouched until the owner accepts the run.
 
 **Actions exercised on real items:** <action (card, device)> ...
 **Not evidenced this run:** <action: why; what covers it instead> ...
@@ -55,6 +60,11 @@ per device; the notification only where the gate expected one> ... These
 items were raised by command, not by the condition: they prove the item
 reaches the clients and how it displays, and the daemon's tests prove the
 condition raises the item.
+**Seeded-condition proofs:** <gate: the mechanism and its command; the
+pass it ran on; the record fields that show the response, such as a line's
+`passed_over` or a run's hold and reset> ... These conditions were seeded
+or injected, not produced by the provider: they prove what the daemon does
+once the condition holds.
 
 ### Findings
 
@@ -165,6 +175,47 @@ issue.> The tracker stays open.
 
 Resume after <condition>, using <the documented path>.
 ```
+
+## Exit-Preparation Comment (Mid-Wave Rehearsal)
+
+One comment per attempt, posted when the attempt ends, whether or not a
+pass completed (SKILL.md, A Mid-Wave Rehearsal).
+
+```markdown
+## Exit Preparation: Mid-Wave Rehearsal (#<unit>), Attempt <k>
+
+**<Bottom line: did a pass complete, and which of the unit's Acceptance
+lines does this attempt evidence, in two sentences.>** <What stopped it, or
+what needs an owner call.>
+
+Evidence basis: `main` at `<sha>`, the state root `<name>`, and the task
+record. No operator took part, and no unit issue's checklist was edited.
+
+### The Pass
+
+| Step | Result |
+| --- | --- |
+| Rehearsal | <as the exit-run comment's Rehearsal row; for an attempt that stopped, the step it reached and the refusal or error, verbatim> |
+| Seeded pass, <line> | <as the exit-run comment's Seeded pass row> |
+| Spend | <per role; total> |
+
+**Acceptance (#<unit>):** <each line in its own words: evidenced by <row
+or record>, not evidenced and why, or needs an owner call>.
+
+### Findings
+
+<The exit-run comment's Findings section, with the proposal.>
+
+### What I Verified And What I Didn't
+
+- Passed: <...>.
+- Checked: <...>.
+- Not run: <...>.
+```
+
+Record the owner's answer as a dated status revision under the bottom
+line: the pass accepted, and any Acceptance line the owner narrowed or
+moved to the exit proof.
 
 ## Tracker Body Update
 

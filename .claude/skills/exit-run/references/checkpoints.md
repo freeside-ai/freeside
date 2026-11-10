@@ -1,6 +1,7 @@
 # Checkpoint Lists
 
-Templates for the exit run's gate table and its five operator checkpoints.
+Templates for the exit run's gate table and its operator checkpoints: five
+on every run, and a sixth when a seeded pass has a row that needs a device.
 SKILL.md says when each is used; this file fixes their shape so every run
 asks the same way. Replace every bracketed placeholder and delete rows the
 contract doesn't need. Send each list as one message and wait for all of
@@ -18,14 +19,16 @@ anything that looks wrong, on either device.
 ## Gate Table
 
 Part of the exit contract, written before the go-ahead. One row per gate
-the tracker's Exit section names. The trigger names come from `freesided
-raise-item -list` on the run's build.
+the tracker's Exit section names, and per Acceptance line of the
+exit-proof unit that no Exit bullet covers. The trigger names come from
+`freesided raise-item -list` on the run's build.
 
 ```markdown
 | Gate | Trigger | Expected on Mac | Expected on iPhone | When |
 | --- | --- | --- | --- | --- |
 | <gate as the Exit section words it> | Real: <the condition the run produces> | <the card and where it shows, or the state> | <same> | Before the merge |
 | <gate> | Synthetic: `freesided raise-item -db <db> -alert <name> [-run <run>]` (synthetic-trigger proof) | <the card and where it shows> | <same> | After the merge and the completion fact |
+| <gate> | Seeded: <the mechanism the gate names and its command> (seeded-condition proof) | <the card and where it shows, the state, or "record only"> | <same> | On its seeded pass, or the rehearsal when the seed rides it |
 | <gate> | None: <why no condition or alert reaches it; what would give it a trigger> | Not measurable | Not measurable | Recorded before launch |
 ```
 
@@ -152,3 +155,31 @@ Repeat rows 1 and 2 per raised alert. `stall` and `held-work` raise
 system-health findings, which show in Settings > System Health;
 `review-growth` raises a review card in the inbox. Add "notification seen
 or not" to the iPhone row's report only when the gate table expects one.
+
+## 6. A Seeded Pass (When A Row Needs A Device)
+
+Sent only when a seeded-condition row's Expected cells name something a
+device shows, and only after the rehearsal has completed and list 1 has
+passed. The clients pair to the seeded pass's daemon, so send its pairing
+rows first (list 2, rows 1 and 2) when it isn't the daemon they are
+already paired to. A row whose Expected cells say "record only" needs no
+list.
+
+```markdown
+**Check the seeded <condition>.** This condition is seeded to test what
+the daemon does once it holds. Task `<task title>`.
+
+| # | Device | Action | Report back |
+| --- | --- | --- | --- |
+| 1 | <device the contract names> | Scenario pass only: approve the specification card, then keep the task open on both devices | Approved. |
+| 2 | Mac | Open the task | The state it shows; a screenshot. |
+| 3 | iPhone | Open the task | The state it shows; a screenshot. |
+| 4 | <device the contract names> | <the action the gate names, such as Retry With Another Agent on a held run> | <what the card or task shows after it> |
+| 5 | Either | Anything that looks wrong | A screenshot. |
+```
+
+Drop row 1 on a deputy pass and row 4 when the gate names no action. On
+the `quota-park` scenario the park lasts two minutes from the refusal, so
+send this list before the approval: the operator's approval starts the
+attempt the provider refuses, and rows 2 and 3 are read while the task is
+parked.

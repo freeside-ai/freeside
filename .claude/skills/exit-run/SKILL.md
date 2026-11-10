@@ -1,6 +1,6 @@
 ---
 name: exit-run
-description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive freesided deputy against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
+description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive freesided deputy against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to run a tracker's mid-wave rehearsal (the fixture pass alone), to re-run a prior exit run, or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
 ---
 
 # Exit Run
@@ -43,11 +43,16 @@ with the settings naming a manual-submission file). Read it from the tracker's E
 exit-gate comment, which may also pin daemon flags or target properties
 (`references/prior-runs.md` lists the ones past trackers required).
 
+`/exit-run <tracker> rehearsal`, or a rehearsal unit's number in place of
+the target, runs a mid-wave rehearsal instead: the fixture pass alone, with
+no target and no operator (A Mid-Wave Rehearsal).
+
 Every run has two passes on the same `freesided` build SHA, or on a
 newer one `scripts/runtime-diff.sh` carries the pass to: a fixture pass on
 Freeside's fixture repository (Rehearse Before The Operator), then the real
-run. Derive the exit contract (below), then state the derived mode, its
-reason, the expected spend of both passes, and every gate the contract
+run. A contract with a seeded-condition row can add a pass for it (A
+Seeded Pass). Derive the exit contract (below), then state the derived mode, its
+reason, the expected spend of every pass, and every gate the contract
 leaves without a trigger, and wait for the user's go-ahead before
 preflight: a run costs real money, opens a real PR on someone's
 repository, and takes the operator's afternoon, so a wrong reading should
@@ -63,15 +68,23 @@ order:
    Notes block. A tracker written before `docs/tracker-format.md` carries
    the close condition in its intro and the dispositions on its unit
    lines.
-2. Every prior exit-run comment on the same tracker, newest first. They
+2. The exit-proof unit, when the tracker has one. Wave planning lists
+   it under `### Owner-run`, and its Objective names this skill. Each of
+   its Acceptance lines is a row of the run record with its evidence
+   units. Its comments, and the status revisions on the tracker's
+   rehearsal comments, carry the owner calls made since planning (an
+   accepted rehearsal, a narrowed criterion). Where it and the tracker's
+   Exit section differ, say so in the go-ahead message; don't pick one.
+3. Every prior exit-run comment on the same tracker, newest first. They
    carry the gates still open, the evidence gaps a previous run left (an
    action nobody exercised on a real item, a check that ran as a no-op), and
    owner decisions that narrowed the remaining exit (for example "only a
    live Stop check remains").
-3. For a wave tracker, the plan §11 row and the internal-exit subsection its
+4. For a wave tracker, the plan §11 row and the internal-exit subsection its
    phase parenthetical names: the exit evaluation is written against those
-   elements, one row each.
-4. `references/prior-runs.md`, the digest of previous exit runs, and the
+   elements, one row each. A row the table marks as folded has no tracker;
+   its work is in the row that carries it.
+5. `references/prior-runs.md`, the digest of previous exit runs, and the
    latest two or three exit-run comments on other trackers: the tracker
    issues among
    `gh search issues --repo <owner/repo> "exit run" --sort updated`. The
@@ -91,9 +104,10 @@ target (#1275 is the precedent), or record the gate as not measurable,
 before the run rather than after.
 
 The **gate table** plans every check before launch, one row per gate the
-tracker's Exit section names (template in `references/checkpoints.md`):
+tracker's Exit section names and per Acceptance line of the exit-proof
+unit that no Exit bullet covers (template in `references/checkpoints.md`):
 the trigger, the expected result on the Mac and on the iPhone, and the
-point in the run where it must happen. A trigger is one of three things:
+point in the run where it must happen. A trigger is one of four things:
 
 - **A real condition the run produces:** the specification card, the
   published pull request and its ready card, the source-issue closure card
@@ -109,6 +123,16 @@ point in the run where it must happen. A trigger is one of three things:
   raises, on the run's own daemon. Mark each such row a
   **synthetic-trigger proof**: it proves the item reaches the clients and
   is shown, and the Go tests, not the run, prove the condition raises it.
+- **A seeded or injected condition:** for a gate whose real condition
+  would spend real allowance or can't be produced on demand (an exhausted
+  usage window, a provider's quota refusal). The gate or the exit-proof
+  unit names the mechanism, and daemon/README.md holds its command (Seed
+  An Exhausted Window For An Exit Run; Run A Scenario, which lists every
+  scenario and what it plays): read it on the run's build. The tracker says which gates the real run proves and which
+  a seeded pass proves; where it doesn't, ask before the go-ahead. Mark
+  each such row a **seeded-condition proof**: it proves what the daemon
+  does once the condition holds, not that the provider produces the
+  condition. A Seeded Pass (below) says how it runs.
 - **None.** A gate no real condition and no `raise-item` alert can reach
   goes into the contract and the go-ahead message as untriggered, with
   what would give it a trigger, before launch. Never discover it after.
@@ -131,7 +155,8 @@ The point in the run is **before the merge** for anything that needs the
 ready pull request open (an external review, a ready-card action), or
 **after the merge and the completion fact** for `review-growth`, which is
 refused until the run's work unit is recorded complete, and the alerts
-raised with it (Walk Through on Both Clients).
+raised with it (Walk Through on Both Clients). A seeded row's point is its
+seeded pass, or the rehearsal when its seed rides it.
 
 The closure card is **before the merge**, and first among those: under the
 human gate, the pull request stays a draft until the card is decided
@@ -299,6 +324,75 @@ and run ids, `billable_cost`, and the result of the record checks, the
 alerts, and the lease release. A pass that fails is an Exit Preparation
 comment on the tracker with the defect filed, and no operator step happens
 until a later pass completes.
+
+### A Seeded Pass
+
+A seeded-condition row (Derive the Exit Contract) runs on a seeded pass: a
+fixture pass, or a scenario instance, with the condition seeded. A row
+that needs a person, or a driver other than the deputy, gets a pass of its
+own after the rehearsal completes, because the rehearsal stays unattended.
+A seed that needs neither may ride the rehearsal pass, as #2396's routing
+seed did, when every key of the fixture's table keeps its value.
+docs/production-walkthrough.md (Rehearse Before The Real Run, **A seeded
+pass**) holds the procedure; this says what makes one count.
+
+1. **The mechanism is the gate's**, run as daemon/README.md documents it
+   on this build. A gate that names a mechanism the build doesn't have is
+   an untriggered row, not something to approximate.
+2. **It changes only what the seed needs.** A pass on the deputy starts
+   from the fixture's settings on a fresh root, and its record names each
+   difference from the rehearsal (a second writer agent on a second pool,
+   for one). A scenario instance has no fixture settings; record its
+   scenario name and build.
+3. **The record shows the response, not the seed.** Read the fields the
+   gate names from the task record: a line's `passed_over` provenance for
+   routing, a run's hold and its reset for a park. The seeding command's
+   own output proves only that the seed was written.
+4. **A row that needs a device gets a checkpoint of its own**
+   (`references/checkpoints.md`, A Seeded Pass), with the clients paired
+   to that pass's daemon and the daemon left serving until the operator
+   has answered. Nothing is asked of the operator until the rehearsal has
+   completed and the environment checkpoint has passed.
+5. **A scenario's specification approval is a step of the pass.** The
+   `quota-park` scenario waits for one before the refusal plays, and
+   `freesided` has no command for it. In an exit run the operator approves
+   it in a paired client, as the first row of that checkpoint. A mid-wave
+   rehearsal has no operator: approve it through the client API on the
+   scenario's ephemeral instance, as #2396's fourth attempt did, and say
+   so in the record. That is no precedent for a card on a deputy pass or
+   a real run, where a card that needs a person stays a person's.
+
+Record each seeded pass as its own row of the run record, beside the
+Rehearsal row; a seed that rode the rehearsal is named in both rows.
+
+### A Mid-Wave Rehearsal
+
+A wave tracker can carry a rehearsal unit under `### Owner-run`: the
+fixture pass alone, on `main` partway through the wave, so a defect
+surfaces mid-wave and not at the exit run. It starts by the owner's word.
+Run this section's fixture pass, and any seeded pass the unit's Acceptance
+names, with these differences from an exit run:
+
+- **No real target and no operator.** There is no go-ahead on real spend
+  and no checkpoint. Preflight's checks of the real project don't apply,
+  and its exit set can't be resolved mid-wave; run `prelaunch` on the
+  pass's own root instead, and record the `main` SHA the pass builds.
+- **The contract is the unit's Acceptance list.** Say which line each
+  step evidences.
+- **Record every attempt when it happens**, as an Exit Preparation comment
+  on the tracker (`references/tracker-comment.md`), an attempt that stops
+  before a pass completes included. Of #2396's four attempts, the second
+  was recorded nowhere when it stopped and the third only on its defect's
+  issue, so the tracker learned of both from the fourth's comment.
+- **File findings and propose dispositions as a run does** (File Findings,
+  Propose Exit Dispositions), against this wave's tracker.
+- **The owner accepts the pass.** Leave the unit's checkboxes and state
+  alone, and report which Acceptance lines the record evidences and which
+  need an owner call. Record the owner's answer as a dated status revision
+  on the comment, any call that changes what the exit proof must show
+  included: the exit run's contract reads it there. Then, on the owner's
+  word, close the unit with a link to the comment and tick its Owner-run
+  entry, as for the exit-proof unit (Record on the Tracker).
 
 ## Run the Deputy
 
@@ -596,14 +690,19 @@ note.
 
 - **Bottom line first:** can the tracker close, and if not, what stands
   between here and closure, in two sentences.
-- **Run record** as a table: the fixture pass, state root, clients and
-  their commit, each campaign and attempt with its result, review, task
-  record, spend, PR, base and head.
+- **Run record** as a table: the fixture pass, each seeded pass, state
+  root, clients and their commit, each campaign and attempt with its
+  result, review, task record, spend, PR, base and head.
 - **Gate table** from the contract, each row with its result.
+- **Exit-proof unit**, when the tracker has one: one line per Acceptance
+  line, saying what evidences it or why it isn't evidenced.
 - **Actions exercised** on real items, per device, and the ones not
   evidenced with why.
 - **Synthetic-trigger proofs**, apart from the real items: per raised alert,
   the command, the item ID, and where each device showed the card.
+- **Seeded-condition proofs**, apart from both: per seeded row, the
+  mechanism, the pass it ran on, and the record fields that show the
+  response.
 - **Findings table:** issue, what's wrong, severity, disposition, reason
   or trigger, with the suggested-to-block-on group above it.
 - **Start order** for the exit set the owner adopted (Required and
@@ -641,6 +740,16 @@ goes in as a dated status revision at the top. A rerun posts its own
 comment under its own run label and leaves the earlier ones untouched, so
 the derivation step can read every prior run newest first.
 
+The exit-proof unit is the owner's to close. Leave its checkboxes and
+state alone when the comment is posted: the comment's Exit-proof unit
+lines are the proposal. Once the owner accepts the run, and on the owner's
+word, tick the Acceptance lines the run evidenced, close the unit with a
+comment that links the exit-run comment, and tick its entry under
+`### Owner-run` in the tracker body: no merge closes an owner-run unit, so
+merge cleanup never ticks it. Fold that into the dispositions' body edit
+when there is one. A line the run didn't evidence stays unticked and the
+unit stays open.
+
 ## Close Out
 
 - Open a PR for any in-run fix branch that is still local, and for a
@@ -675,6 +784,8 @@ win when this skill or its references disagree with them:
   and the task record's fields: daemon/README.md, under Run Real Work With
   The Deputy, Run The Pre-Spend Checks Before A Launch, Operational
   Commands, and Read A Task's Record.
+- Seeding a condition: daemon/README.md, under Seed An Exhausted Window
+  For An Exit Run and Run A Scenario.
 - The Stop check: docs/task-cancellation-check.md.
 - The tracking-issue format and a finding's labels: docs/coordination.md
   (Tracking Issues, Deferral Escalation) and docs/tracker-format.md.

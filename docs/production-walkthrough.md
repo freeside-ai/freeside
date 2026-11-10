@@ -27,10 +27,12 @@ section it links.
 1. Write the real run's settings and inputs
    ([The Inputs And What Refuses Them](#the-inputs-and-what-refuses-them)),
    then run the pre-spend checks on its root ([Start And Verify](#start-and-verify)).
-2. Run the fixture pass on the build the real run will use
+2. Run the fixture pass on the build the real run will use, then any
+   seeded pass the exit contract names that needs no device
    ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
 3. Prepare the operator's devices
-   ([Prepare The Operator's Devices](#prepare-the-operators-devices)).
+   ([Prepare The Operator's Devices](#prepare-the-operators-devices)),
+   then run any seeded pass the operator checks on a device.
 4. Start the deputy on the real root, pair both clients, set up and test
    the iPhone's notifications when a gate names one, and resolve a retained
    root's health items
@@ -549,6 +551,41 @@ next start to recover, means the lease was abandoned; `rig-acquisition.json`
 is removed either way, so its absence proves nothing. Recover an abandoned
 lease with `freesided rig recover -state-root <fixture-root>/daemon -confirm`
 before the real run, which needs the rig lease and starts on its own root.
+
+**A seeded pass.** A gate whose real condition would spend real allowance,
+or can't be produced on demand, is proved on a pass that seeds or injects
+the condition. It proves what the daemon does once the condition holds, not
+that the provider produces it. Two kinds of mechanism exist:
+
+- **An exhausted window.** On a fixture root onboarded as above, with the
+  second pool's writer agent enrolled and the routing order set, run
+  `freesided auth seed-exhausted` on the first-ranked enrollment's pool
+  ([Seed An Exhausted Window For An Exit Run](../daemon/README.md#seed-an-exhausted-window-for-an-exit-run)),
+  then submit promptly: the pool's next collection replaces the seeded
+  reading. The proof is the task line's `passed_over` in `freesided inspect
+  task`.
+- **A scripted refusal.** No command injects a refusal into a deputy pass; a
+  scenario plays one on the production engine composition with no model,
+  container, or GitHub ([Run A Scenario](../daemon/README.md#run-a-scenario)
+  lists each scenario and what it plays). For the park, run `quota-park` as
+  a live instance on the run's build; its specification waits for an
+  approval before the implementation attempt the provider refuses. The
+  proof is the first run's failed terminal with cause `quota` and the
+  second run's `quota_window_exhausted` hold, read while the task is
+  parked, and the second run starting at the reset. The park lasts two
+  minutes from the refusal, so for a check on a device the operator watches
+  the task from its specification approval on.
+
+A seeded pass that the operator checks on a device runs after
+[Prepare The Operator's Devices](#prepare-the-operators-devices) and stays
+up until they have. Pair the clients to its daemon as in
+[Start And Verify](#start-and-verify), on a `-listen` address the iPhone
+can reach. `bash scripts/dev-instance.sh --scenario quota-park` listens on
+loopback and attaches only the Mac app, and no run has yet put an iPhone on
+a scenario instance, so settle how that instance is started before the
+go-ahead. The exit-run skill (A Seeded Pass) says when a seed may ride the
+fixture pass, when it needs a pass of its own, and who approves the
+scenario's specification.
 
 ## Prepare The Operator's Devices
 

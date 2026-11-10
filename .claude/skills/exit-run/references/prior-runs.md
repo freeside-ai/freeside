@@ -24,6 +24,7 @@ pattern; a routine run needs no row.
 | Wave 8 exit run 3, 2026-10-14 to 16 | #1613 | gh-imgup#117, no pull request; ended final with `base_advanced` | CLI | The run reached a second internal review round and the harness's observation deadline expired while the run waited on the review-dispute card; `--resume-session` then refused because the run had not published (#2040, #2041). The per-finding review-dispute decision ran live for the first time, on the internal review, with a remediation and re-review behind it. A retained root's open system-health items hold the next run's admission (#2043), and `inspect` cannot list items on a stopped root (#2042). Resumed on 2026-10-16 after those fixes merged: the verifier refused the retained checkpoint on a drifted backup payload map (#2053, fixed in-run), a decline-only final round durably stopped the daemon at publication (#2055, fixed in-run), and the third resume ended final because gh-imgup's `main` had advanced after admission and an unpublished run has no base-advance re-entry (#2058, owner: Required). The first phone-side per-finding decision ran on the iPhone. |
 | Wave 8 exit run on gh-imgup#125, 2026-10-22 to 23 | #1613, #1616 | gh-imgup#125 to PR #144, merged by the owner; completion recorded | CLI (deputy, rehearsal first) | The rehearsal pass did its job: on a disposable target it found that the agent image's CLIs refused the #1616 picks (#2195) and that the Codex reviewer had the account's connected GitHub tools and the provider web tool (#2196), both fixed in-run before the real run. It also cost three builds, because each fix and one `main` advance restarted it (#2221). The operator was away, so the spine drove the installed Mac app and every gate decision was the agent's under delegation; no iPhone took part. The closure card held the PR in draft before the merge, visible only in the inbox (#2224, #2226). The held-work and review-growth alerts raised after completion were superseded at creation on both passes and never delivered (#2217, owner: Required); the rehearsal's reading missed it. Specifier and implementer models showed in their transcripts, judgment calls in the inference ledger; a cross-role task line was refused (#2211, #1431). Process friction went to tracker #2228. |
 | Wave 8 exit run on gh-imgup#132, 2026-10-25 | #1613, #1616 | gh-imgup#132, no pull request; stopped at the first specification invocation, run ended by the owner | CLI (deputy, fixture pass first) | The first fixture pass failed at import on the table's Haiku model, because the CLI's stderr lands in the transcript (#2307); the second ran the Claude roles on Opus as a recorded departure and completed, with held-work and review-growth staying open after the completion fact (#2217 working), though no device was paired to receive them. The real run's Fable specifier wrote a sentence of prose before its JSON and the decoder rejected it (#2314, owner: Required), which no pass could catch because the fixture runs other models. A failed specification run has no retry inside its task, so under the one-task rule the run ended there (#2315). The #1616 cross-role task line was admitted unattended for the first time. The operator was present with both devices; the iPhone's standing notices took over its screen (#2313). |
+| Wave 9 mid-wave rehearsal, 2026-11-06 to 09 | #2386 (unit #2396) | freeside-review-challenge#2 to PRs #5 and #6, merged; four attempts, the fourth accepted by the owner | Fixture pass only (deputy), two writer agents on two pools | Routing past a window seeded with `auth seed-exhausted` passed on the first attempt, whose only failure was that an unattended writer turn's usage never reached the collector (#2716). The next two attempts stopped before a pass completed, both on the agent image's CLI: it couldn't run the table's Haiku 5.5 (`admission_policy_refused`, fixed by #2895), then every writer role failed admission as `agent_selection_inactive` (#2922). Neither had a tracker comment until the fourth attempt's. The fourth passed after the fixture tree was migrated with `freesided auth migrate-tree` (#2923 had retired agent and offer documents that day). The quota park was proved on a live `quota-park` scenario instance, since #2421 ships the injection only through the scenario. The pool the router passed over recorded no reading, because the collector reads only a writer turn's usage; the owner accepted that for the rehearsal and left both pools' readings to the exit proof (#2395). |
 
 ## Recurring Pitfalls
 
@@ -317,6 +318,29 @@ Look for each of these before and during the run; most have bitten twice.
   alerts an exit run raises. A task whose only open item is one reads
   Working, not Needs You. Tell the operator where to look, or a raised
   alert reads as missing.
+- **A pool shows a usage reading only after a writer turn ran on it.** The
+  collector reads a writer turn's usage, so a pool the router passed over,
+  a seeded one included, has neither a reading nor `unsupported`. A gate
+  that reads both pools' windows needs a turn on each (#2396's fourth
+  attempt).
+- **A quota refusal can't be injected into a deputy pass.** #2421 ships
+  the injection only through the scenario driver. Run a live scenario
+  instance on the run's build and read the hold while the task is parked:
+  the Go test alone isn't the run's evidence, and after the resume the
+  record no longer names the quota cause (#2947).
+- **Another session's `container` build holds the rig gate.** The lease
+  release refuses while any `container` process runs on the machine, so a
+  project-image build in another session can leave this root's prelaunch
+  lease stale. `rig recover` clears it once that build ends. It is an
+  environment collision, not a defect.
+- **Record a rehearsal attempt when it stops.** An attempt that ends
+  before a pass completes still gets its Exit Preparation comment then
+  (SKILL.md, A Mid-Wave Rehearsal).
+- **A first deputy start can fail checks prelaunch just passed.** #2396's
+  fourth attempt failed `repository_base` and `publication_authority` with
+  generic evidence a minute after prelaunch passed both, and a restart
+  passed them with nothing changed. One occurrence with no cause in the
+  record; file it if it recurs.
 
 ## Mode And Flags Past Trackers Required
 
