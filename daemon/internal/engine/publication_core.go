@@ -286,6 +286,46 @@ func validatePublicationCheckoutBinding(
 	return requested, nil
 }
 
+// publicationBaseFetchError marks an error that came from FetchBase itself,
+// so a caller can classify it as a transport failure. It keeps the inner
+// error's text and errors.Is behavior.
+type publicationBaseFetchError struct{ err error }
+
+func (e *publicationBaseFetchError) Error() string { return e.err.Error() }
+func (e *publicationBaseFetchError) Unwrap() error { return e.err }
+
+// fetchAdmittedBase fetches base into scratch/checkout and refuses a checkout
+// that validatePublicationCheckoutBinding does not bind to base, returning the
+// checkout and its validated directory. Only a FetchBase failure comes back
+// as a *publicationBaseFetchError; a binding refusal, which wraps
+// domain.ErrParentKeyMismatch, is never marked, so no caller can treat a
+// substituted checkout as a transport failure to hold or retry. The marker is
+// a type rather than the absence of ErrParentKeyMismatch because a transport
+// error may wrap that sentinel too.
+//
+// The caller owns scratch: later steps write beside the checkout, so the
+// helper neither creates nor removes it.
+func (w *productionPublicationWorkflow) fetchAdmittedBase(
+	ctx context.Context, scratch string, base domain.BaseRevision,
+) (PublicationCheckout, string, error) {
+	parentInfo, err := os.Stat(scratch)
+	if err != nil {
+		return nil, "", err
+	}
+	dir := filepath.Join(scratch, "checkout")
+	checkout, err := w.transport.FetchBase(ctx, base.Repo, base.BaseRef, base.BaseSHA, dir)
+	if err != nil {
+		return nil, "", &publicationBaseFetchError{err: err}
+	}
+	checkoutDir, err := validatePublicationCheckoutBinding(
+		checkout, base.Repo, base.BaseRef, base.BaseSHA, dir, parentInfo,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	return checkout, checkoutDir, nil
+}
+
 func acquirePublicationLock(
 	ctx context.Context,
 	lockDir, key string,

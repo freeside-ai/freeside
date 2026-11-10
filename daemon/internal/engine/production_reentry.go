@@ -372,19 +372,11 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		return productionTaskOutcome{}, err
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // run-owned scratch
-	parentInfo, err := os.Stat(scratch)
-	if err != nil {
-		return productionTaskOutcome{}, err
+	checkout, checkoutDir, err := w.fetchAdmittedBase(ctx, scratch, base)
+	var fetchErr *publicationBaseFetchError
+	if errors.As(err, &fetchErr) {
+		return w.publicationTransportFailure(ctx, task, "fetch exact re-entry base", fetchErr.err)
 	}
-	checkout, err := w.transport.FetchBase(
-		ctx, base.Repo, base.BaseRef, base.BaseSHA, filepath.Join(scratch, "checkout"))
-	if err != nil {
-		return w.publicationTransportFailure(ctx, task, "fetch exact re-entry base", err)
-	}
-	checkoutDir, err := validatePublicationCheckoutBinding(
-		checkout, base.Repo, base.BaseRef, base.BaseSHA,
-		filepath.Join(scratch, "checkout"), parentInfo,
-	)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -523,9 +515,9 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	return w.completeReentryTask(ctx, task, binding, checkpoint, checkout, reviewInstructions)
 }
 
-// publicationTransportFailure classifies a transport failure the way the first
-// cycle classifies a failed base fetch: a definitive refusal holds the run,
-// and anything else is retried or surfaced.
+// publicationTransportFailure classifies a failed transport call on any
+// publication path (forward, reentry, and handoff): a definitive refusal
+// holds the run, and anything else is retried or surfaced under step.
 func (w *productionPublicationWorkflow) publicationTransportFailure(
 	ctx context.Context, task productionPublicationTask, step string, err error,
 ) (productionTaskOutcome, error) {

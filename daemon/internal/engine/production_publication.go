@@ -1214,36 +1214,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, err
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // run-owned scratch
-	parentInfo, err := os.Stat(scratch)
-	if err != nil {
-		return productionTaskOutcome{}, err
+	checkout, checkoutDir, err := w.fetchAdmittedBase(ctx, scratch, binding.admission.Base)
+	var fetchErr *publicationBaseFetchError
+	if errors.As(err, &fetchErr) {
+		return w.publicationTransportFailure(ctx, task, "fetch exact publication base", fetchErr.err)
 	}
-	checkout, err := w.transport.FetchBase(
-		ctx, binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, filepath.Join(scratch, "checkout"),
-	)
-	if err != nil {
-		if isDefinitiveTrustRefusal(err) {
-			return w.holdBlockedTask(
-				ctx, task, importer.Result{CommitSHA: task.HeadSHA}, productionBlockTrust,
-				domain.HoldTrustBlocked,
-			)
-		}
-		if productionPublicationPermanentExternalFailure(err) {
-			return w.holdBlockedTask(
-				ctx, task, importer.Result{CommitSHA: task.HeadSHA}, productionBlockExternal,
-				domain.HoldExternalConflict,
-			)
-		}
-		if productionPublicationRetryableFailure(err) {
-			err = productionPublicationRetryableError(err)
-		}
-		return productionTaskOutcome{}, fmt.Errorf("fetch exact publication base: %w", err)
-	}
-	checkoutDir, err := validatePublicationCheckoutBinding(
-		checkout, binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, filepath.Join(scratch, "checkout"), parentInfo,
-	)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
