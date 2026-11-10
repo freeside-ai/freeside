@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -701,9 +702,28 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		// proceeds to the specification instead of re-asking to the iteration
 		// limit. Pinned so a later edit cannot silently drop the exit.
 		"with no answering `human_feedback`",
+		// The shape guidance (#3017): a model the output tool refused sent
+		// `specification` as a string of JSON, then a placeholder that
+		// validated. Pinned so a later edit cannot drop how to recover.
+		"Send `specification` and every object as an object, not a string of JSON",
+		"If the output tool refuses, resend the same content in the shape it names; never shorten or replace it.",
 	} {
 		if !bytes.Contains(specifier, []byte(required)) {
 			t.Errorf("specifier prompt omits %q", required)
+		}
+	}
+	// A form example a model can copy verbatim must not decode, or a model
+	// stuck on the schema can pass it off as an answer (#3017).
+	if bytes.Contains(specifier, []byte(`"summary":"S"`)) {
+		t.Error("specifier prompt still carries the copyable placeholder specification")
+	}
+	examples := regexp.MustCompile("`(\\{\"[^`]*)`").FindAllSubmatch(specifier, -1)
+	if len(examples) < 4 {
+		t.Fatalf("specifier prompt shows %d form examples, want at least 4", len(examples))
+	}
+	for _, example := range examples {
+		if _, err := specify.DecodeOutput(example[1]); err == nil {
+			t.Errorf("specifier form example %s decodes if copied verbatim", example[1])
 		}
 	}
 	if bytes.Contains(specifier, []byte("open owner decision")) {
