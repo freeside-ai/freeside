@@ -286,7 +286,7 @@ func (tx *ReadTx) authenticateRevisionAttemptSource(
 		len(root.FeedbackArtifactIDs) != 1 || len(root.InputArtifactIDs) != 3 {
 		return false, domain.ErrParentKeyMismatch
 	}
-	feedbackID := domain.ArtifactID("spec-feedback-" + *attempt.RevisionCommandID)
+	feedbackID := domain.SpecificationFeedbackArtifactID(*attempt.RevisionCommandID)
 	if root.FeedbackArtifactIDs[0] != feedbackID ||
 		root.InputArtifactIDs[1] != *root.PriorSpecArtifactID || root.InputArtifactIDs[2] != feedbackID {
 		return false, domain.ErrParentKeyMismatch
@@ -478,8 +478,7 @@ WHERE kind IN (?, ?) AND idempotency_key LIKE ?`,
 		if terminal.ApprovalItemID == nil || !specApproval {
 			continue
 		}
-		expectedItemID := domain.ItemID(fmt.Sprintf(
-			"spec-approval-%s-%d", attempt.ImplementationRunID, request.Iteration))
+		expectedItemID := domain.SpecificationApprovalItemID(attempt.ImplementationRunID, request.Iteration)
 		if *terminal.ApprovalItemID != expectedItemID {
 			continue
 		}

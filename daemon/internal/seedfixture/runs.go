@@ -270,7 +270,7 @@ func (s seeder) specificationCampaign(
 			Attempts: []domain.Attempt{{ID: attemptID(invocation), StageID: specStage, Number: 1, InvocationID: invocation}},
 		}},
 	}
-	approvalID := domain.ItemID("spec-approval-" + string(implementationRunID) + "-1")
+	approvalID := domain.SpecificationApprovalItemID(implementationRunID, 1)
 	terminal, err := json.Marshal(struct {
 		InvocationID        domain.InvocationID `json:"invocation_id"`
 		Iteration           int                 `json:"iteration"`

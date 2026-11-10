@@ -2339,8 +2339,8 @@ func authenticateSpecificationDiscussionInvocationIntent(
 		expectedInputs = append(expectedInputs, request.SpecArtifactID)
 	}
 	expectedInputs = append(expectedInputs, base.FeedbackArtifactIDs...)
-	discussionArtifactID := domain.ArtifactID(
-		"spec-discussion-" + strings.TrimPrefix(string(request.DiscussInvocationID), "inv-"),
+	discussionArtifactID := domain.SpecificationDiscussionArtifactID(
+		strings.TrimPrefix(string(request.DiscussInvocationID), "inv-"),
 	)
 	discussionArtifact, err := tx.GetArtifact(ctx, discussionArtifactID)
 	if err != nil {

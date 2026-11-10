@@ -78,8 +78,9 @@
 //   - interpretation_failure.go why a completed invocation's output could not
 //     be carried forward
 //   - specification_identity.go, specification_source.go
-//     specification run identities and what a specification assembles its
-//     subject from
+//     specification run identities, the feedback, discussion, and approval
+//     IDs derived for a specification, and what a specification assembles
+//     its subject from
 //   - stage_input.go  stage input snapshots and vendor instruction bindings
 //   - production_attempt.go production acceptance attempts and their lineage
 //   - prospective_merge_identity.go the merge a base-advance re-entry evaluates
