@@ -141,8 +141,9 @@ func HeldWorkNoticeItem(
 	}, nil)
 }
 
-// admissionRefusalSentence names the refused check, agent, and launch, each
-// only when the detail carries it, or nothing without a detail.
+// admissionRefusalSentence names the refused check, agent, launch, and
+// unserved part, each only when the detail carries it, or nothing without a
+// detail.
 func admissionRefusalSentence(detail *domain.AdmissionRefusal) string {
 	if detail == nil {
 		return ""
@@ -159,7 +160,25 @@ func admissionRefusalSentence(detail *domain.AdmissionRefusal) string {
 	if detail.LaunchStage != nil {
 		sentence += fmt.Sprintf(" on the %s launch %s", *detail.LaunchStage, *detail.LaunchDigest)
 	}
+	if detail.Unserved != nil {
+		sentence += unservedClause(*detail.Unserved)
+	}
 	return sentence + ". "
+}
+
+// unservedClause names the part of the selection the daemon does not serve,
+// and the held enrollment for a model or effort. It prints nothing the
+// operator typed (domain.AdmissionUnserved).
+func unservedClause(u domain.AdmissionUnserved) string {
+	switch u.Part {
+	case domain.AgentSelectionPartEnrollment:
+		return " because the daemon holds no such enrollment"
+	case domain.AgentSelectionPartModel:
+		return " because enrollment " + string(*u.EnrollmentID) + " does not serve its model"
+	case domain.AgentSelectionPartEffort:
+		return " because enrollment " + string(*u.EnrollmentID) + " does not serve its effort for that model"
+	}
+	return ""
 }
 
 // heldWorkTaskStopped reports whether the operator stopped the run's task.

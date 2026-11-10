@@ -173,6 +173,58 @@ func hideCause(label *string, msg string, err error) error {
 	return hiddenCause{msg: msg, err: err}
 }
 
+// enrollmentNotHeld marks a selection whose enrollment the store holds no
+// row for, keeping err's text, so a refusal can name that part
+// (unservedPart). It is set where the names' own enrollment is read: a
+// not-found from any other read in the same chain is not this part.
+type enrollmentNotHeld struct {
+	err error
+}
+
+func (e enrollmentNotHeld) Error() string { return e.err.Error() }
+
+func (e enrollmentNotHeld) Unwrap() error { return e.err }
+
+// cardRefusal marks a refusal from resolving an attempt's alternate-agent
+// card, keeping err's text, so unservedPart can tell it from a task line's
+// before the card's agent is known.
+type cardRefusal struct {
+	err error
+}
+
+func (e cardRefusal) Error() string { return e.err.Error() }
+
+func (e cardRefusal) Unwrap() error { return e.err }
+
+// unservedPart is the part of the agent's selection a resolution refusal
+// found unserved, nil when err names none. A model or effort part names the
+// enrollment row the store holds (agent.Enrollment), never the typed names,
+// so it is only known once the names resolved to that row.
+//
+// A card's refusal names no part. The card governs the held attempt, so the
+// part's fix, changing the task's agent, would not reach it.
+func unservedPart(err error, agent RoleAgent) *domain.AdmissionUnserved {
+	if agent.Card != nil || errors.As(err, new(cardRefusal)) {
+		return nil
+	}
+	if errors.As(err, new(enrollmentNotHeld)) {
+		return &domain.AdmissionUnserved{Part: domain.AgentSelectionPartEnrollment}
+	}
+	var part domain.AgentSelectionPart
+	switch {
+	case agent.Enrollment.ID == "":
+		return nil
+	case errors.Is(err, domain.ErrDiscoveredModelUnserved):
+		part = domain.AgentSelectionPartModel
+	case errors.Is(err, domain.ErrDiscoveredEffortUnserved):
+		part = domain.AgentSelectionPartEffort
+	default:
+		return nil
+	}
+	id := agent.Enrollment.ID
+	return &domain.AdmissionUnserved{Part: part, EnrollmentID: &id}
+}
+
 // CheckTaskLineSelection reports whether a task line's selection for role
 // resolves now, the way admission resolves it: the enrollment it names and
 // that enrollment's identity as the store holds them, the adapter the role's
@@ -331,7 +383,7 @@ func resolveAttemptRole(
 	if carded {
 		agent, err := resolveCardAgent(ctx, tx, tree, role, card)
 		if err != nil {
-			return RoleAgent{}, err
+			return RoleAgent{}, cardRefusal{err: err}
 		}
 		if err := agent.requireUnmarked(ctx, tx); err != nil {
 			return RoleAgent{}, err
@@ -586,6 +638,9 @@ func resolveNames(
 	agent := RoleAgent{label: label}
 	var err error
 	if agent.Enrollment, err = tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(names.Enrollment)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			err = enrollmentNotHeld{err: err}
+		}
 		return RoleAgent{}, hideCause(label, "its enrollment cannot be read", err)
 	}
 	if agent.Identity, err = tx.GetAuthIdentity(ctx, agent.Enrollment.AuthIdentityID); err != nil {
@@ -1225,6 +1280,8 @@ func resolveAgentAdmission(
 		refused.Agent = agent.refusalAgent()
 		if errors.Is(err, domain.ErrGenerationIntegrityMarked) {
 			refused.Check = domain.AdmissionCheckGenerationIntegrityMarked
+		} else {
+			refused.Unserved = unservedPart(err, agent)
 		}
 		return agentAdmission{}, &AgentAdmissionRefusal{
 			Refusal: refused, err: fmt.Errorf("role %s: %w: %w", role, err, ErrAgentNotAdmissible),
@@ -1243,9 +1300,13 @@ func resolveAgentAdmission(
 	// Step 1 again, by selection: the names resolve against the enrollment's
 	// catalog under the adapter. It runs after the prompt and coverage checks
 	// so their refusals keep their own check.
-	if agent, err = agent.Select(adapter); err != nil {
+	selected, err := agent.Select(adapter)
+	if err != nil {
+		// Read before refuse flattens the error to its text.
+		refused.Unserved = unservedPart(err, agent)
 		return refuse(domain.AdmissionCheckAgentResolution, "%v", err)
 	}
+	agent = selected
 	refused.Agent = agent.refusalAgent()
 	// Step 4, credentialed: a credential that outlives the attempt. Resolution
 	// already refused a disabled identity.

@@ -252,7 +252,9 @@ func (l RouteModelList) Admits(model string) bool {
 // model the catalog lacks (by id, or by the model an entry resolves to), or
 // an effort the model does not report, or a model the route's model list
 // does not admit. Errors quote the operator's names, never the catalog's
-// harness-reported strings.
+// harness-reported strings. A refusal under the served-tuple rule
+// (SelectionServed) also wraps its ErrDiscoveredModelUnserved or
+// ErrDiscoveredEffortUnserved, so a caller can name the refused part.
 //
 // The reserved ClaudeCodeNativeDefaultRouteModelID names no catalog model:
 // it is accepted only for a claude_code enrollment, and then with an effort
@@ -318,26 +320,42 @@ func ResolveAgentSelection(in AgentSelectionInput) (AgentSelection, error) {
 			return fail("the catalog is enrollment %s's", in.Catalog.EnrollmentID)
 		}
 	}
-	switch err := SelectionServed(client, in.Catalog, in.Names.Model, in.Names.Effort); {
-	case err == nil:
-	case errors.Is(err, errNativeDefaultReserved):
-		return fail("the native-default model id is reserved for claude_code, the enrollment binds %q", client)
-	case in.Names.Model == ClaudeCodeNativeDefaultRouteModelID:
-		return fail("the effort has no claude_code native value")
-	case in.Catalog == nil:
-		return fail("enrollment %s records no catalog, and the effort has no %s native value",
-			in.Enrollment.ID, client)
-	case errors.Is(err, ErrDiscoveredModelUnserved):
-		return fail("the model is not in enrollment %s's discovered catalog", in.Enrollment.ID)
-	default:
-		return fail("the effort is not one the model reports in enrollment %s's discovered catalog",
-			in.Enrollment.ID)
+	if served := SelectionServed(client, in.Catalog, in.Names.Model, in.Names.Effort); served != nil {
+		var refusal error
+		switch {
+		case errors.Is(served, errNativeDefaultReserved):
+			_, refusal = fail("the native-default model id is reserved for claude_code, the enrollment binds %q", client)
+		case in.Names.Model == ClaudeCodeNativeDefaultRouteModelID:
+			_, refusal = fail("the effort has no claude_code native value")
+		case in.Catalog == nil:
+			_, refusal = fail("enrollment %s records no catalog, and the effort has no %s native value",
+				in.Enrollment.ID, client)
+		case errors.Is(served, ErrDiscoveredModelUnserved):
+			_, refusal = fail("the model is not in enrollment %s's discovered catalog", in.Enrollment.ID)
+		default:
+			_, refusal = fail("the effort is not one the model reports in enrollment %s's discovered catalog",
+				in.Enrollment.ID)
+		}
+		return AgentSelection{}, servedRefusal{refusal: refusal, served: served}
 	}
 	return sealAgentSelection(AgentSelection{
 		EncodingVersion: AgentSelectionEncodingVersion, EnrollmentID: in.Enrollment.ID,
 		ModelID: in.Names.Model, Effort: in.Names.Effort, AdapterDigest: in.Adapter.Digest,
 	})
 }
+
+// servedRefusal is a refusal of a selection the enrollment does not serve.
+// Its text is the refusal's alone, unchanged, while it also matches the
+// served-tuple cause (ErrDiscoveredModelUnserved or
+// ErrDiscoveredEffortUnserved), so admission can name the refused part
+// without reading text that quotes the names.
+type servedRefusal struct {
+	refusal, served error
+}
+
+func (e servedRefusal) Error() string { return e.refusal.Error() }
+
+func (e servedRefusal) Unwrap() []error { return []error{e.refusal, e.served} }
 
 // errNativeDefaultReserved marks the native-default model id on a client
 // other than claude_code; it wraps ErrDiscoveredModelUnserved.

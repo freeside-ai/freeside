@@ -303,6 +303,12 @@ func holdPaceState(reason domain.RunHoldReason, detail holdDetail) string {
 		if refusal.LaunchDigest != nil {
 			state += "+" + string(*refusal.LaunchDigest)
 		}
+		if unserved := refusal.Unserved; unserved != nil {
+			state += "+" + string(unserved.Part)
+			if unserved.EnrollmentID != nil {
+				state += "+" + string(*unserved.EnrollmentID)
+			}
+		}
 	}
 	if upkeep := detail.imageUpkeep; upkeep != nil {
 		state += "+" + string(upkeep.Pending)
