@@ -128,8 +128,12 @@ point in the run where it must happen. A trigger is one of four things:
   usage window, a provider's quota refusal). The gate or the exit-proof
   unit names the mechanism, and daemon/README.md holds its command (Seed
   An Exhausted Window For An Exit Run; Run A Scenario, which lists every
-  scenario and what it plays): read it on the run's build. The tracker says which gates the real run proves and which
-  a seeded pass proves; where it doesn't, ask before the go-ahead. Mark
+  scenario and what it plays): read it on the run's build. The
+  `quota-move` scenario seeds the parked-task move with the
+  alternate-agent offer, and `quota-no-reset` the alternate-agent retry
+  card on a quota failure with no known reset. The tracker says which
+  gates the real run proves and which a seeded pass proves; where it
+  doesn't, ask before the go-ahead. Mark
   each such row a **seeded-condition proof**: it proves what the daemon
   does once the condition holds, not that the provider produces the
   condition. A Seeded Pass (below) says how it runs.
