@@ -563,6 +563,8 @@ directory named before it in the same bullet. All under `daemon/`:
   re-gates trust before publishing),
   `internal/engine/production_publication_task.go` (the restart
   reconstruction gate on a decoded publication task),
+  `internal/engine/production_publication_progress.go` (decides whether
+  a task verifies, skips verification, or recovers a committed outcome),
   `internal/engine/production_publication_completion.go` (authenticates
   terminal and ready records),
   `internal/engine/production_export_record.go` (commits the trusted
