@@ -188,22 +188,46 @@ type verificationReservationRefused struct {
 func (e *verificationReservationRefused) Error() string { return e.err.Error() }
 func (e *verificationReservationRefused) Unwrap() error { return e.err }
 
-// releaseVerification ends the verification job's reservation once its room
-// returned with every container proved absent, which is any return but one
-// marked ward.ErrVerificationAbsenceUnproven. An unproven one keeps the
-// reservation until a later pass's room, or a confirmed task stop, proves it.
+// releaseVerification ends the verification job's reservation once every
+// container the job started is proved absent. With bound rooms that proof is
+// ward's, from the invocation's ownership records, so it covers every room of
+// every pass: a clean retry cannot release while an earlier pass's room is
+// unproven. It retries owned cleanup, which gives a room whose own cleanup
+// failed, a memory-limit kill included, a second attempt before the task
+// blocks. A reservation still unproven then stays held until a later pass's
+// proof or a confirmed task stop: an unproven container may still hold its
+// memory, and releasing would let the budget overcommit. A task that ends
+// with no later pass and no confirmed stop keeps it. Unbound rooms write no
+// records, so for them the room's own return is the proof: any return but
+// one marked ward.ErrVerificationAbsenceUnproven.
+//
+// It runs detached from the pass, so a pass canceled at shutdown does not
+// turn a provable release into a held one.
 func (w *productionPublicationWorkflow) releaseVerification(
-	ctx context.Context, task productionPublicationTask, roomErr error,
+	ctx context.Context, task productionPublicationTask, run domain.Run, roomErr error,
 ) error {
-	if errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
-		return nil
-	}
+	ctx = context.WithoutCancel(ctx)
 	bound, err := currentLaunchBound(ctx, w.store, w.launchBound)
 	if err != nil || !bound.Budgeted() {
 		return err
 	}
+	invocation := task.verificationInvocationID()
+	if w.proveVerificationAbsent != nil {
+		// Bounded like the room's own cleanup.
+		proofCtx, cancel := context.WithTimeout(ctx, ward.VerificationCleanupTimeout)
+		err := w.proveVerificationAbsent(proofCtx, run, invocation)
+		cancel()
+		if errors.Is(err, ward.ErrVerificationAbsenceUnproven) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("prove verification absent: %w", err)
+		}
+	} else if errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
+		return nil
+	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.ReleaseVerificationReservation(ctx, task.verificationInvocationID(), w.now().UTC())
+		return tx.ReleaseVerificationReservation(ctx, invocation, w.now().UTC())
 	})
 }
 
@@ -332,7 +356,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		}
 		room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 		if err != nil {
-			return productionVerificationCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, err))
+			return productionVerificationCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))
 		}
 		verified, err = verify.Verify(ctx, checkoutDir, verify.Options{
 			HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
@@ -349,7 +373,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 				binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
 			)},
 		})
-		if releaseErr := w.releaseVerification(ctx, task, err); releaseErr != nil {
+		if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
 			return productionVerificationCheckpoint{}, errors.Join(err, releaseErr)
 		}
 		if err != nil {
