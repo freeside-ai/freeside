@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -79,7 +80,7 @@ type fakePreflightEnvironment struct {
 }
 
 func (e *fakePreflightEnvironment) CheckJudgmentRoles(
-	context.Context, preflightConfig, JudgmentRuntime, ward.RuntimeResourceAuthorizer, time.Time,
+	context.Context, preflightConfig, daemoncompose.JudgmentRuntime, ward.RuntimeResourceAuthorizer, time.Time,
 ) ([]inference.RoleCheck, error) {
 	e.judgmentRolesCalls++
 	return e.judgmentRoles, e.judgmentRolesError
@@ -857,7 +858,7 @@ func TestPreflightFailureFixtures(t *testing.T) {
 			env.prodError = errors.New("connection refused")
 		}, "prod_execution"},
 		{"role with no resolving line", func(_ *[]string, env *fakePreflightEnvironment) {
-			env.agentsError = &RoleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}
+			env.agentsError = &daemoncompose.RoleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}
 		}, "agent_selection"},
 		{"unreadable agent tree", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.agentsError = errors.New("commit not found")
@@ -1407,7 +1408,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 	seedRoot := "/var/lib/freeside-test/seed"
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	rigPath := filepath.Join(root, "rig.json")
-	rig := RigHoldOutput{
+	rig := daemoncompose.RigHoldOutput{
 		Token: strings.Repeat("t", 32),
 		Manifest: daemonlock.RigManifest{
 			Version:    3,
@@ -1747,7 +1748,7 @@ func TestPreflightNamesAMarkedGeneration(t *testing.T) {
 				EnrollmentID: "marked/claude_code", Ordinal: 3,
 				Finding: domain.CredentialIntegrityCorruption,
 			}
-			environment.agentsError = &RoleAdmissionError{Role: role, Err: errors.Join(
+			environment.agentsError = &daemoncompose.RoleAdmissionError{Role: role, Err: errors.Join(
 				engine.ErrAgentNotAdmissible, &domain.GenerationIntegrityMarkedError{Mark: mark})}
 			manifest, err := runSourcePreflight(t, args, environment)
 			if !errors.Is(err, errCompositionPreflight) {
@@ -1777,14 +1778,14 @@ func TestPreflightNamesAMarkedGeneration(t *testing.T) {
 // does not accept -review-auth-mode, fails agent selection naming why.
 func TestPreflightNamesAReviewProviderMismatch(t *testing.T) {
 	t.Parallel()
-	for name, mismatch := range map[string]*ReviewProviderMismatch{
+	for name, mismatch := range map[string]*daemoncompose.ReviewProviderMismatch{
 		"no routed provider": {Harness: "gemini_cli"},
 		"auth mode":          {Harness: domain.HarnessClientClaudeCode, AuthMode: ward.CodexAuthSubscription},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			args, environment := preflightFixture(t)
-			environment.agentsError = &RoleAdmissionError{Role: domain.RoleReviewer, Err: mismatch}
+			environment.agentsError = &daemoncompose.RoleAdmissionError{Role: domain.RoleReviewer, Err: mismatch}
 			manifest, err := runSourcePreflight(t, args, environment)
 			if !errors.Is(err, errCompositionPreflight) {
 				t.Fatalf("preflight = %v", err)

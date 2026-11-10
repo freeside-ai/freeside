@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -597,7 +598,7 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 	enabled := passing.Claude
 	if enabled == nil || enabled.RigTokenFile != paths.Acquisition || !enabled.RunConformance ||
 		enabled.OperatingMode != domain.ModeUnattended || enabled.StateRoot != "/prod/daemon" ||
-		enabled.WriterStopTimeout != 20*time.Minute || enabled.Judgments != (JudgmentConfig{}) {
+		enabled.WriterStopTimeout != 20*time.Minute || enabled.Judgments != (daemoncompose.JudgmentConfig{}) {
 		t.Fatalf("passing check: %+v", enabled)
 	}
 	// Exercise the configured judgment fields too: only the launch's digest
@@ -649,7 +650,7 @@ func TestDeputyDaemonSettingsMatchesDownstreamRefusals(t *testing.T) {
 		return deputyClaudeDriverConfig(s, paths, "").Validate()
 	}
 	prompts := func(s loadedDeputySettings, paths deputyPaths) error {
-		_, err := ReadPromptPackages(deputyClaudeDriverConfig(s, paths, ""))
+		_, err := daemoncompose.ReadPromptPackages(deputyClaudeDriverConfig(s, paths, ""))
 		return err
 	}
 	type refusal struct {

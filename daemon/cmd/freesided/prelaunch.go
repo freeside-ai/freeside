@@ -21,6 +21,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -1101,7 +1102,7 @@ func splitIssueURL(issueURL string) (repo, number string) {
 func readPrelaunchIssue(
 	ctx context.Context, cfg preflightConfig, now time.Time, number int,
 ) (prelaunchIssueObservation, error) {
-	return readManagedIssue(ctx, cfg, now, number, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase)
+	return readManagedIssue(ctx, cfg, now, number, &http.Client{Timeout: 30 * time.Second}, daemoncompose.DefaultGitHubAPIBase)
 }
 
 // prelaunchIssueResponseLimit bounds the issue answer. GitHub caps an issue

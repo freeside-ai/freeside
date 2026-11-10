@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"path/filepath"
 	"reflect"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -23,14 +23,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
-	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
 // flagEraReviewConfig is a daemon configuration as the removed flags set it
 // for the adoption fixture's two identities, with the shadow arm on, and the
 // Codex provider the fixture's reviewer line selects.
-func flagEraReviewConfig() ClaudeDriverConfig {
-	return ClaudeDriverConfig{
+func flagEraReviewConfig() daemoncompose.ClaudeDriverConfig {
+	return daemoncompose.ClaudeDriverConfig{
 		ReviewProvider: mustRoutedReviewProvider(domain.HarnessClientCodexCLI),
 		ExporterImage:  "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		OperatingMode:  domain.ModeUnattended,
@@ -60,11 +59,11 @@ func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 	}
 	tree := loadAdoptedPatch(t, patch)
 	flags := flagEraReviewConfig()
-	wantReview, err := ClaudeReviewConfigurationDigest(flags)
+	wantReview, err := daemoncompose.ClaudeReviewConfigurationDigest(flags)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantShadow, err := ShadowReviewConfigurationDigests(flags)
+	wantShadow, err := daemoncompose.ShadowReviewConfigurationDigests(flags)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +75,7 @@ func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 	cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner = "", ""
 	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = "", ""
 	f.withStore(t, func(st *store.Store) {
-		cfg, err = ResolveReviewSelection(ctx, st, tree, cfg, time.Now().UTC())
+		cfg, err = daemoncompose.ResolveReviewSelection(ctx, st, tree, cfg, time.Now().UTC())
 	})
 	if err != nil {
 		t.Fatalf("resolve review selection: %v", err)
@@ -84,11 +83,11 @@ func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 	if !reflect.DeepEqual(cfg, flags) {
 		t.Fatalf("lineup-resolved configuration = %+v, want the flag-era %+v", cfg, flags)
 	}
-	gotReview, err := ClaudeReviewConfigurationDigest(cfg)
+	gotReview, err := daemoncompose.ClaudeReviewConfigurationDigest(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotShadow, err := ShadowReviewConfigurationDigests(cfg)
+	gotShadow, err := daemoncompose.ShadowReviewConfigurationDigests(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,13 +125,13 @@ func TestPreflightResolvesTheAdoptedLineup(t *testing.T) {
 		}
 		// A setup token is not a mode the Codex reviewer accepts (#397).
 		_, err = resolvePreflightAgents(ctx, st, tree, revision, ward.CodexAuthSetupToken, false, now)
-		var mismatch *ReviewProviderMismatch
+		var mismatch *daemoncompose.ReviewProviderMismatch
 		if !errors.As(err, &mismatch) || !errors.Is(err, engine.ErrAgentNotAdmissible) {
 			t.Fatalf("Codex reviewer under setup_token = %v", err)
 		}
 		// The shadow arm is on but adoption emitted no shadow reviewer line.
 		_, err = resolvePreflightAgents(ctx, st, tree, revision, ward.CodexAuthSubscription, true, now)
-		var failure *RoleAdmissionError
+		var failure *daemoncompose.RoleAdmissionError
 		if !errors.As(err, &failure) || failure.Role != domain.RoleShadowReviewer {
 			t.Fatalf("preflight agents with the shadow arm on = %v", err)
 		}
@@ -160,7 +159,7 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = "", ""
 	f.withStore(t, func(st *store.Store) {
 		now := time.Now().UTC()
-		got, err := ResolveReviewSelection(ctx, st, tree, cfg, now)
+		got, err := daemoncompose.ResolveReviewSelection(ctx, st, tree, cfg, now)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("lineup-resolved configuration = %+v, %v; want %+v", got, err, want)
 		}
@@ -212,22 +211,22 @@ func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 			domain.RoleReviewer:       "names the harness-default effort, which sends none",
 			domain.RoleShadowReviewer: "names the native-default model",
 		} {
-			_, err := ReviewRoleAgent(ctx, st, old, role, now)
-			var failure *RoleAdmissionError
+			_, err := daemoncompose.ReviewRoleAgent(ctx, st, old, role, now)
+			var failure *daemoncompose.RoleAdmissionError
 			if !errors.As(err, &failure) || failure.Role != role || !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), "role "+string(role)) || !strings.Contains(err.Error(), lacks) {
 				t.Fatalf("%s on the edited tree = %v, want it refused because its line %s", role, err, lacks)
 			}
 			// The identity is never compared: the line is refused first, so
 			// the refusal has to name what the line lacks.
-			admit := ReviewAdmission(st, old, testReviewRole(role, nil), time.Now)
+			admit := daemoncompose.ReviewAdmission(st, old, testReviewRole(role, nil), time.Now)
 			if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), lacks) {
 				t.Fatalf("%s review admission on the edited tree = %v, want it refused because its line %s", role, err, lacks)
 			}
 		}
-		var failure *RoleAdmissionError
-		if _, err := ResolveReviewSelection(ctx, st, old, flagEraReviewConfig(), now); !errors.As(err, &failure) ||
+		var failure *daemoncompose.RoleAdmissionError
+		if _, err := daemoncompose.ResolveReviewSelection(ctx, st, old, flagEraReviewConfig(), now); !errors.As(err, &failure) ||
 			failure.Role != domain.RoleReviewer {
 			t.Fatalf("startup selection on the edited tree = %v", err)
 		}
@@ -259,7 +258,7 @@ func TestPreflightResolvesAWriterLinesSelection(t *testing.T) {
 	f.withStore(t, func(st *store.Store) {
 		_, err := resolvePreflightAgents(ctx, st, tree, domain.Digest("sha256:"+strings.Repeat("4", 64)),
 			ward.CodexAuthSubscription, false, time.Now().UTC())
-		var failure *RoleAdmissionError
+		var failure *daemoncompose.RoleAdmissionError
 		if !errors.As(err, &failure) || failure.Role != domain.RoleRemediator || !strings.Contains(err.Error(), "no-such-effort") {
 			t.Fatalf("preflight agents with an unsendable remediator effort = %v", err)
 		}
@@ -299,8 +298,8 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 				}
 			}
 			f.withStore(t, func(st *store.Store) {
-				_, err := ReviewRoleAgent(ctx, st, tree, tc.role, now)
-				var failure *RoleAdmissionError
+				_, err := daemoncompose.ReviewRoleAgent(ctx, st, tree, tc.role, now)
+				var failure *daemoncompose.RoleAdmissionError
 				if !errors.As(err, &failure) || failure.Role != tc.role || !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 					!strings.Contains(err.Error(), tc.want) {
 					t.Fatalf("%s on a line naming %q = %v, want it refused for the model's shape", tc.role, tc.model, err)
@@ -331,14 +330,14 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		tree := loadAdoptedPatch(t, patch)
 		f.withStore(t, func(st *store.Store) {
 			cfg := flagEraReviewConfig()
-			_, err := ResolveReviewSelection(ctx, st, tree, cfg, now)
-			var failure *RoleAdmissionError
+			_, err := daemoncompose.ResolveReviewSelection(ctx, st, tree, cfg, now)
+			var failure *daemoncompose.RoleAdmissionError
 			if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
 				!errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("resolve without a reviewer line = %v", err)
 			}
 			cfg.OperatingMode = domain.ModeAttendedDev
-			if got, err := ResolveReviewSelection(ctx, st, tree, cfg, now); err != nil || !reflect.DeepEqual(got, cfg) {
+			if got, err := daemoncompose.ResolveReviewSelection(ctx, st, tree, cfg, now); err != nil || !reflect.DeepEqual(got, cfg) {
 				t.Fatalf("attended daemon resolved a review role: %+v, %v", got, err)
 			}
 		})
@@ -352,8 +351,8 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		}
 		tree := loadAdoptedPatch(t, patch)
 		f.withStore(t, func(st *store.Store) {
-			_, err := ResolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), now)
-			var failure *RoleAdmissionError
+			_, err := daemoncompose.ResolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), now)
+			var failure *daemoncompose.RoleAdmissionError
 			if !errors.As(err, &failure) || failure.Role != domain.RoleShadowReviewer {
 				t.Fatalf("resolve without a shadow reviewer line = %v", err)
 			}
@@ -369,12 +368,12 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		tree := loadAdoptedPatch(t, patch)
 		f.withStore(t, func(st *store.Store) {
 			req := admittedReviewRequest(t, st, tree, domain.RoleReviewer, seedReviewedRun(t, st, "run-reviewed").ID)
-			admit := ReviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), time.Now)
+			admit := daemoncompose.ReviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), time.Now)
 			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission of the adopted reviewer: %v", err)
 			}
 			setIdentityEnabled(t, st, "codex-review", false)
-			var failure *RoleAdmissionError
+			var failure *daemoncompose.RoleAdmissionError
 			if err := admit(ctx, req); !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
 				!errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("review admission after the identity was disabled = %v", err)
@@ -485,20 +484,20 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	f.withStore(t, func(st *store.Store) {
-		reviewer, err := ReviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
+		reviewer, err := daemoncompose.ReviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		shadow, err := ReviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
+		shadow, err := daemoncompose.ReviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		admit := ReviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), time.Now)
-		admitShadow := ReviewAdmission(st, tree, testReviewRole(domain.RoleShadowReviewer, nil), time.Now)
+		admit := daemoncompose.ReviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), time.Now)
+		admitShadow := daemoncompose.ReviewAdmission(st, tree, testReviewRole(domain.RoleShadowReviewer, nil), time.Now)
 		refused := func(t *testing.T, req exec.ReviewRequest, want string) {
 			t.Helper()
 			err := admit(ctx, req)
-			var failure *RoleAdmissionError
+			var failure *daemoncompose.RoleAdmissionError
 			if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
 				!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), want) {
 				t.Fatalf("review admission = %v, want a reviewer refusal naming %q", err, want)
@@ -543,7 +542,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 				domain.RoleReviewer:       {"chatgpt.com:443"},
 				domain.RoleShadowReviewer: {"api.anthropic.com:443"},
 			}
-			admitter := ReviewAdmitter(st, engine.AgentSelection{
+			admitter := daemoncompose.ReviewAdmitter(st, engine.AgentSelection{
 				Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
 			}, testReviewRoles(egress))
 			for role, arm := range map[domain.RoleName]struct {
@@ -580,7 +579,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// harness: the engine refuses the invocation before any snapshot
 			// exists. The shadow reviewer reads no line.
 			submitReviewedRunLine(t, st, run, domain.RoleReviewer, lineupSelection(t, tree, domain.RoleShadowReviewer))
-			var failure *RoleAdmissionError
+			var failure *daemoncompose.RoleAdmissionError
 			if _, err := admitter(ctx, domain.RoleReviewer, run.ID, "review-admitted-refused", now); !errors.As(err, &failure) ||
 				failure.Role != domain.RoleReviewer || !errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("admit a reviewer invocation whose task line names an agent on another harness = %v", err)
@@ -764,20 +763,20 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 				adopt.withStore(t, func(st *store.Store) {
 					f := &fixture{tree: adopted, st: st, run: seedReviewedRun(t, st, "run-refused"), at: now}
 					admit := func(id domain.InvocationID) (domain.ReviewAdmission, error) {
-						return ReviewAdmitter(st, engine.AgentSelection{
+						return daemoncompose.ReviewAdmitter(st, engine.AgentSelection{
 							Tree: f.tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
 						}, testReviewRoles(map[domain.RoleName][]string{role: {"review.example:443"}}))(ctx, role, f.run.ID, id, f.at)
 					}
 					if _, err := admit("review-before"); err != nil {
 						t.Fatalf("admit the %s invocation on the adopted tree: %v", role, err)
 					}
-					agent, err := ReviewRoleAgent(ctx, st, f.tree, role, now)
+					agent, err := daemoncompose.ReviewRoleAgent(ctx, st, f.tree, role, now)
 					if err != nil {
 						t.Fatal(err)
 					}
 					tc.breakIt(t, f, role, agent)
 					admitted, err := admit("review-after")
-					var failure *RoleAdmissionError
+					var failure *daemoncompose.RoleAdmissionError
 					if !errors.As(err, &failure) || failure.Role != role ||
 						!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
 						t.Fatalf("admit the %s invocation = %v, want a refusal naming %q", role, err, tc.want)
@@ -804,7 +803,7 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	checkout, commit := commitAdoptedPatch(t, patch)
-	selection, err := LoadAgentSelection(ctx, ClaudeDriverConfig{
+	selection, err := daemoncompose.LoadAgentSelection(ctx, daemoncompose.ClaudeDriverConfig{
 		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
 		ProviderEndpoints: []string{"api.anthropic.com:443"},
 	})
@@ -829,40 +828,40 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 		if err := recordTestClaudeAdapterConformance(ctx, st, now); err != nil {
 			t.Fatal(err)
 		}
-		if failure := CheckWriterRoles(ctx, st, *selection, prompts, now); failure != nil {
+		if failure := daemoncompose.CheckWriterRoles(ctx, st, *selection, prompts, now); failure != nil {
 			t.Fatalf("adopted writer roles: %v", failure)
 		}
-		if err := AgentSelectionGate(st, nil)(ctx); err != nil {
+		if err := daemoncompose.AgentSelectionGate(st, nil)(ctx); err != nil {
 			t.Fatalf("gate with every role admitted: %v", err)
 		}
 
 		// The daemon now runs another remediation prompt than the line names.
 		prompts[domain.RoleRemediator] = prompts[domain.RoleImplementer]
-		failure := CheckWriterRoles(ctx, st, *selection, prompts, now)
+		failure := daemoncompose.CheckWriterRoles(ctx, st, *selection, prompts, now)
 		if failure == nil || failure.Role != domain.RoleRemediator || !errors.Is(failure, engine.ErrAgentNotAdmissible) {
 			t.Fatalf("mismatched remediation prompt = %v", failure)
 		}
-		if err := AgentSelectionGate(st, failure)(ctx); !errors.Is(err, engine.ErrAgentNotAdmissible) {
+		if err := daemoncompose.AgentSelectionGate(st, failure)(ctx); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 			t.Fatalf("gate with a failed role = %v", err)
 		}
 		for range 2 {
-			if err := ActivateAgentSelection(ctx, st, failure, now); err != nil {
+			if err := daemoncompose.ActivateAgentSelection(ctx, st, failure, now); err != nil {
 				t.Fatal(err)
 			}
 		}
 		items := agentSelectionItems(t, st)
 		if len(items) != 1 || !strings.Contains(items[0].Reason, "role remediator") ||
-			!strings.HasPrefix(string(items[0].ID), AgentSelectionItemPrefix+RoleCausePrefix+"remediator-") {
+			!strings.HasPrefix(string(items[0].ID), daemoncompose.AgentSelectionItemPrefix+daemoncompose.RoleCausePrefix+"remediator-") {
 			t.Fatalf("items after a role failure = %+v", items)
 		}
 		// A start that fails before the engine exists reports the same item.
-		if err := ReportRoleFailure(ctx, st, failure, now); err != nil {
+		if err := daemoncompose.ReportRoleFailure(ctx, st, failure, now); err != nil {
 			t.Fatal(err)
 		}
 		if got := agentSelectionItems(t, st); len(got) != 1 || got[0].ID != items[0].ID {
 			t.Fatalf("items after reporting the same failure = %+v", got)
 		}
-		if err := ActivateAgentSelection(ctx, st, nil, now); err != nil {
+		if err := daemoncompose.ActivateAgentSelection(ctx, st, nil, now); err != nil {
 			t.Fatal(err)
 		}
 		if got := agentSelectionItems(t, st); len(got) != 0 {
@@ -1000,31 +999,31 @@ func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 		if !errors.Is(markedErr, domain.ErrGenerationIntegrityMarked) {
 			t.Fatalf("marked role = %v", markedErr)
 		}
-		if err := ReportRoleFailure(ctx, st, &RoleAdmissionError{Role: domain.RoleSpecifier, Err: markedErr}, at); err != nil {
+		if err := daemoncompose.ReportRoleFailure(ctx, st, &daemoncompose.RoleAdmissionError{Role: domain.RoleSpecifier, Err: markedErr}, at); err != nil {
 			t.Fatal(err)
 		}
 		if len(agentSelectionItems(t, st)) != 1 {
 			t.Fatal("the earlier startup did not leave its role item")
 		}
-		failure := CheckWriterRoles(ctx, st, selection, prompts, at)
+		failure := daemoncompose.CheckWriterRoles(ctx, st, selection, prompts, at)
 		if failure != nil {
 			t.Fatal(failure)
 		}
-		selection.Gate = AgentSelectionGate(st, failure)
+		selection.Gate = daemoncompose.AgentSelectionGate(st, failure)
 		if err := selection.Gate(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := selection.CheckRole(ctx, st, domain.RoleImplementer, prompts[domain.RoleImplementer], at); err != nil {
 			t.Fatalf("healthy second subscription: %v", err)
 		}
-		if err := ActivateAgentSelection(ctx, st, failure, at); err != nil {
+		if err := daemoncompose.ActivateAgentSelection(ctx, st, failure, at); err != nil {
 			t.Fatal(err)
 		}
 		if items := agentSelectionItems(t, st); len(items) != 0 {
 			t.Fatalf("items after marked-only startup = %+v", items)
 		}
 		prompts[domain.RoleRemediator] = prompts[domain.RoleSpecifier]
-		if failure := CheckWriterRoles(ctx, st, selection, prompts, at); failure == nil || failure.Role != domain.RoleRemediator {
+		if failure := daemoncompose.CheckWriterRoles(ctx, st, selection, prompts, at); failure == nil || failure.Role != domain.RoleRemediator {
 			t.Fatalf("another role's real failure = %v", failure)
 		}
 		reenrollStartupRole(t, st, source.Enrollment)
@@ -1047,19 +1046,19 @@ func TestReviewSelectionOnAMarkedGeneration(t *testing.T) {
 			}
 			tree := loadAdoptedPatch(t, patch)
 			f.withStore(t, func(st *store.Store) {
-				cfg, err := ResolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
+				cfg, err := daemoncompose.ResolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
 				if err != nil {
 					t.Fatal(err)
 				}
-				agent, err := ReviewRoleAgent(ctx, st, tree, role, at)
+				agent, err := daemoncompose.ReviewRoleAgent(ctx, st, tree, role, at)
 				if err != nil {
 					t.Fatal(err)
 				}
 				run := seedReviewedRun(t, st, "run-marked-review")
 				req := admittedReviewRequest(t, st, tree, role, run.ID)
-				admit := ReviewAdmission(st, tree, testReviewRole(role, nil), func() time.Time { return at })
+				admit := daemoncompose.ReviewAdmission(st, tree, testReviewRole(role, nil), func() time.Time { return at })
 				mark := markStartupGeneration(t, st, agent.Enrollment.ID)
-				got, err := ResolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
+				got, err := daemoncompose.ResolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
 				if err != nil || !reflect.DeepEqual(got, cfg) {
 					t.Fatalf("marked startup = %+v, %v; want %+v", got, err, cfg)
 				}
@@ -1089,7 +1088,7 @@ func TestReviewSelectionOnAMarkedGeneration(t *testing.T) {
 						broken.Lineup[i].Selection.PromptDigest = domain.Digest("sha256:" + strings.Repeat("7", 64))
 					}
 				}
-				if _, err := ResolveReviewSelection(ctx, st, broken, flagEraReviewConfig(), at); err == nil ||
+				if _, err := daemoncompose.ResolveReviewSelection(ctx, st, broken, flagEraReviewConfig(), at); err == nil ||
 					errors.Is(err, domain.ErrGenerationIntegrityMarked) || !strings.Contains(err.Error(), "this daemon reviews with") {
 					t.Fatalf("mark plus prompt mismatch = %v", err)
 				}
@@ -1118,13 +1117,13 @@ func TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped(t *testing.T) {
 	ctx := context.Background()
 	st, taskID := legacyAdmittedTask(t, "flag-era-auth")
 	now := time.Now().UTC()
-	gate := AgentSelectionGate(st, nil)
+	gate := daemoncompose.AgentSelectionGate(st, nil)
 
 	// An enabled identity is not retired, whatever it owns.
 	if err := gate(ctx); err != nil {
 		t.Fatalf("gate before retirement: %v", err)
 	}
-	if err := ActivateAgentSelection(ctx, st, nil, now); err != nil {
+	if err := daemoncompose.ActivateAgentSelection(ctx, st, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	if len(agentSelectionItems(t, st)) != 0 {
@@ -1132,10 +1131,10 @@ func TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped(t *testing.T) {
 	}
 
 	setIdentityEnabled(t, st, "flag-era-auth", false)
-	if err := gate(ctx); !errors.Is(err, ErrRetiredIdentityOwnsWork) {
+	if err := gate(ctx); !errors.Is(err, daemoncompose.ErrRetiredIdentityOwnsWork) {
 		t.Fatalf("gate with a retired identity owning open work = %v", err)
 	}
-	if err := ActivateAgentSelection(ctx, st, nil, now); err != nil {
+	if err := daemoncompose.ActivateAgentSelection(ctx, st, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	if readTask(t, st, taskID).Cancellation != nil {
@@ -1158,7 +1157,7 @@ func TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped(t *testing.T) {
 		t.Fatalf("cancellation after retirement = %+v", cancellation)
 	}
 	// Requested is not confirmed: the gate holds until teardown is proved.
-	if err := gate(ctx); !errors.Is(err, ErrRetiredIdentityOwnsWork) {
+	if err := gate(ctx); !errors.Is(err, daemoncompose.ErrRetiredIdentityOwnsWork) {
 		t.Fatalf("gate with an unconfirmed cancellation = %v", err)
 	}
 
@@ -1169,7 +1168,7 @@ func TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped(t *testing.T) {
 	if again := readTask(t, st, taskID).Cancellation; again.RequestID != cancellation.RequestID {
 		t.Fatalf("a rerun recorded another stop: %+v", again)
 	}
-	if err := ActivateAgentSelection(ctx, st, nil, now.Add(time.Minute)); err != nil {
+	if err := daemoncompose.ActivateAgentSelection(ctx, st, nil, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if got := agentSelectionItems(t, st); len(got) != 1 || got[0].ID != items[0].ID {
@@ -1191,7 +1190,7 @@ func TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped(t *testing.T) {
 	if err := gate(ctx); err != nil {
 		t.Fatalf("gate after the cancellation was confirmed: %v", err)
 	}
-	if err := ActivateAgentSelection(ctx, st, nil, now.Add(3*time.Minute)); err != nil {
+	if err := daemoncompose.ActivateAgentSelection(ctx, st, nil, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if got := agentSelectionItems(t, st); len(got) != 0 {
@@ -1205,7 +1204,7 @@ func agentSelectionItems(t *testing.T, st *store.Store) []domain.AttentionItem {
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		open, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range open {
-			if strings.HasPrefix(string(item.ID), AgentSelectionItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemoncompose.AgentSelectionItemPrefix) {
 				items = append(items, item)
 			}
 		}
@@ -1288,7 +1287,7 @@ func admittedReviewRequest(
 	t *testing.T, st *store.Store, tree agenttree.Tree, role domain.RoleName, runID domain.RunID,
 ) exec.ReviewRequest {
 	t.Helper()
-	agent, err := ReviewRoleAgent(context.Background(), st, tree, role, time.Now().UTC())
+	agent, err := daemoncompose.ReviewRoleAgent(context.Background(), st, tree, role, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("resolve the %s line: %v", role, err)
 	}
@@ -1302,11 +1301,11 @@ func admittedReviewRequest(
 // testReviewRole is the review spec the daemon composes for a role whose line
 // runs the fixture harness: Codex for the reviewer, Claude for the shadow.
 func testReviewRole(role domain.RoleName, egress []string) engine.ReviewRole {
-	provider := ShadowReviewProvider()
+	provider := daemoncompose.ShadowReviewProvider()
 	if role == domain.RoleReviewer {
 		provider, _ = ward.LookupRoutedReviewProvider(domain.HarnessClientCodexCLI)
 	}
-	return ReviewRole(role, provider, egress)
+	return daemoncompose.ReviewRole(role, provider, egress)
 }
 
 // testReviewRoles composes testReviewRole for each role in egress.
@@ -1340,7 +1339,7 @@ func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
 	}
 	codexTree, claudeTree := loadAdoptedPatch(t, codexPatch), loadAdoptedPatch(t, claudePatch)
 	codexSpec := testReviewRole(domain.RoleReviewer, nil)
-	claudeSpec := ReviewRole(domain.RoleReviewer, mustRoutedReviewProvider(domain.HarnessClientClaudeCode), nil)
+	claudeSpec := daemoncompose.ReviewRole(domain.RoleReviewer, mustRoutedReviewProvider(domain.HarnessClientClaudeCode), nil)
 	wrongVendor := claudeSpec
 	wrongVendor.Vendor = domain.AgentVendorCodex
 	f.withStore(t, func(st *store.Store) {
@@ -1358,14 +1357,14 @@ func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
 			"Claude harness, Codex vendor": {claudeTree, wrongVendor, claudeReq, "adapter"},
 			"recomposed Claude source":     {claudeTree, claudeSpec, claudeReq, ""},
 		} {
-			err := ReviewAdmission(st, tc.tree, tc.spec, time.Now)(ctx, tc.req)
+			err := daemoncompose.ReviewAdmission(st, tc.tree, tc.spec, time.Now)(ctx, tc.req)
 			if tc.refusal == "" {
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
 				continue
 			}
-			var failure *RoleAdmissionError
+			var failure *daemoncompose.RoleAdmissionError
 			if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
 				!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.refusal) {
 				t.Fatalf("%s = %v, want a refusal naming the %s", name, err, tc.refusal)
@@ -1384,69 +1383,4 @@ func lineupSelection(t *testing.T, tree agenttree.Tree, role domain.RoleName) do
 	}
 	t.Fatalf("the tree has no %s line", role)
 	return domain.TaskLineSelection{}
-}
-
-// TestReviewCredentialReadsTheAdmittedGeneration: the routed Claude source
-// reads another identity's token from the enrollment generation the request
-// was admitted under, refuses a read the store refuses, and never prints the
-// token. A Codex source reads no other identity's credential.
-func TestReviewCredentialReadsTheAdmittedGeneration(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	admission := fake.ReviewAdmission(domain.RoleReviewer, "run-1", "review-1")
-	admission.AgentBinding.EnrollmentID, admission.AgentBinding.EnrollmentGeneration = "claude-second/claude_code", 3
-	token := judgmentTestToken(t, judgmentSecondToken)
-	var reads []string
-	read := func(_ context.Context, id domain.ClientEnrollmentID, ordinal int) (ward.SetupToken, error) {
-		reads = append(reads, fmt.Sprintf("%s@%d", id, ordinal))
-		return token, nil
-	}
-	claude := mustRoutedReviewProvider(domain.HarnessClientClaudeCode)
-
-	credential, err := reviewCredential(claude, read)(ctx, admission)
-	if err != nil {
-		t.Fatalf("read the admitted generation: %v", err)
-	}
-	if !slices.Equal(reads, []string{"claude-second/claude_code@3"}) {
-		t.Fatalf("reads = %v, want the admitted generation", reads)
-	}
-	if printed := fmt.Sprintf("%v %+v %#v %s", credential, credential, credential, credential); strings.Contains(printed, judgmentSecondToken) {
-		t.Fatalf("a formatted credential prints the token: %s", printed)
-	}
-
-	// A store that is not the admitted one refuses the review; a store that
-	// is changing, or a read that did not finish, is retried.
-	for cause, want := range map[error]domain.ReviewFailureClass{
-		wardstore.ErrCredentialReadDigestMismatch:    domain.ReviewFailureConfiguration,
-		wardstore.ErrCredentialReadGenerationChanged: domain.ReviewFailureConfiguration,
-		wardstore.ErrCredentialReadUnsupported:       domain.ReviewFailureConfiguration,
-		wardstore.ErrCredentialReadMutationLeaseLive: domain.ReviewFailureTransient,
-		wardstore.ErrCredentialReadHoldEnded:         domain.ReviewFailureTransient,
-		errors.New("exporter container exited"):      domain.ReviewFailureTransient,
-	} {
-		refusing := func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
-			return ward.SetupToken{}, cause
-		}
-		_, err := reviewCredential(claude, refusing)(ctx, admission)
-		if !errors.Is(err, cause) {
-			t.Fatalf("a failed read = %v, want it to wrap %v", err, cause)
-		}
-		var failure *exec.ReviewSourceFailure
-		switch want {
-		case domain.ReviewFailureConfiguration:
-			if !errors.Is(err, engine.ErrAgentNotAdmissible) || errors.As(err, &failure) {
-				t.Errorf("read failing with %v = %v, want a refusal", cause, err)
-			}
-		default:
-			if exec.ClassifyReviewSourceFailure(err) != want || errors.Is(err, engine.ErrAgentNotAdmissible) {
-				t.Errorf("read failing with %v = %v, want a %s failure", cause, err, want)
-			}
-		}
-	}
-
-	reads = nil
-	codex := mustRoutedReviewProvider(domain.HarnessClientCodexCLI)
-	if _, err := reviewCredential(codex, read)(ctx, admission); !errors.Is(err, engine.ErrAgentNotAdmissible) || reads != nil {
-		t.Fatalf("a Codex source = %v after reads %v, want a refusal that reads nothing", err, reads)
-	}
 }

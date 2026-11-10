@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
@@ -322,7 +323,7 @@ func runOnboardCommand(
 			return trustErr
 		}
 		minter := publish.NewMinterWithJanitor(
-			keystore, client, DefaultGitHubAPIBase,
+			keystore, client, daemoncompose.DefaultGitHubAPIBase,
 			recorder, trust, time.Now, janitor,
 		)
 		gate := onboardingJanitorGate{janitor: janitor}
@@ -355,7 +356,7 @@ func runOnboardCommand(
 			return builderErr
 		}
 		auditor, auditorErr := publish.NewGitHubWorkflowAuditor(
-			tokens, client, DefaultGitHubAPIBase, time.Now,
+			tokens, client, daemoncompose.DefaultGitHubAPIBase, time.Now,
 		)
 		if auditorErr != nil {
 			return auditorErr
@@ -649,8 +650,8 @@ func withDurableInstallationPoll(
 		return err
 	}
 	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, DefaultGitHubAPIBase, authority, authority, recorder, recorder,
-		time.Now, DefaultJanitorRemovalBound,
+		keystore, client, daemoncompose.DefaultGitHubAPIBase, authority, authority, recorder, recorder,
+		time.Now, daemoncompose.DefaultJanitorRemovalBound,
 	)
 	if err != nil {
 		return err
@@ -734,8 +735,8 @@ func installationURLForRegistration(
 	onboarder := publish.NewCredentialOnboarder(
 		keystore,
 		&http.Client{Timeout: 30 * time.Second},
-		DefaultGitHubAPIBase,
-		DefaultGitHubRemoteBase,
+		daemoncompose.DefaultGitHubAPIBase,
+		daemoncompose.DefaultGitHubRemoteBase,
 		time.Now,
 		nil,
 	)
@@ -832,13 +833,13 @@ func withInstallationJanitor(
 	janitor, err := publish.NewInstallationJanitor(
 		keystore,
 		client,
-		DefaultGitHubAPIBase,
+		daemoncompose.DefaultGitHubAPIBase,
 		authority,
 		authority,
 		recorder,
 		recorder,
 		time.Now,
-		DefaultJanitorRemovalBound,
+		daemoncompose.DefaultJanitorRemovalBound,
 	)
 	if err != nil {
 		return err

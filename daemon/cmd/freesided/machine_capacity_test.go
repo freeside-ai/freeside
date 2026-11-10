@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -86,7 +87,7 @@ func TestLaunchBoundOfAComposition(t *testing.T) {
 	}
 	// A Claude composition with no budget never runs the container binary,
 	// which does not exist here.
-	bound, err = config{Claude: &ClaudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
+	bound, err = config{Claude: &daemoncompose.ClaudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
 	if err != nil || bound.Budgeted() {
 		t.Fatalf("unbudgeted bound = %+v, %v", bound, err)
 	}

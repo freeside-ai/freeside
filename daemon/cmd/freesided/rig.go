@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -36,11 +37,6 @@ import (
 var errRigUsage = errors.New("invalid rig command")
 
 var errRigCleanRelease = errors.New("clean rig release requested")
-
-type RigHoldOutput struct {
-	Token    string                 `json:"token"`
-	Manifest daemonlock.RigManifest `json:"manifest"`
-}
 
 type rigHost interface {
 	ProbeDaemon(context.Context, string) (description string, live bool, err error)
@@ -476,7 +472,7 @@ func runRigHoldWithLeaseRoot(
 	if err := proveRigIdle(ctx, host, lease.Manifest().Resources); err != nil {
 		return err
 	}
-	if err := json.NewEncoder(stdout).Encode(RigHoldOutput{
+	if err := json.NewEncoder(stdout).Encode(daemoncompose.RigHoldOutput{
 		Token: lease.Token(), Manifest: lease.Manifest(),
 	}); err != nil {
 		return fmt.Errorf("write rig acquisition: %w", err)
@@ -549,7 +545,7 @@ func runRigBind(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 0 || *stateRoot == "" || *tokenFile == "" || len(invocations) == 0 {
 		return fmt.Errorf("%w: -state-root, -token-file, and at least one -invocation are required", errRigUsage)
 	}
-	token, err := ReadRigToken(*tokenFile)
+	token, err := daemoncompose.ReadRigToken(*tokenFile)
 	if err != nil {
 		return err
 	}
@@ -571,32 +567,6 @@ func runRigBind(args []string, stdout, stderr io.Writer) error {
 	return json.NewEncoder(stdout).Encode(manifest)
 }
 
-func ReadRigToken(path string) (string, error) {
-	acquisition, err := ReadRigAcquisition(path)
-	if err != nil {
-		return "", err
-	}
-	return acquisition.Token, nil
-}
-
-func ReadRigAcquisition(path string) (RigHoldOutput, error) {
-	// #nosec G304 -- the operator supplies the private acquisition file emitted by rig hold.
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return RigHoldOutput{}, fmt.Errorf("read rig token file: %w", err)
-	}
-	var acquisition RigHoldOutput
-	if err := strictjson.Decode(
-		body, &acquisition, strictjson.RejectInvalidUTF8, strictjson.Limit(128<<10),
-	); err != nil {
-		return RigHoldOutput{}, fmt.Errorf("decode rig token file: %w", err)
-	}
-	if acquisition.Token == "" {
-		return RigHoldOutput{}, errors.New("rig token file has no token")
-	}
-	return acquisition, nil
-}
-
 func runRigResource(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("freesided rig resource", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -614,7 +584,7 @@ func runRigResource(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read rig token file: %w", err)
 	}
-	var acquisition RigHoldOutput
+	var acquisition daemoncompose.RigHoldOutput
 	if err := strictjson.Decode(
 		body, &acquisition, strictjson.RejectInvalidUTF8, strictjson.Limit(128<<10),
 	); err != nil {
@@ -654,7 +624,7 @@ func runRigCheck(args []string, stderr io.Writer) error {
 	if flags.NArg() != 0 || *stateRoot == "" || *tokenFile == "" {
 		return fmt.Errorf("%w: -state-root and -token-file are required", errRigUsage)
 	}
-	token, err := ReadRigToken(*tokenFile)
+	token, err := daemoncompose.ReadRigToken(*tokenFile)
 	if err != nil {
 		return err
 	}
@@ -676,7 +646,7 @@ func runRigCleanup(
 	if flags.NArg() != 0 || *stateRoot == "" || *tokenFile == "" {
 		return fmt.Errorf("%w: -state-root and -token-file are required", errRigUsage)
 	}
-	token, err := ReadRigToken(*tokenFile)
+	token, err := daemoncompose.ReadRigToken(*tokenFile)
 	if err != nil {
 		return err
 	}

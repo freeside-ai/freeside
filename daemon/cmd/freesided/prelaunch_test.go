@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -969,9 +970,9 @@ func TestPrelaunchNamesTheTreeMissingOnlyForAnUnresolvedLineup(t *testing.T) {
 		err  error
 		tree bool
 	}{
-		"unresolved role": {&RoleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}, true},
+		"unresolved role": {&daemoncompose.RoleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}, true},
 		"unreadable":      {errors.New("store unreadable"), false},
-		"marked generation": {&RoleAdmissionError{Role: domain.RoleReviewer, Err: &domain.GenerationIntegrityMarkedError{
+		"marked generation": {&daemoncompose.RoleAdmissionError{Role: domain.RoleReviewer, Err: &domain.GenerationIntegrityMarkedError{
 			Mark: domain.GenerationIntegrityMark{EnrollmentID: "marked/codex_cli", Ordinal: 2, Finding: domain.CredentialIntegrityCorruption},
 		}}, false},
 	}

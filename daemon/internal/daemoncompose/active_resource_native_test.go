@@ -1,0 +1,575 @@
+package daemoncompose
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+)
+
+const testReviewerLogin = "chatgpt-codex-connector"
+
+func testReviewers() map[string]bool { return map[string]bool{testReviewerLogin: true} }
+
+func openExactPull(context.Context, string, int) (publish.PullObservation, error) {
+	return exactPull("open", false), nil
+}
+
+func staticReview(obs publish.PullReviewObservation) NativeReviewObserver {
+	return func(context.Context, string, int) (publish.PullReviewObservation, error) {
+		return obs, nil
+	}
+}
+
+func readNativeObservations(t *testing.T, st *store.Store) []domain.NativeReviewObservation {
+	t.Helper()
+	var got []domain.NativeReviewObservation
+	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.ListNativeReviewObservations(context.Background(), 424242, 450)
+		return err
+	}); err != nil {
+		t.Fatalf("list native observations: %v", err)
+	}
+	return got
+}
+
+// findingsReviewActivity is a native findings review (one badge comment) plus a
+// clean-pass reaction, both by the configured reviewer and bound to the ready
+// item's head "cafed00d".
+func findingsReviewActivity() publish.PullReviewObservation {
+	return publish.PullReviewObservation{
+		Reviews: []publish.PullReview{{
+			ID: 900100, AuthorLogin: testReviewerLogin, State: "COMMENTED",
+			Body: "review", CommitID: "cafed00d", SubmittedAt: activeResourceTestTime,
+		}},
+		Comments: []publish.PullReviewComment{{
+			ID: 800200, ReviewID: 900100, AuthorLogin: testReviewerLogin,
+			Path: "daemon/main.go", Line: 42, Body: "P2: unchecked error return",
+			CommitID: "cafed00d", CreatedAt: activeResourceTestTime,
+		}},
+		Reactions: []publish.PullDescriptionReaction{{
+			ID: 700300, AuthorLogin: testReviewerLogin, Content: "+1", CreatedAt: activeResourceTestTime,
+		}},
+	}
+}
+
+func TestActiveResourceRecordsNativeFindingsAndCleanPass(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+
+	got := readNativeObservations(t, st)
+	if len(got) != 2 {
+		t.Fatalf("recorded %d native observations, want 2 (findings + clean pass)", len(got))
+	}
+	var findings, clean *domain.NativeReviewObservation
+	for i := range got {
+		switch got[i].Kind {
+		case domain.NativeReviewFindings:
+			findings = &got[i]
+		case domain.NativeReviewCleanPass:
+			clean = &got[i]
+		}
+	}
+	if findings == nil || clean == nil {
+		t.Fatalf("kinds recorded = %+v, want one findings_review and one clean_pass_signal", got)
+	}
+	if len(findings.Findings) != 1 || findings.Findings[0].Severity != "P2" ||
+		findings.Findings[0].Location == nil ||
+		findings.Findings[0].Location.String() != "daemon/main.go:42" ||
+		findings.Findings[0].RunID != *item.Subject.RunID {
+		t.Fatalf("normalized finding = %+v", findings.Findings)
+	}
+	if clean.NativeID != 700300 || len(clean.Findings) != 0 || clean.ReviewCommitSHA != "" {
+		t.Fatalf("clean pass = %+v", clean)
+	}
+
+	// The item stays open and gains no readiness from native activity: readiness
+	// remains gated on the Freeside-invoked pass.
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen {
+		t.Fatalf("native activity changed item status to %s", got.Status)
+	}
+}
+
+// TestActiveResourceRecordsLateAndForeignFiltered proves a late review (arriving
+// on an already-ready item) is recorded while activity from a non-reviewer
+// login is filtered out.
+func TestActiveResourceRecordsLateAndForeignFiltered(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	activity := findingsReviewActivity()
+	activity.Reviews = append(activity.Reviews, publish.PullReview{
+		ID: 900999, AuthorLogin: "random-contributor", State: "COMMENTED",
+		CommitID: "cafed00d", SubmittedAt: activeResourceTestTime,
+	})
+	activity.Reactions = append(activity.Reactions, publish.PullDescriptionReaction{
+		ID: 700999, AuthorLogin: "random-contributor", Content: "+1", CreatedAt: activeResourceTestTime,
+	})
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readNativeObservations(t, st)
+	if len(got) != 2 {
+		t.Fatalf("recorded %d native observations, want 2 (foreign login filtered out)", len(got))
+	}
+	for _, o := range got {
+		if o.AuthorLogin != testReviewerLogin {
+			t.Fatalf("recorded a foreign login: %+v", o)
+		}
+	}
+}
+
+// TestActiveResourceNormalizesBotLogin proves the reviewer filter matches the
+// GitHub App "[bot]" login form the REST endpoints actually return, so a
+// reviewer configured by its canonical login still has its review, inline
+// comment, and clean-pass reaction observed and recorded under the canonical
+// login. Without normalization the exact-login filter drops everything.
+func TestActiveResourceNormalizesBotLogin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	activity := findingsReviewActivity()
+	botLogin := testReviewerLogin + "[bot]"
+	activity.Reviews[0].AuthorLogin = botLogin
+	activity.Comments[0].AuthorLogin = botLogin
+	activity.Reactions[0].AuthorLogin = botLogin
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readNativeObservations(t, st)
+	if len(got) != 2 {
+		t.Fatalf("recorded %d native observations, want 2 (bot-form login normalized)", len(got))
+	}
+	for _, o := range got {
+		if o.AuthorLogin != testReviewerLogin {
+			t.Fatalf("stored login = %q, want the canonical %q", o.AuthorLogin, testReviewerLogin)
+		}
+	}
+}
+
+// TestActiveResourceRejectsStaleCleanPassReaction proves a clean-pass reaction
+// created before the current head's binding (a leftover +1 from an earlier
+// head) is not re-recorded as a clean pass for the current head; only the
+// findings review, which binds by commit_id, is recorded.
+func TestActiveResourceRejectsStaleCleanPassReaction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	activity := findingsReviewActivity()
+	// The binding's RecordedAt is activeResourceTestTime.Add(-time.Minute); this
+	// reaction predates it, so it belongs to an earlier head.
+	activity.Reactions[0].CreatedAt = activeResourceTestTime.Add(-2 * time.Minute)
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readNativeObservations(t, st)
+	if len(got) != 1 {
+		t.Fatalf("recorded %d native observations, want 1 (stale clean-pass rejected)", len(got))
+	}
+	if got[0].Kind != domain.NativeReviewFindings {
+		t.Fatalf("recorded kind = %s, want only the findings review", got[0].Kind)
+	}
+}
+
+// TestActiveResourceRecordsStaleHeadReview proves a review that bound to a head
+// other than the item's live binding head is recorded with the divergence
+// visible rather than dropped.
+func TestActiveResourceRecordsStaleHeadReview(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	activity := findingsReviewActivity()
+	activity.Reviews[0].CommitID = "0ldc0de" // review bound to an earlier head
+	activity.Comments[0].CommitID = "0ldc0de"
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	for _, o := range readNativeObservations(t, st) {
+		if o.Kind == domain.NativeReviewFindings {
+			if o.ReviewCommitSHA != "0ldc0de" || o.BindingHeadSHA != "cafed00d" {
+				t.Fatalf("stale-head divergence not preserved: %+v", o)
+			}
+			return
+		}
+	}
+	t.Fatal("stale-head findings review was not recorded")
+}
+
+// TestActiveResourceNativeObserveFailureIsolated proves a native-observe failure
+// is reported but never blocks the pull fact, and the next tick retries and
+// records without churning the pull timeline.
+func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+
+	failing := func(context.Context, string, int) (publish.PullReviewObservation, error) {
+		return publish.PullReviewObservation{}, errors.New("boom")
+	}
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: failing,
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil {
+		t.Fatalf("Reconcile hard error: %v", err)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("failures = %v, want one isolated native failure", failures)
+	}
+	// The pull fact still committed despite the native failure.
+	if pulls := readPullTimeline(t, st); len(pulls) != 1 {
+		t.Fatalf("pull timeline = %d, want the pull fact committed despite native failure", len(pulls))
+	}
+	if got := readNativeObservations(t, st); len(got) != 0 {
+		t.Fatalf("recorded native observations on a failed observe: %+v", got)
+	}
+
+	// The next tick retries with a working observer and records, without
+	// re-appending the unchanged pull fact.
+	reconciler.Review = staticReview(findingsReviewActivity())
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("retry Reconcile = %v, %v", failures, err)
+	}
+	if got := readNativeObservations(t, st); len(got) != 2 {
+		t.Fatalf("retry recorded %d native observations, want 2", len(got))
+	}
+	if pulls := readPullTimeline(t, st); len(pulls) != 1 {
+		t.Fatalf("pull timeline churned on retry = %d, want 1", len(pulls))
+	}
+}
+
+// TestActiveResourceNativeObservationConverges proves a repeated observation of
+// unchanged native activity appends no new rows.
+func TestActiveResourceNativeObservationConverges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	for i := 0; i < 3; i++ {
+		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+			t.Fatalf("Reconcile %d = %v, %v", i, failures, err)
+		}
+	}
+	if got := readNativeObservations(t, st); len(got) != 2 {
+		t.Fatalf("recorded %d native observations across three ticks, want 2 (converged)", len(got))
+	}
+}
+
+// TestActiveResourceNativeConvergesWithInvalidUTF8 proves a comment path or
+// review commit_id carrying invalid UTF-8 (git stores paths as raw bytes) is
+// sanitized to a byte-stable form, so repeated observation coalesces instead of
+// churning the append timeline forever (the issue #180 round-trip trap).
+func TestActiveResourceNativeConvergesWithInvalidUTF8(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	activity := findingsReviewActivity()
+	activity.Comments[0].Path = "dir/na\xffme"
+	activity.Reviews[0].CommitID = "c0mm\xffit"
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	var first int
+	for i := 0; i < 3; i++ {
+		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+			t.Fatalf("Reconcile %d = %v, %v", i, failures, err)
+		}
+		got := len(readNativeObservations(t, st))
+		if i == 0 {
+			first = got
+			continue
+		}
+		if got != first {
+			t.Fatalf("invalid-UTF-8 native activity churned: tick %d has %d rows, want %d", i, got, first)
+		}
+	}
+	if first == 0 {
+		t.Fatal("no native observations recorded for the invalid-UTF-8 activity")
+	}
+}
+
+// TestActiveResourceNativeNotModifiedRecordsNothing proves a fully-unchanged
+// (304) native observation yields no store write.
+func TestActiveResourceNativeNotModifiedRecordsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull,
+		Review:    staticReview(publish.PullReviewObservation{NotModified: true}),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	if got := readNativeObservations(t, st); len(got) != 0 {
+		t.Fatalf("recorded %d native observations on a 304, want 0", len(got))
+	}
+	_ = item
+}
+
+// TestActiveResourceNativeCommitFailureEvictsCache proves a failed durable
+// append does not permanently drop native evidence: the reconciler evicts the
+// observer cache (so the next tick re-fetches unconditionally instead of riding
+// a 304) and the failure stays isolated from the pull fact (issue #497).
+func TestActiveResourceNativeCommitFailureEvictsCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+
+	// Drop the native table so the pull commit still succeeds but the native
+	// append fails deterministically ("no such table"), isolating the failure to
+	// commitNativeReview without disturbing observe or the pull commit.
+	dropNativeReviewObservations(t, dbPath)
+
+	var evicted [][2]any
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
+		Reviewers: testReviewers(),
+		reviewInvalidate: func(repo string, number int) {
+			evicted = append(evicted, [2]any{repo, number})
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil {
+		t.Fatalf("Reconcile hard error: %v", err)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("failures = %v, want one isolated native-commit failure", failures)
+	}
+	// The failed native commit evicts the observer cache for this exact PR so
+	// the next tick re-fetches and retries rather than stranding the rows.
+	if len(evicted) != 1 || evicted[0][0] != "owner/repo" || evicted[0][1] != 450 {
+		t.Fatalf("reviewInvalidate calls = %v, want one for owner/repo#450", evicted)
+	}
+	// The pull fact still committed despite the native failure (isolation).
+	if pulls := readPullTimeline(t, st); len(pulls) != 1 {
+		t.Fatalf("pull timeline = %d, want the pull fact committed despite the native failure", len(pulls))
+	}
+}
+
+// dropNativeReviewObservations deletes the native-review table, so a
+// subsequent native append fails while the other tables stay intact.
+func dropNativeReviewObservations(t *testing.T, dbPath string) {
+	t.Helper()
+	dropStoreTable(t, dbPath, "native_review_observations")
+}
+
+// dropStoreTable deletes one table, so a later statement against it fails
+// while the others stay intact.
+func dropStoreTable(t *testing.T, dbPath, table string) {
+	t.Helper()
+	execStoreSQL(t, dbPath, "DROP TABLE "+table)
+}
+
+// execStoreSQL runs one statement through a second connection to the store's
+// file. Tests use it to damage the store, and to repair it, behind the
+// reconciler's back.
+func execStoreSQL(t *testing.T, dbPath, statement string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open store db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(statement); err != nil {
+		t.Fatalf("%s: %v", statement, err)
+	}
+}
+
+func readPullTimeline(t *testing.T, st *store.Store) []domain.PullMergeFact {
+	t.Helper()
+	var pulls []domain.PullMergeFact
+	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		pulls, err = tx.ListPullMergeFacts(context.Background(), 424242, 450)
+		return err
+	}); err != nil {
+		t.Fatalf("list pull facts: %v", err)
+	}
+	return pulls
+}
+
+// TestActiveResourceReactionsRefusalReportedOncePerItem proves a refused
+// reactions read keeps the reviews' native evidence, is reported once per
+// ready item rather than every pass, and is reported again after a pass reads
+// the reactions and a later one is refused (#2717).
+func TestActiveResourceReactionsRefusalReportedOncePerItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+
+	refused := findingsReviewActivity()
+	refused.Reactions = nil
+	refused.ReactionsUnavailable = true
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(refused),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	pass := func(label string) activeResourceReconcileResult {
+		t.Helper()
+		result, err := reconciler.Reconcile(ctx)
+		if err != nil || len(result.Failures) != 0 {
+			t.Fatalf("%s: Reconcile = %v, %v", label, result.Failures, err)
+		}
+		return result
+	}
+
+	if got := pass("first refused").reactionsRefused; len(got) != 1 {
+		t.Fatalf("first refused pass reported %v, want one refusal", got)
+	}
+	// The review and its inline comment are still recorded; only the
+	// clean-pass reaction is missing.
+	if got := readNativeObservations(t, st); len(got) != 1 {
+		t.Fatalf("refused pass recorded %d native observations, want the findings review only", len(got))
+	}
+
+	// A repeated refusal, changed or not, stays quiet.
+	if got := pass("second refused").reactionsRefused; len(got) != 0 {
+		t.Fatalf("second refused pass reported %v, want none", got)
+	}
+	unchanged := refused
+	unchanged.NotModified = true
+	reconciler.Review = staticReview(unchanged)
+	if got := pass("unchanged refused").reactionsRefused; len(got) != 0 {
+		t.Fatalf("unchanged refused pass reported %v, want none", got)
+	}
+
+	// A failed review read neither reports nor re-arms.
+	reconciler.Review = func(context.Context, string, int) (publish.PullReviewObservation, error) {
+		return publish.PullReviewObservation{}, errors.New("boom")
+	}
+	if result, err := reconciler.Reconcile(ctx); err != nil || len(result.reactionsRefused) != 0 {
+		t.Fatalf("failed read = %v, %v; want no refusal report", result.reactionsRefused, err)
+	}
+	reconciler.Review = staticReview(refused)
+	if got := pass("refused after failure").reactionsRefused; len(got) != 0 {
+		t.Fatalf("refusal after a failed read reported %v, want none", got)
+	}
+
+	// The reactions read again, then are refused again: reported once more.
+	reconciler.Review = staticReview(findingsReviewActivity())
+	if got := pass("recovered").reactionsRefused; len(got) != 0 {
+		t.Fatalf("recovered pass reported %v, want none", got)
+	}
+	reconciler.Review = staticReview(refused)
+	if got := pass("refused again").reactionsRefused; len(got) != 1 {
+		t.Fatalf("refusal after recovery reported %v, want one", got)
+	}
+}
+
+// TestActiveResourceReactionsRefusalForgottenWhenItemConcludes proves the
+// once-per-item record doesn't outlive the open item: open statuses never
+// return, so an entry left behind would only leak (#2717).
+func TestActiveResourceReactionsRefusalForgottenWhenItemConcludes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+
+	refused := findingsReviewActivity()
+	refused.Reactions = nil
+	refused.ReactionsUnavailable = true
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(refused),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
+	}
+	if result, err := reconciler.Reconcile(ctx); err != nil || len(result.reactionsRefused) != 1 {
+		t.Fatalf("refused pass = %v, %v; want one refusal", result.reactionsRefused, err)
+	}
+
+	concluded := readActiveItem(t, st, item.ID)
+	concluded.Status = domain.StatusResolved
+	concluded.ItemVersion++
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, domaintest.MustConclude(concluded))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(ctx); err != nil {
+		t.Fatalf("pass over the concluded item: %v", err)
+	}
+	if reconciler.reactionsRefusalReported[item.ID] {
+		t.Fatal("the concluded item's refusal record was kept")
+	}
+}

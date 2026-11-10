@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/macverify"
@@ -22,7 +23,7 @@ func refuseProve(context.Context, *macverify.Backend, macverify.ConformanceRecor
 	return errUnexpectedProve
 }
 
-func parseHostVerificationFlags(t *testing.T, args ...string) MacverifyExecutorConfig {
+func parseHostVerificationFlags(t *testing.T, args ...string) daemoncompose.MacverifyExecutorConfig {
 	t.Helper()
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
 	config := macverifyExecutorFlags(flags)
@@ -54,7 +55,7 @@ func recordHostVerificationConformance(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (StoreConformanceRecorder{Store: st}).RecordBackendConformance(context.Background(), record); err != nil {
+	if err := (daemoncompose.StoreConformanceRecorder{Store: st}).RecordBackendConformance(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -68,7 +69,7 @@ func declaresHostVerification(b *macverify.Backend) bool {
 func TestHostVerificationExecutorUnsetConfiguresNone(t *testing.T) {
 	t.Parallel()
 	cfg := parseHostVerificationFlags(t)
-	backend, err := ComposeHostVerificationExecutor(context.Background(), nil, cfg, true, nil, refuseProve)
+	backend, err := daemoncompose.ComposeHostVerificationExecutor(context.Background(), nil, cfg, true, nil, refuseProve)
 	if err != nil || backend != nil {
 		t.Fatalf("unset root = %v, %v; want no executor", backend, err)
 	}
@@ -81,7 +82,7 @@ func TestHostVerificationExecutorBuildsFromFlags(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "macverify")
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	backend, err := ComposeHostVerificationExecutor(
+	backend, err := daemoncompose.ComposeHostVerificationExecutor(
 		context.Background(), st, parseHostVerificationFlags(t, hostVerificationFlags(root)...), false, nil, refuseProve)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +102,7 @@ func TestHostVerificationExecutorBuildsFromFlags(t *testing.T) {
 	}
 
 	missingToolchain := parseHostVerificationFlags(t, "-macverify-root", root)
-	if _, err := ComposeHostVerificationExecutor(
+	if _, err := daemoncompose.ComposeHostVerificationExecutor(
 		context.Background(), st, missingToolchain, false, nil, refuseProve,
 	); !errors.Is(err, macverify.ErrInvalidConfig) {
 		t.Fatalf("root without a toolchain pin = %v, want ErrInvalidConfig", err)
@@ -117,7 +118,7 @@ func TestHostVerificationExecutorRestoresOnlyItsOwnPass(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "macverify")
 	cfg := parseHostVerificationFlags(t, hostVerificationFlags(root)...)
-	probe, err := ComposeHostVerificationExecutor(ctx, storetest.Open(t, filepath.Join(t.TempDir(), "probe.db"), store.Options{}), cfg, false, nil, refuseProve)
+	probe, err := daemoncompose.ComposeHostVerificationExecutor(ctx, storetest.Open(t, filepath.Join(t.TempDir(), "probe.db"), store.Options{}), cfg, false, nil, refuseProve)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestHostVerificationExecutorRestoresOnlyItsOwnPass(t *testing.T) {
 			t.Parallel()
 			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 			recordHostVerificationConformance(t, st, tc.outcome, tc.digest)
-			backend, err := ComposeHostVerificationExecutor(ctx, st, cfg, false, nil, refuseProve)
+			backend, err := daemoncompose.ComposeHostVerificationExecutor(ctx, st, cfg, false, nil, refuseProve)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +158,7 @@ func TestHostVerificationExecutorRunsTheFullPass(t *testing.T) {
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	cfg := parseHostVerificationFlags(t, hostVerificationFlags(filepath.Join(t.TempDir(), "macverify"))...)
 	var proved *macverify.Backend
-	backend, err := ComposeHostVerificationExecutor(ctx, st, cfg, true, nil,
+	backend, err := daemoncompose.ComposeHostVerificationExecutor(ctx, st, cfg, true, nil,
 		func(ctx context.Context, b *macverify.Backend, recorder macverify.ConformanceRecorder) error {
 			proved = b
 			record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
@@ -185,7 +186,7 @@ func TestHostVerificationExecutorRunsTheFullPass(t *testing.T) {
 	}
 
 	failed := errors.New("slot reached the network")
-	if _, err := ComposeHostVerificationExecutor(ctx, st, cfg, true, nil,
+	if _, err := daemoncompose.ComposeHostVerificationExecutor(ctx, st, cfg, true, nil,
 		func(context.Context, *macverify.Backend, macverify.ConformanceRecorder) error { return failed },
 	); !errors.Is(err, failed) {
 		t.Fatalf("failed pass = %v, want startup to fail with it", err)

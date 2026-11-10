@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -839,12 +840,12 @@ func taskRecordOwnsItem(
 			return true
 		}
 		for _, admission := range run.Admissions {
-			if IsInvocationStallNotice(string(itemID), admission.InvocationID) {
+			if daemoncompose.IsInvocationStallNotice(string(itemID), admission.InvocationID) {
 				return true
 			}
 		}
 		for _, invocation := range run.Invocations {
-			if IsInvocationStallNotice(string(itemID), invocation.InvocationID) {
+			if daemoncompose.IsInvocationStallNotice(string(itemID), invocation.InvocationID) {
 				return true
 			}
 		}

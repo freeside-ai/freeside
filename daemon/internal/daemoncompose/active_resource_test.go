@@ -1,0 +1,1854 @@
+package daemoncompose
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+)
+
+var activeResourceTestTime = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+func reconcileActiveResource(
+	r *ActiveResourceReconciler, ctx context.Context,
+) ([]error, error) {
+	result, err := r.Reconcile(ctx)
+	return result.Failures, err
+}
+
+func activeReadyItem(t *testing.T, st *store.Store) domain.AttentionItem {
+	t.Helper()
+	ctx := context.Background()
+	runID := domain.RunID("run-active")
+	seedCaptureRun(t, st, runID)
+	authority := seedReadyBindingAuthority(t, st, runID, "cafed00d")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-ready-active", ProjectID: "project-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason: "published and verified", RequestedDecision: []domain.Action{
+			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss,
+		},
+		PRHeadSHA: "cafed00d", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, domain.ReadyItemPRBinding{
+			ItemID: item.ID, RunID: runID,
+			ProducingInvocationID: authority.invocationID, PublicationIdentity: authority.identity,
+			PublicationInvocationID: authority.publicationInvocationID,
+			Repo:                    "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: item.PRHeadSHA,
+			RecordedAt: activeResourceTestTime.Add(-time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
+func armActiveTestSchedules(t *testing.T, st *store.Store, item domain.AttentionItem) {
+	t.Helper()
+	ctx := context.Background()
+	itemID, version := item.ID, item.ItemVersion
+	runID := *item.Subject.RunID
+	policy := schedTestResolvedPolicy(runID)
+	deadline := activeResourceTestTime.Add(time.Hour)
+	inputs := []domain.ScheduleInput{
+		{
+			ID:        engineScheduleID(domain.SchedulePRChecksDeadline, item.ID),
+			ProjectID: item.ProjectID, Kind: domain.SchedulePRChecksDeadline,
+			Subject: domain.ScheduleSubject{Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &version},
+			RunID:   &runID, PolicyDigest: &policy.Digest, CreatedAt: activeResourceTestTime, FireAt: &deadline,
+		},
+		{
+			ID:        engineScheduleID(domain.ScheduleReviewWaitThreshold, item.ID),
+			ProjectID: item.ProjectID, Kind: domain.ScheduleReviewWaitThreshold,
+			Subject: domain.ScheduleSubject{Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &version},
+			RunID:   &runID, PolicyDigest: &policy.Digest, CreatedAt: activeResourceTestTime, FireAt: &deadline,
+		},
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		for _, input := range inputs {
+			schedule, err := domain.NewSchedule(input)
+			if err != nil {
+				return err
+			}
+			if err := tx.PutSchedule(ctx, schedule); err != nil {
+				return err
+			}
+			if err := tx.SetScheduleTimer(ctx, schedule.ID, schedule.Generation, *schedule.FireAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func engineScheduleID(kind domain.ScheduleKind, itemID domain.ItemID) domain.ScheduleID {
+	return domain.ScheduleID("schedule-" + string(kind) + "-" + string(itemID))
+}
+
+func readActiveItem(t *testing.T, st *store.Store, id domain.ItemID) domain.AttentionItem {
+	t.Helper()
+	var item domain.AttentionItem
+	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItem(context.Background(), id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
+func exactPull(state string, merged bool) publish.PullObservation {
+	observation := publish.PullObservation{
+		Number: 450, State: state, BaseRepoID: 424242,
+		BaseRef: "main", HeadSHA: "cafed00d",
+	}
+	if merged {
+		observation.Merged = true
+		observation.MergeCommitSHA = "deadbeef"
+	}
+	return observation
+}
+
+func assertIdentityInvalidated(
+	t *testing.T, st *store.Store, original domain.AttentionItem,
+	bound, observed string,
+) {
+	t.Helper()
+	got := readActiveItem(t, st, original.ID)
+	if got.Status != domain.StatusSuperseded || got.ItemVersion != original.ItemVersion+1 {
+		t.Fatalf("identity-invalidated item = status %s version %d", got.Status, got.ItemVersion)
+	}
+	inv := got.ReadinessInvalidation
+	if inv == nil || inv.Reason != domain.ReadinessInvalidationIdentityChanged ||
+		inv.Bound != bound || inv.Observed != observed ||
+		!inv.ObservedAt.Equal(activeResourceTestTime) {
+		t.Fatalf("identity invalidation = %+v", inv)
+	}
+	if len(got.EvidenceSnapshot) != 0 {
+		t.Fatalf("identity invalidation created completion evidence: %+v", got.EvidenceSnapshot)
+	}
+	for _, id := range publicationScheduleIDs(original.ID) {
+		if schedule := readScheduleRow(t, st, id); !schedule.Status.Terminal() {
+			t.Fatalf("schedule %s not concluded: %s", id, schedule.Status)
+		}
+	}
+}
+
+func activePullFacts(
+	t *testing.T, st *store.Store, repositoryID int64, prNumber int,
+) []domain.PullMergeFact {
+	t.Helper()
+	var facts []domain.PullMergeFact
+	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		facts, err = tx.ListPullMergeFacts(context.Background(), repositoryID, prNumber)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return facts
+}
+
+func assertNoActiveCompletion(t *testing.T, st *store.Store, item domain.AttentionItem) {
+	t.Helper()
+	err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		_, err := tx.GetWorkUnitCompletion(
+			context.Background(), domain.WorkUnitIDForRun(*item.Subject.RunID),
+		)
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("completion lookup = %v, want ErrNotFound", err)
+	}
+}
+
+func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	var pullErr error
+	closed := false
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			if pullErr != nil {
+				return publish.PullObservation{}, pullErr
+			}
+			if closed {
+				return exactPull("closed", false), nil
+			}
+			return exactPull("open", false), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+
+	result, err := reconciler.Reconcile(ctx)
+	if err != nil || len(result.Failures) != 0 {
+		t.Fatalf("open Reconcile = %+v, %v", result, err)
+	}
+	if !result.operatorActive {
+		t.Fatal("an open ready item did not select the operator-active regime")
+	}
+	if got := activeResourceInterval(true, 15*time.Minute, time.Minute); got != time.Minute {
+		t.Fatalf("operator-active interval = %s, want 1m", got)
+	}
+
+	pullErr = errors.New("token mint unavailable")
+	result, err = reconciler.Reconcile(ctx)
+	if err != nil || len(result.Failures) != 1 || !result.operatorActive {
+		t.Fatalf("failed-observation Reconcile = %+v, %v", result, err)
+	}
+
+	pullErr = nil
+	closed = true
+	result, err = reconciler.Reconcile(ctx)
+	if err != nil || len(result.Failures) != 0 {
+		t.Fatalf("concluding Reconcile = %+v, %v", result, err)
+	}
+	if result.operatorActive {
+		t.Fatal("a pass that concluded its only ready item stayed operator-active")
+	}
+	if got := activeResourceInterval(false, 15*time.Minute, time.Minute); got != 15*time.Minute {
+		t.Fatalf("idle interval = %s, want 15m", got)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("concluded item status = %s, want resolved", got.Status)
+	}
+
+	result, err = reconciler.Reconcile(ctx)
+	if err != nil || len(result.Failures) != 0 || result.operatorActive {
+		t.Fatalf("idle Reconcile = %+v, %v", result, err)
+	}
+}
+
+func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	armActiveTestSchedules(t, st, item)
+	pullCalls := 0
+	issueClosed := false
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			if !issueClosed {
+				return publish.IssueObservation{Number: 443, State: "open"}, nil
+			}
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusOpen || got.ItemVersion != item.ItemVersion {
+		t.Fatalf("item concluded before issue closure = %+v", got)
+	}
+	for _, id := range publicationScheduleIDs(item.ID) {
+		if schedule := readScheduleRow(t, st, id); schedule.Status != domain.ScheduleArmed {
+			t.Fatalf("schedule %s settled before issue closure = %+v", id, schedule)
+		}
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 1 || !pulls[0].Merged || len(issues) != 1 ||
+		issues[0].State != domain.IssueOpen || completion != nil {
+		t.Fatalf("pending capture = pulls %v issues %v completion %v", pulls, issues, completion)
+	}
+
+	issueClosed = true
+	if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("issue-closure Reconcile = %v, %v", failures, err)
+	}
+	got = readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusResolved || got.ItemVersion != item.ItemVersion+1 {
+		t.Fatalf("item = %+v", got)
+	}
+	for _, id := range publicationScheduleIDs(item.ID) {
+		schedule := readScheduleRow(t, st, id)
+		if schedule.Status != domain.ScheduleResolved || schedule.Resolution == nil ||
+			schedule.Resolution.Reason != domain.ResolutionSubjectConcluded {
+			t.Fatalf("schedule %s = %+v", id, schedule)
+		}
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			_, _, ok, err := tx.GetScheduleTimer(ctx, id)
+			if err != nil {
+				return err
+			}
+			if ok {
+				t.Fatalf("schedule %s retained its timer", id)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pulls, issues, completion = readCaptureState(t, st)
+	if len(pulls) != 1 || !pulls[0].Merged || len(issues) != 2 || completion == nil {
+		t.Fatalf("capture = pulls %v issues %v completion %v", pulls, issues, completion)
+	}
+	// A fresh reconciler after restart sees the terminal item, settles no-op
+	// schedules, and never polls the concluded resource again.
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("restart Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 4 { // two active passes, each with a repository-identity recheck
+		t.Fatalf("pull calls after terminal replay = %d, want 4", pullCalls)
+	}
+}
+
+func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	first := capturedRunNamed(t, st, "run-shared-first", "item-shared-first")
+	now := activeResourceTestTime
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		Now: func() time.Time { return now },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("first Reconcile = %v, %v", failures, err)
+	}
+	if got := readActiveItem(t, st, first.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("first item = %+v", got)
+	}
+
+	second := capturedRunNamed(t, st, "run-shared-second", "item-shared-second")
+	now = now.Add(time.Hour)
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("shared-pr Reconcile = %v, %v", failures, err)
+	}
+	if got := readActiveItem(t, st, second.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("second item = %+v", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		completion, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun("run-shared-second"))
+		if err != nil {
+			return err
+		}
+		if !completion.RecordedAt.Equal(activeResourceTestTime) {
+			t.Fatalf("completion recorded_at = %s, want persisted fact time %s",
+				completion.RecordedAt, activeResourceTestTime)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, runID := range []domain.RunID{"run-shared-first", "run-shared-second"} {
+		assertCompletionMilestone(t, st, runID, activeResourceTestTime)
+	}
+}
+
+func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	boundIssue := 443
+	item := capturedRunWithCriterion(
+		t, st, "run-pr-only", "item-pr-only",
+		domain.CompletionBoundPRMerged, &boundIssue,
+	)
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			return exactPull("closed", true), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("item = %+v", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		completion, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun("run-pr-only"))
+		if err != nil {
+			return err
+		}
+		if completion.Criterion != domain.CompletionBoundPRMerged || completion.BoundIssue != nil {
+			t.Fatalf("completion = %+v", completion)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var recordedAt time.Time
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		completion, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun("run-pr-only"))
+		recordedAt = completion.RecordedAt
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCompletionMilestone(t, st, "run-pr-only", recordedAt)
+	// A second pass over the settled unit appends nothing new.
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("second Reconcile = %v, %v", failures, err)
+	}
+	assertCompletionMilestone(t, st, "run-pr-only", recordedAt)
+}
+
+func TestActiveResourceHonorsHistoricalCompletionAfterIssueReopens(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	pull := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime.Add(-time.Hour),
+	}
+	issue := domain.IssueStateFact{
+		Repo: "owner/repo", RepositoryID: 424242, IssueNumber: 443,
+		State: domain.IssueClosed, ClosedByCommitSHA: "deadbeef",
+		ObservedAt: activeResourceTestTime.Add(-time.Hour),
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, *item.Subject.RunID)
+		if err != nil {
+			return err
+		}
+		binding, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.AppendPullMergeFact(ctx, pull); err != nil {
+			return err
+		}
+		if _, err := tx.AppendIssueStateFact(ctx, issue); err != nil {
+			return err
+		}
+		completion, ok := domain.EvaluateWorkUnitCompletion(declaration, binding, pull, &issue)
+		if !ok {
+			return errors.New("fixture did not derive completion")
+		}
+		if err := tx.RecordWorkUnitCompletion(ctx, completion); err != nil {
+			return err
+		}
+		reopened := issue
+		reopened.State = domain.IssueOpen
+		reopened.ClosedByCommitSHA = ""
+		reopened.ObservedAt = issue.ObservedAt.Add(30 * time.Minute)
+		_, err = tx.AppendIssueStateFact(ctx, reopened)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			return exactPull("closed", true), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("item = %+v", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun(*item.Subject.RunID))
+		return err
+	}); err != nil {
+		t.Fatalf("historical completion became unreadable: %v", err)
+	}
+}
+
+func TestActiveResourceReconcileUnmergedCloseConcludesUndeclaredItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			return exactPull("closed", false), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("item status = %s", got.Status)
+	}
+	var facts []domain.PullMergeFact
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		facts, err = tx.ListPullMergeFacts(ctx, 424242, 450)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 || facts[0].Merged || facts[0].State != domain.PullRequestClosed {
+		t.Fatalf("facts = %+v", facts)
+	}
+}
+
+func TestActiveResourceReconcileRequiresExactReturnedResource(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name            string
+		mutate          func(*publish.PullObservation)
+		observed        string
+		foreignRepoID   int64
+		foreignPRNumber int
+	}{
+		{
+			name: "response number",
+			mutate: func(observed *publish.PullObservation) {
+				observed.Number = 451
+			},
+			observed: "424242#451", foreignRepoID: 424242, foreignPRNumber: 451,
+		},
+		{
+			name: "repository identity before fact validation",
+			mutate: func(observed *publish.PullObservation) {
+				observed.BaseRepoID = 434343
+				observed.State = "not-a-pull-state"
+				observed.BaseRef = ""
+				observed.HeadSHA = ""
+			},
+			observed: "434343#450", foreignRepoID: 434343, foreignPRNumber: 450,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := activeReadyItem(t, st)
+			armActiveTestSchedules(t, st, item)
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					observed := exactPull("closed", true)
+					tc.mutate(&observed)
+					return observed, nil
+				},
+				Now: func() time.Time { return activeResourceTestTime },
+			}
+			failures, err := reconcileActiveResource(&reconciler, ctx)
+			if err != nil || len(failures) != 0 {
+				t.Fatalf("Reconcile = %v, %v", failures, err)
+			}
+			assertIdentityInvalidated(t, st, item, "424242#450", tc.observed)
+			assertNoActiveCompletion(t, st, item)
+			if facts := activePullFacts(t, st, 424242, 450); len(facts) != 0 {
+				t.Fatalf("bound pull facts = %+v, want none", facts)
+			}
+			if facts := activePullFacts(t, st, tc.foreignRepoID, tc.foreignPRNumber); len(facts) != 0 {
+				t.Fatalf("foreign pull facts = %+v, want none", facts)
+			}
+		})
+	}
+}
+
+func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		mutate func(*publish.PullObservation)
+	}{
+		{name: "missing repository ID", mutate: func(p *publish.PullObservation) { p.BaseRepoID = 0 }},
+		{name: "negative repository ID", mutate: func(p *publish.PullObservation) { p.BaseRepoID = -1 }},
+		{name: "missing pull number", mutate: func(p *publish.PullObservation) { p.Number = 0 }},
+		{name: "negative pull number", mutate: func(p *publish.PullObservation) { p.Number = -1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := activeReadyItem(t, st)
+			armActiveTestSchedules(t, st, item)
+			malformed := true
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					observed := exactPull("open", false)
+					if malformed {
+						tc.mutate(&observed)
+					}
+					return observed, nil
+				},
+				Now: func() time.Time { return activeResourceTestTime },
+			}
+			failures, err := reconcileActiveResource(&reconciler, ctx)
+			if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrNonPositive) {
+				t.Fatalf("malformed Reconcile = %v, %v", failures, err)
+			}
+			got := readActiveItem(t, st, item.ID)
+			if got.Status != domain.StatusOpen || got.ItemVersion != item.ItemVersion ||
+				got.ReadinessInvalidation != nil {
+				t.Fatalf("malformed identity changed item = %+v", got)
+			}
+			for _, id := range publicationScheduleIDs(item.ID) {
+				if schedule := readScheduleRow(t, st, id); schedule.Status != domain.ScheduleArmed {
+					t.Fatalf("malformed identity concluded schedule %s: %s", id, schedule.Status)
+				}
+			}
+			if facts := activePullFacts(t, st, 424242, 450); len(facts) != 0 {
+				t.Fatalf("malformed identity persisted pull facts: %+v", facts)
+			}
+
+			malformed = false
+			if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("retry Reconcile = %v, %v", failures, err)
+			}
+			if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen ||
+				got.ItemVersion != item.ItemVersion || got.ReadinessInvalidation != nil {
+				t.Fatalf("valid retry changed ready item = %+v", got)
+			}
+		})
+	}
+}
+
+func TestActiveResourceReconcileSameIdentityRenameStaysReady(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			observed := exactPull("open", false)
+			observed.BaseRepo = "renamed-owner/renamed-repo"
+			return observed, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusOpen || got.ItemVersion != item.ItemVersion ||
+		got.ReadinessInvalidation != nil {
+		t.Fatalf("same-ID rename invalidated ready item = %+v", got)
+	}
+}
+
+// TestActiveResourceReconcileInvalidatesReadyOnBindingDivergence covers #496's
+// same-PR candidate changes and #514's identity divergence. Either withdraws
+// the ready claim, records the precise readiness-invalidation reason, and
+// concludes the publication schedules so a stale pass cannot remain actionable.
+func TestActiveResourceReconcileInvalidatesReadyOnBindingDivergence(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name            string
+		mutate          func(*publish.PullObservation)
+		reason          domain.ReadinessInvalidationReason
+		bound, observed string
+	}{
+		{
+			name:   "head advanced",
+			mutate: func(p *publish.PullObservation) { p.HeadSHA = "f00dbabe" },
+			reason: domain.ReadinessInvalidationHeadChanged,
+			bound:  "cafed00d", observed: "f00dbabe",
+		},
+		{
+			name:   "retargeted",
+			mutate: func(p *publish.PullObservation) { p.BaseRef = "release" },
+			reason: domain.ReadinessInvalidationRetargeted,
+			bound:  "main", observed: "release",
+		},
+		{
+			name:   "repository identity",
+			mutate: func(p *publish.PullObservation) { p.BaseRepoID = 434343 },
+			reason: domain.ReadinessInvalidationIdentityChanged,
+			bound:  "424242#450", observed: "434343#450",
+		},
+		{
+			name:   "pull number",
+			mutate: func(p *publish.PullObservation) { p.Number = 451 },
+			reason: domain.ReadinessInvalidationIdentityChanged,
+			bound:  "424242#450", observed: "424242#451",
+		},
+		{
+			name: "repository identity and pull number",
+			mutate: func(p *publish.PullObservation) {
+				p.BaseRepoID = 434343
+				p.Number = 451
+			},
+			reason: domain.ReadinessInvalidationIdentityChanged,
+			bound:  "424242#450", observed: "434343#451",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := activeReadyItem(t, st)
+			armActiveTestSchedules(t, st, item)
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					observed := exactPull("open", false)
+					tc.mutate(&observed)
+					return observed, nil
+				},
+				Now: func() time.Time { return activeResourceTestTime },
+			}
+			failures, err := reconcileActiveResource(&reconciler, ctx)
+			if err != nil || len(failures) != 0 {
+				t.Fatalf("Reconcile = %v, %v", failures, err)
+			}
+			got := readActiveItem(t, st, item.ID)
+			if got.Status != domain.StatusSuperseded || got.ItemVersion != item.ItemVersion+1 {
+				t.Fatalf("invalidated item = status %s version %d", got.Status, got.ItemVersion)
+			}
+			inv := got.ReadinessInvalidation
+			if inv == nil || inv.Reason != tc.reason ||
+				inv.Bound != tc.bound || inv.Observed != tc.observed ||
+				!inv.ObservedAt.Equal(activeResourceTestTime) {
+				t.Fatalf("invalidation = %+v", inv)
+			}
+			// The publication watches are concluded alongside the supersession,
+			// so no later fire acts on the invalidated item.
+			for _, id := range publicationScheduleIDs(item.ID) {
+				if sc := readScheduleRow(t, st, id); !sc.Status.Terminal() {
+					t.Fatalf("schedule %s not concluded: %s", id, sc.Status)
+				}
+			}
+		})
+	}
+}
+
+func TestActiveResourceIdentityInvalidationAfterRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	options := store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+	}}
+	st := storetest.Open(t, dbPath, options)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := storetest.Open(t, dbPath, options)
+	reconciler := ActiveResourceReconciler{
+		Store: reopened,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			observed := exactPull("open", false)
+			observed.BaseRepoID = 434343
+			return observed, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("restart Reconcile = %v, %v", failures, err)
+	}
+	assertIdentityInvalidated(t, reopened, item, "424242#450", "434343#450")
+	if facts := activePullFacts(t, reopened, 434343, 450); len(facts) != 0 {
+		t.Fatalf("foreign pull facts after restart = %+v, want none", facts)
+	}
+}
+
+func TestActiveResourceIdentityInvalidationRejectsChangedBindingAtCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			observed := exactPull("open", false)
+			observed.Number = 451
+			return observed, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	observation, err := reconciler.observe(ctx, item, activeResourceTestTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation.binding.PRNumber++ // simulates a replacement between observe and commit
+	if err := reconciler.commit(ctx, observation); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("commit = %v, want ErrImmutableConflict", err)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen || got.ItemVersion != item.ItemVersion {
+		t.Fatalf("binding race changed item = %+v", got)
+	}
+	for _, id := range publicationScheduleIDs(item.ID) {
+		if schedule := readScheduleRow(t, st, id); schedule.Status != domain.ScheduleArmed {
+			t.Fatalf("binding race concluded schedule %s: %s", id, schedule.Status)
+		}
+	}
+}
+
+func TestActiveResourceIdentityInvalidationYieldsToConcurrentSupersession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			observed := exactPull("open", false)
+			observed.BaseRepoID = 434343
+			return observed, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	observation, err := reconciler.observe(ctx, item, activeResourceTestTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrent := readActiveItem(t, st, item.ID)
+	concurrent.Status = domain.StatusSuperseded
+	concurrent.ItemVersion++
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		concurrent = domaintest.MustConclude(concurrent)
+		return tx.PutAttentionItem(ctx, concurrent)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.commit(ctx, observation); err != nil {
+		t.Fatal(err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusSuperseded || got.ItemVersion != concurrent.ItemVersion ||
+		got.ReadinessInvalidation != nil {
+		t.Fatalf("concurrent supersession did not win = %+v", got)
+	}
+	for _, id := range publicationScheduleIDs(item.ID) {
+		if schedule := readScheduleRow(t, st, id); !schedule.Status.Terminal() {
+			t.Fatalf("schedule %s not concluded after concurrent supersession: %s", id, schedule.Status)
+		}
+	}
+}
+
+func TestActiveResourceIdentityDivergenceAtCompletionRecheck(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	armActiveTestSchedules(t, st, item)
+	pullCalls := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			observed := exactPull("closed", true)
+			if pullCalls == 2 {
+				observed.BaseRepoID = 434343
+				observed.Number = 451
+				observed.State = "not-a-pull-state"
+				observed.BaseRef = "foreign-base"
+				observed.HeadSHA = "foreign-head"
+				observed.MergeCommitSHA = "foreign-merge"
+			}
+			return observed, nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				// The identity recheck takes precedence over fact validation, so
+				// this malformed foreign issue response cannot strand readiness.
+				Number: 999, State: "not-an-issue-state",
+			}, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	assertIdentityInvalidated(t, st, item, "424242#450", "434343#451")
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 1 || pulls[0].RepositoryID != 424242 || pulls[0].PRNumber != 450 {
+		t.Fatalf("bound pull facts = %+v, want the initial exact observation", pulls)
+	}
+	if len(issues) != 0 || completion != nil {
+		t.Fatalf("recheck divergence persisted issue/completion: issues=%+v completion=%+v", issues, completion)
+	}
+	if facts := activePullFacts(t, st, 434343, 451); len(facts) != 0 {
+		t.Fatalf("foreign recheck facts = %+v, want none", facts)
+	}
+}
+
+func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		mutate func(*publish.PullObservation)
+	}{
+		{name: "missing repository ID", mutate: func(p *publish.PullObservation) { p.BaseRepoID = 0 }},
+		{name: "missing pull number", mutate: func(p *publish.PullObservation) { p.Number = 0 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := capturedRun(t, st)
+			armActiveTestSchedules(t, st, item)
+			pullCalls := 0
+			malformed := true
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					pullCalls++
+					observed := exactPull("closed", true)
+					if malformed && pullCalls == 2 {
+						tc.mutate(&observed)
+					}
+					return observed, nil
+				},
+				issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+					return publish.IssueObservation{
+						Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+					}, nil
+				},
+				Now: func() time.Time { return activeResourceTestTime },
+			}
+			failures, err := reconcileActiveResource(&reconciler, ctx)
+			if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrNonPositive) {
+				t.Fatalf("malformed recheck Reconcile = %v, %v", failures, err)
+			}
+			got := readActiveItem(t, st, item.ID)
+			if got.Status != domain.StatusOpen || got.ItemVersion != item.ItemVersion ||
+				got.ReadinessInvalidation != nil {
+				t.Fatalf("malformed recheck changed item = %+v", got)
+			}
+			for _, id := range publicationScheduleIDs(item.ID) {
+				if schedule := readScheduleRow(t, st, id); schedule.Status != domain.ScheduleArmed {
+					t.Fatalf("malformed recheck concluded schedule %s: %s", id, schedule.Status)
+				}
+			}
+			pulls, issues, completion := readCaptureState(t, st)
+			if len(pulls) != 0 || len(issues) != 0 || completion != nil {
+				t.Fatalf("malformed recheck persisted facts: pulls=%v issues=%v completion=%v",
+					pulls, issues, completion)
+			}
+
+			malformed = false
+			pullCalls = 0
+			if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("retry Reconcile = %v, %v", failures, err)
+			}
+			if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved ||
+				got.ItemVersion != item.ItemVersion+1 {
+				t.Fatalf("valid retry did not conclude item = %+v", got)
+			}
+		})
+	}
+}
+
+// TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion is the
+// #496 race: a conclusion that serializes between the observation and the
+// commit wins, because the commit re-reads the item and only supersedes a
+// still-open one. The pull observer concludes the item as a side effect,
+// standing in for the concurrent writer.
+func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			// A decision concludes the item after the observation reads it open
+			// but before the commit re-reads it.
+			concluded := readActiveItem(t, st, item.ID)
+			concluded.Status = domain.StatusResolved
+			concluded.ItemVersion++
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				concluded = domaintest.MustConclude(concluded)
+				return tx.PutAttentionItem(ctx, concluded)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			observed := exactPull("open", false)
+			observed.HeadSHA = "f00dbabe"
+			return observed, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusResolved || got.ReadinessInvalidation != nil {
+		t.Fatalf("concurrent conclusion lost to invalidation = %+v", got)
+	}
+}
+
+func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	transient := errors.New("temporary forge failure")
+	fail := true
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			if fail {
+				return publish.PullObservation{}, transient
+			}
+			return exactPull("open", false), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 1 || !errors.Is(failures[0], transient) {
+		t.Fatalf("failed Reconcile = %v, %v", failures, err)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen || got.ItemVersion != item.ItemVersion {
+		t.Fatalf("failed observation changed item = %+v", got)
+	}
+	fail = false
+	if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("retry Reconcile = %v, %v", failures, err)
+	}
+	var before store.ServerState
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		before, err = tx.ServerState(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("unchanged Reconcile = %v, %v", failures, err)
+	}
+	var after store.ServerState
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		after, err = tx.ServerState(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision {
+		t.Fatalf("unchanged observation advanced revision %d -> %d", before.Revision, after.Revision)
+	}
+}
+
+func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	remoteFailure := errors.New("remote response carried untrusted detail")
+	failing := true
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			if failing {
+				return publish.PullObservation{}, remoteFailure
+			}
+			return exactPull("open", false), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	readHealth := func() []domain.AttentionItem {
+		t.Helper()
+		var got []domain.AttentionItem
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			snapshots, err := tx.ListAttentionItems(ctx)
+			if err != nil {
+				return err
+			}
+			prefix := activeResourceObservationHealthPrefix(item.ID)
+			for _, snapshot := range snapshots {
+				candidate := snapshot.Value
+				if strings.HasPrefix(string(candidate.ID), prefix) {
+					got = append(got, candidate)
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	for pass := 1; pass < activeResourceObservationFailureThreshold; pass++ {
+		failures, err := reconcileActiveResource(&reconciler, ctx)
+		if err != nil || len(failures) != 1 || !errors.Is(failures[0], remoteFailure) {
+			t.Fatalf("failure pass %d = %v, %v", pass, failures, err)
+		}
+		if health := readHealth(); len(health) != 0 {
+			t.Fatalf("failure pass %d health = %+v, want none before threshold", pass, health)
+		}
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil ||
+		len(failures) != 1 || !errors.Is(failures[0], remoteFailure) {
+		t.Fatalf("threshold pass = %v, %v", failures, err)
+	}
+	health := readHealth()
+	if len(health) != 1 || health[0].Status != domain.StatusOpen ||
+		health[0].Posture == nil || *health[0].Posture != domain.HealthPostureAdvisory {
+		t.Fatalf("threshold health = %+v, want one open advisory item", health)
+	}
+	if strings.Contains(health[0].Reason, remoteFailure.Error()) {
+		t.Fatalf("health reason persisted untrusted failure text: %q", health[0].Reason)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireUnattendedOperationOpen(ctx)
+	}); err != nil {
+		t.Fatalf("advisory observation health blocked unrelated admission: %v", err)
+	}
+	version := health[0].ItemVersion
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 1 {
+		t.Fatalf("continued failure = %v, %v", failures, err)
+	}
+	health = readHealth()
+	if len(health) != 1 || health[0].ItemVersion != version {
+		t.Fatalf("continued failure health = %+v, want one unchanged item", health)
+	}
+
+	failing = false
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("recovery = %v, %v", failures, err)
+	}
+	health = readHealth()
+	if len(health) != 1 || health[0].Status != domain.StatusResolved ||
+		health[0].ItemVersion != version+1 {
+		t.Fatalf("recovered health = %+v, want one resolved item", health)
+	}
+}
+
+func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t *testing.T) {
+	t.Parallel()
+	for _, status := range []domain.ItemStatus{domain.StatusResolved, domain.StatusDismissed} {
+		t.Run(string(status), func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := activeReadyItem(t, st)
+			armActiveTestSchedules(t, st, item)
+			item.Status = status
+			item.ItemVersion++
+			item, err := item.WithDecidedAt(activeResourceTestTime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item = domaintest.MustConclude(item)
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutAttentionItem(ctx, item)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			pullCalls := 0
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					pullCalls++
+					return exactPull("open", false), nil
+				},
+				Now: func() time.Time { return activeResourceTestTime },
+			}
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 0 {
+				t.Fatalf("terminal item polled %d times", pullCalls)
+			}
+			for _, id := range publicationScheduleIDs(item.ID) {
+				if schedule := readScheduleRow(t, st, id); schedule.Status != domain.ScheduleResolved {
+					t.Fatalf("schedule %s = %+v", id, schedule)
+				}
+			}
+		})
+	}
+}
+
+func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	item.Status = domain.StatusSuperseded
+	item.ItemVersion++
+	item.ReadinessInvalidation = &domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationBaseAdvanced,
+		Bound:  "cafebabe", Observed: "deadbeef", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("recovery Reconcile = %v, %v", failures, err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusSuperseded || got.ItemVersion != item.ItemVersion {
+		t.Fatalf("completion recovery changed item = %+v", got)
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
+		t.Fatalf("recovered capture = %v %v %v", pulls, issues, completion)
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("write-once Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 2 {
+		t.Fatalf("completed unit was polled again: %d pull calls", pullCalls)
+	}
+	pulls, issues, completion = readCaptureState(t, st)
+	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
+		t.Fatalf("write-once capture = %v %v %v", pulls, issues, completion)
+	}
+}
+
+// TestActiveResourceReconcileRequiresWorkUnitBindingAnchor: a work-unit
+// binding that no longer restates the independently reconstructed ready
+// binding is refused before anything is recorded through it, so a corrupt
+// row never settles the unit.
+func TestActiveResourceReconcileRequiresWorkUnitBindingAnchor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	item := capturedRun(t, st)
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE work_unit_pr_bindings
+		SET repository_id = 515151, pr_number = 451,
+			body = json_set(body, '$.repository_id', 515151, '$.pr_number', 451)
+		WHERE unit_id = ?`, domain.WorkUnitIDForRun("run-cap")); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconcileActiveResource(&reconciler, ctx)
+	if err != nil || len(failures) != 1 || !strings.Contains(failures[0].Error(), "disagrees with ready resource") {
+		t.Fatalf("Reconcile = %v, %v; want one binding-anchor failure", failures, err)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("corrupt binding reached the observer %d times", pullCalls)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen ||
+		got.ItemVersion != item.ItemVersion {
+		t.Fatalf("item settled through a corrupt binding: %+v", got)
+	}
+	assertNoActiveCompletion(t, st, item)
+}
+
+// TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead: a concluded
+// item whose published head no longer restates its ready binding fails the
+// store's re-gate, so the completion pass observes and records nothing
+// through the unanchored binding.
+func TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	mismatched := item
+	mismatched.ItemVersion++
+	mismatched.Status = domain.StatusResolved
+	mismatched.PRHeadSHA = "0ther5ha"
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		mismatched = domaintest.MustConclude(mismatched)
+		return tx.PutAttentionItem(ctx, mismatched)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if _, err := reconcileActiveResource(&reconciler, ctx); err == nil ||
+		!strings.Contains(err.Error(), "stored row body inconsistent") {
+		t.Fatalf("Reconcile error = %v, want corrupt ready-item authority", err)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("the pass observed through an unanchored binding (%d pulls)", pullCalls)
+	}
+	if pulls, _, completion := readCaptureState(t, st); len(pulls) != 0 || completion != nil {
+		t.Fatalf("unanchored binding recorded: %v %v", pulls, completion)
+	}
+}
+
+func TestActiveResourceReconcileForeclosesDivergedMergedCompletion(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		mutate   func(*publish.PullObservation)
+		observed string
+	}{
+		{
+			name: "head changed",
+			mutate: func(pull *publish.PullObservation) {
+				pull.HeadSHA = "amended00"
+			},
+			observed: "amended00",
+		},
+		{
+			name: "base retargeted",
+			mutate: func(pull *publish.PullObservation) {
+				pull.BaseRef = "release"
+			},
+			observed: "release",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := capturedRun(t, st)
+			pull := exactPull("closed", true)
+			tc.mutate(&pull)
+
+			pullCalls := 0
+			evictions := 0
+			newReconciler := func() ActiveResourceReconciler {
+				return ActiveResourceReconciler{
+					Store: st,
+					Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+						pullCalls++
+						return pull, nil
+					},
+					evictConcluded: func(domain.ReadyItemPRBinding, *int) { evictions++ },
+					Now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+				}
+			}
+			reconciler := newReconciler()
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("divergence Reconcile = %v, %v", failures, err)
+			}
+			if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusSuperseded {
+				t.Fatalf("diverged item status = %s, want superseded", got.Status)
+			}
+			if pullCalls != 1 || evictions != 1 {
+				t.Fatalf("diverged resource calls = pulls %d evictions %d, want 1 and 1", pullCalls, evictions)
+			}
+			assertNoActiveCompletion(t, st, item)
+
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("foreclosure Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 1 || evictions != 1 {
+				t.Fatalf("foreclosed resource calls = pulls %d evictions %d, want 1 and 1", pullCalls, evictions)
+			}
+			noticeID := completionForeclosureItemID(domain.WorkUnitIDForRun(*item.Subject.RunID))
+			notice := readActiveItem(t, st, noticeID)
+			if notice.Type != domain.AttentionSystemHealth || notice.Status != domain.StatusOpen ||
+				notice.Posture == nil || *notice.Posture != domain.HealthPostureAdvisory ||
+				len(notice.RequestedDecision) != 1 || notice.RequestedDecision[0] != domain.ActionAcknowledge ||
+				!strings.Contains(notice.Reason, tc.observed) {
+				t.Fatalf("completion foreclosure notice = %+v", notice)
+			}
+
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("repeat Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 1 || evictions != 1 {
+				t.Fatalf("repeat resource calls = pulls %d evictions %d, want 1 and 1", pullCalls, evictions)
+			}
+
+			notice.Status = domain.StatusResolved
+			notice.ItemVersion++
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				notice = domaintest.MustConclude(notice)
+				if err := tx.PutAttentionItem(ctx, notice); err != nil {
+					return err
+				}
+				laterExact := domain.PullMergeFact{
+					Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+					State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+					BaseRef: "main", HeadSHA: "cafed00d",
+					ObservedAt: activeResourceTestTime.Add(2 * time.Minute),
+				}
+				_, err := tx.AppendPullMergeFact(ctx, laterExact)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			restarted := newReconciler()
+			if failures, err := reconcileActiveResource(&restarted, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("restart Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 1 {
+				t.Fatalf("restart changed pull calls to %d, want 1", pullCalls)
+			}
+			assertNoActiveCompletion(t, st, item)
+			if got := readActiveItem(t, st, noticeID); got.Status != domain.StatusResolved ||
+				got.ItemVersion != notice.ItemVersion {
+				t.Fatalf("resolved notice resurrected = %+v", got)
+			}
+		})
+	}
+}
+
+func TestActiveResourceReconcileKeepsExactMergedCompletionPending(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	item.Status = domain.StatusSuperseded
+	item.ItemVersion++
+	pull := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		_, err := tx.AppendPullMergeFact(ctx, pull)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{Number: 443, State: "open"}, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+	}
+	for pass := 1; pass <= 2; pass++ {
+		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+			t.Fatalf("pending pass %d Reconcile = %v, %v", pass, failures, err)
+		}
+	}
+	if pullCalls != 4 {
+		t.Fatalf("exact merged resource pull calls = %d, want 4", pullCalls)
+	}
+	assertNoActiveCompletion(t, st, item)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(
+			ctx, completionForeclosureItemID(domain.WorkUnitIDForRun(*item.Subject.RunID)),
+		)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("exact pending merge foreclosure lookup = %v, want ErrNotFound", err)
+	}
+}
+
+func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	runID := domain.RunID("run-binding-recovery")
+	seedCaptureRun(t, st, runID)
+	authority := seedReadyBindingAuthority(t, st, runID, "cafed00d")
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundPRMerged,
+	}, runID, "project-1", activeResourceTestTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-binding-recovery", ProjectID: "project-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "published and verified",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
+		PRHeadSHA:         "cafed00d",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 450},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusResolved,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = domaintest.MustConclude(item)
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitDeclaration(ctx, declaration)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	evictions := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		evictConcluded: func(domain.ReadyItemPRBinding, *int) {
+			evictions++
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 1 {
+		t.Fatalf("ready-unbound Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 0 || evictions != 0 {
+		t.Fatalf("ready-unbound resource calls = pulls %d evictions %d, want 0 and 0", pullCalls, evictions)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, domain.ReadyItemPRBinding{
+			ItemID: item.ID, RunID: runID,
+			ProducingInvocationID: authority.invocationID, PublicationIdentity: authority.identity,
+			PublicationInvocationID: authority.publicationInvocationID,
+			Repo:                    "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+			RecordedAt: activeResourceTestTime,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("unit-unbound Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 0 || evictions != 1 {
+		t.Fatalf("unit-unbound resource calls = pulls %d evictions %d, want 0 and 1", pullCalls, evictions)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitPRBinding(ctx, domain.WorkUnitPRBinding{
+			UnitID: declaration.ID, Repo: "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+			RecordedAt: activeResourceTestTime,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("bound Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 1 || evictions != 2 {
+		t.Fatalf("bound resource calls = pulls %d evictions %d, want 1 and 2", pullCalls, evictions)
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("completed Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 1 || evictions != 2 {
+		t.Fatalf("completed resource calls = pulls %d evictions %d, want 1 and 2", pullCalls, evictions)
+	}
+}
+
+func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	item.Status = domain.StatusDismissed
+	item.ItemVersion++
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closed := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: false,
+		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		_, err := tx.AppendPullMergeFact(ctx, closed)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	merged := false
+	pullCalls := 0
+	evictions := 0
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", merged), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		evictConcluded: func(domain.ReadyItemPRBinding, *int) {
+			evictions++
+		},
+		Now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("closed-unmerged Reconcile = %v, %v", failures, err)
+	}
+	if evictions != 1 {
+		t.Fatalf("initial concluded eviction count = %d, want 1", evictions)
+	}
+	merged = true
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("reopened-and-merged Reconcile = %v, %v", failures, err)
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 2 || pulls[0].Merged || !pulls[1].Merged ||
+		len(issues) != 1 || completion == nil {
+		t.Fatalf("reopened capture = %v %v %v", pulls, issues, completion)
+	}
+	if evictions != 2 {
+		t.Fatalf("post-completion eviction count = %d, want 2", evictions)
+	}
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("completed Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 3 || evictions != 2 {
+		t.Fatalf("completed resource calls = pulls %d evictions %d, want 3 and 2", pullCalls, evictions)
+	}
+}
+
+// TestActiveResourceReconcileWaitsOnARebaseProof is a lander that rebases the
+// reviewed head and merges it (issue #2129). The merged head is not the
+// published one, which alone would foreclose the unit, so the reconciler waits
+// while the head_changed cycle for exactly that head has not reached a
+// verdict. A proven rebase completes the unit; a refusal, or a cycle that
+// retired with none, forecloses it as any diverged merge does.
+func TestActiveResourceReconcileWaitsOnARebaseProof(t *testing.T) {
+	t.Parallel()
+	published, rebased := reentryTestHead, reentryTestNewHead
+	for _, tc := range []struct {
+		name     string
+		settle   func(*testing.T, *store.Store, domain.WorkUnitID, *domain.PublicationSuccessor)
+		complete bool
+	}{
+		{
+			name: "proven",
+			settle: func(t *testing.T, st *store.Store, unit domain.WorkUnitID, _ *domain.PublicationSuccessor) {
+				recordRebaseProof(t, st, unit, reentryTestHead, rebased, true)
+			},
+			complete: true,
+		},
+		{
+			name: "refused",
+			settle: func(t *testing.T, st *store.Store, unit domain.WorkUnitID, _ *domain.PublicationSuccessor) {
+				recordRebaseProof(t, st, unit, reentryTestHead, rebased, false)
+			},
+		},
+		{
+			name: "retired without a verdict",
+			settle: func(t *testing.T, st *store.Store, _ domain.WorkUnitID, successor *domain.PublicationSuccessor) {
+				if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+					return tx.MarkOutboxDispatched(context.Background(), successor.TaskKey())
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			runID := domain.RunID("run-rebase")
+			boundIssue := 443
+			item := capturedRunAtHead(t, st, runID, domain.ProductionReadyItemID(runID),
+				domain.CompletionBoundIssueClosedByMergedPR, &boundIssue, published)
+			putReentryCleanReview(t, st, runID, published)
+			unit := domain.WorkUnitIDForRun(runID)
+
+			pull := exactPull("open", false)
+			pull.HeadSHA = rebased
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					return pull, nil
+				},
+				issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+					return publish.IssueObservation{Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef"}, nil
+				},
+				evictConcluded: func(domain.ReadyItemPRBinding, *int) {},
+				Now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+			}
+			reconcile := func(pass string) {
+				t.Helper()
+				if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+					t.Fatalf("%s Reconcile = %v, %v", pass, failures, err)
+				}
+			}
+			reconcile("push")
+			successor, queued := readReentry(t, st, runID)
+			if successor == nil || !queued || successor.Reentry.HeadSHA != rebased {
+				t.Fatalf("re-entry = %+v, queued %t", successor, queued)
+			}
+
+			pull = exactPull("closed", true)
+			pull.HeadSHA = rebased
+			foreclosureID := completionForeclosureItemID(unit)
+			for _, pass := range []string{"merge", "repeat"} {
+				reconcile(pass)
+				assertNoActiveCompletion(t, st, item)
+				if err := st.Read(ctx, func(tx *store.ReadTx) error {
+					_, err := tx.GetAttentionItem(ctx, foreclosureID)
+					return err
+				}); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("%s pass foreclosed a merge whose proof is in flight: %v", pass, err)
+				}
+			}
+
+			tc.settle(t, st, unit, successor)
+			reconcile("settled")
+			var completion *domain.WorkUnitCompletion
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				c, err := tx.GetWorkUnitCompletion(ctx, unit)
+				if err == nil {
+					completion = &c
+				}
+				if errors.Is(err, store.ErrNotFound) {
+					return nil
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.complete {
+				if completion == nil || completion.MergeCommitSHA != "deadbeef" {
+					t.Fatalf("completion = %+v, want the rebased merge", completion)
+				}
+				if len(workUnitCompletedMilestones(t, st, runID)) != 1 {
+					t.Error("a proven rebase merge recorded no completion milestone")
+				}
+				return
+			}
+			if completion != nil {
+				t.Fatalf("completion = %+v, want a foreclosure", completion)
+			}
+			if notice := readActiveItem(t, st, foreclosureID); !strings.Contains(notice.Reason, rebased) {
+				t.Fatalf("foreclosure notice = %+v", notice)
+			}
+		})
+	}
+}
+
+func putReentryCleanReview(t *testing.T, st *store.Store, runID domain.RunID, head string) {
+	t.Helper()
+	review, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: reentryTestReviewID, RunID: runID, Round: 1,
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, reentryTestReviewID),
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		BaseSHA:             reentryTestBase, HeadSHA: head,
+		CompletedAt:        activeResourceTestTime.Add(-2 * time.Minute),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Outcome:            domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(context.Background(), review, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recordRebaseProof(
+	t *testing.T, st *store.Store, unit domain.WorkUnitID, reviewed, head string, proven bool,
+) {
+	t.Helper()
+	proof := domain.WorkUnitRebaseProof{
+		UnitID: unit, RepositoryID: 424242, PRNumber: 450,
+		ReviewedBaseSHA: reentryTestBase, ReviewedHeadSHA: reviewed, ProvenHeadSHA: head,
+		ReviewedTreeSHA: strings.Repeat("7", 40), Proven: proven,
+		RecordedAt: activeResourceTestTime.Add(time.Minute),
+	}
+	if !proven {
+		proof.Detail = "range-diff does not pair the reviewed commits as identical"
+	}
+	if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitRebaseProof(context.Background(), proof)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -208,7 +209,7 @@ func legacyOwners(t *testing.T, st *store.Store) map[domain.AuthIdentityID][]dom
 	var owned map[domain.AuthIdentityID][]domain.Task
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		var err error
-		owned, err = LegacyOpenTasks(context.Background(), tx)
+		owned, err = daemoncompose.LegacyOpenTasks(context.Background(), tx)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -314,7 +315,7 @@ func legacyAdmittedTask(t *testing.T, identityID domain.AuthIdentityID) (*store.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (StoreConformanceRecorder{Store: st}).RecordBackendConformance(ctx, record); err != nil {
+	if err := (daemoncompose.StoreConformanceRecorder{Store: st}).RecordBackendConformance(ctx, record); err != nil {
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentity{

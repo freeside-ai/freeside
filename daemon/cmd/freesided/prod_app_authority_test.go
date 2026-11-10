@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
@@ -156,7 +157,7 @@ func acquireTestRig(t *testing.T) (lease *daemonlock.RigLease, leaseRoot, tokenF
 
 func writeAcquisition(t *testing.T, token string, manifest daemonlock.RigManifest) string {
 	t.Helper()
-	body, err := json.Marshal(RigHoldOutput{Token: token, Manifest: manifest})
+	body, err := json.Marshal(daemoncompose.RigHoldOutput{Token: token, Manifest: manifest})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -102,7 +103,7 @@ func TestModelCatalogRefreshDiscoversCodexEnrollmentsForACodexReviewer(t *testin
 // attended daemon reads no Codex credential and logs one line.
 func TestModelCatalogRefreshSkipsCodexWithoutACodexReviewer(t *testing.T) {
 	t.Parallel()
-	codexReviewer := ClaudeDriverConfig{
+	codexReviewer := daemoncompose.ClaudeDriverConfig{
 		OperatingMode: domain.ModeUnattended, ReviewImage: codexModelDiscoveryTestImage,
 		ReviewInputRoot: "/private/review", ReviewAuthMode: ward.CodexAuthSubscription,
 	}
@@ -115,7 +116,7 @@ func TestModelCatalogRefreshSkipsCodexWithoutACodexReviewer(t *testing.T) {
 	if !codexReviewerConfigured(codexReviewer) {
 		t.Fatal("a Codex reviewer is not recognised")
 	}
-	for name, cfg := range map[string]ClaudeDriverConfig{
+	for name, cfg := range map[string]daemoncompose.ClaudeDriverConfig{
 		"Claude reviewer": claudeReviewer, "API-key Codex reviewer": apiKeyReviewer, "attended": attended,
 	} {
 		t.Run(name, func(t *testing.T) {

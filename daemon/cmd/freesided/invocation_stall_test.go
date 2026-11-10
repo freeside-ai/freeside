@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -20,7 +21,7 @@ func TestInvocationStallNoticeLifecycle(t *testing.T) {
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	now := func() time.Time { return time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC) }
-	report := InvocationStallNotice(st, 5*time.Minute, now)
+	report := daemoncompose.InvocationStallNotice(st, 5*time.Minute, now)
 	const (
 		inv   domain.InvocationID = "inv-implement-run-1"
 		other domain.InvocationID = "inv-implement-run-1-b"
