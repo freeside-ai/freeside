@@ -4111,6 +4111,9 @@ struct DecisionDetailView: View {
             .menuStyle(.button)
             .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
             .disabled(!model.actionsEnabled)
+            // As on the task's menu (`TaskActionsMenu`): a selectable label
+            // would answer for the menu button's spoken label (#2993).
+            .textSelection(.disabled)
             .accessibilityLabel("More decision actions")
             // Subordinate to the actions above it, and centered under them
             // on both layouts rather than filling a row of its own.

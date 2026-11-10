@@ -245,6 +245,13 @@ struct TaskActionsMenu: View {
                 .fixedSize()
                 .freesideFocusRing(cornerRadius: 4)
                 .disabled(isDisabled)
+                // The window's selection default would make the label a
+                // selectable text view, and that view then answers for the
+                // menu button's spoken label: the construct the ready
+                // card's accessibility recursion ran through (#2993). A
+                // control's label is not selectable (app/README.md,
+                // Copyable Text).
+                .textSelection(.disabled)
                 .accessibilityLabel("Task actions")
                 .accessibilityHint(hint)
             } else {
