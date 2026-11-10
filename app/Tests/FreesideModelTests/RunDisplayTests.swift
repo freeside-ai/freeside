@@ -383,13 +383,14 @@ import Testing
         let rows = RunDisplay.admissionRows(writer)
         #expect(
             rows.map(\.label) == [
-                "Harness", "Model", "Effort", "Cost Owner", "Credential Mode", "Egress Profile",
-                "Isolation Class", "Operating Mode",
+                "Harness", "Model", "Effort", "Enrollment", "Selection", "Cost Owner", "Credential Mode",
+                "Egress Profile", "Isolation Class", "Operating Mode",
             ])
         #expect(
             rows.map(\.value) == [
-                "Claude Code", "claude-opus-5-5", "High", "platform-team", "Subscription, contained",
-                "Provider only", "Fresh VM, read-only volume handoff", "Unattended",
+                "Claude Code", "claude-opus-5-5", "High", "anthropic-a/claude_code", "sha256:eeeeeeeeeeee…",
+                "platform-team", "Subscription, contained", "Provider only",
+                "Fresh VM, read-only volume handoff", "Unattended",
             ])
     }
 
@@ -399,7 +400,7 @@ import Testing
         let legacy = RunFixtures.legacyAdmission("inv-1", at: RunFixtures.screenshotInstant)
         #expect(RunDisplay.admissionLine(legacy) == nil)
         let values = Dictionary(uniqueKeysWithValues: RunDisplay.admissionRows(legacy).map { ($0.label, $0.value) })
-        for label in ["Harness", "Model", "Effort", "Cost Owner"] {
+        for label in ["Harness", "Model", "Effort", "Enrollment", "Selection", "Cost Owner"] {
             #expect(values[label] == RunDisplay.unavailable)
         }
         #expect(values["Operating Mode"] == "Attended")
@@ -419,6 +420,8 @@ import Testing
             ])
         // A review admission records no containment facts.
         #expect(rows.first { $0.label == "Credential Mode" }?.value == RunDisplay.unavailable)
+        #expect(rows.first { $0.label == "Enrollment" }?.value == "openai-a/codex_cli")
+        #expect(rows.first { $0.label == "Selection" }?.value == "sha256:ffffffffffff…")
         var matched = review
         matched.independence = [.init(writing_role: .implementer, lineage: .matched)]
         #expect(RunDisplay.admissionRows(matched).last?.value == "Matched implementer")

@@ -290,6 +290,8 @@ package enum RunDisplay {
             row("Harness", facts.harness.map { label($0.value1) }),
             row("Model", facts.model),
             row("Effort", effort(facts)),
+            row("Enrollment", facts.enrollment_id),
+            row("Selection", facts.selection_digest.map { ShortIdentifier.short($0.value1) }),
             row("Cost Owner", facts.cost_owner),
             row("Credential Mode", facts.credential_mode.map { label($0.value1) }),
             row("Egress Profile", facts.egress_profile.map { label($0.value1) }),
