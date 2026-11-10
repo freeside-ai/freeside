@@ -73,20 +73,22 @@ func validateRunConfig(cfg config) error {
 
 // seedStartupFixture seeds the named fixture into a store that must hold
 // no runs or attention items yet.
-func seedStartupFixture(parent context.Context, st *store.Store, fixture seedfixture.Name, cfg config) error {
+func seedStartupFixture(
+	parent context.Context, st *store.Store, fixture seedfixture.Name, dbPath string, logger *slog.Logger,
+) error {
 	inventory, err := seedfixture.Seed(parent, st, fixture)
 	if errors.Is(err, seedfixture.ErrStoreNotEmpty) {
-		return fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", cfg.DBPath)
+		return fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", dbPath)
 	}
 	if err != nil {
 		// The fixture commits in several transactions, so a failure after
 		// the first leaves a partial fixture that the emptiness check then
 		// refuses to reseed.
 		return fmt.Errorf("-seed-fixture %s: %w (store %q may be partially seeded; delete it before retrying)",
-			fixture, err, cfg.DBPath)
+			fixture, err, dbPath)
 	}
-	if cfg.Logger != nil {
-		cfg.Logger.Info("seeded fixture", "fixture", fixture,
+	if logger != nil {
+		logger.Info("seeded fixture", "fixture", fixture,
 			"projects", inventory.Projects, "tasks", inventory.Tasks, "runs", inventory.Runs,
 			"attention_items", inventory.AttentionItems)
 	}
@@ -97,7 +99,7 @@ func seedStartupFixture(parent context.Context, st *store.Store, fixture seedfix
 // producer whose loop startServing starts.
 func maintainLocalBackups(
 	parent context.Context, st *store.Store, blobs *signet.BlobStore, localBackupFiles *store.LocalBackupFiles,
-	cfg config,
+	logger *slog.Logger,
 ) (*store.LocalBackupProducer, error) {
 	// Backup evidence is maintained before anything can admit work. Orphan
 	// reconciliation in composeClaudeWorkflow resumes writers through the
@@ -115,8 +117,8 @@ func maintainLocalBackups(
 	// body it could not write still surfaces as unhealthy backup closure.
 	if restored, err := signet.RestoreProposalEvidence(parent, st, blobs); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
-	} else if restored > 0 && cfg.Logger != nil {
-		cfg.Logger.Info("restored effect-proposal evidence bodies", "count", restored)
+	} else if restored > 0 && logger != nil {
+		logger.Info("restored effect-proposal evidence bodies", "count", restored)
 	}
 	if err := localBackups.Maintain(parent); err != nil {
 		// A durable row this binary cannot reconstruct is reported, never
@@ -271,32 +273,55 @@ func newAttentionService(
 	return attention
 }
 
-// composeFakeWorkflow builds the fake-driver engine, publishes it to late,
-// and seeds the walking-skeleton run when asked.
+// composeFakeWorkflow builds the fake-driver engine over driver.
 func composeFakeWorkflow(
-	parent context.Context, st *store.Store, attention *signet.Service, driver *fake.StageDriver,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config, late *startupBindings,
-) (workflow *engine.Engine, err error) {
+	st *store.Store, attention *signet.Service, driver exec.StageDriver,
+	lock *daemonlock.Lock, bound ward.LaunchBound, logger *slog.Logger,
+) (*engine.Engine, error) {
 	walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock), engine.WithMachineCapacity(bound)}
-	if cfg.Logger != nil {
-		walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
+	if logger != nil {
+		walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(logger))
 	}
-	workflow, err = engine.New(
-		st, attention, autoScriptStageDriver{StageDriver: driver}, walkingSkeletonOptions...)
+	return engine.New(st, attention, driver, walkingSkeletonOptions...)
+}
+
+// seedWalkingSkeleton starts the walking-skeleton sample run on workflow.
+// Even explicit fake execution starts without sample work unless asked, so
+// run calls it only under -seed-walking-skeleton.
+func seedWalkingSkeleton(parent context.Context, workflow *engine.Engine) error {
+	if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
+		RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
+		SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
+	}); err != nil {
+		return fmt.Errorf("seed walking-skeleton run: %w", err)
+	}
+	return nil
+}
+
+// newScenarioParts gathers what composeScenario takes, including the values
+// it needs from package main's helpers: the unattended admission floor,
+// both delivery validators over one production materializer, the store's
+// import authority and export recorder, and the publication watches. Each
+// is the value the scenario computed for itself before it left package
+// main.
+func newScenarioParts(
+	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
+	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
+) (scenarioParts, error) {
+	materializer, err := productionMaterializer(blobs)
 	if err != nil {
-		return nil, err
+		return scenarioParts{}, err
 	}
-	late.workflow = workflow
-	// Even explicit fake execution starts without sample work unless asked.
-	if cfg.SeedWalkingSkeleton {
-		if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
-			RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
-			SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
-		}); err != nil {
-			return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
-		}
-	}
-	return workflow, nil
+	return scenarioParts{
+		Store: st, Attention: attention, Blobs: blobs, Lock: lock, Bound: bound,
+		DBPath: cfg.DBPath, Logger: cfg.Logger, Scenario: cfg.Scenario,
+		AdmissionFloor:                   admissionFloor(domain.ModeUnattended),
+		ImplementationDeliveryValidation: productionImplementationDeliveryValidator(materializer),
+		SpecificationDeliveryValidation:  productionSpecificationDeliveryValidator(materializer),
+		Imports:                          storeAdmissionAuthority{store: st, blobs: blobs},
+		Exports:                          exportRecorder{store: st},
+		PublicationWatches:               publicationWatchRegistrations(st),
+	}, nil
 }
 
 // claudeWorkflow is what the Claude composition hands the rest of startup.

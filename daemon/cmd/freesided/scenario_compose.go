@@ -45,6 +45,40 @@ var (
 	scenarioRemediationPromptPackage   = []byte("<!-- freeside:render-prior-artifacts=v1 -->\nScenario remediator prompt package.\n")
 )
 
+// scenarioParts are what run hands composeScenario. AdmissionFloor through
+// PublicationWatches are values the scenario cannot compute for itself from
+// outside package main, because their helpers live there; run builds each
+// exactly as the scenario built it in package main. The admission floor,
+// validators, and watches come from the helpers the Claude composition
+// uses; the import authority and export recorder are its types, built bare,
+// without the Claude composition's path, author, or usage configuration.
+type scenarioParts struct {
+	Store     *store.Store
+	Attention *signet.Service
+	Blobs     *signet.BlobStore
+	Lock      *daemonlock.Lock
+	Bound     ward.LaunchBound
+	DBPath    string
+	Logger    *slog.Logger
+	Scenario  *scenario
+
+	// AdmissionFloor is the unattended admission floor.
+	AdmissionFloor []exec.Capability
+	// ImplementationDeliveryValidation and SpecificationDeliveryValidation
+	// check that a stage's prompt inputs are deliverable, over one
+	// production materializer.
+	ImplementationDeliveryValidation func(context.Context, exec.StartSpec) error
+	SpecificationDeliveryValidation  func(context.Context, exec.StartSpec) error
+	// Imports and Exports are the store's import authority and export
+	// recorder, which the scripted delivery uses the way the ward pipeline
+	// does.
+	Imports scenarioImportAuthority
+	Exports scenarioExportLookup
+	// PublicationWatches are the publication deadline registrations every
+	// production scheduler runs.
+	PublicationWatches map[domain.ScheduleKind]scheduler.Registration
+}
+
 // composeScenario seeds the scenario's world and composes the production
 // engine over it through the builder the Claude branch uses
 // (productionEngine), with the scripted stage driver and review source, an
@@ -55,13 +89,11 @@ var (
 //
 // run refuses a non-ephemeral environment before calling it: the fake
 // backend's conformance record claims a containment no process here has.
-func composeScenario(
-	ctx context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, cfg config, bound ward.LaunchBound,
-) (_ *scenarioComposition, err error) {
+func composeScenario(ctx context.Context, parts scenarioParts) (_ *scenarioComposition, err error) {
+	st, blobs := parts.Store, parts.Blobs
 	now := func() time.Time { return time.Now().UTC() }
-	sc := *cfg.Scenario
-	world, err := seedScenario(ctx, st, cfg.DBPath, sc, now())
+	sc := *parts.Scenario
+	world, err := seedScenario(ctx, st, parts.DBPath, sc, now())
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +116,8 @@ func composeScenario(
 	forge := fakeforge.New(fakeforge.Config{
 		Repo: scenarioRepo, Token: scenarioForgeToken,
 		Report: func(format string, args ...any) {
-			if cfg.Logger != nil {
-				cfg.Logger.Warn("scenario forge: " + fmt.Sprintf(format, args...))
+			if parts.Logger != nil {
+				parts.Logger.Warn("scenario forge: " + fmt.Sprintf(format, args...))
 			}
 		},
 	})
@@ -131,6 +163,7 @@ func composeScenario(
 	}
 	driver := scenarioStageDriver{
 		StageDriver: fakeStages, scenario: sc, store: st, blobs: blobs,
+		imports: parts.Imports, exports: parts.Exports,
 		baseDir: world.BaseDir, workDir: filepath.Join(world.Dir, "deliveries"),
 	}
 	fakeReviews, err := fake.NewReviewSourceAt(filepath.Join(world.Dir, "review-source"))
@@ -138,10 +171,6 @@ func composeScenario(
 		return nil, fmt.Errorf("open scenario review source: %w", err)
 	}
 	reviews := scenarioReviewSource{ReviewSource: fakeReviews}
-	materializer, err := productionMaterializer(blobs)
-	if err != nil {
-		return nil, err
-	}
 	fetcher, err := specify.NewFetcher(st, blobs, nil)
 	if err != nil {
 		return nil, err
@@ -149,8 +178,8 @@ func composeScenario(
 
 	identity := scenarioIdentityID
 	production := productionEngine{
-		Lock: lock, Bound: bound,
-		Backend: world.Backend, AdmissionFloor: admissionFloor(domain.ModeUnattended),
+		Lock: parts.Lock, Bound: parts.Bound,
+		Backend: world.Backend, AdmissionFloor: parts.AdmissionFloor,
 		Admission: engine.AdmissionEnvironment{
 			OperatingMode: domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,
 			EgressProfile: domain.EgressProviderOnly, ImageRef: world.Image.ImageRef,
@@ -169,11 +198,11 @@ func composeScenario(
 				BaseRef: scenarioBaseRef, BaseSHA: world.BaseSHA,
 			}, nil
 		},
-		DeliveryValidation: productionImplementationDeliveryValidator(materializer),
+		DeliveryValidation: parts.ImplementationDeliveryValidation,
 		Specification: engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: now,
 			PromptPackageDigest: digests["specification"],
-			ValidateDelivery:    productionSpecificationDeliveryValidator(materializer),
+			ValidateDelivery:    parts.SpecificationDeliveryValidation,
 		},
 		Cancellation: engine.TaskCancellationRuntime{
 			Timeout: time.Minute,
@@ -248,21 +277,20 @@ func composeScenario(
 		// and no doctor runs without a Claude config (newDoctorPass); the
 		// scenario's review configuration is the fake's fixed default.
 		HealthRefresh: nil,
-		Logger:        cfg.Logger,
+		Logger:        parts.Logger,
 		// The scripted stage driver runs no Claude writer turn, so there is
 		// no usage capture to sink.
 		UsageSink: nil,
 	}
-	workflow, err := engine.New(st, attention, driver, production.options()...)
+	workflow, err := engine.New(st, parts.Attention, driver, production.options()...)
 	if err != nil {
 		return nil, err
 	}
-	sched, err := scheduler.New(st, domain.ModeUnattended, now,
-		publicationWatchRegistrations(st))
+	sched, err := scheduler.New(st, domain.ModeUnattended, now, parts.PublicationWatches)
 	if err != nil {
 		return nil, err
 	}
-	sched.SetLogger(cfg.Logger)
+	sched.SetLogger(parts.Logger)
 	return &scenarioComposition{
 		workflow: workflow, scheduler: sched, listener: listener,
 		forge: &http.Server{Handler: forge, ReadHeaderTimeout: 5 * time.Second},

@@ -966,11 +966,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	if fixture != "" {
-		if err := seedStartupFixture(parent, st, fixture, cfg); err != nil {
+		if err := seedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
 			return nil, err
 		}
 	}
-	localBackups, err := maintainLocalBackups(parent, st, blobs, localBackupFiles, cfg)
+	localBackups, err := maintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -997,9 +997,18 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
 		manualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
 	if cfg.FakeDriverEnabled {
-		workflow, err = composeFakeWorkflow(parent, st, attention, driver, lock, bound, cfg, late)
+		workflow, err = composeFakeWorkflow(
+			st, attention, autoScriptStageDriver{StageDriver: driver}, lock, bound, cfg.Logger)
 		if err != nil {
 			return nil, err
+		}
+		// Published before the seed, so an attention option the seed's
+		// writes reach reads this engine, not nil.
+		late.workflow = workflow
+		if cfg.SeedWalkingSkeleton {
+			if err := seedWalkingSkeleton(parent, workflow); err != nil {
+				return nil, err
+			}
 		}
 	} else if cfg.Claude != nil {
 		var claude *claudeWorkflow
@@ -1010,7 +1019,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		claudeWiring, workflow, imageUpkeep = claude.claudeWiring, claude.workflow, claude.imageUpkeep
 	} else if cfg.Scenario != nil {
-		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg, bound)
+		var parts scenarioParts
+		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
+		}
+		scenarioWiring, err = composeScenario(ctx, parts)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
