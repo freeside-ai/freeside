@@ -43,6 +43,11 @@ Look for each of these before and during the run; most have bitten twice.
 - **Stale inputs.** A prompt package, settings file, or client build from an
   earlier run proves the earlier run. Take prompts from the approved
   default-branch commit and rebuild both clients from the tip.
+- **A copied settings file carries its lineup.** Wave 9's real root copied
+  the previous root's settings, so gh-imgup#147 was written by Haiku at
+  `low` and the go-ahead never named it (#3024). Choose the lineup under
+  docs/production-walkthrough.md, Choose The Real Run's Writers, and name
+  it in the go-ahead.
 - **Credentials that expire between runs.** Check the Codex token and the
   provider identity before onboarding; preflight rejects them after the
   expensive steps.

@@ -26,7 +26,9 @@ section it links.
 
 1. Write the real run's settings and inputs
    ([The Inputs And What Refuses Them](#the-inputs-and-what-refuses-them)),
-   then run the pre-spend checks on its root ([Start And Verify](#start-and-verify)).
+   with the writer lineup chosen under
+   [Choose The Real Run's Writers](#choose-the-real-runs-writers), then run
+   the pre-spend checks on its root ([Start And Verify](#start-and-verify)).
 2. Run the fixture pass on the build the real run will use, then any
    seeded pass the exit contract names that needs no device
    ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
@@ -357,6 +359,7 @@ is the authority for the settings, and it changes. The pre-spend record's
 | Policy | `submit -policy`: the resolved policy keys, including `gates.spec_approval` and `gates.source_issue_closure` | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
 | Publication | `submit -publication`: for a bare-URL target, the client record with `source_issue` set to that same URL ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)) | Composition preflight and `freesided submit` (`submittedSourceReference`, `daemon/cmd/freesided/submit.go`) |
 | Work-unit declaration | `submit -work-unit`: at least `{"completion_criterion": "bound_pr_merged"}` | Composition preflight and `freesided submit` (`errWorkUnitRequired`, same file). A task accepted without one never records completion (#1931). |
+| Writer lineup | The settings' `writers.*` and `judgment.*` keys, chosen under [Choose The Real Run's Writers](#choose-the-real-runs-writers) | The lineup probe, for a model the pinned CLIs don't serve. Nothing refuses a weak choice. |
 
 A target in the managed repository becomes the pull request's closing
 reference; one in another repository is linked and stays open.
@@ -369,6 +372,45 @@ CLI-mode rows, for the visibility seed on a fresh root
 | --- | --- | --- |
 | Manual-submission file | `manual_submission_config` in the settings, the JSON in the daemon guide ([Configure Client Task Submission](../daemon/README.md#configure-client-task-submission)) | The deputy at start, before the lease. A file with an empty `projects` array starts but accepts no client submission. |
 | Composer source text | The pairing checkpoint list, which the exit run writes and the operator types | Nothing: `Please handle <URL>.` creates valid work with no saved source reference (#1928). When the contract requires source-issue closure, write the bare canonical issue URL, with no prose or trailing punctuation. |
+
+### Choose The Real Run's Writers
+
+The real run's writer and judgment models and efforts are chosen for this
+run and named in the go-ahead, never inherited (#3024). Decision record:
+`devlog/2026-11-10-1639-exit-run-real-lineup.md`.
+
+- **The tracker's lineup, when the owner pinned one.** The tracker's Exit
+  section or its exit-proof unit names it; use it as written.
+- **Otherwise, the default lineup:**
+
+  | Key | Real-run value |
+  | --- | --- |
+  | `writers.specifier`, `writers.implementer`, `writers.remediator` | `claude-opus-5-5` at `medium` |
+  | `writers.specifier_escalated` | Absent |
+  | `judgment.model`, `judgment.effort` | `claude-opus-5-5` at `medium` |
+
+  Writer roles on one model and effort share one agent
+  (`devlog/2026-10-22-1346-rehearsal-real-models.md`), so a `--task-line`
+  the tracker names may need a role on its own model or effort; the
+  tracker's lineup then sets it.
+- **Review stays with onboarding.** `review.model` and `review.effort` stay
+  as the real project's onboarding set them. They feed the review
+  configuration digest the onboarding approved, so this choice leaves them
+  alone.
+- **Never copied, never the fixture's.** Don't take the lineup from an
+  earlier root's settings: Wave 9's real root did, and a real pull request
+  was written by Haiku at `low` without anyone choosing it (#3024). The
+  fixture table in [Rehearse Before The Real Run](#rehearse-before-the-real-run)
+  never applies to the real run.
+- **What checks it.** The lineup probe
+  ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
+  refuses a model the pinned CLIs don't serve. Nothing refuses a weak
+  choice; the go-ahead is where the owner sees it.
+- **A new lineup is a new tree.** The emitted agent tree depends on each
+  writer role's model and effort, and on judgment's when the run has
+  subscription judgments on, so a lineup that differs from the one the
+  root's `agent_tree.commit` was adopted with needs a new adoption
+  ([The First Start](#the-first-start)).
 
 ## Rehearse Before The Real Run
 
@@ -714,8 +756,8 @@ with. A changed value is a different tree and fails the check.
 read but change nothing, because the tree carries no offers since #2599.
 
 The patch creates every file, so it doesn't apply over an existing tree. To
-replace a committed tree (a new review model or effort, a changed prompt
-package), remove the old one in the same commit:
+replace a committed tree (a new writer, judgment, or review model or
+effort, a changed prompt package), remove the old one in the same commit:
 
 ```sh
 git -C <agent-tree-checkout> rm -r -q policy/fragments policy/lineup policy/agents.lock
