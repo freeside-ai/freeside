@@ -39,6 +39,7 @@ type coreCell struct {
 const (
 	ps = domain.ClosureFlagOriginProposeSite
 	df = domain.ClosureFlagOriginDaemonFallback
+	pd = domain.ClosureFlagOriginPolicyDefault
 
 	none     = domain.ClosureApprovalStateNone
 	declined = domain.ClosureApprovalStateDeclined
@@ -50,7 +51,8 @@ const (
 // the cells its "Settled in planning" section spells out), keyed over the four
 // deciding dimensions. Every valid (provenance × resolves × origin × gate ×
 // approval) input maps here; the completeness walk fails if any lacks a row.
-// A resolving daemon_fallback is invalid, so no df row carries resolves=true.
+// A resolving daemon_fallback is invalid, so no df row carries resolves=true,
+// and a non-resolving policy_default is invalid, so no pd row carries false.
 var closureOutcomeCells = map[coreCell]struct {
 	reference domain.ClosureReference
 	hold      domain.ClosureHold
@@ -93,6 +95,22 @@ var closureOutcomeCells = map[coreCell]struct {
 	{false, df, true, declined}: {domain.ClosureReferenceRefs, domain.ClosureHoldNone, domain.ClosureItemNone},
 	{false, df, true, human}:    {domain.ClosureReferenceRefs, domain.ClosureHoldNone, domain.ClosureItemNone},
 	{false, df, true, policy}:   {domain.ClosureReferenceRefs, domain.ClosureHoldNone, domain.ClosureItemNone},
+
+	// policy_default, gate off: the default policy set the flag, so the store
+	// records a policy approval and the merge closes with nothing open. Before
+	// that approval binds, or after a person declines, it only references.
+	{true, pd, false, none}:     {domain.ClosureReferenceRefs, domain.ClosureHoldNone, domain.ClosureItemNone},
+	{true, pd, false, declined}: {domain.ClosureReferenceRefs, domain.ClosureHoldNone, domain.ClosureItemNone},
+	{true, pd, false, human}:    {domain.ClosureReferenceCloses, domain.ClosureHoldNone, domain.ClosureItemNone},
+	{true, pd, false, policy}:   {domain.ClosureReferenceCloses, domain.ClosureHoldNone, domain.ClosureItemNone},
+
+	// policy_default, gate on: the engine mints policy_default only with the
+	// gate off, so these cells keep the function total; the gate holds an
+	// undecided merge as it does for any origin.
+	{true, pd, true, none}:     {domain.ClosureReferenceRefs, domain.ClosureHoldDraft, domain.ClosureItemPlannedGate},
+	{true, pd, true, declined}: {domain.ClosureReferenceRefs, domain.ClosureHoldNone, domain.ClosureItemNone},
+	{true, pd, true, human}:    {domain.ClosureReferenceCloses, domain.ClosureHoldNone, domain.ClosureItemNone},
+	{true, pd, true, policy}:   {domain.ClosureReferenceCloses, domain.ClosureHoldNone, domain.ClosureItemNone},
 }
 
 // TestClosureOutcomeForCells checks every listed cell under both provenances,
@@ -165,7 +183,7 @@ func TestClosureOutcomeForCells(t *testing.T) {
 
 // TestClosureOutcomeForCompleteness walks every (provenance × resolves × origin
 // × gate × approval) input, skips the ones that fail Validate (a resolving
-// fallback), and fails on any valid input the table does not list. This is the
+// fallback or a non-resolving policy default), and fails on any valid input the table does not list. This is the
 // guard the plan asks for: an enum member that gains a value with no row makes
 // the walk produce a valid input with no cell, and the test fails.
 func TestClosureOutcomeForCompleteness(t *testing.T) {

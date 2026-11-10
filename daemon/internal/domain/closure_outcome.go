@@ -191,7 +191,7 @@ func closureReference(approval ClosureApprovalState, resolves bool) ClosureRefer
 // approval or a decline binds the merge) no item is open. While the merge is
 // unacted, an open human gate holds it as a planned gate, whatever the origin;
 // without the gate, only a default-policy daemon_fallback shows the non-holding
-// fallback notice, and a propose_site proposal shows nothing. The origin switch
+// fallback notice, and a propose_site or policy_default proposal shows nothing. The origin switch
 // dispatches and omits default; the trailing return guards the invalid zero
 // value the proposal's Validate already rejected.
 func closureItem(approval ClosureApprovalState, gate bool, origin ClosureFlagOrigin) ClosureItem {
@@ -202,7 +202,7 @@ func closureItem(approval ClosureApprovalState, gate bool, origin ClosureFlagOri
 		return ClosureItemPlannedGate
 	}
 	switch origin {
-	case ClosureFlagOriginProposeSite:
+	case ClosureFlagOriginProposeSite, ClosureFlagOriginPolicyDefault:
 		return ClosureItemNone
 	case ClosureFlagOriginDaemonFallback:
 		return ClosureItemFallbackNotice

@@ -146,7 +146,7 @@ func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
 	if len(domain.AllProposalAdmissionSources) != 4 || len(domain.AllTaskProposalIntents) != 1 {
 		t.Fatalf("admission source registry = %v", domain.AllProposalAdmissionSources)
 	}
-	if len(domain.AllClosureProvenances) != 2 || len(domain.AllClosureFlagOrigins) != 2 {
+	if len(domain.AllClosureProvenances) != 2 || len(domain.AllClosureFlagOrigins) != 3 {
 		t.Fatalf("closure registries = %v / %v", domain.AllClosureProvenances, domain.AllClosureFlagOrigins)
 	}
 	export := domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

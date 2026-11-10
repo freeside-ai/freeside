@@ -177,11 +177,24 @@ func (f closurePolicyFixture) reconstruct(t *testing.T, ctx context.Context) (*d
 // TestRecordPolicyClosureApprovalReconstructs proves the policy write records a
 // binding that reconstructs with the policy actor and the instance's current
 // proposal digest, and authorizes the close for the merge it was recorded
-// against.
+// against. It covers both origins the write admits: policy_default, which the
+// default policy now mints, and propose_site, which rows stored before #3023
+// carry.
 func TestRecordPolicyClosureApprovalReconstructs(t *testing.T) {
 	t.Parallel()
+	for _, origin := range []domain.ClosureFlagOrigin{
+		domain.ClosureFlagOriginPolicyDefault, domain.ClosureFlagOriginProposeSite,
+	} {
+		t.Run(string(origin), func(t *testing.T) {
+			t.Parallel()
+			testRecordPolicyClosureApprovalReconstructs(t, origin)
+		})
+	}
+}
+
+func testRecordPolicyClosureApprovalReconstructs(t *testing.T, origin domain.ClosureFlagOrigin) {
 	ctx := context.Background()
-	f := seedClosurePolicyFixture(t, ctx, domain.ClosureFlagOriginProposeSite, true)
+	f := seedClosurePolicyFixture(t, ctx, origin, true)
 
 	recorded, err := f.recordPolicyApproval(t, ctx, f.merge)
 	if err != nil {

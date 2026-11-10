@@ -1388,13 +1388,30 @@ func (tx *ReadTx) gateFollowUpFilingApproval(ctx context.Context, instanceID dom
 	return tx.gateFollowUpFilingSourceCurrent(ctx, declaration, filing.Source)
 }
 
+// policyApprovableClosureOrigin says which closure origins may carry a policy
+// approval, for both the recorder and the reader. It switches with no default
+// arm so the exhaustive linter makes a new origin decide here instead of being
+// honored silently. A daemon_fallback closure gets the non-holding notice item,
+// never a policy approval: its resolves flag is always false, so an approval
+// would authorize no close, and admitting one would blur the two recorders.
+func policyApprovableClosureOrigin(origin domain.ClosureFlagOrigin) bool {
+	switch origin {
+	case domain.ClosureFlagOriginProposeSite, domain.ClosureFlagOriginPolicyDefault:
+		return true
+	case domain.ClosureFlagOriginDaemonFallback:
+		return false
+	}
+	return false
+}
+
 // RecordPolicyClosureApproval records the project policy actor's approval of a
 // source-issue closure at publication, bound to the merge the daemon observes
 // now. It is the policy counterpart of a human decision: there is no attention
 // item and no command, so the approval is its own durable row. It re-gates
 // before writing exactly as AllocateProposalInstance does (GetProposalInstance
 // re-runs the closable-source gate against current rows), refuses a proposal
-// that is not a propose_site closure, and refuses the second actor when a human
+// that is not a closure or is a daemon_fallback one (propose_site and
+// policy_default are admitted), and refuses the second actor when a human
 // decision already exists. One row per instance, upserted, so a moved merge
 // replaces the prior binding (which AuthorizesClose would reject anyway). The
 // returned ClosureApproval carries the policy actor and the instance's current
@@ -1425,12 +1442,9 @@ func (tx *WriteTx) RecordPolicyClosureApproval(
 		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: not a closure proposal: %w",
 			instanceID, domain.ErrEffectProposalInconsistent)
 	}
-	// A daemon_fallback closure gets the non-holding notice item, never a policy
-	// approval: its resolves flag is always false, so an approval would authorize
-	// no close, and admitting one here would blur the two recorders.
-	if closure.Origin == domain.ClosureFlagOriginDaemonFallback {
-		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: daemon_fallback: %w",
-			instanceID, domain.ErrEffectProposalInconsistent)
+	if !policyApprovableClosureOrigin(closure.Origin) {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %s: %w",
+			instanceID, closure.Origin, domain.ErrEffectProposalInconsistent)
 	}
 	decisions, err := tx.countProposalDecisions(ctx, instanceID)
 	if err != nil {
@@ -1530,9 +1544,11 @@ func (tx *ReadTx) ClosureApprovalForInstance(
 
 // policyClosureApproval rebuilds a policy-actor approval from its durable row. It
 // re-reads the instance through GetProposalInstance, so a source that is no
-// longer closable fails closed on read too, and requires a propose_site closure
-// whose current proposal digest equals the row's (the write only records
-// propose_site, so a fallback or a stale digest here is corruption). The merge
+// longer closable fails closed on read too, and requires a propose_site or
+// policy_default closure whose current proposal digest equals the row's (the
+// write refuses daemon_fallback, so a fallback or a stale digest here is
+// corruption; propose_site stays admitted for rows stored before the default
+// policy stopped asking the site, #3023). The merge
 // columns are validated through ClosureApproval.Validate, so a blank column that
 // slipped a CHECK cannot become a trusted binding value.
 func (tx *ReadTx) policyClosureApproval(
@@ -1553,7 +1569,7 @@ func (tx *ReadTx) policyClosureApproval(
 	if instance.Proposal.Kind != domain.EffectSourceIssueClosure || closure == nil {
 		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
 	}
-	if closure.Origin != domain.ClosureFlagOriginProposeSite {
+	if !policyApprovableClosureOrigin(closure.Origin) {
 		return nil, fmt.Errorf("closure approval for instance %q: policy row on a %q closure: %w",
 			instanceID, closure.Origin, errRowInconsistent)
 	}

@@ -71,6 +71,23 @@ func fallbackClosureProposal(t *testing.T) domain.EffectProposal {
 	return p
 }
 
+func policyDefaultClosureProposal(t *testing.T) domain.EffectProposal {
+	t.Helper()
+	// A policy_default constructs with resolves forced true even though the
+	// caller requested false.
+	p, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: "subject-opaque-1", Source: verifiedClosureSource(),
+		Origin: domain.ClosureFlagOriginPolicyDefault, Resolves: false,
+	}, proposalPolicy(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.ClosureProposal.Resolves {
+		t.Fatalf("policy_default resolves = false, want forced true")
+	}
+	return p
+}
+
 func TestSourceIssueClosureGoldensAndRoundTrip(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -79,6 +96,7 @@ func TestSourceIssueClosureGoldensAndRoundTrip(t *testing.T) {
 		{"effect_proposal_closure_verified", verifiedClosureProposal(t)},
 		{"effect_proposal_closure_recommended", recommendedClosureProposal(t)},
 		{"effect_proposal_closure_fallback", fallbackClosureProposal(t)},
+		{"effect_proposal_closure_policy_default", policyDefaultClosureProposal(t)},
 	}
 	seen := map[domain.Digest]bool{}
 	for _, tc := range cases {
@@ -106,7 +124,7 @@ func TestSourceIssueClosureGoldensAndRoundTrip(t *testing.T) {
 	}
 	// verified and recommended differ visibly in their encoded form, so their
 	// digests differ; that difference is what #1443 projects to the card.
-	if len(seen) != 3 {
+	if len(seen) != 4 {
 		t.Fatalf("closure proposals collided: %d distinct digests", len(seen))
 	}
 }
@@ -180,6 +198,10 @@ func TestSourceIssueClosureParametersValidate(t *testing.T) {
 		{"fallback resolves true", func(p *domain.SourceIssueClosureParameters) {
 			p.Origin = domain.ClosureFlagOriginDaemonFallback
 			p.Resolves = true
+		}, domain.ErrEffectProposalInconsistent},
+		{"policy default resolves false", func(p *domain.SourceIssueClosureParameters) {
+			p.Origin = domain.ClosureFlagOriginPolicyDefault
+			p.Resolves = false
 		}, domain.ErrEffectProposalInconsistent},
 	}
 	for _, tc := range cases {

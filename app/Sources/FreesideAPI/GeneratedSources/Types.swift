@@ -4530,13 +4530,14 @@ public enum Components {
             case verified = "verified"
             case recommended = "recommended"
         }
-        /// Which mechanism produced a source-issue-closure proposal: propose_site when the inference site emitted the flag, daemon_fallback when the daemon minted a durable resolve-false proposal (plan §5.13). Matches domain.AllClosureFlagOrigins.
+        /// Which mechanism produced a source-issue-closure proposal: propose_site when the inference site emitted the flag, daemon_fallback when the daemon minted a durable resolve-false proposal, policy_default when the default policy set a resolving flag without asking the site (plan §5.13). Matches domain.AllClosureFlagOrigins.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClosureFlagOrigin`.
         @frozen public enum ClosureFlagOrigin: String, Codable, Hashable, Sendable, CaseIterable {
             case propose_site = "propose_site"
             case daemon_fallback = "daemon_fallback"
+            case policy_default = "policy_default"
         }
         /// A resource snapshot wrapping one attention delivery (plan §5.14).
         ///

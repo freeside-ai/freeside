@@ -825,12 +825,14 @@ package enum AttentionDisplay {
 
     /// The mechanism that produced the closure flag (schema ClosureFlagOrigin,
     /// plan §5.13): the inference site that authored the publication emitted
-    /// it, or the daemon minted a resolve-false fallback because that site or
-    /// its admission failed. Not the human work proposal.
+    /// it, the daemon minted a resolve-false fallback because that site or
+    /// its admission failed, or the project's default policy set it without
+    /// asking the site. Not the human work proposal.
     static func closureOriginLabel(_ origin: Components.Schemas.ClosureFlagOrigin) -> String {
         switch origin {
         case .propose_site: return "Emitted by the inference site"
         case .daemon_fallback: return "Daemon resolve-false fallback"
+        case .policy_default: return "Set by project policy"
         }
     }
 

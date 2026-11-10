@@ -2605,9 +2605,10 @@ components:
       description: >
         Which mechanism produced a source-issue-closure proposal: propose_site
         when the inference site emitted the flag, daemon_fallback when the daemon
-        minted a durable resolve-false proposal (plan §5.13). Matches
-        domain.AllClosureFlagOrigins.
-      enum: [propose_site, daemon_fallback]
+        minted a durable resolve-false proposal, policy_default when the default
+        policy set a resolving flag without asking the site (plan §5.13).
+        Matches domain.AllClosureFlagOrigins.
+      enum: [propose_site, daemon_fallback, policy_default]
 
     AttentionDeliverySnapshot:
       type: object
