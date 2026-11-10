@@ -19,6 +19,8 @@
 //     the attention model and how a closed item concluded (§4)
 //   - decision_surface.go the daemon-owned decision surface an item presents
 //     and its synchronized reference (§4)
+//   - attention_item_view.go the first open of an item's decision surface,
+//     the source of its unviewed mark
 //   - card_facts.go   the typed facts an item's card shows: display names,
 //     cost, failures, questions, publish blocks, diff stats, health
 //     diagnostics, review disputes, and specification revisions

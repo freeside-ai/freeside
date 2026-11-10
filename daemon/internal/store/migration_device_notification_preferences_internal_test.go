@@ -59,6 +59,7 @@ func TestDeviceNotificationPreferencesMigrationWritesNoRows(t *testing.T) {
 // 0130 leaves: no preference table.
 func rewindDeviceNotificationPreferences(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindAttentionItemViews(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE device_notification_preferences`,
 		`DELETE FROM schema_migrations WHERE name = '0131_device_notification_preferences.sql'`,

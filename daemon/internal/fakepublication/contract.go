@@ -232,6 +232,10 @@ type terminalDigestItem struct {
 	Conclusion            *struct{} `json:"conclusion,omitempty"`
 	AlternateAgents       *struct{} `json:"alternate_agents,omitempty"`
 	ElapsedDeadlines      *struct{} `json:"elapsed_deadlines,omitempty"`
+	// SurfaceFirstOpenedAt is display state the read path projects and the
+	// stored body never carries (#2930), so it binds nothing and an item
+	// bound before the field existed keeps its digest.
+	SurfaceFirstOpenedAt *struct{} `json:"surface_first_opened_at,omitempty"`
 	// ReviewGuide carries the item's own guide, so a guide binds when
 	// present and an item without one keeps the digest it had before the
 	// field existed.

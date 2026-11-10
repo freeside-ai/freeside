@@ -195,9 +195,11 @@ func TestRecordComprehensionEventNoRevisionBump(t *testing.T) {
 	ctx := context.Background()
 	surface := registerAndDerive(t, f, f.device.ID, itemActions)
 	before := f.revision(t)
+	// Only a first card_opened for a surface rides the revision
+	// (TestRecordCardOpenedRecordsFirstView); every other kind stays internal.
 	event, err := f.service.RecordComprehensionEvent(ctx, domain.ComprehensionEventInput{
 		DeviceID: f.device.ID, EventID: "event-1", ItemID: f.item.ID,
-		Kind: domain.ComprehensionCardOpened, ItemDecisionSurfaceDigest: surface.ItemDecisionSurfaceDigest,
+		Kind: domain.ComprehensionDrillDownOpened, ItemDecisionSurfaceDigest: surface.ItemDecisionSurfaceDigest,
 		OccurredAt: *f.now, Sequence: 1,
 	})
 	if err != nil {

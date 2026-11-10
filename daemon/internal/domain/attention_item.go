@@ -628,6 +628,14 @@ type AttentionItem struct {
 	// recorded it is immutable (ValidateAttentionItemTransition): an
 	// idempotent command replay or a later re-put must not move or erase it.
 	DecidedAt *time.Time `json:"decided_at"`
+	// SurfaceFirstOpenedAt is the instant the item's current decision surface
+	// was first opened on any paired device (AttentionItemView, issue #2930):
+	// derived display state the signet read projection sets on the copy it
+	// serves, nil while no device has opened this surface. Constructors and
+	// producers never set it, and the stored item body never carries a value,
+	// so it can't move item_version or entity_version. A decision-surface
+	// revision resets it to nil. Nothing gates on it.
+	SurfaceFirstOpenedAt *time.Time `json:"surface_first_opened_at"`
 	// Conclusion records how the item closed: the concluding decision or the
 	// daemon's reason for closing it (attention_conclusion.go). Nil while open
 	// and on items closed before the field existed; set once, by
@@ -1302,6 +1310,11 @@ func (i AttentionItem) Validate() error {
 		// in a different byte form, so it would give one stamp two encodings.
 		if i.DecidedAt.Location() != time.UTC {
 			return fmt.Errorf("item %s decided_at: %w", i.ID, ErrTimestampNotUTC)
+		}
+	}
+	if i.SurfaceFirstOpenedAt != nil {
+		if err := requireUTC(*i.SurfaceFirstOpenedAt, fmt.Sprintf("item %s surface_first_opened_at", i.ID)); err != nil {
+			return err
 		}
 	}
 	if err := i.validateConclusion(); err != nil {

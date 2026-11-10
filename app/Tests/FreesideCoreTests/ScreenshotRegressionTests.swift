@@ -1460,6 +1460,36 @@
                         )))
             }
 
+            // The unviewed mark (#2930): an open row no device has opened
+            // (the top-right dot), an open row already viewed, and a closed
+            // row, which never carries the mark.
+            if let unviewed = inbox.first(where: {
+                $0.item.status == .open && $0.item.surface_first_opened_at == nil
+            })?.item,
+                let viewed = inbox.first(where: {
+                    $0.item.status == .open && $0.item.surface_first_opened_at != nil
+                })?.item,
+                let closed = inbox.first(where: { $0.item.status != .open })?.item
+            {
+                for variant: (suffix: String, width: CGFloat, colorScheme: ColorScheme) in [
+                    ("", 560, .light), ("-dark", 560, .dark), ("-phone", 390, .light), ("-phone-dark", 390, .dark),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: "inbox-viewed-mix\(variant.suffix)",
+                            width: variant.width,
+                            colorScheme: variant.colorScheme,
+                            view: AnyView(
+                                VStack(spacing: 8) {
+                                    InboxRowView(item: unviewed, now: screenshotNow)
+                                    InboxRowView(item: viewed, now: screenshotNow)
+                                    InboxRowView(item: closed, now: screenshotNow)
+                                }
+                                .padding()
+                            )))
+                }
+            }
+
             var concludedDegraded = AttentionFixtures.degradedReady().item
             concludedDegraded.status = .resolved
             surfaces.append(

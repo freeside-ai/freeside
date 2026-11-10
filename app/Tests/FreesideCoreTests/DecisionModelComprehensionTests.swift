@@ -1,5 +1,6 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import HTTPTypes
 import OpenAPIRuntime
 import Testing
@@ -67,6 +68,68 @@ private struct HookOnOperationTransport: ClientTransport {
         #expect(model.actionSurface != nil)
         await store.drainComprehensionEvents()
         #expect(store.comprehensionQueue.isEmpty)
+    }
+
+    /// Opening a card clears its unviewed mark at once on this device, before
+    /// the telemetry write, and a write that fails leaves the clear in place
+    /// (#2930).
+    @Test func cardOpenClearsTheUnviewedMarkLocally() async throws {
+        let (store, itemID) = try await pairedStore()
+        #expect(store.snapshotsByID[itemID]?.item.surface_first_opened_at == nil)
+        let model = DecisionModel(store: store, itemID: itemID)
+        model.emitCardOpened()
+        #expect(store.snapshotsByID[itemID]?.item.surface_first_opened_at != nil)
+        #expect(store.comprehensionQueue.contains { $0.input.kind == .card_opened })
+    }
+
+    @Test func cardOpenClearsSurviveAFailedTelemetryWrite() async throws {
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let grant = try await APIClientFactory.mock(server: server).pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "d"))
+        ).created.body.json
+        let client = APIClientFactory.mock(server: server, token: { grant.device_token })
+        let store = InboxStore(client: client, device: DeviceIdentity(deviceID: "device-1"))
+        await store.refresh()
+        let itemID = "item-ready_for_final_review"
+        await server.setBeforeRespond { operationID in
+            if operationID == "recordComprehensionEvent" { throw InjectedFailure() }
+        }
+        DecisionModel(store: store, itemID: itemID).emitCardOpened()
+        await store.drainComprehensionEvents()
+        #expect(!store.comprehensionQueue.isEmpty)
+        await store.refresh()
+        #expect(store.snapshotsByID[itemID]?.item.surface_first_opened_at != nil)
+    }
+
+    /// A card opened on one device clears the mark on another through sync
+    /// alone: the view moves the revision, and the other device's heartbeat
+    /// resyncs (#2930).
+    @Test func cardOpenOnOneDeviceClearsTheMarkOnAnother() async throws {
+        let server = MockServer(
+            authMode: .enforcing, pairingCodes: ["483911": .valid, "572046": .valid])
+        // The mock numbers paired devices in pairing order.
+        func pair(_ code: String) async throws -> any APIProtocol {
+            let grant = try await APIClientFactory.mock(server: server).pairDevice(
+                body: .json(.init(pairing_code: code, display_name: code))
+            ).created.body.json
+            return APIClientFactory.mock(server: server, token: { grant.device_token })
+        }
+        let (macClient, macID) = (try await pair("483911"), "device-1")
+        let (phoneClient, phoneID) = (try await pair("572046"), "device-2")
+        let itemID = "item-ready_for_final_review"
+        let phone = SyncCoordinator(
+            client: phoneClient, device: DeviceIdentity(deviceID: phoneID), cache: InMemoryCacheStore())
+        await phone.bootstrap()
+        #expect(phone.store.snapshotsByID[itemID]?.item.surface_first_opened_at == nil)
+
+        let mac = InboxStore(client: macClient, device: DeviceIdentity(deviceID: macID))
+        await mac.refresh()
+        DecisionModel(store: mac, itemID: itemID).emitCardOpened()
+        await mac.drainComprehensionEvents()
+        #expect(mac.comprehensionQueue.isEmpty)
+
+        await phone.heartbeat()
+        #expect(phone.store.snapshotsByID[itemID]?.item.surface_first_opened_at != nil)
     }
 
     @Test func cardOpenRecordsFromTheCachedDigestWithoutASurface() async throws {

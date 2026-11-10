@@ -190,6 +190,13 @@ public final class InboxStore {
     /// so an older in-flight list/bootstrap cannot resurrect a snoozed row.
     /// A strictly newer snapshot is the release transition and clears it.
     private var removalVersionFloors: [String: Int64] = [:]
+    /// Local clears of the unviewed mark (#2930): item id to the
+    /// decision-surface digest whose card opened on this device, and when. The
+    /// card_opened write is best-effort, so the mark clears here at once and
+    /// stays clear while sync keeps serving that surface unviewed; it retires
+    /// when a server snapshot arrives already viewed or on a new surface, or
+    /// when an epoch change discards the cache.
+    private var localSurfaceViews: [String: (digest: String, openedAt: Date)] = [:]
     /// Bumped every time the cache is evicted for a sync-epoch change
     /// (`discardSnapshots`, driven only by `SyncCoordinator.discardCache`).
     /// A per-item validation stamps the generation it certified against,
@@ -266,7 +273,7 @@ public final class InboxStore {
     /// state the cards gate their actions on.
     ///
     /// Returns whether `snapshot` is now the rendered row: `false` when a
-    /// cached higher `entity_version` outranked it and the write was
+    /// cached snapshot outranked it (`outranks`) and the write was
     /// refused. A certifying caller must not mark a rejected snapshot
     /// validated — `entity_version` is monotonic only within a sync
     /// epoch, so across a restore the shadowing higher version is a dead
@@ -278,12 +285,10 @@ public final class InboxStore {
             guard snapshot.entity_version > floor else { return false }
             removalVersionFloors.removeValue(forKey: snapshot.item.id)
         }
-        if let existing = snapshotsByID[snapshot.item.id],
-            existing.entity_version > snapshot.entity_version
-        {
+        if let existing = snapshotsByID[snapshot.item.id], Self.outranks(existing, snapshot) {
             return false
         }
-        snapshotsByID[snapshot.item.id] = snapshot
+        snapshotsByID[snapshot.item.id] = withLocalSurfaceView(snapshot)
         if !serverOrder.contains(snapshot.item.id) {
             serverOrder.append(snapshot.item.id)
         }
@@ -304,6 +309,52 @@ public final class InboxStore {
         conversationsByID[id] = snapshot
         snapshotObserver?(snapshot.as_of_revision)
         return true
+    }
+
+    /// Clears an item's unviewed mark on this device the moment its card
+    /// opens, before the card_opened event reaches the daemon, for the
+    /// decision surface the card shows. A row already viewed needs nothing.
+    public func markSurfaceViewedLocally(itemID: String, digest: String, at openedAt: Date) {
+        guard var snapshot = snapshotsByID[itemID],
+            snapshot.item.decision_surface.digest == digest,
+            snapshot.item.surface_first_opened_at == nil
+        else { return }
+        localSurfaceViews[itemID] = (digest, openedAt)
+        snapshot.item.surface_first_opened_at = openedAt
+        snapshotsByID[itemID] = snapshot
+    }
+
+    /// Applies a local clear to an incoming server snapshot, or retires it
+    /// once the server says the surface is viewed or has moved on.
+    private func withLocalSurfaceView(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        let id = snapshot.item.id
+        guard let local = localSurfaceViews[id] else { return snapshot }
+        guard snapshot.item.surface_first_opened_at == nil,
+            snapshot.item.decision_surface.digest == local.digest
+        else {
+            localSurfaceViews.removeValue(forKey: id)
+            return snapshot
+        }
+        var overlaid = snapshot
+        overlaid.item.surface_first_opened_at = local.openedAt
+        return overlaid
+    }
+
+    /// Whether a cached snapshot is newer than an incoming one of the same
+    /// item. A higher `entity_version` is a newer row. At the same
+    /// `entity_version`, a higher `as_of_revision` is newer too: the daemon
+    /// raises it when it records the item's first surface open without
+    /// touching the row (#2930), and within an epoch that view is never
+    /// removed, so an older read must not bring the unviewed mark back.
+    private static func outranks(
+        _ existing: Components.Schemas.AttentionItemSnapshot,
+        _ incoming: Components.Schemas.AttentionItemSnapshot
+    ) -> Bool {
+        existing.entity_version > incoming.entity_version
+            || (existing.entity_version == incoming.entity_version
+                && existing.as_of_revision > incoming.as_of_revision)
     }
 
     /// Removes a row after an authoritative read proves it is intentionally
@@ -332,12 +383,10 @@ public final class InboxStore {
                 guard snapshot.entity_version > floor else { continue }
                 removalVersionFloors.removeValue(forKey: snapshot.item.id)
             }
-            if let existing = snapshotsByID[snapshot.item.id],
-                existing.entity_version > snapshot.entity_version
-            {
+            if let existing = snapshotsByID[snapshot.item.id], Self.outranks(existing, snapshot) {
                 replaced[snapshot.item.id] = existing
             } else {
-                replaced[snapshot.item.id] = snapshot
+                replaced[snapshot.item.id] = withLocalSurfaceView(snapshot)
             }
         }
         snapshotsByID = replaced
@@ -382,6 +431,9 @@ public final class InboxStore {
         statusAtOrderRebuild = [:]
         projectID = nil
         removalVersionFloors = [:]
+        // A local mark clear vouched for an open the previous epoch's daemon
+        // may not hold (a restore), so this device rejoins what sync serves.
+        localSurfaceViews = [:]
         loadState = .idle
         // A new epoch: every prior per-item validation is now stale, even
         // for rows a subsequent bootstrap repopulates (issue #162).

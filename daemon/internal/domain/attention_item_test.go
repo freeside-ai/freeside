@@ -1274,3 +1274,35 @@ func agentQuestionClaim(facts *domain.AgentQuestionFacts) domain.AgentClaim {
 		Metadata: claimMeta(domain.EvidenceMediaApplicationJSON),
 	}
 }
+
+// TestValidateSurfaceFirstOpenedAt covers the item field the read projection
+// sets: the constructor leaves it nil, and a present pointer must carry a real
+// UTC instant.
+func TestValidateSurfaceFirstOpenedAt(t *testing.T) {
+	base, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.SurfaceFirstOpenedAt != nil {
+		t.Fatalf("constructor set surface_first_opened_at %v, want nil", base.SurfaceFirstOpenedAt)
+	}
+	opened := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		at   time.Time
+		want error
+	}{
+		{"utc", opened, nil},
+		{"zero", time.Time{}, domain.ErrMissingTimestamp},
+		{"non-UTC", opened.In(time.FixedZone("PST", -8*3600)), domain.ErrTimestampNotUTC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := base
+			at := tc.at
+			item.SurfaceFirstOpenedAt = &at
+			if err := item.Validate(); !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}

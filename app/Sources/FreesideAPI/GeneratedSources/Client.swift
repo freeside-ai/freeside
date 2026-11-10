@@ -2558,8 +2558,12 @@ public struct Client: APIProtocol {
     ///
     /// Ingests one typed decision-path event (plan §8). Deliberately not a
     /// ClientCommand, like reportDeliveryOpened: it records a fact, makes no
-    /// judgment, and has no version precondition. Recording never advances the
-    /// server revision. The device is the bearer credential's and the event_id
+    /// judgment, and has no version precondition. Recording does not advance
+    /// the server revision, with one exception: the first card_opened for an
+    /// item's decision surface sets the item's surface_first_opened_at, which
+    /// advances the revision once so every device's inbox learns the item was
+    /// viewed. A repeat open of that surface advances nothing. The device is
+    /// the bearer credential's and the event_id
     /// is the path idempotency key, so the body carries neither; received_at is
     /// daemon-stamped. Idempotent by (device, event_id): replaying returns the
     /// recorded event unchanged. The action-bearing kinds (action_taken,
