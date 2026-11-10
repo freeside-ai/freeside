@@ -80,6 +80,8 @@ func (l *adapterConformanceLeaser) bind(id domain.InvocationID, agent engine.Rol
 
 // recordObservedAdapterConformance uses the declaration only as a ceiling.
 // Failed observations supersede older passes, including declaration-only ones.
+// The caller does not record a proof that could not run because the
+// implementer's generation is marked (proveSelectedClaudeAdapter).
 func recordObservedAdapterConformance(ctx context.Context, st *store.Store, observed domain.LaunchCapabilitySet, runErr error, provedAt time.Time) error {
 	adapter, err := agentbaseline.ClaudeWardAdapter()
 	if err != nil {
@@ -131,21 +133,48 @@ func runAdapterConformance(ctx context.Context, gate adapterConformanceGate, inp
 	return claude.JudgeConformance(result, input.Task, input.InvocationID, authorities)
 }
 
+// proveClaudeAdapter proves the Claude ward adapter on the lineup
+// implementer's subscription. A selection that cannot load records failed;
+// proveSelectedClaudeAdapter decides the rest.
 func proveClaudeAdapter(ctx context.Context, st *store.Store, backend *ward.Backend, cfg claudeDriverConfig, leaser *adapterConformanceLeaser) error {
 	selection, err := loadAgentSelection(ctx, cfg)
 	if err != nil {
 		return recordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
+	return proveSelectedClaudeAdapter(ctx, st, *selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+		return observeClaudeAdapter(ctx, backend, cfg, leaser, agent)
+	})
+}
+
+// proveSelectedClaudeAdapter resolves the implementer the proof launches on
+// and proves the adapter through observe. A resolution or launch-selection
+// failure records failed, with one exception: when the implementer's
+// generation carries an integrity mark, the proof cannot run, so it records
+// nothing, returns nil, and the adapter's last record stands.
+//
+// A mark holds only the admissions that would run on its own generation (the
+// owner decision on #1740), and each launch's admission refuses it until
+// re-enrollment. The adapter record is keyed by adapter digest, not
+// enrollment, so a failed record here would refuse every Claude writer on
+// every subscription; checkWriterRoles makes the same exception at startup.
+// Every other refusal still records failed: startup already holds the whole
+// lineup for those, so the record holds nothing wider.
+func proveSelectedClaudeAdapter(ctx context.Context, st *store.Store, selection engine.AgentSelection, observe func(engine.RoleAgent) (domain.LaunchCapabilitySet, error)) error {
 	agent, err := engine.ResolveRole(ctx, st, selection.Tree, domain.RoleImplementer)
+	if errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+		slog.Warn("skipping Claude adapter conformance: the implementer's generation is marked; the adapter's last record stands",
+			"role", domain.RoleImplementer, "error", err)
+		return nil
+	}
 	if err == nil {
-		agent, err = selectForLaunch(*selection, domain.RoleImplementer, agent)
+		agent, err = selectForLaunch(selection, domain.RoleImplementer, agent)
 	}
 	if err != nil {
 		slog.Warn("cannot resolve implementer for Claude adapter conformance", "error", err)
 		return recordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
 	return proveResolvedClaudeAdapter(ctx, st, agent.Adapter.Digest, func() (domain.LaunchCapabilitySet, error) {
-		return observeClaudeAdapter(ctx, backend, cfg, leaser, agent)
+		return observe(agent)
 	})
 }
 
