@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/admissionauth"
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
@@ -246,7 +247,7 @@ func newScenarioParts(
 		AdmissionFloor:                   admissionFloor(domain.ModeUnattended),
 		ImplementationDeliveryValidation: productionImplementationDeliveryValidator(materializer),
 		SpecificationDeliveryValidation:  productionSpecificationDeliveryValidator(materializer),
-		Imports:                          storeAdmissionAuthority{store: st, blobs: blobs},
+		Imports:                          admissionauth.Authority{Store: st, Blobs: blobs},
 		Exports:                          exportRecorder{store: st},
 		PublicationWatches:               publicationWatchRegistrations(st),
 		AgentExpiryMargin:                agentExpiryMargin,

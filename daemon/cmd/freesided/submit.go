@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/admissionauth"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -1160,7 +1161,7 @@ func validateLaunchComposition(
 			identity.CommitAuthor.AppSlug, identity.CommitAuthor.BotUserID,
 			manifest.PublicationAuthor.AppSlug, manifest.PublicationAuthor.BotUserID, domain.ErrParentKeyMismatch)
 	}
-	if _, err := resolvedPathAllowlist(policy, policy.Digest, manifest.AllowedPaths); err != nil {
+	if _, err := admissionauth.ResolvedPathAllowlist(policy, policy.Digest, manifest.AllowedPaths); err != nil {
 		return fmt.Errorf("paths policy against the run's allowed paths: %w", err)
 	}
 	return nil

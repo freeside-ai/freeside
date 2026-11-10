@@ -1,4 +1,4 @@
-package main
+package admissionauth
 
 import (
 	"bytes"
@@ -20,6 +20,18 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
+
+// testRunEvidenceMetadata is valid run-sourced evidence metadata, a copy of
+// cmd/freesided's fixture helper.
+func testRunEvidenceMetadata(sizeBytes int64) domain.EvidenceMetadata {
+	return domain.EvidenceMetadata{
+		MediaType:    domain.EvidenceMediaApplicationJSON,
+		SizeBytes:    sizeBytes,
+		CreatedAt:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Source:       domain.EvidenceSourceRun,
+		Availability: domain.EvidenceAvailable,
+	}
+}
 
 type fixedProductionCommitAuthorResolver struct {
 	identity publish.AppBotIdentity
@@ -219,7 +231,7 @@ func (f submissionFixture) SubmitProduction(
 	return production
 }
 
-func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
+func TestAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	fixture := newSubmissionFixture(t, store.Options{})
@@ -233,14 +245,14 @@ func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 		Title: "Describe another outcome", Body: "## Why\n\nCloses #456.\n",
 		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 	})
-	authority := storeAdmissionAuthority{
-		store: st,
-		commitAuthors: fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
+	authority := Authority{
+		Store: st,
+		CommitAuthors: fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
 			AppSlug: "freeside-test", BotUserID: 12345,
 		}},
 	}
 	commitAuthorErr := errors.New("commit author resolution must not run for specification")
-	authority.commitAuthors = fixedProductionCommitAuthorResolver{err: commitAuthorErr}
+	authority.CommitAuthors = fixedProductionCommitAuthorResolver{err: commitAuthorErr}
 	if err := authority.authenticateInvocationStart(ctx, first.SpecificationInvocationID,
 		domain.ExecutionAdmission{
 			RunID: first.Run.ID, StageID: first.SpecificationStageID,
@@ -299,7 +311,7 @@ func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 		t.Fatalf("production finding profile = %v, want nil (publish-strict default)",
 			productionOpts.Policy.FindingProfile)
 	}
-	authority.commitAuthors = fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
+	authority.CommitAuthors = fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
 		AppSlug: "freeside-test", BotUserID: 12345,
 	}}
 	author, production, err := authority.authenticateProductionCommitAuthor(
@@ -315,8 +327,8 @@ func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 	countingResolver := &countingProductionCommitAuthorResolver{Identity: publish.AppBotIdentity{
 		AppSlug: "freeside-test", BotUserID: 12345,
 	}}
-	authority.commitAuthors = countingResolver
-	authority.authenticatedStartAuthors = newProductionCommitAuthorAuthenticationCache()
+	authority.CommitAuthors = countingResolver
+	authority.StartAuthors = NewCommitAuthorCache()
 	for range 2 {
 		if _, _, err := authority.authenticateProductionCommitAuthorForStart(
 			ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "example/repo",
@@ -333,7 +345,7 @@ func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 	); err != nil {
 		t.Fatalf("re-authenticate changed start binding: %v", err)
 	}
-	authority.authenticatedStartAuthors.forget(authoritySubmission.InvocationID)
+	authority.StartAuthors.forget(authoritySubmission.InvocationID)
 	if _, _, err := authority.authenticateProductionCommitAuthorForStart(
 		ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "another/repo",
 	); err != nil {
@@ -356,7 +368,7 @@ func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 	); !errors.Is(err, publish.ErrAppBotIdentityMismatch) {
 		t.Fatalf("new invocation under changed App binding = %v, want ErrAppBotIdentityMismatch", err)
 	}
-	authority.commitAuthors = fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
+	authority.CommitAuthors = fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
 		AppSlug: "another-app", BotUserID: 67890,
 	}}
 	if _, _, err := authority.authenticateProductionCommitAuthor(
@@ -383,8 +395,8 @@ func TestStoreAdmissionAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 	remediationResolver := &countingProductionCommitAuthorResolver{Identity: publish.AppBotIdentity{
 		AppSlug: "freeside-test", BotUserID: 12345,
 	}}
-	authority.commitAuthors = remediationResolver
-	authority.authenticatedStartAuthors = newProductionCommitAuthorAuthenticationCache()
+	authority.CommitAuthors = remediationResolver
+	authority.StartAuthors = NewCommitAuthorCache()
 	if err := authority.authenticateInvocationStart(
 		ctx, remediationID, remediationAdmission, "example/repo",
 	); err != nil {
@@ -554,7 +566,7 @@ func seedRemediationAuthorityFixture(
 	}
 }
 
-func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
+func TestAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	fixture := newSubmissionFixture(t, store.Options{})
@@ -564,7 +576,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 		Title: "Test the task", Body: "## Why\n\nCloses #123.\n",
 		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 	})
-	authority := storeAdmissionAuthority{store: st, blobs: blobs}
+	authority := Authority{Store: st, Blobs: blobs}
 	admission := domain.ExecutionAdmission{
 		RunID: production.Run.ID, SpecDigest: fixture.SpecArtifact.Digest,
 	}
@@ -600,5 +612,76 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	reconstructed, err := authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
 	if err != nil || reconstructed != got {
 		t.Fatalf("reconstructed message = %q, %v; want byte-identical %q", reconstructed, err, got)
+	}
+}
+
+func TestAuthorityRejectsMissingSpecificationMarker(t *testing.T) {
+	t.Parallel()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	authority := Authority{Store: st}
+	specification, err := authority.authenticateSpecificationInvocation(
+		t.Context(), "inv-specify-run-missing-2", domain.ExecutionAdmission{
+			RunID: "run-missing", StageID: "specify-run-missing",
+		},
+	)
+	if !specification || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing specification marker = specification %t, error %v; want fail-closed ErrNotFound",
+			specification, err)
+	}
+}
+
+func TestAttendedImportUsesCurrentActiveTrustProfile(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "example/repo", RepositoryID: 44,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 31, 6, 15, 0, 0, time.UTC)
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordInactiveTrustProfile(ctx, profile, now); err != nil {
+			return err
+		}
+		return tx.ActivateTrustProfile(ctx, profile.Repo, profile.ProfileDigest, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authority := Authority{Store: st}
+	admission := domain.ExecutionAdmission{
+		ID: "sha256:attended-admission", OperatingMode: domain.ModeAttendedDev,
+		Base: domain.BaseRevision{Repo: profile.Repo, RepositoryID: profile.RepositoryID},
+	}
+	got, err := authority.importTrustProfile(ctx, admission)
+	if err != nil {
+		t.Fatalf("attended import profile: %v", err)
+	}
+	if got.ProfileDigest != profile.ProfileDigest {
+		t.Fatalf("attended import profile = %s, want %s", got.ProfileDigest, profile.ProfileDigest)
+	}
+	admission.OperatingMode = domain.ModeUnattended
+	digest := profile.ProfileDigest
+	admission.TrustProfileDigest = &digest
+	got, err = authority.importTrustProfile(ctx, admission)
+	if err != nil {
+		t.Fatalf("bound unattended import profile: %v", err)
+	}
+	if got.ProfileDigest != profile.ProfileDigest {
+		t.Fatalf("unattended import profile = %s, want %s", got.ProfileDigest, profile.ProfileDigest)
+	}
+	admission.TrustProfileDigest = nil
+	if _, err := authority.importTrustProfile(ctx, admission); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("unbound unattended import profile = %v, want ErrEmptyField", err)
 	}
 }

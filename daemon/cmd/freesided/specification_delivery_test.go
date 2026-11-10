@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,21 +115,6 @@ func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testi
 	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
 		!errors.Is(err, exec.ErrInputTooLarge) {
 		t.Fatalf("aggregate overflow = %v, want durable undeliverable materialized input", err)
-	}
-}
-
-func TestStoreAdmissionAuthorityRejectsMissingSpecificationMarker(t *testing.T) {
-	t.Parallel()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	authority := storeAdmissionAuthority{store: st}
-	specification, err := authority.authenticateSpecificationInvocation(
-		t.Context(), "inv-specify-run-missing-2", domain.ExecutionAdmission{
-			RunID: "run-missing", StageID: "specify-run-missing",
-		},
-	)
-	if !specification || !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("missing specification marker = specification %t, error %v; want fail-closed ErrNotFound",
-			specification, err)
 	}
 }
 
