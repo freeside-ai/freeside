@@ -13,51 +13,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
-
-func TestUnprovableTaskStopFollowsTheCoverageRecord(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "freeside.db")
-	storetest.Copy(t, path)
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := st.ServerState(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	coverage, err := ward.OpenCancellationCoverage(
-		filepath.Join(t.TempDir(), "task-runtime-coverage.json"), state.SyncEpoch, []domain.TaskID{"task-before-record"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reason, err := unprovableTaskStop(ctx, st, coverage, "task-after-record"); err != nil || reason != "" {
-		t.Fatalf("covered task reported unprovable: %q, %v", reason, err)
-	}
-	if reason, err := unprovableTaskStop(ctx, st, coverage, "task-before-record"); err != nil || !strings.HasPrefix(reason, "runtime coverage: ") {
-		t.Fatalf("task that predates the record: %q, %v", reason, err)
-	}
-	if _, err := st.NewEpoch(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if reason, err := unprovableTaskStop(ctx, st, coverage, "task-after-record"); err != nil || !strings.HasPrefix(reason, "runtime coverage: ") {
-		t.Fatalf("epoch that differs from the record's: %q, %v", reason, err)
-	}
-	// A reason ends retries for good, so a failed read must never produce one.
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if reason, err := unprovableTaskStop(ctx, st, coverage, "task-before-record"); err == nil || reason != "" {
-		t.Fatalf("failed epoch read reported a reason: %q, %v", reason, err)
-	}
-}
 
 // saveCoverageTestTask saves a task, and a run for it when run is set, as
 // a submission would; the run has no stage attempt.
@@ -108,7 +69,7 @@ func TestDeputyTaskCoverageCoversTasksSavedAfterIt(t *testing.T) {
 		if err := openDeputyTaskCoverage(ctx, paths, settings); err != nil {
 			t.Fatal(err)
 		}
-		recordPath := filepath.Join(paths.StateRoot, taskRuntimeCoverageFile)
+		recordPath := filepath.Join(paths.StateRoot, daemoncompose.TaskRuntimeCoverageFile)
 		written, err := os.ReadFile(recordPath) //nolint:gosec // G304: test-owned path
 		if err != nil {
 			t.Fatal(err)
@@ -139,15 +100,15 @@ func TestDeputyTaskCoverageCoversTasksSavedAfterIt(t *testing.T) {
 		}
 		cfg := deputyDaemonConfig(settings, paths, deputyLaunch{}, nil)
 		if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
-			coverage, err := openTaskRuntimeCoverage(ctx, st, cfg.StateDir)
+			coverage, err := daemoncompose.OpenTaskRuntimeCoverage(ctx, st, cfg.StateDir)
 			if err != nil {
 				return err
 			}
-			if reason, err := unprovableTaskStop(ctx, st, coverage, after); err != nil || reason != "" {
+			if reason, err := daemoncompose.UnprovableTaskStop(ctx, st, coverage, after); err != nil || reason != "" {
 				t.Errorf("savedBefore=%v: task saved after the record: %q, %v", savedBefore, reason, err)
 			}
 			if savedBefore {
-				if reason, err := unprovableTaskStop(ctx, st, coverage, before); err != nil ||
+				if reason, err := daemoncompose.UnprovableTaskStop(ctx, st, coverage, before); err != nil ||
 					!strings.HasPrefix(reason, "runtime coverage: ") {
 					t.Errorf("task saved before the record: %q, %v", reason, err)
 				}
@@ -177,7 +138,7 @@ func TestDeputyTaskCoverageRefusesAHeldLock(t *testing.T) {
 	if err := openDeputyTaskCoverage(t.Context(), paths, settings); !errors.Is(err, daemonlock.ErrAlreadyRunning) {
 		t.Fatalf("held lock: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(paths.StateRoot, taskRuntimeCoverageFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(paths.StateRoot, daemoncompose.TaskRuntimeCoverageFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("held lock wrote a record: %v", err)
 	}
 }

@@ -631,37 +631,3 @@ func seedPreflightResolvedPolicy(t *testing.T, dbPath string, projectID domain.P
 		t.Fatal(err)
 	}
 }
-
-func TestIntakeEgressPolicyBeforePersistence(t *testing.T) {
-	t.Parallel()
-	for _, tc := range submissionEgressCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newIntakeFixture(t)
-			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-			init.PolicyKeys = withSubmissionEgress(init.PolicyKeys, tc.values)
-			r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
-			r.reconcile(t.Context(), nil)
-			occurrence := f.latestOccurrence(t, 7)
-			if tc.wantErr == nil {
-				if occurrence.Admission == nil {
-					t.Fatal("valid policy was not admitted")
-				}
-				return
-			}
-			if occurrence.Admission != nil {
-				t.Fatal("malformed policy was admitted")
-			}
-			_, err := r.admit(t.Context(), init, occurrence)
-			checkSubmissionEgressError(t, err, tc)
-			specID, err := engine.SpecificationRunIDForImplementation(intakeImplementationRunID(occurrence))
-			if err != nil {
-				t.Fatal(err)
-			}
-			policy, err := domain.NewResolvedPolicy(specID, init.PolicyKeys)
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertEgressPolicyAbsent(t, f.store, f.blobs, specID, policy.Digest)
-		})
-	}
-}

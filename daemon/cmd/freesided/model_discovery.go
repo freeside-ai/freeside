@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -68,15 +69,15 @@ type modelCatalogRefresh struct {
 // the identity's read hold, and discovery runs in the agent image. Codex
 // credentials are read from the review input root under the same hold, and
 // Codex discovery runs in the review image, only when the review auth mode
-// is a Codex one: the driver composed, so resolveReviewSelection admitted
+// is a Codex one: the driver composed, so ResolveReviewSelection admitted
 // that mode for the reviewer's harness. A nil discoverer is the production
 // probe.
 func newModelCatalogRefresh(
-	st *store.Store, cfg claudeDriverConfig, containerBin string,
+	st *store.Store, cfg daemoncompose.ClaudeDriverConfig, containerBin string,
 	discover claudeModelDiscoverer, discoverCodex codexModelDiscoverer, logger *slog.Logger,
 ) modelCatalogRefresh {
 	runtime := ward.NewCLIRuntime(containerBin)
-	authorize := productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
+	authorize := daemoncompose.ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
 	if discover == nil {
 		discover = productionClaudeModelDiscoverer(runtime, authorize)
 	}
@@ -85,7 +86,7 @@ func newModelCatalogRefresh(
 	}
 	utcNow := func() time.Time { return time.Now().UTC() }
 	reader := wardstore.CredentialReader{
-		Store: st, ReadSetupToken: productionSetupTokenReader(runtime, cfg.ExporterImage, authorize), Now: utcNow,
+		Store: st, ReadSetupToken: daemoncompose.ProductionSetupTokenReader(runtime, cfg.ExporterImage, authorize), Now: utcNow,
 	}
 	refresh := modelCatalogRefresh{
 		store: st, readToken: reader.Read, discover: discover, image: string(cfg.AgentImage),
@@ -102,7 +103,7 @@ func newModelCatalogRefresh(
 // subscription reviewer: an unattended review whose auth mode only the Codex
 // provider takes. Its input root holds the OAuth stores discovery reads; an
 // API-key reviewer's holds a key file, so it starts no Codex discovery.
-func codexReviewerConfigured(cfg claudeDriverConfig) bool {
+func codexReviewerConfigured(cfg daemoncompose.ClaudeDriverConfig) bool {
 	return cfg.OperatingMode == domain.ModeUnattended && cfg.ReviewImage != "" && cfg.ReviewInputRoot != "" &&
 		cfg.ReviewAuthMode == ward.CodexAuthSubscription
 }

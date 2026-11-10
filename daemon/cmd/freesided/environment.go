@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 )
 
@@ -455,7 +456,7 @@ func authenticateProductionRigLease(rigTokenFile, leaseRoot string) error {
 	if rigTokenFile == "" {
 		return errors.New("-prod-app-authority requires -rig-token-file naming the live production rig lease")
 	}
-	acquisition, err := readRigAcquisition(rigTokenFile)
+	acquisition, err := daemoncompose.ReadRigAcquisition(rigTokenFile)
 	if err != nil {
 		return err
 	}

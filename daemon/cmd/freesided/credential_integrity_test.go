@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
@@ -168,7 +169,7 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	codexCutOff := enrollIntegrityFixture(t, adapters, "codex-cut-off", domain.HarnessClientCodexCLI, cutOff, recorded)
 	codexExposed := enrollIntegrityFixture(t, adapters, "codex-exposed", domain.HarnessClientCodexCLI, exposed, recorded)
 
-	observers := productionCredentialIntegrityObservers(claudeDriverConfig{
+	observers := productionCredentialIntegrityObservers(daemoncompose.ClaudeDriverConfig{
 		ExporterImage:   "registry.test/exporter@sha256:" + strings.Repeat("0", 64),
 		ReviewInputRoot: root,
 	}, absentVolumeRuntime{})

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
@@ -367,7 +368,7 @@ func TestLineupProbeRecordLeavesTheManifestUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	rigPath := args[slices.Index(args, "-rig-token-file")+1]
-	var rig rigHoldOutput
+	var rig daemoncompose.RigHoldOutput
 	body, err := os.ReadFile(rigPath) //nolint:gosec // G304: the fixture's own temp file.
 	if err != nil {
 		t.Fatal(err)

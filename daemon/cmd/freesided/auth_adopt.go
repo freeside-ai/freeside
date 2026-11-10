@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -514,7 +515,7 @@ func readAdoptPrompts(cfg authAdoptConfig) (map[domain.RoleName]agentbaseline.Pr
 		prompts[role] = agentbaseline.Prompt{Name: prompt.Name, Digest: prompt.Digest}
 	}
 	if cfg.JudgmentPublicationAuthorPrompt != "" {
-		body, err := readJudgmentPrompt(cfg.JudgmentPublicationAuthorPrompt)
+		body, err := daemoncompose.ReadJudgmentPrompt(cfg.JudgmentPublicationAuthorPrompt)
 		if err != nil {
 			return nil, fmt.Errorf("-judgment-publication-author-prompt: %w", err)
 		}
@@ -682,7 +683,7 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 			return authAdoptConfig{}, err
 		}
 	}
-	if cfg.ReviewModel != "" && !validReviewLaunchModel(cfg.ReviewModel) {
+	if cfg.ReviewModel != "" && !daemoncompose.ValidReviewLaunchModel(cfg.ReviewModel) {
 		return authAdoptConfig{}, errors.New("-review-model cannot be passed to the review launch as one argument")
 	}
 	if err := validateShadowReviewSelection(cfg); err != nil {
@@ -883,20 +884,10 @@ func validateShadowReviewSelection(cfg authAdoptConfig) error {
 	if cfg.ShadowReviewModel == domain.ClaudeCodeNativeDefaultRouteModelID {
 		return fmt.Errorf("-shadow-review-model %s names no model: give the exact Claude model id", cfg.ShadowReviewModel)
 	}
-	if !validReviewLaunchModel(cfg.ShadowReviewModel) {
+	if !daemoncompose.ValidReviewLaunchModel(cfg.ShadowReviewModel) {
 		return errors.New("-shadow-review-model cannot be passed to the review launch as one argument")
 	}
 	return nil
-}
-
-// validReviewLaunchModel reports whether a review launch can pass the model
-// as one command-line argument: the shape every launch value has, and the
-// review launch's own rule. Adoption holds its flags to it and the daemon
-// holds a review role's line to it (reviewRoleAgent), so a tree adoption
-// wrote is never refused for its model's shape.
-func validReviewLaunchModel(model string) bool {
-	return inference.ValidLaunchValue(model) &&
-		ward.ValidateCodexReviewModelConfiguration(model, string(domain.EffortHigh)) == nil
 }
 
 // refusePatchInsideCheckout keeps the emitted patch out of every git

@@ -9,14 +9,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 var (
 	reentryTestBase     = strings.Repeat("b", 40)
 	reentryTestHead     = strings.Repeat("a", 40)
-	reentryTestNewHead  = strings.Repeat("d", 40)
 	reentryTestReviewID = domain.InvocationID("review-reentry-round-1")
 )
 
@@ -110,96 +108,4 @@ func readReentry(t *testing.T, st *store.Store, runID domain.RunID) (*domain.Pub
 		t.Fatal(err)
 	}
 	return successor, queued
-}
-
-func assertReentryStarted(
-	t *testing.T, st *store.Store, item domain.AttentionItem,
-	reason domain.ReadinessInvalidationReason, base, head string,
-) {
-	t.Helper()
-	successor, queued := readReentry(t, st, *item.Subject.RunID)
-	if successor == nil || !queued {
-		t.Fatalf("re-entry = authority %+v, task queued %t; want both", successor, queued)
-	}
-	if successor.Origin != domain.PublicationSuccessorReadinessInvalidation ||
-		successor.PredecessorItemID != item.ID ||
-		successor.PriorReviewInvocationID != reentryTestReviewID || successor.ReviewRound != 2 ||
-		successor.Reentry == nil || successor.Reentry.Reason != reason ||
-		successor.Reentry.BaseSHA != base || successor.Reentry.HeadSHA != head {
-		t.Fatalf("re-entry authority = %+v (re-entry %+v)", successor, successor.Reentry)
-	}
-}
-
-func assertNoReentry(t *testing.T, st *store.Store, runID domain.RunID) {
-	t.Helper()
-	if successor, queued := readReentry(t, st, runID); successor != nil || queued {
-		t.Fatalf("re-entry = authority %+v, task queued %t; want neither", successor, queued)
-	}
-}
-
-// TestActiveResourceReconcileStartsReadinessReentry proves the reconciler
-// starts a cycle for a pushed head, reviewed against the prior review's base,
-// and starts none for an invalidation no cycle can answer (issue #502).
-func TestActiveResourceReconcileStartsReadinessReentry(t *testing.T) {
-	t.Parallel()
-	reconcile := func(t *testing.T, st *store.Store, mutate func(*publish.PullObservation)) {
-		t.Helper()
-		reconciler := activeResourceReconciler{
-			store: st,
-			pull: func(context.Context, string, int) (publish.PullObservation, error) {
-				observed := exactPull("open", false)
-				observed.HeadSHA = reentryTestHead
-				mutate(&observed)
-				return observed, nil
-			},
-			now: func() time.Time { return activeResourceTestTime },
-		}
-		if failures, err := reconcileActiveResource(&reconciler, context.Background()); err != nil || len(failures) != 0 {
-			t.Fatalf("Reconcile = %v, %v", failures, err)
-		}
-	}
-
-	t.Run("head changed", func(t *testing.T) {
-		st := schedTestStore(t)
-		item := reentryReadyItem(t, st, "run-reentry-head")
-		push := func(p *publish.PullObservation) { p.HeadSHA = reentryTestNewHead }
-		reconcile(t, st, push)
-		assertReentryStarted(t, st, item,
-			domain.ReadinessInvalidationHeadChanged, reentryTestBase, reentryTestNewHead)
-
-		// A second pass finds the item superseded and the cycle already
-		// recorded: it neither fails nor starts another.
-		reconcile(t, st, push)
-		assertReentryStarted(t, st, item,
-			domain.ReadinessInvalidationHeadChanged, reentryTestBase, reentryTestNewHead)
-	})
-
-	for _, tc := range []struct {
-		name   string
-		mutate func(*publish.PullObservation)
-		reason domain.ReadinessInvalidationReason
-	}{
-		{
-			name:   "retargeted",
-			mutate: func(p *publish.PullObservation) { p.BaseRef = "release" },
-			reason: domain.ReadinessInvalidationRetargeted,
-		},
-		{
-			name:   "identity changed",
-			mutate: func(p *publish.PullObservation) { p.BaseRepoID = 434343 },
-			reason: domain.ReadinessInvalidationIdentityChanged,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			st := schedTestStore(t)
-			item := reentryReadyItem(t, st, "run-reentry-none")
-			reconcile(t, st, tc.mutate)
-			got := readActiveItem(t, st, item.ID)
-			if got.Status != domain.StatusSuperseded || got.ReadinessInvalidation == nil ||
-				got.ReadinessInvalidation.Reason != tc.reason {
-				t.Fatalf("item = status %s invalidation %+v", got.Status, got.ReadinessInvalidation)
-			}
-			assertNoReentry(t, st, *item.Subject.RunID)
-		})
-	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -372,7 +373,7 @@ func deputyRigAcquireConfig(
 // writeDeputyAcquisition writes the lease token where the driver and the
 // prod-authority check read it, as rig hold's stdout did for the script.
 func writeDeputyAcquisition(path string, lease *daemonlock.RigLease) error {
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(daemoncompose.RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		return err
 	}
@@ -406,7 +407,7 @@ func withDeputyStore(
 // root's first start stays uncovered, as it would under run(). It holds the
 // database daemon lock while it lists tasks and writes the record, and
 // releases it, because the self-check's preflight takes the same lock. run()
-// opens the same file through openTaskRuntimeCoverage, since the deputy
+// opens the same file through OpenTaskRuntimeCoverage, since the deputy
 // passes it paths.StateRoot as its state directory.
 func openDeputyTaskCoverage(ctx context.Context, paths deputyPaths, settings loadedDeputySettings) error {
 	lock, err := daemonlock.Acquire(paths.DB)
@@ -414,7 +415,7 @@ func openDeputyTaskCoverage(ctx context.Context, paths deputyPaths, settings loa
 		return fmt.Errorf("acquire database daemon lock: %w", err)
 	}
 	err = withDeputyStore(ctx, paths.DB, settings, func(st *store.Store) error {
-		_, err := openTaskRuntimeCoverage(ctx, st, paths.StateRoot)
+		_, err := daemoncompose.OpenTaskRuntimeCoverage(ctx, st, paths.StateRoot)
 		return err
 	})
 	return errors.Join(err, lock.Close())
@@ -746,11 +747,11 @@ func deputyPreflightConfig(
 	return cfg
 }
 
-func deputyJudgments(settings loadedDeputySettings, expectedDigest string) judgmentConfig {
+func deputyJudgments(settings loadedDeputySettings, expectedDigest string) daemoncompose.JudgmentConfig {
 	if settings.Judgment.ClaudeBin == "" {
-		return judgmentConfig{}
+		return daemoncompose.JudgmentConfig{}
 	}
-	return judgmentConfig{
+	return daemoncompose.JudgmentConfig{
 		CLI:                     claudeinference.Config{Binary: settings.Judgment.ClaudeBin, SHA256: settings.Judgment.ClaudeSHA256},
 		PublicationAuthorPrompt: settings.Judgment.PublicationAuthorPrompt,
 		ExpectedDigest:          expectedDigest,
@@ -811,8 +812,8 @@ func deputyDaemonConfig(
 
 func deputyClaudeDriverConfig(
 	settings loadedDeputySettings, paths deputyPaths, judgmentDigest string,
-) claudeDriverConfig {
-	return claudeDriverConfig{
+) daemoncompose.ClaudeDriverConfig {
+	return daemoncompose.ClaudeDriverConfig{
 		AgentImage: domain.ImageRef(settings.Images.Agent), ExporterImage: settings.Images.Exporter,
 		ContainerBin: deputyContainerBin, SeedRoot: settings.SeedRoot,
 		WriterStopTimeout: settings.stopTime, WriterStallInterval: settings.stallFor,
@@ -851,10 +852,10 @@ func checkDeputyDaemonSettings(
 		return fmt.Errorf("settings: listen: %w", err)
 	}
 	cfg := deputyClaudeDriverConfig(settings, paths, "")
-	if err := cfg.validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("settings: Claude configuration: %w", err)
 	}
-	if _, err := readPromptPackages(cfg); err != nil {
+	if _, err := daemoncompose.ReadPromptPackages(cfg); err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
 	return nil

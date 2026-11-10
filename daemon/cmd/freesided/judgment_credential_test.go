@@ -13,13 +13,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
@@ -48,10 +48,10 @@ func judgmentTestToken(t *testing.T, value string) ward.SetupToken {
 
 // fixedJudgmentCredentials is a credential source that answers every read
 // with one token, for a test whose subject is not the credential.
-func fixedJudgmentCredentials(t *testing.T) *judgmentCredentials {
+func fixedJudgmentCredentials(t *testing.T) *daemoncompose.JudgmentCredentials {
 	t.Helper()
 	token := judgmentTestToken(t, judgmentSentinelToken)
-	return newJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
+	return daemoncompose.NewJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
 		return token, nil
 	}, nil)
 }
@@ -190,9 +190,9 @@ func (r *judgmentCredentialRig) client(tree agenttree.Tree, health inference.Hea
 	r.t.Helper()
 	client, err := inference.New(inference.Config{
 		StatePath: r.ledger,
-		Roles: judgmentRoles{
-			st: r.st, tree: tree, revision: r.revision, runtime: judgmentRuntime{Driver: r.driver},
-			credentials: newJudgmentCredentials(r.reader().Read, r.logger()),
+		Roles: daemoncompose.JudgmentRoles{
+			Store: r.st, Tree: tree, Revision: r.revision, Runtime: daemoncompose.JudgmentRuntime{Driver: r.driver},
+			Credentials: daemoncompose.NewJudgmentCredentials(r.reader().Read, r.logger()),
 		},
 		Health: health, Sites: r.sites,
 		Advisory: advisory.Unavailable(errors.New("unused")), Now: r.now,
@@ -366,7 +366,7 @@ func TestJudgmentCallsCarryTheirEnrollmentsToken(t *testing.T) {
 		}
 
 		firstVolume := r.generation(r.first.ID).AuthStoreVolume
-		health := newJudgmentRoleHealth(r.st, r.now, nil)
+		health := daemoncompose.NewJudgmentRoleHealth(r.st, r.now, nil)
 		client := r.client(tree, health)
 		for _, check := range client.CheckRoles(context.Background()) {
 			if check.Err != nil {
@@ -454,7 +454,7 @@ func TestJudgmentRoleIsUnboundWhileItsCredentialCannotBeRead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			withJudgmentCredentialRig(t, func(r *judgmentCredentialRig) {
 				breakStore(r)
-				health := newJudgmentRoleHealth(r.st, r.now, nil)
+				health := daemoncompose.NewJudgmentRoleHealth(r.st, r.now, nil)
 				client := r.client(r.tree, health)
 				auditor, classifier := r.site(domain.RoleDriftAuditor), r.site(domain.RoleFindingClassifier)
 				for _, site := range []inference.Site{auditor, classifier, auditor} {
@@ -482,7 +482,7 @@ func TestJudgmentRoleIsUnboundWhileItsCredentialCannotBeRead(t *testing.T) {
 					}
 					if item.Posture == nil || *item.Posture != posture || item.HealthDiagnostic == nil ||
 						item.HealthDiagnostic.Impairs != impairs ||
-						!strings.Contains(item.Reason, errJudgmentCredentialUnavailable.Error()) {
+						!strings.Contains(item.Reason, daemoncompose.ErrJudgmentCredentialUnavailable.Error()) {
 						t.Fatalf("item for %s = %+v", role, item)
 					}
 				}
@@ -514,12 +514,12 @@ func TestJudgmentCredentialReadRefusesAStoreInMotion(t *testing.T) {
 	t.Parallel()
 	withJudgmentCredentialRig(t, func(r *judgmentCredentialRig) {
 		ctx := context.Background()
-		credentials := newJudgmentCredentials(r.reader().Read, r.logger())
+		credentials := daemoncompose.NewJudgmentCredentials(r.reader().Read, r.logger())
 		volume := r.generation(r.first.ID).AuthStoreVolume
 
 		// The caller resolved generation 1 and a re-enrollment landed since.
 		r.appendGeneration(r.first, domain.Digest(contentaddr.Sum([]byte(judgmentRotatedToken))))
-		if token, err := credentials.token(ctx, r.first.ID, 1); !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
+		if token, err := credentials.Token(ctx, r.first.ID, 1); !errors.Is(err, daemoncompose.ErrJudgmentCredentialUnavailable) || token != "" {
 			t.Fatalf("a superseded generation's read = %v", err)
 		}
 		if r.volumes.count(volume) != 0 {
@@ -535,7 +535,7 @@ func TestJudgmentCredentialReadRefusesAStoreInMotion(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.stores(r.first.ID, judgmentRotatedToken)
-		if token, err := credentials.token(ctx, r.first.ID, 2); !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
+		if token, err := credentials.Token(ctx, r.first.ID, 2); !errors.Is(err, daemoncompose.ErrJudgmentCredentialUnavailable) || token != "" {
 			t.Fatalf("a read under a live mutation lease = %v", err)
 		}
 		if r.volumes.count(volume) != 0 {
@@ -567,7 +567,7 @@ func TestJudgmentCredentialStaysOutOfEveryOutput(t *testing.T) {
 			}
 			fmt.Fprintf(&outputs, "%s: %s\n%v\n%+v\n%#v\n", label, body, value, value, value)
 		}
-		health := newJudgmentRoleHealth(r.st, r.now, r.logger())
+		health := daemoncompose.NewJudgmentRoleHealth(r.st, r.now, r.logger())
 		client := r.client(r.tree, health)
 		pass := func(label string) {
 			t.Helper()
@@ -584,10 +584,10 @@ func TestJudgmentCredentialStaysOutOfEveryOutput(t *testing.T) {
 			manifest := compositionManifest{
 				Status: compositionPassed, Checks: []compositionCheck{{Name: "judgment_roles", Status: compositionNotRun}},
 			}
-			checks, err := inference.CheckRoles(ctx, judgmentRoles{
-				st: r.st, tree: r.tree, revision: r.revision, runtime: judgmentRuntime{Driver: r.driver},
-				credentials: newJudgmentCredentials(r.reader().ReadUnheld, r.logger()),
-			}, judgmentSites(inference.Budget{}), r.now())
+			checks, err := inference.CheckRoles(ctx, daemoncompose.JudgmentRoles{
+				Store: r.st, Tree: r.tree, Revision: r.revision, Runtime: daemoncompose.JudgmentRuntime{Driver: r.driver},
+				Credentials: daemoncompose.NewJudgmentCredentials(r.reader().ReadUnheld, r.logger()),
+			}, daemoncompose.JudgmentSites(inference.Budget{}), r.now())
 			evaluateJudgmentRoles(&manifest, checks, err)
 			record(label+" preflight manifest", manifest)
 		}
@@ -628,19 +628,19 @@ func TestJudgmentCredentialStaysOutOfEveryOutput(t *testing.T) {
 		}
 		record("token", token)
 		record("secret", inference.Secret(judgmentSentinelToken))
-		record("held", heldJudgmentCredential{ordinal: 1, Token: judgmentSentinelToken})
-		r.logger().Info("held", "held", heldJudgmentCredential{ordinal: 1, Token: judgmentSentinelToken})
+		record("held", daemoncompose.HeldJudgmentCredential{Ordinal: 1, Token: judgmentSentinelToken})
+		r.logger().Info("held", "held", daemoncompose.HeldJudgmentCredential{Ordinal: 1, Token: judgmentSentinelToken})
 		// A source that holds the token, rendered whole.
-		source := newJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
+		source := daemoncompose.NewJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
 			return token, nil
 		}, nil)
-		if held, err := source.token(ctx, r.first.ID, 1); err != nil || held != judgmentSentinelToken {
+		if held, err := source.Token(ctx, r.first.ID, 1); err != nil || held != judgmentSentinelToken {
 			t.Fatalf("the source does not hold the sentinel: %v", err)
 		}
 		record("source", source)
 		r.logger().Info("source", "source", source)
 		slog.New(slog.NewJSONHandler(r.logs, nil)).Info("source", "source", source,
-			"held", heldJudgmentCredential{ordinal: 1, Token: judgmentSentinelToken})
+			"held", daemoncompose.HeldJudgmentCredential{Ordinal: 1, Token: judgmentSentinelToken})
 
 		ledger, err := os.ReadFile(r.ledger)
 		if err != nil {
@@ -666,102 +666,6 @@ func TestJudgmentCredentialStaysOutOfEveryOutput(t *testing.T) {
 		}
 		if !strings.Contains(r.logs.String(), wardstore.ErrCredentialReadDigestMismatch.Error()) {
 			t.Errorf("the failing paths did not run: %s", r.logs)
-		}
-	})
-}
-
-// The credential source remembers only a token: a nil source and a read that
-// hands back nothing are both the fixed refusal.
-func TestJudgmentCredentialsFailClosed(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	const enrollment = domain.ClientEnrollmentID("claude-main/claude_code")
-	var none *judgmentCredentials
-	if token, err := none.token(ctx, enrollment, 1); !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
-		t.Fatalf("nil source = %v", err)
-	}
-	empty := newJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
-		return ward.SetupToken{}, nil
-	}, nil)
-	if token, err := empty.token(ctx, enrollment, 1); !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
-		t.Fatalf("a read with no token = %v", err)
-	}
-
-	// A held token answers for its own generation only: when the read of a
-	// newer one fails, the older token is not the fallback and is no longer
-	// held. A stale request for an older generation leaves the current token
-	// held.
-	failing := false
-	source := newJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
-		if failing {
-			return ward.SetupToken{}, errors.New("volume gone")
-		}
-		return judgmentTestToken(t, judgmentSentinelToken), nil
-	}, nil)
-	if token, err := source.token(ctx, enrollment, 1); err != nil || token != judgmentSentinelToken {
-		t.Fatalf("first generation = %v", err)
-	}
-	failing = true
-	if token, err := source.token(ctx, enrollment, 2); !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
-		t.Fatalf("a failed read of a newer generation returned a token or %v", err)
-	}
-	if len(source.held) != 0 {
-		t.Fatal("a failed read of a newer generation left the replaced token held")
-	}
-	failing = false
-	if token, err := source.token(ctx, enrollment, 2); err != nil || token != judgmentSentinelToken {
-		t.Fatalf("second generation = %v", err)
-	}
-	failing = true
-	if token, err := source.token(ctx, enrollment, 1); !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
-		t.Fatalf("a stale request for an older generation returned a token or %v", err)
-	}
-	if held, ok := source.held[enrollment]; !ok || held.ordinal != 2 {
-		t.Fatal("a stale request for an older generation cost the current token")
-	}
-}
-
-// Callers that miss at once share one read, and a caller waiting behind a
-// read that does not end leaves at its own deadline with no token.
-func TestJudgmentCredentialsShareOneReadAndWaitNoLongerThanTheirDeadline(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		ctx := context.Background()
-		const enrollment = domain.ClientEnrollmentID("claude-main/claude_code")
-		release := make(chan struct{})
-		reads := 0
-		source := newJudgmentCredentials(func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
-			reads++
-			<-release
-			return judgmentTestToken(t, judgmentSentinelToken), nil
-		}, nil)
-		tokens := make(chan inference.Secret, 2)
-		for range cap(tokens) {
-			go func() {
-				token, err := source.token(ctx, enrollment, 1)
-				if err != nil {
-					t.Error(err)
-				}
-				tokens <- token
-			}()
-		}
-		synctest.Wait()
-
-		waiting, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		token, err := source.token(waiting, "claude-second/claude_code", 1)
-		if !errors.Is(err, errJudgmentCredentialUnavailable) || token != "" {
-			t.Fatalf("a caller past its deadline got a token or %v", err)
-		}
-
-		close(release)
-		for range cap(tokens) {
-			if token := <-tokens; token != judgmentSentinelToken {
-				t.Fatal("a caller that shared the read got another token")
-			}
-		}
-		if reads != 1 {
-			t.Fatalf("callers that missed at once made %d reads, want 1", reads)
 		}
 	})
 }

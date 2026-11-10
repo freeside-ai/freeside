@@ -97,3 +97,9 @@ b4fb2369d0b8f08ac11dc78a6824d3ce6298f0f5
 
 # Move freesided's admission authority to internal/admissionauth (#2552)
 c169cc154c25efb54cbddf5d77d24629f96d41cf
+
+# Export the Claude composition names before their move (#2863)
+9762875bd8a9d4c769eba5ab7d38d6d81ac32d07
+
+# Move the Claude composition to internal/daemoncompose (#2863)
+19cbb52f5a87c6cfdd3248ab7626c781801a6679

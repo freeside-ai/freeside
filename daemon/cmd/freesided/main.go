@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -60,13 +59,6 @@ const defaultSchedulerInterval = time.Second
 // for notifications it owes paired devices: the longest a new item waits
 // before its first send. It is not the retry wait, which the sender owns.
 const defaultAttentionDeliveryInterval = 5 * time.Second
-
-const (
-	defaultGitHubAPIBase       = "https://api.github.com"
-	defaultGitHubRemoteBase    = "https://github.com"
-	defaultJanitorInterval     = 30 * time.Second
-	defaultJanitorRemovalBound = 10
-)
 
 type repositoryIDFlag struct {
 	value *int64
@@ -114,7 +106,7 @@ func currentAccountHome() (string, error) {
 
 // reviewFlagValues are the daemon's review flags. No model and no effort is
 // among them: each review role's agent names the pair its launch passes
-// (resolveReviewSelection), so a command line that still passes
+// (ResolveReviewSelection), so a command line that still passes
 // -review-model, -review-reasoning-effort, -shadow-review-model, or
 // -shadow-review-reasoning-effort is refused, not silently ignored.
 type reviewFlagValues struct {
@@ -123,13 +115,6 @@ type reviewFlagValues struct {
 	ShadowImage, ShadowAuthSnapshot                        string
 	ShadowWorkspaceSizeMB                                  int64
 	ShadowRate                                             float64
-}
-
-// reviewAuthModes are the -review-auth-mode values: Codex delivers a
-// subscription or an API key, Claude a setup token. Which of them suits the
-// reviewer is checked against its line's harness (requireReviewAuthMode).
-var reviewAuthModes = []ward.CodexAuthMode{
-	ward.CodexAuthSubscription, ward.CodexAuthAPIKey, ward.CodexAuthSetupToken,
 }
 
 func reviewFlags(flags *flag.FlagSet, v *reviewFlagValues) {
@@ -260,7 +245,7 @@ func main() {
 			"or scenario (a scripted run on the production pipeline; ephemeral only)")
 	scenarioName := flags.String("scenario", "", "with -driver scenario: the scenario to play (see -list-scenarios)")
 	listScenariosOnly := flags.Bool("list-scenarios", false, "print the scenarios -driver scenario plays, one per line, and exit")
-	var judgmentsConfig judgmentConfig
+	var judgmentsConfig daemoncompose.JudgmentConfig
 	judgmentFlags(flags, &judgmentsConfig)
 	flags.StringVar(&judgmentsConfig.ExpectedDigest, "judgment-configuration-digest", "", "required preflight digest when subscription judgments are enabled")
 	seedWalkingSkeleton := flags.Bool("seed-walking-skeleton", false,
@@ -473,13 +458,13 @@ func main() {
 		var reviewAuthMode ward.CodexAuthMode
 		if mode == domain.ModeUnattended {
 			reviewAuthMode = ward.CodexAuthMode(review.AuthMode)
-			if !slices.Contains(reviewAuthModes, reviewAuthMode) {
+			if !slices.Contains(daemoncompose.ReviewAuthModes, reviewAuthMode) {
 				fmt.Fprintf(os.Stderr,
 					"freesided: -review-auth-mode %q is not subscription, api_key, or setup_token\n", review.AuthMode)
 				os.Exit(2)
 			}
 		}
-		daemonConfig.Claude = &claudeDriverConfig{
+		daemonConfig.Claude = &daemoncompose.ClaudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
 			WriterStopTimeout: *writerStopTimeout, WriterStallInterval: *writerStallInterval,
@@ -591,7 +576,7 @@ type config struct {
 	// reconciler observes (#659). Empty leaves the loop supervised but idle; the
 	// rein resolver and workflow-definition parsing that populate it are a later
 	// unit, so a composition (or a test) supplies them directly for now.
-	IntakeInitiators []intakeInitiator
+	IntakeInitiators []daemoncompose.IntakeInitiator
 	// MemoryBudgetMiB is the declared budget for every ward launch's memory
 	// (resolveMemoryBudget). A budget recorded with freesided
 	// set-memory-budget wins over it (startupLaunchBound). Zero, with none
@@ -636,7 +621,7 @@ type config struct {
 	// Claude configures real execution and its ward gate. Without it, explicit
 	// FakeDriverEnabled, or Scenario, the daemon serves setup and state
 	// without an engine.
-	Claude *claudeDriverConfig
+	Claude *daemoncompose.ClaudeDriverConfig
 	// Scenario plays one scripted run on the production engine composition
 	// over fakes (-driver scenario). It is refused outside the ephemeral tier,
 	// because the fake backend's conformance record claims a containment
@@ -669,18 +654,13 @@ func newLogger(w io.Writer, level string) (*slog.Logger, error) {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: parsed})), nil
 }
 
-func logEffectiveReviewConfiguration(logger *slog.Logger, digest domain.Digest) {
-	if logger == nil || digest == "" {
-		return
+// claudeStartup is the configuration the Claude composition reads.
+func (cfg config) claudeStartup() daemoncompose.ClaudeStartupConfig {
+	return daemoncompose.ClaudeStartupConfig{
+		Claude: cfg.Claude, Logger: cfg.Logger, StateDir: cfg.StateDir, DBPath: cfg.DBPath,
+		ApprovedRecipes: cfg.ApprovedRecipes, IntakeInitiators: cfg.IntakeInitiators,
+		DoctorInterval: cfg.DoctorInterval, Now: cfg.now,
 	}
-	logger.Info("effective reviewer configuration", "digest", digest)
-}
-
-func enabledShadowReviewRate(source exec.ReviewSource, configured float64) float64 {
-	if source == nil {
-		return 0
-	}
-	return configured
 }
 
 // execution is the mode this configuration runs: a Claude driver, the fake
@@ -712,7 +692,7 @@ func (cfg config) storeOptions() (store.Options, error) {
 		// The scenario runs unattended, so its store re-gates admissions
 		// against the unattended floor, as a Claude-mode store does.
 		opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
-			domain.ModeUnattended: admissionCapabilitySnapshot(domain.ModeUnattended),
+			domain.ModeUnattended: daemoncompose.AdmissionCapabilitySnapshot(domain.ModeUnattended),
 		}
 		opts.ApprovedCredentialModes = []domain.CredentialMode{domain.CredentialSubscriptionContained}
 		if opts.ApprovedRecipes == nil {
@@ -730,7 +710,7 @@ func (cfg config) storeOptions() (store.Options, error) {
 			// re-gate fails them closed. Decision:
 			// devlog/2026-09-25-1608-seed-fixture-admission-floor.md.
 			opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
-				domain.ModeAttendedDev: admissionCapabilitySnapshot(domain.ModeAttendedDev),
+				domain.ModeAttendedDev: daemoncompose.AdmissionCapabilitySnapshot(domain.ModeAttendedDev),
 			}
 		}
 		return opts, nil
@@ -741,26 +721,10 @@ func (cfg config) storeOptions() (store.Options, error) {
 	// configured", which fails closed, not "no minimum". The floor here is
 	// the same mode-specific minimum the engine admits against.
 	opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
-		cfg.Claude.OperatingMode: admissionCapabilitySnapshot(cfg.Claude.OperatingMode),
+		cfg.Claude.OperatingMode: daemoncompose.AdmissionCapabilitySnapshot(cfg.Claude.OperatingMode),
 	}
 	opts.ApprovedCredentialModes = []domain.CredentialMode{domain.CredentialSubscriptionContained}
 	return opts, nil
-}
-
-func runScheduledDoctorPass(
-	ctx context.Context,
-	runConformance, runDoctor func(context.Context) error,
-) error {
-	conformanceErr := runConformance(ctx)
-	doctorErr := runDoctor(ctx)
-	if ctx.Err() != nil {
-		return nil
-	}
-	return errors.Join(conformanceErr, doctorErr)
-}
-
-type sessionCloser interface {
-	Close(context.Context) error
 }
 
 // reportAttentionDelivery logs one thing the notification sender could not
@@ -959,7 +923,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, err
 	}
 	logLaunchBound(cfg.Logger, bound)
-	var startupSessionCloser sessionCloser
+	var startupSessionCloser daemoncompose.SessionCloser
 	defer func() {
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
@@ -984,12 +948,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	var (
 		workflow              *engine.Engine
-		claudeWiring          *claudeComposition
+		claudeWiring          *daemoncompose.ClaudeComposition
 		imageUpkeep           *engine.ImageUpkeep
 		scenarioWiring        *daemoncompose.ScenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
-		late                  = &startupBindings{}
+		late                  = &daemoncompose.StartupBindings{}
+		claudeStartup         = cfg.claudeStartup()
 	)
 	usageRefreshAge, usage, claudeUsageCaptures := newUsageCollection(st, cfg)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
@@ -1002,20 +967,20 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		// Published before the seed, so an attention option the seed's
 		// writes reach reads this engine, not nil.
-		late.workflow = workflow
+		late.Workflow = workflow
 		if cfg.SeedWalkingSkeleton {
 			if err := daemoncompose.SeedWalkingSkeleton(parent, workflow); err != nil {
 				return nil, err
 			}
 		}
 	} else if cfg.Claude != nil {
-		var claude *claudeWorkflow
-		claude, err = composeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, cfg, manualProjects,
+		var claude *daemoncompose.ClaudeWorkflow
+		claude, err = daemoncompose.ComposeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, claudeStartup, manualProjects,
 			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late)
 		if err != nil {
 			return nil, err
 		}
-		claudeWiring, workflow, imageUpkeep = claude.claudeWiring, claude.workflow, claude.imageUpkeep
+		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
 	} else if cfg.Scenario != nil {
 		var parts daemoncompose.ScenarioParts
 		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
@@ -1026,7 +991,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
-		late.scenarioWiring, late.agentCatalog = scenarioWiring, &scenarioWiring.Catalog
+		late.ScenarioWiring, late.AgentCatalog = scenarioWiring, &scenarioWiring.Catalog
 		// The forge serves only once its loop starts; a start that fails
 		// before then still owns the listener.
 		defer func() {
@@ -1035,14 +1000,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 		}()
 		workflow = scenarioWiring.Workflow
-		late.workflow = workflow
+		late.Workflow = workflow
 	}
 	// The live credential-integrity probe exists only in Claude mode, where
 	// the daemon has a runtime and a pinned exporter image to observe with.
 	var integrityProbe credentialIntegrityProbe
 	if cfg.Claude != nil {
 		integrityProbe = newCredentialIntegrityProbe(st,
-			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin)),
+			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin)),
 			cfg.now, cfg.Logger)
 	}
 	// The startup pass reports recorded marks only, so starting the daemon
@@ -1088,7 +1053,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	server.RegisterOnShutdown(attention.Shutdown)
 	var sessions daemonshell.SessionCloser
 	if claudeWiring != nil {
-		sessions = claudeWiring.closer
+		sessions = claudeWiring.Closer
 	}
 	d := &daemon{
 		Shell: daemonshell.New(daemonshell.Parts{
@@ -1115,18 +1080,18 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return workflow.CommitTaskWorkflowClosure(ctx, id, commit)
 		})
 	var fakeSched *scheduler.Scheduler
-	var loops *claudeLoops
+	var loops *daemoncompose.ClaudeLoops
 	if cfg.FakeDriverEnabled {
 		// Construct every loop before making restart-gated recovery available.
 		// None is running yet, so no operator can resume into a partial start.
-		fakeSched, err = newFakeScheduler(st)
+		fakeSched, err = daemoncompose.NewFakeScheduler(st)
 		if err != nil {
 			return nil, err
 		}
 		fakeSched.SetLogger(cfg.Logger)
 	} else if claudeWiring != nil {
-		loops, err = d.composeClaudeLoops(parent, st, attention, blobs, cfg, claudeWiring, workflow, imageUpkeep,
-			runDoctor, late)
+		loops, err = daemoncompose.ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
+			runDoctor, d.usage.CollectAll, late)
 		if err != nil {
 			return nil, err
 		}
@@ -1180,52 +1145,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	return d, nil
 }
 
-// taskRuntimeCoverageFile is the coverage record's name under a daemon's
-// state directory.
-const taskRuntimeCoverageFile = "task-runtime-coverage.json"
-
-// openTaskRuntimeCoverage opens stateDir's task runtime coverage record. On
-// a root's first open it writes the record, listing the tasks then in st as
-// uncovered; later opens read it unchanged. The caller holds the database
-// daemon lock, so no task is saved between the listing and the write. run()
-// and a deputy start both open the record here, so they read one file with
-// the same inputs.
-func openTaskRuntimeCoverage(ctx context.Context, st *store.Store, stateDir string) (ward.CancellationCoverage, error) {
-	var existingTasks []domain.TaskID
-	var epoch string
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		state, err := tx.ServerState(ctx)
-		if err != nil {
-			return err
-		}
-		epoch = state.SyncEpoch
-		tasks, err := tx.ListTasks(ctx)
-		for _, task := range tasks {
-			existingTasks = append(existingTasks, task.Value.ID)
-		}
-		return err
-	}); err != nil {
-		return ward.CancellationCoverage{}, err
-	}
-	return ward.OpenCancellationCoverage(filepath.Join(stateDir, taskRuntimeCoverageFile), epoch, existingTasks)
-}
-
-// unprovableTaskStop reports why no stop attempt can prove that task's
-// runtime work is absent: the coverage refusal. The record is written once and
-// freesided never changes the sync epoch while it runs, so the answer holds
-// for as long as the state root does. A failed epoch read is an error, never a
-// reason, because a reason ends retries of the stop for good.
-func unprovableTaskStop(ctx context.Context, st *store.Store, coverage ward.CancellationCoverage, task domain.TaskID) (string, error) {
-	state, err := st.ServerState(ctx)
-	if err != nil {
-		return "", fmt.Errorf("server state: %w", err)
-	}
-	if err := coverage.Covers(task, state.SyncEpoch); err != nil {
-		return "runtime coverage: " + err.Error(), nil
-	}
-	return "", nil
-}
-
 func parseOperatingMode(raw string) (domain.OperatingMode, error) {
 	switch domain.OperatingMode(raw) {
 	case domain.ModeAttendedDev:
@@ -1237,7 +1156,7 @@ func parseOperatingMode(raw string) (domain.OperatingMode, error) {
 	}
 }
 
-func closeStartupSessions(success bool, closer sessionCloser, stop func()) error {
+func closeStartupSessions(success bool, closer daemoncompose.SessionCloser, stop func()) error {
 	if success || closer == nil {
 		return nil
 	}

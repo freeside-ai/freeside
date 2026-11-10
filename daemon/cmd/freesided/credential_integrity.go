@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -40,9 +41,9 @@ type credentialIntegrityObservers struct {
 // Codex store when no review root is configured, fails its observation and
 // is reported as not checked.
 func productionCredentialIntegrityObservers(
-	cfg claudeDriverConfig, runtime ward.Runtime,
+	cfg daemoncompose.ClaudeDriverConfig, runtime ward.Runtime,
 ) credentialIntegrityObservers {
-	authorize := productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
+	authorize := daemoncompose.ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
 	return credentialIntegrityObservers{
 		setupToken: func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error) {
 			return ward.ObserveSetupTokenIntegrity(ctx, runtime, cfg.ExporterImage, volume, authorize)

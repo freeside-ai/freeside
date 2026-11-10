@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
@@ -335,9 +336,9 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 	t.Parallel()
 	fixture := newCompositionImageFixture(t)
 	base := compositionCommit(t, fixture.root, map[string]string{"README.md": "docs\n"})
-	cfg := claudeDriverConfig{RepositoryID: 42, BaseSHA: base}
+	cfg := daemoncompose.ClaudeDriverConfig{RepositoryID: 42, BaseSHA: base}
 	var fetched string
-	fetch := func(repositoryID int64) exactBaseFetcher {
+	fetch := func(repositoryID int64) daemoncompose.ExactBaseFetcher {
 		return func(_ context.Context, dir string) (int64, error) {
 			fetched = dir
 			authorPreflightGit(t, fixture.root, "clone", "-q", "--bare", fixture.root, dir)
@@ -345,7 +346,7 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 		}
 	}
 
-	inputs, err := observeCompositionBaseInputs(t.Context(), fetch(42), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
+	inputs, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(), fetch(42), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,12 +357,12 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 		t.Fatalf("fetched checkout %s survived the observation: %v", fetched, statErr)
 	}
 
-	if _, err := observeCompositionBaseInputs(t.Context(), fetch(7), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}); !errors.Is(
+	if _, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(), fetch(7), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}); !errors.Is(
 		err, domain.ErrRepositoryIdentityMismatch) {
 		t.Fatalf("foreign repository = %v, want ErrRepositoryIdentityMismatch", err)
 	}
 	missing := errors.New("base absent from branch")
-	if _, err := observeCompositionBaseInputs(t.Context(),
+	if _, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(),
 		func(context.Context, string) (int64, error) { return 0, missing }, cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM},
 	); !errors.Is(err, missing) {
 		t.Fatalf("failed fetch = %v, want the fetch error", err)

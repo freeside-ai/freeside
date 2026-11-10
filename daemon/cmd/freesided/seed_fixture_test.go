@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -24,7 +25,7 @@ func TestSeedFixtureRefusedBeforeStoreOpens(t *testing.T) {
 		// this refusal comes from the tier check, still before the store opens.
 		{"unset tier", config{SeedFixture: "representative"}, `environment "" is not prod, dev, or ephemeral`},
 		{"fake driver", config{SeedFixture: "representative", Environment: environmentEphemeral, FakeDriverEnabled: true}, "-seed-fixture requires -driver disabled"},
-		{"claude driver", config{SeedFixture: "representative", Environment: environmentEphemeral, Claude: &claudeDriverConfig{}}, "-seed-fixture requires -driver disabled"},
+		{"claude driver", config{SeedFixture: "representative", Environment: environmentEphemeral, Claude: &daemoncompose.ClaudeDriverConfig{}}, "-seed-fixture requires -driver disabled"},
 		{"unknown name", config{SeedFixture: "nope", Environment: environmentEphemeral}, "-seed-fixture: unknown fixture"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

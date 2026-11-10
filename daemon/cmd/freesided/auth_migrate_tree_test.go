@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
@@ -75,7 +76,7 @@ func TestAuthMigrateTree(t *testing.T) {
 	if _, err := agenttree.ReadCommit(ctx, checkout, t.TempDir(), commit); err != nil {
 		t.Fatalf("read old layout: %v", err)
 	}
-	if _, _, err := readAgentTree(ctx, checkout, commit); err == nil ||
+	if _, _, err := daemoncompose.ReadAgentTree(ctx, checkout, commit); err == nil ||
 		!strings.Contains(err.Error(), "freesided auth migrate-tree") {
 		t.Fatalf("daemon read of the old layout = %v, want a refusal naming migrate-tree", err)
 	}
@@ -89,7 +90,7 @@ func TestAuthMigrateTree(t *testing.T) {
 	gitForAdoptTest(t, checkout, patch, "apply", "--index", "-")
 	gitForAdoptTest(t, checkout, nil, "commit", "-q", "-m", "migrate")
 	migrated := gitForAdoptTest(t, checkout, nil, "rev-parse", "HEAD")
-	tree, revision, err := readAgentTree(ctx, checkout, migrated)
+	tree, revision, err := daemoncompose.ReadAgentTree(ctx, checkout, migrated)
 	if err != nil {
 		t.Fatalf("daemon read of the migrated tree: %v", err)
 	}

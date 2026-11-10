@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
@@ -125,15 +126,15 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		// Preflight composes the configured driver as the daemon does; a
 		// runtime with none is judgments off, and every role off with it.
 		driver := inferencefake.New()
-		evaluate := func(tree agenttree.Tree, runtime judgmentRuntime) compositionManifest {
+		evaluate := func(tree agenttree.Tree, runtime daemoncompose.JudgmentRuntime) compositionManifest {
 			t.Helper()
 			manifest := compositionManifest{
 				Status: compositionPassed,
 				Checks: []compositionCheck{{Name: "judgment_roles", Status: compositionNotRun}},
 			}
 			checks, err := inference.CheckRoles(ctx,
-				judgmentRoles{st: st, tree: tree, revision: revision, runtime: runtime, credentials: credentials},
-				judgmentSites(inference.Budget{}), now)
+				daemoncompose.JudgmentRoles{Store: st, Tree: tree, Revision: revision, Runtime: runtime, Credentials: credentials},
+				daemoncompose.JudgmentSites(inference.Budget{}), now)
 			evaluateJudgmentRoles(&manifest, checks, err)
 			return manifest
 		}
@@ -145,7 +146,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 			return out
 		}
 
-		manifest := evaluate(adopted, judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
+		manifest := evaluate(adopted, daemoncompose.JudgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if got := statuses(manifest); manifest.Status != compositionPassed || len(got) != 8 {
 			t.Fatalf("adopted lineup: status = %s, roles = %+v", manifest.Status, manifest.JudgmentRoles)
 		}
@@ -159,7 +160,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		unlined.Lineup = slices.DeleteFunc(slices.Clone(adopted.Lineup), func(line agenttree.LineupLine) bool {
 			return domain.RoleName(line.Key) == domain.RoleDriftAuditor
 		})
-		manifest = evaluate(unlined, judgmentRuntime{Driver: driver})
+		manifest = evaluate(unlined, daemoncompose.JudgmentRuntime{Driver: driver})
 		got := statuses(manifest)
 		if manifest.Status != compositionFailed || got[domain.RoleDriftAuditor] != judgmentRoleUnbound ||
 			got[domain.RolePublicationAuthor] != judgmentRoleOff || got[domain.RoleTaskNamer] != judgmentRoleAdmitted ||
@@ -170,7 +171,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 
 		// Every judgment line on the native-default model id: each such
 		// role is unbound, and the check fails naming it.
-		manifest = evaluate(callLinesNamingNoModel(t, adopted), judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
+		manifest = evaluate(callLinesNamingNoModel(t, adopted), daemoncompose.JudgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if manifest.Status != compositionFailed || manifest.Checks[0].Status != compositionFailed ||
 			len(manifest.JudgmentRoles) != 8 {
 			t.Fatalf("lines on the native-default model: manifest = %+v", manifest)
@@ -185,18 +186,18 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		// A role whose enrollment's stored credential cannot be read is
 		// unbound too, for the one fixed reason, and the remedy names the
 		// credential volume.
-		credentials = newJudgmentCredentials(
+		credentials = daemoncompose.NewJudgmentCredentials(
 			func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
 				return ward.SetupToken{}, errors.New("credential volume \"freeside-claude-main-auth\": absent")
 			}, nil)
-		manifest = evaluate(adopted, judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
+		manifest = evaluate(adopted, daemoncompose.JudgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if manifest.Status != compositionFailed || len(manifest.JudgmentRoles) != 8 ||
 			!strings.Contains(manifest.Checks[0].Remediation, "credential volume") {
 			t.Fatalf("unreadable credential: manifest = %+v", manifest)
 		}
 		for _, role := range manifest.JudgmentRoles {
 			if role.Status != judgmentRoleUnbound ||
-				!strings.Contains(role.Reason, errJudgmentCredentialUnavailable.Error()) ||
+				!strings.Contains(role.Reason, daemoncompose.ErrJudgmentCredentialUnavailable.Error()) ||
 				strings.Contains(role.Reason, "freeside-claude-main-auth") {
 				t.Fatalf("role with an unreadable credential = %+v", role)
 			}

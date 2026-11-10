@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -310,10 +311,10 @@ func lineupCalls(settings *loadedDeputySettings) ([]lineupCall, error) {
 }
 
 // judgmentProbeRoles is every role a judgment site with an instruction
-// serves, in judgmentSites order: the roles the judgment line binds.
+// serves, in JudgmentSites order: the roles the judgment line binds.
 func judgmentProbeRoles() []domain.RoleName {
 	var roles []domain.RoleName
-	for _, site := range judgmentSites(inference.Budget{}) {
+	for _, site := range daemoncompose.JudgmentSites(inference.Budget{}) {
 		role, ok := domain.RoleForSite(site.ID)
 		if site.Instruction == "" || !ok || slices.Contains(roles, role) {
 			continue
@@ -392,7 +393,7 @@ func newProductionLineupProber(
 	return &productionLineupProber{
 		settings:  settings,
 		runtime:   ward.NewCLIRuntime(resolved),
-		authorize: productionRigRuntimeAuthorizer(stateRoot, rigTokenFile),
+		authorize: daemoncompose.ProductionRigRuntimeAuthorizer(stateRoot, rigTokenFile),
 		now:       time.Now,
 	}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -14,17 +15,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
-
-func TestImageRepairProjectIsTheFirstConfiguredProject(t *testing.T) {
-	t.Parallel()
-	if _, ok := imageRepairProject(nil); ok {
-		t.Fatal("no configured project chose one")
-	}
-	got, ok := imageRepairProject(map[domain.ProjectID]engine.ManualInitiator{"project-b": {}, "project-a": {}})
-	if !ok || got != "project-a" {
-		t.Fatalf("project = %q %v, want project-a", got, ok)
-	}
-}
 
 // The upkeep hold names the maintenance task while it exists and is not
 // cancelled, and a later repair refusal measured from the same image names
@@ -93,22 +83,22 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	service := signet.NewService(st, signet.WithBlobStore(blobs),
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(projects))))
 
-	if _, _, pending, err := pendingImageRepairTask(ctx, st, refusal); err != nil || pending {
+	if _, _, pending, err := daemoncompose.PendingImageRepairTask(ctx, st, refusal); err != nil || pending {
 		t.Fatalf("before any submit: pending = %v err=%v, want none", pending, err)
 	}
-	project, _ := imageRepairProject(projects)
+	project, _ := daemoncompose.ImageRepairProject(projects)
 	submission, err := service.SubmitImageRepairTask(ctx, project, refusal.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, settled := range map[string]domain.ImageUpkeepRefusal{"its refusal": refusal, "a later refusal": later} {
-		if answered, task, pending, err := pendingImageRepairTask(ctx, st, settled); err != nil || !pending ||
+		if answered, task, pending, err := daemoncompose.PendingImageRepairTask(ctx, st, settled); err != nil || !pending ||
 			task != submission.TaskID || answered != refusal.ID {
 			t.Fatalf("open task for %s: pending = %s %q %v err=%v, want %s for %s",
 				name, answered, task, pending, err, submission.TaskID, refusal.ID)
 		}
 	}
-	if _, _, pending, err := pendingImageRepairTask(ctx, st, policy); err != nil || pending {
+	if _, _, pending, err := daemoncompose.PendingImageRepairTask(ctx, st, policy); err != nil || pending {
 		t.Fatalf("policy refusal from the same image: pending = %v err=%v, want none", pending, err)
 	}
 	state, err := st.ServerState(ctx)
@@ -124,32 +114,7 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, pending, err := pendingImageRepairTask(ctx, st, later); err != nil || pending {
+	if _, _, pending, err := daemoncompose.PendingImageRepairTask(ctx, st, later); err != nil || pending {
 		t.Fatalf("cancelled task: pending = %v err=%v, want none", pending, err)
-	}
-}
-
-// Only a composition that selects each attempt's image submits maintenance
-// tasks: without selection a task could not run at its refusal's tip.
-func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
-	t.Parallel()
-	st := storetest.Open(t, t.TempDir()+"/freesided.db", store.Options{})
-	t.Cleanup(func() { _ = st.Close() })
-	cfg := config{Claude: &claudeDriverConfig{SeedRoot: t.TempDir(), Repo: "owner/repo", RepositoryID: 7}}
-	for name, selection := range map[string]engine.ImageSelection{
-		"attended": nil,
-		"unattended": func(context.Context, domain.InvocationID, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {
-			return "", nil
-		},
-	} {
-		upkeep, err := composeImageUpkeep(st, signet.NewService(st), nil, cfg,
-			&claudeComposition{selectImage: selection}, nil, nil, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		submits := upkeep.SubmitMaintenance != nil && upkeep.MaintenancePending != nil
-		if submits != (selection != nil) {
-			t.Fatalf("%s composition submits maintenance = %t", name, submits)
-		}
 	}
 }

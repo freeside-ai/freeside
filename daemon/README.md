@@ -5025,13 +5025,13 @@ executable's SHA-256, and which build was audited is deployment configuration
 the caller supplies.
 
 Every judgment site looks its role up in the lineup at each call
-(`cmd/freesided/judgment_roles.go`, plan §5.4). The daemon resolves the role's
-line against the tree commit it started on and the store, and the inference
-client admits what comes back before it reserves budget or reaches the driver:
-it checks the line's prompt name and digest against the prompt the daemon will
-send, then runs the wardless admission above under a code-owned audit
-record. The daemon holds two (`judgmentCallAudits`), one per call adapter,
-both for `claude-code 2.1.267`:
+(`internal/daemoncompose/judgment_roles.go`, plan §5.4). The daemon resolves
+the role's line against the tree commit it started on and the store, and the
+inference client admits what comes back before it reserves budget or reaches
+the driver: it checks the line's prompt name and digest against the prompt the
+daemon will send, then runs the wardless admission above under a code-owned
+audit record. The daemon holds two (`judgmentCallAudits`), one per call
+adapter, both for `claude-code 2.1.267`:
 
 - **`claude_code_call_v1`, audited 2026-09-09.** It sends `harness_default`
   only, so its launch passes no `--effort`. The baseline named it before the

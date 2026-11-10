@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -182,7 +183,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	cfg := manualConfigFixture(t)
 	writeManualConfig(t, path, cfg)
 	var h *daemon
-	start := func(configPath string, labels []intakeInitiator) {
+	start := func(configPath string, labels []daemoncompose.IntakeInitiator) {
 		t.Helper()
 		if h != nil {
 			if err := h.Close(); err != nil {
@@ -365,7 +366,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A separately configured label project cannot become a manual fallback.
-	start("", []intakeInitiator{{ProjectID: "label-only", PolicyKeys: cfg.Projects[0].PolicyKeys, CommitAuthor: cfg.Projects[0].CommitAuthor}})
+	start("", []daemoncompose.IntakeInitiator{{ProjectID: "label-only", PolicyKeys: cfg.Projects[0].PolicyKeys, CommitAuthor: cfg.Projects[0].CommitAuthor}})
 	reused(submit("first", "project-client", "# New client task", "First name", http.StatusOK))
 	submit("fourth", "project-client", "# New client task", "First name", http.StatusNotFound)
 	counts(4, 4, 4)
@@ -416,52 +417,5 @@ func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T
 	err = requireManualProjectsFit(projects, bound)
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "16384 MiB declared plus 256 MiB") {
 		t.Fatalf("budgeted fit = %v, want a never-fits refusal naming the numbers", err)
-	}
-}
-
-// Upkeep keeps one image per repository, so it needs one registry set: the
-// one the configured projects declare, none when none declares one, and a
-// refusal to start when two disagree.
-func TestImageUpkeepPolicyTakesTheProjectsOneRegistrySet(t *testing.T) {
-	t.Parallel()
-	registrySet := func(value string) domain.PolicyKey {
-		return domain.PolicyKey{
-			Key: domain.RegistrySetPolicyKey, Value: value,
-			Provenance: domain.KeyProvenance{Source: "manual-submission-config"},
-		}
-	}
-	other := domain.PolicyKey{Key: ward.PolicyWriterMemoryMiB, Value: "4096"}
-	projects := func(keys ...[]domain.PolicyKey) map[domain.ProjectID]engine.ManualInitiator {
-		out := map[domain.ProjectID]engine.ManualInitiator{}
-		for index, projectKeys := range keys {
-			out[domain.ProjectID(fmt.Sprintf("project-%d", index))] = engine.ManualInitiator{PolicyKeys: projectKeys}
-		}
-		return out
-	}
-	declared := registrySet(`["registry.npmjs.org"]`)
-	for name, test := range map[string]struct {
-		projects map[domain.ProjectID]engine.ManualInitiator
-		want     []domain.PolicyKey
-		fails    bool
-	}{
-		"no projects":              {projects: projects()},
-		"no declaration":           {projects: projects([]domain.PolicyKey{other})},
-		"one declaration":          {projects: projects([]domain.PolicyKey{other, declared}), want: []domain.PolicyKey{declared}},
-		"two agreeing projects":    {projects: projects([]domain.PolicyKey{declared}, []domain.PolicyKey{declared}), want: []domain.PolicyKey{declared}},
-		"two disagreeing projects": {projects: projects([]domain.PolicyKey{declared}, []domain.PolicyKey{registrySet(`["npm.example.test"]`)}), fails: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			policy, err := imageUpkeepPolicy(test.projects)
-			if test.fails {
-				if err == nil {
-					t.Fatalf("policy = %+v, want a refusal", policy)
-				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(policy.Keys, test.want) {
-				t.Fatalf("policy = %+v, %v; want keys %+v", policy, err, test.want)
-			}
-		})
 	}
 }

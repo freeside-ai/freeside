@@ -13,51 +13,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
-
-// The audit records are written out, not derived, so this is what notices a
-// call adapter changing under its record: a changed adapter is a launch
-// nobody audited, and the record must be re-earned, not regenerated. Each
-// record is held to its own adapter, so the v2 audit never stands in for v1.
-func TestJudgmentCallAuditsNameTheCallAdapters(t *testing.T) {
-	t.Parallel()
-	v1, err := agentbaseline.ClaudeCallAdapterV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	v2, err := agentbaseline.ClaudeCallAdapter()
-	if err != nil {
-		t.Fatal(err)
-	}
-	audited := []struct {
-		adapter domain.AdapterFragment
-		on      string
-	}{{v1, "2026-09-09"}, {v2, "2026-10-11"}}
-	if len(judgmentCallAudits) != len(audited) {
-		t.Fatalf("%d audit records for %d call adapters", len(judgmentCallAudits), len(audited))
-	}
-	for i, want := range audited {
-		audit, adapter := judgmentCallAudits[i], want.adapter
-		if err := audit.Validate(); err != nil {
-			t.Fatal(err)
-		}
-		if audit.AdapterDigest != adapter.Digest || audit.HarnessBuild != adapter.HarnessBuild || audit.AuditedOn != want.on {
-			t.Fatalf("audit covers %s %q on %s, the call adapter %s is %s %q, audited %s",
-				audit.AdapterDigest, audit.HarnessBuild, audit.AuditedOn,
-				adapter.AdapterBuild, adapter.Digest, adapter.HarnessBuild, want.on)
-		}
-		if got := judgmentCallAuditFor(adapter.Digest); got == nil || *got != audit {
-			t.Fatalf("audit for %s = %+v, want %+v", adapter.AdapterBuild, got, audit)
-		}
-	}
-	if got := judgmentCallAuditFor(domain.Digest("sha256:" + strings.Repeat("0", 64))); got != nil {
-		t.Fatalf("audit for an adapter nobody audited = %+v", got)
-	}
-}
 
 func judgmentTestSites() []inference.Site {
 	limits := inference.Limits{Calls: 100, ComputeUnits: 10_000_000, AttentionItems: 100, Starvation: 10 * time.Hour}
@@ -65,7 +26,7 @@ func judgmentTestSites() []inference.Site {
 		Window: 24 * time.Hour, Site: limits, Project: limits, Global: limits,
 		MaxCallsPerRoot: 100, MaxStarvationPerRoot: 10 * time.Hour,
 	}
-	return judgmentSites(budget)
+	return daemoncompose.JudgmentSites(budget)
 }
 
 func judgmentRoleItems(t *testing.T, st *store.Store) map[domain.RoleName]domain.AttentionItem {
@@ -74,11 +35,11 @@ func judgmentRoleItems(t *testing.T, st *store.Store) map[domain.RoleName]domain
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		open, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range open {
-			rest, ok := strings.CutPrefix(string(item.ID), judgmentRoleItemPrefix)
+			rest, ok := strings.CutPrefix(string(item.ID), daemoncompose.JudgmentRoleItemPrefix)
 			if !ok {
 				continue
 			}
-			role := judgmentRoleOfCause(rest)
+			role := daemoncompose.JudgmentRoleOfCause(rest)
 			if _, dup := items[role]; dup {
 				t.Fatalf("role %s has two open items", role)
 			}
@@ -97,7 +58,7 @@ func inferenceLedgerItems(t *testing.T, st *store.Store) []domain.AttentionItem 
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		open, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range open {
-			if strings.HasPrefix(string(item.ID), inferenceLedgerItemPrefix) {
+			if strings.HasPrefix(string(item.ID), daemoncompose.InferenceLedgerItemPrefix) {
 				items = append(items, item)
 			}
 		}
@@ -151,15 +112,15 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 	f.withStore(t, func(st *store.Store) {
 		now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
 		driver := inferencefake.New()
-		runtime := judgmentRuntime{Driver: driver, AuthorPrompt: authorBody}
+		runtime := daemoncompose.JudgmentRuntime{Driver: driver, AuthorPrompt: authorBody}
 		credentials := fixedJudgmentCredentials(t)
-		health := newJudgmentRoleHealth(st, now, nil)
-		newClient := func(tree agenttree.Tree, runtime judgmentRuntime, health inference.HealthReporter) *inference.Client {
+		health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
+		newClient := func(tree agenttree.Tree, runtime daemoncompose.JudgmentRuntime, health inference.HealthReporter) *inference.Client {
 			t.Helper()
 			client, err := inference.New(inference.Config{
 				StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-				Roles: judgmentRoles{
-					st: st, tree: tree, revision: revision, runtime: runtime, credentials: credentials,
+				Roles: daemoncompose.JudgmentRoles{
+					Store: st, Tree: tree, Revision: revision, Runtime: runtime, Credentials: credentials,
 				},
 				Health: health, Sites: sites,
 				Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
@@ -268,7 +229,7 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		// A restarted daemon knows nothing of the items it left. Reporting
 		// the same state again writes nothing; the startup check resolves the
 		// item of a role fixed since, with no call needed.
-		health = newJudgmentRoleHealth(st, now, nil)
+		health = daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 		at := storeRevision(t, st)
 		newClient(without(adopted, missing...), runtime, health).CheckRoles(ctx)
 		if storeRevision(t, st) != at || len(judgmentRoleItems(t, st)) != len(missing) {
@@ -316,7 +277,7 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		// The publication author with no prompt file is off: both sites fail
 		// safe as inference being down, and nothing is raised.
 		authorSites := []inference.Site{sites[6], sites[7]}
-		off := newClient(adopted, judgmentRuntime{Driver: driver}, health)
+		off := newClient(adopted, daemoncompose.JudgmentRuntime{Driver: driver}, health)
 		for _, site := range authorSites {
 			if result := call(off, site); !result.Fallback || result.Reason != inference.FallbackRoleOff {
 				t.Fatalf("%s with no prompt file = %+v", site.ID, result)
@@ -410,7 +371,7 @@ func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
 	f.withStore(t, func(st *store.Store) {
 		// An earlier start with judgments on left the drift auditor's
 		// blocking item behind.
-		newJudgmentRoleHealth(st, now, nil).RoleUnbound(ctx, domain.RoleDriftAuditor, "the lineup has no line for it")
+		daemoncompose.NewJudgmentRoleHealth(st, now, nil).RoleUnbound(ctx, domain.RoleDriftAuditor, "the lineup has no line for it")
 		if len(judgmentRoleItems(t, st)) != 1 {
 			t.Fatal("the item of the earlier start is missing")
 		}
@@ -418,13 +379,13 @@ func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
 			name string
 			tree agenttree.Tree
 		}{{"with judgment lines", withLines}, {"without judgment lines", withoutLines}} {
-			health := newJudgmentRoleHealth(st, now, nil)
+			health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 			client, err := inference.New(inference.Config{
 				StatePath: filepath.Join(t.TempDir(), "ledger.json"),
 				// No credentials: the off answer comes before they are read.
-				Roles: judgmentRoles{
-					st: st, tree: tree.tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
-					runtime: judgmentRuntime{},
+				Roles: daemoncompose.JudgmentRoles{
+					Store: st, Tree: tree.tree, Revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+					Runtime: daemoncompose.JudgmentRuntime{},
 				},
 				Health: health, Sites: sites,
 				Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
@@ -441,7 +402,7 @@ func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
 					t.Fatalf("%s: role %s = %+v, want off", tree.name, check.Role, check)
 				}
 			}
-			if err := checkJudgmentRolesAtStartup(ctx, client, health, nil); err != nil {
+			if err := daemoncompose.CheckJudgmentRolesAtStartup(ctx, client, health, nil); err != nil {
 				t.Fatalf("%s: startup check returned %v", tree.name, err)
 			}
 			if items := judgmentRoleItems(t, st); len(items) != 0 {
@@ -509,11 +470,11 @@ func TestJudgmentLineOnTheNativeDefaultModelIsUnbound(t *testing.T) {
 		sites := judgmentTestSites()
 		client, err := inference.New(inference.Config{
 			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-			Roles: judgmentRoles{
-				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
-				runtime: judgmentRuntime{Driver: driver}, credentials: fixedJudgmentCredentials(t),
+			Roles: daemoncompose.JudgmentRoles{
+				Store: st, Tree: tree, Revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+				Runtime: daemoncompose.JudgmentRuntime{Driver: driver}, Credentials: fixedJudgmentCredentials(t),
 			},
-			Health: newJudgmentRoleHealth(st, now, nil), Sites: sites,
+			Health: daemoncompose.NewJudgmentRoleHealth(st, now, nil), Sites: sites,
 			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
 		})
 		if err != nil {
@@ -555,68 +516,6 @@ func TestJudgmentLineOnTheNativeDefaultModelIsUnbound(t *testing.T) {
 	})
 }
 
-// A judgment line's adapter is the tree's audited call adapter that sends
-// its effort. An adapter no audit names is no candidate, so a tree whose
-// only call adapter is unaudited admits nothing; the earlier adapter sends
-// only harness_default; and two audited adapters that both send the effort
-// refuse as ambiguous rather than leave the choice to tree order.
-func TestJudgmentCallAdapterIsTheAuditedOneThatSendsTheEffort(t *testing.T) {
-	t.Parallel()
-	v1, err := agentbaseline.ClaudeCallAdapterV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	v2, err := agentbaseline.ClaudeCallAdapter()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The v2 launch under a build id no audit covers.
-	unaudited := v2
-	unaudited.AdapterBuild = "claude_code_call_v3"
-	if unaudited.Digest, err = unaudited.ComputeDigest(); err != nil {
-		t.Fatal(err)
-	}
-	ward, err := agentbaseline.ClaudeWardAdapter()
-	if err != nil {
-		t.Fatal(err)
-	}
-	treeOf := func(adapters ...domain.AdapterFragment) agenttree.Tree {
-		var tree agenttree.Tree
-		for _, adapter := range adapters {
-			tree.Adapters = append(tree.Adapters, agenttree.Adapter{Name: adapter.AdapterBuild, Fragment: adapter})
-		}
-		return tree
-	}
-	harnessDefault := string(domain.EffortHarnessDefault)
-	for name, tc := range map[string]struct {
-		tree   agenttree.Tree
-		effort string
-		want   domain.Digest
-		err    error
-	}{
-		"v2 at harness_default":               {treeOf(ward, v2), harnessDefault, v2.Digest, nil},
-		"v2 at high":                          {treeOf(ward, v2), "high", v2.Digest, nil},
-		"v1 at harness_default":               {treeOf(ward, v1), harnessDefault, v1.Digest, nil},
-		"v1 at high":                          {treeOf(ward, v1), "high", "", domain.ErrNoAdapterForLaunch},
-		"v1 and v2 at high":                   {treeOf(v1, v2), "high", v2.Digest, nil},
-		"v1 and v2 at harness_default":        {treeOf(v1, v2), harnessDefault, "", domain.ErrAmbiguousAdapterForLaunch},
-		"an unaudited adapter only":           {treeOf(ward, unaudited), harnessDefault, "", domain.ErrNoAdapterForLaunch},
-		"an unaudited adapter beside v2":      {treeOf(unaudited, v2), harnessDefault, v2.Digest, nil},
-		"the ward adapter is no call adapter": {treeOf(ward), harnessDefault, "", domain.ErrNoAdapterForLaunch},
-	} {
-		adapter, err := judgmentCallAdapter(tc.tree, domain.HarnessClientClaudeCode, tc.effort)
-		if tc.err != nil {
-			if !errors.Is(err, tc.err) {
-				t.Fatalf("%s = %+v, %v; want %v", name, adapter, err, tc.err)
-			}
-			continue
-		}
-		if err != nil || adapter.Digest != tc.want {
-			t.Fatalf("%s = %s, %v; want %s", name, adapter.Digest, err, tc.want)
-		}
-	}
-}
-
 // One daemon admits a line of each model and effort and hands each call its
 // own line's model and the effort the harness names for it.
 func TestJudgmentLinesLaunchTheirOwnModelAndEffort(t *testing.T) {
@@ -648,11 +547,11 @@ func TestJudgmentLinesLaunchTheirOwnModelAndEffort(t *testing.T) {
 		sites := judgmentTestSites()
 		client, err := inference.New(inference.Config{
 			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-			Roles: judgmentRoles{
-				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
-				runtime: judgmentRuntime{Driver: driver}, credentials: fixedJudgmentCredentials(t),
+			Roles: daemoncompose.JudgmentRoles{
+				Store: st, Tree: tree, Revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+				Runtime: daemoncompose.JudgmentRuntime{Driver: driver}, Credentials: fixedJudgmentCredentials(t),
 			},
-			Health: newJudgmentRoleHealth(st, now, nil), Sites: sites,
+			Health: daemoncompose.NewJudgmentRoleHealth(st, now, nil), Sites: sites,
 			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
 		})
 		if err != nil {
@@ -714,7 +613,7 @@ func TestJudgmentRoleItemSaysTheCurrentReasonAfterARestart(t *testing.T) {
 			}
 			return item.Reason
 		}
-		health := newJudgmentRoleHealth(st, now, nil)
+		health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 		health.RoleUnbound(ctx, domain.RoleDriftAuditor, noLine)
 		at := storeRevision(t, st)
 		health.RoleUnbound(ctx, domain.RoleDriftAuditor, marked)
@@ -722,17 +621,17 @@ func TestJudgmentRoleItemSaysTheCurrentReasonAfterARestart(t *testing.T) {
 			t.Fatalf("a changed reason in one process rewrote the item: %q", got)
 		}
 
-		health = newJudgmentRoleHealth(st, now, nil)
+		health = daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 		health.RoleUnbound(ctx, domain.RoleDriftAuditor, marked)
 		if got := reason(); !strings.Contains(got, marked) || strings.Contains(got, noLine) {
 			t.Fatalf("item after a restart with another reason = %q", got)
 		}
 		at = storeRevision(t, st)
-		newJudgmentRoleHealth(st, now, nil).RoleUnbound(ctx, domain.RoleDriftAuditor, marked)
+		daemoncompose.NewJudgmentRoleHealth(st, now, nil).RoleUnbound(ctx, domain.RoleDriftAuditor, marked)
 		if storeRevision(t, st) != at {
 			t.Fatal("a restart with the same reason wrote to the store")
 		}
-		newJudgmentRoleHealth(st, now, nil).RoleResolved(ctx, domain.RoleDriftAuditor)
+		daemoncompose.NewJudgmentRoleHealth(st, now, nil).RoleResolved(ctx, domain.RoleDriftAuditor)
 		if items := judgmentRoleItems(t, st); len(items) != 0 {
 			t.Fatalf("items after the role resolved = %+v", items)
 		}
@@ -759,12 +658,12 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 	credentials := fixedJudgmentCredentials(t)
 	check := func(ctx context.Context, st *store.Store) error {
 		t.Helper()
-		health := newJudgmentRoleHealth(st, now, nil)
+		health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 		client, err := inference.New(inference.Config{
 			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-			Roles: judgmentRoles{
-				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
-				runtime: judgmentRuntime{Driver: inferencefake.New()}, credentials: credentials,
+			Roles: daemoncompose.JudgmentRoles{
+				Store: st, Tree: tree, Revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+				Runtime: daemoncompose.JudgmentRuntime{Driver: inferencefake.New()}, Credentials: credentials,
 			},
 			Health: health, Sites: judgmentTestSites(),
 			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
@@ -772,7 +671,7 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return checkJudgmentRolesAtStartup(ctx, client, health, nil)
+		return daemoncompose.CheckJudgmentRolesAtStartup(ctx, client, health, nil)
 	}
 	st, _, err := openStoreWithTopicKey(context.Background(), f.dbPath, store.Options{})
 	if err != nil {
@@ -800,9 +699,9 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 	}
 
 	// A report that fails is remembered until a later one reaches the store.
-	health := newJudgmentRoleHealth(st, now, nil)
+	health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 	health.RoleResolved(cancelled, domain.RoleDriftAuditor)
-	if err := health.unwritten(); !errors.Is(err, context.Canceled) ||
+	if err := health.Unwritten(); !errors.Is(err, context.Canceled) ||
 		!strings.Contains(err.Error(), string(domain.RoleDriftAuditor)) {
 		t.Fatalf("a failed report left unwritten() = %v", err)
 	}
@@ -810,7 +709,7 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 		t.Fatal("a failed report resolved the item")
 	}
 	health.RoleResolved(context.Background(), domain.RoleDriftAuditor)
-	if err := health.unwritten(); err != nil || len(judgmentRoleItems(t, st)) != 0 {
+	if err := health.Unwritten(); err != nil || len(judgmentRoleItems(t, st)) != 0 {
 		t.Fatalf("a report that reached the store left unwritten() = %v", err)
 	}
 
@@ -851,7 +750,7 @@ func TestWriterLineageDerivesFromTheLinesEnrollmentAndModel(t *testing.T) {
 		return tree
 	}
 	f.withStore(t, func(st *store.Store) {
-		lineages, err := writerLineages(ctx, st, adopted)
+		lineages, err := daemoncompose.WriterLineages(ctx, st, adopted)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -863,7 +762,7 @@ func TestWriterLineageDerivesFromTheLinesEnrollmentAndModel(t *testing.T) {
 		// The writer's identity disabled: the line still wrote on its
 		// lineage.
 		setIdentityEnabled(t, st, "claude-main", false)
-		if lineages, err := writerLineages(ctx, st, adopted); err != nil || lineages[domain.RoleImplementer] != "anthropic" {
+		if lineages, err := daemoncompose.WriterLineages(ctx, st, adopted); err != nil || lineages[domain.RoleImplementer] != "anthropic" {
 			t.Fatalf("lineage with the writer disabled = %v, %v", lineages, err)
 		}
 		unlined := adopted
@@ -875,7 +774,7 @@ func TestWriterLineageDerivesFromTheLinesEnrollmentAndModel(t *testing.T) {
 			"an absent enrollment":  edited(func(n *domain.AgentSelectionNames) { n.Enrollment = "absent/claude_code" }),
 			"a model of no lineage": edited(func(n *domain.AgentSelectionNames) { n.Model = "gpt-5.6-sol" }),
 		} {
-			lineages, err := writerLineages(ctx, st, tree)
+			lineages, err := daemoncompose.WriterLineages(ctx, st, tree)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -907,12 +806,12 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 	}
 	driver := inferencefake.New()
 	roles := inferencefake.Roles{Provider: "fake", Model: "test", Driver: driver}
-	newClient := func(path string, calls int64, health *judgmentRoleHealth) *inference.Client {
+	newClient := func(path string, calls int64, health *daemoncompose.JudgmentRoleHealth) *inference.Client {
 		t.Helper()
 		limits := inference.Limits{Calls: calls, ComputeUnits: 10_000_000, AttentionItems: 100, Starvation: 10 * time.Hour}
 		client, err := inference.New(inference.Config{
 			StatePath: path, Roles: roles, Health: health,
-			Sites: judgmentSites(inference.Budget{
+			Sites: daemoncompose.JudgmentSites(inference.Budget{
 				Window: 24 * time.Hour, Site: limits, Project: limits, Global: limits,
 				MaxCallsPerRoot: 100, MaxStarvationPerRoot: 10 * time.Hour,
 			}),
@@ -943,9 +842,9 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	{
-		health := newJudgmentRoleHealth(st, now, nil)
+		health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 		disabled := newClient(undecodable, 100, health)
-		if err := checkJudgmentRolesAtStartup(ctx, disabled, health, nil); err != nil {
+		if err := daemoncompose.CheckJudgmentRolesAtStartup(ctx, disabled, health, nil); err != nil {
 			t.Fatalf("startup check over a disabled ledger: %v", err)
 		}
 		items := inferenceLedgerItems(t, st)
@@ -975,8 +874,8 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 		if storeRevision(t, st) != at || len(driver.Requests()) != 0 {
 			t.Fatal("a call over a disabled ledger wrote to the store or reached the driver")
 		}
-		health = newJudgmentRoleHealth(st, now, nil)
-		if err := checkJudgmentRolesAtStartup(ctx, newClient(undecodable, 100, health), health, nil); err != nil {
+		health = daemoncompose.NewJudgmentRoleHealth(st, now, nil)
+		if err := daemoncompose.CheckJudgmentRolesAtStartup(ctx, newClient(undecodable, 100, health), health, nil); err != nil {
 			t.Fatalf("restart over the same disabled ledger: %v", err)
 		}
 		if storeRevision(t, st) != at || len(inferenceLedgerItems(t, st)) != 1 {
@@ -989,8 +888,8 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 		if err := os.WriteFile(missing+".anchor", []byte("sha256:"+strings.Repeat("5", 64)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		health = newJudgmentRoleHealth(st, now, nil)
-		if err := checkJudgmentRolesAtStartup(ctx, newClient(missing, 100, health), health, nil); err != nil {
+		health = daemoncompose.NewJudgmentRoleHealth(st, now, nil)
+		if err := daemoncompose.CheckJudgmentRolesAtStartup(ctx, newClient(missing, 100, health), health, nil); err != nil {
 			t.Fatalf("restart over a missing ledger with an anchor: %v", err)
 		}
 		if items := inferenceLedgerItems(t, st); len(items) != 1 || items[0].ID == item.ID ||
@@ -999,9 +898,9 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 		}
 
 		// A start that loads the ledger resolves the item.
-		health = newJudgmentRoleHealth(st, now, nil)
+		health = daemoncompose.NewJudgmentRoleHealth(st, now, nil)
 		loaded := newClient(filepath.Join(t.TempDir(), "ledger.json"), 1, health)
-		if err := checkJudgmentRolesAtStartup(ctx, loaded, health, nil); err != nil {
+		if err := daemoncompose.CheckJudgmentRolesAtStartup(ctx, loaded, health, nil); err != nil {
 			t.Fatalf("startup check over a loaded ledger: %v", err)
 		}
 		if items := inferenceLedgerItems(t, st); len(items) != 0 {
@@ -1026,9 +925,9 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	health := newJudgmentRoleHealth(st, now, nil)
-	err = checkJudgmentRolesAtStartup(ctx, newClient(undecodable, 100, health), health, nil)
-	if err == nil || !strings.Contains(err.Error(), string(ledgerHealthSubject)) {
+	health := daemoncompose.NewJudgmentRoleHealth(st, now, nil)
+	err = daemoncompose.CheckJudgmentRolesAtStartup(ctx, newClient(undecodable, 100, health), health, nil)
+	if err == nil || !strings.Contains(err.Error(), string(daemoncompose.LedgerHealthSubject)) {
 		t.Fatalf("a start that could not write the ledger item returned %v", err)
 	}
 }
