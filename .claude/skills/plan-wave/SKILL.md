@@ -110,9 +110,10 @@ than planning around it:
 - **Width within what was demonstrated.** Applied again after
   decomposition, once the unit count and chains exist. Compare this wave's
   unit count and its longest `starts-after` chain, counted in units, with
-  the prior wave's final Units count and its longest chain at close; compare
-  the fronts it needs with the width AGENTS.md (Coordination model) records.
-  When the wave exceeds any of them, stop and present a split-or-slip
+  the prior wave's final Units count and its longest chain at close.
+  AGENTS.md (Coordination model) sets no fixed width: review bandwidth is
+  the limit, and those two counts are what the prior wave showed it can
+  carry. When the wave exceeds either, stop and present a split-or-slip
   proposal: which units move to a later wave or which chain breaks where.
   A first wave of a new phase has no prior tracker to compare; say so and
   ask.
@@ -169,7 +170,8 @@ milestones exist is the half-scheduled state the sweep detects.
 3. **Staged is not scheduled.** Milestone and listing publish together at
    Close Out (docs/coordination.md, Work-Unit Issues), so nothing becomes
    agent-actionable mid-planning. A dormant `kind:contract` deferral is
-   staged only once it has a valid place in the assessed contract order
+   staged like any other: the label classifies the change for contract
+   review and implies no order and no limit on open contract units
    (AGENTS.md, Contract Changes). When the table assigns a general deferral
    drain to a later wave, pull in only what this wave needs.
 
@@ -178,14 +180,22 @@ milestones exist is the half-scheduled state the sweep detects.
 - **One issue per unit.** Where the work list names an existing issue,
   stage or rescope it in place. New issues come from the work-unit template
   with the fields docs/coordination.md (Work-Unit Issues) lists.
-- **Order.** Shape and sequencing come from the row. Encode every ordering
-  as a typed relationship in the Dependencies field (docs/coordination.md,
-  Relationship Types), and contract ordering and assessments as AGENTS.md
-  (Contract Changes) requires.
-- **Labels and milestone.** Labels as docs/coordination.md (Work-Unit
-  Issues, Lane Glossary) assigns them, with a one-line rationale on the
-  issue wherever the assignment needs judgment. The milestone is assigned
-  only at Close Out.
+- **Order.** Shape and sequencing come from the row, written as typed
+  relationships in the Dependencies field (docs/coordination.md,
+  Relationship Types). Write a `starts-after` edge only where the dependent
+  is written against the prerequisite's result (AGENTS.md, Coordination,
+  rule 3), and name that result in the line's note: a contract change its
+  consumers build on (AGENTS.md, Contract Changes), or a migration that
+  rewrites the same rows or rebuilds the same table (docs/coordination.md,
+  Migrations). Work on the same subject, or an expected textual conflict,
+  gets no edge; it resolves at landing. A row edge that fails this test is
+  row drift that changes order: record it and stop for the owner's
+  direction, as the reconciliation above requires, before writing or
+  dropping it. Use `merges-after` where only landing order matters.
+- **Labels and milestone.** One `kind:*` label by the work's nature, as
+  docs/coordination.md (Work-Unit Issues, Deferral Escalation) assigns
+  them, with a one-line rationale on the issue wherever the choice needs
+  judgment. The milestone is assigned only at Close Out.
 - **Acceptance.** Where the row targets an exit list, each criterion lands
   verbatim in the one unit responsible for it, and the complete exit
   evaluation lives on the tracker. Otherwise the cited sections'
@@ -226,8 +236,9 @@ milestones exist is the half-scheduled state the sweep detects.
 ## Ground the Units
 
 Before Close Out, check every unit against the repository. Delegate the
-checks per unit or per lane; the return contract is one line per surface:
-the surface, exists or not, and `file:line`.
+checks per unit, or per group of units that touch the same package; the
+return contract is one line per surface: the surface, exists or not, and
+`file:line`.
 
 - **Premise check.** Each unit's Affected interfaces/contracts field lists
   the shared-package surfaces, migrations, endpoints, and app surfaces the
@@ -307,4 +318,8 @@ resolve it.
   applies. Decomposition and sweep status live on the tracker, never in a
   note.
 - **Report.** Tell the user what was scheduled, what was re-deferred, what
-  drift was found, and what waits on the owner. Do not start any unit.
+  drift was found, and what waits on the owner. Name every unit whose
+  Dependencies carry `merges-after`, with its prerequisite: no tool reads
+  that relation at landing, so it holds only through the order the owner
+  approves or types (docs/coordination.md, Relationship Types). Do not
+  start any unit.
