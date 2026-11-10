@@ -411,6 +411,59 @@ func (systemHost) BootstrapService(plistPath string) error {
 	return err
 }
 
+func (systemHost) ServiceRunState(label string) (ServiceRun, error) {
+	out, err := run(launchctlPath, "print", "system/"+label)
+	if err != nil {
+		return ServiceRun{}, err
+	}
+	return parseLaunchctlPrint(out)
+}
+
+// parseLaunchctlPrint reads the job's own state, runs, and last exit code
+// from launchctl print. Those are the lines one tab deep: nested blocks such
+// as the coalitions carry their own state lines. launchctl's format is
+// undocumented, so anything missing or malformed is an error, except a
+// missing runs line, which reads as no run yet and so never as finished.
+func parseLaunchctlPrint(out []byte) (ServiceRun, error) {
+	var r ServiceRun
+	var state, lastExit string
+	for line := range strings.Lines(string(out)) {
+		rest, ok := strings.CutPrefix(line, "\t")
+		if !ok || strings.HasPrefix(rest, "\t") {
+			continue
+		}
+		name, value, ok := strings.Cut(strings.TrimSpace(rest), " = ")
+		if !ok {
+			continue
+		}
+		switch name {
+		case "state":
+			state = value
+		case "runs":
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return ServiceRun{}, fmt.Errorf("launchctl print: runs %q: %w", value, err)
+			}
+			r.Runs = n
+		case "last exit code":
+			lastExit = value
+		}
+	}
+	if state == "" {
+		return ServiceRun{}, errors.New("launchctl print: no state line")
+	}
+	r.Running = state != "not running"
+	if r.Running || r.Runs == 0 {
+		return r, nil
+	}
+	code, err := strconv.Atoi(lastExit)
+	if err != nil {
+		return ServiceRun{}, fmt.Errorf("launchctl print: a finished job's last exit code %q: %w", lastExit, err)
+	}
+	r.LastExitCode = code
+	return r, nil
+}
+
 func (systemHost) BootoutService(label string) error {
 	_, err := run(launchctlPath, "bootout", "system/"+label)
 	return err

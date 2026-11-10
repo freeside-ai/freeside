@@ -4483,7 +4483,10 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   runs `pfctl -E -a com.apple/freeside-macverify -f <root>/pf/anchor.conf` at
   load. Stock macOS loads `/etc/pf.conf` at boot but never enables pf, and the
   anchor does not survive a reboot, so the job reloads it and takes a pf
-  enable reference each boot.
+  enable reference each boot. Install loads the job and waits up to 30 seconds
+  for that first run, failing if it exits nonzero, so it never loads the
+  anchor itself while the job's load is in flight (pf refuses the second load
+  as `Resource busy`).
 
 Install prints the `macverify.Config` values it determines (`ExecutorRoot`
 and `Slots`); the daemon's `Config` also names the `Toolchain` pin below. A

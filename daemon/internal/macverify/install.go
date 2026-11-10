@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The executor's host state (#2878) is installed, checked, and removed here,
@@ -658,7 +659,46 @@ func (in installer) servicePiece() piece {
 			}
 			return StateMissing, "not loaded in launchd", nil
 		},
-		repair: func() error { return in.host.BootstrapService(s.plistPath()) },
+		repair: func() error {
+			if err := in.host.BootstrapService(s.plistPath()); err != nil {
+				return err
+			}
+			return in.awaitBootJob()
+		},
+	}
+}
+
+// bootJobTimeout bounds the wait for the boot job's first run; its one
+// pfctl call takes well under a second.
+const (
+	bootJobTimeout = 30 * time.Second
+	bootJobPoll    = 100 * time.Millisecond
+)
+
+// awaitBootJob waits for the job bootstrapping just started to finish its
+// first run. RunAtLoad runs its pfctl -f on the anchor, and a second load
+// while that one is in flight fails with "Resource busy" (#3009), so the
+// anchor piece, which comes next, must see the job's result rather than
+// load the anchor itself. A run that exits nonzero fails install: the job
+// is what loads the rules at every boot.
+func (in installer) awaitBootJob() error {
+	deadline := time.Now().Add(bootJobTimeout)
+	for {
+		state, err := in.host.ServiceRunState(in.spec.Label)
+		if err != nil {
+			return fmt.Errorf("read the boot job's state: %w", err)
+		}
+		if !state.Running && state.Runs > 0 {
+			if state.LastExitCode != 0 {
+				return fmt.Errorf("boot job %s exited %d loading the anchor", in.spec.Label, state.LastExitCode)
+			}
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("boot job %s did not finish its first run within %v (running %t, runs %d)",
+				in.spec.Label, bootJobTimeout, state.Running, state.Runs)
+		}
+		time.Sleep(bootJobPoll)
 	}
 }
 
@@ -795,7 +835,9 @@ func Install(spec InstallSpec, host Host) ([]Finding, error) {
 		return findings, fmt.Errorf("%w: %s", ErrInstallRefused, strings.Join(foreign, "; "))
 	}
 	// Each piece is inspected again just before its repair, since an earlier
-	// repair can satisfy it (bootstrapping the job loads the anchor).
+	// repair can satisfy it: bootstrapping the job loads the anchor, and the
+	// boot job's repair waits for that load so the anchor piece finds the
+	// rules instead of racing the job with a load of its own.
 	for _, p := range pieces {
 		state, _, err := p.inspect()
 		if err != nil {

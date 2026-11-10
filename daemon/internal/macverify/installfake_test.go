@@ -29,12 +29,28 @@ type fakeHost struct {
 	// live is the uids that own a process; stuck uids survive a reap.
 	live, stuck map[int]bool
 	changes     []string
+
+	// bootPolls makes the boot job's pfctl load asynchronous: it lands
+	// only after that many reads of the job's state. Zero loads at
+	// bootstrap, as before.
+	bootPolls int
+	// bootExit is the boot job's exit code; bootNever keeps it running.
+	bootExit  int
+	bootNever bool
+	// pending is the boot job's load still in flight.
+	pending *[2]string
+	// runs counts each loaded job's runs.
+	runs map[string]int
+	// anchorLoads counts LoadAnchor calls; inFlightLoads those made while
+	// the boot job's own load was pending.
+	anchorLoads, inFlightLoads int
 }
 
 func newFakeHost() *fakeHost {
 	h := &fakeHost{
 		root: true, users: map[string]Account{}, groups: map[string]Group{}, files: map[string]fakeFile{},
 		services: map[string]bool{}, anchors: map[string][]string{}, live: map[int]bool{}, stuck: map[int]bool{},
+		runs: map[string]int{},
 	}
 	for _, dir := range []string{"/", "/Library", launchDaemonsDir, "/etc", sudoersDir} {
 		h.files[dir] = fakeFile{info: FileInfo{Kind: FileDir, Mode: 0o755}}
@@ -248,11 +264,35 @@ func (h *fakeHost) BootstrapService(plistPath string) error {
 		args = append(args, m[1])
 	}
 	h.services[args[0]] = true
+	h.runs[args[0]] = 1
 	if i := slices.Index(args, "-a"); i > 0 && args[i+2] == "-f" {
+		if h.bootPolls > 0 || h.bootNever {
+			h.pending = &[2]string{args[i+1], args[i+3]}
+			return nil
+		}
 		h.pf = true
-		return h.LoadAnchor(args[i+1], args[i+3])
+		return h.loadAnchor(args[i+1], args[i+3])
 	}
 	return nil
+}
+
+// ServiceRunState reports the job running until its pending load lands.
+func (h *fakeHost) ServiceRunState(label string) (ServiceRun, error) {
+	if !h.services[label] {
+		return ServiceRun{}, errors.New("launchctl print: service not found")
+	}
+	if h.pending != nil {
+		if h.bootNever || h.bootPolls > 0 {
+			h.bootPolls--
+			return ServiceRun{Running: true, Runs: h.runs[label]}, nil
+		}
+		h.pf = true
+		if err := h.loadAnchor(h.pending[0], h.pending[1]); err != nil {
+			return ServiceRun{}, err
+		}
+		h.pending = nil
+	}
+	return ServiceRun{Runs: h.runs[label], LastExitCode: h.bootExit}, nil
 }
 
 func (h *fakeHost) BootoutService(label string) error {
@@ -266,6 +306,14 @@ func (h *fakeHost) AnchorRules(anchor string) ([]string, error) { return h.ancho
 // LoadAnchor resolves each rule's user to a uid, as pf does, and prints it
 // as pfctl -s rules would.
 func (h *fakeHost) LoadAnchor(anchor, path string) error {
+	h.anchorLoads++
+	if h.pending != nil {
+		h.inFlightLoads++
+	}
+	return h.loadAnchor(anchor, path)
+}
+
+func (h *fakeHost) loadAnchor(anchor, path string) error {
 	h.change("load anchor %s", anchor)
 	f, ok := h.files[path]
 	if !ok {
