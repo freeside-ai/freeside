@@ -379,7 +379,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	checkout, err := w.transport.FetchBase(
 		ctx, base.Repo, base.BaseRef, base.BaseSHA, filepath.Join(scratch, "checkout"))
 	if err != nil {
-		return w.reentryTransportFailure(ctx, task, "fetch exact re-entry base", err)
+		return w.publicationTransportFailure(ctx, task, "fetch exact re-entry base", err)
 	}
 	checkoutDir, err := validatePublicationCheckoutBinding(
 		checkout, base.Repo, base.BaseRef, base.BaseSHA,
@@ -408,7 +408,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if errors.Is(err, publish.ErrRemoteMissingHead) {
 			return w.stopReentryCycle(ctx, task, reentryMissingHeadReason(task, cycle.branch), nil)
 		}
-		return w.reentryTransportFailure(ctx, task, "fetch pull request head", err)
+		return w.publicationTransportFailure(ctx, task, "fetch pull request head", err)
 	}
 	// A cycle evaluates its head and nothing else. A base_advanced authority
 	// sealed before plan revision 110 once evaluated the head's merge into the
@@ -523,10 +523,10 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	return w.completeReentryTask(ctx, task, binding, checkpoint, checkout, reviewInstructions)
 }
 
-// reentryTransportFailure classifies a transport failure the way the first
+// publicationTransportFailure classifies a transport failure the way the first
 // cycle classifies a failed base fetch: a definitive refusal holds the run,
 // and anything else is retried or surfaced.
-func (w *productionPublicationWorkflow) reentryTransportFailure(
+func (w *productionPublicationWorkflow) publicationTransportFailure(
 	ctx context.Context, task productionPublicationTask, step string, err error,
 ) (productionTaskOutcome, error) {
 	held := importer.Result{CommitSHA: task.HeadSHA}
@@ -1345,7 +1345,7 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 			if errors.Is(err, publish.ErrRemoteMissingHead) {
 				return w.stopReentryCycle(ctx, task, reentryMissingHeadReason(task, cycle.branch), nil)
 			}
-			return w.reentryTransportFailure(ctx, task, "observe pull request head before readiness", err)
+			return w.publicationTransportFailure(ctx, task, "observe pull request head before readiness", err)
 		}
 		if err := runDurableTransitionHook(w.transitionHook,
 			DurableTransitionReadyItem, DurableTransitionBefore); err != nil {

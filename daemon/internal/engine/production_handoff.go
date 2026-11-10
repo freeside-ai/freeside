@@ -117,7 +117,7 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 	}
 	check, sealedNow, err := w.sealHandoffTip(ctx, task, binding)
 	if err != nil {
-		outcome, err := w.reentryTransportFailure(ctx, task, "resolve the handoff tip", err)
+		outcome, err := w.publicationTransportFailure(ctx, task, "resolve the handoff tip", err)
 		return domain.HandoffCheck{}, &outcome, err
 	}
 	if check.Proved() {
@@ -159,7 +159,7 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 			// for this publication.
 			return block(productionBlockBaseAdvanced, checkpoint.Artifacts)
 		}
-		outcome, err := w.reentryTransportFailure(ctx, task, "build the handoff merge", err)
+		outcome, err := w.publicationTransportFailure(ctx, task, "build the handoff merge", err)
 		return domain.HandoffCheck{}, &outcome, err
 	}
 	identity := check.MergeIdentity()
