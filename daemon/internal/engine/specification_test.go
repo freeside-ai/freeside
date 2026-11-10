@@ -2771,6 +2771,36 @@ func TestSpecificationRejectsUnknownRevisionAddressals(t *testing.T) {
 		}
 		assertSpecificationFailedWithoutImplementation(t, f, secondID)
 	})
+
+	t.Run("answered retry cannot address an unknown id", func(t *testing.T) {
+		f := newSpecificationFixture(t, false, 3)
+		driver := f.newDriver(t)
+		firstID := specificationInvocationID("specification-run", 1)
+		secondID := specificationInvocationID("specification-run", 2)
+		if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{Decisions: decisionsFixture()}); err != nil {
+			t.Fatal(err)
+		}
+		if err := specifyfake.Script(driver, secondID, 0, 0, specify.Output{Specification: &specify.Specification{
+			Summary: "Answered draft.", Body: "# Specification\n\nTarget both API versions.",
+			Addressals: []specify.Addressal{{CommentID: "not-supplied", Response: "Claimed response."}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		f.submit(t)
+		engine := f.newEngine(t, driver)
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		f.answerQuestion(t, domain.ItemID("question-"+string(firstID)), "answer-question",
+			"Target the current and immediately previous API versions.")
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 1 {
+			t.Fatalf("reconcileOperatorFeedback = %d, %v", created, err)
+		}
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		assertSpecificationFailedWithoutImplementation(t, f, secondID)
+	})
 }
 
 func TestUnifiedLineDiff(t *testing.T) {
