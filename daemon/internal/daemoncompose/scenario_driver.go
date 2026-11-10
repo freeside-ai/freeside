@@ -108,15 +108,17 @@ func (d scenarioStageDriver) refuseOnQuota(
 	if run.AttemptNumber > 1 {
 		return false, nil
 	}
-	resetsAt := time.Now().UTC().Add(refusal.ResetAfter)
+	quota := &domain.QuotaRefusal{Window: refusal.Window}
+	if refusal.ResetAfter > 0 {
+		resetsAt := time.Now().UTC().Add(refusal.ResetAfter)
+		quota.ResetsAt = &resetsAt
+	}
 	d.Script(id, fake.StageScript{
 		Outcome: fake.OutcomeFail,
 		Result: exec.StageResult{
-			Summary: "The scenario provider refused the run: its quota window is exhausted.",
-			Cause:   domain.FailureCauseQuota,
-			QuotaRefusal: &domain.QuotaRefusal{
-				Window: refusal.Window, ResetsAt: &resetsAt,
-			},
+			Summary:      "The scenario provider refused the run: its quota window is exhausted.",
+			Cause:        domain.FailureCauseQuota,
+			QuotaRefusal: quota,
 		},
 	})
 	return true, d.StageDriver.Start(ctx, id, spec)

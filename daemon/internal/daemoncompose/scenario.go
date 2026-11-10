@@ -29,9 +29,14 @@ type Scenario struct {
 	// paths are the run's path allowlist.
 	Delivery map[string]string
 	// QuotaRefusal, when set, makes the provider refuse the first
-	// implementation attempt on a quota window. The task parks until the
-	// window resets, then the next attempt delivers.
+	// implementation attempt on a quota window. With a reset the task parks
+	// until the window resets; without one it raises the failure card. Either
+	// way the next attempt delivers.
 	QuotaRefusal *ScenarioQuotaRefusal
+	// SecondSubscription seeds a second Claude subscription on its own pool
+	// and a routing policy that orders both for the implementer, so a park
+	// or a failure card has another agent to offer.
+	SecondSubscription bool
 }
 
 // ScenarioQuotaRefusal is the refusal a quota scenario's first
@@ -39,11 +44,12 @@ type Scenario struct {
 type ScenarioQuotaRefusal struct {
 	Window string
 	// ResetAfter is how long after the refusal the window resets: long
-	// enough to watch the park, short enough to wait out the resume.
+	// enough to watch the park, short enough to wait out the resume. Zero
+	// means the refusal names no reset.
 	ResetAfter time.Duration
 }
 
-var scenarios = []Scenario{CleanScenario(), QuotaParkScenario()}
+var scenarios = []Scenario{CleanScenario(), QuotaParkScenario(), QuotaMoveScenario(), QuotaNoResetScenario()}
 
 func CleanScenario() Scenario {
 	title := "Describe the scenario repository"
@@ -76,6 +82,33 @@ func QuotaParkScenario() Scenario {
 	s.Description = "the provider refuses the first implementation on a quota window; " +
 		"the task parks until the reset, then publishes"
 	s.QuotaRefusal = &ScenarioQuotaRefusal{Window: "five_hour", ResetAfter: 2 * time.Minute}
+	return s
+}
+
+// QuotaMoveScenario is quota-park with a second subscription and a reset far
+// enough out that the operator moves the parked task to the second agent
+// before it (#2951).
+func QuotaMoveScenario() Scenario {
+	s := QuotaParkScenario()
+	s.Name = "quota-move"
+	s.Description = "the provider refuses the first implementation on a quota window; " +
+		"the operator moves the parked task to the second subscription, which publishes"
+	s.QuotaRefusal.ResetAfter = 30 * time.Minute
+	s.SecondSubscription = true
+	return s
+}
+
+// QuotaNoResetScenario is clean with a second subscription and a quota
+// refusal that names no reset, so the task raises the failure card with the
+// alternate-agent retry (#2951). The seed gives each pool an allowed reading
+// with no reset, which the client shows beside the card's offers.
+func QuotaNoResetScenario() Scenario {
+	s := CleanScenario()
+	s.Name = "quota-no-reset"
+	s.Description = "the provider refuses the first implementation on a quota window with no known reset; " +
+		"the operator retries on the second subscription from the failure card, which publishes"
+	s.QuotaRefusal = &ScenarioQuotaRefusal{Window: "five_hour"}
+	s.SecondSubscription = true
 	return s
 }
 

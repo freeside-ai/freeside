@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -35,6 +37,11 @@ type ScenarioComposition struct {
 	Scheduler *scheduler.Scheduler
 	forge     *http.Server
 	Listener  net.Listener
+	// Agents is the lineup the scenario admits through, which the operator
+	// hooks re-derive alternate-agent choices against, and Catalog its
+	// projection for clients.
+	Agents  *engine.AgentSelection
+	Catalog signet.AgentCatalog
 }
 
 // The prompt packages a scenario run's stage inputs name. The materializer
@@ -46,12 +53,14 @@ var (
 )
 
 // ScenarioParts are what run hands ComposeScenario. AdmissionFloor through
-// PublicationWatches are values the scenario cannot compute for itself from
+// AgentExpiryMargin are values the scenario cannot compute for itself from
 // outside package main, because their helpers live there; run builds each
-// exactly as the scenario built it in package main. The admission floor,
-// validators, and watches come from the helpers the Claude composition
-// uses; the import authority and export recorder are its types, built bare,
-// without the Claude composition's path, author, or usage configuration.
+// but AgentExpiryMargin exactly as the scenario built it in package main,
+// and passes the Claude composition's margin. The admission floor,
+// validators, watches, and expiry margin come from what the Claude
+// composition uses; the import authority and export recorder are its types,
+// built bare, without the Claude composition's path, author, or usage
+// configuration.
 type ScenarioParts struct {
 	Store     *store.Store
 	Attention *signet.Service
@@ -77,6 +86,9 @@ type ScenarioParts struct {
 	// PublicationWatches are the publication deadline registrations every
 	// production scheduler runs.
 	PublicationWatches map[domain.ScheduleKind]scheduler.Registration
+	// AgentExpiryMargin is how far past an attempt's deadline an expiring
+	// credential must last, which the scenario lineup admits with.
+	AgentExpiryMargin time.Duration
 }
 
 // ComposeScenario seeds the scenario's world and composes the production
@@ -93,10 +105,6 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 	st, blobs := parts.Store, parts.Blobs
 	now := func() time.Time { return time.Now().UTC() }
 	sc := *parts.Scenario
-	world, err := seedScenario(ctx, st, parts.DBPath, sc, now())
-	if err != nil {
-		return nil, err
-	}
 	digests := map[string]domain.Digest{}
 	for name, body := range map[string][]byte{
 		"implementation": scenarioPromptPackage, "specification": scenarioSpecificationPromptPackage,
@@ -107,6 +115,18 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			return nil, fmt.Errorf("store scenario %s prompt package: %w", name, err)
 		}
 		digests[name] = digest
+	}
+	agents, err := scenarioAgentSelection(sc, digests, parts.AgentExpiryMargin)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := signet.AgentCatalogOf(agents.Tree, agents.LineupRevision)
+	if err != nil {
+		return nil, fmt.Errorf("scenario agent catalog: %w", err)
+	}
+	world, err := seedScenario(ctx, st, parts.DBPath, sc, agents.LineupRevision, now())
+	if err != nil {
+		return nil, err
 	}
 	vendorInstructions := filepath.Join(world.Dir, "CLAUDE.md")
 	if err := os.WriteFile(vendorInstructions, []byte("Scenario vendor instructions.\n"), 0o600); err != nil {
@@ -176,20 +196,25 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 		return nil, err
 	}
 
-	identity := ScenarioIdentityID
 	production := ProductionEngine{
 		Lock: parts.Lock, Bound: parts.Bound,
 		Backend: world.Backend, AdmissionFloor: parts.AdmissionFloor,
 		Admission: engine.AdmissionEnvironment{
 			OperatingMode: domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,
-			EgressProfile: domain.EgressProviderOnly, ImageRef: world.Image.ImageRef,
+			EgressProfile:             domain.EgressProviderOnly,
+			EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
+			ImageRef:                  world.Image.ImageRef,
 			PromptPackageDigest:       digests["implementation"],
 			ReviewConfigurationDigest: fake.DefaultReviewConfigurationDigest,
 			VendorInstructions: engine.VendorInstructionConfig{
 				Vendor: domain.AgentVendorClaude, Delivery: domain.VendorInstructionDeliveryAppendFile,
 				HostPath: vendorInstructions,
 			},
-			AuthIdentityID: &identity,
+			// Every stage admits through the lineup, as the Claude
+			// composition's do, so a park or a failure card can offer
+			// another agent.
+			AuthIdentityID: nil,
+			Agents:         &agents,
 		},
 		AdmissionNow: now,
 		Derive: func(context.Context, domain.InvocationID) (string, domain.BaseRevision, error) {
@@ -293,7 +318,71 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 	sched.SetLogger(parts.Logger)
 	return &ScenarioComposition{
 		Workflow: workflow, Scheduler: sched, Listener: listener,
-		forge: &http.Server{Handler: forge, ReadHeaderTimeout: 5 * time.Second},
+		forge:  &http.Server{Handler: forge, ReadHeaderTimeout: 5 * time.Second},
+		Agents: &agents, Catalog: catalog,
+	}, nil
+}
+
+// The scenario lineup's writer models. They name no real model: the
+// scripted stage driver runs no agent.
+const (
+	ScenarioWriterModel    = "claude-scenario"
+	scenarioSpecifierModel = "claude-scenario-specifier"
+)
+
+// scenarioAgentSelection is the baseline lineup on the scenario identity's
+// enrollment, with a second subscription's enrollment when the scenario
+// seeds one, for the prompt packages the scenario stores. digests is keyed
+// by stage: specification, implementation, and remediation. expiryMargin is
+// the Claude composition's, which run passes in ScenarioParts.
+func scenarioAgentSelection(
+	sc Scenario, digests map[string]domain.Digest, expiryMargin time.Duration,
+) (engine.AgentSelection, error) {
+	subscriptions := sc.Subscriptions()
+	input := agentbaseline.TreeInput{
+		ClaudeEnrollment: subscriptions[0].Enrollment,
+		Writers: map[domain.RoleName]agentbaseline.Selection{
+			// The specifier asks its own model, so its lineup line differs
+			// from the implementer's.
+			domain.RoleSpecifier:   {Model: scenarioSpecifierModel, Effort: domain.EffortHigh},
+			domain.RoleImplementer: {Model: ScenarioWriterModel, Effort: domain.EffortHigh},
+			domain.RoleRemediator:  {Model: ScenarioWriterModel, Effort: domain.EffortHigh},
+		},
+		TermsBasisDate: "2026-07-01",
+		Prompts: map[domain.RoleName]agentbaseline.Prompt{
+			domain.RoleSpecifier:   {Name: "specifier", Digest: digests["specification"]},
+			domain.RoleImplementer: {Name: "implementer", Digest: digests["implementation"]},
+			domain.RoleRemediator:  {Name: "remediator", Digest: digests["remediation"]},
+		},
+	}
+	if len(subscriptions) > 1 {
+		input.SecondClaudeEnrollment = &subscriptions[1].Enrollment
+	}
+	tree, err := agentbaseline.Tree(input)
+	if err != nil {
+		return engine.AgentSelection{}, fmt.Errorf("scenario agent tree: %w", err)
+	}
+	// The round trip through the tree's files gives the revision the
+	// Claude composition reads from a committed tree.
+	files, err := agenttree.Render(tree)
+	if err != nil {
+		return engine.AgentSelection{}, fmt.Errorf("render scenario agent tree: %w", err)
+	}
+	revision, err := agenttree.Revision(files)
+	if err != nil {
+		return engine.AgentSelection{}, fmt.Errorf("scenario agent tree revision: %w", err)
+	}
+	if tree, err = agenttree.Parse(files); err != nil {
+		return engine.AgentSelection{}, fmt.Errorf("parse scenario agent tree: %w", err)
+	}
+	return engine.AgentSelection{
+		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
+		EffectiveEgress: []string{"api.anthropic.com:443"},
+		// The scenario policy's budgets.stage_active_time.
+		AttemptBudget: time.Hour, ExpiryMargin: expiryMargin,
+		// Seeding records every writer subscription before the engine
+		// starts, so nothing holds admission.
+		Gate: nil,
 	}, nil
 }
 
