@@ -28,14 +28,14 @@ import (
 // invocation IDs to the resolved enrollment generation; ordinary invocations
 // still use wardstore's admission-bound resolver. Embedding preserves both the
 // mutation-lease and shared-read interfaces and their store-backed checks.
-type adapterConformanceLeaser struct {
+type AdapterConformanceLeaser struct {
 	*wardstore.Leaser
-	store    *store.Store
+	Store    *store.Store
 	mu       sync.RWMutex
 	bindings map[domain.InvocationID]engine.RoleAgent
 }
 
-func (l *adapterConformanceLeaser) AuthStoreVolume(ctx context.Context, identity domain.AuthIdentityID, holder domain.InvocationID) (string, error) {
+func (l *AdapterConformanceLeaser) AuthStoreVolume(ctx context.Context, identity domain.AuthIdentityID, holder domain.InvocationID) (string, error) {
 	l.mu.RLock()
 	agent, bound := l.bindings[holder]
 	l.mu.RUnlock()
@@ -46,7 +46,7 @@ func (l *adapterConformanceLeaser) AuthStoreVolume(ctx context.Context, identity
 		return "", fmt.Errorf("adapter conformance holder belongs to another identity")
 	}
 	var volume string
-	err := l.store.Read(ctx, func(tx *store.ReadTx) error {
+	err := l.Store.Read(ctx, func(tx *store.ReadTx) error {
 		enrollment, err := tx.GetClientEnrollment(ctx, agent.Enrollment.ID)
 		if err != nil {
 			return err
@@ -64,7 +64,7 @@ func (l *adapterConformanceLeaser) AuthStoreVolume(ctx context.Context, identity
 	return volume, err
 }
 
-func (l *adapterConformanceLeaser) bind(id domain.InvocationID, agent engine.RoleAgent) func() {
+func (l *AdapterConformanceLeaser) Bind(id domain.InvocationID, agent engine.RoleAgent) func() {
 	l.mu.Lock()
 	if l.bindings == nil {
 		l.bindings = make(map[domain.InvocationID]engine.RoleAgent)
@@ -78,11 +78,11 @@ func (l *adapterConformanceLeaser) bind(id domain.InvocationID, agent engine.Rol
 	}
 }
 
-// recordObservedAdapterConformance uses the declaration only as a ceiling.
+// RecordObservedAdapterConformance uses the declaration only as a ceiling.
 // Failed observations supersede older passes, including declaration-only ones.
 // The caller does not record a proof that could not run because the
-// implementer's generation is marked (proveSelectedClaudeAdapter).
-func recordObservedAdapterConformance(ctx context.Context, st *store.Store, observed domain.LaunchCapabilitySet, runErr error, provedAt time.Time) error {
+// implementer's generation is marked (ProveSelectedClaudeAdapter).
+func RecordObservedAdapterConformance(ctx context.Context, st *store.Store, observed domain.LaunchCapabilitySet, runErr error, provedAt time.Time) error {
 	adapter, err := agentbaseline.ClaudeWardAdapter()
 	if err != nil {
 		return err
@@ -135,18 +135,18 @@ func runAdapterConformance(ctx context.Context, gate adapterConformanceGate, inp
 
 // proveClaudeAdapter proves the Claude ward adapter on the lineup
 // implementer's subscription. A selection that cannot load records failed;
-// proveSelectedClaudeAdapter decides the rest.
-func proveClaudeAdapter(ctx context.Context, st *store.Store, backend *ward.Backend, cfg claudeDriverConfig, leaser *adapterConformanceLeaser) error {
-	selection, err := loadAgentSelection(ctx, cfg)
+// ProveSelectedClaudeAdapter decides the rest.
+func proveClaudeAdapter(ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig, leaser *AdapterConformanceLeaser) error {
+	selection, err := LoadAgentSelection(ctx, cfg)
 	if err != nil {
-		return recordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
+		return RecordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
-	return proveSelectedClaudeAdapter(ctx, st, *selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+	return ProveSelectedClaudeAdapter(ctx, st, *selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
 		return observeClaudeAdapter(ctx, backend, cfg, leaser, agent)
 	})
 }
 
-// proveSelectedClaudeAdapter resolves the implementer the proof launches on
+// ProveSelectedClaudeAdapter resolves the implementer the proof launches on
 // and proves the adapter through observe. A resolution or launch-selection
 // failure records failed, with one exception: when the implementer's
 // generation carries an integrity mark, the proof cannot run, so it records
@@ -156,10 +156,10 @@ func proveClaudeAdapter(ctx context.Context, st *store.Store, backend *ward.Back
 // owner decision on #1740), and each launch's admission refuses it until
 // re-enrollment. The adapter record is keyed by adapter digest, not
 // enrollment, so a failed record here would refuse every Claude writer on
-// every subscription; checkWriterRoles makes the same exception at startup.
+// every subscription; CheckWriterRoles makes the same exception at startup.
 // Every other refusal still records failed: startup already holds the whole
 // lineup for those, so the record holds nothing wider.
-func proveSelectedClaudeAdapter(ctx context.Context, st *store.Store, selection engine.AgentSelection, observe func(engine.RoleAgent) (domain.LaunchCapabilitySet, error)) error {
+func ProveSelectedClaudeAdapter(ctx context.Context, st *store.Store, selection engine.AgentSelection, observe func(engine.RoleAgent) (domain.LaunchCapabilitySet, error)) error {
 	agent, err := engine.ResolveRole(ctx, st, selection.Tree, domain.RoleImplementer)
 	if errors.Is(err, domain.ErrGenerationIntegrityMarked) {
 		slog.Warn("skipping Claude adapter conformance: the implementer's generation is marked; the adapter's last record stands",
@@ -171,7 +171,7 @@ func proveSelectedClaudeAdapter(ctx context.Context, st *store.Store, selection 
 	}
 	if err != nil {
 		slog.Warn("cannot resolve implementer for Claude adapter conformance", "error", err)
-		return recordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
+		return RecordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
 	return proveResolvedClaudeAdapter(ctx, st, agent.Adapter.Digest, func() (domain.LaunchCapabilitySet, error) {
 		return observe(agent)
@@ -203,7 +203,7 @@ func proveResolvedClaudeAdapter(ctx context.Context, st *store.Store, digest dom
 		return nil
 	}
 	observed, err := observe()
-	if recordErr := recordObservedAdapterConformance(ctx, st, observed, err, time.Now().UTC()); recordErr != nil {
+	if recordErr := RecordObservedAdapterConformance(ctx, st, observed, err, time.Now().UTC()); recordErr != nil {
 		return recordErr
 	}
 	if err != nil {
@@ -216,14 +216,14 @@ func proveResolvedClaudeAdapter(ctx context.Context, st *store.Store, digest dom
 	return nil
 }
 
-func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg claudeDriverConfig, leaser *adapterConformanceLeaser, agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg ClaudeDriverConfig, leaser *AdapterConformanceLeaser, agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
 	model, nativeEffort := agent.Selection.LaunchValues(agent.Adapter.ClientKind)
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
 	id := domain.InvocationID("adapter-conformance-" + hex.EncodeToString(nonce[:]))
-	release := leaser.bind(id, agent)
+	release := leaser.Bind(id, agent)
 	defer release()
 	if err := bindRigInvocationResources(cfg.StateDir, cfg.RigTokenFile, id); err != nil {
 		return nil, err
@@ -318,7 +318,7 @@ func retireAdapterConformance(ctx context.Context, backend adapterRecoveryGate, 
 	return os.Remove(path)
 }
 
-func recoverAdapterConformance(ctx context.Context, st *store.Store, backend adapterRecoveryGate, cfg claudeDriverConfig, leaser *adapterConformanceLeaser) error {
+func recoverAdapterConformance(ctx context.Context, st *store.Store, backend adapterRecoveryGate, cfg ClaudeDriverConfig, leaser *AdapterConformanceLeaser) error {
 	root := filepath.Join(cfg.StateDir, "adapter-conformance")
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -344,10 +344,10 @@ func recoverAdapterConformance(ctx context.Context, st *store.Store, backend ada
 			intent.Spec.RunID != claude.RunIDFor(intent.InvocationID) {
 			return fmt.Errorf("invalid adapter conformance recovery record %s", path)
 		}
-		if err := recordObservedAdapterConformance(ctx, st, nil, errors.New("interrupted adapter proof"), time.Now().UTC()); err != nil {
+		if err := RecordObservedAdapterConformance(ctx, st, nil, errors.New("interrupted adapter proof"), time.Now().UTC()); err != nil {
 			return err
 		}
-		release := leaser.bind(intent.InvocationID, intent.Agent)
+		release := leaser.Bind(intent.InvocationID, intent.Agent)
 		err = retireAdapterConformance(ctx, backend, intent, path)
 		release()
 		if err != nil {

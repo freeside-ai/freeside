@@ -86,7 +86,7 @@ func TestLaunchBoundOfAComposition(t *testing.T) {
 	}
 	// A Claude composition with no budget never runs the container binary,
 	// which does not exist here.
-	bound, err = config{Claude: &claudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
+	bound, err = config{Claude: &ClaudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
 	if err != nil || bound.Budgeted() {
 		t.Fatalf("unbudgeted bound = %+v, %v", bound, err)
 	}

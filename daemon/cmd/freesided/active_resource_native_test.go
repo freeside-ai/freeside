@@ -23,7 +23,7 @@ func openExactPull(context.Context, string, int) (publish.PullObservation, error
 	return exactPull("open", false), nil
 }
 
-func staticReview(obs publish.PullReviewObservation) nativeReviewObserver {
+func staticReview(obs publish.PullReviewObservation) NativeReviewObserver {
 	return func(context.Context, string, int) (publish.PullReviewObservation, error) {
 		return obs, nil
 	}
@@ -68,10 +68,10 @@ func TestActiveResourceRecordsNativeFindingsAndCleanPass(t *testing.T) {
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(findingsReviewActivity()),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
@@ -128,10 +128,10 @@ func TestActiveResourceRecordsLateAndForeignFiltered(t *testing.T) {
 	activity.Reactions = append(activity.Reactions, publish.PullDescriptionReaction{
 		ID: 700999, AuthorLogin: "random-contributor", Content: "+1", CreatedAt: activeResourceTestTime,
 	})
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(activity),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -163,10 +163,10 @@ func TestActiveResourceNormalizesBotLogin(t *testing.T) {
 	activity.Reviews[0].AuthorLogin = botLogin
 	activity.Comments[0].AuthorLogin = botLogin
 	activity.Reactions[0].AuthorLogin = botLogin
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(activity),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -196,10 +196,10 @@ func TestActiveResourceRejectsStaleCleanPassReaction(t *testing.T) {
 	// The binding's RecordedAt is activeResourceTestTime.Add(-time.Minute); this
 	// reaction predates it, so it belongs to an earlier head.
 	activity.Reactions[0].CreatedAt = activeResourceTestTime.Add(-2 * time.Minute)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(activity),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -225,10 +225,10 @@ func TestActiveResourceRecordsStaleHeadReview(t *testing.T) {
 	activity := findingsReviewActivity()
 	activity.Reviews[0].CommitID = "0ldc0de" // review bound to an earlier head
 	activity.Comments[0].CommitID = "0ldc0de"
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(activity),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -257,10 +257,10 @@ func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
 	failing := func(context.Context, string, int) (publish.PullReviewObservation, error) {
 		return publish.PullReviewObservation{}, errors.New("boom")
 	}
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: failing,
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: failing,
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil {
@@ -279,7 +279,7 @@ func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
 
 	// The next tick retries with a working observer and records, without
 	// re-appending the unchanged pull fact.
-	reconciler.review = staticReview(findingsReviewActivity())
+	reconciler.Review = staticReview(findingsReviewActivity())
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("retry Reconcile = %v, %v", failures, err)
 	}
@@ -299,10 +299,10 @@ func TestActiveResourceNativeObservationConverges(t *testing.T) {
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(findingsReviewActivity()),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	for i := 0; i < 3; i++ {
 		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
@@ -327,10 +327,10 @@ func TestActiveResourceNativeConvergesWithInvalidUTF8(t *testing.T) {
 	activity := findingsReviewActivity()
 	activity.Comments[0].Path = "dir/na\xffme"
 	activity.Reviews[0].CommitID = "c0mm\xffit"
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(activity),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	var first int
 	for i := 0; i < 3; i++ {
@@ -359,11 +359,11 @@ func TestActiveResourceNativeNotModifiedRecordsNothing(t *testing.T) {
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull,
-		review:    staticReview(publish.PullReviewObservation{NotModified: true}),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull,
+		Review:    staticReview(publish.PullReviewObservation{NotModified: true}),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -397,13 +397,13 @@ func TestActiveResourceNativeCommitFailureEvictsCache(t *testing.T) {
 	dropNativeReviewObservations(t, dbPath)
 
 	var evicted [][2]any
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(findingsReviewActivity()),
-		reviewers: testReviewers(),
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
+		Reviewers: testReviewers(),
 		reviewInvalidate: func(repo string, number int) {
 			evicted = append(evicted, [2]any{repo, number})
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil {
@@ -479,16 +479,16 @@ func TestActiveResourceReactionsRefusalReportedOncePerItem(t *testing.T) {
 	refused := findingsReviewActivity()
 	refused.Reactions = nil
 	refused.ReactionsUnavailable = true
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(refused),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(refused),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	pass := func(label string) activeResourceReconcileResult {
 		t.Helper()
 		result, err := reconciler.Reconcile(ctx)
-		if err != nil || len(result.failures) != 0 {
-			t.Fatalf("%s: Reconcile = %v, %v", label, result.failures, err)
+		if err != nil || len(result.Failures) != 0 {
+			t.Fatalf("%s: Reconcile = %v, %v", label, result.Failures, err)
 		}
 		return result
 	}
@@ -508,29 +508,29 @@ func TestActiveResourceReactionsRefusalReportedOncePerItem(t *testing.T) {
 	}
 	unchanged := refused
 	unchanged.NotModified = true
-	reconciler.review = staticReview(unchanged)
+	reconciler.Review = staticReview(unchanged)
 	if got := pass("unchanged refused").reactionsRefused; len(got) != 0 {
 		t.Fatalf("unchanged refused pass reported %v, want none", got)
 	}
 
 	// A failed review read neither reports nor re-arms.
-	reconciler.review = func(context.Context, string, int) (publish.PullReviewObservation, error) {
+	reconciler.Review = func(context.Context, string, int) (publish.PullReviewObservation, error) {
 		return publish.PullReviewObservation{}, errors.New("boom")
 	}
 	if result, err := reconciler.Reconcile(ctx); err != nil || len(result.reactionsRefused) != 0 {
 		t.Fatalf("failed read = %v, %v; want no refusal report", result.reactionsRefused, err)
 	}
-	reconciler.review = staticReview(refused)
+	reconciler.Review = staticReview(refused)
 	if got := pass("refused after failure").reactionsRefused; len(got) != 0 {
 		t.Fatalf("refusal after a failed read reported %v, want none", got)
 	}
 
 	// The reactions read again, then are refused again: reported once more.
-	reconciler.review = staticReview(findingsReviewActivity())
+	reconciler.Review = staticReview(findingsReviewActivity())
 	if got := pass("recovered").reactionsRefused; len(got) != 0 {
 		t.Fatalf("recovered pass reported %v, want none", got)
 	}
-	reconciler.review = staticReview(refused)
+	reconciler.Review = staticReview(refused)
 	if got := pass("refused again").reactionsRefused; len(got) != 1 {
 		t.Fatalf("refusal after recovery reported %v, want one", got)
 	}
@@ -549,10 +549,10 @@ func TestActiveResourceReactionsRefusalForgottenWhenItemConcludes(t *testing.T) 
 	refused := findingsReviewActivity()
 	refused.Reactions = nil
 	refused.ReactionsUnavailable = true
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(refused),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(refused),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	if result, err := reconciler.Reconcile(ctx); err != nil || len(result.reactionsRefused) != 1 {
 		t.Fatalf("refused pass = %v, %v; want one refusal", result.reactionsRefused, err)

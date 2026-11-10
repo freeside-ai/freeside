@@ -839,12 +839,12 @@ func taskRecordOwnsItem(
 			return true
 		}
 		for _, admission := range run.Admissions {
-			if isInvocationStallNotice(string(itemID), admission.InvocationID) {
+			if IsInvocationStallNotice(string(itemID), admission.InvocationID) {
 				return true
 			}
 		}
 		for _, invocation := range run.Invocations {
-			if isInvocationStallNotice(string(itemID), invocation.InvocationID) {
+			if IsInvocationStallNotice(string(itemID), invocation.InvocationID) {
 				return true
 			}
 		}

@@ -36,14 +36,14 @@ func appendWorkUnitCompletedMilestone(
 	if !domain.PublicationReadyStands(published) {
 		return nil
 	}
-	milestone, err := currentWorkUnitCompletedMilestone(ctx, &tx.ReadTx, runID, completion)
+	milestone, err := CurrentWorkUnitCompletedMilestone(ctx, &tx.ReadTx, runID, completion)
 	if err != nil {
 		return err
 	}
 	return tx.AppendRunMilestone(ctx, milestone)
 }
 
-func currentWorkUnitCompletedMilestone(ctx context.Context, tx *store.ReadTx, runID domain.RunID, completion domain.WorkUnitCompletion) (domain.RunMilestone, error) {
+func CurrentWorkUnitCompletedMilestone(ctx context.Context, tx *store.ReadTx, runID domain.RunID, completion domain.WorkUnitCompletion) (domain.RunMilestone, error) {
 	invocation, err := tx.PublishedPublicationInvocationID(ctx, runID)
 	if err != nil {
 		return domain.RunMilestone{}, err
@@ -141,7 +141,7 @@ func reconcileWorkUnitCompletionMilestones(ctx context.Context, st *store.Store,
 					"unit", completion.UnitID, "run", declaration.RunID)
 				continue
 			}
-			milestone, err := currentWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, completion)
+			milestone, err := CurrentWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, completion)
 			if err != nil {
 				return err
 			}

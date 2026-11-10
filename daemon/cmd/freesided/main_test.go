@@ -451,7 +451,7 @@ func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendConformance: %v", err)
 	}
-	if err := (storeConformanceRecorder{store: st}).RecordBackendConformance(ctx, record); err != nil {
+	if err := (StoreConformanceRecorder{Store: st}).RecordBackendConformance(ctx, record); err != nil {
 		t.Fatalf("RecordBackendConformance: %v", err)
 	}
 

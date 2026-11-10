@@ -20,10 +20,10 @@ import (
 var activeResourceTestTime = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 
 func reconcileActiveResource(
-	r *activeResourceReconciler, ctx context.Context,
+	r *ActiveResourceReconciler, ctx context.Context,
 ) ([]error, error) {
 	result, err := r.Reconcile(ctx)
-	return result.failures, err
+	return result.Failures, err
 }
 
 func activeReadyItem(t *testing.T, st *store.Store) domain.AttentionItem {
@@ -195,9 +195,9 @@ func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
 	item := activeReadyItem(t, st)
 	var pullErr error
 	closed := false
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			if pullErr != nil {
 				return publish.PullObservation{}, pullErr
 			}
@@ -206,11 +206,11 @@ func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
 			}
 			return exactPull("open", false), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 
 	result, err := reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 0 {
+	if err != nil || len(result.Failures) != 0 {
 		t.Fatalf("open Reconcile = %+v, %v", result, err)
 	}
 	if !result.operatorActive {
@@ -222,14 +222,14 @@ func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
 
 	pullErr = errors.New("token mint unavailable")
 	result, err = reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 1 || !result.operatorActive {
+	if err != nil || len(result.Failures) != 1 || !result.operatorActive {
 		t.Fatalf("failed-observation Reconcile = %+v, %v", result, err)
 	}
 
 	pullErr = nil
 	closed = true
 	result, err = reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 0 {
+	if err != nil || len(result.Failures) != 0 {
 		t.Fatalf("concluding Reconcile = %+v, %v", result, err)
 	}
 	if result.operatorActive {
@@ -243,7 +243,7 @@ func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
 	}
 
 	result, err = reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 0 || result.operatorActive {
+	if err != nil || len(result.Failures) != 0 || result.operatorActive {
 		t.Fatalf("idle Reconcile = %+v, %v", result, err)
 	}
 }
@@ -256,9 +256,9 @@ func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 	armActiveTestSchedules(t, st, item)
 	pullCalls := 0
 	issueClosed := false
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
@@ -270,7 +270,7 @@ func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
 			}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
@@ -338,9 +338,9 @@ func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 	st := schedTestStore(t)
 	first := capturedRunNamed(t, st, "run-shared-first", "item-shared-first")
 	now := activeResourceTestTime
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			return exactPull("closed", true), nil
 		},
 		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
@@ -348,7 +348,7 @@ func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
 			}, nil
 		},
-		now: func() time.Time { return now },
+		Now: func() time.Time { return now },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("first Reconcile = %v, %v", failures, err)
@@ -392,12 +392,12 @@ func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
 		t, st, "run-pr-only", "item-pr-only",
 		domain.CompletionBoundPRMerged, &boundIssue,
 	)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			return exactPull("closed", true), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -479,12 +479,12 @@ func TestActiveResourceHonorsHistoricalCompletionAfterIssueReopens(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			return exactPull("closed", true), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -505,12 +505,12 @@ func TestActiveResourceReconcileUnmergedCloseConcludesUndeclaredItem(t *testing.
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			return exactPull("closed", false), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
@@ -565,14 +565,14 @@ func TestActiveResourceReconcileRequiresExactReturnedResource(t *testing.T) {
 			st := schedTestStore(t)
 			item := activeReadyItem(t, st)
 			armActiveTestSchedules(t, st, item)
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					observed := exactPull("closed", true)
 					tc.mutate(&observed)
 					return observed, nil
 				},
-				now: func() time.Time { return activeResourceTestTime },
+				Now: func() time.Time { return activeResourceTestTime },
 			}
 			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 0 {
@@ -608,16 +608,16 @@ func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
 			item := activeReadyItem(t, st)
 			armActiveTestSchedules(t, st, item)
 			malformed := true
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					observed := exactPull("open", false)
 					if malformed {
 						tc.mutate(&observed)
 					}
 					return observed, nil
 				},
-				now: func() time.Time { return activeResourceTestTime },
+				Now: func() time.Time { return activeResourceTestTime },
 			}
 			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrNonPositive) {
@@ -654,14 +654,14 @@ func TestActiveResourceReconcileSameIdentityRenameStaysReady(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			observed := exactPull("open", false)
 			observed.BaseRepo = "renamed-owner/renamed-repo"
 			return observed, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -725,14 +725,14 @@ func TestActiveResourceReconcileInvalidatesReadyOnBindingDivergence(t *testing.T
 			st := schedTestStore(t)
 			item := activeReadyItem(t, st)
 			armActiveTestSchedules(t, st, item)
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					observed := exactPull("open", false)
 					tc.mutate(&observed)
 					return observed, nil
 				},
-				now: func() time.Time { return activeResourceTestTime },
+				Now: func() time.Time { return activeResourceTestTime },
 			}
 			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 0 {
@@ -774,14 +774,14 @@ func TestActiveResourceIdentityInvalidationAfterRestart(t *testing.T) {
 	}
 
 	reopened := storetest.Open(t, dbPath, options)
-	reconciler := activeResourceReconciler{
-		store: reopened,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: reopened,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			observed := exactPull("open", false)
 			observed.BaseRepoID = 434343
 			return observed, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("restart Reconcile = %v, %v", failures, err)
@@ -798,14 +798,14 @@ func TestActiveResourceIdentityInvalidationRejectsChangedBindingAtCommit(t *test
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			observed := exactPull("open", false)
 			observed.Number = 451
 			return observed, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	observation, err := reconciler.observe(ctx, item, activeResourceTestTime)
 	if err != nil {
@@ -831,14 +831,14 @@ func TestActiveResourceIdentityInvalidationYieldsToConcurrentSupersession(t *tes
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			observed := exactPull("open", false)
 			observed.BaseRepoID = 434343
 			return observed, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	observation, err := reconciler.observe(ctx, item, activeResourceTestTime)
 	if err != nil {
@@ -875,9 +875,9 @@ func TestActiveResourceIdentityDivergenceAtCompletionRecheck(t *testing.T) {
 	item := capturedRun(t, st)
 	armActiveTestSchedules(t, st, item)
 	pullCalls := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			observed := exactPull("closed", true)
 			if pullCalls == 2 {
@@ -897,7 +897,7 @@ func TestActiveResourceIdentityDivergenceAtCompletionRecheck(t *testing.T) {
 				Number: 999, State: "not-an-issue-state",
 			}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -932,9 +932,9 @@ func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t
 			armActiveTestSchedules(t, st, item)
 			pullCalls := 0
 			malformed := true
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					pullCalls++
 					observed := exactPull("closed", true)
 					if malformed && pullCalls == 2 {
@@ -947,7 +947,7 @@ func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t
 						Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
 					}, nil
 				},
-				now: func() time.Time { return activeResourceTestTime },
+				Now: func() time.Time { return activeResourceTestTime },
 			}
 			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrNonPositive) {
@@ -993,9 +993,9 @@ func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *test
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			// A decision concludes the item after the observation reads it open
 			// but before the commit re-reads it.
 			concluded := readActiveItem(t, st, item.ID)
@@ -1011,7 +1011,7 @@ func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *test
 			observed.HeadSHA = "f00dbabe"
 			return observed, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
@@ -1030,15 +1030,15 @@ func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T
 	item := activeReadyItem(t, st)
 	transient := errors.New("temporary forge failure")
 	fail := true
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			if fail {
 				return publish.PullObservation{}, transient
 			}
 			return exactPull("open", false), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 1 || !errors.Is(failures[0], transient) {
@@ -1082,15 +1082,15 @@ func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.
 	item := activeReadyItem(t, st)
 	remoteFailure := errors.New("remote response carried untrusted detail")
 	failing := true
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			if failing {
 				return publish.PullObservation{}, remoteFailure
 			}
 			return exactPull("open", false), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	readHealth := func() []domain.AttentionItem {
 		t.Helper()
@@ -1181,13 +1181,13 @@ func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t
 				t.Fatal(err)
 			}
 			pullCalls := 0
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					pullCalls++
 					return exactPull("open", false), nil
 				},
-				now: func() time.Time { return activeResourceTestTime },
+				Now: func() time.Time { return activeResourceTestTime },
 			}
 			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 				t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -1222,9 +1222,9 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	pullCalls := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
@@ -1233,7 +1233,7 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
 			}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+		Now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("recovery Reconcile = %v, %v", failures, err)
@@ -1292,9 +1292,9 @@ func TestActiveResourceReconcileRequiresWorkUnitBindingAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	pullCalls := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
@@ -1303,7 +1303,7 @@ func TestActiveResourceReconcileRequiresWorkUnitBindingAnchor(t *testing.T) {
 				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
 			}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 1 || !strings.Contains(failures[0].Error(), "disagrees with ready resource") {
@@ -1339,13 +1339,13 @@ func TestActiveResourceReconcileRefusesReadyBindingOffTheItemHead(t *testing.T) 
 		t.Fatal(err)
 	}
 	pullCalls := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if _, err := reconcileActiveResource(&reconciler, ctx); err == nil ||
 		!strings.Contains(err.Error(), "stored row body inconsistent") {
@@ -1391,15 +1391,15 @@ func TestActiveResourceReconcileForeclosesDivergedMergedCompletion(t *testing.T)
 
 			pullCalls := 0
 			evictions := 0
-			newReconciler := func() activeResourceReconciler {
-				return activeResourceReconciler{
-					store: st,
-					pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			newReconciler := func() ActiveResourceReconciler {
+				return ActiveResourceReconciler{
+					Store: st,
+					Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 						pullCalls++
 						return pull, nil
 					},
 					evictConcluded: func(domain.ReadyItemPRBinding, *int) { evictions++ },
-					now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+					Now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 				}
 			}
 			reconciler := newReconciler()
@@ -1493,16 +1493,16 @@ func TestActiveResourceReconcileKeepsExactMergedCompletionPending(t *testing.T) 
 		t.Fatal(err)
 	}
 	pullCalls := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
 		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
 			return publish.IssueObservation{Number: 443, State: "open"}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+		Now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 	}
 	for pass := 1; pass <= 2; pass++ {
 		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
@@ -1563,16 +1563,16 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 	}
 	pullCalls := 0
 	evictions := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
 		evictConcluded: func(domain.ReadyItemPRBinding, *int) {
 			evictions++
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 1 {
 		t.Fatalf("ready-unbound Reconcile = %v, %v", failures, err)
@@ -1648,9 +1648,9 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 	merged := false
 	pullCalls := 0
 	evictions := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", merged), nil
 		},
@@ -1662,7 +1662,7 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 		evictConcluded: func(domain.ReadyItemPRBinding, *int) {
 			evictions++
 		},
-		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+		Now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("closed-unmerged Reconcile = %v, %v", failures, err)
@@ -1740,16 +1740,16 @@ func TestActiveResourceReconcileWaitsOnARebaseProof(t *testing.T) {
 
 			pull := exactPull("open", false)
 			pull.HeadSHA = rebased
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					return pull, nil
 				},
 				issue: func(context.Context, string, int) (publish.IssueObservation, error) {
 					return publish.IssueObservation{Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef"}, nil
 				},
 				evictConcluded: func(domain.ReadyItemPRBinding, *int) {},
-				now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+				Now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 			}
 			reconcile := func(pass string) {
 				t.Helper()

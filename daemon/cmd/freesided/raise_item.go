@@ -270,7 +270,7 @@ func raisedItem(
 	case raiseAlertStall:
 		// The real hook's builder, for an invocation no run has. Like every
 		// stall notice, the item resolves at the next daemon start.
-		return invocationStalledItem(ctx, tx, raisedMarker, stallInterval(0), now)
+		return InvocationStalledItem(ctx, tx, raisedMarker, StallInterval(0), now)
 	case raiseAlertHeldWork:
 		return raisedHeldWorkItem(ctx, tx, req.RunID, now)
 	case raiseAlertReviewGrowth:

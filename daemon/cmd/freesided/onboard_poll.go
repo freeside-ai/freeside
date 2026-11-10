@@ -27,10 +27,10 @@ import (
 // tens of seconds, so two seconds keeps resume latency imperceptible.
 const installPollInterval = 2 * time.Second
 
-// pendingReadySource is the janitor's onboarding transition signal
+// PendingReadySource is the janitor's onboarding transition signal
 // (publish.InstallationJanitor and the daemon's janitorSession both
 // provide it).
-type pendingReadySource interface {
+type PendingReadySource interface {
 	PendingReady(publish.PendingInstallationEnvelope) (int64, bool)
 }
 
@@ -38,14 +38,14 @@ func installPollScheduleID(registrationID int64) domain.ScheduleID {
 	return domain.ScheduleID(fmt.Sprintf("schedule-installation_poll-%d", registrationID))
 }
 
-// installPollRegistration wires the installation-poll kind. SubjectLive is
+// InstallPollRegistration wires the installation-poll kind. SubjectLive is
 // the §5.9 activation-state check: the schedule stays live only while the
 // authority document holds the exact pending envelope (epoch and durable
 // intent revision) the schedule was armed against; a promoted or superseded
 // envelope resolves as subject_concluded at the next fire.
-func installPollRegistration(
+func InstallPollRegistration(
 	authority publish.InstallationAuthoritySource,
-	ready pendingReadySource,
+	ready PendingReadySource,
 ) scheduler.Registration {
 	pendingEnvelope := func(ctx context.Context, sc domain.Schedule) (*publish.PendingInstallationEnvelope, error) {
 		snapshot, err := authority.InstallationAuthority(ctx, *sc.Subject.RegistrationID)
@@ -97,12 +97,12 @@ func installPollRegistration(
 func newInstallPollScheduler(
 	st *store.Store,
 	authority publish.InstallationAuthoritySource,
-	ready pendingReadySource,
+	ready PendingReadySource,
 ) (*scheduler.Scheduler, error) {
 	return scheduler.New(st, domain.ModeAttendedDev,
 		func() time.Time { return time.Now().UTC() },
 		map[domain.ScheduleKind]scheduler.Registration{
-			domain.ScheduleInstallationPoll: installPollRegistration(authority, ready),
+			domain.ScheduleInstallationPoll: InstallPollRegistration(authority, ready),
 		})
 }
 
@@ -118,7 +118,7 @@ func armInstallationPoll(
 	interval := int64(installPollInterval / time.Second)
 	expiry := expiresAt.UTC()
 	schedule, err := domain.NewSchedule(domain.ScheduleInput{
-		ID: installPollScheduleID(registrationID), ProjectID: schedulerSystemProjectID,
+		ID: installPollScheduleID(registrationID), ProjectID: SchedulerSystemProjectID,
 		Kind: domain.ScheduleInstallationPoll,
 		Subject: domain.ScheduleSubject{
 			Type:           domain.ScheduleSubjectInstallationIntent,

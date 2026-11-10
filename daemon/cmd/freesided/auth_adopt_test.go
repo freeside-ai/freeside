@@ -1055,11 +1055,11 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "policy", "lineup"), []byte("edited\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := claudeDriverConfig{
+	cfg := ClaudeDriverConfig{
 		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
 		ProviderEndpoints: []string{"b.example:443", "a.example:443"},
 	}
-	selection, err := loadAgentSelection(context.Background(), cfg)
+	selection, err := LoadAgentSelection(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("load agent selection: %v", err)
 	}
@@ -1072,7 +1072,7 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 	}
 
 	cfg.AgentTreeCommit = "HEAD"
-	if _, err := loadAgentSelection(context.Background(), cfg); !errors.Is(err, agenttree.ErrCommit) {
+	if _, err := LoadAgentSelection(context.Background(), cfg); !errors.Is(err, agenttree.ErrCommit) {
 		t.Fatalf("a symbolic commit = %v, want %v", err, agenttree.ErrCommit)
 	}
 }
@@ -1118,7 +1118,7 @@ func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixt
 	t.Helper()
 	ctx := context.Background()
 	checkout, commit := commitAdoptedPatch(t, patch)
-	selection, err := loadAgentSelection(ctx, claudeDriverConfig{
+	selection, err := LoadAgentSelection(ctx, ClaudeDriverConfig{
 		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
 		ProviderEndpoints: []string{"api.anthropic.com:443"},
 	})
@@ -1283,8 +1283,8 @@ func TestAuthAdoptClaudeReviewer(t *testing.T) {
 			t.Fatalf("Claude reviewer selection = %+v", got)
 		}
 		// The daemon resolves the same reviewer from the line.
-		cfg := claudeDriverConfig{OperatingMode: domain.ModeUnattended, ReviewAuthMode: ward.CodexAuthSetupToken}
-		daemon, err := resolveReviewSelection(ctx, st, tree, cfg, now)
+		cfg := ClaudeDriverConfig{OperatingMode: domain.ModeUnattended, ReviewAuthMode: ward.CodexAuthSetupToken}
+		daemon, err := ResolveReviewSelection(ctx, st, tree, cfg, now)
 		if err != nil || daemon.ReviewProvider != got.ReviewProvider ||
 			daemon.ReviewAuthIdentityID != "claude-review" || daemon.ReviewModel != adoptClaudeReviewModel {
 			t.Fatalf("daemon review selection = %+v, %v", daemon, err)
@@ -1292,12 +1292,12 @@ func TestAuthAdoptClaudeReviewer(t *testing.T) {
 		// A Codex auth mode is not one the Claude reviewer accepts.
 		for _, mode := range []ward.CodexAuthMode{ward.CodexAuthSubscription, ward.CodexAuthAPIKey} {
 			_, err := resolvePreflightAgents(ctx, st, tree, revision, mode, false, now)
-			var mismatch *reviewProviderMismatch
+			var mismatch *ReviewProviderMismatch
 			if !errors.As(err, &mismatch) || !errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("Claude reviewer under %s = %v", mode, err)
 			}
 			cfg.ReviewAuthMode = mode
-			if _, err := resolveReviewSelection(ctx, st, tree, cfg, now); !errors.As(err, &mismatch) {
+			if _, err := ResolveReviewSelection(ctx, st, tree, cfg, now); !errors.As(err, &mismatch) {
 				t.Fatalf("daemon Claude reviewer under %s = %v", mode, err)
 			}
 		}

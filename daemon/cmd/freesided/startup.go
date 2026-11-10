@@ -29,30 +29,30 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// startupBindings holds the values startup composes after the attention
+// StartupBindings holds the values startup composes after the attention
 // service, whose options read them later. Each field is assigned at the
 // point startup composes its value and stays nil in a composition that
 // has none, so an option that runs earlier, or in another composition,
 // takes its unavailable answer. Options read a field through the
 // pointer at call time; one that copied a field at construction would
 // keep nil forever.
-type startupBindings struct {
-	workflow       *engine.Engine
-	claudeWiring   *claudeComposition
-	agentCatalog   *signet.AgentCatalog
-	upkeepTrigger  *imageUpkeepTrigger
-	scenarioWiring *daemoncompose.ScenarioComposition
+type StartupBindings struct {
+	Workflow       *engine.Engine
+	ClaudeWiring   *ClaudeComposition
+	AgentCatalog   *signet.AgentCatalog
+	UpkeepTrigger  *imageUpkeepTrigger
+	ScenarioWiring *daemoncompose.ScenarioComposition
 }
 
-// agents is the lineup the composed engine admits through: the Claude
+// Agents is the lineup the composed engine admits through: the Claude
 // composition's, else the scenario composition's, else nil, which the
 // operator hooks answer with signet.ErrOperatorSettingUnavailable.
-func (b *startupBindings) agents() *engine.AgentSelection {
+func (b *StartupBindings) Agents() *engine.AgentSelection {
 	switch {
-	case b.claudeWiring != nil:
-		return b.claudeWiring.env.Agents
-	case b.scenarioWiring != nil:
-		return b.scenarioWiring.Agents
+	case b.ClaudeWiring != nil:
+		return b.ClaudeWiring.env.Agents
+	case b.ScenarioWiring != nil:
+		return b.ScenarioWiring.Agents
 	default:
 		return nil
 	}
@@ -118,29 +118,29 @@ func newAttentionService(
 	connectionMode domain.ConnectionMode, topicKey []byte,
 	manualInitiator func(domain.ProjectID) (engine.ManualInitiator, bool),
 	usage *usagecollect.Coordinator, usageRefreshAge time.Duration, doctorAvailable *atomic.Bool,
-	late *startupBindings,
+	late *StartupBindings,
 ) *signet.Service {
 	attention := signet.NewService(st,
 		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
-			if late.workflow == nil {
+			if late.Workflow == nil {
 				return commit()
 			}
-			return late.workflow.CommitTaskStop(stopCtx, taskID, commit)
+			return late.Workflow.CommitTaskStop(stopCtx, taskID, commit)
 		}),
 		signet.WithFollowUpFiler(func() signet.FollowUpFiler {
-			return followUpFilerBinding(late.claudeWiring)
+			return FollowUpFilerBinding(late.ClaudeWiring)
 		}),
 		// An approved image-policy adoption wakes upkeep to build under it.
 		signet.WithImageUpkeepWake(func() {
-			if late.upkeepTrigger != nil {
-				late.upkeepTrigger.wake()
+			if late.UpkeepTrigger != nil {
+				late.UpkeepTrigger.Wake()
 			}
 		}),
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.now),
 		signet.WithLogger(cfg.Logger),
-		signet.WithDoctorSchedule(doctorScheduleID, doctorAvailable.Load),
+		signet.WithDoctorSchedule(DoctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
 		// Client task submission (plan §5.11) resolves each project's policy from
 		// its operator-configured startup snapshot, independently of label intake.
@@ -164,7 +164,7 @@ func newAttentionService(
 		signet.WithRoutingPolicySetter(func(
 			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 		) (signet.RoutingPolicyOutcome, error) {
-			agents := late.agents()
+			agents := late.Agents()
 			if agents == nil {
 				return signet.RoutingPolicyOutcome{}, signet.ErrOperatorSettingUnavailable
 			}
@@ -182,7 +182,7 @@ func newAttentionService(
 		signet.WithAlternateAgentRetrier(func(
 			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
 		) (domain.AlternateAgentRetry, error) {
-			agents := late.agents()
+			agents := late.Agents()
 			if agents == nil {
 				return domain.AlternateAgentRetry{}, signet.ErrOperatorSettingUnavailable
 			}
@@ -191,7 +191,7 @@ func newAttentionService(
 		signet.WithParkedTaskMover(func(
 			ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 		) (domain.ParkedTaskMoveReceipt, error) {
-			agents := late.agents()
+			agents := late.Agents()
 			if agents == nil {
 				return domain.ParkedTaskMoveReceipt{}, signet.ErrOperatorSettingUnavailable
 			}
@@ -200,7 +200,7 @@ func newAttentionService(
 		// The catalog, like the tree it projects, exists only after the
 		// Claude or scenario composition; until then, and in the fake-driver
 		// composition that loads no tree, clients see null.
-		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.agentCatalog }),
+		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.AgentCatalog }),
 		signet.WithUsageRefreshAge(usageRefreshAge),
 		// A client's refresh or reassignment starts its collection only after
 		// the command commits.
@@ -209,18 +209,18 @@ func newAttentionService(
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 		}),
 		// The effective digest exists only after the Claude composition
-		// (composeClaudeWorkflow); the func indirection lets the
+		// (ComposeClaudeWorkflow); the func indirection lets the
 		// decision-time adoption gate read it then. The fake-driver
 		// composition leaves it empty (gate absent); the scenario's review
 		// source is the fake's default configuration.
 		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
-			if late.scenarioWiring != nil {
+			if late.ScenarioWiring != nil {
 				return fake.DefaultReviewConfigurationDigest
 			}
-			if late.claudeWiring == nil {
+			if late.ClaudeWiring == nil {
 				return ""
 			}
-			return late.claudeWiring.reviewConfigurationDigest
+			return late.ClaudeWiring.ReviewConfigurationDigest
 		}),
 	)
 	return attention
@@ -237,59 +237,59 @@ func newScenarioParts(
 	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
 	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
 ) (daemoncompose.ScenarioParts, error) {
-	materializer, err := productionMaterializer(blobs)
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		return daemoncompose.ScenarioParts{}, err
 	}
 	return daemoncompose.ScenarioParts{
 		Store: st, Attention: attention, Blobs: blobs, Lock: lock, Bound: bound,
 		DBPath: cfg.DBPath, Logger: cfg.Logger, Scenario: cfg.Scenario,
-		AdmissionFloor:                   admissionFloor(domain.ModeUnattended),
-		ImplementationDeliveryValidation: productionImplementationDeliveryValidator(materializer),
-		SpecificationDeliveryValidation:  productionSpecificationDeliveryValidator(materializer),
+		AdmissionFloor:                   AdmissionFloor(domain.ModeUnattended),
+		ImplementationDeliveryValidation: ProductionImplementationDeliveryValidator(materializer),
+		SpecificationDeliveryValidation:  ProductionSpecificationDeliveryValidator(materializer),
 		Imports:                          admissionauth.Authority{Store: st, Blobs: blobs},
-		Exports:                          exportRecorder{store: st},
-		PublicationWatches:               publicationWatchRegistrations(st),
-		AgentExpiryMargin:                agentExpiryMargin,
+		Exports:                          ExportRecorder{Store: st},
+		PublicationWatches:               PublicationWatchRegistrations(st),
+		AgentExpiryMargin:                AgentExpiryMargin,
 	}, nil
 }
 
-// claudeStartupConfig is the part of the daemon's configuration the
+// ClaudeStartupConfig is the part of the daemon's configuration the
 // Claude composition and its loops read. Each field means what the
 // config field of the same name does.
-type claudeStartupConfig struct {
-	Claude           *claudeDriverConfig
+type ClaudeStartupConfig struct {
+	Claude           *ClaudeDriverConfig
 	Logger           *slog.Logger
 	StateDir         string
 	DBPath           string
 	ApprovedRecipes  map[domain.Digest]bool
-	IntakeInitiators []intakeInitiator
+	IntakeInitiators []IntakeInitiator
 	DoctorInterval   time.Duration
 	// Now is the attention service clock; nil is the wall clock.
 	Now func() time.Time
 }
 
-// claudeWorkflow is what the Claude composition hands the rest of startup.
-type claudeWorkflow struct {
-	claudeWiring *claudeComposition
-	workflow     *engine.Engine
-	imageUpkeep  *engine.ImageUpkeep
+// ClaudeWorkflow is what the Claude composition hands the rest of startup.
+type ClaudeWorkflow struct {
+	ClaudeWiring *ClaudeComposition
+	Workflow     *engine.Engine
+	ImageUpkeep  *engine.ImageUpkeep
 }
 
-// composeClaudeWorkflow builds the Claude driver and the engine around it,
+// ComposeClaudeWorkflow builds the Claude driver and the engine around it,
 // then gives orphaned handoffs their first adoption attempt. It assigns
 // *startupSessionCloser as soon as the driver exists, so run()'s cleanup
 // awaits every credential-bearing session even when a later step here
 // fails, and it publishes the wiring, the agent catalog, and the engine
 // to late as it composes each.
-func composeClaudeWorkflow(
+func ComposeClaudeWorkflow(
 	ctx context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg claudeStartupConfig,
+	lock *daemonlock.Lock, bound ward.LaunchBound, cfg ClaudeStartupConfig,
 	manualProjects map[domain.ProjectID]engine.ManualInitiator, claudeUsageCaptures engine.ClaudeUsageSink,
-	doctorConvergenceLock *sync.Mutex, startupSessionCloser *sessionCloser, late *startupBindings,
-) (_ *claudeWorkflow, err error) {
+	doctorConvergenceLock *sync.Mutex, startupSessionCloser *SessionCloser, late *StartupBindings,
+) (_ *ClaudeWorkflow, err error) {
 	var (
-		claudeWiring *claudeComposition
+		claudeWiring *ClaudeComposition
 		workflow     *engine.Engine
 		imageUpkeep  *engine.ImageUpkeep
 	)
@@ -299,31 +299,31 @@ func composeClaudeWorkflow(
 		// sources cannot be composed without its identity. Leave the
 		// item naming the role for the next start that gets far enough
 		// to serve it.
-		var roleFailure *roleAdmissionError
+		var roleFailure *RoleAdmissionError
 		if errors.As(err, &roleFailure) {
-			err = errors.Join(err, reportRoleFailure(ctx, st, roleFailure, startupNow(cfg.Now)))
+			err = errors.Join(err, ReportRoleFailure(ctx, st, roleFailure, startupNow(cfg.Now)))
 		}
 		return nil, err
 	}
-	late.claudeWiring = claudeWiring
-	logEffectiveReviewConfiguration(cfg.Logger, claudeWiring.reviewConfigurationDigest)
+	late.ClaudeWiring = claudeWiring
+	LogEffectiveReviewConfiguration(cfg.Logger, claudeWiring.ReviewConfigurationDigest)
 	// Reconcile below can resume credential-bearing sessions before every
 	// later startup step has succeeded. Register their awaited cleanup
 	// immediately, while the store they need is still open.
-	*startupSessionCloser = claudeWiring.closer
+	*startupSessionCloser = claudeWiring.Closer
 	// The tree already parsed, so a projection error is a daemon bug.
 	catalog, err := signet.AgentCatalogOf(claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision)
 	if err != nil {
 		return nil, err
 	}
-	late.agentCatalog = &catalog
+	late.AgentCatalog = &catalog
 	stageDriver, err := claudeWiring.stageDriver(blobs)
 	if err != nil {
 		return nil, err
 	}
 	production := daemoncompose.ProductionEngine{
 		Lock: lock, Bound: bound,
-		Backend: claudeWiring.backend, AdmissionFloor: admissionFloor(cfg.Claude.OperatingMode),
+		Backend: claudeWiring.Backend, AdmissionFloor: AdmissionFloor(cfg.Claude.OperatingMode),
 		Admission: claudeWiring.env, AdmissionNow: func() time.Time { return time.Now().UTC() },
 		Derive:           claudeWiring.derive,
 		SelectImage:      claudeWiring.selectImage,
@@ -349,7 +349,7 @@ func composeClaudeWorkflow(
 		// mix of sites.
 		MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
 	}
-	sites := judgmentSites(judgmentBudget)
+	sites := JudgmentSites(judgmentBudget)
 	advisoryStore, advisoryErr := openAdvisoryStore(cfg.StateDir, sites)
 	var advisoryWriter inference.AdvisoryWriter = advisoryStore
 	if advisoryErr != nil {
@@ -365,16 +365,16 @@ func composeClaudeWorkflow(
 	if judgmentRuntime.Driver == nil && cfg.Logger != nil {
 		cfg.Logger.Info("subscription judgments are off; every judgment site returns its fail-safe")
 	}
-	judgmentHealth := newJudgmentRoleHealth(st, func() time.Time { return time.Now().UTC() }, cfg.Logger)
+	judgmentHealth := NewJudgmentRoleHealth(st, func() time.Time { return time.Now().UTC() }, cfg.Logger)
 	judgments, err := inference.New(inference.Config{
 		Logger:     cfg.Logger,
 		StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
 		AnchorPath: cfg.DBPath + ".inference-budget-anchor",
-		Roles: judgmentRoles{
-			st: st, tree: claudeWiring.env.Agents.Tree, revision: claudeWiring.env.Agents.LineupRevision,
-			runtime: judgmentRuntime,
-			credentials: productionJudgmentCredentials(
-				st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin), cfg.Logger),
+		Roles: JudgmentRoles{
+			Store: st, Tree: claudeWiring.env.Agents.Tree, Revision: claudeWiring.env.Agents.LineupRevision,
+			Runtime: judgmentRuntime,
+			Credentials: productionJudgmentCredentials(
+				st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin), cfg.Logger),
 		},
 		Health:   judgmentHealth,
 		Sites:    sites,
@@ -388,15 +388,15 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, fmt.Errorf("compose research fetcher: %w", err)
 	}
-	deliveryMaterializer, err := productionMaterializer(blobs)
+	deliveryMaterializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		return nil, fmt.Errorf("compose specification delivery validator: %w", err)
 	}
-	production.DeliveryValidation = productionImplementationDeliveryValidator(deliveryMaterializer)
+	production.DeliveryValidation = ProductionImplementationDeliveryValidator(deliveryMaterializer)
 	production.Specification = engine.SpecificationConfig{
 		Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
 		PromptPackageDigest: claudeWiring.specificationPromptPackage,
-		ValidateDelivery:    productionSpecificationDeliveryValidator(deliveryMaterializer),
+		ValidateDelivery:    ProductionSpecificationDeliveryValidator(deliveryMaterializer),
 	}
 	var shadowReviewFailure func(domain.RunID, int, domain.ReviewFailureClass, error)
 	if claudeWiring.shadowReviewSource != nil {
@@ -408,11 +408,11 @@ func composeClaudeWorkflow(
 		}
 	}
 	verificationOwnership, err := ward.NewVerificationOwnership(
-		filepath.Join(cfg.StateDir, "task-verification"), ward.NewCLIRuntime(claudeWiring.containerBin))
+		filepath.Join(cfg.StateDir, "task-verification"), ward.NewCLIRuntime(claudeWiring.ContainerBin))
 	if err != nil {
 		return nil, err
 	}
-	coverage, err := openTaskRuntimeCoverage(ctx, st, cfg.StateDir)
+	coverage, err := OpenTaskRuntimeCoverage(ctx, st, cfg.StateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +422,7 @@ func composeClaudeWorkflow(
 			var joined error
 			// Still request exact known teardown for an uncovered legacy task,
 			// but never equate its missing private records with absence.
-			if reason, err := unprovableTaskStop(stopCtx, st, coverage, run.TaskID); err != nil {
+			if reason, err := UnprovableTaskStop(stopCtx, st, coverage, run.TaskID); err != nil {
 				joined = errors.Join(joined, err)
 			} else if reason != "" {
 				joined = errors.Join(joined, errors.New(reason))
@@ -458,7 +458,7 @@ func composeClaudeWorkflow(
 			return joined
 		},
 		Unprovable: func(ctx context.Context, task domain.TaskID) (string, error) {
-			return unprovableTaskStop(ctx, st, coverage, task)
+			return UnprovableTaskStop(ctx, st, coverage, task)
 		},
 	}
 	rebuild, err := newProjectImageRebuild(*cfg.Claude, st)
@@ -485,7 +485,7 @@ func composeClaudeWorkflow(
 		ShadowReviewSource:              claudeWiring.shadowReviewSource,
 		ReviewAdmission:                 claudeWiring.reviewAdmission,
 		ReviewRecovery:                  claudeWiring.reviewRecovery,
-		ReviewConfigurationDigest:       claudeWiring.reviewConfigurationDigest,
+		ReviewConfigurationDigest:       claudeWiring.ReviewConfigurationDigest,
 		ShadowReviewConfigurationDigest: claudeWiring.shadowReviewConfigurationDigest,
 		ShadowReviewDefaultRate: enabledShadowReviewRate(
 			claudeWiring.shadowReviewSource, claudeWiring.shadowReviewRate),
@@ -495,10 +495,10 @@ func composeClaudeWorkflow(
 		RebuildProjectImage:    rebuild,
 		ImageUpkeepPending:     imageUpkeep.PendingResolution,
 		NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
-			return ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
+			return ward.NewProjectImageRoom(claudeWiring.ContainerBin, image, size, cfg.Logger)
 		},
 		NewBoundRoom: func(image domain.ProjectImage, size ward.ContainerSize, run domain.Run, invocation domain.InvocationID) (engine.ProductionVerificationRoom, error) {
-			room, err := ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
+			room, err := ward.NewProjectImageRoom(claudeWiring.ContainerBin, image, size, cfg.Logger)
 			if err != nil {
 				return nil, err
 			}
@@ -518,7 +518,7 @@ func composeClaudeWorkflow(
 			return (operations.Doctor{
 				Store: st, Attention: attention,
 				ProjectID:                 domain.ProjectID("project-system"),
-				ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+				ReviewConfigurationDigest: claudeWiring.ReviewConfigurationDigest,
 				Mode:                      domain.ModeUnattended,
 				Now:                       cfg.Now,
 			}).ConvergeReviewConfiguration(refreshCtx)
@@ -528,16 +528,16 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, err
 	}
-	late.workflow = workflow
+	late.Workflow = workflow
 	// Before any loop admits: report why selection is not active, if it
 	// is not.
-	if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.Now)); err != nil {
+	if err := ActivateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("activate agent selection: %w", err)
 	}
 	// The same for the judgment roles: name each one the lineup cannot
 	// fill before a site returns its fail-safe for it, and resolve the
 	// item of a role fixed since the last start.
-	if err := checkJudgmentRolesAtStartup(ctx, judgments, judgmentHealth, cfg.Logger); err != nil {
+	if err := CheckJudgmentRolesAtStartup(ctx, judgments, judgmentHealth, cfg.Logger); err != nil {
 		return nil, fmt.Errorf("check judgment roles: %w", err)
 	}
 	claudeWiring.driver.SetRecoveryLauncher(workflow.ResumeTaskInvocation)
@@ -563,7 +563,7 @@ func composeClaudeWorkflow(
 	if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("report quarantined stage intents: %w", err)
 	}
-	return &claudeWorkflow{claudeWiring: claudeWiring, workflow: workflow, imageUpkeep: imageUpkeep}, nil
+	return &ClaudeWorkflow{ClaudeWiring: claudeWiring, Workflow: workflow, ImageUpkeep: imageUpkeep}, nil
 }
 
 // newDoctorPass returns a doctor pass, which does nothing outside Claude
@@ -571,7 +571,7 @@ func composeClaudeWorkflow(
 // credential-integrity marks only and starting the daemon starts no
 // observer container; scheduled passes take the live probe.
 func newDoctorPass(
-	cfg config, st *store.Store, attention *signet.Service, claudeWiring *claudeComposition,
+	cfg config, st *store.Store, attention *signet.Service, claudeWiring *ClaudeComposition,
 	doctorConvergenceLock *sync.Mutex, probe credentialIntegrityProbe,
 ) func(context.Context) error {
 	return func(runCtx context.Context) error {
@@ -588,8 +588,8 @@ func newDoctorPass(
 			Store: st, Attention: attention,
 			ProjectID:                 domain.ProjectID("project-system"),
 			Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
-			ConfigurationDigest:       claudeWiring.backend.ConfigurationDigest(),
-			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+			ConfigurationDigest:       claudeWiring.Backend.ConfigurationDigest(),
+			ReviewConfigurationDigest: claudeWiring.ReviewConfigurationDigest,
 			Mode:                      cfg.Claude.OperatingMode,
 			Now:                       cfg.now,
 			CredentialIntegrityProbe:  replay,
@@ -599,27 +599,27 @@ func newDoctorPass(
 	}
 }
 
-// claudeLoops holds the Claude composition's background loops between
+// ClaudeLoops holds the Claude composition's background loops between
 // their construction and their start.
-type claudeLoops struct {
-	claudeSched          *scheduler.Scheduler
-	activeReconciler     *activeResourceReconciler
-	intakeReconcilerLoop *intakeReconciler
-	upkeepTrigger        *imageUpkeepTrigger
+type ClaudeLoops struct {
+	ClaudeSched          *scheduler.Scheduler
+	ActiveReconciler     *ActiveResourceReconciler
+	IntakeReconcilerLoop *intakeReconciler
+	UpkeepTrigger        *imageUpkeepTrigger
 }
 
-// composeClaudeLoops builds the Claude loops without starting any, so it
+// ComposeClaudeLoops builds the Claude loops without starting any, so it
 // runs before startup makes durable-stop recovery available, and
 // publishes the image-upkeep trigger to late. collectUsage is the usage
 // coordinator's collection pass, which the scheduled doctor pass starts.
-func composeClaudeLoops(
-	parent context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore, cfg claudeStartupConfig,
-	claudeWiring *claudeComposition, workflow *engine.Engine, imageUpkeep *engine.ImageUpkeep,
-	runDoctor func(context.Context) error, collectUsage func(context.Context) error, late *startupBindings,
-) (_ *claudeLoops, err error) {
+func ComposeClaudeLoops(
+	parent context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore, cfg ClaudeStartupConfig,
+	claudeWiring *ClaudeComposition, workflow *engine.Engine, imageUpkeep *engine.ImageUpkeep,
+	runDoctor func(context.Context) error, collectUsage func(context.Context) error, late *StartupBindings,
+) (_ *ClaudeLoops, err error) {
 	var (
 		claudeSched          *scheduler.Scheduler
-		activeReconciler     *activeResourceReconciler
+		activeReconciler     *ActiveResourceReconciler
 		intakeReconcilerLoop *intakeReconciler
 		upkeepTrigger        *imageUpkeepTrigger
 	)
@@ -634,14 +634,14 @@ func composeClaudeLoops(
 		return nil, err
 	}
 	upkeepTrigger = newImageUpkeepTrigger()
-	late.upkeepTrigger = upkeepTrigger
-	activeReconciler = &activeResourceReconciler{
-		store: st, pull: claudeWiring.observePull,
+	late.UpkeepTrigger = upkeepTrigger
+	activeReconciler = &ActiveResourceReconciler{
+		Store: st, Pull: claudeWiring.observePull,
 		issue:  claudeWiring.observeIssue,
-		review: claudeWiring.observeReview,
+		Review: claudeWiring.observeReview,
 		// The default automated reviewer is wired here, not in the domain
 		// (plan §5.16, §7; AGENTS.md, Automated reviewer).
-		reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
+		Reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
 		reviewInvalidate: claudeWiring.reviewInvalidate,
 		evictConcluded:   claudeWiring.evictConcluded,
 		tipWatch: repositoryTipWatch{
@@ -649,7 +649,7 @@ func composeClaudeLoops(
 		},
 		observeTip:       claudeWiring.observeRepositoryTip,
 		upkeepTipAdvance: upkeepTrigger.tipAdvanced,
-		now:              func() time.Time { return time.Now().UTC() },
+		Now:              func() time.Time { return time.Now().UTC() },
 	}
 	intakeReconcilerLoop = &intakeReconciler{
 		store: st, blobs: blobs, engine: workflow, attention: attention,
@@ -659,9 +659,9 @@ func composeClaudeLoops(
 		initiators:   cfg.IntakeInitiators,
 		now:          func() time.Time { return time.Now().UTC() },
 	}
-	return &claudeLoops{
-		claudeSched: claudeSched, activeReconciler: activeReconciler,
-		intakeReconcilerLoop: intakeReconcilerLoop, upkeepTrigger: upkeepTrigger,
+	return &ClaudeLoops{
+		ClaudeSched: claudeSched, ActiveReconciler: activeReconciler,
+		IntakeReconcilerLoop: intakeReconcilerLoop, UpkeepTrigger: upkeepTrigger,
 	}, nil
 }
 
@@ -672,7 +672,7 @@ func composeClaudeLoops(
 // later reports through ComponentExited.
 func (d *daemon) startServing(
 	parent, ctx context.Context, cfg config, st *store.Store, attention *signet.Service,
-	workflow *engine.Engine, claudeWiring *claudeComposition, localBackups *store.LocalBackupProducer,
+	workflow *engine.Engine, claudeWiring *ClaudeComposition, localBackups *store.LocalBackupProducer,
 	logger *slog.Logger,
 ) {
 	// Usage collection starts before the control socket serves and the
@@ -687,7 +687,7 @@ func (d *daemon) startServing(
 	// background, one container at a time, and nothing it meets stops the
 	// daemon.
 	if claudeWiring != nil {
-		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.containerBin,
+		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.ContainerBin,
 			cfg.claudeModelDiscoverer, cfg.codexModelDiscoverer, logger)
 		d.Go(func() {
 			refresh.run(ctx)
@@ -728,15 +728,15 @@ func (d *daemon) startServing(
 // cleanup that stops them, and marks the doctor available before its
 // scheduler starts.
 func (d *daemon) startClaudeLoops(
-	parent, ctx context.Context, cfg config, claudeWiring *claudeComposition, workflow *engine.Engine,
-	imageUpkeep *engine.ImageUpkeep, loops *claudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
+	parent, ctx context.Context, cfg config, claudeWiring *ClaudeComposition, workflow *engine.Engine,
+	imageUpkeep *engine.ImageUpkeep, loops *ClaudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
 ) {
-	claudeSched := loops.claudeSched
-	activeReconciler := loops.activeReconciler
-	intakeReconcilerLoop := loops.intakeReconcilerLoop
-	upkeepTrigger := loops.upkeepTrigger
+	claudeSched := loops.ClaudeSched
+	activeReconciler := loops.ActiveReconciler
+	intakeReconcilerLoop := loops.IntakeReconcilerLoop
+	upkeepTrigger := loops.UpkeepTrigger
 	d.Go(func() {
-		err := claudeWiring.followUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
+		err := claudeWiring.FollowUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
 			if cfg.Logger != nil {
 				cfg.Logger.Error("follow-up filing pass failed", "error", err)
 			}
@@ -745,7 +745,7 @@ func (d *daemon) startClaudeLoops(
 	})
 	doctorAvailable.Store(true)
 	d.Go(func() {
-		err := claudeWiring.reviewReplier.Run(ctx, time.Minute, func(err error) {
+		err := claudeWiring.ReviewReplier.Run(ctx, time.Minute, func(err error) {
 			if cfg.Logger != nil {
 				cfg.Logger.Warn("external review reply sweep", "error", err)
 			}
@@ -768,17 +768,17 @@ func (d *daemon) startClaudeLoops(
 	})
 	d.Go(func() {
 		err := activeReconciler.Run(ctx,
-			defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
+			DefaultActiveResourceInterval, OperatorActiveResourceInterval, cfg.Logger)
 		d.ComponentExited(parent, ctx, daemonshell.ComponentActiveResource, err)
 	})
 	d.Go(func() {
-		err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
+		err := intakeReconcilerLoop.Run(ctx, DefaultIntakeInterval, cfg.Logger)
 		d.ComponentExited(parent, ctx, daemonshell.ComponentLabelIntake, err)
 	})
 	// The start and tip-advance triggers: an upgrade's rebuild can take
 	// an hour, so start does not wait for it.
 	d.Go(func() {
-		upkeepTrigger.run(ctx, imageUpkeep, logger)
+		upkeepTrigger.Run(ctx, imageUpkeep, logger)
 	})
 }
 

@@ -179,7 +179,7 @@ type compositionManifest struct {
 
 type preflightConfig struct {
 	SubmissionID                string
-	Judgments                   judgmentConfig
+	Judgments                   JudgmentConfig
 	DBPath                      string
 	RigTokenFile                string
 	ServerURL                   string
@@ -312,7 +312,7 @@ type preflightEnvironment interface {
 	AuthenticateRig(string, string) (daemonlock.RigManifest, error)
 	ResolveAgentSelection(context.Context, preflightConfig, time.Time) (preflightAgentSelection, error)
 	CheckJudgmentRoles(
-		context.Context, preflightConfig, judgmentRuntime, ward.RuntimeResourceAuthorizer, time.Time,
+		context.Context, preflightConfig, JudgmentRuntime, ward.RuntimeResourceAuthorizer, time.Time,
 	) ([]inference.RoleCheck, error)
 	InspectDatabase(context.Context, preflightConfig, domain.Digest) databaseInspection
 	InspectImage(context.Context, string, string, []string, string) imageInspection
@@ -387,7 +387,7 @@ func composePreflight(
 	daemonBuild string,
 ) (compositionManifest, error) {
 	manifest := newCompositionManifest(cfg, daemonBuild, now)
-	rig, rigErr := readRigAcquisition(cfg.RigTokenFile)
+	rig, rigErr := ReadRigAcquisition(cfg.RigTokenFile)
 	if rigErr == nil {
 		manifest.Rig, rigErr = environment.AuthenticateRig(rig.Manifest.Resources.StateRoot, rig.Token)
 	}
@@ -430,8 +430,8 @@ func composePreflight(
 	}
 	protectedAccessBlocked := evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
 		agentsErr, reviewDigestErr, shadowReviewDigestErr)
-	if cfg.Judgments != (judgmentConfig{}) {
-		runtime, digest, err := composeJudgments(cfg.Judgments)
+	if cfg.Judgments != (JudgmentConfig{}) {
+		runtime, digest, err := ComposeJudgments(cfg.Judgments)
 		if err != nil {
 			failCheck(&manifest, "judgment_configuration", "subscription judgment binding is unavailable or unsafe", "verify the exact native CLI pin and the publication-author prompt file")
 			notRunCheck(&manifest, "judgment_roles", "the judgment configuration must pass first")
@@ -452,7 +452,7 @@ func composePreflight(
 				// authorize each credential observer into the held rig
 				// manifest before it is created.
 				checks, err := environment.CheckJudgmentRoles(ctx, rolesCfg, runtime,
-					productionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile), now)
+					ProductionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile), now)
 				evaluateJudgmentRoles(&manifest, checks, err)
 			}
 		}
@@ -531,7 +531,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	}
 	// The mode is refused before it can reach any manifest evidence, without
 	// echoing it: a value pasted into the wrong flag may be a credential.
-	if !slices.Contains(reviewAuthModes, cfg.ReviewAuthMode) {
+	if !slices.Contains(ReviewAuthModes, cfg.ReviewAuthMode) {
 		return preflightConfig{}, errors.New("-review-auth-mode is not subscription, api_key, or setup_token")
 	}
 	if cfg.ShadowReviewImage != "" &&
@@ -567,7 +567,7 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 	if cfg.ShadowReviewImage != "" {
 		names = append(names, "shadow_reviewer_image")
 	}
-	if cfg.Judgments != (judgmentConfig{}) {
+	if cfg.Judgments != (JudgmentConfig{}) {
 		names = append(names, "judgment_configuration", "judgment_roles")
 	}
 	if cfg.Judgments.PublicationAuthorPrompt != "" {
@@ -644,8 +644,8 @@ func evaluateComposition(
 		}
 	} else {
 		var (
-			roleFailure      *roleAdmissionError
-			providerMismatch *reviewProviderMismatch
+			roleFailure      *RoleAdmissionError
+			providerMismatch *ReviewProviderMismatch
 			marked           *domain.GenerationIntegrityMarkedError
 		)
 		switch {
@@ -964,7 +964,7 @@ func evaluateComposition(
 		// cfg.DBPath empty and lands on not_run above), so the manifest resources
 		// and token file authorize the observer name into the held rig manifest
 		// before it is created.
-		productionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile),
+		ProductionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile),
 	) != nil {
 		failCheck(manifest, "claude_credentials", "Claude auth identity or setup-token credential manifest is absent or invalid", "record a lease-enabled Claude identity and restore its setup-token volume before production submission")
 	} else {
@@ -1052,7 +1052,7 @@ func evaluateSecondClaudeCredentials(
 			"second writer identity %s is not a lease-enabled Claude identity whose agents mount volume %s",
 			cfg.SecondAuthIdentityID, cfg.SecondAuthVolume), adopt)
 	case environment.CheckAuthVolume(ctx, cfg.ContainerBin, cfg.SecondAuthVolume, cfg.ExporterImage,
-		productionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile)) != nil:
+		ProductionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile)) != nil:
 		failCheck(manifest, secondClaudeCredentialCheck, fmt.Sprintf(
 			"second writer setup-token volume %s is absent or its credential manifest is invalid", cfg.SecondAuthVolume),
 			"create the volume once with freesided auth add -client claude_code; see daemon/README.md, Enroll An Agent Credential")
@@ -1108,7 +1108,7 @@ func selectPreflightWriterImage(
 	if database.AdmittedImageFound {
 		pointed = database.AdmittedImage
 	}
-	selected, serves, err := selectAmongRecordedImages(pointed, database.ProjectImages, cfg.Repo, cfg.BaseSHA, "",
+	selected, serves, err := SelectAmongRecordedImages(pointed, database.ProjectImages, cfg.Repo, cfg.BaseSHA, "",
 		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
 			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA, layout)
 		})
@@ -1389,7 +1389,7 @@ func inspectRepositoryAuthority(
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resolved, err := publish.InspectAppBotIdentity(
-		ctx, selected, client, defaultGitHubAPIBase,
+		ctx, selected, client, DefaultGitHubAPIBase,
 	)
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
@@ -1432,12 +1432,12 @@ func inspectRepositoryAuthority(
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
 	}
 	clock := func() time.Time { return now }
-	minter := publish.NewMinter(keystore, client, defaultGitHubAPIBase, recorder, nil, clock)
+	minter := publish.NewMinter(keystore, client, DefaultGitHubAPIBase, recorder, nil, clock)
 	tokens := publish.NewAuthorityInspectionTokenSource(
 		minter, authorityStore, selected.AppID, cfg.RepositoryID,
 	)
 	transport, err := publish.NewTransport(
-		tokens, publish.TransportOptions{GitPath: "git", RemoteBase: defaultGitHubRemoteBase},
+		tokens, publish.TransportOptions{GitPath: "git", RemoteBase: DefaultGitHubRemoteBase},
 	)
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
@@ -1524,7 +1524,7 @@ func inspectLocalRepositoryBase(ctx context.Context, cfg preflightConfig) error 
 }
 
 // reviewConfigurationDigest is the digest the daemon would compose for the
-// routed review the reviewer line selects (claudeReviewConfigurationDigest).
+// routed review the reviewer line selects (ClaudeReviewConfigurationDigest).
 func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 	if err := ward.ValidateCodexReviewModelConfiguration(
 		cfg.Agents.ReviewModel, cfg.Agents.ReviewReasoningEffort,
@@ -1532,9 +1532,9 @@ func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 		return "", err
 	}
 	provider := cfg.Agents.ReviewProvider
-	return provider.ConfigurationDigest(routedReviewConfig(provider, ward.CodexReviewConfig{
+	return provider.ConfigurationDigest(RoutedReviewConfig(provider, ward.CodexReviewConfig{
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-		ProviderEndpoints: routedReviewEndpoints(provider, cfg.ReviewAuthMode), ApprovedImage: cfg.ReviewImage,
+		ProviderEndpoints: RoutedReviewEndpoints(provider, cfg.ReviewAuthMode), ApprovedImage: cfg.ReviewImage,
 		ObserverImage: cfg.ExporterImage, Model: cfg.Agents.ReviewModel,
 		ReasoningEffort: cfg.Agents.ReviewReasoningEffort,
 	}), cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.Agents.ReviewAuthIdentityID, cfg.Agents.ReviewCostOwner)
@@ -1597,7 +1597,7 @@ func preflightShadowReviewConfigurationDigest(cfg preflightConfig) (domain.Diges
 	if err != nil {
 		return "", err
 	}
-	return shadowReviewCompositionDigest(runtimeDigest, cfg.ShadowReviewRate)
+	return ShadowReviewCompositionDigest(runtimeDigest, cfg.ShadowReviewRate)
 }
 
 // inspectShadowReviewSetupToken mirrors the Claude review provider's token
@@ -1694,7 +1694,7 @@ func preflightUIDMatches(stat *syscall.Stat_t, euid int) bool {
 func (productionPreflightEnvironment) ResolveAgentSelection(
 	ctx context.Context, cfg preflightConfig, now time.Time,
 ) (preflightAgentSelection, error) {
-	agents, err := loadAgentSelection(ctx, claudeDriverConfig{
+	agents, err := LoadAgentSelection(ctx, ClaudeDriverConfig{
 		AgentTreeCheckout: cfg.AgentTreeCheckout, AgentTreeCommit: cfg.AgentTreeCommit,
 	})
 	if err != nil {
@@ -1777,10 +1777,10 @@ func resolvePreflightSecondWriter(
 // daemon reads its own. A failed read's cause goes to standard error and the
 // manifest carries the fixed reason.
 func (productionPreflightEnvironment) CheckJudgmentRoles(
-	ctx context.Context, cfg preflightConfig, runtime judgmentRuntime,
+	ctx context.Context, cfg preflightConfig, runtime JudgmentRuntime,
 	authorize ward.RuntimeResourceAuthorizer, now time.Time,
 ) ([]inference.RoleCheck, error) {
-	agents, err := loadAgentSelection(ctx, claudeDriverConfig{
+	agents, err := LoadAgentSelection(ctx, ClaudeDriverConfig{
 		AgentTreeCheckout: cfg.AgentTreeCheckout, AgentTreeCommit: cfg.AgentTreeCommit,
 	})
 	if err != nil {
@@ -1800,12 +1800,12 @@ func (productionPreflightEnvironment) CheckJudgmentRoles(
 	defer st.Close() //nolint:errcheck // the check result is reported independently
 	reader := wardstore.CredentialReader{
 		Store:          st,
-		ReadSetupToken: productionSetupTokenReader(ward.NewCLIRuntime(cfg.ContainerBin), cfg.ExporterImage, authorize),
+		ReadSetupToken: ProductionSetupTokenReader(ward.NewCLIRuntime(cfg.ContainerBin), cfg.ExporterImage, authorize),
 	}
-	return inference.CheckRoles(ctx, judgmentRoles{
-		st: st, tree: agents.Tree, revision: agents.LineupRevision, runtime: runtime,
-		credentials: newJudgmentCredentials(reader.ReadUnheld, slog.New(slog.NewTextHandler(os.Stderr, nil))),
-	}, judgmentSites(inference.Budget{}), now)
+	return inference.CheckRoles(ctx, JudgmentRoles{
+		Store: st, Tree: agents.Tree, Revision: agents.LineupRevision, Runtime: runtime,
+		Credentials: NewJudgmentCredentials(reader.ReadUnheld, slog.New(slog.NewTextHandler(os.Stderr, nil))),
+	}, JudgmentSites(inference.Budget{}), now)
 }
 
 // evaluateJudgmentRoles records each judgment role's result and fails the
@@ -1880,24 +1880,24 @@ func resolvePreflightAgents(
 			agent, err = selectWriterLaunch(tree, role, agent)
 		}
 		if err != nil {
-			return preflightAgentSelection{}, &roleAdmissionError{Role: role, Err: err}
+			return preflightAgentSelection{}, &RoleAdmissionError{Role: role, Err: err}
 		}
 		if selection.AuthVolume == "" {
 			selection.AuthIdentityID, selection.AuthVolume = agent.Identity.ID, agent.Generation.AuthStoreVolume
 		}
 		if agent.Generation.AuthStoreVolume != selection.AuthVolume {
-			return preflightAgentSelection{}, &roleAdmissionError{Role: role, Err: errors.New(
+			return preflightAgentSelection{}, &RoleAdmissionError{Role: role, Err: errors.New(
 				"it mounts another credential volume than the implementer; preflight probes one writer volume")}
 		}
 	}
-	provider, err := reviewProviderFor(ctx, st, tree, domain.RoleReviewer)
+	provider, err := ReviewProviderFor(ctx, st, tree, domain.RoleReviewer)
 	if err != nil {
 		return preflightAgentSelection{}, err
 	}
-	if err := requireReviewAuthMode(provider, reviewAuthMode); err != nil {
+	if err := RequireReviewAuthMode(provider, reviewAuthMode); err != nil {
 		return preflightAgentSelection{}, err
 	}
-	reviewer, err := checkReviewRoleAgent(ctx, st, tree, reviewRole(domain.RoleReviewer, provider, nil), now)
+	reviewer, err := CheckReviewRoleAgent(ctx, st, tree, ReviewRole(domain.RoleReviewer, provider, nil), now)
 	if err != nil {
 		return preflightAgentSelection{}, err
 	}
@@ -1905,7 +1905,7 @@ func resolvePreflightAgents(
 	selection.ReviewAuthIdentityID, selection.ReviewCostOwner = reviewer.Identity.ID, reviewer.Identity.CostOwner
 	selection.ReviewModel, selection.ReviewReasoningEffort = reviewer.Model, reviewer.NativeEffort
 	if shadow {
-		agent, err := reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
+		agent, err := ReviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
 		if err != nil {
 			return preflightAgentSelection{}, err
 		}

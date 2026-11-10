@@ -40,7 +40,7 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 	next := now.Add(time.Hour)
 	seconds := int64(3600)
 	schedule, err := domain.NewSchedule(domain.ScheduleInput{
-		ID: doctorScheduleID, ProjectID: "project-system", Kind: domain.ScheduleDoctor,
+		ID: DoctorScheduleID, ProjectID: "project-system", Kind: domain.ScheduleDoctor,
 		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
 		CreatedAt: now, IntervalSeconds: &seconds,
 	})

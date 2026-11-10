@@ -27,117 +27,117 @@ import (
 // admission and says why. Retiring is the operator's act, through auth adopt.
 
 const (
-	agentSelectionItemPrefix = "system-health-agent-selection-"
-	roleCausePrefix          = "role-"
+	AgentSelectionItemPrefix = "system-health-agent-selection-"
+	RoleCausePrefix          = "role-"
 	retiredCausePrefix       = "retired-"
 )
 
-// errRetiredIdentityOwnsWork holds lineup admission while a retired
+// ErrRetiredIdentityOwnsWork holds lineup admission while a retired
 // identity still owns an open task.
-var errRetiredIdentityOwnsWork = errors.New("a retired auth identity still owns open work")
+var ErrRetiredIdentityOwnsWork = errors.New("a retired auth identity still owns open work")
 
-// roleAdmissionError names the role whose lineup line the daemon cannot run.
-type roleAdmissionError struct {
+// RoleAdmissionError names the role whose lineup line the daemon cannot run.
+type RoleAdmissionError struct {
 	Role domain.RoleName
 	Err  error
 }
 
-func (e *roleAdmissionError) Error() string {
+func (e *RoleAdmissionError) Error() string {
 	return fmt.Sprintf("agent selection: role %s: %v", e.Role, e.Err)
 }
 
-func (e *roleAdmissionError) Unwrap() error { return e.Err }
+func (e *RoleAdmissionError) Unwrap() error { return e.Err }
 
-// reviewRole is what this daemon's composition fixes about a review role's
+// ReviewRole is what this daemon's composition fixes about a review role's
 // source: the code-owned review prompt, the harness client the source drives
 // and its vendor (provider), the model shape the review launch can pass, and
 // the allowlist the source's proxy admits.
-func reviewRole(role domain.RoleName, provider ward.RoutedReviewProvider, egress []string) engine.ReviewRole {
+func ReviewRole(role domain.RoleName, provider ward.RoutedReviewProvider, egress []string) engine.ReviewRole {
 	name, digest := ward.ProductionReviewPromptIdentity()
 	return engine.ReviewRole{
 		Role: role, PromptName: name, PromptDigest: digest,
 		HarnessClient: provider.HarnessClient, Vendor: provider.Vendor,
-		EffectiveEgress: egress, ValidModel: validReviewLaunchModel,
+		EffectiveEgress: egress, ValidModel: ValidReviewLaunchModel,
 	}
 }
 
-// shadowReviewProvider is the shadow reviewer's provider. The shadow arm is
+// ShadowReviewProvider is the shadow reviewer's provider. The shadow arm is
 // Claude only (domain.ShadowReviewSource has the one member claude_local), so
 // its line is held to Claude whatever the routed reviewer runs.
-func shadowReviewProvider() ward.RoutedReviewProvider {
+func ShadowReviewProvider() ward.RoutedReviewProvider {
 	provider, _ := ward.LookupRoutedReviewProvider(domain.HarnessClientClaudeCode)
 	return provider
 }
 
-// reviewProviderFor selects the provider the daemon composes for a review
+// ReviewProviderFor selects the provider the daemon composes for a review
 // role. The reviewer line selects it (#397): the harness its agent runs picks
 // the routed source, and a harness ward keeps no routed provider for is
 // refused rather than run on an unproven source. There is no flag or setting
 // beside the line, so a restart with the same lineup composes the same source.
 // A marked generation does not stop the selection: the review check that
 // follows reports it.
-func reviewProviderFor(
+func ReviewProviderFor(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
 ) (ward.RoutedReviewProvider, error) {
 	if role == domain.RoleShadowReviewer {
-		return shadowReviewProvider(), nil
+		return ShadowReviewProvider(), nil
 	}
 	harness, err := engine.RoleHarnessClient(ctx, st, tree, role)
 	if err != nil {
-		return ward.RoutedReviewProvider{}, &roleAdmissionError{Role: role, Err: err}
+		return ward.RoutedReviewProvider{}, &RoleAdmissionError{Role: role, Err: err}
 	}
 	provider, ok := ward.LookupRoutedReviewProvider(harness)
 	if !ok {
-		return ward.RoutedReviewProvider{}, &roleAdmissionError{Role: role, Err: &reviewProviderMismatch{
+		return ward.RoutedReviewProvider{}, &RoleAdmissionError{Role: role, Err: &ReviewProviderMismatch{
 			Harness: harness,
 		}}
 	}
 	return provider, nil
 }
 
-// reviewProviderMismatch is a reviewer line the daemon cannot compose a
+// ReviewProviderMismatch is a reviewer line the daemon cannot compose a
 // routed review for under this configuration: its harness has no routed
 // provider, or AuthMode is a -review-auth-mode that provider does not deliver.
 // Its text names only the harness and the mode, never the operator-authored
 // agent name, so preflight can show it as evidence.
-type reviewProviderMismatch struct {
+type ReviewProviderMismatch struct {
 	Harness  domain.HarnessClientKind
 	AuthMode ward.CodexAuthMode
 }
 
-func (e *reviewProviderMismatch) Error() string {
+func (e *ReviewProviderMismatch) Error() string {
 	if e.AuthMode == "" {
 		return fmt.Sprintf("the reviewer line's agent runs harness client %s, which has no routed review provider", e.Harness)
 	}
 	return fmt.Sprintf("-review-auth-mode %s is not a mode the %s reviewer accepts", e.AuthMode, e.Harness)
 }
 
-func (e *reviewProviderMismatch) Unwrap() error { return engine.ErrAgentNotAdmissible }
+func (e *ReviewProviderMismatch) Unwrap() error { return engine.ErrAgentNotAdmissible }
 
-// reviewRoleAgent resolves a review role's line and runs the review admission
+// ReviewRoleAgent resolves a review role's line and runs the review admission
 // checks (engine.CheckReviewRole) with no task in view: the startup and
 // preflight checks, and the values the review sources are composed with.
-func reviewRoleAgent(
+func ReviewRoleAgent(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName, now time.Time,
 ) (engine.ReviewRoleAgent, error) {
-	provider, err := reviewProviderFor(ctx, st, tree, role)
+	provider, err := ReviewProviderFor(ctx, st, tree, role)
 	if err != nil {
 		return engine.ReviewRoleAgent{}, err
 	}
-	return checkReviewRoleAgent(ctx, st, tree, reviewRole(role, provider, nil), now)
+	return CheckReviewRoleAgent(ctx, st, tree, ReviewRole(role, provider, nil), now)
 }
 
-func checkReviewRoleAgent(
+func CheckReviewRoleAgent(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, spec engine.ReviewRole, now time.Time,
 ) (engine.ReviewRoleAgent, error) {
 	agent, err := engine.CheckReviewRole(ctx, st, tree, agentbaseline.RoleLaunch, spec, "", now)
 	if err != nil {
-		return agent, &roleAdmissionError{Role: spec.Role, Err: err}
+		return agent, &RoleAdmissionError{Role: spec.Role, Err: err}
 	}
 	return agent, nil
 }
 
-// resolveReviewSelection fills the routed review provider, and the review
+// ResolveReviewSelection fills the routed review provider, and the review
 // identities, cost owners, models, and efforts the removed flags carried, from
 // the reviewer and shadow reviewer lines, so the review sources and the
 // approved configuration digests read the values the lineup selects. A role
@@ -145,21 +145,21 @@ func checkReviewRoleAgent(
 // stays a flag, and it must be one the selected provider delivers. A role
 // whose only failure is a marked generation is composed anyway
 // (composableReviewAgent).
-func resolveReviewSelection(
-	ctx context.Context, st *store.Store, tree agenttree.Tree, cfg claudeDriverConfig, now time.Time,
-) (claudeDriverConfig, error) {
+func ResolveReviewSelection(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, cfg ClaudeDriverConfig, now time.Time,
+) (ClaudeDriverConfig, error) {
 	if cfg.OperatingMode != domain.ModeUnattended {
 		return cfg, nil
 	}
-	provider, err := reviewProviderFor(ctx, st, tree, domain.RoleReviewer)
+	provider, err := ReviewProviderFor(ctx, st, tree, domain.RoleReviewer)
 	if err != nil {
 		return cfg, err
 	}
-	if err := requireReviewAuthMode(provider, cfg.ReviewAuthMode); err != nil {
+	if err := RequireReviewAuthMode(provider, cfg.ReviewAuthMode); err != nil {
 		return cfg, err
 	}
 	reviewer, err := composableReviewAgent(
-		checkReviewRoleAgent(ctx, st, tree, reviewRole(domain.RoleReviewer, provider, nil), now))
+		CheckReviewRoleAgent(ctx, st, tree, ReviewRole(domain.RoleReviewer, provider, nil), now))
 	if err != nil {
 		return cfg, err
 	}
@@ -169,7 +169,7 @@ func resolveReviewSelection(
 	if cfg.ShadowReviewImage == "" {
 		return cfg, nil
 	}
-	shadow, err := composableReviewAgent(reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now))
+	shadow, err := composableReviewAgent(ReviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now))
 	if err != nil {
 		return cfg, err
 	}
@@ -191,23 +191,23 @@ func composableReviewAgent(agent engine.ReviewRoleAgent, err error) (engine.Revi
 	return agent, err
 }
 
-// requireReviewAuthMode refuses a -review-auth-mode the routed provider does
+// RequireReviewAuthMode refuses a -review-auth-mode the routed provider does
 // not deliver: a setup token for Codex, or a subscription or API key for
 // Claude. The flag is not derived from the line, because Codex has two modes;
 // one agree-or-refuse rule covers both harnesses.
-func requireReviewAuthMode(provider ward.RoutedReviewProvider, mode ward.CodexAuthMode) error {
+func RequireReviewAuthMode(provider ward.RoutedReviewProvider, mode ward.CodexAuthMode) error {
 	if !provider.AcceptsAuthMode(mode) {
-		return &roleAdmissionError{Role: domain.RoleReviewer, Err: &reviewProviderMismatch{
+		return &RoleAdmissionError{Role: domain.RoleReviewer, Err: &ReviewProviderMismatch{
 			Harness: provider.HarnessClient, AuthMode: mode,
 		}}
 	}
 	return nil
 }
 
-// routedReviewEndpoints is the allowlist the routed review proxy admits: the
+// RoutedReviewEndpoints is the allowlist the routed review proxy admits: the
 // Anthropic API for Claude, and for Codex the ChatGPT backend under a
 // subscription or the OpenAI API under an API key.
-func routedReviewEndpoints(provider ward.RoutedReviewProvider, mode ward.CodexAuthMode) []string {
+func RoutedReviewEndpoints(provider ward.RoutedReviewProvider, mode ward.CodexAuthMode) []string {
 	switch provider.Vendor {
 	case domain.AgentVendorClaude:
 		return []string{"api.anthropic.com:443"}
@@ -220,18 +220,18 @@ func routedReviewEndpoints(provider ward.RoutedReviewProvider, mode ward.CodexAu
 	return nil
 }
 
-// routedReviewConfig adds the provider's credential floors to a routed review
+// RoutedReviewConfig adds the provider's credential floors to a routed review
 // configuration: Codex's OAuth access token must outlive the review, while a
 // Claude setup token carries no lifetime and takes none (the shadow source's
 // shape).
-func routedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReviewConfig) ward.CodexReviewConfig {
+func RoutedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReviewConfig) ward.CodexReviewConfig {
 	if provider.Vendor == domain.AgentVendorCodex {
 		cfg.AccessTokenLifetimeFloor, cfg.AccessTokenRefreshThreshold = time.Hour, 2*time.Hour
 	}
 	return cfg
 }
 
-// reviewAdmission is the check a review source runs before each launch: the
+// ReviewAdmission is the check a review source runs before each launch: the
 // role's line, the task's reviewer line or else the lineup's, still resolves,
 // still holds a current credential, and still selects the agent the request's
 // snapshot names (engine.CheckReviewRole). The tree is fixed for the daemon's
@@ -248,7 +248,7 @@ func routedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReview
 // role the source was composed for, so a line that moved to another harness
 // or vendor is refused as well. Whether the source can deliver the selected
 // identity's credential is the source's own check.
-func reviewAdmission(
+func ReviewAdmission(
 	st *store.Store, tree agenttree.Tree, spec engine.ReviewRole, now func() time.Time,
 ) func(context.Context, exec.ReviewRequest) error {
 	role := spec.Role
@@ -256,7 +256,7 @@ func reviewAdmission(
 		agent, err := engine.CheckReviewRole(
 			ctx, st, tree, agentbaseline.RoleLaunch, spec, req.RunID, now())
 		if err != nil {
-			return &roleAdmissionError{Role: role, Err: err}
+			return &RoleAdmissionError{Role: role, Err: err}
 		}
 		admitted := req.Admission
 		if admitted.Role != role || admitted.AuthIdentityID != agent.Identity.ID ||
@@ -269,7 +269,7 @@ func reviewAdmission(
 			if agent.TaskLine != nil {
 				chose = fmt.Sprintf("%s (task line %s)", chose, agent.TaskLine.ID)
 			}
-			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
+			return &RoleAdmissionError{Role: role, Err: fmt.Errorf(
 				"the invocation was admitted as %s under identity %s, the line now selects %s for %s under %s: %w",
 				admitted.Role, admitted.AuthIdentityID, chose, role, agent.Identity.ID, engine.ErrAgentNotAdmissible)}
 		}
@@ -315,12 +315,12 @@ func reviewCredential(
 	}
 }
 
-// reviewAdmitter admits a review invocation through the lineup the daemon
+// ReviewAdmitter admits a review invocation through the lineup the daemon
 // loaded (engine.AgentSelection.AdmitReview), against the role the daemon
 // composed a source for. Each role's snapshot records the allowlist that
 // role's review proxy admits, which is the source's own and not the writer
 // stages' egress the selection carries.
-func reviewAdmitter(
+func ReviewAdmitter(
 	st *store.Store, agents engine.AgentSelection, roles map[domain.RoleName]engine.ReviewRole,
 ) engine.ReviewAdmitter {
 	return func(
@@ -329,19 +329,19 @@ func reviewAdmitter(
 	) (domain.ReviewAdmission, error) {
 		spec, ok := roles[role]
 		if !ok {
-			return domain.ReviewAdmission{}, &roleAdmissionError{Role: role, Err: fmt.Errorf(
+			return domain.ReviewAdmission{}, &RoleAdmissionError{Role: role, Err: fmt.Errorf(
 				"no review source is composed for the role: %w", engine.ErrAgentNotAdmissible)}
 		}
 		admission, err := agents.AdmitReview(
 			ctx, st, spec, runID, invocationID, admittedAt)
 		if err != nil {
-			return domain.ReviewAdmission{}, &roleAdmissionError{Role: role, Err: err}
+			return domain.ReviewAdmission{}, &RoleAdmissionError{Role: role, Err: err}
 		}
 		return admission, nil
 	}
 }
 
-// checkWriterRoles runs the five admission steps for each writer role with
+// CheckWriterRoles runs the five admission steps for each writer role with
 // the prompt the daemon runs it on, and returns the first role that fails.
 //
 // A role whose generation is marked is skipped, not returned. A mark holds
@@ -350,14 +350,14 @@ func reviewAdmitter(
 // enrollment is re-enrolled; returning it here would hold the whole lineup
 // for the daemon's run. The mark refuses at resolution, so that role's later
 // steps go unchecked until an attempt runs them.
-func checkWriterRoles(
+func CheckWriterRoles(
 	ctx context.Context, st *store.Store, agents engine.AgentSelection,
 	prompts map[domain.RoleName]domain.Digest, now time.Time,
-) *roleAdmissionError {
+) *RoleAdmissionError {
 	for _, role := range []domain.RoleName{domain.RoleSpecifier, domain.RoleImplementer, domain.RoleRemediator} {
 		_, err := agents.CheckRole(ctx, st, role, prompts[role], now)
 		if err != nil && !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
-			return &roleAdmissionError{Role: role, Err: err}
+			return &RoleAdmissionError{Role: role, Err: err}
 		}
 	}
 	return nil
@@ -395,7 +395,7 @@ func retiredOpenWork(ctx context.Context, tx *store.ReadTx) ([]retiredWork, erro
 	if len(retired) == 0 {
 		return nil, nil
 	}
-	owned, err := legacyOpenTasks(ctx, tx)
+	owned, err := LegacyOpenTasks(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -408,14 +408,14 @@ func retiredOpenWork(ctx context.Context, tx *store.ReadTx) ([]retiredWork, erro
 	return work, nil
 }
 
-// agentSelectionGate holds every lineup admission while selection is not
+// AgentSelectionGate holds every lineup admission while selection is not
 // active: a writer role failed its startup check, or a retired identity still
 // owns open work. The role check is fixed for the daemon's run; a marked
-// generation is not a failure of it (checkWriterRoles), so it holds nothing
+// generation is not a failure of it (CheckWriterRoles), so it holds nothing
 // here and re-enrollment needs no restart. The retired work is read again on
 // each admission, so the gate opens once that work is
 // closed; the item activation raised stays open until the next start.
-func agentSelectionGate(st *store.Store, failure *roleAdmissionError) func(context.Context) error {
+func AgentSelectionGate(st *store.Store, failure *RoleAdmissionError) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if failure != nil {
 			return failure
@@ -430,7 +430,7 @@ func agentSelectionGate(st *store.Store, failure *roleAdmissionError) func(conte
 		}
 		if len(work) != 0 {
 			return fmt.Errorf("auth identity %s, task %s: %w",
-				work[0].Identity, work[0].Tasks[0].ID, errRetiredIdentityOwnsWork)
+				work[0].Identity, work[0].Tasks[0].ID, ErrRetiredIdentityOwnsWork)
 		}
 		return nil
 	}
@@ -443,12 +443,12 @@ func startupNow(now func() time.Time) time.Time {
 	return time.Now().UTC()
 }
 
-// activateAgentSelection runs once at startup, before the engine loops, and
+// ActivateAgentSelection runs once at startup, before the engine loops, and
 // converges the system_health items: one per failing role, one per retired
 // identity that still owns open work. An item whose cause is gone is
 // resolved. It cancels nothing.
-func activateAgentSelection(
-	ctx context.Context, st *store.Store, failure *roleAdmissionError, now time.Time,
+func ActivateAgentSelection(
+	ctx context.Context, st *store.Store, failure *RoleAdmissionError, now time.Time,
 ) error {
 	var work []retiredWork
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -460,7 +460,7 @@ func activateAgentSelection(
 	}
 	causes := map[string]string{}
 	if failure != nil {
-		causes[roleCausePrefix+string(failure.Role)] = fmt.Sprintf(
+		causes[RoleCausePrefix+string(failure.Role)] = fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon admits no work "+
 				"until the agent tree and the store agree; fix the line or the enrollment and restart.",
 			failure.Role, failure.Err)
@@ -481,12 +481,12 @@ func activateAgentSelection(
 	return convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(causes), nil, now)
 }
 
-// reportRoleFailure records the item for a role failure that stopped startup
+// ReportRoleFailure records the item for a role failure that stopped startup
 // before the engine existed. The retirement items are left as they are: the
 // next start that composes converges them.
-func reportRoleFailure(ctx context.Context, st *store.Store, failure *roleAdmissionError, now time.Time) error {
+func ReportRoleFailure(ctx context.Context, st *store.Store, failure *RoleAdmissionError, now time.Time) error {
 	return convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(map[string]string{
-		roleCausePrefix + string(failure.Role): fmt.Sprintf(
+		RoleCausePrefix + string(failure.Role): fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon did not start; "+
 				"fix the line or the enrollment and restart.", failure.Role, failure.Err),
 	}), func(cause string) bool { return strings.HasPrefix(cause, retiredCausePrefix) }, now)
@@ -508,7 +508,7 @@ type healthCause struct {
 	Impairs domain.ImpairedCapability
 }
 
-var agentSelectionItemKind = healthItemKind{Prefix: agentSelectionItemPrefix, Code: "agent_selection_inactive"}
+var agentSelectionItemKind = healthItemKind{Prefix: AgentSelectionItemPrefix, Code: "agent_selection_inactive"}
 
 // agentSelectionCauses gives every agent-selection cause its one posture: an
 // inactive selection admits no work, so each item blocks.

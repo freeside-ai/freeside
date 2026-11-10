@@ -102,7 +102,7 @@ func TestModelCatalogRefreshDiscoversCodexEnrollmentsForACodexReviewer(t *testin
 // attended daemon reads no Codex credential and logs one line.
 func TestModelCatalogRefreshSkipsCodexWithoutACodexReviewer(t *testing.T) {
 	t.Parallel()
-	codexReviewer := claudeDriverConfig{
+	codexReviewer := ClaudeDriverConfig{
 		OperatingMode: domain.ModeUnattended, ReviewImage: codexModelDiscoveryTestImage,
 		ReviewInputRoot: "/private/review", ReviewAuthMode: ward.CodexAuthSubscription,
 	}
@@ -115,7 +115,7 @@ func TestModelCatalogRefreshSkipsCodexWithoutACodexReviewer(t *testing.T) {
 	if !codexReviewerConfigured(codexReviewer) {
 		t.Fatal("a Codex reviewer is not recognised")
 	}
-	for name, cfg := range map[string]claudeDriverConfig{
+	for name, cfg := range map[string]ClaudeDriverConfig{
 		"Claude reviewer": claudeReviewer, "API-key Codex reviewer": apiKeyReviewer, "attended": attended,
 	} {
 		t.Run(name, func(t *testing.T) {

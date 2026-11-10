@@ -102,10 +102,10 @@ func readScheduleRow(t *testing.T, st *store.Store, id domain.ScheduleID) domain
 func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 	t.Parallel()
 	st := schedTestStore(t)
-	wiring := &claudeComposition{
+	wiring := &ClaudeComposition{
 		janitor: &janitorSession{janitor: &stubJanitorRunner{}},
 	}
-	cfg := claudeStartupConfig{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
+	cfg := ClaudeStartupConfig{Claude: &ClaudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
 	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, func(context.Context) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -129,13 +129,13 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
 	t.Parallel()
 	st := schedTestStore(t)
-	cfg := claudeStartupConfig{
-		Claude:         &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev},
+	cfg := ClaudeStartupConfig{
+		Claude:         &ClaudeDriverConfig{OperatingMode: domain.ModeAttendedDev},
 		DoctorInterval: 15 * time.Minute,
 	}
 	arm := func() domain.Schedule {
 		t.Helper()
-		wiring := &claudeComposition{
+		wiring := &ClaudeComposition{
 			janitor: &janitorSession{janitor: &stubJanitorRunner{}},
 		}
 		sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, func(context.Context) error { return nil }, nil)
@@ -165,12 +165,12 @@ func TestScheduledDoctorPassStartsUsageCollection(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := schedTestStore(t)
-	wiring := &claudeComposition{
+	wiring := &ClaudeComposition{
 		janitor:        &janitorSession{janitor: &stubJanitorRunner{}},
 		runConformance: func(context.Context) error { return nil },
 	}
 	collections := 0
-	sched, err := newClaudeScheduler(st, claudeStartupConfig{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}},
+	sched, err := newClaudeScheduler(st, ClaudeStartupConfig{Claude: &ClaudeDriverConfig{OperatingMode: domain.ModeAttendedDev}},
 		wiring, func(context.Context) error { return nil },
 		func(context.Context) error {
 			collections++
@@ -182,7 +182,7 @@ func TestScheduledDoctorPassStartsUsageCollection(t *testing.T) {
 	now := time.Now().UTC()
 	seconds := int64(3600)
 	schedule, err := domain.NewSchedule(domain.ScheduleInput{
-		ID: doctorScheduleID, ProjectID: "project-system", Kind: domain.ScheduleDoctor,
+		ID: DoctorScheduleID, ProjectID: "project-system", Kind: domain.ScheduleDoctor,
 		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
 		CreatedAt: now.Add(-time.Hour), IntervalSeconds: &seconds,
 	})

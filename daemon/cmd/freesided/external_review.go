@@ -127,11 +127,11 @@ func buildExternalFindings(
 // bytes is the reviewer's identical text in the same thread on the same head,
 // seen earlier with another timestamp, and it stays as first stored (devlog
 // 2026-10-02-1249).
-func (r activeResourceReconciler) commitExternalFindings(
+func (r ActiveResourceReconciler) commitExternalFindings(
 	ctx context.Context, observation activeResourceObservation,
 ) error {
 	var fresh []domain.Finding
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		for _, finding := range observation.externalFindings {
 			_, err := tx.GetFinding(ctx, finding.ID)
 			switch {
@@ -145,7 +145,7 @@ func (r activeResourceReconciler) commitExternalFindings(
 	}); err != nil || len(fresh) == 0 {
 		return err
 	}
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		// The findings were fetched for the pull request this binding named;
 		// storing them under the run is sound only while it still does.
 		binding, err := tx.GetReadyItemPRBinding(ctx, observation.itemID)

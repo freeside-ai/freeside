@@ -144,15 +144,15 @@ func TestActiveResourceReconcileStartsReadinessReentry(t *testing.T) {
 	t.Parallel()
 	reconcile := func(t *testing.T, st *store.Store, mutate func(*publish.PullObservation)) {
 		t.Helper()
-		reconciler := activeResourceReconciler{
-			store: st,
-			pull: func(context.Context, string, int) (publish.PullObservation, error) {
+		reconciler := ActiveResourceReconciler{
+			Store: st,
+			Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 				observed := exactPull("open", false)
 				observed.HeadSHA = reentryTestHead
 				mutate(&observed)
 				return observed, nil
 			},
-			now: func() time.Time { return activeResourceTestTime },
+			Now: func() time.Time { return activeResourceTestTime },
 		}
 		if failures, err := reconcileActiveResource(&reconciler, context.Background()); err != nil || len(failures) != 0 {
 			t.Fatalf("Reconcile = %v, %v", failures, err)

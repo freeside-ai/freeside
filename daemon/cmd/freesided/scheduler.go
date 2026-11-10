@@ -24,8 +24,8 @@ import (
 // scheduler loop, which the daemon consumes as a durable in-process stop.
 
 const (
-	schedulerSystemProjectID = domain.ProjectID("project-system")
-	doctorScheduleID         = domain.ScheduleID("schedule-doctor")
+	SchedulerSystemProjectID = domain.ProjectID("project-system")
+	DoctorScheduleID         = domain.ScheduleID("schedule-doctor")
 	janitorScheduleID        = domain.ScheduleID("schedule-janitor")
 	imageUpkeepScheduleID    = domain.ScheduleID("schedule-image-upkeep")
 )
@@ -45,12 +45,12 @@ type (
 // label observer.
 type labelIssueObserver func(ctx context.Context, repo, label string) (publish.LabelIssuesObservation, error)
 
-// nativeReviewObserver reads one PR's native (forge-hosted) review activity —
+// NativeReviewObserver reads one PR's native (forge-hosted) review activity —
 // its submitted reviews, inline review comments, and description reactions —
 // as best-effort extra evidence (plan §5.16, §7). The production composition
 // observes through the publish reconciler's conditional reads; the fake lane
 // wires no native reviewer.
-type nativeReviewObserver func(ctx context.Context, repo string, number int) (publish.PullReviewObservation, error)
+type NativeReviewObserver func(ctx context.Context, repo string, number int) (publish.PullReviewObservation, error)
 
 // deadlineRegistration wires a one-shot publication deadline
 // (pr_checks_deadline, review_wait_threshold). The handler first rechecks
@@ -188,29 +188,29 @@ func recheckItemSubject(
 	return current, nil, nil
 }
 
-// publicationWatchRegistrations is the shared registration set for the two
+// PublicationWatchRegistrations is the shared registration set for the two
 // §5.16 publication deadline kinds, identical in both daemon compositions.
 // Work-unit completion after a merge is the active-resource reconciler's
 // (§5.18), not a schedule's.
-func publicationWatchRegistrations(st *store.Store) map[domain.ScheduleKind]scheduler.Registration {
+func PublicationWatchRegistrations(st *store.Store) map[domain.ScheduleKind]scheduler.Registration {
 	return map[domain.ScheduleKind]scheduler.Registration{
 		domain.SchedulePRChecksDeadline:    deadlineRegistration(st),
 		domain.ScheduleReviewWaitThreshold: deadlineRegistration(st),
 	}
 }
 
-// newFakeScheduler runs the publication watch kinds for the walking-skeleton
+// NewFakeScheduler runs the publication watch kinds for the walking-skeleton
 // composition, keeping fake-lane parity with the production wiring.
-func newFakeScheduler(st *store.Store) (*scheduler.Scheduler, error) {
+func NewFakeScheduler(st *store.Store) (*scheduler.Scheduler, error) {
 	return scheduler.New(st, domain.ModeAttendedDev,
 		func() time.Time { return time.Now().UTC() },
-		publicationWatchRegistrations(st))
+		PublicationWatchRegistrations(st))
 }
 
 func newClaudeScheduler(
 	st *store.Store,
-	cfg claudeStartupConfig,
-	wiring *claudeComposition,
+	cfg ClaudeStartupConfig,
+	wiring *ClaudeComposition,
 	runDoctor func(context.Context) error,
 	collectUsage func(context.Context) error,
 	imageUpkeep *engine.ImageUpkeep,
@@ -271,8 +271,8 @@ func newClaudeScheduler(
 	// The installation-poll kind registers with the daemon too: a pending
 	// intent recorded by the onboarding CLI keeps its durable observation
 	// (and its expiry gets recorded) even when the operator never resumes.
-	kinds[domain.ScheduleInstallationPoll] = installPollRegistration(wiring.authority, wiring.janitor)
-	for kind, reg := range publicationWatchRegistrations(st) {
+	kinds[domain.ScheduleInstallationPoll] = InstallPollRegistration(wiring.authority, wiring.janitor)
+	for kind, reg := range PublicationWatchRegistrations(st) {
 		kinds[kind] = reg
 	}
 	return scheduler.New(st, cfg.Claude.OperatingMode, now, kinds)
@@ -283,14 +283,14 @@ func newClaudeScheduler(
 // a restart preserves cadence (a missed fire coalesces with a recorded gap
 // rather than resetting); a reconfigured interval re-arms under the next
 // generation.
-func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg claudeStartupConfig) error {
+func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg ClaudeStartupConfig) error {
 	now := time.Now().UTC()
 	for _, job := range []struct {
 		id       domain.ScheduleID
 		kind     domain.ScheduleKind
 		interval time.Duration
 	}{
-		{doctorScheduleID, domain.ScheduleDoctor, cfg.DoctorInterval},
+		{DoctorScheduleID, domain.ScheduleDoctor, cfg.DoctorInterval},
 		{janitorScheduleID, domain.ScheduleJanitor, defaultJanitorInterval},
 		// Upkeep's start pass runs beside startup rather than before it, and
 		// its scheduled pass is the retry for a host fault, at the doctor's
@@ -299,7 +299,7 @@ func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg c
 	} {
 		seconds := int64(job.interval / time.Second)
 		schedule, err := domain.NewSchedule(domain.ScheduleInput{
-			ID: job.id, ProjectID: schedulerSystemProjectID, Kind: job.kind,
+			ID: job.id, ProjectID: SchedulerSystemProjectID, Kind: job.kind,
 			Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
 			CreatedAt: now, IntervalSeconds: &seconds,
 		})

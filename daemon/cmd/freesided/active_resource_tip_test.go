@@ -37,10 +37,10 @@ type tipWatchHarness struct {
 	readyHit int
 }
 
-func (h *tipWatchHarness) reconciler(st *store.Store) *activeResourceReconciler {
-	return &activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+func (h *tipWatchHarness) reconciler(st *store.Store) *ActiveResourceReconciler {
+	return &ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			h.readyHit++
 			return exactPull("open", false), nil
 		},
@@ -56,7 +56,7 @@ func (h *tipWatchHarness) reconciler(st *store.Store) *activeResourceReconciler 
 			h.handed = append(h.handed, observation.TipSHA)
 			return h.callErr
 		},
-		now: func() time.Time { return h.now },
+		Now: func() time.Time { return h.now },
 	}
 }
 
@@ -88,7 +88,7 @@ func seedTipObservation(t *testing.T, st *store.Store, tip, upkeepTip string) {
 	}
 }
 
-func reconcileTipWatch(t *testing.T, r *activeResourceReconciler) []error {
+func reconcileTipWatch(t *testing.T, r *ActiveResourceReconciler) []error {
 	t.Helper()
 	failures, err := reconcileActiveResource(r, context.Background())
 	if err != nil {

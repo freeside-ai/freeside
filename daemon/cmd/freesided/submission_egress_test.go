@@ -639,7 +639,7 @@ func TestIntakeEgressPolicyBeforePersistence(t *testing.T) {
 			f := newIntakeFixture(t)
 			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
 			init.PolicyKeys = withSubmissionEgress(init.PolicyKeys, tc.values)
-			r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+			r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 			r.reconcile(t.Context(), nil)
 			occurrence := f.latestOccurrence(t, 7)
 			if tc.wantErr == nil {

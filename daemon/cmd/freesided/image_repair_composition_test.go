@@ -17,10 +17,10 @@ import (
 
 func TestImageRepairProjectIsTheFirstConfiguredProject(t *testing.T) {
 	t.Parallel()
-	if _, ok := imageRepairProject(nil); ok {
+	if _, ok := ImageRepairProject(nil); ok {
 		t.Fatal("no configured project chose one")
 	}
-	got, ok := imageRepairProject(map[domain.ProjectID]engine.ManualInitiator{"project-b": {}, "project-a": {}})
+	got, ok := ImageRepairProject(map[domain.ProjectID]engine.ManualInitiator{"project-b": {}, "project-a": {}})
 	if !ok || got != "project-a" {
 		t.Fatalf("project = %q %v, want project-a", got, ok)
 	}
@@ -93,22 +93,22 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	service := signet.NewService(st, signet.WithBlobStore(blobs),
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(projects))))
 
-	if _, _, pending, err := pendingImageRepairTask(ctx, st, refusal); err != nil || pending {
+	if _, _, pending, err := PendingImageRepairTask(ctx, st, refusal); err != nil || pending {
 		t.Fatalf("before any submit: pending = %v err=%v, want none", pending, err)
 	}
-	project, _ := imageRepairProject(projects)
+	project, _ := ImageRepairProject(projects)
 	submission, err := service.SubmitImageRepairTask(ctx, project, refusal.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, settled := range map[string]domain.ImageUpkeepRefusal{"its refusal": refusal, "a later refusal": later} {
-		if answered, task, pending, err := pendingImageRepairTask(ctx, st, settled); err != nil || !pending ||
+		if answered, task, pending, err := PendingImageRepairTask(ctx, st, settled); err != nil || !pending ||
 			task != submission.TaskID || answered != refusal.ID {
 			t.Fatalf("open task for %s: pending = %s %q %v err=%v, want %s for %s",
 				name, answered, task, pending, err, submission.TaskID, refusal.ID)
 		}
 	}
-	if _, _, pending, err := pendingImageRepairTask(ctx, st, policy); err != nil || pending {
+	if _, _, pending, err := PendingImageRepairTask(ctx, st, policy); err != nil || pending {
 		t.Fatalf("policy refusal from the same image: pending = %v err=%v, want none", pending, err)
 	}
 	state, err := st.ServerState(ctx)
@@ -124,7 +124,7 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, pending, err := pendingImageRepairTask(ctx, st, later); err != nil || pending {
+	if _, _, pending, err := PendingImageRepairTask(ctx, st, later); err != nil || pending {
 		t.Fatalf("cancelled task: pending = %v err=%v, want none", pending, err)
 	}
 }
@@ -135,7 +135,7 @@ func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
 	t.Parallel()
 	st := storetest.Open(t, t.TempDir()+"/freesided.db", store.Options{})
 	t.Cleanup(func() { _ = st.Close() })
-	cfg := claudeStartupConfig{Claude: &claudeDriverConfig{SeedRoot: t.TempDir(), Repo: "owner/repo", RepositoryID: 7}}
+	cfg := ClaudeStartupConfig{Claude: &ClaudeDriverConfig{SeedRoot: t.TempDir(), Repo: "owner/repo", RepositoryID: 7}}
 	for name, selection := range map[string]engine.ImageSelection{
 		"attended": nil,
 		"unattended": func(context.Context, domain.InvocationID, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {
@@ -143,7 +143,7 @@ func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
 		},
 	} {
 		upkeep, err := composeImageUpkeep(st, signet.NewService(st), nil, cfg,
-			&claudeComposition{selectImage: selection}, nil, nil, nil)
+			&ClaudeComposition{selectImage: selection}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

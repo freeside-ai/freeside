@@ -208,7 +208,7 @@ func legacyOwners(t *testing.T, st *store.Store) map[domain.AuthIdentityID][]dom
 	var owned map[domain.AuthIdentityID][]domain.Task
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		var err error
-		owned, err = legacyOpenTasks(context.Background(), tx)
+		owned, err = LegacyOpenTasks(context.Background(), tx)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func legacyAdmittedTask(t *testing.T, identityID domain.AuthIdentityID) (*store.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (storeConformanceRecorder{store: st}).RecordBackendConformance(ctx, record); err != nil {
+	if err := (StoreConformanceRecorder{Store: st}).RecordBackendConformance(ctx, record); err != nil {
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentity{

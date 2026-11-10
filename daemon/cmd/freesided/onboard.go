@@ -322,7 +322,7 @@ func runOnboardCommand(
 			return trustErr
 		}
 		minter := publish.NewMinterWithJanitor(
-			keystore, client, defaultGitHubAPIBase,
+			keystore, client, DefaultGitHubAPIBase,
 			recorder, trust, time.Now, janitor,
 		)
 		gate := onboardingJanitorGate{janitor: janitor}
@@ -355,7 +355,7 @@ func runOnboardCommand(
 			return builderErr
 		}
 		auditor, auditorErr := publish.NewGitHubWorkflowAuditor(
-			tokens, client, defaultGitHubAPIBase, time.Now,
+			tokens, client, DefaultGitHubAPIBase, time.Now,
 		)
 		if auditorErr != nil {
 			return auditorErr
@@ -649,8 +649,8 @@ func withDurableInstallationPoll(
 		return err
 	}
 	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, recorder,
-		time.Now, defaultJanitorRemovalBound,
+		keystore, client, DefaultGitHubAPIBase, authority, authority, recorder, recorder,
+		time.Now, DefaultJanitorRemovalBound,
 	)
 	if err != nil {
 		return err
@@ -734,8 +734,8 @@ func installationURLForRegistration(
 	onboarder := publish.NewCredentialOnboarder(
 		keystore,
 		&http.Client{Timeout: 30 * time.Second},
-		defaultGitHubAPIBase,
-		defaultGitHubRemoteBase,
+		DefaultGitHubAPIBase,
+		DefaultGitHubRemoteBase,
 		time.Now,
 		nil,
 	)
@@ -832,13 +832,13 @@ func withInstallationJanitor(
 	janitor, err := publish.NewInstallationJanitor(
 		keystore,
 		client,
-		defaultGitHubAPIBase,
+		DefaultGitHubAPIBase,
 		authority,
 		authority,
 		recorder,
 		recorder,
 		time.Now,
-		defaultJanitorRemovalBound,
+		DefaultJanitorRemovalBound,
 	)
 	if err != nil {
 		return err

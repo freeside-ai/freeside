@@ -125,7 +125,7 @@ func TestTaskRecordGolden(t *testing.T) {
 			return err
 		}
 		invocation = admissions[0].InvocationID
-		notice, err := invocationStalledItem(ctx, tx, invocation, 5*time.Minute, taskRecordAsOf)
+		notice, err := InvocationStalledItem(ctx, tx, invocation, 5*time.Minute, taskRecordAsOf)
 		if err != nil {
 			return err
 		}
@@ -663,7 +663,7 @@ func TestTaskRecordJoinsStallNotices(t *testing.T) {
 		for target, itemID := range map[domain.InvocationID]*domain.ItemID{
 			invocation: &own, "inv-of-no-task": &foreign, invocation + "-b": &longer,
 		} {
-			notice, err := invocationStalledItem(ctx, tx, target, 5*time.Minute, taskRecordAsOf)
+			notice, err := InvocationStalledItem(ctx, tx, target, 5*time.Minute, taskRecordAsOf)
 			if err != nil {
 				return err
 			}

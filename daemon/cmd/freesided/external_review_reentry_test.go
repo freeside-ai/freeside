@@ -85,24 +85,24 @@ func externalReentryActivity() publish.PullReviewObservation {
 
 // externalReentryReconciler reconciles the open pull request reentryReadyItem
 // binds, at its bound head, with review observing its activity.
-func externalReentryReconciler(st *store.Store, review nativeReviewObserver) activeResourceReconciler {
-	return activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+func externalReentryReconciler(st *store.Store, review NativeReviewObserver) ActiveResourceReconciler {
+	return ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			observed := exactPull("open", false)
 			observed.HeadSHA = reentryTestHead
 			return observed, nil
 		},
-		review:    review,
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+		Review:    review,
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 }
 
-func reconcileClean(t *testing.T, reconciler *activeResourceReconciler, step string) {
+func reconcileClean(t *testing.T, reconciler *ActiveResourceReconciler, step string) {
 	t.Helper()
 	result, err := reconciler.Reconcile(context.Background())
-	if err != nil || len(result.failures) != 0 || len(result.skipped) != 0 {
+	if err != nil || len(result.Failures) != 0 || len(result.Skipped) != 0 {
 		t.Fatalf("%s: Reconcile = %+v, %v", step, result, err)
 	}
 }
@@ -383,7 +383,7 @@ func TestActiveResourceExternalReviewNeedsAnOpenPull(t *testing.T) {
 
 	merged := false
 	reconciler := externalReentryReconciler(st, staticReview(externalReentryActivity()))
-	reconciler.pull = func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler.Pull = func(context.Context, string, int) (publish.PullObservation, error) {
 		observed := exactPull("open", false)
 		if merged {
 			observed = exactPull("closed", true)
@@ -430,8 +430,8 @@ func TestActiveResourceExternalReviewStartFailureIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile hard error: %v", err)
 	}
-	if len(result.failures) != 1 || !strings.Contains(result.failures[0].Error(), "start external review") {
-		t.Fatalf("failures = %v, want one isolated start failure", result.failures)
+	if len(result.Failures) != 1 || !strings.Contains(result.Failures[0].Error(), "start external review") {
+		t.Fatalf("failures = %v, want one isolated start failure", result.Failures)
 	}
 	assertNoExternalReview(t, st, item)
 	pulls := 0

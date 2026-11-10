@@ -108,7 +108,7 @@ func runRoutingSetCommand(ctx context.Context, args []string, stdout, stderr io.
 		return callCommand(ctx, client, routingPolicyRoute, args, stdout)
 	}
 	defer func() { err = errors.Join(err, handle.Close()) }()
-	tree, revision, err := readAgentTree(ctx, cfg.AgentTreeCheckout, cfg.AgentTreeCommit)
+	tree, revision, err := ReadAgentTree(ctx, cfg.AgentTreeCheckout, cfg.AgentTreeCommit)
 	if err != nil {
 		return err
 	}

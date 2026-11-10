@@ -11,21 +11,21 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-const invocationStalledItemPrefix = "invocation-stalled-"
+const InvocationStalledItemPrefix = "invocation-stalled-"
 
 func invocationStalledPrefix(id domain.InvocationID) string {
-	return invocationStalledItemPrefix + string(id) + "-"
+	return InvocationStalledItemPrefix + string(id) + "-"
 }
 
-// isInvocationStallNotice reports whether itemID is a stall notice filed for
+// IsInvocationStallNotice reports whether itemID is a stall notice filed for
 // exactly this invocation. The remainder after the prefix is the filing
 // revision alone, so invocation "inv-a" never matches the notice of "inv-a-b".
-func isInvocationStallNotice(itemID string, id domain.InvocationID) bool {
+func IsInvocationStallNotice(itemID string, id domain.InvocationID) bool {
 	revision, ok := strings.CutPrefix(itemID, invocationStalledPrefix(id))
 	return ok && revision != "" && strings.Trim(revision, "0123456789") == ""
 }
 
-// invocationStallNotice returns the stage driver's Stall hook: it files one
+// InvocationStallNotice returns the stage driver's Stall hook: it files one
 // advisory invocation_stalled health notice when ward reports a running
 // writer stalled, and resolves it when ward reports recovery or the end of
 // the writer wait (plan §5.12). The notice holds nothing and never touches
@@ -35,25 +35,25 @@ func isInvocationStallNotice(itemID string, id domain.InvocationID) bool {
 // requested decision reads as attention_required to run supervision, and a
 // self-resolving advisory notice must not end a supervised run. The reason
 // names the invocation instead.
-func invocationStallNotice(
+func InvocationStallNotice(
 	st *store.Store, interval time.Duration, now func() time.Time,
 ) func(context.Context, domain.InvocationID, bool) error {
 	return func(ctx context.Context, id domain.InvocationID, stalled bool) error {
 		return st.Write(ctx, func(tx *store.WriteTx) error {
-			open, err := openInvocationStallNotices(ctx, tx, func(itemID string) bool {
-				return isInvocationStallNotice(itemID, id)
+			open, err := OpenInvocationStallNotices(ctx, tx, func(itemID string) bool {
+				return IsInvocationStallNotice(itemID, id)
 			})
 			if err != nil {
 				return err
 			}
 			if !stalled {
-				return resolveInvocationStallNotices(ctx, tx, open, now().UTC(),
+				return ResolveInvocationStallNotices(ctx, tx, open, now().UTC(),
 					"Resolved when the writer recovered or its wait ended.")
 			}
 			if len(open) > 0 {
 				return nil
 			}
-			item, err := invocationStalledItem(ctx, tx, id, interval, now().UTC())
+			item, err := InvocationStalledItem(ctx, tx, id, interval, now().UTC())
 			if err != nil {
 				return err
 			}
@@ -62,7 +62,7 @@ func invocationStallNotice(
 	}
 }
 
-func invocationStalledItem(
+func InvocationStalledItem(
 	ctx context.Context, tx *store.WriteTx, id domain.InvocationID, interval time.Duration, createdAt time.Time,
 ) (domain.AttentionItem, error) {
 	state, err := tx.ServerState(ctx)
@@ -100,18 +100,18 @@ func invocationStalledItem(
 // same write, so a start costs one revision, not two.
 func concludeInvocationStallNotices(ctx context.Context, st *store.Store) error {
 	return st.Write(ctx, func(tx *store.WriteTx) error {
-		open, err := openInvocationStallNotices(ctx, tx, func(itemID string) bool {
-			return strings.HasPrefix(itemID, invocationStalledItemPrefix) || isRaisedHeldWorkNotice(itemID)
+		open, err := OpenInvocationStallNotices(ctx, tx, func(itemID string) bool {
+			return strings.HasPrefix(itemID, InvocationStalledItemPrefix) || isRaisedHeldWorkNotice(itemID)
 		})
 		if err != nil {
 			return err
 		}
-		return resolveInvocationStallNotices(ctx, tx, open, time.Now().UTC(),
+		return ResolveInvocationStallNotices(ctx, tx, open, time.Now().UTC(),
 			"Resolved when the daemon restarted: no writer wait survives a restart.")
 	})
 }
 
-func openInvocationStallNotices(
+func OpenInvocationStallNotices(
 	ctx context.Context, tx *store.WriteTx, match func(itemID string) bool,
 ) ([]domain.AttentionItem, error) {
 	items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
@@ -127,7 +127,7 @@ func openInvocationStallNotices(
 	return matching, nil
 }
 
-func resolveInvocationStallNotices(
+func ResolveInvocationStallNotices(
 	ctx context.Context, tx *store.WriteTx, items []domain.AttentionItem, now time.Time, reason string,
 ) error {
 	for _, item := range items {
@@ -143,9 +143,9 @@ func resolveInvocationStallNotices(
 	return nil
 }
 
-// stallInterval resolves a zero flag to ward's default, so the notice names
+// StallInterval resolves a zero flag to ward's default, so the notice names
 // the interval ward actually applies.
-func stallInterval(configured time.Duration) time.Duration {
+func StallInterval(configured time.Duration) time.Duration {
 	if configured == 0 {
 		return ward.DefaultStallInterval
 	}

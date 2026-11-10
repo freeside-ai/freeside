@@ -175,7 +175,7 @@ func TestRigHoldLeavesALoadedProdAlone(t *testing.T) {
 	); err != nil {
 		t.Fatalf("hold with a loaded prod: %v", err)
 	}
-	var output rigHoldOutput
+	var output RigHoldOutput
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil || output.Token == "" {
 		t.Fatalf("hold with a loaded prod published %q (%v), want an acquisition", stdout.String(), err)
 	}
@@ -320,7 +320,7 @@ func TestRigHoldWritesAcquisitionBeforeWaitingAndPreservesManifestOnInterrupt(t 
 	); err != nil {
 		t.Fatal(err)
 	}
-	var output rigHoldOutput
+	var output RigHoldOutput
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
 		t.Fatalf("decode acquisition: %v", err)
 	}
@@ -403,7 +403,7 @@ func acquireBoundRig(
 	}
 	names = manifest.Resources.Containers
 	tokenFile = filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestRunRigBindRecordsPreJobContainer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lease.Close() })
 	tokenFile := filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +466,7 @@ func TestBindRigInvocationResourcesAddsLaterIteration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lease.Close() })
 	tokenFile := filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +520,7 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lease.Close() })
 	tokenFile := filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	if err := os.WriteFile(blockedSeedRoot, []byte("block mkdir"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = runClaudeConformance(t.Context(), nil, nil, nil, claudeDriverConfig{
+	err = runClaudeConformance(t.Context(), nil, nil, nil, ClaudeDriverConfig{
 		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: blockedSeedRoot,
 	}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "create conformance seed root") {
@@ -594,14 +594,14 @@ func assertVolumeResiduePreservesGlobalGate(
 		t.Fatal(err)
 	}
 	tokenFile := filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(tokenFile, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := bindRigRuntimeResources(stateRoot, tokenFile, resources); err != nil {
+	if err := BindRigRuntimeResources(stateRoot, tokenFile, resources); err != nil {
 		t.Fatal(err)
 	}
 	if err := lease.Abandon(); err != nil {
@@ -738,7 +738,7 @@ func TestRigCleanupReapsPreflightCredentialObserver(t *testing.T) {
 		t.Fatalf("bind preflight credential observer: %v", err)
 	}
 	tokenFile := filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,7 +783,7 @@ func TestProductionRigRuntimeAuthorizerBindsCredentialObserver(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lease.Close() })
 	tokenFile := filepath.Join(t.TempDir(), "rig.json")
-	body, err := json.Marshal(rigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
+	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +791,7 @@ func TestProductionRigRuntimeAuthorizerBindsCredentialObserver(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	authorize := productionRigRuntimeAuthorizer(stateRoot, tokenFile)
+	authorize := ProductionRigRuntimeAuthorizer(stateRoot, tokenFile)
 	if authorize == nil {
 		t.Fatal("authorizer is nil for a configured rig token file")
 	}

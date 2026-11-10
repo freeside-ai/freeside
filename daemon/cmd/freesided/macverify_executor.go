@@ -14,10 +14,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// macverifyExecutorConfig names the macOS verification executor the daemon
+// MacverifyExecutorConfig names the macOS verification executor the daemon
 // places macos_host recipe commands on. An empty Root configures no
 // executor: every such command then fails its verification by name.
-type macverifyExecutorConfig struct {
+type MacverifyExecutorConfig struct {
 	// Root is the executor root `freesided macverify install` created.
 	Root string
 	// Slots are the slot account names the install created.
@@ -29,7 +29,7 @@ type macverifyExecutorConfig struct {
 
 // macverifyExecutorFlags registers the executor's flags. The slot default
 // matches the install command's default slots.
-func macverifyExecutorFlags(flags *flag.FlagSet) func() macverifyExecutorConfig {
+func macverifyExecutorFlags(flags *flag.FlagSet) func() MacverifyExecutorConfig {
 	root := flags.String("macverify-root", "",
 		"root of the installed macOS verification executor; empty (default) configures none, so macos_host recipe commands fail")
 	slots := flags.String("macverify-slots", "fvslot1,fvslot2",
@@ -38,8 +38,8 @@ func macverifyExecutorFlags(flags *flag.FlagSet) func() macverifyExecutorConfig 
 		"Xcode build number (xcodebuild -version) the executor's commands run under; required with -macverify-root")
 	swift := flags.String("macverify-swift", "",
 		"swiftlang- token (swift --version) the executor's commands run under; required with -macverify-root")
-	return func() macverifyExecutorConfig {
-		return macverifyExecutorConfig{
+	return func() MacverifyExecutorConfig {
+		return MacverifyExecutorConfig{
 			Root: *root, Slots: engine.SplitNonEmpty(*slots), XcodeBuild: *xcodeBuild, Swift: *swift,
 		}
 	}
@@ -57,7 +57,7 @@ func proveHostVerification(
 	return suite.Full(ctx)
 }
 
-// composeHostVerificationExecutor builds the executor's backend, or returns
+// ComposeHostVerificationExecutor builds the executor's backend, or returns
 // nil when cfg.Root is empty. Under runConformance it runs the full pass
 // through prove (proveHostVerification outside tests), and a failed pass
 // fails startup, as the ward's does. Otherwise it restores
@@ -72,8 +72,8 @@ func proveHostVerification(
 // restore re-checks the record's class, outcome, and configuration digest
 // against the backend built from current flags (macverify.RestoreConformance),
 // so a record for an older configuration or binary never declares.
-func composeHostVerificationExecutor(
-	ctx context.Context, st *store.Store, cfg macverifyExecutorConfig, runConformance bool, logger *slog.Logger,
+func ComposeHostVerificationExecutor(
+	ctx context.Context, st *store.Store, cfg MacverifyExecutorConfig, runConformance bool, logger *slog.Logger,
 	prove func(context.Context, *macverify.Backend, macverify.ConformanceRecorder) error,
 ) (*macverify.Backend, error) {
 	if cfg.Root == "" {
@@ -91,7 +91,7 @@ func composeHostVerificationExecutor(
 		return nil, fmt.Errorf("configure the macOS verification executor: %w", err)
 	}
 	if runConformance {
-		if err := prove(ctx, backend, storeConformanceRecorder{store: st}); err != nil {
+		if err := prove(ctx, backend, StoreConformanceRecorder{Store: st}); err != nil {
 			return nil, fmt.Errorf("run macOS verification executor conformance: %w", err)
 		}
 		return backend, nil

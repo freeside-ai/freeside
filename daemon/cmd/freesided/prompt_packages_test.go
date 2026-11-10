@@ -16,26 +16,26 @@ import (
 
 const priorArtifactsTestDirective = "<!-- freeside:render-prior-artifacts=v1 -->\n"
 
-func promptPackagesFixture(t *testing.T) (claudeDriverConfig, promptPackages) {
+func promptPackagesFixture(t *testing.T) (ClaudeDriverConfig, PromptPackages) {
 	t.Helper()
 	root := t.TempDir()
-	cfg := claudeDriverConfig{
+	cfg := ClaudeDriverConfig{
 		PromptPackageFile:              filepath.Join(root, "implementation.md"),
 		SpecificationPromptPackageFile: filepath.Join(root, "specification.md"),
 		RemediationPromptPackageFile:   filepath.Join(root, "remediation.md"),
 	}
-	bodies := promptPackages{
-		implementation: []byte("Implement exactly.\n\x00Keep these bytes.\n"),
-		specification:  []byte(priorArtifactsTestDirective + "Specify the work.\n"),
-		remediation:    []byte(priorArtifactsTestDirective + "Remediate the findings.\n"),
+	bodies := PromptPackages{
+		Implementation: []byte("Implement exactly.\n\x00Keep these bytes.\n"),
+		Specification:  []byte(priorArtifactsTestDirective + "Specify the work.\n"),
+		Remediation:    []byte(priorArtifactsTestDirective + "Remediate the findings.\n"),
 	}
 	for _, file := range []struct {
 		path string
 		body []byte
 	}{
-		{cfg.PromptPackageFile, bodies.implementation},
-		{cfg.SpecificationPromptPackageFile, bodies.specification},
-		{cfg.RemediationPromptPackageFile, bodies.remediation},
+		{cfg.PromptPackageFile, bodies.Implementation},
+		{cfg.SpecificationPromptPackageFile, bodies.Specification},
+		{cfg.RemediationPromptPackageFile, bodies.Remediation},
 	} {
 		if err := os.WriteFile(file.path, file.body, 0o600); err != nil {
 			t.Fatal(err)
@@ -47,7 +47,7 @@ func promptPackagesFixture(t *testing.T) (claudeDriverConfig, promptPackages) {
 func TestReadPromptPackagesStoresExactValidatedBytes(t *testing.T) {
 	t.Parallel()
 	cfg, want := promptPackagesFixture(t)
-	packages, err := readPromptPackages(cfg)
+	packages, err := ReadPromptPackages(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,9 +67,9 @@ func TestReadPromptPackagesStoresExactValidatedBytes(t *testing.T) {
 		got  []byte
 		want []byte
 	}{
-		{"implementation", packages.implementation, want.implementation},
-		{"specification", packages.specification, want.specification},
-		{"remediation", packages.remediation, want.remediation},
+		{"implementation", packages.Implementation, want.Implementation},
+		{"specification", packages.Specification, want.Specification},
+		{"remediation", packages.Remediation, want.Remediation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !bytes.Equal(tc.got, tc.want) {

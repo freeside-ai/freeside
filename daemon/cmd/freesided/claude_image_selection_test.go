@@ -264,7 +264,7 @@ func TestStartWardOnSelectedImage(t *testing.T) {
 			if tc.conformance != nil {
 				conformance = *tc.conformance
 			}
-			if err := startWardOnSelectedImage(t.Context(), st, backend, claudeDriverConfig{
+			if err := startWardOnSelectedImage(t.Context(), st, backend, ClaudeDriverConfig{
 				Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase,
 				RunConformance: tc.runConformance,
 			}, selectorBaseInputs(tc.manifest, nil), tc.images[0].ImageRef, conformance, tc.conformance != nil,
@@ -281,7 +281,7 @@ func TestStartWardOnSelectedImage(t *testing.T) {
 		t.Parallel()
 		st := selectorStore(t, pointed)
 		failure := errors.New("fetch failed")
-		err := startWardOnSelectedImage(t.Context(), st, &fakeWard{}, claudeDriverConfig{
+		err := startWardOnSelectedImage(t.Context(), st, &fakeWard{}, ClaudeDriverConfig{
 			Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase, RunConformance: true,
 		}, selectorBaseInputs("2", failure), pointed.ImageRef, domain.BackendConformance{}, false,
 			slog.New(slog.DiscardHandler))
@@ -301,7 +301,7 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	base := selectorBaseInputs("5", nil)
 	// The start itself repoints ward from no image to the pointed-to one;
 	// only later repoints would follow an attempt.
-	if err := startWardOnSelectedImage(t.Context(), st, backend, claudeDriverConfig{
+	if err := startWardOnSelectedImage(t.Context(), st, backend, ClaudeDriverConfig{
 		Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase, RunConformance: true,
 	}, base, pointed.ImageRef, domain.BackendConformance{}, false, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("start = %v, want an unserved base to start", err)

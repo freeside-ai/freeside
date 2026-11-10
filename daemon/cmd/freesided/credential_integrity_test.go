@@ -168,7 +168,7 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	codexCutOff := enrollIntegrityFixture(t, adapters, "codex-cut-off", domain.HarnessClientCodexCLI, cutOff, recorded)
 	codexExposed := enrollIntegrityFixture(t, adapters, "codex-exposed", domain.HarnessClientCodexCLI, exposed, recorded)
 
-	observers := productionCredentialIntegrityObservers(claudeDriverConfig{
+	observers := productionCredentialIntegrityObservers(ClaudeDriverConfig{
 		ExporterImage:   "registry.test/exporter@sha256:" + strings.Repeat("0", 64),
 		ReviewInputRoot: root,
 	}, absentVolumeRuntime{})

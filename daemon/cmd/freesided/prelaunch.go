@@ -1101,7 +1101,7 @@ func splitIssueURL(issueURL string) (repo, number string) {
 func readPrelaunchIssue(
 	ctx context.Context, cfg preflightConfig, now time.Time, number int,
 ) (prelaunchIssueObservation, error) {
-	return readManagedIssue(ctx, cfg, now, number, &http.Client{Timeout: 30 * time.Second}, defaultGitHubAPIBase)
+	return readManagedIssue(ctx, cfg, now, number, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase)
 }
 
 // prelaunchIssueResponseLimit bounds the issue answer. GitHub caps an issue

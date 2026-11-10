@@ -43,7 +43,7 @@ func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
 		{"dev", config{Scenario: &clean, Environment: environmentDev}, "-driver scenario requires -environment ephemeral"},
 		{"unset tier", config{Scenario: &clean}, `environment "" is not prod, dev, or ephemeral`},
 		{"beside fake", config{Scenario: &clean, Environment: environmentEphemeral, FakeDriverEnabled: true}, "-driver scenario cannot run beside another driver"},
-		{"beside claude", config{Scenario: &clean, Environment: environmentEphemeral, Claude: &claudeDriverConfig{}}, "-driver scenario cannot run beside another driver"},
+		{"beside claude", config{Scenario: &clean, Environment: environmentEphemeral, Claude: &ClaudeDriverConfig{}}, "-driver scenario cannot run beside another driver"},
 		{"seed fixture", config{Scenario: &clean, Environment: environmentEphemeral, SeedFixture: "representative"}, "-seed-fixture requires -driver disabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

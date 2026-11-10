@@ -41,7 +41,7 @@ func TestImageUpkeepTriggerRunsTheStartPassThenTheNewestTip(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			trigger.run(ctx, upkeep, slog.New(slog.NewTextHandler(&logs, nil)))
+			trigger.Run(ctx, upkeep, slog.New(slog.NewTextHandler(&logs, nil)))
 		}()
 		synctest.Wait()
 		got := logs.String()
@@ -60,8 +60,8 @@ func TestImageUpkeepTriggerRunsAPassPerWake(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		trigger := newImageUpkeepTrigger()
-		trigger.wake()
-		trigger.wake()
+		trigger.Wake()
+		trigger.Wake()
 		starts := 0
 		upkeep := &engine.ImageUpkeep{
 			RepositoryID: 42,
@@ -75,7 +75,7 @@ func TestImageUpkeepTriggerRunsAPassPerWake(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			trigger.run(ctx, upkeep, slog.New(slog.NewTextHandler(&logs, nil)))
+			trigger.Run(ctx, upkeep, slog.New(slog.NewTextHandler(&logs, nil)))
 		}()
 		synctest.Wait()
 		if got := logs.String(); starts != 2 || strings.Count(got, "image upkeep adoption pass failed") != 1 {

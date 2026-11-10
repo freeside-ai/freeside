@@ -21,7 +21,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-func judgmentFixture(t *testing.T) (judgmentConfig, string) {
+func judgmentFixture(t *testing.T) (JudgmentConfig, string) {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // G302: owner traversal is required for the private credential directory.
@@ -33,13 +33,13 @@ func judgmentFixture(t *testing.T) (judgmentConfig, string) {
 	if err := os.WriteFile(bin, b, 0o700); err != nil { //nolint:gosec // G306: executable fixture in an owner-only test directory.
 		t.Fatal(err)
 	}
-	return judgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:])}}, root
+	return JudgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:])}}, root
 }
 
 // pinAnotherJudgmentCLI points cfg at a second executable under root, pinned
 // by its own digest: a configuration that composes and differs from the
 // fixture's.
-func pinAnotherJudgmentCLI(t *testing.T, cfg *judgmentConfig, root string) {
+func pinAnotherJudgmentCLI(t *testing.T, cfg *JudgmentConfig, root string) {
 	t.Helper()
 	bin := filepath.Join(root, "other-cli")
 	b := []byte("#!/bin/sh\nexit 2\n")
@@ -55,7 +55,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	// With no prompt file the publication author is off: the role source says
 	// so before it reads a line, both sites return their fail-safe with
 	// nothing blocking, and the runtime carries no driver.
-	unavailable, digest, err := composeJudgments(judgmentConfig{})
+	unavailable, digest, err := ComposeJudgments(JudgmentConfig{})
 	if err != nil || digest != "" || unavailable.Driver != nil || unavailable.AuthorPrompt != nil {
 		t.Fatalf("unconfigured runtime carries a driver or prompt; digest=%q, err=%v", digest, err)
 	}
@@ -71,7 +71,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Roles:     judgmentRoles{runtime: unavailable},
+		Roles:     JudgmentRoles{Runtime: unavailable},
 		Sites:     []inference.Site{inference.PublicationAuthorExplainSite(budget), inference.PublicationAuthorProposeSite(budget)},
 		Advisory:  store,
 	})
@@ -96,7 +96,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	// A configured prompt changes the configuration digest, and a different
 	// prompt file changes it again; the driver is bound.
 	cfg, root := judgmentFixture(t)
-	_, base, err := composeJudgments(cfg)
+	_, base, err := ComposeJudgments(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,14 +105,14 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.PublicationAuthorPrompt = promptPath
-	bound, withPrompt, err := composeJudgments(cfg)
+	bound, withPrompt, err := ComposeJudgments(cfg)
 	if err != nil || bound.Driver == nil || withPrompt == base || string(bound.AuthorPrompt) != "role prompt one" {
 		t.Fatalf("prompt digest = %q (base %q), err = %v", withPrompt, base, err)
 	}
 	if err := os.WriteFile(promptPath, []byte("role prompt two, different"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, changed, err := composeJudgments(cfg)
+	_, changed, err := ComposeJudgments(cfg)
 	if err != nil || changed == withPrompt {
 		t.Fatalf("different prompt did not change the digest: %q vs %q, err %v", changed, withPrompt, err)
 	}
@@ -121,13 +121,13 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	if err := os.WriteFile(promptPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := composeJudgments(cfg); err == nil {
+	if _, _, err := ComposeJudgments(cfg); err == nil {
 		t.Fatal("empty prompt file accepted")
 	}
 	if err := os.WriteFile(promptPath, bytes.Repeat([]byte("x"), (32<<10)+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := composeJudgments(cfg); err == nil {
+	if _, _, err := ComposeJudgments(cfg); err == nil {
 		t.Fatal("oversized prompt file accepted")
 	}
 }
@@ -137,16 +137,16 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 func TestJudgmentBindingAndReceipt(t *testing.T) {
 	t.Parallel()
 	cfg, root := judgmentFixture(t)
-	b, digest, err := composeJudgments(cfg)
+	b, digest, err := ComposeJudgments(cfg)
 	if err != nil || b.Driver == nil || digest == "" {
 		t.Fatalf("binding failed: %v", err)
 	}
-	_, again, err := composeJudgments(cfg)
+	_, again, err := ComposeJudgments(cfg)
 	if err != nil || again != digest {
 		t.Fatal("unstable binding")
 	}
 	pinAnotherJudgmentCLI(t, &cfg, root)
-	_, changed, err := composeJudgments(cfg)
+	_, changed, err := ComposeJudgments(cfg)
 	if err != nil || changed == digest {
 		t.Fatal("CLI pin absent from receipt")
 	}
@@ -157,7 +157,7 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 	for _, change := range []string{"unchanged", "changed CLI", "missing digest", "invalid digest"} {
 		t.Run(change, func(t *testing.T) {
 			cfg, root := judgmentFixture(t)
-			_, digest, err := composeJudgments(cfg)
+			_, digest, err := ComposeJudgments(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,7 +180,7 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 			}
 		})
 	}
-	binding, err := composeRuntimeJudgments(judgmentConfig{})
+	binding, err := composeRuntimeJudgments(JudgmentConfig{})
 	if err != nil || binding.Driver != nil {
 		t.Fatal("unconfigured startup fallback changed")
 	}
@@ -196,7 +196,7 @@ func TestProductionJudgmentsComposeWithTheFlagsAbsent(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
 	ownership := filepath.Join(stateDir, "task-judgments")
-	off, owned, err := composeProductionJudgments(stateDir, judgmentConfig{})
+	off, owned, err := composeProductionJudgments(stateDir, JudgmentConfig{})
 	if err != nil || off.Driver != nil || off.AuthorPrompt != nil || owned == nil {
 		t.Fatalf("composition with the flags absent = %+v, %v, %v", off, owned, err)
 	}
@@ -211,7 +211,7 @@ func TestProductionJudgmentsComposeWithTheFlagsAbsent(t *testing.T) {
 	}
 
 	cfg, _ := judgmentFixture(t)
-	_, digest, err := composeJudgments(cfg)
+	_, digest, err := ComposeJudgments(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,10 +233,10 @@ func TestJudgmentConfigRefusesAPartialPin(t *testing.T) {
 	t.Parallel()
 	cfg, _ := judgmentFixture(t)
 	cfg.CLI.SHA256 = ""
-	if _, _, err := composeJudgments(cfg); err == nil {
+	if _, _, err := ComposeJudgments(cfg); err == nil {
 		t.Fatal("partial configuration accepted")
 	}
-	b, digest, err := composeJudgments(judgmentConfig{})
+	b, digest, err := ComposeJudgments(JudgmentConfig{})
 	if err != nil || b.Driver != nil || digest != "" {
 		t.Fatal("unconfigured fallback changed")
 	}
@@ -250,8 +250,8 @@ func TestJudgmentFlags(t *testing.T) {
 	t.Parallel()
 	cfg, _ := judgmentFixture(t)
 	args := []string{"-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256}
-	parse := func(args []string) (judgmentConfig, error) {
-		var parsed judgmentConfig
+	parse := func(args []string) (JudgmentConfig, error) {
+		var parsed JudgmentConfig
 		flags := flag.NewFlagSet("test", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		judgmentFlags(flags, &parsed)
@@ -264,7 +264,7 @@ func TestJudgmentFlags(t *testing.T) {
 	if parsed != cfg {
 		t.Fatal("flag binding mismatch")
 	}
-	if _, _, err := composeJudgments(parsed); err != nil {
+	if _, _, err := ComposeJudgments(parsed); err != nil {
 		t.Fatal(err)
 	}
 	for _, removed := range []string{"-judgment-auth-snapshot", "-judgment-model"} {

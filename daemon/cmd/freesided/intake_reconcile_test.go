@@ -81,7 +81,7 @@ func openIntakeFixture(t *testing.T, root string) intakeFixture {
 // reconciler builds a loop over the fixture with a fixed label observation and a
 // per-issue state lookup, and a single initiator carrying the given mode.
 func (f intakeFixture) reconciler(
-	initiators []intakeInitiator, labeled []publish.LabelIssue, issueState map[int]string,
+	initiators []IntakeInitiator, labeled []publish.LabelIssue, issueState map[int]string,
 ) *intakeReconciler {
 	return &intakeReconciler{
 		store: f.store, blobs: f.blobs, engine: f.engine, attention: f.attention,
@@ -117,9 +117,9 @@ func intakePolicyKeys(t *testing.T, mode domain.InitiatorMode, modeSource domain
 	}
 }
 
-func intakeInitiatorFor(t *testing.T, mode domain.InitiatorMode, modeSource domain.ProvenanceSource, wipCap int) intakeInitiator {
+func intakeInitiatorFor(t *testing.T, mode domain.InitiatorMode, modeSource domain.ProvenanceSource, wipCap int) IntakeInitiator {
 	t.Helper()
-	return intakeInitiator{
+	return IntakeInitiator{
 		Repo: intakeTestRepo, RepositoryID: intakeTestRepoID, Label: intakeTestLabel,
 		ProjectID:         intakeTestProj,
 		PolicyKeys:        intakePolicyKeys(t, mode, modeSource, wipCap),
@@ -184,7 +184,7 @@ func TestIntakeProposeCreatesOneProposalPerOccurrence(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 
 	for pass := 0; pass < 3; pass++ {
 		r.reconcile(t.Context(), nil)
@@ -216,7 +216,7 @@ func TestIntakeKillRecoveryConvergesOnAdmissionKey(t *testing.T) {
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
 
 	first := openIntakeFixture(t, root)
-	first.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	first.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	before := first.latestOccurrence(t, 7)
 	if before.Admission == nil || !first.started(t, before.Admission.Subject.SpecificationRunID) {
 		t.Fatal("first run should have admitted and started")
@@ -227,7 +227,7 @@ func TestIntakeKillRecoveryConvergesOnAdmissionKey(t *testing.T) {
 
 	// Restart: a fresh store, engine, and reconciler over the same durable files.
 	second := openIntakeFixture(t, root)
-	second.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	second.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	after := second.latestOccurrence(t, 7)
 	if after.Ordinal != before.Ordinal ||
 		after.Admission == nil ||
@@ -254,7 +254,7 @@ func TestIntakeFailsClosedOnReboundRepository(t *testing.T) {
 		observeIssue: func(_ context.Context, _ string, number int) (publish.IssueObservation, error) {
 			return publish.IssueObservation{Number: number, State: "open"}, nil
 		},
-		initiators: []intakeInitiator{init}, now: func() time.Time { return f.now },
+		initiators: []IntakeInitiator{init}, now: func() time.Time { return f.now },
 	}
 	r.reconcile(t.Context(), nil)
 
@@ -277,7 +277,7 @@ func TestIntakeProposalDoesNotOfferStartWithChanges(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 
 	item := f.proposalItem(t, f.latestOccurrence(t, 7))
 	for _, action := range item.RequestedDecision {
@@ -299,7 +299,7 @@ func TestIntakeAutoStartUnderCapStarts(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
@@ -323,7 +323,7 @@ func TestIntakeAutoStartPresetDowngrades(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenancePreset, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
@@ -346,7 +346,7 @@ func TestIntakeAutoStartWIPCapRefusesBeyondAndSerializes(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7, 8), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7, 8), nil)
 
 	r.reconcile(t.Context(), nil)
 	first := f.latestOccurrence(t, 7)
@@ -375,7 +375,7 @@ func TestIntakeAutoStartReleasesWIPWhenDecisionDoesNotTake(t *testing.T) {
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
 	// Pass 1 (propose): admit an open proposal and reserve its run; no start yet.
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if o.Admission == nil {
 		t.Fatal("occurrence was not admitted")
@@ -383,7 +383,7 @@ func TestIntakeAutoStartReleasesWIPWhenDecisionDoesNotTake(t *testing.T) {
 	// The proposal departs while still open and undecided: the reconciler
 	// supersedes the card, so the start decision below cannot take (a non-start
 	// decision, exactly the decline/supersession race the cap gate must survive).
-	f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
 	superseded := f.latestOccurrence(t, 7)
 	if item := f.proposalItem(t, superseded); item.Status == domain.StatusOpen {
 		t.Fatal("proposal card should have been superseded by the departure")
@@ -404,7 +404,7 @@ func TestIntakeAutoStartReleasesWIPWhenDecisionDoesNotTake(t *testing.T) {
 	// Drive autoStart directly: its cap write records the start (claiming a slot),
 	// then StartTaskProposalUnattended finds the card no longer open and records no
 	// start, so the compensating release must free the slot.
-	r := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
+	r := f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"})
 	if err := r.autoStart(t.Context(), init, superseded, policy); err != nil {
 		t.Fatalf("autoStart: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestIntakeNeverAutoStartsDaemonFiledIssue(t *testing.T) {
 	f := newIntakeFixture(t)
 	storetest.LedgerFiledFollowUpIssue(t, f.store, intakeRepoFiling(), 7)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
-	present := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	present := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 
 	present.reconcile(t.Context(), nil)
 	first := f.assertOriginDemoted(t, 7)
@@ -488,7 +488,7 @@ func TestIntakeNeverAutoStartsDaemonFiledIssue(t *testing.T) {
 	}
 
 	// The label is removed, then added again.
-	f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
 	if departed := f.latestOccurrence(t, 7); departed.State != domain.IntakeOccurrenceAbsent {
 		t.Fatalf("occurrence state after the label left = %q, want %q", departed.State, domain.IntakeOccurrenceAbsent)
 	}
@@ -525,7 +525,7 @@ func TestIntakeDemotesEveryIssueWhereDaemonMayHaveFiled(t *testing.T) {
 			f := newIntakeFixture(t)
 			tc.file(t, f.store)
 			init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
-			r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+			r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 
 			r.reconcile(t.Context(), nil)
 			f.assertOriginDemoted(t, 7)
@@ -547,7 +547,7 @@ func TestIntakeAutoStartsWhereDaemonNeverFiled(t *testing.T) {
 	}, 7)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
 
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if o.Refusal != nil {
 		t.Fatalf("unexpected refusal %q in a repository the daemon never filed in", o.Refusal.Reason)
@@ -565,7 +565,7 @@ func TestIntakeOperatorStartLaunchesDemotedCard(t *testing.T) {
 	f := newIntakeFixture(t)
 	storetest.LedgerFiledFollowUpIssue(t, f.store, intakeRepoFiling(), 7)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.assertOriginDemoted(t, 7)
 
@@ -588,7 +588,7 @@ func TestIntakeOriginGateRunsInTheStartWrite(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	// Admit an open, undecided proposal while the repository has no filing.
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
@@ -655,7 +655,7 @@ func TestIntakeOriginGateFailsClosedOnUnreadableLedger(t *testing.T) {
 	rewrite(string(domain.ActionDecline), nil)
 
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if o.Admission == nil {
@@ -747,7 +747,7 @@ func TestIntakeWorkItemCarriesNoIssueContent(t *testing.T) {
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
 	// A hostile observation cannot inject content: LabelIssue carries only the
 	// number, state, and label presence. There is no field for a title or body.
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 
 	o := f.latestOccurrence(t, 7)
@@ -799,14 +799,14 @@ func TestIntakeSupersedesDepartedProposal(t *testing.T) {
 			f := newIntakeFixture(t)
 			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
 			// Pass 1: labeled-open, admit a propose card.
-			present := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+			present := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 			present.reconcile(t.Context(), nil)
 			before := f.latestOccurrence(t, 7)
 			if before.Admission == nil {
 				t.Fatal("occurrence was not admitted")
 			}
 			// Pass 2: the issue is gone from the labeled-open set.
-			departed := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: tc.state})
+			departed := f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: tc.state})
 			departed.reconcile(t.Context(), nil)
 			after := f.latestOccurrence(t, 7)
 			if after.State != tc.wantState {
@@ -829,14 +829,14 @@ func TestIntakeDoesNotSupersedeDecidedProposal(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
-	present := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	present := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	present.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if !f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("occurrence should have auto-started")
 	}
 	// Now the label is removed.
-	departed := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
+	departed := f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"})
 	departed.reconcile(t.Context(), nil)
 	after := f.latestOccurrence(t, 7)
 	if after.Supersession != nil {
@@ -851,7 +851,7 @@ func TestIntakeLaunchesDepartedDecidedStart(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 
 	// An operator decides start (records the decision, resolves the card); the
@@ -865,7 +865,7 @@ func TestIntakeLaunchesDepartedDecidedStart(t *testing.T) {
 	}
 
 	// The issue departs (label removed) before the loop launched it.
-	f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
 	after := f.latestOccurrence(t, 7)
 	if !f.started(t, after.Admission.Subject.SpecificationRunID) {
 		t.Fatal("a departed decided start must launch before the occurrence retires")
@@ -883,7 +883,7 @@ func TestIntakeDefersDepartureUntilDecidedStartLaunches(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 
 	// A start is decided (card resolved) but the run has not launched (no marker).
@@ -893,7 +893,7 @@ func TestIntakeDefersDepartureUntilDecidedStartLaunches(t *testing.T) {
 	}
 	// advanceDeparture alone must DEFER, atomically, rather than retire and strand
 	// the decided start.
-	r := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
+	r := f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"})
 	if err := r.advanceDeparture(t.Context(), o); !errors.Is(err, errIntakeDeferDepartureRetire) {
 		t.Fatalf("advanceDeparture on a decided-but-unstarted proposal: err = %v, want defer", err)
 	}
@@ -914,7 +914,7 @@ func TestIntakeRequiresForgeHostInAllowlist(t *testing.T) {
 			init.PolicyKeys[i].Value = "https://docs.example" // no forge host
 		}
 	}
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 
 	var found bool
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
@@ -946,7 +946,7 @@ func TestIntakeCrossRepoProjectRefusedAtMint(t *testing.T) {
 		t.Fatal(err)
 	}
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	// A cross-repo project makes admission fail; the pass isolates the failure.
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
@@ -976,7 +976,7 @@ func TestIntakeUnadmittedDepartureAdvances(t *testing.T) {
 	}
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
 	// Pass 1: labeled-open, admission fails, occurrence left present + unadmitted.
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	before := f.latestOccurrence(t, 7)
 	if before.Admission != nil {
 		t.Fatal("a cross-repo project must not admit the occurrence")
@@ -986,14 +986,14 @@ func TestIntakeUnadmittedDepartureAdvances(t *testing.T) {
 	}
 	// Pass 2: the label is removed (issue still open); the departure advances the
 	// unadmitted occurrence to absent rather than skipping it.
-	f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
 	after := f.latestOccurrence(t, 7)
 	if after.State != domain.IntakeOccurrenceAbsent {
 		t.Fatalf("departed unadmitted occurrence state = %q, want absent", after.State)
 	}
 	// Pass 3: the label is re-added; a fresh occurrence (next ordinal) is
 	// allocated, not the stale one.
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	relabeled := f.latestOccurrence(t, 7)
 	if relabeled.Ordinal != before.Ordinal+1 {
 		t.Fatalf("re-label ordinal = %d, want %d (a fresh occurrence)", relabeled.Ordinal, before.Ordinal+1)
@@ -1012,7 +1012,7 @@ func TestIntakeRegistersOwnProjectAndAdmits(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if o.Admission == nil {
@@ -1096,7 +1096,7 @@ func TestIntakeReleasesStrandedStartOnOriginDemotion(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	f.strandStart(t, o)
@@ -1119,7 +1119,7 @@ func TestIntakeReleasesStrandedStartOnWIPCapRefusal(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7, 8), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7, 8), nil)
 	r.reconcile(t.Context(), nil)
 	stranded, other := f.latestOccurrence(t, 7), f.latestOccurrence(t, 8)
 	f.strandStart(t, other)
@@ -1151,7 +1151,7 @@ func TestIntakeReleasesStrandedStartOnSubjectInputRefusal(t *testing.T) {
 			t.Parallel()
 			f := newIntakeFixture(t)
 			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-			r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+			r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 			r.reconcile(t.Context(), nil)
 			o := f.latestOccurrence(t, 7)
 			f.strandStart(t, o)
@@ -1179,11 +1179,11 @@ func TestIntakeReleasesStrandedStartOnDeparture(t *testing.T) {
 			t.Parallel()
 			f := newIntakeFixture(t)
 			init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-			f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+			f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 			o := f.latestOccurrence(t, 7)
 			f.strandStart(t, o)
 
-			f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: state}).reconcile(t.Context(), nil)
+			f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: state}).reconcile(t.Context(), nil)
 			after := f.latestOccurrence(t, 7)
 			if after.State == domain.IntakeOccurrencePresent || after.Supersession == nil {
 				t.Fatalf("occurrence = state %q, supersession %+v; want departed and superseded", after.State, after.Supersession)
@@ -1203,7 +1203,7 @@ func TestIntakeReleasesStrandedStartRefusedBeforeTheFix(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	f.strandStart(t, o)
@@ -1248,7 +1248,7 @@ func TestIntakeKeepsDecidedStartSlot(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	f.strandStart(t, o)
@@ -1265,7 +1265,7 @@ func TestIntakeKeepsDecidedStartSlot(t *testing.T) {
 	if !f.holdsSlot(t, o) {
 		t.Fatal("a refusal's release must not touch a decided start")
 	}
-	departed := f.reconciler([]intakeInitiator{init}, nil, map[int]string{7: "open"})
+	departed := f.reconciler([]IntakeInitiator{init}, nil, map[int]string{7: "open"})
 	if err := departed.advanceDeparture(t.Context(), o); !errors.Is(err, errIntakeDeferDepartureRetire) {
 		t.Fatalf("advanceDeparture: err = %v, want defer", err)
 	}
@@ -1288,7 +1288,7 @@ func TestIntakeOperatorAbandonedDecidedStartStaysDown(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	f.strandStart(t, o)
@@ -1343,14 +1343,14 @@ func TestIntakeReleaseLeavesAnotherOccurrencesStart(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	auto := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 5)
-	f.reconciler([]intakeInitiator{auto}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{auto}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	first := f.latestOccurrence(t, 7)
 	if !f.started(t, first.Admission.Subject.SpecificationRunID) {
 		t.Fatal("the first occurrence should have auto-started")
 	}
-	f.reconciler([]intakeInitiator{auto}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{auto}, nil, map[int]string{7: "open"}).reconcile(t.Context(), nil)
 	propose := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
-	r := f.reconciler([]intakeInitiator{propose}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{propose}, labeledOpen(7), nil)
 	r.reconcile(t.Context(), nil)
 	second := f.latestOccurrence(t, 7)
 	if second.Ordinal != 2 || second.Admission == nil {

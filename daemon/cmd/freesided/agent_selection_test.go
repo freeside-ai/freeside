@@ -112,7 +112,7 @@ func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
 // These fixtures test admission, not a real harness. Their proof is explicit
 // so changing an adapter declaration cannot silently grow fixture coverage.
 func recordTestClaudeAdapterConformance(ctx context.Context, st *store.Store, at time.Time) error {
-	return recordObservedAdapterConformance(ctx, st, testObservedClaudeCapabilities(), nil, at)
+	return RecordObservedAdapterConformance(ctx, st, testObservedClaudeCapabilities(), nil, at)
 }
 
 func TestRecordObservedAdapterConformance(t *testing.T) {
@@ -121,7 +121,7 @@ func TestRecordObservedAdapterConformance(t *testing.T) {
 	provedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	observed := slices.DeleteFunc(testObservedClaudeCapabilities(), func(c domain.LaunchCapability) bool { return c == domain.LaunchCapMutationTools })
 	observed = append(observed, domain.LaunchCapAuxiliaryInferenceControl)
-	if err := recordObservedAdapterConformance(t.Context(), st, observed, nil, provedAt); err != nil {
+	if err := RecordObservedAdapterConformance(t.Context(), st, observed, nil, provedAt); err != nil {
 		t.Fatal(err)
 	}
 	adapters, err := agentbaseline.Adapters()
@@ -157,7 +157,7 @@ func TestRecordObservedAdapterConformance(t *testing.T) {
 		// Even a canceled pass must append a newer failed generation.
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if err := recordObservedAdapterConformance(ctx, st, testObservedClaudeCapabilities(), context.DeadlineExceeded, provedAt); err != nil {
+		if err := RecordObservedAdapterConformance(ctx, st, testObservedClaudeCapabilities(), context.DeadlineExceeded, provedAt); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
@@ -180,7 +180,7 @@ func TestObservedAdapterCoverageHoldsWriterAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkout, commit := commitAdoptedPatch(t, patch)
-	selection, err := loadAgentSelection(t.Context(), claudeDriverConfig{AgentTreeCheckout: checkout, AgentTreeCommit: commit, ProviderEndpoints: []string{"api.anthropic.com:443"}})
+	selection, err := LoadAgentSelection(t.Context(), ClaudeDriverConfig{AgentTreeCheckout: checkout, AgentTreeCommit: commit, ProviderEndpoints: []string{"api.anthropic.com:443"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestObservedAdapterCoverageHoldsWriterAdmission(t *testing.T) {
 		}
 		for _, runErr := range []error{nil, errors.New("handoff failed")} {
 			observed := slices.DeleteFunc(testObservedClaudeCapabilities(), func(c domain.LaunchCapability) bool { return c == domain.LaunchCapMutationTools })
-			if err := recordObservedAdapterConformance(t.Context(), st, observed, runErr, time.Now()); err != nil {
+			if err := RecordObservedAdapterConformance(t.Context(), st, observed, runErr, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 			_, err = selection.CheckRole(t.Context(), st, domain.RoleImplementer, agent.Line.PromptDigest, time.Now())
@@ -205,9 +205,9 @@ func TestObservedAdapterCoverageHoldsWriterAdmission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		leaser := &adapterConformanceLeaser{Leaser: adapters.Leaser, store: st}
+		leaser := &AdapterConformanceLeaser{Leaser: adapters.Leaser, Store: st}
 		const holder domain.InvocationID = "conformance-fixture-holder"
-		release := leaser.bind(holder, agent)
+		release := leaser.Bind(holder, agent)
 		defer release()
 		volume, err := leaser.AuthStoreVolume(t.Context(), agent.Identity.ID, holder)
 		if err != nil || volume != agent.Generation.AuthStoreVolume {
@@ -222,7 +222,7 @@ func TestObservedAdapterCoverageHoldsWriterAdmission(t *testing.T) {
 		}
 		tampered := agent
 		tampered.Enrollment.ID = other.Enrollment.ID
-		undo := leaser.bind("tampered-conformance-holder", tampered)
+		undo := leaser.Bind("tampered-conformance-holder", tampered)
 		defer undo()
 		if _, err := leaser.AuthStoreVolume(t.Context(), agent.Identity.ID, "tampered-conformance-holder"); err == nil {
 			t.Fatal("reconstructed enrollment from another identity accepted")
@@ -311,7 +311,7 @@ func TestMarkedImplementerLeavesTheAdapterRecord(t *testing.T) {
 			t.Fatal("the proof launched on a marked implementer")
 			return nil, nil
 		}
-		if err := proveSelectedClaudeAdapter(ctx, st, selection, launchMarked); err != nil {
+		if err := ProveSelectedClaudeAdapter(ctx, st, selection, launchMarked); err != nil {
 			t.Fatalf("marked implementer pass = %v, want nil so the follower counts no failure", err)
 		}
 		if got := latest(st); !reflect.DeepEqual(got, passed) {
@@ -329,7 +329,7 @@ func TestMarkedImplementerLeavesTheAdapterRecord(t *testing.T) {
 			t.Fatalf("same selection after re-enrollment: %v", err)
 		}
 		var proved domain.ClientEnrollmentID
-		if err := proveSelectedClaudeAdapter(ctx, st, selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+		if err := ProveSelectedClaudeAdapter(ctx, st, selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
 			proved = agent.Enrollment.ID
 			return testObservedClaudeCapabilities(), nil
 		}); err != nil {
@@ -348,7 +348,7 @@ func TestMarkedImplementerLeavesTheAdapterRecord(t *testing.T) {
 			}
 		}
 		unresolved := selectionOf(tree)
-		if err := proveSelectedClaudeAdapter(ctx, st, unresolved, launchMarked); err != nil {
+		if err := ProveSelectedClaudeAdapter(ctx, st, unresolved, launchMarked); err != nil {
 			t.Fatal(err)
 		}
 		if got := latest(st); got.Outcome != domain.ConformanceFailed || got.ProvedCapabilities != nil {

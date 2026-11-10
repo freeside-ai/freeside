@@ -82,8 +82,8 @@ func TestAdapterConformanceRecoveryRetainsInputsUntilQuiescent(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate.fail = false
-	leaser := &adapterConformanceLeaser{store: st}
-	if err := recoverAdapterConformance(t.Context(), st, gate, claudeDriverConfig{StateDir: root, SeedRoot: seedRoot}, leaser); err != nil {
+	leaser := &AdapterConformanceLeaser{Store: st}
+	if err := recoverAdapterConformance(t.Context(), st, gate, ClaudeDriverConfig{StateDir: root, SeedRoot: seedRoot}, leaser); err != nil {
 		t.Fatal(err)
 	}
 	if gate.recovered != 2 {
@@ -128,7 +128,7 @@ func TestAdapterConformanceRecoveryRefusesSeedOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := &conformanceRecoveryGate{}
-	if err := recoverAdapterConformance(t.Context(), nil, gate, claudeDriverConfig{StateDir: root, SeedRoot: filepath.Join(root, "seeds")}, nil); err == nil {
+	if err := recoverAdapterConformance(t.Context(), nil, gate, ClaudeDriverConfig{StateDir: root, SeedRoot: filepath.Join(root, "seeds")}, nil); err == nil {
 		t.Fatal("out-of-root seed accepted")
 	}
 	if gate.recovered != 0 {

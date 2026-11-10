@@ -35,10 +35,10 @@ import (
 // devlog/2026-08-13-2210-label-intake-reconciliation.md.
 
 const (
-	// defaultIntakeInterval is the reconciliation cadence. Label intake is a
+	// DefaultIntakeInterval is the reconciliation cadence. Label intake is a
 	// polling reconciler (webhooks are Phase 2), so it re-observes on this
 	// interval; conditional requests keep an unchanged labeled set cheap.
-	defaultIntakeInterval = 15 * time.Minute
+	DefaultIntakeInterval = 15 * time.Minute
 
 	// intakeForgeResearchHost is the forge API host the loop guarantees in the
 	// resolved policy's research allowlist, so the specifier's issue fetch (the
@@ -66,13 +66,13 @@ var errIntakeForgeHostNotAllowed = errors.New(
 var errIntakeDeferDepartureRetire = errors.New(
 	"deferring departure retire until the decided start launches")
 
-// intakeInitiator is one configured label initiator: which (repository, label)
+// IntakeInitiator is one configured label initiator: which (repository, label)
 // to observe, the project its runs belong to, the rein-resolved policy keys, and
 // the daemon's publication identity. Occurrence, admission, mode, WIP, and
 // supersession decisions are the loop's; this is the static configuration a
 // workflow definition supplies (the rein resolver and YAML parsing are a later
 // unit, so this is populated directly for now).
-type intakeInitiator struct {
+type IntakeInitiator struct {
 	Repo              string
 	RepositoryID      int64
 	Label             string
@@ -83,7 +83,7 @@ type intakeInitiator struct {
 	ComponentCount    int
 }
 
-func (i intakeInitiator) validate() error {
+func (i IntakeInitiator) validate() error {
 	switch {
 	case i.Repo == "":
 		return errors.New("intake initiator repo is required")
@@ -113,7 +113,7 @@ type intakeReconciler struct {
 	// (repo, label) after a durable intake write fails, so the next tick
 	// re-observes unconditionally instead of riding a 304. Optional.
 	evictLabel func(repo, label string)
-	initiators []intakeInitiator
+	initiators []IntakeInitiator
 	now        func() time.Time
 }
 
@@ -166,7 +166,7 @@ func (r *intakeReconciler) reconcile(ctx context.Context, logger *slog.Logger) {
 	}
 }
 
-func (r *intakeReconciler) reconcileInitiator(ctx context.Context, init intakeInitiator, logger *slog.Logger) error {
+func (r *intakeReconciler) reconcileInitiator(ctx context.Context, init IntakeInitiator, logger *slog.Logger) error {
 	if err := init.validate(); err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func (r *intakeReconciler) reconcileInitiator(ctx context.Context, init intakeIn
 
 // reconcilePresent advances the active occurrence for a labeled-open issue,
 // admits it when unadmitted, and applies the mode/WIP/start decision.
-func (r *intakeReconciler) reconcilePresent(ctx context.Context, init intakeInitiator, issueNumber int) error {
+func (r *intakeReconciler) reconcilePresent(ctx context.Context, init IntakeInitiator, issueNumber int) error {
 	var occurrence domain.IntakeOccurrence
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
 		var err error
@@ -245,7 +245,7 @@ func (r *intakeReconciler) reconcilePresent(ctx context.Context, init intakeInit
 // declaration, admit the task proposal under the occurrence's derived key, and
 // bind the admission. See the decision note for the reserved-run adoption model.
 func (r *intakeReconciler) admit(
-	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
+	ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence,
 ) (domain.IntakeOccurrence, error) {
 	implementationRunID := intakeImplementationRunID(occurrence)
 	specificationRunID, err := engine.ResolveSpecificationRunID(ctx, r.store, implementationRunID)
@@ -419,7 +419,7 @@ func (r *intakeReconciler) admit(
 // cap), or auto-started. A refused card whose admitted start was never decided
 // has that start released (#1770), including one refused before the release
 // existed.
-func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {
+func (r *intakeReconciler) decide(ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence) error {
 	if occurrence.Admission == nil {
 		return nil
 	}
@@ -490,7 +490,7 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 // pass recorded without reaching the decision is released in the refusal's
 // write (#1770); with no refusal, this pass keeps it and decides.
 func (r *intakeReconciler) autoStart(
-	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence, policy intake.IntakePolicy,
+	ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence, policy intake.IntakePolicy,
 ) error {
 	missing, stale, err := r.subjectInputStatus(ctx, occurrence)
 	if err != nil {
@@ -625,7 +625,7 @@ func countProjectWIPTasks(
 	return tx.CountProjectWIPTasks(ctx, projectID, exclude)
 }
 
-func (r *intakeReconciler) launch(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {
+func (r *intakeReconciler) launch(ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence) error {
 	spec, err := r.startSpec(ctx, init, occurrence)
 	if err != nil {
 		return err
@@ -642,7 +642,7 @@ func (r *intakeReconciler) launch(ctx context.Context, init intakeInitiator, occ
 // occurrence coordinates and the initiator identity; the resolved policy is the
 // one persisted at admission.
 func (r *intakeReconciler) startSpec(
-	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
+	ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence,
 ) (engine.SpecificationRunSpec, error) {
 	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
 	implementationRunID := intakeImplementationRunID(occurrence)
@@ -894,7 +894,7 @@ func (r *intakeReconciler) subjectInputStatus(
 // admission never completed carries no proposal, and is advanced by a bare
 // observation so it never lingers present.
 func (r *intakeReconciler) reconcileDepartures(
-	ctx context.Context, init intakeInitiator, labeledOpen map[int]bool, logger *slog.Logger,
+	ctx context.Context, init IntakeInitiator, labeledOpen map[int]bool, logger *slog.Logger,
 ) error {
 	var present []domain.IntakeOccurrence
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -1008,7 +1008,7 @@ func (r *intakeReconciler) advanceDeparture(ctx context.Context, occurrence doma
 // stranded by the departure. SubmitSpecificationRun converges, so a replay is a
 // no-op.
 func (r *intakeReconciler) launchDecidedDeparture(
-	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence,
+	ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence,
 ) (bool, error) {
 	if occurrence.Admission == nil {
 		return false, nil
@@ -1076,7 +1076,7 @@ func intakeWorkItemDocument(occurrence domain.IntakeOccurrence) []byte {
 // fallback (plan §5.15). Only a first admission uses it; a replay decodes the
 // admitted attempt's stored bytes (admit, startSpec), so an occurrence admitted
 // before this title change keeps its frozen record.
-func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
+func intakePublication(init IntakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	publication := intakeLiteralPublication(init, occurrence)
 	publication.Recipe = engine.IntakePublicationRecipe
 	return publication
@@ -1087,7 +1087,7 @@ func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence)
 // configured commit-author identity. It omits raw label text because a label
 // can contain GitHub directives; only the publisher's approved closure outcome
 // may close the source issue.
-func intakeLiteralPublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
+func intakeLiteralPublication(init IntakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	return engine.ProductionPublication{
 		Title: fmt.Sprintf("Address %s#%d", occurrence.Repo, occurrence.IssueNumber),
 		Body: fmt.Sprintf(
@@ -1101,7 +1101,7 @@ func intakeLiteralPublication(init intakeInitiator, occurrence domain.IntakeOccu
 // intakeLegacyLiteralPublication rebuilds the pre-#1491 text that a legacy
 // reservation with no admitted attempt froze. Keep these bytes unchanged so
 // startSpec can replay that reservation without changing its publication.
-func intakeLegacyLiteralPublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
+func intakeLegacyLiteralPublication(init IntakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	return engine.ProductionPublication{
 		Title: fmt.Sprintf("Resolve %s#%d", occurrence.Repo, occurrence.IssueNumber),
 		Body: fmt.Sprintf(

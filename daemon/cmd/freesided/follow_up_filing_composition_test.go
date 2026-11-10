@@ -45,13 +45,13 @@ func TestFollowUpFilerCompositionAndBinding(t *testing.T) {
 	if filer == nil {
 		t.Fatal("composition returned no filer")
 	}
-	if got := followUpFilerBinding(nil); got != nil {
+	if got := FollowUpFilerBinding(nil); got != nil {
 		t.Fatal("fake-driver binding is not a nil interface")
 	}
-	if got := followUpFilerBinding(&claudeComposition{}); got != nil {
+	if got := FollowUpFilerBinding(&ClaudeComposition{}); got != nil {
 		t.Fatal("empty composition binding is not a nil interface")
 	}
-	if got := followUpFilerBinding(&claudeComposition{followUpFiler: filer}); got != filer {
+	if got := FollowUpFilerBinding(&ClaudeComposition{FollowUpFiler: filer}); got != filer {
 		t.Fatal("binding did not return the composed filer")
 	}
 	if err := filer.Pass(context.Background()); err != nil {

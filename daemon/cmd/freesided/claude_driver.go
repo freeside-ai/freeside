@@ -46,12 +46,12 @@ import (
 // dispatch under. The fake-driver mode is untouched, so the 1A.0 walking
 // skeleton keeps its exact behaviour.
 
-// claudeDriverConfig is the operator-supplied half of the production
+// ClaudeDriverConfig is the operator-supplied half of the production
 // composition. Everything here is deliberately explicit: a defaulted image,
 // endpoint, or identity would put an unaudited value into the durable
 // admission record.
-type claudeDriverConfig struct {
-	Judgments     judgmentConfig
+type ClaudeDriverConfig struct {
+	Judgments     JudgmentConfig
 	AgentImage    domain.ImageRef
 	ExporterImage string
 	ContainerBin  string
@@ -94,8 +94,8 @@ type claudeDriverConfig struct {
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
 	// HostVerification names the macOS verification executor; an empty root
-	// configures none (composeHostVerificationExecutor).
-	HostVerification macverifyExecutorConfig
+	// configures none (ComposeHostVerificationExecutor).
+	HostVerification MacverifyExecutorConfig
 	// StateRoot and CredentialsDir locate the GitHub App authority and
 	// credential material the exact-base transport authenticates with.
 	StateRoot                   string
@@ -113,11 +113,11 @@ type claudeDriverConfig struct {
 	ShadowReviewRate            float64
 
 	// ReviewProvider is the routed review provider the reviewer line's
-	// harness selects (resolveReviewSelection, #397).
+	// harness selects (ResolveReviewSelection, #397).
 	ReviewProvider ward.RoutedReviewProvider
 	// The review identities, cost owners, models, and efforts are resolved
 	// from the reviewer and shadow reviewer lineup lines
-	// (resolveReviewSelection), never set by a flag. An effort is the native
+	// (ResolveReviewSelection), never set by a flag. An effort is the native
 	// value the launch passes. They feed the review sources and the approved
 	// configuration digests, which is why they stay beside the review fields.
 	ReviewAuthIdentityID        domain.AuthIdentityID
@@ -132,7 +132,7 @@ type claudeDriverConfig struct {
 
 var errBackendConformanceUnavailable = errors.New("exact passing backend conformance proof is unavailable")
 
-func (c claudeDriverConfig) validate() error {
+func (c ClaudeDriverConfig) Validate() error {
 	if c.Rebuild.BaseBuildRef == "" {
 		if c.Rebuild.BuildProxy != "" || len(c.Rebuild.DNS) != 0 {
 			return fmt.Errorf("-build-proxy and -build-dns configure the project-image rebuild and need -base-build-ref")
@@ -191,9 +191,9 @@ func (c claudeDriverConfig) validate() error {
 	case c.OperatingMode == domain.ModeUnattended &&
 		(!filepath.IsAbs(c.ReviewInputRoot) || filepath.Clean(c.ReviewInputRoot) != c.ReviewInputRoot):
 		return fmt.Errorf("-review-input-root must be a clean absolute path")
-	case c.OperatingMode == domain.ModeUnattended && !slices.Contains(reviewAuthModes, c.ReviewAuthMode):
+	case c.OperatingMode == domain.ModeUnattended && !slices.Contains(ReviewAuthModes, c.ReviewAuthMode):
 		// Whether the mode suits the reviewer's harness is checked once the
-		// line is resolved (requireReviewAuthMode).
+		// line is resolved (RequireReviewAuthMode).
 		return fmt.Errorf("-review-auth-mode is invalid")
 	case c.ShadowReviewImage != "" && c.OperatingMode != domain.ModeUnattended:
 		return fmt.Errorf("shadow review requires unattended mode")
@@ -210,34 +210,34 @@ func (c claudeDriverConfig) validate() error {
 	return nil
 }
 
-// admissionCapabilitySnapshot is the selected mode's engine floor as a
+// AdmissionCapabilitySnapshot is the selected mode's engine floor as a
 // durable snapshot, for the store policy that re-gates every admission.
-func admissionCapabilitySnapshot(mode domain.OperatingMode) domain.CapabilitySnapshot {
-	return exec.NewCapabilitySet(admissionFloor(mode)...).Snapshot()
+func AdmissionCapabilitySnapshot(mode domain.OperatingMode) domain.CapabilitySnapshot {
+	return exec.NewCapabilitySet(AdmissionFloor(mode)...).Snapshot()
 }
 
-func admissionFloor(mode domain.OperatingMode) []exec.Capability {
+func AdmissionFloor(mode domain.OperatingMode) []exec.Capability {
 	switch mode {
 	case domain.ModeAttendedDev:
-		return attendedAdmissionFloor
+		return AttendedAdmissionFloor
 	case domain.ModeUnattended:
 		return unattendedAdmissionFloor
 	}
 	return nil
 }
 
-// agentExpiryMargin is how far past an attempt's deadline an expiring
+// AgentExpiryMargin is how far past an attempt's deadline an expiring
 // credential must last (§5.4 step 4): slack for the teardown that still holds
 // the store after the handoff budget ends.
-const agentExpiryMargin = 5 * time.Minute
+const AgentExpiryMargin = 5 * time.Minute
 
-// loadAgentSelection reads the admitted-agent tree at the operator's exact
+// LoadAgentSelection reads the admitted-agent tree at the operator's exact
 // commit and returns the selection that admits ward stages through its
 // lineup. The tree is read once: a later commit takes effect at the next
 // start, so every admission of one daemon run cites one revision. The caller
 // sets the attempt budget and the gate once the backend is composed.
-func loadAgentSelection(ctx context.Context, cfg claudeDriverConfig) (*engine.AgentSelection, error) {
-	tree, revision, err := readAgentTree(ctx, cfg.AgentTreeCheckout, cfg.AgentTreeCommit)
+func LoadAgentSelection(ctx context.Context, cfg ClaudeDriverConfig) (*engine.AgentSelection, error) {
+	tree, revision, err := ReadAgentTree(ctx, cfg.AgentTreeCheckout, cfg.AgentTreeCommit)
 	if err != nil {
 		return nil, err
 	}
@@ -245,13 +245,13 @@ func loadAgentSelection(ctx context.Context, cfg claudeDriverConfig) (*engine.Ag
 	slices.Sort(egress)
 	return &engine.AgentSelection{
 		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
-		EffectiveEgress: egress, ExpiryMargin: agentExpiryMargin,
+		EffectiveEgress: egress, ExpiryMargin: AgentExpiryMargin,
 	}, nil
 }
 
-// readAgentTree reads and parses the admitted-agent tree at an exact commit
+// ReadAgentTree reads and parses the admitted-agent tree at an exact commit
 // of a local checkout and returns it with its revision.
-func readAgentTree(ctx context.Context, checkout, commit string) (agenttree.Tree, domain.Digest, error) {
+func ReadAgentTree(ctx context.Context, checkout, commit string) (agenttree.Tree, domain.Digest, error) {
 	scratch, err := os.MkdirTemp("", "freesided-agent-tree-")
 	if err != nil {
 		return agenttree.Tree{}, "", fmt.Errorf("agent tree scratch: %w", err)
@@ -283,31 +283,31 @@ func readPromptPackage(path string) ([]byte, error) {
 	return body, nil
 }
 
-type promptPackages struct {
-	implementation []byte
-	specification  []byte
-	remediation    []byte
+type PromptPackages struct {
+	Implementation []byte
+	Specification  []byte
+	Remediation    []byte
 }
 
-// readPromptPackages shares composition's file and role checks with the
+// ReadPromptPackages shares composition's file and role checks with the
 // deputy's early validation, without opening a store or writing blobs.
-func readPromptPackages(cfg claudeDriverConfig) (promptPackages, error) {
-	var packages promptPackages
+func ReadPromptPackages(cfg ClaudeDriverConfig) (PromptPackages, error) {
+	var packages PromptPackages
 	var err error
-	if packages.implementation, err = readPromptPackage(cfg.PromptPackageFile); err != nil {
-		return promptPackages{}, fmt.Errorf("implementation prompt package: %w", err)
+	if packages.Implementation, err = readPromptPackage(cfg.PromptPackageFile); err != nil {
+		return PromptPackages{}, fmt.Errorf("implementation prompt package: %w", err)
 	}
-	if packages.specification, err = readPromptPackage(cfg.SpecificationPromptPackageFile); err != nil {
-		return promptPackages{}, fmt.Errorf("specification prompt package: %w", err)
+	if packages.Specification, err = readPromptPackage(cfg.SpecificationPromptPackageFile); err != nil {
+		return PromptPackages{}, fmt.Errorf("specification prompt package: %w", err)
 	}
-	if err := claude.ValidatePromptPackageRoles(packages.implementation, packages.specification); err != nil {
-		return promptPackages{}, fmt.Errorf("prompt package roles: %w", err)
+	if err := claude.ValidatePromptPackageRoles(packages.Implementation, packages.Specification); err != nil {
+		return PromptPackages{}, fmt.Errorf("prompt package roles: %w", err)
 	}
-	if packages.remediation, err = readPromptPackage(cfg.RemediationPromptPackageFile); err != nil {
-		return promptPackages{}, fmt.Errorf("remediation prompt package: %w", err)
+	if packages.Remediation, err = readPromptPackage(cfg.RemediationPromptPackageFile); err != nil {
+		return PromptPackages{}, fmt.Errorf("remediation prompt package: %w", err)
 	}
-	if err := claude.ValidatePromptPackageRoles(packages.implementation, packages.remediation); err != nil {
-		return promptPackages{}, fmt.Errorf("remediation prompt package roles: %w", err)
+	if err := claude.ValidatePromptPackageRoles(packages.Implementation, packages.Remediation); err != nil {
+		return PromptPackages{}, fmt.Errorf("remediation prompt package roles: %w", err)
 	}
 	return packages, nil
 }
@@ -323,9 +323,9 @@ func storePromptPackage(blobs *signet.BlobStore, body []byte) (domain.Digest, er
 	return digest, nil
 }
 
-// attendedAdmissionFloor is ward's honest base capability class before the
+// AttendedAdmissionFloor is ward's honest base capability class before the
 // full conformance suite earns the two unattended-only proofs.
-var attendedAdmissionFloor = []exec.Capability{
+var AttendedAdmissionFloor = []exec.Capability{
 	exec.CapDetachableWorkspace,
 	exec.CapPostExitExport,
 	exec.CapReadOnlyRemount,
@@ -344,24 +344,24 @@ var unattendedAdmissionFloor = []exec.Capability{
 	exec.CapEnforcedProviderEgress,
 }
 
-// exportRecorder adapts the store's internal-transaction export seam to the
+// ExportRecorder adapts the store's internal-transaction export seam to the
 // driver's port (the wardstore adapter precedent: the driver holds no store
 // handle, and RecordExecutionExport is not client-visible state). usage
 // receives an unattended export's Claude usage capture once the export
 // commits, since that export is never collected; nil drops it with a warning
 // on logger.
-type exportRecorder struct {
-	store  *store.Store
+type ExportRecorder struct {
+	Store  *store.Store
 	usage  engine.ClaudeUsageSink
 	logger *slog.Logger
 }
 
-func (r exportRecorder) RecordExecutionExport(
+func (r ExportRecorder) RecordExecutionExport(
 	ctx context.Context,
 	record domain.ExecutionExport,
 	replay claude.ExecutionReplay,
 ) error {
-	err := engine.RecordExecutionExport(ctx, r.store, record, productionReplayFrom(replay), r.usage, r.logger)
+	err := engine.RecordExecutionExport(ctx, r.Store, record, productionReplayFrom(replay), r.usage, r.logger)
 	if errors.Is(err, store.ErrImmutableConflict) {
 		return errors.Join(err, domain.ErrImmutableTransition)
 	}
@@ -384,22 +384,22 @@ func productionReplayFrom(replay claude.ExecutionReplay) engine.ProductionReplay
 	}
 }
 
-func (r exportRecorder) LookupExecutionExport(
+func (r ExportRecorder) LookupExecutionExport(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionExport, bool, error) {
 	return r.lookupExecutionExport(ctx, id, true)
 }
 
-func (r exportRecorder) LookupExecutionExportRecord(
+func (r ExportRecorder) LookupExecutionExportRecord(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionExport, bool, error) {
 	return r.lookupExecutionExport(ctx, id, false)
 }
 
-func (r exportRecorder) RecordCurrentImportStart(
+func (r ExportRecorder) RecordCurrentImportStart(
 	ctx context.Context, start domain.CurrentImportStart,
 ) error {
-	err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err := r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordCurrentImportStart(ctx, start)
 	})
 	if errors.Is(err, store.ErrImmutableConflict) {
@@ -408,11 +408,11 @@ func (r exportRecorder) RecordCurrentImportStart(
 	return err
 }
 
-func (r exportRecorder) LookupCurrentImportStart(
+func (r ExportRecorder) LookupCurrentImportStart(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.CurrentImportStart, bool, error) {
 	var start domain.CurrentImportStart
-	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		start, err = tx.GetCurrentImportStart(ctx, id)
 		return err
@@ -423,11 +423,11 @@ func (r exportRecorder) LookupCurrentImportStart(
 	return start, err == nil, err
 }
 
-func (r exportRecorder) lookupExecutionExport(
+func (r ExportRecorder) lookupExecutionExport(
 	ctx context.Context, id domain.InvocationID, requireCurrent bool,
 ) (domain.ExecutionExport, bool, error) {
 	var record domain.ExecutionExport
-	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		if requireCurrent {
 			record, err = tx.GetExecutionExport(ctx, id)
@@ -442,31 +442,31 @@ func (r exportRecorder) lookupExecutionExport(
 	return record, err == nil, err
 }
 
-func (r exportRecorder) RecordExecutionOutcome(
+func (r ExportRecorder) RecordExecutionOutcome(
 	ctx context.Context, record domain.ExecutionOutcome,
 ) error {
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionOutcome(ctx, record)
 	})
 }
 
-func (r exportRecorder) LookupExecutionOutcome(
+func (r ExportRecorder) LookupExecutionOutcome(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionOutcome, bool, error) {
 	return r.lookupExecutionOutcome(ctx, id, true)
 }
 
-func (r exportRecorder) LookupExecutionOutcomeRecord(
+func (r ExportRecorder) LookupExecutionOutcomeRecord(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionOutcome, bool, error) {
 	return r.lookupExecutionOutcome(ctx, id, false)
 }
 
-func (r exportRecorder) lookupExecutionOutcome(
+func (r ExportRecorder) lookupExecutionOutcome(
 	ctx context.Context, id domain.InvocationID, requireCurrent bool,
 ) (domain.ExecutionOutcome, bool, error) {
 	var record domain.ExecutionOutcome
-	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		if requireCurrent {
 			record, err = tx.GetExecutionOutcome(ctx, id)
@@ -481,19 +481,19 @@ func (r exportRecorder) lookupExecutionOutcome(
 	return record, err == nil, err
 }
 
-func (r exportRecorder) RecordExportRejection(
+func (r ExportRecorder) RecordExportRejection(
 	ctx context.Context, rejection domain.ExportRejection,
 ) error {
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExportRejection(ctx, rejection)
 	})
 }
 
-func (r exportRecorder) LookupExportRejection(
+func (r ExportRecorder) LookupExportRejection(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExportRejection, bool, error) {
 	var record domain.ExportRejection
-	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		record, err = tx.GetExportRejection(ctx, id)
 		return err
@@ -646,33 +646,33 @@ func isPermanentSeedCredentialError(err error) bool {
 	return false
 }
 
-// claudeComposition is the live production wiring one daemon run owns.
+// ClaudeComposition is the live production wiring one daemon run owns.
 //
 // Unattended admission requires a durable, generation-current
 // backend-conformance record. The operator may request a fresh store-backed
 // startup pass for this exact composition with -run-conformance; otherwise a
 // matching prior pass is restored. The daemon keeps the same conformance
 // closure for every scheduled doctor pass.
-type claudeComposition struct {
+type ClaudeComposition struct {
 	driver                          *claude.Driver
-	backend                         *ward.Backend
+	Backend                         *ward.Backend
 	authority                       *publish.InstallationAuthorityStore
 	publicationTransport            engine.PublicationTransport
 	publisher                       *publish.Publisher
-	followUpFiler                   *publish.FollowUpFiler
-	reviewReplier                   *publish.ExternalReviewReplier
+	FollowUpFiler                   *publish.FollowUpFiler
+	ReviewReplier                   *publish.ExternalReviewReplier
 	reviewSource                    exec.ReviewSource
 	shadowReviewSource              exec.ReviewSource
 	reviewAdmission                 engine.ReviewAdmitter
 	reviewRecovery                  func(context.Context) error
-	reviewConfigurationDigest       domain.Digest
+	ReviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
 	// selectionFailure names the writer role that failed its startup
 	// admission check; while set, the admission gate holds every attempt.
-	selectionFailure           *roleAdmissionError
+	selectionFailure           *RoleAdmissionError
 	shadowReviewRate           float64
 	reviewHostInstructions     engine.ReviewHostInstructions
-	containerBin               string
+	ContainerBin               string
 	env                        engine.AdmissionEnvironment
 	specificationPromptPackage domain.Digest
 	remediationPromptPackage   domain.Digest
@@ -687,7 +687,7 @@ type claudeComposition struct {
 	// hostVerification is the macOS verification executor, nil when none
 	// is configured.
 	hostVerification *macverify.Backend
-	closer           sessionCloser
+	Closer           SessionCloser
 	janitor          *janitorSession
 	// observeRepositoryTip is the conditional ref read through the publish
 	// reconciler (§5.11 conditional requests) for the active-resource
@@ -709,7 +709,7 @@ type claudeComposition struct {
 	evictLabelIssues func(repo, label string)
 	// observeReview is the §5.16 native-review observation's conditional reads
 	// through the same reconciler (issue #497).
-	observeReview nativeReviewObserver
+	observeReview NativeReviewObserver
 	// reviewInvalidate evicts a PR's cached review-activity validators after a
 	// failed durable append, so the next tick re-fetches unconditionally rather
 	// than riding a 304 and stranding the un-persisted rows (issue #497).
@@ -759,18 +759,18 @@ func seedAdmittedImagePointer(
 	return nil
 }
 
-// exactBaseFetcher materializes the configured base at dir, which does not
+// ExactBaseFetcher materializes the configured base at dir, which does not
 // exist yet, and reports the numeric identity of the repository it fetched
 // from. Production binds it to the publication transport's FetchBase.
-type exactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64, err error)
+type ExactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64, err error)
 
-// observeCompositionBaseInputs fetches the configured base once into private
+// ObserveCompositionBaseInputs fetches the configured base once into private
 // scratch and reads the project-image inputs from it. Startup has no checkout
 // of the managed repository, and the transport's exact-base fetch is the same
 // proof every later boundary uses: the checkout holds cfg.BaseSHA only when
 // the remote's base branch does.
-func observeCompositionBaseInputs(
-	ctx context.Context, fetch exactBaseFetcher, cfg claudeDriverConfig,
+func ObserveCompositionBaseInputs(
+	ctx context.Context, fetch ExactBaseFetcher, cfg ClaudeDriverConfig,
 	layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
 	scratch, err := os.MkdirTemp("", "freesided-project-image-base-")
@@ -812,20 +812,20 @@ func wardEnforceableEgressProfiles() []domain.EgressProfile {
 // export is recorded; nil, as for a daemon without the Claude collector,
 // drops it with a warning.
 func composeClaudeDriver(
-	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg claudeDriverConfig,
+	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg ClaudeDriverConfig,
 	usage engine.ClaudeUsageSink, logger *slog.Logger,
-) (_ *claudeComposition, err error) {
-	if err := cfg.validate(); err != nil {
+) (_ *ClaudeComposition, err error) {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	agents, err := loadAgentSelection(ctx, cfg)
+	agents, err := LoadAgentSelection(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 	utcNow := func() time.Time { return time.Now().UTC() }
 	// The review identities come from the lineup before anything reads them:
 	// the approved configuration digests below take them as inputs.
-	if cfg, err = resolveReviewSelection(ctx, st, agents.Tree, cfg, utcNow()); err != nil {
+	if cfg, err = ResolveReviewSelection(ctx, st, agents.Tree, cfg, utcNow()); err != nil {
 		return nil, err
 	}
 	reviewConfigurationDigest, err := requireApprovedReviewConfiguration(ctx, st, cfg)
@@ -836,19 +836,19 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	packages, err := readPromptPackages(cfg)
+	packages, err := ReadPromptPackages(cfg)
 	if err != nil {
 		return nil, err
 	}
-	promptPackage, err := storePromptPackage(blobs, packages.implementation)
+	promptPackage, err := storePromptPackage(blobs, packages.Implementation)
 	if err != nil {
 		return nil, fmt.Errorf("implementation prompt package: %w", err)
 	}
-	specificationPromptPackage, err := storePromptPackage(blobs, packages.specification)
+	specificationPromptPackage, err := storePromptPackage(blobs, packages.Specification)
 	if err != nil {
 		return nil, fmt.Errorf("specification prompt package: %w", err)
 	}
-	remediationPromptPackage, err := storePromptPackage(blobs, packages.remediation)
+	remediationPromptPackage, err := storePromptPackage(blobs, packages.Remediation)
 	if err != nil {
 		return nil, fmt.Errorf("remediation prompt package: %w", err)
 	}
@@ -898,7 +898,7 @@ func composeClaudeDriver(
 		ctx context.Context, layout domain.ProjectImageInputLayout,
 	) (inputs domain.ProjectImageBaseInputs, err error) {
 		err = janitor.WithStableCoverage(func() error {
-			inputs, err = observeCompositionBaseInputs(ctx,
+			inputs, err = ObserveCompositionBaseInputs(ctx,
 				func(ctx context.Context, dir string) (int64, error) {
 					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, dir)
 					if err != nil {
@@ -920,7 +920,7 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose ward store adapters: %w", adapterErr)
 	}
 	runtime := ward.NewCLIRuntime(cfg.ContainerBin)
-	conformanceLeaser := &adapterConformanceLeaser{Leaser: adapters.Leaser, store: st}
+	conformanceLeaser := &AdapterConformanceLeaser{Leaser: adapters.Leaser, Store: st}
 	wardConfig := ward.Config{
 		AgentImage:    string(cfg.AgentImage),
 		ExporterImage: cfg.ExporterImage,
@@ -955,7 +955,7 @@ func composeClaudeDriver(
 	// reviewer still reconciles the review intents and workspaces an
 	// earlier Codex reviewer left in the journal.
 	reviewLifecycle, lifecycleErr := ward.NewCodexReviewLifecycle(
-		runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
+		runtime, wardConfig, ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
 	)
 	if lifecycleErr != nil {
 		return nil, fmt.Errorf("compose Codex review lifecycle: %w", lifecycleErr)
@@ -983,7 +983,7 @@ func composeClaudeDriver(
 	)
 	if routedClaude || cfg.ShadowReviewImage != "" {
 		claudeLifecycle, lifecycleErr = ward.NewClaudeReviewLifecycle(
-			runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
+			runtime, wardConfig, ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
 		)
 		if lifecycleErr != nil {
 			return nil, fmt.Errorf("compose Claude review lifecycle: %w", lifecycleErr)
@@ -1001,7 +1001,7 @@ func composeClaudeDriver(
 	// review admission snapshot records for the role.
 	reviewRoles := map[domain.RoleName]engine.ReviewRole{}
 	if cfg.ShadowReviewImage != "" {
-		shadowRole := reviewRole(domain.RoleShadowReviewer, shadowReviewProvider(),
+		shadowRole := ReviewRole(domain.RoleShadowReviewer, ShadowReviewProvider(),
 			[]string{"api.anthropic.com:443"})
 		reviewRoles[domain.RoleShadowReviewer] = shadowRole
 		shadowConfig := ward.CodexReviewConfig{
@@ -1018,9 +1018,9 @@ func composeClaudeDriver(
 			WorkspaceSizeMB: cfg.ShadowReviewWorkspaceSizeMB,
 			AuthMode:        ward.CodexAuthSetupToken, AuthIdentityID: cfg.ShadowReviewAuthIdentityID,
 			AuthSnapshot: cfg.ShadowReviewAuthSnapshot, InstructionArtifacts: blobs,
-			ConfigurationDigest: shadowReviewDigests.runtime,
+			ConfigurationDigest: shadowReviewDigests.Runtime,
 			CostOwner:           cfg.ShadowReviewCostOwner, Now: utcNow,
-			Admit: reviewAdmission(st, agents.Tree, shadowRole, utcNow),
+			Admit: ReviewAdmission(st, agents.Tree, shadowRole, utcNow),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compose Claude shadow review source: %w", err)
@@ -1037,10 +1037,10 @@ func composeClaudeDriver(
 		if err != nil {
 			return nil, fmt.Errorf("snapshot review host instructions: %w", err)
 		}
-		routedRole := reviewRole(domain.RoleReviewer, cfg.ReviewProvider,
-			routedReviewEndpoints(cfg.ReviewProvider, cfg.ReviewAuthMode))
+		routedRole := ReviewRole(domain.RoleReviewer, cfg.ReviewProvider,
+			RoutedReviewEndpoints(cfg.ReviewProvider, cfg.ReviewAuthMode))
 		reviewRoles[domain.RoleReviewer] = routedRole
-		reviewConfig := routedReviewConfig(cfg.ReviewProvider, ward.CodexReviewConfig{
+		reviewConfig := RoutedReviewConfig(cfg.ReviewProvider, ward.CodexReviewConfig{
 			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
 			ProviderEndpoints: routedRole.EffectiveEgress, ApprovedImage: cfg.ReviewImage,
 			ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
@@ -1056,11 +1056,11 @@ func composeClaudeDriver(
 			InstructionArtifacts: blobs,
 			ConfigurationDigest:  reviewConfigurationDigest,
 			CostOwner:            cfg.ReviewCostOwner, Now: utcNow,
-			Admit: reviewAdmission(st, agents.Tree, routedRole, utcNow),
+			Admit: ReviewAdmission(st, agents.Tree, routedRole, utcNow),
 			Credential: reviewCredential(cfg.ReviewProvider, wardstore.CredentialReader{
 				Store: st,
-				ReadSetupToken: productionSetupTokenReader(
-					runtime, cfg.ExporterImage, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)),
+				ReadSetupToken: ProductionSetupTokenReader(
+					runtime, cfg.ExporterImage, ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)),
 				Now: utcNow,
 			}.Read),
 		}
@@ -1099,7 +1099,7 @@ func composeClaudeDriver(
 	); err != nil {
 		return nil, err
 	}
-	hostVerification, err := composeHostVerificationExecutor(
+	hostVerification, err := ComposeHostVerificationExecutor(
 		ctx, st, cfg.HostVerification, cfg.RunConformance, logger, proveHostVerification)
 	if err != nil {
 		return nil, err
@@ -1112,9 +1112,9 @@ func composeClaudeDriver(
 		ExportRoot:   filepath.Join(cfg.StateDir, "ward-exports"),
 		Gate:         backend,
 		Seeder:       transportSeeder{transport: transport},
-		Exports:      exportRecorder{store: st, usage: usage, logger: logger},
-		ImportStarts: exportRecorder{store: st, usage: usage, logger: logger},
-		Outcomes:     exportRecorder{store: st, usage: usage, logger: logger},
+		Exports:      ExportRecorder{Store: st, usage: usage, logger: logger},
+		ImportStarts: ExportRecorder{Store: st, usage: usage, logger: logger},
+		Outcomes:     ExportRecorder{Store: st, usage: usage, logger: logger},
 		Authority: admissionauth.Authority{
 			Store: st, Blobs: blobs, AllowedPaths: slices.Clone(cfg.AllowedPaths),
 			CommitAuthors: commitAuthors,
@@ -1128,7 +1128,7 @@ func composeClaudeDriver(
 			}
 			return backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id))
 		},
-		Stall: invocationStallNotice(st, stallInterval(cfg.WriterStallInterval), time.Now),
+		Stall: InvocationStallNotice(st, StallInterval(cfg.WriterStallInterval), time.Now),
 		AdoptedRegistryHosts: func(ctx context.Context, repositoryID int64) ([]string, error) {
 			var hosts []string
 			err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -1153,11 +1153,11 @@ func composeClaudeDriver(
 	// prompt this daemon runs it on; until then the gate holds every attempt.
 	// A marked generation is left to each attempt's admission.
 	agents.AttemptBudget = backend.HandoffTimeout()
-	selectionFailure := checkWriterRoles(ctx, st, *agents, map[domain.RoleName]domain.Digest{
+	selectionFailure := CheckWriterRoles(ctx, st, *agents, map[domain.RoleName]domain.Digest{
 		domain.RoleSpecifier: specificationPromptPackage, domain.RoleImplementer: promptPackage,
 		domain.RoleRemediator: remediationPromptPackage,
 	}, utcNow())
-	agents.Gate = agentSelectionGate(st, selectionFailure)
+	agents.Gate = AgentSelectionGate(st, selectionFailure)
 	env := engine.AdmissionEnvironment{
 		OperatingMode:             cfg.OperatingMode,
 		CredentialMode:            domain.CredentialSubscriptionContained,
@@ -1193,12 +1193,12 @@ func composeClaudeDriver(
 		selectImage, bindImageUpkeep = selector.selectImage, selector.bindImageUpkeep
 	}
 	observeRefTip := refTipObserver(reconciler)
-	composition := &claudeComposition{
-		driver: driver, backend: backend, authority: authority,
+	composition := &ClaudeComposition{
+		driver: driver, Backend: backend, authority: authority,
 		hostVerification: hostVerification,
 		selectionFailure: selectionFailure,
-		followUpFiler:    followUpFiler,
-		reviewReplier:    reviewReplier,
+		FollowUpFiler:    followUpFiler,
+		ReviewReplier:    reviewReplier,
 		issueReadTokens:  issueReadTokens,
 		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (repositoryID int64, err error) {
 			// Stable coverage keeps the fetch's installation token from
@@ -1238,7 +1238,7 @@ func composeClaudeDriver(
 		},
 		publicationTransport: publicationTransport,
 		publisher:            publisher, reviewSource: reviewSource, shadowReviewSource: shadowReviewSource,
-		reviewAdmission: reviewAdmitter(st, *agents, reviewRoles),
+		reviewAdmission: ReviewAdmitter(st, *agents, reviewRoles),
 		reviewRecovery: func(recoveryCtx context.Context) error {
 			err := reviewRecovery.Reconcile(recoveryCtx)
 			if claudeReviewRecovery != nil {
@@ -1246,8 +1246,8 @@ func composeClaudeDriver(
 			}
 			return err
 		},
-		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
-		shadowReviewConfigurationDigest: shadowReviewDigests.runtime,
+		ReviewConfigurationDigest: reviewConfigurationDigest, ContainerBin: cfg.ContainerBin,
+		shadowReviewConfigurationDigest: shadowReviewDigests.Runtime,
 		shadowReviewRate:                cfg.ShadowReviewRate,
 		reviewHostInstructions:          reviewHostInstructions,
 		env:                             env,
@@ -1259,7 +1259,7 @@ func composeClaudeDriver(
 		runConformance:                  follower.runScheduled,
 		// The follower stops first, so a pass in flight ends before the
 		// janitor its fetches ride on closes.
-		closer:  sessionGroup{follower, driver, janitor},
+		Closer:  sessionGroup{follower, driver, janitor},
 		janitor: janitor,
 	}
 	return composition, nil
@@ -1270,7 +1270,7 @@ func composeClaudeDriver(
 // cannot read fails the start, as reading it always has; a base no image
 // serves does not.
 func startWardOnSelectedImage(
-	ctx context.Context, st *store.Store, backend startupWardBackend, cfg claudeDriverConfig,
+	ctx context.Context, st *store.Store, backend startupWardBackend, cfg ClaudeDriverConfig,
 	base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance, haveConformance bool,
 	logger *slog.Logger,
 ) error {
@@ -1349,12 +1349,12 @@ func newRoutedReviewSource(
 // exporter images before composition can construct a transport or execute the
 // conformance runtime against repository content.
 func requireApprovedReviewConfiguration(
-	ctx context.Context, st *store.Store, cfg claudeDriverConfig,
+	ctx context.Context, st *store.Store, cfg ClaudeDriverConfig,
 ) (domain.Digest, error) {
 	if cfg.OperatingMode != domain.ModeUnattended {
 		return "", nil
 	}
-	digest, err := claudeReviewConfigurationDigest(cfg)
+	digest, err := ClaudeReviewConfigurationDigest(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -1384,15 +1384,15 @@ func requireApprovedReviewConfiguration(
 	return digest, nil
 }
 
-// claudeReviewConfigurationDigest is the trust-profile digest of the routed
+// ClaudeReviewConfigurationDigest is the trust-profile digest of the routed
 // review the reviewer line selected, Codex or Claude. The trust profile must
 // approve it before composition goes on (requireApprovedReviewConfiguration),
 // so flipping the line to another harness without re-approving refuses.
-func claudeReviewConfigurationDigest(cfg claudeDriverConfig) (domain.Digest, error) {
+func ClaudeReviewConfigurationDigest(cfg ClaudeDriverConfig) (domain.Digest, error) {
 	provider := cfg.ReviewProvider
-	digest, err := provider.ConfigurationDigest(routedReviewConfig(provider, ward.CodexReviewConfig{
+	digest, err := provider.ConfigurationDigest(RoutedReviewConfig(provider, ward.CodexReviewConfig{
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-		ProviderEndpoints: routedReviewEndpoints(provider, cfg.ReviewAuthMode), ApprovedImage: cfg.ReviewImage,
+		ProviderEndpoints: RoutedReviewEndpoints(provider, cfg.ReviewAuthMode), ApprovedImage: cfg.ReviewImage,
 		ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
 		ReasoningEffort: cfg.ReviewReasoningEffort,
 	}), cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner)
@@ -1403,12 +1403,12 @@ func claudeReviewConfigurationDigest(cfg claudeDriverConfig) (domain.Digest, err
 }
 
 func requireApprovedShadowReviewConfiguration(
-	ctx context.Context, st *store.Store, cfg claudeDriverConfig,
+	ctx context.Context, st *store.Store, cfg ClaudeDriverConfig,
 ) (shadowReviewDigests, error) {
 	if cfg.OperatingMode != domain.ModeUnattended || cfg.ShadowReviewImage == "" {
 		return shadowReviewDigests{}, nil
 	}
-	digests, err := shadowReviewConfigurationDigests(cfg)
+	digests, err := ShadowReviewConfigurationDigests(cfg)
 	if err != nil {
 		return shadowReviewDigests{}, err
 	}
@@ -1432,7 +1432,7 @@ func requireApprovedShadowReviewConfiguration(
 				domain.ErrShadowReviewConfigUnapproved)
 		}
 		return tx.RequireShadowReviewConfigurationApproved(
-			ctx, domain.ShadowReviewClaudeLocal, digests.approval,
+			ctx, domain.ShadowReviewClaudeLocal, digests.Approval,
 		)
 	}); err != nil {
 		return shadowReviewDigests{}, fmt.Errorf(
@@ -1443,13 +1443,13 @@ func requireApprovedShadowReviewConfiguration(
 }
 
 type shadowReviewDigests struct {
-	runtime  domain.Digest
-	approval domain.Digest
+	Runtime  domain.Digest
+	Approval domain.Digest
 }
 
 const shadowReviewCompositionDigestVersion = "freeside-shadow-review-composition/v1"
 
-func shadowReviewConfigurationDigests(cfg claudeDriverConfig) (shadowReviewDigests, error) {
+func ShadowReviewConfigurationDigests(cfg ClaudeDriverConfig) (shadowReviewDigests, error) {
 	runtimeDigest, err := ward.ClaudeReviewConfigurationDigest(ward.CodexReviewConfig{
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
 		ProviderEndpoints: []string{"api.anthropic.com:443"},
@@ -1462,18 +1462,18 @@ func shadowReviewConfigurationDigests(cfg claudeDriverConfig) (shadowReviewDiges
 			"digest Claude shadow review runtime configuration: %w", err,
 		)
 	}
-	approvalDigest, err := shadowReviewCompositionDigest(runtimeDigest, cfg.ShadowReviewRate)
+	approvalDigest, err := ShadowReviewCompositionDigest(runtimeDigest, cfg.ShadowReviewRate)
 	if err != nil {
 		return shadowReviewDigests{}, err
 	}
-	return shadowReviewDigests{runtime: runtimeDigest, approval: approvalDigest}, nil
+	return shadowReviewDigests{Runtime: runtimeDigest, Approval: approvalDigest}, nil
 }
 
-// shadowReviewCompositionDigest extends ward's invocation-runtime digest with
+// ShadowReviewCompositionDigest extends ward's invocation-runtime digest with
 // the deployment-owned sampling rate. The runtime digest remains the value the
 // source and returned evidence re-authenticate; this outer digest is the exact
 // independently owner-approved composition from #912.
-func shadowReviewCompositionDigest(runtimeDigest domain.Digest, rate float64) (domain.Digest, error) {
+func ShadowReviewCompositionDigest(runtimeDigest domain.Digest, rate float64) (domain.Digest, error) {
 	if !contentaddr.Valid(string(runtimeDigest)) || math.IsNaN(rate) || math.IsInf(rate, 0) ||
 		rate < 0 || rate > 1 {
 		return "", errors.New("invalid Claude shadow review composition")
@@ -1499,27 +1499,27 @@ func bindRigInvocationResources(
 	resources.Containers = append(
 		resources.Containers, ward.PreJobContainerNameForInvocation(invocationID),
 	)
-	return bindRigRuntimeResources(stateRoot, tokenFile, resources)
+	return BindRigRuntimeResources(stateRoot, tokenFile, resources)
 }
 
-func productionRigRuntimeAuthorizer(
+func ProductionRigRuntimeAuthorizer(
 	stateRoot, tokenFile string,
 ) ward.RuntimeResourceAuthorizer {
 	if tokenFile == "" {
 		return nil
 	}
 	return func(_ context.Context, resources ward.RuntimeResourceNames) error {
-		return bindRigRuntimeResources(stateRoot, tokenFile, resources)
+		return BindRigRuntimeResources(stateRoot, tokenFile, resources)
 	}
 }
 
-func bindRigRuntimeResources(
+func BindRigRuntimeResources(
 	stateRoot, tokenFile string, resources ward.RuntimeResourceNames,
 ) error {
 	if tokenFile == "" {
 		return nil
 	}
-	token, err := readRigToken(tokenFile)
+	token, err := ReadRigToken(tokenFile)
 	if err != nil {
 		return fmt.Errorf("read production rig token: %w", err)
 	}
@@ -1531,14 +1531,14 @@ func bindRigRuntimeResources(
 	return nil
 }
 
-type storeConformanceRecorder struct {
-	store *store.Store
+type StoreConformanceRecorder struct {
+	Store *store.Store
 }
 
-func (r storeConformanceRecorder) RecordBackendConformance(
+func (r StoreConformanceRecorder) RecordBackendConformance(
 	ctx context.Context, record domain.BackendConformance,
 ) error {
-	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.RecordBackendConformance(ctx, record)
 		return err
 	})
@@ -1549,9 +1549,9 @@ func runClaudeConformance(
 	st *store.Store,
 	transport *publish.Transport,
 	backend *ward.Backend,
-	cfg claudeDriverConfig,
+	cfg ClaudeDriverConfig,
 	withStableCoverage func(func() error) error,
-	leaser *adapterConformanceLeaser,
+	leaser *AdapterConformanceLeaser,
 ) error {
 	if backend != nil {
 		if err := recoverAdapterConformance(ctx, st, backend, cfg, leaser); err != nil {
@@ -1570,7 +1570,7 @@ func runClaudeConformance(
 	}
 	runID := "conf-" + hex.EncodeToString(nonce[:])
 	registryRunID := "conf-" + hex.EncodeToString(registryNonce[:])
-	if err := bindRigRuntimeResources(
+	if err := BindRigRuntimeResources(
 		cfg.StateDir, cfg.RigTokenFile,
 		ward.FullConformanceRuntimeResourceNamesFor(runID, registryRunID),
 	); err != nil {
@@ -1619,7 +1619,7 @@ func runClaudeConformance(
 				BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
 			},
 		},
-	}, ward.WithConformanceRecorder(storeConformanceRecorder{store: st}))
+	}, ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st}))
 	if err != nil {
 		return err
 	}
@@ -1653,7 +1653,7 @@ func runClaudeConformance(
 // its candidate was written there (issue #2699), instead of this base. Each
 // tip comes from an immutable record, the refusal or the sealed
 // handoff_conflict authority, so every attempt derives the same one.
-func claudeAdmissionDerivation(cfg claudeDriverConfig) engine.AdmissionDerivation {
+func claudeAdmissionDerivation(cfg ClaudeDriverConfig) engine.AdmissionDerivation {
 	base := domain.BaseRevision{
 		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
 		BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
@@ -1671,7 +1671,7 @@ func claudeAdmissionDerivation(cfg claudeDriverConfig) engine.AdmissionDerivatio
 func claudeTransport(
 	ctx context.Context,
 	st *store.Store,
-	cfg claudeDriverConfig,
+	cfg ClaudeDriverConfig,
 	authority *publish.InstallationAuthorityStore,
 ) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *publish.FollowUpFiler, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, publish.TokenSource, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -1684,8 +1684,8 @@ func claudeTransport(
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, recorder, time.Now,
-		defaultJanitorRemovalBound,
+		keystore, client, DefaultGitHubAPIBase, authority, authority, recorder, recorder, time.Now,
+		DefaultJanitorRemovalBound,
 	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
@@ -1695,32 +1695,32 @@ func claudeTransport(
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
-		keystore, client, defaultGitHubAPIBase, recorder, trust, time.Now, janitor,
+		keystore, client, DefaultGitHubAPIBase, recorder, trust, time.Now, janitor,
 	)
 	tokens := publish.NewCachedTokenSource(minter, time.Now)
 	commitAuthors, err := publish.NewGitHubAppBotIdentityResolver(
-		tokens, keystore, client, defaultGitHubAPIBase, time.Now,
+		tokens, keystore, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
-	followUpFiler, err := composeFollowUpFiler(st, minter, keystore, client, defaultGitHubAPIBase)
+	followUpFiler, err := composeFollowUpFiler(st, minter, keystore, client, DefaultGitHubAPIBase)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
-	reviewReplier, err := publish.NewExternalReviewReplier(st, tokens, client, defaultGitHubAPIBase, commitAuthors, time.Now)
+	reviewReplier, err := publish.NewExternalReviewReplier(st, tokens, client, DefaultGitHubAPIBase, commitAuthors, time.Now)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 	transport, err := publish.NewTransport(
 		tokens,
-		publish.TransportOptions{RemoteBase: defaultGitHubRemoteBase},
+		publish.TransportOptions{RemoteBase: DefaultGitHubRemoteBase},
 	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 	auditor, err := publish.NewGitHubWorkflowAuditor(
-		tokens, client, defaultGitHubAPIBase, time.Now,
+		tokens, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
@@ -1734,7 +1734,7 @@ func claudeTransport(
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 	publisher := publish.NewPublisher(
-		tokens, client, defaultGitHubAPIBase, auditor, ledger, trust, authorizations,
+		tokens, client, DefaultGitHubAPIBase, auditor, ledger, trust, authorizations,
 	)
 	if err := transport.AuthorizePublisher(publisher); err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, err
@@ -1758,7 +1758,7 @@ func claudeTransport(
 	// grant, never on the publication token.
 	issueReadTokens := publish.NewIssueReadTokenSource(minter, time.Now)
 	return transport, publisher, commitAuthors, followUpFiler, session,
-		publish.NewReconciler(tokens, client, defaultGitHubAPIBase), reviewReplier, issueReadTokens, nil
+		publish.NewReconciler(tokens, client, DefaultGitHubAPIBase), reviewReplier, issueReadTokens, nil
 }
 
 // composeFollowUpFiler keeps both issue calls and bot identity reads on the
@@ -1774,13 +1774,13 @@ func composeFollowUpFiler(st *store.Store, minter *publish.Minter, keystore *pub
 	return publish.NewFollowUpFiler(st, tokens, client, baseURL, identity, time.Now)
 }
 
-// followUpFilerBinding is read after composition, when a committed approve wakes
+// FollowUpFilerBinding is read after composition, when a committed approve wakes
 // the filer. A fake-driver composition must return a genuinely nil interface.
-func followUpFilerBinding(composition *claudeComposition) signet.FollowUpFiler {
-	if composition == nil || composition.followUpFiler == nil {
+func FollowUpFilerBinding(composition *ClaudeComposition) signet.FollowUpFiler {
+	if composition == nil || composition.FollowUpFiler == nil {
 		return nil
 	}
-	return composition.followUpFiler
+	return composition.FollowUpFiler
 }
 
 const janitorStartupTimeout = 2 * time.Minute
@@ -1892,7 +1892,7 @@ func (s *janitorSession) Close(context.Context) error {
 	return nil
 }
 
-type sessionGroup []sessionCloser
+type sessionGroup []SessionCloser
 
 func (g sessionGroup) Close(ctx context.Context) error {
 	var result error
@@ -1906,28 +1906,28 @@ func (g sessionGroup) Close(ctx context.Context) error {
 
 // stageDriver wraps the Claude driver in the production materializing seam,
 // so digest verification always completes before an intent is committed.
-func (c *claudeComposition) stageDriver(blobs *signet.BlobStore) (exec.StageDriver, error) {
-	materializer, err := productionMaterializer(blobs)
+func (c *ClaudeComposition) stageDriver(blobs *signet.BlobStore) (exec.StageDriver, error) {
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		return nil, fmt.Errorf("compose materializer: %w", err)
 	}
 	return exec.NewMaterializingStageDriver(materializer, c.driver)
 }
 
-func productionMaterializer(blobs *signet.BlobStore) (*exec.Materializer, error) {
+func ProductionMaterializer(blobs *signet.BlobStore) (*exec.Materializer, error) {
 	return exec.NewMaterializer(productionInputSource{blobs: blobs}, exec.MaterializerOptions{
 		MaxInputBytes: exec.ProductionMaxInputBytes,
 		MaxTotalBytes: exec.ProductionMaxTotalInputBytes,
 	})
 }
 
-func productionSpecificationDeliveryValidator(
+func ProductionSpecificationDeliveryValidator(
 	materializer *exec.Materializer,
 ) func(context.Context, exec.StartSpec) error {
 	return productionPromptDeliveryValidator(materializer, engine.ErrSpecificationInputUndeliverable)
 }
 
-func productionImplementationDeliveryValidator(
+func ProductionImplementationDeliveryValidator(
 	materializer *exec.Materializer,
 ) func(context.Context, exec.StartSpec) error {
 	return productionPromptDeliveryValidator(materializer, engine.ErrProductionInputUndeliverable)

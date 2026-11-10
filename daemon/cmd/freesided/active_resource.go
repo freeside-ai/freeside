@@ -19,22 +19,22 @@ import (
 // schedule kind (plan §5.16). An immediate startup pass restores convergence;
 // later passes use conditional requests through publish.Reconciler.
 const (
-	defaultActiveResourceInterval  = 15 * time.Minute
-	operatorActiveResourceInterval = time.Minute
+	DefaultActiveResourceInterval  = 15 * time.Minute
+	OperatorActiveResourceInterval = time.Minute
 )
 
 const activeResourceObservationFailureThreshold = 4
 
-type activeResourceReconciler struct {
-	store *store.Store
-	pull  pullObserver
+type ActiveResourceReconciler struct {
+	Store *store.Store
+	Pull  pullObserver
 	issue issueObserver
-	// review observes native (forge-hosted) review activity on the exact ready
+	// Review observes native (forge-hosted) review activity on the exact ready
 	// PR; reviewers is the configured set of reviewer logins whose activity is
 	// recorded. Both are optional: a composition that wires no native reviewer
 	// (or an empty set) simply records no native evidence (plan §5.16, §7).
-	review    nativeReviewObserver
-	reviewers map[string]bool
+	Review    NativeReviewObserver
+	Reviewers map[string]bool
 	// reviewInvalidate drops the observer's cached validators for a PR when the
 	// durable append of its native observations fails, so the next tick
 	// re-fetches unconditionally instead of riding a 304 and permanently
@@ -65,7 +65,7 @@ type activeResourceReconciler struct {
 	tipWatch         repositoryTipWatch
 	observeTip       func(ctx context.Context, repo, branch string) (string, error)
 	upkeepTipAdvance func(context.Context, domain.RepositoryTipObservation) error
-	now              func() time.Time
+	Now              func() time.Time
 }
 
 // repositoryTipWatch is the one configured repository and the branch tasks
@@ -144,10 +144,10 @@ type completionRecoveryState struct {
 
 type activeResourceReconcileResult struct {
 	operatorActive bool
-	failures       []error
-	// skipped names review activity a pass read and could not store as an
+	Failures       []error
+	// Skipped names review activity a pass read and could not store as an
 	// external finding. Nothing retries it: the activity itself is unusable.
-	skipped []error
+	Skipped []error
 	// reactionsRefused names each ready item whose reactions read GitHub
 	// refused, once per item until the reactions read again. The reviews and
 	// comments were still observed, so it is a warning, not a failure.
@@ -291,7 +291,7 @@ func rebaseProofPending(
 // rate-limit failure shows up. Reporting it at error severity with a
 // timestamp is the whole point: as an unstructured stderr line every
 // quarter hour, a persistent 401 was indistinguishable from noise.
-func (r activeResourceReconciler) Run(
+func (r ActiveResourceReconciler) Run(
 	ctx context.Context, defaultInterval, operatorActiveInterval time.Duration,
 	logger *slog.Logger,
 ) error {
@@ -328,12 +328,12 @@ func (r activeResourceReconciler) Run(
 			logger.Error("active resource pass failed", "error", err)
 			return 0, err
 		}
-		for _, failure := range result.failures {
+		for _, failure := range result.Failures {
 			// Isolated per-item failures: the pass converged around them, so
 			// they are error severity without being loop-fatal.
 			logger.Error("active resource observation failed", "error", failure)
 		}
-		for _, skip := range result.skipped {
+		for _, skip := range result.Skipped {
 			logger.Warn("external review activity skipped", "error", skip)
 		}
 		if result.operatorActive != operatorActive {
@@ -348,7 +348,7 @@ func (r activeResourceReconciler) Run(
 		// while an operator is active; an info record per pass is a log an
 		// operator stops reading, and the records that matter drown in it.
 		logger.Debug("active resource pass complete",
-			"failures", len(result.failures), "operator_active", result.operatorActive)
+			"failures", len(result.Failures), "operator_active", result.operatorActive)
 		return activeResourceInterval(
 			result.operatorActive, defaultInterval, operatorActiveInterval,
 		), nil
@@ -364,7 +364,7 @@ func (r activeResourceReconciler) Run(
 		case <-ctx.Done():
 			logger.Info("active resource reconciler stopped")
 			return nil
-		case <-r.store.ReadyItemCreated():
+		case <-r.Store.ReadyItemCreated():
 			// A new ready item must not wait through an idle interval before it
 			// can engage the operator-active cadence. The store emits only after
 			// commit; reconciliation remains authoritative if this wake is lost.
@@ -401,7 +401,7 @@ func activeResourceInterval(
 // the first pass that sees the refusal adds it to result, later refused
 // passes stay quiet, and a pass that reads the reactions again re-arms the
 // report. A pass whose review read failed or didn't run changes nothing.
-func (r *activeResourceReconciler) noteReactionsRefusal(
+func (r *ActiveResourceReconciler) noteReactionsRefusal(
 	itemID domain.ItemID, observation activeResourceObservation, result *activeResourceReconcileResult,
 ) {
 	if !observation.reviewRead {
@@ -430,28 +430,28 @@ func (r *activeResourceReconciler) noteReactionsRefusal(
 // ready item.
 // Per-resource observation failures remain retryable and do not prevent a
 // healthy sibling from converging in the same pass.
-func (r *activeResourceReconciler) Reconcile(
+func (r *ActiveResourceReconciler) Reconcile(
 	ctx context.Context,
 ) (activeResourceReconcileResult, error) {
 	result := activeResourceReconcileResult{}
-	if r.store == nil || r.pull == nil || r.now == nil {
+	if r.Store == nil || r.Pull == nil || r.Now == nil {
 		return result, errors.New("active resource reconciler is not fully configured")
 	}
 	if r.tipWatch != (repositoryTipWatch{}) && (r.observeTip == nil || r.upkeepTipAdvance == nil) {
 		return result, errors.New("active resource reconciler tip watch is not fully configured")
 	}
 	var snapshots []store.Snapshotted[domain.AttentionItem]
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		snapshots, err = tx.ListAttentionItems(ctx)
 		return err
 	}); err != nil {
 		return result, fmt.Errorf("list active ready resources: %w", err)
 	}
-	result.failures = make([]error, 0)
+	result.Failures = make([]error, 0)
 	if r.tipWatch != (repositoryTipWatch{}) {
 		if err := r.observeRepositoryTip(ctx); err != nil {
-			result.failures = append(result.failures,
+			result.Failures = append(result.Failures,
 				fmt.Errorf("observe repository tip %s %s: %w", r.tipWatch.Repo, r.tipWatch.Branch, err))
 		}
 	}
@@ -486,9 +486,9 @@ func (r *activeResourceReconciler) Reconcile(
 			if err := r.convergeObservationHealth(ctx, snapshots, item, true); err != nil {
 				return result, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
 			}
-			observation, err := r.observeCompletionOnly(ctx, item, r.now().UTC())
+			observation, err := r.observeCompletionOnly(ctx, item, r.Now().UTC())
 			if err != nil {
-				result.failures = append(result.failures,
+				result.Failures = append(result.Failures,
 					fmt.Errorf("recover ready resource completion %s: %w", item.ID, err))
 			} else {
 				if observation.material || observation.completion != nil {
@@ -503,18 +503,18 @@ func (r *activeResourceReconciler) Reconcile(
 				}
 			}
 			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
-				result.failures = append(result.failures,
+				result.Failures = append(result.Failures,
 					fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
 			}
-			if err := r.settleSchedules(ctx, item.ID, r.now().UTC()); err != nil {
+			if err := r.settleSchedules(ctx, item.ID, r.Now().UTC()); err != nil {
 				return result, fmt.Errorf("settle ready resource %s: %w", item.ID, err)
 			}
 			continue
 		}
-		observation, err := r.observe(ctx, item, r.now().UTC())
+		observation, err := r.observe(ctx, item, r.Now().UTC())
 		if err != nil {
 			result.operatorActive = true
-			result.failures = append(result.failures,
+			result.Failures = append(result.Failures,
 				fmt.Errorf("reconcile ready resource %s: %w", item.ID, err))
 			if r.observationFailures == nil {
 				r.observationFailures = make(map[domain.ItemID]int)
@@ -535,7 +535,7 @@ func (r *activeResourceReconciler) Reconcile(
 		// A native-observe failure is isolated: it is reported but never blocks
 		// the pull/issue commit below, and the next tick retries (plan §5.16).
 		if observation.nativeErr != nil {
-			result.failures = append(result.failures,
+			result.Failures = append(result.Failures,
 				fmt.Errorf("reconcile ready resource %s: %w", item.ID, observation.nativeErr))
 		}
 		r.noteReactionsRefusal(item.ID, observation, &result)
@@ -545,7 +545,7 @@ func (r *activeResourceReconciler) Reconcile(
 				return result, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
 			}
 			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
-				result.failures = append(result.failures,
+				result.Failures = append(result.Failures,
 					fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
 			}
 		}
@@ -557,7 +557,7 @@ func (r *activeResourceReconciler) Reconcile(
 		// collected as a retryable failure rather than stopping the pass.
 		if len(observation.nativeObservations) > 0 {
 			if err := r.commitNativeReview(ctx, observation.nativeObservations); err != nil {
-				result.failures = append(result.failures,
+				result.Failures = append(result.Failures,
 					fmt.Errorf("record native review %s: %w", item.ID, err))
 				// The observer already advanced its ETags on the fetch, so a 304
 				// on the next tick would suppress the rebuild and strand these
@@ -571,10 +571,10 @@ func (r *activeResourceReconciler) Reconcile(
 		// External findings ride the same fetch and are isolated the same way:
 		// their own transaction, a collected failure, and an evicted cache so
 		// the retry rebuilds them.
-		result.skipped = append(result.skipped, observation.externalSkipped...)
+		result.Skipped = append(result.Skipped, observation.externalSkipped...)
 		if len(observation.externalFindings) > 0 {
 			if err := r.commitExternalFindings(ctx, observation); err != nil {
-				result.failures = append(result.failures,
+				result.Failures = append(result.Failures,
 					fmt.Errorf("record external review %s: %w", item.ID, err))
 				r.dropReviewCache(observation.binding)
 			}
@@ -587,7 +587,7 @@ func (r *activeResourceReconciler) Reconcile(
 		// intake's and retried on the next pass.
 		if observation.boundOpen && observation.invalidation == nil && !observation.conclude {
 			if err := r.startExternalReview(ctx, item.ID, observation.pull.ObservedAt); err != nil {
-				result.failures = append(result.failures,
+				result.Failures = append(result.Failures,
 					fmt.Errorf("start external review %s: %w", item.ID, err))
 			}
 		}
@@ -605,14 +605,14 @@ func (r *activeResourceReconciler) Reconcile(
 //
 // Each write reads the row and writes it in one transaction and changes only
 // its own fields, so it never overwrites a field another writer set.
-func (r *activeResourceReconciler) observeRepositoryTip(ctx context.Context) error {
+func (r *ActiveResourceReconciler) observeRepositoryTip(ctx context.Context) error {
 	watch := r.tipWatch
 	tip, err := r.observeTip(ctx, watch.Repo, watch.Branch)
 	if err != nil {
 		return fmt.Errorf("read tip: %w", err)
 	}
 	var pending domain.RepositoryTipObservation
-	if err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		stored, found, err := tx.GetRepositoryTipObservation(ctx, watch.RepositoryID)
 		if err != nil {
 			return err
@@ -620,7 +620,7 @@ func (r *activeResourceReconciler) observeRepositoryTip(ctx context.Context) err
 		if !found || stored.TipSHA != tip || stored.Branch != watch.Branch || stored.Repository != watch.Repo {
 			stored = domain.RepositoryTipObservation{
 				RepositoryID: watch.RepositoryID, Repository: watch.Repo, Branch: watch.Branch,
-				TipSHA: tip, ObservedAt: r.now().UTC(), UpkeepTipSHA: stored.UpkeepTipSHA,
+				TipSHA: tip, ObservedAt: r.Now().UTC(), UpkeepTipSHA: stored.UpkeepTipSHA,
 			}
 			if err := tx.RecordRepositoryTipObservation(ctx, stored); err != nil {
 				return err
@@ -637,7 +637,7 @@ func (r *activeResourceReconciler) observeRepositoryTip(ctx context.Context) err
 	if err := r.upkeepTipAdvance(ctx, pending); err != nil {
 		return fmt.Errorf("hand tip %s to image upkeep: %w", pending.TipSHA, err)
 	}
-	if err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		current, found, err := tx.GetRepositoryTipObservation(ctx, watch.RepositoryID)
 		if err != nil {
 			return err
@@ -666,18 +666,18 @@ func (r *activeResourceReconciler) observeRepositoryTip(ctx context.Context) err
 // and the item stays open when anything fails. The transaction is opened
 // only when a cycle is due, because every write transaction advances the
 // client-visible revision.
-func (r activeResourceReconciler) startExternalReview(
+func (r ActiveResourceReconciler) startExternalReview(
 	ctx context.Context, itemID domain.ItemID, observedAt time.Time,
 ) error {
 	var due bool
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		due, err = engine.ExternalReviewReentryDue(ctx, tx, itemID)
 		return err
 	}); err != nil || !due {
 		return err
 	}
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		started, err := engine.StartExternalReviewReentry(ctx, tx, itemID)
 		if err != nil || !started {
 			return err
@@ -693,12 +693,12 @@ func (r activeResourceReconciler) startExternalReview(
 // unit the issue fact and completion. The hold item stays open and the
 // publication task stays queued; ending a held run is the engine's decision.
 // Observation failures are isolated to this hold, like a ready item's.
-func (r *activeResourceReconciler) reconcileHeldResource(
+func (r *ActiveResourceReconciler) reconcileHeldResource(
 	ctx context.Context, item domain.AttentionItem, result *activeResourceReconcileResult,
 ) error {
-	observation, err := r.observeReadyResource(ctx, item, r.now().UTC(), true, true)
+	observation, err := r.observeReadyResource(ctx, item, r.Now().UTC(), true, true)
 	if err != nil {
-		result.failures = append(result.failures,
+		result.Failures = append(result.Failures,
 			fmt.Errorf("reconcile held resource %s: %w", item.ID, err))
 		return nil
 	}
@@ -726,12 +726,12 @@ func completionForeclosureItemID(unitID domain.WorkUnitID) domain.ItemID {
 // convergeCompletionForeclosure surfaces the terminal completion refusal once.
 // The deterministic ID is checked across every item status so acknowledging the
 // notice does not cause a later reconciliation pass to resurrect it.
-func (r *activeResourceReconciler) convergeCompletionForeclosure(
+func (r *ActiveResourceReconciler) convergeCompletionForeclosure(
 	ctx context.Context, ready domain.AttentionItem, foreclosure completionForeclosure,
 ) error {
 	itemID := completionForeclosureItemID(foreclosure.unitID)
 	var exists bool
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.GetAttentionItem(ctx, itemID)
 		switch {
 		case err == nil:
@@ -750,10 +750,10 @@ func (r *activeResourceReconciler) convergeCompletionForeclosure(
 	}
 
 	posture := domain.HealthPostureAdvisory
-	createdAt := r.now().UTC()
+	createdAt := r.Now().UTC()
 	subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
 	var displayNames *domain.DisplayNames
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		displayNames, err = tx.DisplayNamesFor(ctx, ready.ProjectID, subject)
 		return err
@@ -786,7 +786,7 @@ func (r *activeResourceReconciler) convergeCompletionForeclosure(
 	if err != nil {
 		return err
 	}
-	return signet.NewService(r.store).PutItem(ctx, item)
+	return signet.NewService(r.Store).PutItem(ctx, item)
 }
 
 func activeResourceObservationHealthPrefix(itemID domain.ItemID) string {
@@ -815,7 +815,7 @@ func activeResourceObservationHealthItems(
 // is no longer active. The error itself is deliberately not persisted: remote
 // response text is untrusted, while the ready item ID is a trusted local
 // coordinate an operator can use to inspect the logs.
-func (r *activeResourceReconciler) convergeObservationHealth(
+func (r *ActiveResourceReconciler) convergeObservationHealth(
 	ctx context.Context,
 	snapshots []store.Snapshotted[domain.AttentionItem],
 	ready domain.AttentionItem,
@@ -825,10 +825,10 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 	if (healthy && len(existing) == 0) || (!healthy && len(existing) == 1) {
 		return nil
 	}
-	attention := signet.NewService(r.store)
+	attention := signet.NewService(r.Store)
 	if healthy {
 		for _, item := range existing {
-			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, r.now().UTC(),
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, r.Now().UTC(),
 				"Resolved when the pull request could be observed again or its watch ended.", nil)
 			if err != nil {
 				return err
@@ -842,7 +842,7 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 	}
 	if len(existing) > 0 {
 		for _, duplicate := range existing[1:] {
-			duplicate, err := duplicate.ConcludeByDaemon(domain.ConcludedByDaemon, r.now().UTC(),
+			duplicate, err := duplicate.ConcludeByDaemon(domain.ConcludedByDaemon, r.Now().UTC(),
 				fmt.Sprintf("Resolved as a duplicate of the open observation item %s.", existing[0].ID), nil)
 			if err != nil {
 				return err
@@ -859,7 +859,7 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 		displayNames *domain.DisplayNames
 	)
 	subject := domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		state, err = tx.ServerState(ctx)
 		if err != nil {
@@ -871,7 +871,7 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 		return err
 	}
 	posture := domain.HealthPostureAdvisory
-	createdAt := r.now().UTC()
+	createdAt := r.Now().UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID(fmt.Sprintf(
 			"%s%d", activeResourceObservationHealthPrefix(ready.ID), state.Revision+1,
@@ -903,7 +903,7 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 	return attention.PutItem(ctx, item)
 }
 
-func (r *activeResourceReconciler) evictConcludedResource(
+func (r *ActiveResourceReconciler) evictConcludedResource(
 	ctx context.Context, itemID domain.ItemID,
 ) error {
 	if r.evictConcluded == nil {
@@ -919,7 +919,7 @@ func (r *activeResourceReconciler) evictConcludedResource(
 		found            bool
 		recoveryComplete = true
 	)
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		item, err := tx.GetAttentionItem(ctx, itemID)
 		if err != nil {
 			return err
@@ -973,10 +973,10 @@ func (r *activeResourceReconciler) evictConcludedResource(
 // daemon-internal transaction. Each append coalesces an unchanged
 // re-observation, so duplicate observations converge idempotently under
 // retries (issue #497).
-func (r activeResourceReconciler) commitNativeReview(
+func (r ActiveResourceReconciler) commitNativeReview(
 	ctx context.Context, observations []domain.NativeReviewObservation,
 ) error {
-	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		for _, observation := range observations {
 			if _, err := tx.AppendNativeReviewObservation(ctx, observation); err != nil {
 				return err
@@ -986,12 +986,12 @@ func (r activeResourceReconciler) commitNativeReview(
 	})
 }
 
-func (r activeResourceReconciler) settleSchedules(
+func (r ActiveResourceReconciler) settleSchedules(
 	ctx context.Context, itemID domain.ItemID, settledAt time.Time,
 ) error {
 	ids := publicationScheduleIDs(itemID)
 	hasArmed := false
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		for _, id := range ids {
 			schedule, err := tx.GetSchedule(ctx, id)
 			switch {
@@ -1007,7 +1007,7 @@ func (r activeResourceReconciler) settleSchedules(
 	}); err != nil || !hasArmed {
 		return err
 	}
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		item, err := tx.GetAttentionItem(ctx, itemID)
 		if err != nil {
 			return err
@@ -1019,7 +1019,7 @@ func (r activeResourceReconciler) settleSchedules(
 	})
 }
 
-func (r activeResourceReconciler) observe(
+func (r ActiveResourceReconciler) observe(
 	ctx context.Context, item domain.AttentionItem, observedAt time.Time,
 ) (activeResourceObservation, error) {
 	return r.observeReadyResource(ctx, item, observedAt, false, false)
@@ -1029,7 +1029,7 @@ func (r activeResourceReconciler) observe(
 // construction without applying readiness, review, or item-lifecycle
 // semantics. It remains eligible after the item concludes until completion is
 // durable; a closed pull remains retryable because GitHub permits reopening it.
-func (r activeResourceReconciler) observeCompletionOnly(
+func (r ActiveResourceReconciler) observeCompletionOnly(
 	ctx context.Context, item domain.AttentionItem, observedAt time.Time,
 ) (activeResourceObservation, error) {
 	return r.observeReadyResource(ctx, item, observedAt, true, false)
@@ -1039,7 +1039,7 @@ func (r activeResourceReconciler) observeCompletionOnly(
 // reads a publication hold's binding instead of a ready item's and requires
 // completionOnly: both bindings carry the same store-proven coordinates, so
 // everything after the read is shared.
-func (r activeResourceReconciler) observeReadyResource(
+func (r ActiveResourceReconciler) observeReadyResource(
 	ctx context.Context, item domain.AttentionItem, observedAt time.Time, completionOnly, held bool,
 ) (activeResourceObservation, error) {
 	var (
@@ -1055,7 +1055,7 @@ func (r activeResourceReconciler) observeReadyResource(
 	if held && !completionOnly {
 		return activeResourceObservation{}, errors.New("a held resource is observed for completion only")
 	}
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		if held {
 			var heldBinding domain.HeldItemPRBinding
@@ -1144,7 +1144,7 @@ func (r activeResourceReconciler) observeReadyResource(
 			return observation, nil
 		}
 	}
-	observed, err := r.pull(ctx, binding.Repo, binding.PRNumber)
+	observed, err := r.Pull(ctx, binding.Repo, binding.PRNumber)
 	if err != nil {
 		return activeResourceObservation{}, fmt.Errorf("observe pull %s#%d: %w", binding.Repo, binding.PRNumber, err)
 	}
@@ -1200,8 +1200,8 @@ func (r activeResourceReconciler) observeReadyResource(
 	// it never blocks the pull/issue facts; on success, unchanged activity
 	// (a 304 across all sub-resources) yields nothing to record.
 	observation.boundOpen = !completionOnly && exact && pullFact.State == domain.PullRequestOpen
-	if observation.boundOpen && r.review != nil {
-		reviewObs, err := r.review(ctx, binding.Repo, binding.PRNumber)
+	if observation.boundOpen && r.Review != nil {
+		reviewObs, err := r.Review(ctx, binding.Repo, binding.PRNumber)
 		if err == nil {
 			observation.reviewRead = true
 			observation.reactionsUnavailable = reviewObs.ReactionsUnavailable
@@ -1211,7 +1211,7 @@ func (r activeResourceReconciler) observeReadyResource(
 			observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, err)
 		case !reviewObs.NotModified:
 			reviewFetched = true
-			observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.reviewers, observedAt)
+			observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.Reviewers, observedAt)
 			observation.externalFindings, observation.externalSkipped = buildExternalFindings(reviewObs, binding)
 		}
 	}
@@ -1232,7 +1232,7 @@ func (r activeResourceReconciler) observeReadyResource(
 			return activeResourceObservation{}, fmt.Errorf("observe issue %s#%d: %w",
 				binding.Repo, *declaration.BoundIssue, err)
 		}
-		recheck, err := r.pull(ctx, binding.Repo, binding.PRNumber)
+		recheck, err := r.Pull(ctx, binding.Repo, binding.PRNumber)
 		if err != nil {
 			return activeResourceObservation{}, fmt.Errorf("re-verify repository identity %s: %w", binding.Repo, err)
 		}
@@ -1280,7 +1280,7 @@ func (r activeResourceReconciler) observeReadyResource(
 		observation.conclude = !pullFact.Merged || declaration == nil ||
 			observation.completed || observation.completion != nil
 	}
-	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		latest, err := tx.LatestPullMergeFact(ctx, pullFact.RepositoryID, pullFact.PRNumber)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -1317,14 +1317,14 @@ func (r activeResourceReconciler) observeReadyResource(
 // whose fetched activity was not stored. The observer advanced its ETags on
 // the fetch, so without this the next pass would be answered 304 and the
 // unstored activity would stay unread until the pull request changed again.
-func (r activeResourceReconciler) dropReviewCache(binding domain.ReadyItemPRBinding) {
+func (r ActiveResourceReconciler) dropReviewCache(binding domain.ReadyItemPRBinding) {
 	if r.reviewInvalidate != nil {
 		r.reviewInvalidate(binding.Repo, binding.PRNumber)
 	}
 }
 
-func (r activeResourceReconciler) commit(ctx context.Context, observation activeResourceObservation) error {
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+func (r ActiveResourceReconciler) commit(ctx context.Context, observation activeResourceObservation) error {
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		var binding domain.ReadyItemPRBinding
 		var err error
 		if observation.held {

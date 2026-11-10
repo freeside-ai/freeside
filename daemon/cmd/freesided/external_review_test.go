@@ -269,13 +269,13 @@ func TestActiveResourceStoresExternalFindings(t *testing.T) {
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(externalReviewActivity()),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(externalReviewActivity()),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	result, err := reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 0 || len(result.skipped) != 0 {
+	if err != nil || len(result.Failures) != 0 || len(result.Skipped) != 0 {
 		t.Fatalf("Reconcile = %+v, %v", result, err)
 	}
 
@@ -329,18 +329,18 @@ func TestActiveResourceExternalFindingsConverge(t *testing.T) {
 	item := activeReadyItem(t, st)
 	armActiveTestSchedules(t, st, item)
 	activity := externalReviewActivity()
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull,
-		review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull,
+		Review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
 			return activity, nil
 		},
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	reconcile := func(step string) {
 		t.Helper()
 		result, err := reconciler.Reconcile(ctx)
-		if err != nil || len(result.failures) != 0 || len(result.skipped) != 0 {
+		if err != nil || len(result.Failures) != 0 || len(result.Skipped) != 0 {
 			t.Fatalf("%s: Reconcile = %+v, %v", step, result, err)
 		}
 	}
@@ -392,17 +392,17 @@ func TestActiveResourceExternalIntakeSkipsUnusableActivity(t *testing.T) {
 	armActiveTestSchedules(t, st, item)
 	activity := externalReviewActivity()
 	activity.Comments[1].Body = strings.Repeat("x", domain.MaxNativeReviewTextBytes+1)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(activity),
-		reviewers: testReviewers(),
-		now:       func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(activity),
+		Reviewers: testReviewers(),
+		Now:       func() time.Time { return activeResourceTestTime },
 	}
 	result, err := reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 0 {
+	if err != nil || len(result.Failures) != 0 {
 		t.Fatalf("Reconcile = %+v, %v", result, err)
 	}
-	if len(result.skipped) != 1 || !errors.Is(result.skipped[0], domain.ErrNativeReviewTextTooLarge) {
-		t.Fatalf("skipped = %v, want the oversized comment", result.skipped)
+	if len(result.Skipped) != 1 || !errors.Is(result.Skipped[0], domain.ErrNativeReviewTextTooLarge) {
+		t.Fatalf("skipped = %v, want the oversized comment", result.Skipped)
 	}
 	kept, _ := buildExternalFindings(activity, externalTestBinding())
 	if len(kept) != 1 || kept[0].External.ThreadID != "review_comment/800200" {
@@ -446,16 +446,16 @@ func TestActiveResourceExternalIntakeFailureIsolated(t *testing.T) {
 	// The observer answers "not modified" until its cache is evicted, as the
 	// real one does once a fetch has advanced its validators.
 	fetched, evicted := false, 0
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull,
-		review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull,
+		Review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
 			if fetched {
 				return publish.PullReviewObservation{NotModified: true}, nil
 			}
 			fetched = true
 			return externalReviewActivity(), nil
 		},
-		reviewers: testReviewers(),
+		Reviewers: testReviewers(),
 		reviewInvalidate: func(repo string, number int) {
 			if repo != "owner/repo" || number != 450 {
 				t.Errorf("reviewInvalidate(%q, %d), want owner/repo#450", repo, number)
@@ -463,14 +463,14 @@ func TestActiveResourceExternalIntakeFailureIsolated(t *testing.T) {
 			fetched = false
 			evicted++
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	result, err := reconciler.Reconcile(ctx)
 	if err != nil {
 		t.Fatalf("Reconcile hard error: %v", err)
 	}
-	if len(result.failures) != 1 || !strings.Contains(result.failures[0].Error(), "record external review") {
-		t.Fatalf("failures = %v, want one isolated external-intake failure", result.failures)
+	if len(result.Failures) != 1 || !strings.Contains(result.Failures[0].Error(), "record external review") {
+		t.Fatalf("failures = %v, want one isolated external-intake failure", result.Failures)
 	}
 	if evicted != 1 {
 		t.Fatalf("reviewInvalidate calls = %d, want 1", evicted)
@@ -488,7 +488,7 @@ func TestActiveResourceExternalIntakeFailureIsolated(t *testing.T) {
 
 	execStoreSQL(t, dbPath, "DROP TRIGGER refuse_findings")
 	result, err = reconciler.Reconcile(ctx)
-	if err != nil || len(result.failures) != 0 {
+	if err != nil || len(result.Failures) != 0 {
 		t.Fatalf("retry Reconcile = %+v, %v", result, err)
 	}
 	for _, w := range want {
@@ -507,24 +507,24 @@ func TestActiveResourceDiscardedObservationEvictsReviewCache(t *testing.T) {
 	ctx := context.Background()
 	st, dbPath, _ := externalIntakeStore(t)
 	evicted := 0
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull,
-		review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull,
+		Review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
 			// The store breaks after the fetch and before the pass reads its
 			// latest pull fact.
 			dropStoreTable(t, dbPath, "pull_merge_facts")
 			return externalReviewActivity(), nil
 		},
-		reviewers:        testReviewers(),
+		Reviewers:        testReviewers(),
 		reviewInvalidate: func(string, int) { evicted++ },
-		now:              func() time.Time { return activeResourceTestTime },
+		Now:              func() time.Time { return activeResourceTestTime },
 	}
 	result, err := reconciler.Reconcile(ctx)
 	if err != nil {
 		t.Fatalf("Reconcile hard error: %v", err)
 	}
-	if len(result.failures) != 1 || !strings.Contains(result.failures[0].Error(), "reconcile ready resource") {
-		t.Fatalf("failures = %v, want the discarded observation", result.failures)
+	if len(result.Failures) != 1 || !strings.Contains(result.Failures[0].Error(), "reconcile ready resource") {
+		t.Fatalf("failures = %v, want the discarded observation", result.Failures)
 	}
 	if evicted != 1 {
 		t.Fatalf("reviewInvalidate calls = %d, want 1", evicted)
@@ -548,19 +548,19 @@ func TestActiveResourceExternalIntakeNeedsTheBoundOpenPull(t *testing.T) {
 			item := activeReadyItem(t, st)
 			armActiveTestSchedules(t, st, item)
 			fetches := 0
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					observed := exactPull("open", false)
 					mutate(&observed)
 					return observed, nil
 				},
-				review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
+				Review: func(context.Context, string, int) (publish.PullReviewObservation, error) {
 					fetches++
 					return externalReviewActivity(), nil
 				},
-				reviewers: testReviewers(),
-				now:       func() time.Time { return activeResourceTestTime },
+				Reviewers: testReviewers(),
+				Now:       func() time.Time { return activeResourceTestTime },
 			}
 			if _, err := reconciler.Reconcile(ctx); err != nil {
 				t.Fatalf("Reconcile: %v", err)
@@ -588,9 +588,9 @@ func TestCommitExternalFindingsRefusesChangedBinding(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := activeReadyItem(t, st)
-	reconciler := activeResourceReconciler{
-		store: st, pull: openExactPull, review: staticReview(externalReviewActivity()),
-		now: func() time.Time { return activeResourceTestTime },
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: openExactPull, Review: staticReview(externalReviewActivity()),
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	observation, err := reconciler.observe(ctx, item, activeResourceTestTime)
 	if err != nil || len(observation.externalFindings) != 2 {

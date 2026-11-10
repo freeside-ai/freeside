@@ -126,9 +126,9 @@ func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *test
 	}
 
 	evictions := 0
-	reconciler := activeResourceReconciler{
-		store: st, pull: cache.ReconcilePull, issue: cache.ReconcileIssue,
-		review: cache.ReconcilePullReviewActivity,
+	reconciler := ActiveResourceReconciler{
+		Store: st, Pull: cache.ReconcilePull, issue: cache.ReconcileIssue,
+		Review: cache.ReconcilePullReviewActivity,
 		evictConcluded: func(binding domain.ReadyItemPRBinding, boundIssue *int) {
 			evictions++
 			cache.EvictRef(binding.Repo, binding.BaseRef)
@@ -138,7 +138,7 @@ func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *test
 				cache.EvictIssue(binding.Repo, *boundIssue)
 			}
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("open Reconcile = %v, %v", failures, err)

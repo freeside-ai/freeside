@@ -40,9 +40,9 @@ type credentialIntegrityObservers struct {
 // Codex store when no review root is configured, fails its observation and
 // is reported as not checked.
 func productionCredentialIntegrityObservers(
-	cfg claudeDriverConfig, runtime ward.Runtime,
+	cfg ClaudeDriverConfig, runtime ward.Runtime,
 ) credentialIntegrityObservers {
-	authorize := productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
+	authorize := ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
 	return credentialIntegrityObservers{
 		setupToken: func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error) {
 			return ward.ObserveSetupTokenIntegrity(ctx, runtime, cfg.ExporterImage, volume, authorize)

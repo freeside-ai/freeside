@@ -64,9 +64,9 @@ func judgmentCallAuditFor(adapter domain.Digest) *domain.InterimCallLaunchAudit 
 	return nil
 }
 
-// judgmentSites is every judgment site the daemon registers. Preflight checks
+// JudgmentSites is every judgment site the daemon registers. Preflight checks
 // the same list's roles, so a site added here is checked there.
-func judgmentSites(budget inference.Budget) []inference.Site {
+func JudgmentSites(budget inference.Budget) []inference.Site {
 	return []inference.Site{
 		inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
 		inference.DriftAuditorSite(budget),
@@ -85,24 +85,24 @@ func openAdvisoryStore(stateDir string, sites []inference.Site) (*advisory.Store
 	return advisory.Open(filepath.Join(stateDir, "advisory.json"), 2_000, inference.MaxSiteOutputBytes(sites))
 }
 
-// judgmentRuntime is what the judgment flags compose: the driver that makes
+// JudgmentRuntime is what the judgment flags compose: the driver that makes
 // every call and the publication author's prompt file. The zero value is
 // judgments switched off: with no driver, every role is off.
-type judgmentRuntime struct {
+type JudgmentRuntime struct {
 	Driver       inference.Driver
 	AuthorPrompt []byte
 }
 
-// judgmentRoles resolves a judgment role through the lineup. It returns what
+// JudgmentRoles resolves a judgment role through the lineup. It returns what
 // it resolved and decides nothing: the inference client runs the admission.
-type judgmentRoles struct {
-	st       *store.Store
-	tree     agenttree.Tree
-	revision domain.Digest
-	runtime  judgmentRuntime
-	// credentials reads the token a call authenticates with. A role whose
+type JudgmentRoles struct {
+	Store    *store.Store
+	Tree     agenttree.Tree
+	Revision domain.Digest
+	Runtime  JudgmentRuntime
+	// Credentials reads the token a call authenticates with. A role whose
 	// token cannot be read is unbound, like a role with no line.
-	credentials *judgmentCredentials
+	Credentials *JudgmentCredentials
 }
 
 // judgmentRolePrompt returns the prompt this daemon runs a judgment role
@@ -125,39 +125,39 @@ func judgmentRolePrompt(role domain.RoleName, authorPrompt []byte) (inference.Ro
 // so a tree with no judgment lines leaves no role unbound and raises no item
 // on a deployment that never asked for judgments (#1945). Policy asks for a
 // role's line only while it asks for the role's work (plan §5.4).
-func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (inference.RoleCall, error) {
-	if j.runtime.Driver == nil {
+func (j JudgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (inference.RoleCall, error) {
+	if j.Runtime.Driver == nil {
 		return inference.RoleCall{}, inference.ErrRoleOff
 	}
-	prompt, ok := judgmentRolePrompt(role, j.runtime.AuthorPrompt)
-	if !ok || (role == domain.RoleTriager && !triagerAsked(j.tree)) {
+	prompt, ok := judgmentRolePrompt(role, j.Runtime.AuthorPrompt)
+	if !ok || (role == domain.RoleTriager && !triagerAsked(j.Tree)) {
 		return inference.RoleCall{}, inference.ErrRoleOff
 	}
-	agent, err := engine.ResolveRole(ctx, j.st, j.tree, role)
+	agent, err := engine.ResolveRole(ctx, j.Store, j.Tree, role)
 	if err != nil {
 		return inference.RoleCall{}, err
 	}
-	adapter, err := judgmentCallAdapter(j.tree, agent.Enrollment.HarnessClient, agent.Line.Names.Effort)
+	adapter, err := judgmentCallAdapter(j.Tree, agent.Enrollment.HarnessClient, agent.Line.Names.Effort)
 	if err != nil {
 		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
 	if agent, err = agent.Select(adapter); err != nil {
 		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
-	credential, err := j.credentials.token(ctx, agent.Enrollment.ID, agent.Generation.Ordinal)
+	credential, err := j.Credentials.Token(ctx, agent.Enrollment.ID, agent.Generation.Ordinal)
 	if err != nil {
 		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
 	call := inference.RoleCall{
-		Line: agent.Line, LineupRevision: j.revision,
+		Line: agent.Line, LineupRevision: j.Revision,
 		Selection: agent.Selection, Route: agent.Route, Adapter: agent.Adapter,
-		Enrollment: agent.Enrollment, Generation: agent.Generation, ExpiryMargin: agentExpiryMargin,
+		Enrollment: agent.Enrollment, Generation: agent.Generation, ExpiryMargin: AgentExpiryMargin,
 		LaunchProof: judgmentCallAuditFor(agent.Adapter.Digest), Prompt: prompt,
-		Driver: j.runtime.Driver, Credential: credential,
+		Driver: j.Runtime.Driver, Credential: credential,
 		CredentialSource: inference.CredentialSourceEnrollment,
 	}
 	if role.JudgesWrittenWork() {
-		if call.WriterLineage, err = writerLineages(ctx, j.st, j.tree); err != nil {
+		if call.WriterLineage, err = WriterLineages(ctx, j.Store, j.Tree); err != nil {
 			return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 		}
 	}
@@ -200,14 +200,14 @@ func triagerAsked(tree agenttree.Tree) bool {
 	return escalated
 }
 
-// writerLineages is each writing role's lineage group: the one its lineup
+// WriterLineages is each writing role's lineage group: the one its lineup
 // line's enrollment's client kind and model derive (domain.LineageGroupOf),
 // or "" (which the record carries as unknown) when the lineup has no line
 // for the role, the line's enrollment is not in the store, or the model's
 // lineage is not known. A writer whose enrollment cannot run today still
 // wrote on that lineage, so only the enrollment's client is read, not its
 // credential. Only a failed store read is an error.
-func writerLineages(ctx context.Context, st *store.Store, tree agenttree.Tree) (map[domain.RoleName]string, error) {
+func WriterLineages(ctx context.Context, st *store.Store, tree agenttree.Tree) (map[domain.RoleName]string, error) {
 	lineages := make(map[domain.RoleName]string, len(domain.WritingRoles))
 	for _, writer := range domain.WritingRoles {
 		lineages[writer] = ""
@@ -236,9 +236,9 @@ func writerLineages(ctx context.Context, st *store.Store, tree agenttree.Tree) (
 	return lineages, err
 }
 
-const judgmentRoleItemPrefix = "system-health-judgment-role-"
+const JudgmentRoleItemPrefix = "system-health-judgment-role-"
 
-var judgmentRoleItemKind = healthItemKind{Prefix: judgmentRoleItemPrefix, Code: "judgment_role_unbound"}
+var judgmentRoleItemKind = healthItemKind{Prefix: JudgmentRoleItemPrefix, Code: "judgment_role_unbound"}
 
 // judgmentRoleCauseKey keys a role's item by the role and by why it is
 // unbound, so an item never outlives its reason: when the reason changes, the
@@ -248,7 +248,7 @@ func judgmentRoleCauseKey(role domain.RoleName, reason string) string {
 	return string(role) + "-" + contentaddr.Hex(contentaddr.Sum([]byte(reason)))[:12]
 }
 
-func judgmentRoleOfCause(cause string) domain.RoleName {
+func JudgmentRoleOfCause(cause string) domain.RoleName {
 	role, _, _ := strings.Cut(cause, "-")
 	return domain.RoleName(role)
 }
@@ -275,9 +275,9 @@ func judgmentRoleCause(role domain.RoleName, reason string) healthCause {
 	return cause
 }
 
-const inferenceLedgerItemPrefix = "system-health-inference-ledger-"
+const InferenceLedgerItemPrefix = "system-health-inference-ledger-"
 
-var inferenceLedgerItemKind = healthItemKind{Prefix: inferenceLedgerItemPrefix, Code: "inference_ledger_disabled"}
+var inferenceLedgerItemKind = healthItemKind{Prefix: InferenceLedgerItemPrefix, Code: "inference_ledger_disabled"}
 
 // inferenceLedgerCauseKey keys the ledger's item by why it is disabled, as a
 // role's item is keyed by its reason, so a restart that fails for another
@@ -308,13 +308,13 @@ func inferenceLedgerCause(cause string) healthCause {
 	}
 }
 
-// healthSubject is what one report to judgmentRoleHealth is about: a
+// healthSubject is what one report to JudgmentRoleHealth is about: a
 // judgment role, named by its role name, or the inference ledger.
 type healthSubject string
 
-const ledgerHealthSubject healthSubject = "inference ledger"
+const LedgerHealthSubject healthSubject = "inference ledger"
 
-// judgmentRoleHealth keeps one open system_health item per unbound judgment
+// JudgmentRoleHealth keeps one open system_health item per unbound judgment
 // role and one for a disabled inference ledger. The client reports on every
 // call, so the last state written per subject is remembered and only a
 // change between faulted and resolved reaches the store. A process's first
@@ -325,8 +325,8 @@ const ledgerHealthSubject healthSubject = "inference ledger"
 // reasons name the call's own deadline and would rewrite the item on every
 // call. A failed write is logged and retried on the next report: a health
 // item never fails a judgment call. Only the startup check stops on one
-// (checkJudgmentRolesAtStartup).
-type judgmentRoleHealth struct {
+// (CheckJudgmentRolesAtStartup).
+type JudgmentRoleHealth struct {
 	st     *store.Store
 	now    func() time.Time
 	logger *slog.Logger
@@ -340,34 +340,34 @@ type judgmentRoleHealth struct {
 	failed map[healthSubject]error
 }
 
-func newJudgmentRoleHealth(st *store.Store, now func() time.Time, logger *slog.Logger) *judgmentRoleHealth {
-	return &judgmentRoleHealth{
+func NewJudgmentRoleHealth(st *store.Store, now func() time.Time, logger *slog.Logger) *JudgmentRoleHealth {
+	return &JudgmentRoleHealth{
 		st: st, now: now, logger: logger,
 		faulted: map[healthSubject]bool{}, failed: map[healthSubject]error{},
 	}
 }
 
 // RoleUnbound implements inference.HealthReporter.
-func (h *judgmentRoleHealth) RoleUnbound(ctx context.Context, role domain.RoleName, reason string) {
+func (h *JudgmentRoleHealth) RoleUnbound(ctx context.Context, role domain.RoleName, reason string) {
 	h.converge(ctx, healthSubject(role), true, func() error { return h.writeRole(ctx, role, true, reason) })
 }
 
 // RoleResolved implements inference.HealthReporter.
-func (h *judgmentRoleHealth) RoleResolved(ctx context.Context, role domain.RoleName) {
+func (h *JudgmentRoleHealth) RoleResolved(ctx context.Context, role domain.RoleName) {
 	h.converge(ctx, healthSubject(role), false, func() error { return h.writeRole(ctx, role, false, "") })
 }
 
 // LedgerDisabled implements inference.HealthReporter.
-func (h *judgmentRoleHealth) LedgerDisabled(ctx context.Context, cause string) {
-	h.converge(ctx, ledgerHealthSubject, true, func() error { return h.writeLedger(ctx, true, cause) })
+func (h *JudgmentRoleHealth) LedgerDisabled(ctx context.Context, cause string) {
+	h.converge(ctx, LedgerHealthSubject, true, func() error { return h.writeLedger(ctx, true, cause) })
 }
 
 // LedgerLoaded implements inference.HealthReporter.
-func (h *judgmentRoleHealth) LedgerLoaded(ctx context.Context) {
-	h.converge(ctx, ledgerHealthSubject, false, func() error { return h.writeLedger(ctx, false, "") })
+func (h *JudgmentRoleHealth) LedgerLoaded(ctx context.Context) {
+	h.converge(ctx, LedgerHealthSubject, false, func() error { return h.writeLedger(ctx, false, "") })
 }
 
-func (h *judgmentRoleHealth) converge(ctx context.Context, subject healthSubject, faulted bool, write func() error) {
+func (h *JudgmentRoleHealth) converge(ctx context.Context, subject healthSubject, faulted bool, write func() error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if last, known := h.faulted[subject]; known && last == faulted {
@@ -386,10 +386,10 @@ func (h *judgmentRoleHealth) converge(ctx context.Context, subject healthSubject
 	h.faulted[subject] = faulted
 }
 
-// unwritten returns an error naming the subjects whose last report did not
+// Unwritten returns an error naming the subjects whose last report did not
 // reach the store, with the first one's write error, or nil when every
 // report did.
-func (h *judgmentRoleHealth) unwritten() error {
+func (h *JudgmentRoleHealth) Unwritten() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.failed) == 0 {
@@ -403,7 +403,7 @@ func (h *judgmentRoleHealth) unwritten() error {
 	return fmt.Errorf("health item not written for %s: %w", strings.Join(names, ", "), h.failed[subjects[0]])
 }
 
-// checkJudgmentRolesAtStartup admits every judgment role once, before any
+// CheckJudgmentRolesAtStartup admits every judgment role once, before any
 // site is reached, and leaves the store saying what it found: an item for
 // each role the lineup cannot fill, one for a ledger that did not load, and
 // none for a cause fixed since the last start. The drift auditor's item and
@@ -413,8 +413,8 @@ func (h *judgmentRoleHealth) unwritten() error {
 // nothing holding the work it audits, and a fixed one would stay held. A
 // start cancelled during the check is reported as cancelled, because it
 // proves nothing about the lineup.
-func checkJudgmentRolesAtStartup(
-	ctx context.Context, judgments *inference.Client, health *judgmentRoleHealth, logger *slog.Logger,
+func CheckJudgmentRolesAtStartup(
+	ctx context.Context, judgments *inference.Client, health *JudgmentRoleHealth, logger *slog.Logger,
 ) error {
 	checks := judgments.CheckRoles(ctx)
 	if err := ctx.Err(); err != nil {
@@ -426,17 +426,17 @@ func checkJudgmentRolesAtStartup(
 				"role", check.Role, "error", check.Err)
 		}
 	}
-	return health.unwritten()
+	return health.Unwritten()
 }
 
-func (h *judgmentRoleHealth) writeRole(ctx context.Context, role domain.RoleName, unbound bool, reason string) error {
+func (h *JudgmentRoleHealth) writeRole(ctx context.Context, role domain.RoleName, unbound bool, reason string) error {
 	// Every store write advances the revision clients watch, so look first
 	// and write only when the item is not already as it should be.
 	open, err := h.openCauses(ctx, judgmentRoleItemKind)
 	if err != nil {
 		return err
 	}
-	open = slices.DeleteFunc(open, func(cause string) bool { return judgmentRoleOfCause(cause) != role })
+	open = slices.DeleteFunc(open, func(cause string) bool { return JudgmentRoleOfCause(cause) != role })
 	causes := map[string]healthCause{}
 	var want []string
 	if unbound {
@@ -449,10 +449,10 @@ func (h *judgmentRoleHealth) writeRole(ctx context.Context, role domain.RoleName
 	// One role is converged at a time; every other role's item is left as it
 	// is.
 	return convergeHealthItems(ctx, h.st, judgmentRoleItemKind, causes,
-		func(cause string) bool { return judgmentRoleOfCause(cause) != role }, h.now())
+		func(cause string) bool { return JudgmentRoleOfCause(cause) != role }, h.now())
 }
 
-func (h *judgmentRoleHealth) writeLedger(ctx context.Context, disabled bool, cause string) error {
+func (h *JudgmentRoleHealth) writeLedger(ctx context.Context, disabled bool, cause string) error {
 	open, err := h.openCauses(ctx, inferenceLedgerItemKind)
 	if err != nil {
 		return err
@@ -470,7 +470,7 @@ func (h *judgmentRoleHealth) writeLedger(ctx context.Context, disabled bool, cau
 }
 
 // openCauses returns the cause keys of the kind's open items.
-func (h *judgmentRoleHealth) openCauses(ctx context.Context, kind healthItemKind) ([]string, error) {
+func (h *JudgmentRoleHealth) openCauses(ctx context.Context, kind healthItemKind) ([]string, error) {
 	var open []string
 	err := h.st.Read(ctx, func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)

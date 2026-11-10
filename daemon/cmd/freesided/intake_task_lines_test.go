@@ -16,7 +16,7 @@ func TestIntakeAutoStartSetsNoTaskLine(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
-	r := f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
 
 	r.reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)

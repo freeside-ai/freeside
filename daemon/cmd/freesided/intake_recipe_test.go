@@ -58,7 +58,7 @@ func TestIntakeFreezesIntakeRecipeOnFirstAdmission(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if o.Admission == nil || !f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("occurrence was not admitted and started")
@@ -88,7 +88,7 @@ func TestIntakeFreezesPublicationWithoutLabelDirectives(t *testing.T) {
 	if err := init.validate(); err != nil {
 		t.Fatalf("directive label is not an accepted initiator configuration: %v", err)
 	}
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	var o domain.IntakeOccurrence
 	var found bool
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
@@ -211,7 +211,7 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
 	o := f.latestOccurrence(t, 7)
 	if o.Admission == nil || !f.started(t, o.Admission.Subject.SpecificationRunID) {
 		t.Fatal("pre-change occurrence was not admitted and started")

@@ -455,7 +455,7 @@ func authenticateProductionRigLease(rigTokenFile, leaseRoot string) error {
 	if rigTokenFile == "" {
 		return errors.New("-prod-app-authority requires -rig-token-file naming the live production rig lease")
 	}
-	acquisition, err := readRigAcquisition(rigTokenFile)
+	acquisition, err := ReadRigAcquisition(rigTokenFile)
 	if err != nil {
 		return err
 	}

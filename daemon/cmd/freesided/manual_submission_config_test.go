@@ -182,7 +182,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	cfg := manualConfigFixture(t)
 	writeManualConfig(t, path, cfg)
 	var h *daemon
-	start := func(configPath string, labels []intakeInitiator) {
+	start := func(configPath string, labels []IntakeInitiator) {
 		t.Helper()
 		if h != nil {
 			if err := h.Close(); err != nil {
@@ -365,7 +365,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A separately configured label project cannot become a manual fallback.
-	start("", []intakeInitiator{{ProjectID: "label-only", PolicyKeys: cfg.Projects[0].PolicyKeys, CommitAuthor: cfg.Projects[0].CommitAuthor}})
+	start("", []IntakeInitiator{{ProjectID: "label-only", PolicyKeys: cfg.Projects[0].PolicyKeys, CommitAuthor: cfg.Projects[0].CommitAuthor}})
 	reused(submit("first", "project-client", "# New client task", "First name", http.StatusOK))
 	submit("fourth", "project-client", "# New client task", "First name", http.StatusNotFound)
 	counts(4, 4, 4)

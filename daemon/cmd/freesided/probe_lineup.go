@@ -310,10 +310,10 @@ func lineupCalls(settings *loadedDeputySettings) ([]lineupCall, error) {
 }
 
 // judgmentProbeRoles is every role a judgment site with an instruction
-// serves, in judgmentSites order: the roles the judgment line binds.
+// serves, in JudgmentSites order: the roles the judgment line binds.
 func judgmentProbeRoles() []domain.RoleName {
 	var roles []domain.RoleName
-	for _, site := range judgmentSites(inference.Budget{}) {
+	for _, site := range JudgmentSites(inference.Budget{}) {
 		role, ok := domain.RoleForSite(site.ID)
 		if site.Instruction == "" || !ok || slices.Contains(roles, role) {
 			continue
@@ -392,7 +392,7 @@ func newProductionLineupProber(
 	return &productionLineupProber{
 		settings:  settings,
 		runtime:   ward.NewCLIRuntime(resolved),
-		authorize: productionRigRuntimeAuthorizer(stateRoot, rigTokenFile),
+		authorize: ProductionRigRuntimeAuthorizer(stateRoot, rigTokenFile),
 		now:       time.Now,
 	}, nil
 }

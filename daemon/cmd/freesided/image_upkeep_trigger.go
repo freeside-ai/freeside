@@ -34,11 +34,11 @@ func newImageUpkeepTrigger() *imageUpkeepTrigger {
 	}
 }
 
-// wake is signet's image-upkeep wake. It never blocks: a wake already
+// Wake is signet's image-upkeep wake. It never blocks: a wake already
 // pending covers this one, because the pass it runs reads the current
 // adoptions. The wake is a latency hint; the start pass and the doctor's
 // schedule cover a missed one.
-func (t *imageUpkeepTrigger) wake() {
+func (t *imageUpkeepTrigger) Wake() {
 	select {
 	case t.rerun <- struct{}{}:
 	default:
@@ -62,11 +62,11 @@ func (t *imageUpkeepTrigger) tipAdvanced(_ context.Context, observation domain.R
 	}
 }
 
-// run is the worker: the start pass, then one pass per handed-off tip or
+// Run is the worker: the start pass, then one pass per handed-off tip or
 // wake, until ctx ends. A failed pass is not fatal; the doctor's schedule retries. A tip
 // handed off but not yet run when the daemon stops is covered by the next
 // start pass, which reads the tip itself.
-func (t *imageUpkeepTrigger) run(ctx context.Context, upkeep *engine.ImageUpkeep, logger *slog.Logger) {
+func (t *imageUpkeepTrigger) Run(ctx context.Context, upkeep *engine.ImageUpkeep, logger *slog.Logger) {
 	if err := upkeep.RunAll(ctx); err != nil && ctx.Err() == nil {
 		logger.Warn("image upkeep start pass failed", "error", err)
 	}

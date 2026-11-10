@@ -36,8 +36,8 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	return runSetupCommand(
 		ctx, args, stdin, stdout, stderr,
 		&http.Client{Timeout: 30 * time.Second},
-		defaultGitHubAPIBase,
-		defaultGitHubRemoteBase,
+		DefaultGitHubAPIBase,
+		DefaultGitHubRemoteBase,
 	)
 }
 
@@ -183,7 +183,7 @@ func runSetupCommand(
 			},
 			*operator,
 			*registrationRetry,
-			publish.Manifest{URL: defaultGitHubRemoteBase + "/freeside-ai/freeside"},
+			publish.Manifest{URL: DefaultGitHubRemoteBase + "/freeside-ai/freeside"},
 		)
 		if err != nil {
 			return err

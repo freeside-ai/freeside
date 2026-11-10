@@ -21,14 +21,14 @@ import (
 // fail loudly rather than returning empty results: an empty store must
 // reach no observer at all, and a silent stub would hide it if one day it
 // did.
-func idleActiveResourceReconciler(t *testing.T) activeResourceReconciler {
+func idleActiveResourceReconciler(t *testing.T) ActiveResourceReconciler {
 	t.Helper()
-	return activeResourceReconciler{
-		store: schedTestStore(t),
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	return ActiveResourceReconciler{
+		Store: schedTestStore(t),
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			return publish.PullObservation{}, errors.New("no ready item should reach an observer")
 		},
-		now: func() time.Time { return time.Now().UTC() },
+		Now: func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -112,15 +112,15 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 			domain.CompletionBoundPRMerged, nil,
 		)
 		var merged atomic.Bool
-		reconciler := activeResourceReconciler{
-			store: st,
-			pull: func(context.Context, string, int) (publish.PullObservation, error) {
+		reconciler := ActiveResourceReconciler{
+			Store: st,
+			Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 				if merged.Load() {
 					return exactPull("closed", true), nil
 				}
 				return exactPull("open", false), nil
 			},
-			now: func() time.Time { return time.Now().UTC() },
+			Now: func() time.Time { return time.Now().UTC() },
 		}
 
 		var out lockedBuffer
@@ -238,16 +238,16 @@ func TestActiveResourceRunWakesForNewReadyItem(t *testing.T) {
 	t.Parallel()
 	st := schedTestStore(t)
 	observed := make(chan struct{}, 1)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			select {
 			case observed <- struct{}{}:
 			default:
 			}
 			return exactPull("open", false), nil
 		},
-		now: func() time.Time { return time.Now().UTC() },
+		Now: func() time.Time { return time.Now().UTC() },
 	}
 
 	const (

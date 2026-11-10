@@ -15,7 +15,7 @@ import (
 // No paired client commanded it, so it names the command.
 const agentRetirementDevice = domain.DeviceID("auth-adopt-retirement")
 
-// legacyOpenTasks groups the open tasks by the flag-era identity that owns
+// LegacyOpenTasks groups the open tasks by the flag-era identity that owns
 // them. A task is open until a task-level decision (completed, stopped,
 // abandoned) closes it. Its owner is read from its newest admission: a
 // legacy one (an identity and no agent binding) names the owner, and an
@@ -23,7 +23,7 @@ const agentRetirementDevice = domain.DeviceID("auth-adopt-retirement")
 // flag-era owner. Ownership is read from admissions alone: a review record's
 // admission snapshot names only an identity the lineup selected, never a
 // flag-era one, and a legacy review record names none.
-func legacyOpenTasks(ctx context.Context, tx *store.ReadTx) (map[domain.AuthIdentityID][]domain.Task, error) {
+func LegacyOpenTasks(ctx context.Context, tx *store.ReadTx) (map[domain.AuthIdentityID][]domain.Task, error) {
 	tasks, err := tx.ListTasks(ctx)
 	if err != nil {
 		return nil, err
@@ -69,7 +69,7 @@ func stopRetiredTasks(
 ) ([]domain.TaskID, error) {
 	var tasks []domain.Task
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		owned, err := legacyOpenTasks(ctx, tx)
+		owned, err := LegacyOpenTasks(ctx, tx)
 		tasks = owned[identity]
 		return err
 	}); err != nil {

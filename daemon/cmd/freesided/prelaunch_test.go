@@ -969,9 +969,9 @@ func TestPrelaunchNamesTheTreeMissingOnlyForAnUnresolvedLineup(t *testing.T) {
 		err  error
 		tree bool
 	}{
-		"unresolved role": {&roleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}, true},
+		"unresolved role": {&RoleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}, true},
 		"unreadable":      {errors.New("store unreadable"), false},
-		"marked generation": {&roleAdmissionError{Role: domain.RoleReviewer, Err: &domain.GenerationIntegrityMarkedError{
+		"marked generation": {&RoleAdmissionError{Role: domain.RoleReviewer, Err: &domain.GenerationIntegrityMarkedError{
 			Mark: domain.GenerationIntegrityMark{EnrollmentID: "marked/codex_cli", Ordinal: 2, Finding: domain.CredentialIntegrityCorruption},
 		}}, false},
 	}

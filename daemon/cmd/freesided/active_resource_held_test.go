@@ -109,18 +109,18 @@ func TestActiveResourceRecordsHeldPullRequestEndAndLeavesHoldOpen(t *testing.T) 
 			st := schedTestStore(t)
 			item := heldRun(t, st, true, nil)
 			pullCalls := 0
-			reconciler := activeResourceReconciler{
-				store: st,
-				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			reconciler := ActiveResourceReconciler{
+				Store: st,
+				Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 					pullCalls++
 					return exactPull("closed", tc.merged), nil
 				},
-				now: func() time.Time { return activeResourceTestTime },
+				Now: func() time.Time { return activeResourceTestTime },
 			}
 			for pass := range 3 {
 				result, err := reconciler.Reconcile(ctx)
-				if err != nil || len(result.failures) != 0 {
-					t.Fatalf("pass %d Reconcile = %v, %v", pass, result.failures, err)
+				if err != nil || len(result.Failures) != 0 {
+					t.Fatalf("pass %d Reconcile = %v, %v", pass, result.Failures, err)
 				}
 				if result.operatorActive {
 					t.Fatalf("pass %d: a held run reported operator activity", pass)
@@ -147,9 +147,9 @@ func TestActiveResourceCompletesDeclaredHeldRun(t *testing.T) {
 	item := heldRun(t, st, true, &boundIssue)
 	pullCalls := 0
 	issueClosed := false
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("closed", true), nil
 		},
@@ -161,7 +161,7 @@ func TestActiveResourceCompletesDeclaredHeldRun(t *testing.T) {
 				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
 			}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -196,13 +196,13 @@ func TestActiveResourceSkipsHoldWithoutBinding(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := heldRun(t, st, false, nil)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			t.Fatal("polled a hold whose binding is not recorded")
 			return publish.PullObservation{}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -251,13 +251,13 @@ func TestActiveResourceObservesHeldRunWithReadyItemOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	pullCalls := 0
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			pullCalls++
 			return exactPull("open", false), nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
@@ -303,13 +303,13 @@ func TestActiveResourceRefusesUnprovableHeldBinding(t *testing.T) {
 		t.Fatal(errors.Join(updateErr, closeErr))
 	}
 
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
 			t.Fatal("polled a pull request through an unprovable binding")
 			return publish.PullObservation{}, nil
 		},
-		now: func() time.Time { return activeResourceTestTime },
+		Now: func() time.Time { return activeResourceTestTime },
 	}
 	if _, err := reconciler.Reconcile(ctx); err == nil {
 		t.Fatal("an unprovable held binding went unreported")

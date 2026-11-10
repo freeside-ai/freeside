@@ -21,11 +21,11 @@ func TestProductionSpecificationDeliveryValidatorRejectsPromptOverflow(t *testin
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	priorBody := []byte(strings.Repeat("r", 1<<20))
 	putDeliveryArtifact(t, st, blobs, "research-prompt-overflow", priorBody)
-	materializer, err := productionMaterializer(blobs)
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionSpecificationDeliveryValidator(materializer)(t.Context(),
+	err = ProductionSpecificationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, []domain.Digest{
 			domain.Digest(contentaddr.Sum(priorBody)),
 		}))
@@ -45,11 +45,11 @@ func TestProductionSpecificationDeliveryValidatorRejectsAggregateOverflow(t *tes
 			domain.ArtifactID("research-aggregate-"+string(rune('a'+i))), body)
 		prior[i] = domain.Digest(contentaddr.Sum(body))
 	}
-	materializer, err := productionMaterializer(blobs)
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionSpecificationDeliveryValidator(materializer)(t.Context(),
+	err = ProductionSpecificationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, prior))
 	if !errors.Is(err, engine.ErrSpecificationInputUndeliverable) ||
 		!errors.Is(err, exec.ErrInputTooLarge) {
@@ -62,11 +62,11 @@ func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.
 	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
 	priorBody := []byte(strings.Repeat("r", 1<<20))
 	putDeliveryArtifact(t, st, blobs, "remediation-prompt-overflow", priorBody)
-	materializer, err := productionMaterializer(blobs)
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionImplementationDeliveryValidator(materializer)(t.Context(),
+	err = ProductionImplementationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, []domain.Digest{
 			domain.Digest(contentaddr.Sum(priorBody)),
 		}))
@@ -84,11 +84,11 @@ func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t
 	if _, err := blobs.Put(run.SpecDigest, bytes.NewReader(largeSpec)); err != nil {
 		t.Fatal(err)
 	}
-	materializer, err := productionMaterializer(blobs)
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionImplementationDeliveryValidator(materializer)(t.Context(),
+	err = ProductionImplementationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, nil))
 	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
 		!errors.Is(err, claude.ErrUnsupportedStart) {
@@ -106,11 +106,11 @@ func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testi
 			domain.ArtifactID("remediation-aggregate-"+string(rune('a'+i))), body)
 		prior[i] = domain.Digest(contentaddr.Sum(body))
 	}
-	materializer, err := productionMaterializer(blobs)
+	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = productionImplementationDeliveryValidator(materializer)(t.Context(),
+	err = ProductionImplementationDeliveryValidator(materializer)(t.Context(),
 		deliveryStartSpec(t, run, promptDigest, prior))
 	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
 		!errors.Is(err, exec.ErrInputTooLarge) {

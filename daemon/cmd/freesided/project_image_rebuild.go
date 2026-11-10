@@ -27,7 +27,7 @@ import (
 // The builder holds no token source. A rebuild reads the candidate from the
 // lane's own checkout and never reaches the forge, so it carries no GitHub
 // authority at all.
-func newProjectImageRebuild(cfg claudeDriverConfig, st *store.Store) (*engine.ProjectImageRebuild, error) {
+func newProjectImageRebuild(cfg ClaudeDriverConfig, st *store.Store) (*engine.ProjectImageRebuild, error) {
 	if cfg.Rebuild.BaseBuildRef == "" {
 		return nil, nil
 	}
@@ -68,8 +68,8 @@ func composeImageUpkeep(
 	st *store.Store,
 	attention *signet.Service,
 	blobs signet.EvidenceBlobWriter,
-	cfg claudeStartupConfig,
-	wiring *claudeComposition,
+	cfg ClaudeStartupConfig,
+	wiring *ClaudeComposition,
 	rebuild *engine.ProjectImageRebuild,
 	manualProjects map[domain.ProjectID]engine.ManualInitiator,
 	doctorLock *sync.Mutex,
@@ -94,7 +94,7 @@ func composeImageUpkeep(
 		},
 		Checkout: wiring.fetchTip,
 		NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
-			return ward.NewProjectImageRoom(wiring.containerBin, image, size, cfg.Logger)
+			return ward.NewProjectImageRoom(wiring.ContainerBin, image, size, cfg.Logger)
 		},
 		Policy:            policy,
 		PreparationDigest: projectimage.PreparationDigest(),
@@ -103,7 +103,7 @@ func composeImageUpkeep(
 			doctorLock.Lock()
 			defer doctorLock.Unlock()
 			return (operations.Doctor{
-				Store: st, Attention: attention, ProjectID: schedulerSystemProjectID,
+				Store: st, Attention: attention, ProjectID: SchedulerSystemProjectID,
 				Mode: cfg.Claude.OperatingMode, Now: cfg.Now,
 			}).ConvergeImageUpkeep(ctx, fault)
 		},
@@ -116,7 +116,7 @@ func composeImageUpkeep(
 	// submitted.
 	if wiring.selectImage != nil {
 		upkeep.SubmitMaintenance = func(ctx context.Context, refusal domain.ImageUpkeepRefusal) error {
-			project, ok := imageRepairProject(manualProjects)
+			project, ok := ImageRepairProject(manualProjects)
 			if !ok {
 				return fmt.Errorf("no project is configured for manual submission: %w", store.ErrNotFound)
 			}
@@ -126,30 +126,30 @@ func composeImageUpkeep(
 		upkeep.MaintenancePending = func(
 			ctx context.Context, refusal domain.ImageUpkeepRefusal,
 		) (domain.Digest, domain.TaskID, bool, error) {
-			return pendingImageRepairTask(ctx, st, refusal)
+			return PendingImageRepairTask(ctx, st, refusal)
 		}
 	}
 	upkeep.AdoptionPending = upkeep.PendingAdoption
 	return upkeep, nil
 }
 
-// imageRepairProject is the project a maintenance task is submitted to: the
+// ImageRepairProject is the project a maintenance task is submitted to: the
 // first configured manual-submission project in ProjectID order. Every
 // configured project shares the daemon's one repository (imageUpkeepPolicy
 // already assumes this), and the store's daemon-origin gate refuses a
 // project on another repository.
-func imageRepairProject(projects map[domain.ProjectID]engine.ManualInitiator) (domain.ProjectID, bool) {
+func ImageRepairProject(projects map[domain.ProjectID]engine.ManualInitiator) (domain.ProjectID, bool) {
 	if len(projects) == 0 {
 		return "", false
 	}
 	return slices.Min(slices.Collect(maps.Keys(projects))), true
 }
 
-// pendingImageRepairTask names the open maintenance task for the image a
+// PendingImageRepairTask names the open maintenance task for the image a
 // refusal was measured from, and the refusal that task was opened for, so
 // other writer attempts no image serves hold on it. A cancelled, completed,
 // or abandoned task resolves nothing, so they go back to the ordinary hold.
-func pendingImageRepairTask(
+func PendingImageRepairTask(
 	ctx context.Context, st *store.Store, refusal domain.ImageUpkeepRefusal,
 ) (domain.Digest, domain.TaskID, bool, error) {
 	var (
@@ -168,7 +168,7 @@ func pendingImageRepairTask(
 // raised in, in a stable order: the label-intake projects of the daemon's
 // repository, then the manual-submission projects. Upkeep takes the first
 // one registered for the repository.
-func imageUpkeepProjects(cfg claudeStartupConfig, manualProjects map[domain.ProjectID]engine.ManualInitiator) []domain.ProjectID {
+func imageUpkeepProjects(cfg ClaudeStartupConfig, manualProjects map[domain.ProjectID]engine.ManualInitiator) []domain.ProjectID {
 	var projects []domain.ProjectID
 	for _, initiator := range cfg.IntakeInitiators {
 		if initiator.RepositoryID == cfg.Claude.RepositoryID {

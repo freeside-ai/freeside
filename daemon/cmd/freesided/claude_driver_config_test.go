@@ -47,7 +47,7 @@ func TestClaudeStoreOptionsCarryTheSelectedModePolicy(t *testing.T) {
 			t.Parallel()
 			cfg := config{
 				DBPath: "/var/freeside/freeside.db",
-				Claude: &claudeDriverConfig{OperatingMode: test.mode},
+				Claude: &ClaudeDriverConfig{OperatingMode: test.mode},
 			}
 			opts, err := cfg.storeOptions()
 			if err != nil {
@@ -65,8 +65,8 @@ func TestClaudeStoreOptionsCarryTheSelectedModePolicy(t *testing.T) {
 					t.Errorf("configured floor lacks %q", capability)
 				}
 			}
-			if !slices.Equal(admissionFloor(test.mode), test.floor) {
-				t.Errorf("engine floor = %v, want %v", admissionFloor(test.mode), test.floor)
+			if !slices.Equal(AdmissionFloor(test.mode), test.floor) {
+				t.Errorf("engine floor = %v, want %v", AdmissionFloor(test.mode), test.floor)
 			}
 			if !slices.Contains(opts.ApprovedCredentialModes, domain.CredentialSubscriptionContained) {
 				t.Errorf("approved credential modes = %v, want subscription_contained",
@@ -74,8 +74,8 @@ func TestClaudeStoreOptionsCarryTheSelectedModePolicy(t *testing.T) {
 			}
 		})
 	}
-	if slices.Contains(attendedAdmissionFloor, exec.CapNetworklessExport) ||
-		slices.Contains(attendedAdmissionFloor, exec.CapEnforcedProviderEgress) {
+	if slices.Contains(AttendedAdmissionFloor, exec.CapNetworklessExport) ||
+		slices.Contains(AttendedAdmissionFloor, exec.CapEnforcedProviderEgress) {
 		t.Fatal("attended_dev floor includes unattended-only conformance capabilities")
 	}
 
@@ -91,7 +91,7 @@ func TestClaudeStoreOptionsCarryTheSelectedModePolicy(t *testing.T) {
 
 func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 	t.Parallel()
-	valid := claudeDriverConfig{ //nolint:gosec // G101: fixture paths and digests, no credential material
+	valid := ClaudeDriverConfig{ //nolint:gosec // G101: fixture paths and digests, no credential material
 		AgentImage:                     domain.ImageRef("ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)),
 		ExporterImage:                  "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		SeedRoot:                       "/var/freeside/seeds",
@@ -113,68 +113,68 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		ReviewWorkspaceSizeMB: 8192,
 		OperatingMode:         domain.ModeUnattended,
 	}
-	if err := valid.validate(); err != nil {
+	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 	// Every binding that lands in a durable admission record must be
 	// operator-supplied: a default would record an unaudited value.
-	tests := map[string]func(*claudeDriverConfig){
-		"agent image":                  func(c *claudeDriverConfig) { c.AgentImage = "" },
-		"exporter image":               func(c *claudeDriverConfig) { c.ExporterImage = "" },
-		"seed root":                    func(c *claudeDriverConfig) { c.SeedRoot = "" },
-		"state dir":                    func(c *claudeDriverConfig) { c.StateDir = "" },
-		"endpoints":                    func(c *claudeDriverConfig) { c.ProviderEndpoints = nil },
-		"prompt package":               func(c *claudeDriverConfig) { c.PromptPackageFile = "" },
-		"specification prompt package": func(c *claudeDriverConfig) { c.SpecificationPromptPackageFile = "" },
-		"remediation prompt package":   func(c *claudeDriverConfig) { c.RemediationPromptPackageFile = "" },
-		"instructions":                 func(c *claudeDriverConfig) { c.VendorInstructions = "" },
-		"repository id":                func(c *claudeDriverConfig) { c.RepositoryID = 0 },
-		"base sha":                     func(c *claudeDriverConfig) { c.BaseSHA = "" },
-		"repository shape": func(c *claudeDriverConfig) {
+	tests := map[string]func(*ClaudeDriverConfig){
+		"agent image":                  func(c *ClaudeDriverConfig) { c.AgentImage = "" },
+		"exporter image":               func(c *ClaudeDriverConfig) { c.ExporterImage = "" },
+		"seed root":                    func(c *ClaudeDriverConfig) { c.SeedRoot = "" },
+		"state dir":                    func(c *ClaudeDriverConfig) { c.StateDir = "" },
+		"endpoints":                    func(c *ClaudeDriverConfig) { c.ProviderEndpoints = nil },
+		"prompt package":               func(c *ClaudeDriverConfig) { c.PromptPackageFile = "" },
+		"specification prompt package": func(c *ClaudeDriverConfig) { c.SpecificationPromptPackageFile = "" },
+		"remediation prompt package":   func(c *ClaudeDriverConfig) { c.RemediationPromptPackageFile = "" },
+		"instructions":                 func(c *ClaudeDriverConfig) { c.VendorInstructions = "" },
+		"repository id":                func(c *ClaudeDriverConfig) { c.RepositoryID = 0 },
+		"base sha":                     func(c *ClaudeDriverConfig) { c.BaseSHA = "" },
+		"repository shape": func(c *ClaudeDriverConfig) {
 			c.Repo = ".unsafe/repo"
 		},
-		"base ref shape": func(c *claudeDriverConfig) {
+		"base ref shape": func(c *ClaudeDriverConfig) {
 			c.BaseRef = "refs/heads/main"
 		},
-		"base sha shape": func(c *claudeDriverConfig) {
+		"base sha shape": func(c *ClaudeDriverConfig) {
 			c.BaseSHA = strings.Repeat("D", 40)
 		},
 		// The lineup names every identity, so the tree it is read from is a
 		// required binding.
-		"agent tree":        func(c *claudeDriverConfig) { c.AgentTreeCheckout = "" },
-		"agent tree commit": func(c *claudeDriverConfig) { c.AgentTreeCommit = "" },
-		"agent tree shape":  func(c *claudeDriverConfig) { c.AgentTreeCheckout = "relative/checkout" },
-		"review image":      func(c *claudeDriverConfig) { c.ReviewImage = "" },
-		"review image pin": func(c *claudeDriverConfig) {
+		"agent tree":        func(c *ClaudeDriverConfig) { c.AgentTreeCheckout = "" },
+		"agent tree commit": func(c *ClaudeDriverConfig) { c.AgentTreeCommit = "" },
+		"agent tree shape":  func(c *ClaudeDriverConfig) { c.AgentTreeCheckout = "relative/checkout" },
+		"review image":      func(c *ClaudeDriverConfig) { c.ReviewImage = "" },
+		"review image pin": func(c *ClaudeDriverConfig) {
 			c.ReviewImage = "ghcr.io/x/codex:latest"
 		},
-		"review input root":       func(c *claudeDriverConfig) { c.ReviewInputRoot = "" },
-		"review input root shape": func(c *claudeDriverConfig) { c.ReviewInputRoot = "relative" },
-		"review auth mode":        func(c *claudeDriverConfig) { c.ReviewAuthMode = "" },
-		"review auth snapshot":    func(c *claudeDriverConfig) { c.ReviewAuthSnapshot = "" },
-		"review instructions":     func(c *claudeDriverConfig) { c.ReviewInstructions = "" },
-		"review workspace size":   func(c *claudeDriverConfig) { c.ReviewWorkspaceSizeMB = 0 },
-		"credentials dir":         func(c *claudeDriverConfig) { c.CredentialsDir = "" },
-		"allowed paths":           func(c *claudeDriverConfig) { c.AllowedPaths = nil },
+		"review input root":       func(c *ClaudeDriverConfig) { c.ReviewInputRoot = "" },
+		"review input root shape": func(c *ClaudeDriverConfig) { c.ReviewInputRoot = "relative" },
+		"review auth mode":        func(c *ClaudeDriverConfig) { c.ReviewAuthMode = "" },
+		"review auth snapshot":    func(c *ClaudeDriverConfig) { c.ReviewAuthSnapshot = "" },
+		"review instructions":     func(c *ClaudeDriverConfig) { c.ReviewInstructions = "" },
+		"review workspace size":   func(c *ClaudeDriverConfig) { c.ReviewWorkspaceSizeMB = 0 },
+		"credentials dir":         func(c *ClaudeDriverConfig) { c.CredentialsDir = "" },
+		"allowed paths":           func(c *ClaudeDriverConfig) { c.AllowedPaths = nil },
 		// Match-everything equivalents do not name the paths unattended work
 		// may rewrite, even when their spelling is not the literal "**".
-		"match-everything allowlist": func(c *claudeDriverConfig) { c.AllowedPaths = []string{"**/*"} },
-		"malformed allowlist":        func(c *claudeDriverConfig) { c.AllowedPaths = []string{"daemon/[abc"} },
+		"match-everything allowlist": func(c *ClaudeDriverConfig) { c.AllowedPaths = []string{"**/*"} },
+		"malformed allowlist":        func(c *ClaudeDriverConfig) { c.AllowedPaths = []string{"daemon/[abc"} },
 		// The rebuild's egress flags mean nothing without the base to build
 		// from, and a malformed one would refuse every rebuild at run time.
-		"build proxy without base build ref": func(c *claudeDriverConfig) {
+		"build proxy without base build ref": func(c *ClaudeDriverConfig) {
 			c.Rebuild.BuildProxy = "http://192.168.64.1:3128"
 		},
-		"build dns without base build ref": func(c *claudeDriverConfig) { c.Rebuild.DNS = []string{"192.168.64.1"} },
-		"base build ref shape": func(c *claudeDriverConfig) {
+		"build dns without base build ref": func(c *ClaudeDriverConfig) { c.Rebuild.DNS = []string{"192.168.64.1"} },
+		"base build ref shape": func(c *ClaudeDriverConfig) {
 			c.Rebuild.BaseBuildRef = "ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)
 		},
-		"build proxy scheme": func(c *claudeDriverConfig) {
+		"build proxy scheme": func(c *ClaudeDriverConfig) {
 			c.Rebuild = projectimage.BuildInputs{
 				BaseBuildRef: "local/agent:test", BuildProxy: "https://192.168.64.1:3128",
 			}
 		},
-		"build dns shape": func(c *claudeDriverConfig) {
+		"build dns shape": func(c *ClaudeDriverConfig) {
 			c.Rebuild = projectimage.BuildInputs{BaseBuildRef: "local/agent:test", DNS: []string{"--flag"}}
 		},
 	}
@@ -182,14 +182,14 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 	rebuilding.Rebuild = projectimage.BuildInputs{
 		BaseBuildRef: "local/agent:test", BuildProxy: "http://192.168.64.1:3128", DNS: []string{"192.168.64.1"},
 	}
-	if err := rebuilding.validate(); err != nil {
+	if err := rebuilding.Validate(); err != nil {
 		t.Fatalf("valid rebuild inputs rejected: %v", err)
 	}
 	for name, edit := range tests {
 		t.Run(name, func(t *testing.T) {
 			cfg := valid
 			edit(&cfg)
-			if err := cfg.validate(); err == nil {
+			if err := cfg.Validate(); err == nil {
 				t.Fatalf("config missing %s was accepted", name)
 			}
 		})
@@ -198,7 +198,7 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 
 func TestClaudeDriverConfigAttendedModeDoesNotRequireProductionReview(t *testing.T) {
 	t.Parallel()
-	cfg := claudeDriverConfig{ //nolint:gosec // fixture paths and digests, no credential material
+	cfg := ClaudeDriverConfig{ //nolint:gosec // fixture paths and digests, no credential material
 		AgentImage:                     domain.ImageRef("ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)),
 		ExporterImage:                  "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		SeedRoot:                       "/var/freeside/seeds",
@@ -219,14 +219,14 @@ func TestClaudeDriverConfigAttendedModeDoesNotRequireProductionReview(t *testing
 		CredentialsDir:                 "/var/freeside/creds",
 		OperatingMode:                  domain.ModeAttendedDev,
 	}
-	if err := cfg.validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		t.Fatalf("attended config without production review rejected: %v", err)
 	}
 }
 
 func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 	t.Parallel()
-	cfg := claudeDriverConfig{ //nolint:gosec // fixture paths and digests, no credential material
+	cfg := ClaudeDriverConfig{ //nolint:gosec // fixture paths and digests, no credential material
 		AgentImage:    domain.ImageRef("ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)),
 		ExporterImage: "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		SeedRoot:      "/var/freeside/seeds", StateDir: "/var/freeside/state",
@@ -253,53 +253,53 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,
 		ShadowReviewRate: 0.2,
 	}
-	if err := cfg.validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid shadow config rejected: %v", err)
 	}
-	digests, err := shadowReviewConfigurationDigests(cfg)
+	digests, err := ShadowReviewConfigurationDigests(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	golden.Assert(t, "shadow-review-composition-digest", []byte(digests.approval+"\n"))
-	for name, mutate := range map[string]func(*claudeDriverConfig){
-		"image": func(c *claudeDriverConfig) {
+	golden.Assert(t, "shadow-review-composition-digest", []byte(digests.Approval+"\n"))
+	for name, mutate := range map[string]func(*ClaudeDriverConfig){
+		"image": func(c *ClaudeDriverConfig) {
 			c.ShadowReviewImage = "ghcr.io/x/claude@sha256:" + strings.Repeat("f", 64)
 		},
-		"exporter": func(c *claudeDriverConfig) {
+		"exporter": func(c *ClaudeDriverConfig) {
 			c.ExporterImage = "ghcr.io/x/exporter@sha256:" + strings.Repeat("7", 64)
 		},
-		"model":      func(c *claudeDriverConfig) { c.ShadowReviewModel = "claude-sonnet" },
-		"reasoning":  func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "medium" },
-		"identity":   func(c *claudeDriverConfig) { c.ShadowReviewAuthIdentityID = "auth-other-owner" },
-		"cost owner": func(c *claudeDriverConfig) { c.ShadowReviewCostOwner = "subscription:other" },
-		"workspace":  func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB++ },
-		"rate":       func(c *claudeDriverConfig) { c.ShadowReviewRate = 0.3 },
+		"model":      func(c *ClaudeDriverConfig) { c.ShadowReviewModel = "claude-sonnet" },
+		"reasoning":  func(c *ClaudeDriverConfig) { c.ShadowReviewReasoningEffort = "medium" },
+		"identity":   func(c *ClaudeDriverConfig) { c.ShadowReviewAuthIdentityID = "auth-other-owner" },
+		"cost owner": func(c *ClaudeDriverConfig) { c.ShadowReviewCostOwner = "subscription:other" },
+		"workspace":  func(c *ClaudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB++ },
+		"rate":       func(c *ClaudeDriverConfig) { c.ShadowReviewRate = 0.3 },
 	} {
 		t.Run("digest binds "+name, func(t *testing.T) {
 			changed := cfg
 			mutate(&changed)
-			changedDigests, err := shadowReviewConfigurationDigests(changed)
+			changedDigests, err := ShadowReviewConfigurationDigests(changed)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if changedDigests.approval == digests.approval {
+			if changedDigests.Approval == digests.Approval {
 				t.Fatalf("%s change did not change approval digest", name)
 			}
-			if name == "rate" && changedDigests.runtime != digests.runtime {
+			if name == "rate" && changedDigests.Runtime != digests.Runtime {
 				t.Fatal("selection rate changed ward invocation-runtime digest")
 			}
 		})
 	}
-	for name, mutate := range map[string]func(*claudeDriverConfig){
-		"image":     func(c *claudeDriverConfig) { c.ShadowReviewImage = "" },
-		"snapshot":  func(c *claudeDriverConfig) { c.ShadowReviewAuthSnapshot = "" },
-		"workspace": func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB = 0 },
-		"rate":      func(c *claudeDriverConfig) { c.ShadowReviewRate = 1.1 },
+	for name, mutate := range map[string]func(*ClaudeDriverConfig){
+		"image":     func(c *ClaudeDriverConfig) { c.ShadowReviewImage = "" },
+		"snapshot":  func(c *ClaudeDriverConfig) { c.ShadowReviewAuthSnapshot = "" },
+		"workspace": func(c *ClaudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB = 0 },
+		"rate":      func(c *ClaudeDriverConfig) { c.ShadowReviewRate = 1.1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			invalid := cfg
 			mutate(&invalid)
-			if err := invalid.validate(); err == nil {
+			if err := invalid.Validate(); err == nil {
 				t.Fatalf("shadow configuration missing %s was accepted", name)
 			}
 		})
@@ -310,7 +310,7 @@ func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) 
 	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	cfg := claudeDriverConfig{
+	cfg := ClaudeDriverConfig{
 		OperatingMode: domain.ModeUnattended, Repo: "example/repo", RepositoryID: 44,
 		ExporterImage:   "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		ReviewInputRoot: "/var/freeside/review-inputs", ShadowReviewAuthIdentityID: "auth-claude-owner",
@@ -319,7 +319,7 @@ func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) 
 		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,
 		ShadowReviewRate: 0.2,
 	}
-	digests, err := shadowReviewConfigurationDigests(cfg)
+	digests, err := ShadowReviewConfigurationDigests(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) 
 	approval, err := domain.NewShadowReviewConfigurationApproval(
 		domain.ShadowReviewConfigurationApprovalInput{
 			Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
-			Source: domain.ShadowReviewClaudeLocal, ConfigurationDigest: digests.approval,
+			Source: domain.ShadowReviewClaudeLocal, ConfigurationDigest: digests.Approval,
 		},
 	)
 	if err != nil {
@@ -380,7 +380,7 @@ func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) 
 		t.Fatalf("approved digests = %#v, want %#v", approved, digests)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		return tx.RequireReviewConfigurationApproved(ctx, digests.approval)
+		return tx.RequireReviewConfigurationApproved(ctx, digests.Approval)
 	}); !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
 		t.Fatalf("shadow approval passed routed gate: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestReviewConfigurationApprovalBindsExporterBeforeComposition(t *testing.T)
 	t.Parallel()
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	cfg := claudeDriverConfig{
+	cfg := ClaudeDriverConfig{
 		OperatingMode:   domain.ModeUnattended,
 		Repo:            "example/repo",
 		RepositoryID:    44,
@@ -426,7 +426,7 @@ func TestReviewConfigurationApprovalBindsExporterBeforeComposition(t *testing.T)
 	if _, err := requireApprovedReviewConfiguration(ctx, st, cfg); !errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
 		t.Fatalf("unapproved configuration error = %v, want %v", err, domain.ErrReviewConfigurationUnapproved)
 	}
-	digest, err := claudeReviewConfigurationDigest(cfg)
+	digest, err := ClaudeReviewConfigurationDigest(cfg)
 	if err != nil {
 		t.Fatalf("derive review configuration: %v", err)
 	}
