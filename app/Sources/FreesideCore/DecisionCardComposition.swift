@@ -794,20 +794,43 @@ struct DecisionCardComposition: Equatable {
 
     /// The one action a card's row draws filled, or none (R6). A
     /// recommendation the card draws holds the fill in its own block, so the
-    /// row fills nothing. Without one the fill goes to the type's forward
+    /// row fills nothing, unless the operator holds a pick, when the control
+    /// that sends the picks is filled: on a finding adjudication a held route
+    /// pick (`holdsPick`) moves the fill to Choose Another Route, because the
+    /// acceptance sends the proposed routes and drops the pick. Without a
+    /// recommendation the fill goes to the type's forward
     /// action, where the row offers it and it needs no confirmation: a
     /// destructive action is never filled. A stale final review fills
     /// nothing: the proof no longer covers the head `View PR` would open. `requested_decision` may repeat
     /// an action, so the row fills only the first and no card draws two.
     static func filledAction(
-        for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking
+        for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking,
+        holdsPick: Bool = false
     ) -> Components.Schemas.Action? {
-        guard !isStale(item), ranking.recommended == nil,
-            let forward = forwardAction(for: item._type),
+        guard !isStale(item) else { return nil }
+        if ranking.recommended != nil {
+            let picksFill =
+                holdsPick && item._type == .finding_adjudication
+                && ranking.principal.contains(.choose_alternative_route)
+            return picksFill ? .choose_alternative_route : nil
+        }
+        guard let forward = forwardAction(for: item._type),
             ranking.principal.contains(forward) || ranking.reviewing == forward,
             AttentionDisplay.confirmationConsequence(forward, for: item) == nil
         else { return nil }
         return forward
+    }
+
+    /// Whether the recommendation's button takes the card's one fill (R6).
+    /// The recommendation block and the iPhone footer that stands in for it
+    /// both read this, so neither draws a fill the row already holds. A
+    /// destructive recommendation keeps its own tone whatever this says.
+    static func recommendationIsFilled(
+        for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking,
+        holdsPick: Bool
+    ) -> Bool {
+        ranking.recommended != nil
+            && filledAction(for: item, ranking: ranking, holdsPick: holdsPick) == nil
     }
 
     /// The type's one forward action, as R6 lists them: the supported next

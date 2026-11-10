@@ -2465,13 +2465,23 @@ struct DecisionDetailView: View {
         Binding(
             get: { alternativeSelections[proposal.finding_id] ?? proposal.route },
             set: { route in
-                if route == proposal.route {
-                    alternativeSelections.removeValue(forKey: proposal.finding_id)
-                } else {
-                    alternativeSelections[proposal.finding_id] = route
-                }
+                alternativeSelections = Self.selections(
+                    alternativeSelections, picking: route, for: proposal)
             }
         )
+    }
+
+    /// The held picks after the operator picks `route` for a finding: a
+    /// route other than the proposed one is held, and the proposed route
+    /// clears the pick, so the fill returns to the acceptance (R6).
+    static func selections(
+        _ selections: [String: Components.Schemas.AdjudicationRoute],
+        picking route: Components.Schemas.AdjudicationRoute,
+        for proposal: Components.Schemas.FindingAdjudicationProposal
+    ) -> [String: Components.Schemas.AdjudicationRoute] {
+        var next = selections
+        next[proposal.finding_id] = route == proposal.route ? nil : route
+        return next
     }
 
     private func selectedAlternatives(

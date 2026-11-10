@@ -716,6 +716,100 @@ import Testing
         #expect(DecisionCardComposition.filledAction(for: item, ranking: recommending) == nil)
     }
 
+    /// R6's pick clause (#3011): the recommendation's action is filled
+    /// unless the operator holds a pick, when the control that sends the
+    /// picks is filled. Pressing a filled acceptance would send the proposed
+    /// routes and drop the pick. The pick is held and cleared the way the
+    /// card's route picker does it, and counted from the selections on
+    /// findings the binding lists.
+    @Test @MainActor func aHeldFindingPickMovesTheFillToChooseAnotherRoute() throws {
+        let item = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let binding = try #require(item.finding_adjudication?.value1)
+        let finding = try #require(binding.proposals.first)
+        #expect(finding.route != .dispute)
+        let picked = DecisionDetailView.selections([:], picking: .dispute, for: finding)
+        let pickedBack = DecisionDetailView.selections(picked, picking: finding.route, for: finding)
+        let held = !DecisionDetailView.selectedAlternatives(binding, selections: picked).isEmpty
+        let cleared = !DecisionDetailView.selectedAlternatives(binding, selections: pickedBack).isEmpty
+        #expect(held)
+        #expect(!cleared)
+
+        let recommending = ranking(item, recommending: .accept_recommended_route)
+        #expect(recommending.principal.contains(.choose_alternative_route))
+        let unrecommended = ranking(item)
+
+        // With a pick: Choose Another Route is filled, the acceptance outlined.
+        #expect(
+            DecisionCardComposition.filledAction(for: item, ranking: recommending, holdsPick: held)
+                == .choose_alternative_route)
+        #expect(
+            !DecisionCardComposition.recommendationIsFilled(
+                for: item, ranking: recommending, holdsPick: held))
+
+        // Without a pick, and once it is cleared: the acceptance is filled.
+        for holdsPick in [false, cleared] {
+            #expect(
+                DecisionCardComposition.filledAction(
+                    for: item, ranking: recommending, holdsPick: holdsPick) == nil)
+            #expect(
+                DecisionCardComposition.recommendationIsFilled(
+                    for: item, ranking: recommending, holdsPick: holdsPick))
+        }
+
+        // No recommendation drawn: nothing is filled, with or without a pick.
+        // A recommendation that did not revalidate reaches the ranking as
+        // none (`unrecommended`); one the served surface no longer offers is
+        // dropped by the ranking (`unserved`).
+        let unserved = DecisionActionRanking(
+            requested: item.requested_decision, recommendedAction: .accept_recommended_route,
+            servedActions: item.requested_decision.filter { $0 != .accept_recommended_route })
+        #expect(unserved.recommended == nil)
+        for noRecommendation in [unrecommended, unserved] {
+            for holdsPick in [false, true] {
+                #expect(
+                    DecisionCardComposition.filledAction(
+                        for: item, ranking: noRecommendation, holdsPick: holdsPick) == nil)
+                #expect(
+                    !DecisionCardComposition.recommendationIsFilled(
+                        for: item, ranking: noRecommendation, holdsPick: holdsPick))
+            }
+        }
+
+        // One fill: the row and the recommendation never both take it.
+        for candidate in [recommending, unrecommended, unserved] {
+            for holdsPick in [false, true] {
+                let rowFilled =
+                    DecisionCardComposition.filledAction(
+                        for: item, ranking: candidate, holdsPick: holdsPick) != nil
+                let recommendationFilled = DecisionCardComposition.recommendationIsFilled(
+                    for: item, ranking: candidate, holdsPick: holdsPick)
+                #expect(!(rowFilled && recommendationFilled))
+            }
+        }
+    }
+
+    /// A held pick moves the fill on a finding adjudication only: every
+    /// other type fills what it fills without one, recommended or not, and
+    /// still draws at most one filled control.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func aHeldPickMovesNoFillOnOtherTypes(type: Components.Schemas.AttentionType) {
+        guard type != .finding_adjudication else { return }
+        let item = AttentionFixtures.fixture(type: type).item
+        var rankings = [ranking(item)]
+        if let recommended = item.requested_decision.first {
+            rankings.append(ranking(item, recommending: recommended))
+        }
+        for candidate in rankings {
+            let filled = DecisionCardComposition.filledAction(
+                for: item, ranking: candidate, holdsPick: true)
+            #expect(filled == DecisionCardComposition.filledAction(for: item, ranking: candidate))
+            let recommendationFilled = DecisionCardComposition.recommendationIsFilled(
+                for: item, ranking: candidate, holdsPick: true)
+            #expect(recommendationFilled == (candidate.recommended != nil))
+            #expect(!(filled != nil && recommendationFilled))
+        }
+    }
+
     /// The fill is never a destructive action, and never one the row does
     /// not draw: an action under More Actions cannot be the filled button.
     @Test func theFillIsNeverDestructiveOrOutOfTheRow() {
