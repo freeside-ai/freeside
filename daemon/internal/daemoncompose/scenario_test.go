@@ -15,11 +15,14 @@ func TestListScenarios(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "clean\t" + CleanScenario().Description + "\n" +
-		"quota-park\t" + QuotaParkScenario().Description + "\n"
+		"quota-park\t" + QuotaParkScenario().Description + "\n" +
+		"quota-move\t" + QuotaMoveScenario().Description + "\n" +
+		"quota-no-reset\t" + QuotaNoResetScenario().Description + "\n"
 	if got := out.String(); got != want {
 		t.Fatalf("ListScenarios = %q, want %q", got, want)
 	}
-	if _, err := LookupScenario("nope"); err == nil || !strings.Contains(err.Error(), "not one of: clean, quota-park") {
+	if _, err := LookupScenario("nope"); err == nil ||
+		!strings.Contains(err.Error(), "not one of: clean, quota-park, quota-move, quota-no-reset") {
 		t.Fatalf("LookupScenario(nope) = %v, want the known names", err)
 	}
 }

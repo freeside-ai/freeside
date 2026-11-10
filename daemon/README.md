@@ -1199,8 +1199,24 @@ scenario's name and description:
   the second run held at `quota_window_exhausted` with the pool, the
   window, and the reset. At the reset, the second attempt starts with no
   operator step and runs on as `clean` does, so the run that publishes
-  pull request #101 is the second one. Startup enrolls a client on the
-  scenario identity, since a pool with no enrollment cannot hold the mark.
+  pull request #101 is the second one.
+- **`quota-move`:** `quota-park` with a second subscription and a reset 30
+  minutes after the refusal (#2951), long enough for the operator to move
+  the parked task. The second run's `quota_window_exhausted` hold offers
+  the second subscription's enrollment, `auth-scenario-second/claude_code`,
+  on its own pool. Moving the task there (`move_parked_task`, the app's
+  move on the parked task) records an `alternate_agent_move` implementer
+  line, which `freesided inspect task` shows as `task_line_set`; the second
+  run then starts on that enrollment before the reset and publishes.
+- **`quota-no-reset`:** `clean` with a second subscription, and the
+  provider refuses the first implementation attempt on `five_hour` with no
+  reset (#2951). With no reset to wait for, nothing parks: the first run's
+  `execution_failure` card, cause `quota`, offers
+  `retry_with_alternate_agent` on the second subscription beside discuss
+  and stop. Each pool carries an allowed `five_hour` reading with no
+  reset, so the client has a latest reading to show beside the offers.
+  Choosing the second subscription on the card admits the retry, the
+  campaign's second run, under that enrollment, and it publishes.
 
 The dev instance is the quickest way in:
 
@@ -1240,17 +1256,29 @@ publishes. Fakes stand in for everything that would leave the machine:
   same base commit; their heads differ only in the run id the commit
   message names.
 
-Startup seeds the auth identity, project image, backend conformance, and
-trust profile the gates check, and writes the task's submit inputs beside
-the repository. A restart on the same root finds them in place. The forge
-keeps its refs and pull requests in memory, though, so a restart is
-supported only before approval or after the run publishes; one in between
-loses the forge's state.
+Startup seeds the auth identities, project image, backend and adapter
+conformance, and trust profile the gates check, and writes the task's
+submit inputs beside the repository. Every scenario admits through a
+seeded lineup, as the Claude composition does: the scenario identity is an
+enabled subscription with a `claude_code` enrollment and a current
+generation, and the lineup's writer lines name it. That enrollment also
+lets a pool hold a quota refusal's mark. A scenario with a second
+subscription (`quota-move`, `quota-no-reset`) seeds another enabled
+identity on its own pool, with its own enrollment and generation, and a
+routing policy that orders both enrollments for the implementer. The
+operator's routing-policy, alternate-agent retry, and parked-task move
+commands work against that lineup, and `/agents` serves its catalog. A
+restart on the same root finds them in place, so a root plays the
+scenario that first seeded it: restarting it under another scenario
+seeds nothing new. The forge keeps its refs and pull requests in memory,
+though, so a restart is supported only before approval or after the run
+publishes; one in between loses the forge's state.
 
-> **Caveat: the backend's conformance claim is scripted.** The scenario
-> records the fake backend as conforming to the fresh-VM backend's full
-> capability ceiling, a containment nothing in the process provides. Only
-> the ephemeral guard keeps that claim out of a `dev` or `prod` store:
+> **Caveat: the conformance claims are scripted.** The scenario records the
+> fake backend as conforming to the fresh-VM backend's full capability
+> ceiling, a containment nothing in the process provides, and the Claude
+> ward adapter as having passed conformance, which no launch proved. Only
+> the ephemeral guard keeps those claims out of a `dev` or `prod` store:
 > `-driver scenario` refuses every `-environment` but `ephemeral` before it
 > opens the database. Nothing else protects those stores from it.
 

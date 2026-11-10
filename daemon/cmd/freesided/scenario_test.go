@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,259 @@ func TestScenarioQuotaParkResumes(t *testing.T) {
 	}
 }
 
+// TestScenarioQuotaMoveMovesTheParkedTask plays the quota-move scenario: the
+// refused first attempt parks the task under a hold that offers the other
+// subscription, the operator moves the task there through the daemon's own
+// command hook, and the parked attempt starts on that enrollment before the
+// refused window's reset and publishes.
+func TestScenarioQuotaMoveMovesTheParkedTask(t *testing.T) {
+	t.Parallel()
+	quota := daemoncompose.QuotaMoveScenario()
+	cfg := scenarioConfig(t, &quota)
+	h := startDaemon(t, cfg)
+	submitted := submitAndApproveScenario(t, h, cfg)
+
+	first := waitForScenarioRun(t, h.store, submitted.RunID)
+	parked, err := engine.ProductionAttemptRunID(first.CampaignID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := waitForScenarioHold(t, h.store, parked)
+	window := hold.QuotaWindow
+	if hold.Reason != domain.HoldQuotaWindowExhausted || window == nil || window.Window != quota.QuotaRefusal.Window {
+		t.Fatalf("parked hold = %+v, want quota_window_exhausted on the refused window", hold)
+	}
+	target := otherSubscription(t, quota, window.Pool)
+	offer := domain.AlternateAgentOffer{
+		Enrollment: target.Enrollment.ID, Pool: target.Identity.EffectiveUsagePool(),
+		Harness: domain.HarnessClientClaudeCode, Model: daemoncompose.ScenarioWriterModel,
+		Qualification: domain.AlternateAgentDifferentPool,
+	}
+	if !slices.Contains(window.AlternateAgents, offer) {
+		t.Fatalf("parked hold offers %+v, want %+v among them", window.AlternateAgents, offer)
+	}
+
+	if _, err := h.attention.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "move-scenario", DeviceID: "device-scenario", Kind: domain.CommandKindMoveParkedTask,
+		MoveParkedTask: signet.MoveParkedTaskPayload{
+			TaskID: submitted.TaskID, Choice: &signet.AlternateAgentChoice{EnrollmentID: target.Enrollment.ID},
+		},
+	}); err != nil {
+		t.Fatalf("move_parked_task: %v", err)
+	}
+
+	assertScenarioPublished(t, h.attention, submitted.TaskID, parked)
+	assertStartedBeforeReset(t, h.attention, submitted.TaskID, parked, window.ResetsAt)
+	timeline, err := h.attention.GetTaskTimeline(t.Context(), submitted.TaskID)
+	if err != nil {
+		t.Fatalf("task timeline: %v", err)
+	}
+	var moved *domain.TaskEventTaskLine
+	for _, event := range timeline.Events {
+		if line := event.Line; line != nil && line.Source == domain.TaskLineSourceAlternateAgentMove &&
+			line.Role == domain.RoleImplementer && line.Selection != nil &&
+			line.Selection.EnrollmentID == target.Enrollment.ID {
+			moved = line
+		}
+	}
+	if moved == nil {
+		t.Fatalf("task timeline shows no move of the implementer to %s; events: %+v", target.Enrollment.ID, timeline.Events)
+	}
+	admission := scenarioAdmission(t, h.store, parked)
+	if binding := admission.AgentBinding; binding == nil || binding.EnrollmentID != target.Enrollment.ID ||
+		binding.SelectionSource != domain.AgentSelectionSourceTaskLine {
+		t.Fatalf("parked attempt admission binds %+v, want %s selected by its task line", binding, target.Enrollment.ID)
+	}
+	assertScenarioLineupServed(t, h.attention, quota, target.Enrollment.ID)
+	if err := h.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// TestScenarioQuotaNoResetRaisesTheAlternateAgentCard plays the
+// quota-no-reset scenario: the refusal names no reset and no reading
+// supplies one, so nothing parks and the failure card offers the other
+// subscription beside readings on both pools. The operator retries there
+// from the card through the daemon's own command hook, and the retry is
+// admitted under that enrollment and publishes.
+func TestScenarioQuotaNoResetRaisesTheAlternateAgentCard(t *testing.T) {
+	t.Parallel()
+	quota := daemoncompose.QuotaNoResetScenario()
+	cfg := scenarioConfig(t, &quota)
+	h := startDaemon(t, cfg)
+	submitted := submitAndApproveScenario(t, h, cfg)
+
+	failed := scenarioInvocation(t, h.store, submitted.RunID)
+	card := waitForScenarioItem(t, h.attention, domain.ExecutionFailureItemID(failed))
+	item := card.Item
+	if item.Type != domain.AttentionExecutionFailure || item.ExecutionFailure == nil ||
+		item.ExecutionFailure.Cause != domain.FailureCauseQuota {
+		t.Fatalf("failure card = %+v, want an execution_failure with cause quota", item)
+	}
+	for _, action := range []domain.Action{domain.ActionRetryWithAlternateAgent, domain.ActionStop} {
+		if !item.Offers(action) {
+			t.Fatalf("failure card requests %v, want %s among them", item.RequestedDecision, action)
+		}
+	}
+	refused := scenarioAdmission(t, h.store, submitted.RunID)
+	if refused.AuthIdentityID == nil {
+		t.Fatalf("refused admission %+v names no identity", refused)
+	}
+	target := otherSubscription(t, quota, identityPool(t, h.store, *refused.AuthIdentityID))
+	offer := domain.AlternateAgentOffer{
+		Enrollment: target.Enrollment.ID, Pool: target.Identity.EffectiveUsagePool(),
+		Harness: domain.HarnessClientClaudeCode, Model: daemoncompose.ScenarioWriterModel,
+		Qualification: domain.AlternateAgentDifferentPool,
+	}
+	if !slices.Contains(item.AlternateAgents, offer) {
+		t.Fatalf("failure card offers %+v, want %+v among them", item.AlternateAgents, offer)
+	}
+	retry, err := engine.ProductionAttemptRunID(waitForScenarioRun(t, h.store, submitted.RunID).CampaignID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		if _, found, err := tx.GetRunHold(t.Context(), submitted.RunID); err != nil || found {
+			t.Errorf("refused run hold: found %v, err %v; want none", found, err)
+		}
+		if _, err := tx.GetRun(t.Context(), retry); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("attempt 2 before the decision: err %v, want not found (nothing parks)", err)
+		}
+		for _, subscription := range quota.Subscriptions() {
+			record, err := tx.GetPoolUsageObservation(t.Context(), subscription.Identity.EffectiveUsagePool())
+			if err != nil {
+				return err
+			}
+			shown := slices.ContainsFunc(record.Windows, func(reading domain.WindowReading) bool {
+				return reading.Window == quota.QuotaRefusal.Window && reading.Status == domain.WindowStatusAllowed &&
+					reading.ResetsAt == nil
+			})
+			if !shown {
+				t.Errorf("pool %s readings %+v, want an allowed %s reading with no reset to show beside the card",
+					record.Pool, record.Windows, quota.QuotaRefusal.Window)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.attention.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "retry-scenario", DeviceID: "device-scenario", ExpectedEntityVersion: card.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionRetryWithAlternateAgent, ItemVersion: item.ItemVersion,
+			AlternateAgentChoice: &signet.AlternateAgentChoice{EnrollmentID: target.Enrollment.ID},
+		},
+	}); err != nil {
+		t.Fatalf("retry_with_alternate_agent: %v", err)
+	}
+
+	assertScenarioPublished(t, h.attention, submitted.TaskID, retry)
+	admission := scenarioAdmission(t, h.store, retry)
+	if binding := admission.AgentBinding; binding == nil || binding.EnrollmentID != target.Enrollment.ID ||
+		binding.SelectionSource != domain.AgentSelectionSourceCard {
+		t.Fatalf("retry admission binds %+v, want %s selected by the card", binding, target.Enrollment.ID)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// assertScenarioLineupServed checks the scenario's lineup reaches the
+// client: the agent catalog names its lineup and the second subscription's
+// enrollment, and the operator's routing-policy command, which reads the
+// scenario's selection through the same hook as the move, takes a new order.
+func assertScenarioLineupServed(t *testing.T, attention *signet.Service, sc daemoncompose.Scenario, second domain.ClientEnrollmentID) {
+	t.Helper()
+	snapshot, err := attention.Bootstrap(t.Context())
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	catalog := snapshot.AgentCatalog
+	listed := slices.ContainsFunc(catalog.Enrollments, func(enrollment signet.AgentCatalogEnrollment) bool {
+		return enrollment.EnrollmentID == second
+	})
+	if catalog.LineupRevision == nil || len(catalog.Lineup) == 0 || !listed {
+		t.Fatalf("agent catalog = %+v, want the scenario lineup and enrollment %s", catalog, second)
+	}
+	if snapshot.RoutingPolicy == nil {
+		t.Fatal("bootstrap carries no routing policy, want the scenario's")
+	}
+	revision := snapshot.RoutingPolicy.Policy.Revision
+	var order []domain.ClientEnrollmentID
+	for _, subscription := range slices.Backward(sc.Subscriptions()) {
+		order = append(order, subscription.Enrollment.ID)
+	}
+	if _, err := attention.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "route-scenario", DeviceID: "device-scenario", Kind: domain.CommandKindSetRoutingPolicy,
+		SetRoutingPolicy: signet.SetRoutingPolicyPayload{
+			Roles:            []signet.RoutingPolicyRoleInput{{Role: domain.RoleImplementer, Enrollments: order}},
+			ExpectedRevision: &revision,
+		},
+	}); err != nil {
+		t.Fatalf("set_routing_policy: %v", err)
+	}
+}
+
+// otherSubscription returns the scenario's subscription off the refused
+// pool. The router may have put the first attempt on either one, so the test
+// reads the refused pool from the record instead of assuming it.
+func otherSubscription(t *testing.T, sc daemoncompose.Scenario, refused domain.UsagePoolID) daemoncompose.ScenarioSubscription {
+	t.Helper()
+	for _, subscription := range sc.Subscriptions() {
+		if subscription.Identity.EffectiveUsagePool() != refused {
+			return subscription
+		}
+	}
+	t.Fatalf("scenario %s has no subscription off pool %s", sc.Name, refused)
+	return daemoncompose.ScenarioSubscription{}
+}
+
+func identityPool(t *testing.T, st *store.Store, id domain.AuthIdentityID) domain.UsagePoolID {
+	t.Helper()
+	var pool domain.UsagePoolID
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		identity, err := tx.GetAuthIdentity(t.Context(), id)
+		pool = identity.EffectiveUsagePool()
+		return err
+	}); err != nil {
+		t.Fatalf("read identity %s: %v", id, err)
+	}
+	return pool
+}
+
+// scenarioInvocation waits for the run's first invocation.
+func scenarioInvocation(t *testing.T, st *store.Store, id domain.RunID) domain.InvocationID {
+	t.Helper()
+	deadline := time.Now().Add(scenarioWaitBound)
+	for {
+		for _, stage := range waitForScenarioRun(t, st, id).Stages {
+			for _, attempt := range stage.Attempts {
+				return attempt.InvocationID
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s started no invocation within %s", id, scenarioWaitBound)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// scenarioAdmission reads the admission of the run's first invocation.
+func scenarioAdmission(t *testing.T, st *store.Store, id domain.RunID) domain.ExecutionAdmission {
+	t.Helper()
+	invocation := scenarioInvocation(t, st, id)
+	var admission domain.ExecutionAdmission
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(t.Context(), invocation)
+		return err
+	}); err != nil {
+		t.Fatalf("read admission of %s: %v", invocation, err)
+	}
+	return admission
+}
+
 // assertStartedBeforeReset checks that the parked run's invocation started
 // before the refused window's reset. Once the reset passes, the park lets the
 // attempt start whatever the readings say, so a start at or after it no
@@ -295,38 +549,24 @@ func waitForScenarioHold(t *testing.T, st *store.Store, run domain.RunID) domain
 
 // recordScenarioAllowedReading records a collection that reads the window
 // allowed, after the refusal's mark, which clears the mark before its reset.
-// A reading names a generation of the collecting enrollment, so the test
-// adopts one first; the scenario seeds none.
+// A reading names the collector's current generation, which seeding adopted.
 func recordScenarioAllowedReading(t *testing.T, st *store.Store, pool domain.UsagePoolID, window string) {
 	t.Helper()
 	ctx := t.Context()
-	manifest := domain.Digest("sha256:" + strings.Repeat("5", 64))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		at := time.Now().UTC()
-		lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, daemoncompose.ScenarioIdentityID, "inv-scenario-collect",
-			&domain.LeaseGenerationBinding{
-				EnrollmentID: daemoncompose.ScenarioEnrollmentID, AuthStoreVolume: "scenario-collect",
-				StoreManifestDigest: manifest,
-			}, at, at.Add(10*time.Minute))
-		if err != nil {
-			return err
-		}
-		generation, err := tx.AppendEnrollmentGeneration(ctx, domain.EnrollmentGeneration{
-			EnrollmentID: daemoncompose.ScenarioEnrollmentID, AuthStoreVolume: "scenario-collect",
-			StoreManifestDigest: manifest, LeaseFence: lease.Fence,
-			AccountBinding: daemoncompose.ScenarioAccountBinding, RecordedAt: at,
-		}, at)
-		if err != nil {
-			return err
-		}
 		record, err := tx.GetPoolUsageObservation(ctx, pool)
+		if err != nil {
+			return err
+		}
+		generation, err := tx.CurrentEnrollmentGeneration(ctx, record.Collector)
 		if err != nil {
 			return err
 		}
 		reset := at.Add(time.Hour)
 		record.LastAttempt = &domain.CollectionAttempt{Status: domain.CollectionAttemptSucceeded, At: at}
 		record.Windows = []domain.WindowReading{{
-			Window: window, EnrollmentID: daemoncompose.ScenarioEnrollmentID, Generation: generation.Ordinal,
+			Window: window, EnrollmentID: record.Collector, Generation: generation.Ordinal,
 			Status: domain.WindowStatusAllowed, ResetsAt: &reset, ObservedAt: at,
 		}}
 		return tx.RecordPoolUsageObservation(ctx, record, at)

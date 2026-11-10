@@ -15,13 +15,15 @@
 //
 // The scenario lane runs only under -environment ephemeral, against an
 // in-process fake forge; run refuses any other environment before the
-// store opens. ScenarioParts carries six values the scenario cannot reach
+// store opens. ScenarioParts carries seven values the scenario cannot reach
 // from here, because their helpers live in package main: the admission
-// floor, the two delivery validators, and the import authority and export
-// recorder are in the Tier A claude_driver.go, and the publication watch
-// registrations in scheduler.go. Main builds each exactly as the scenario
-// built it there: the import authority and export recorder are bare, not
-// the Claude composition's configured values. When the Claude composition
-// moves out of main (#2863), those inputs can become direct calls that
-// keep them bare.
+// floor, the two delivery validators, the import authority and export
+// recorder, and the agent expiry margin its lineup admits with are in the
+// Tier A claude_driver.go, and the publication watch registrations in
+// scheduler.go. Main builds each but the margin exactly as the scenario
+// built it there, and passes the Claude composition's own margin: the
+// import authority and export recorder are bare, not the Claude
+// composition's configured values. When the Claude composition moves out
+// of main (#2863), those inputs can become direct calls that keep them
+// bare.
 package daemoncompose

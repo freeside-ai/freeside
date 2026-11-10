@@ -43,6 +43,20 @@ type startupBindings struct {
 	scenarioWiring *daemoncompose.ScenarioComposition
 }
 
+// agents is the lineup the composed engine admits through: the Claude
+// composition's, else the scenario composition's, else nil, which the
+// operator hooks answer with signet.ErrOperatorSettingUnavailable.
+func (b *startupBindings) agents() *engine.AgentSelection {
+	switch {
+	case b.claudeWiring != nil:
+		return b.claudeWiring.env.Agents
+	case b.scenarioWiring != nil:
+		return b.scenarioWiring.Agents
+	default:
+		return nil
+	}
+}
+
 // validateRunConfig checks the flag combinations that no default can
 // repair. It runs before startup acquires anything, so a refused
 // configuration leaves no lock, listener, or store behind.
@@ -142,48 +156,49 @@ func newAttentionService(
 			}, now)
 			return signet.TaskLineChangeOutcome{Recorded: result.Recorded, Line: result.Line}, err
 		}),
-		// A policy orders enrollments on the committed tree's lineup, which
-		// exists only after the Claude composition (composeClaudeWorkflow);
-		// without it the command fails closed. Signet has already translated
-		// the wire's agent names to enrollments.
+		// A policy orders enrollments on the admitted lineup, which exists
+		// only after the Claude or scenario composition; without one the
+		// command fails closed. Signet has already translated the wire's
+		// agent names to enrollments.
 		signet.WithRoutingPolicySetter(func(
 			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 		) (signet.RoutingPolicyOutcome, error) {
-			if late.claudeWiring == nil {
+			agents := late.agents()
+			if agents == nil {
 				return signet.RoutingPolicyOutcome{}, signet.ErrOperatorSettingUnavailable
 			}
-			result, err := engine.SetRoutingPolicyTx(ctx, tx,
-				late.claudeWiring.env.Agents.Tree, late.claudeWiring.env.Agents.LineupRevision,
+			result, err := engine.SetRoutingPolicyTx(ctx, tx, agents.Tree, agents.LineupRevision,
 				engine.SetRoutingPolicyRequest{
 					Roles: change.Roles, DrainFirstAccount: change.DrainFirstAccount,
 					Source: change.Source, SetBy: change.SetBy,
 				}, now)
 			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 		}),
-		// An alternate-agent choice re-derives its rule against the committed
-		// tree and the daemon's admission settings, which exist only after
-		// the Claude composition (composeClaudeWorkflow); without them both
-		// commands fail closed.
+		// An alternate-agent choice re-derives its rule against the admitted
+		// lineup and the daemon's admission settings, which exist only after
+		// the Claude or scenario composition; without one both commands
+		// fail closed.
 		signet.WithAlternateAgentRetrier(func(
 			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
 		) (domain.AlternateAgentRetry, error) {
-			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
+			agents := late.agents()
+			if agents == nil {
 				return domain.AlternateAgentRetry{}, signet.ErrOperatorSettingUnavailable
 			}
-			return late.claudeWiring.env.Agents.AcceptAlternateAgentRetryTx(ctx, tx, command, item, now)
+			return agents.AcceptAlternateAgentRetryTx(ctx, tx, command, item, now)
 		}),
 		signet.WithParkedTaskMover(func(
 			ctx context.Context, tx *store.WriteTx, request domain.ParkedTaskMoveRequest, now time.Time,
 		) (domain.ParkedTaskMoveReceipt, error) {
-			if late.claudeWiring == nil || late.claudeWiring.env.Agents == nil {
+			agents := late.agents()
+			if agents == nil {
 				return domain.ParkedTaskMoveReceipt{}, signet.ErrOperatorSettingUnavailable
 			}
-			return late.claudeWiring.env.Agents.MoveParkedTaskTx(ctx, tx, request, now)
+			return agents.MoveParkedTaskTx(ctx, tx, request, now)
 		}),
 		// The catalog, like the tree it projects, exists only after the
-		// Claude composition (composeClaudeWorkflow); until then, and in the
-		// fake-driver and scenario compositions that load no tree, clients
-		// see null.
+		// Claude or scenario composition; until then, and in the fake-driver
+		// composition that loads no tree, clients see null.
 		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.agentCatalog }),
 		signet.WithUsageRefreshAge(usageRefreshAge),
 		// A client's refresh or reassignment starts its collection only after
@@ -213,9 +228,10 @@ func newAttentionService(
 // newScenarioParts gathers what ComposeScenario takes, including the values
 // it needs from package main's helpers: the unattended admission floor,
 // both delivery validators over one production materializer, the store's
-// import authority and export recorder, and the publication watches. Each
-// is the value the scenario computed for itself before it left package
-// main.
+// import authority and export recorder, the publication watches, and the
+// Claude composition's agent expiry margin. Each but the margin is the value
+// the scenario computed for itself before it left package main; the margin
+// is the Claude composition's own constant.
 func newScenarioParts(
 	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
 	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
@@ -233,6 +249,7 @@ func newScenarioParts(
 		Imports:                          storeAdmissionAuthority{store: st, blobs: blobs},
 		Exports:                          exportRecorder{store: st},
 		PublicationWatches:               publicationWatchRegistrations(st),
+		AgentExpiryMargin:                agentExpiryMargin,
 	}, nil
 }
 

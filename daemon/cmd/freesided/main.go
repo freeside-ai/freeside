@@ -1024,7 +1024,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
-		late.scenarioWiring = scenarioWiring
+		late.scenarioWiring, late.agentCatalog = scenarioWiring, &scenarioWiring.Catalog
 		// The forge serves only once its loop starts; a start that fails
 		// before then still owns the listener.
 		defer func() {
