@@ -8,6 +8,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 )
 
 type stubClaudeUsageSink struct{}
@@ -36,10 +37,11 @@ func TestProductionEngineOptionsInstallOptionalPartsOnlyWhenSet(t *testing.T) {
 				return "", nil
 			}
 		},
-		"inference":      func(p *ProductionEngine) { p.Inference = &inference.Client{} },
-		"health refresh": func(p *ProductionEngine) { p.HealthRefresh = func(context.Context) error { return nil } },
-		"logger":         func(p *ProductionEngine) { p.Logger = slog.New(slog.DiscardHandler) },
-		"usage sink":     func(p *ProductionEngine) { p.UsageSink = stubClaudeUsageSink{} },
+		"inference":         func(p *ProductionEngine) { p.Inference = &inference.Client{} },
+		"health refresh":    func(p *ProductionEngine) { p.HealthRefresh = func(context.Context) error { return nil } },
+		"logger":            func(p *ProductionEngine) { p.Logger = slog.New(slog.DiscardHandler) },
+		"usage sink":        func(p *ProductionEngine) { p.UsageSink = stubClaudeUsageSink{} },
+		"host verification": func(p *ProductionEngine) { p.HostVerification = &macverify.Backend{} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

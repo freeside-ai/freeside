@@ -379,8 +379,9 @@ func (w *productionPublicationWorkflow) blockHandoff(
 
 // handoffStopAccount reports whether verifying merge, the head merged into
 // the tip, failed on a cause the tip itself decides, with the evidence text
-// that names it: a rebuild trust refuses, a tree the image cannot verify, or
-// an image that does not serve the tip. imageRef is the image the run was
+// that names it: a rebuild trust refuses, a tree the image cannot verify, an
+// image that does not serve the tip, or a recipe naming macos_host with no
+// admitted host executor. imageRef is the image the run was
 // admitted with. Candidate-written text reaches the account only as the
 // rebuild gate already bounded and quoted it, or through reentryQuoted.
 //
@@ -397,6 +398,14 @@ func handoffStopAccount(
 				"Freeside did not verify %s. The merge's dependency manifests differ from the ones project image %s was built with, and Freeside rebuilds an image without a person only for a change inside the project's policy. No verification command ran, and nothing was published.\n\n"+
 				"Rerun the work against the current base once the change is within the project's policy, or rebuild the project image.\n",
 			rebuildRefusedLine(refused.refusal), subject, imageRef), true
+	}
+	var unavailable *hostVerificationUnavailable
+	if errors.As(err, &unavailable) {
+		return fmt.Sprintf(
+			"%s\n\n"+
+				"Freeside did not verify %s. No verification command ran, and nothing was published.\n\n"+
+				"Configure and prove the executor (freesided -macverify-root and -run-conformance), then rerun the work against the current base.\n",
+			hostVerificationRefusedLine(unavailable), subject), true
 	}
 	if cause, ok := unverifiableTreeCause(err); ok {
 		return fmt.Sprintf(

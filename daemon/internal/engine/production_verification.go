@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -107,6 +108,118 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 	return w.roomAndRecipe(ctx, task, binding, binding.verificationImage())
 }
 
+// verificationRooms is the one room choice of every verification path: a
+// first cycle, a remediation round, a re-entry, and the handoff merge check.
+// project_image always runs in imageRoom, the room the recipe was read
+// through. The host executor is asked to admit the job only when the recipe
+// names macos_host, so a project_image-only recipe never reaches its gate. A
+// refusal returns *hostVerificationUnavailable and no room for the class:
+// nothing has run, and the caller records the refusal on its own path. A
+// recipe that does not parse returns only imageRoom, for verify to refuse.
+func (w *productionPublicationWorkflow) verificationRooms(
+	ctx context.Context, task productionPublicationTask, imageRoom verify.Room, recipe []byte,
+) (map[verify.ExecutionClass]verify.Room, error) {
+	rooms := map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: imageRoom}
+	parsed, err := verify.ParseRecipe(recipe)
+	if err != nil || len(parsed.CommandsIn(verify.ClassMacOSHost)) == 0 {
+		return rooms, nil
+	}
+	if w.hostVerificationRoom == nil {
+		return nil, &hostVerificationUnavailable{refusal: &HostVerificationRefusal{
+			InvocationID: task.verificationInvocationID(), Reason: "no host verification backend is configured",
+		}}
+	}
+	room, admission, err := w.hostVerificationRoom(ctx, task)
+	if err != nil {
+		// A pass canceled while the gate read the store, or a transient
+		// store or host failure under it, is not the gate's verdict; the
+		// next pass asks again.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, productionPublicationRetryableError(ctxErr)
+		}
+		if productionPublicationRetryableFailure(err) {
+			return nil, productionPublicationRetryableError(err)
+		}
+		return nil, &hostVerificationUnavailable{refusal: err}
+	}
+	if w.logger != nil {
+		w.logger.Info("host verification admitted",
+			"run_id", admission.RunID, "invocation_id", admission.InvocationID,
+			"backend", admission.Backend, "configuration_digest", admission.BackendConfigurationDigest,
+			"operating_mode", admission.OperatingMode)
+	}
+	rooms[verify.ClassMacOSHost] = room
+	return rooms, nil
+}
+
+// hostVerificationUnavailable is a recipe that names macos_host meeting a
+// host executor that did not admit its job. No verification command ran. A
+// first cycle or remediation round records it as a failed verification
+// (hostVerificationRefusedVerification); a re-entry or handoff, which records
+// no failed checkpoint without a verifier report, stops on it.
+type hostVerificationUnavailable struct {
+	refusal error
+}
+
+func (e *hostVerificationUnavailable) Error() string {
+	return fmt.Sprintf("recipe names execution class %s: %v", verify.ClassMacOSHost, e.refusal)
+}
+
+func (e *hostVerificationUnavailable) Unwrap() error { return e.refusal }
+
+// hostVerificationRefusedLine is the first line of every account of a
+// refused host executor, so a reader finds the class and the refusal in one
+// place on each path.
+func hostVerificationRefusedLine(unavailable *hostVerificationUnavailable) string {
+	return fmt.Sprintf("Host verification refused: the recipe names execution class %s, and no macOS verification executor was admitted for this job (%v).",
+		verify.ClassMacOSHost, unavailable.refusal)
+}
+
+// hostVerificationRefusedVerification is the verification account of a
+// candidate whose recipe needs the host executor and did not get it: failed,
+// with one daemon-produced evidence artifact naming the class and the
+// refusal, and no command run. It takes the place of verify's result, so the
+// refusal blocks and recovers as any failed verification does.
+func hostVerificationRefusedVerification(
+	task productionPublicationTask,
+	binding productionBinding,
+	headSHA string,
+	unavailable *hostVerificationUnavailable,
+	approvedRecipes map[domain.Digest]bool,
+) (verify.Result, error) {
+	content := fmt.Sprintf(
+		"%s\n\n"+
+			"Freeside did not verify candidate %s. No verification command ran.\n\n"+
+			"Configure and prove the executor (freesided -macverify-root and -run-conformance), then rerun the work.\n",
+		hostVerificationRefusedLine(unavailable), headSHA)
+	recipe := binding.image.RecipeDigest
+	// The stable per-verification time a room's evidence carries, so a
+	// replayed refusal converges on the same artifact.
+	evidence, err := daemonVerificationEvidence(task.verificationInvocationID(), headSHA, recipe,
+		content, binding.export.RecordedAt, approvedRecipes)
+	if err != nil {
+		return verify.Result{}, err
+	}
+	return verify.Result{
+		HeadSHA: headSHA, RecipeDigest: recipe, Outcome: verify.OutcomeFailed,
+		Evidence: []verify.Evidence{evidence},
+	}, nil
+}
+
+// reentryHostVerificationRefusedReason reports a re-entry whose recipe needs
+// the host executor and did not get it, with the reason the cycle stops on.
+func reentryHostVerificationRefusedReason(
+	task productionPublicationTask, baseSHA string, err error,
+) (string, bool) {
+	var unavailable *hostVerificationUnavailable
+	if !errors.As(err, &unavailable) {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"Readiness re-entry stopped because pull request head %s could not be verified against base %s: %s No verification command ran. Configure and prove the executor, then rerun the work.",
+		task.HeadSHA, baseSHA, hostVerificationRefusedLine(unavailable)), true
+}
+
 // reserveVerification reserves the verification job's memory before its
 // first container, the recipe read (plan §5.4). A job takes no pool slot, so
 // the memory gate is its whole scheduling decision. One that does not fit yet
@@ -189,17 +302,27 @@ func (e *verificationReservationRefused) Error() string { return e.err.Error() }
 func (e *verificationReservationRefused) Unwrap() error { return e.err }
 
 // releaseVerification ends the verification job's reservation once every
-// container the job started is proved absent. With bound rooms that proof is
-// ward's, from the invocation's ownership records, so it covers every room of
-// every pass: a clean retry cannot release while an earlier pass's room is
-// unproven. It retries owned cleanup, which gives a room whose own cleanup
-// failed, a memory-limit kill included, a second attempt before the task
-// blocks. A reservation still unproven then stays held until a later pass's
-// proof or a confirmed task stop: an unproven container may still hold its
-// memory, and releasing would let the budget overcommit. A task that ends
-// with no later pass and no confirmed stop keeps it. Unbound rooms write no
-// records, so for them the room's own return is the proof: any return but
-// one marked ward.ErrVerificationAbsenceUnproven.
+// container and host slot process the job started is proved absent. With
+// bound rooms the container proof is ward's, from the invocation's ownership
+// records, so it covers every room of every pass: a clean retry cannot release
+// while an earlier pass's room is unproven. It retries owned cleanup, which
+// gives a room whose own cleanup failed, a memory-limit kill included, a
+// second attempt before the task blocks. A reservation still unproven then
+// stays held until a later pass's proof or a confirmed task stop: an unproven
+// container may still hold its memory, and releasing would let the budget
+// overcommit. A task that ends with no later pass and no confirmed stop keeps
+// it. Unbound rooms write no records, so for them the room's own return is the
+// proof: any return but one marked ward.ErrVerificationAbsenceUnproven.
+//
+// The host executor writes no ownership records either, so for its slots the
+// pass's own return is the only proof: a return marked
+// macverify.ErrAbsenceUnproven keeps the reservation, after ward's proof has
+// run its cleanup. That proof covers this pass alone. The executor never
+// re-inspects a quarantined slot, so a later pass whose own proofs pass
+// releases while that slot's processes may still run. They are uncapped
+// either way, and the pool never leases the slot again (#3000). The job's
+// one reservation covers whichever room runs: recipe commands run one at a
+// time, so a container and a slot command are never live together.
 //
 // It runs detached from the pass, so a pass canceled at shutdown does not
 // turn a provable release into a held one.
@@ -224,6 +347,9 @@ func (w *productionPublicationWorkflow) releaseVerification(
 			return fmt.Errorf("prove verification absent: %w", err)
 		}
 	} else if errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
+		return nil
+	}
+	if errors.Is(roomErr, macverify.ErrAbsenceUnproven) {
 		return nil
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -351,36 +477,9 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 			return productionVerificationCheckpoint{}, err
 		}
 	} else {
-		if err := w.reserveVerification(ctx, task, binding); err != nil {
+		verified, err = w.runVerification(ctx, task, binding, imported, checkoutDir, recipes)
+		if err != nil {
 			return productionVerificationCheckpoint{}, err
-		}
-		room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
-		if err != nil {
-			return productionVerificationCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))
-		}
-		verified, err = verify.Verify(ctx, checkoutDir, verify.Options{
-			HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
-			InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
-			RecipePath:      verify.DefaultRecipePath,
-			Rooms:           map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: room},
-			ApprovedRecipes: recipes, Changes: imported.Changes,
-			// A stable per-verification time, not a wall clock: the emitted evidence
-			// is content-addressed and write-once, and this checkpoint can re-run, so
-			// the evidence metadata must converge byte-identically on replay (mirrors
-			// the checkpoint's CandidateAuthorization CreatedAt).
-			Now: binding.export.RecordedAt,
-			Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
-				binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
-			)},
-		})
-		if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
-			return productionVerificationCheckpoint{}, errors.Join(err, releaseErr)
-		}
-		if err != nil {
-			if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
-				err = productionPublicationRetryableError(err)
-			}
-			return productionVerificationCheckpoint{}, fmt.Errorf("clean production verification: %w", err)
 		}
 	}
 	if verified.HeadSHA != imported.CommitSHA || verified.RecipeDigest != binding.image.RecipeDigest {
@@ -449,6 +548,64 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	return checkpoint, nil
 }
 
+// runVerification runs a first cycle's or remediation round's verification
+// under the job's one memory reservation, taken before the recipe read and
+// released once every room it used proved its work absent. A recipe that
+// needs the host executor and did not get it releases the reservation, since
+// nothing ran, and becomes a failed verification naming the class.
+func (w *productionPublicationWorkflow) runVerification(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	imported importer.Result,
+	checkoutDir string,
+	recipes map[domain.Digest]bool,
+) (verify.Result, error) {
+	if err := w.reserveVerification(ctx, task, binding); err != nil {
+		return verify.Result{}, err
+	}
+	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
+	if err != nil {
+		return verify.Result{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))
+	}
+	rooms, err := w.verificationRooms(ctx, task, room, recipe)
+	if err != nil {
+		if releaseErr := w.releaseVerification(ctx, task, binding.run, nil); releaseErr != nil {
+			return verify.Result{}, errors.Join(err, releaseErr)
+		}
+		var unavailable *hostVerificationUnavailable
+		if errors.As(err, &unavailable) {
+			return hostVerificationRefusedVerification(task, binding, imported.CommitSHA, unavailable, recipes)
+		}
+		return verify.Result{}, err
+	}
+	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
+		HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
+		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
+		RecipePath:      verify.DefaultRecipePath,
+		Rooms:           rooms,
+		ApprovedRecipes: recipes, Changes: imported.Changes,
+		// A stable per-verification time, not a wall clock: the emitted evidence
+		// is content-addressed and write-once, and this checkpoint can re-run, so
+		// the evidence metadata must converge byte-identically on replay (mirrors
+		// the checkpoint's CandidateAuthorization CreatedAt).
+		Now: binding.export.RecordedAt,
+		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
+			binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
+		)},
+	})
+	if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
+		return verify.Result{}, errors.Join(err, releaseErr)
+	}
+	if err != nil {
+		if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
+			err = productionPublicationRetryableError(err)
+		}
+		return verify.Result{}, fmt.Errorf("clean production verification: %w", err)
+	}
+	return verified, nil
+}
+
 // verificationMemoryLimit reports a verification room killed at its declared
 // memory limit. The room runs at the size the run's durable policy resolved,
 // so a retry meets the same limit: the caller ends the cycle on it instead of
@@ -461,8 +618,9 @@ func verificationMemoryLimit(err error) bool {
 // productionVerificationStateContradiction reports a verify refusal that a
 // retry would meet again because Freeside's own state causes it. A recipe that
 // names an execution class with no room is one: the recipe is approved and the
-// rooms are the engine's choice, so retrying cannot supply the missing room
-// (#2882 adds the macOS room and maps this refusal to a failed verification).
+// rooms are the engine's choice, so retrying cannot supply the missing room.
+// verificationRooms supplies every class or refuses before verify runs, so
+// this case is a backstop.
 func productionVerificationStateContradiction(err error) bool {
 	return errors.Is(err, verify.ErrRecipeInvalid) ||
 		errors.Is(err, verify.ErrRoomUnavailable) ||

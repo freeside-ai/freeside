@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 var hostVerificationAdmittedAt = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -37,7 +38,7 @@ func hostVerificationEngine(
 			now:         func() time.Time { return hostVerificationAdmittedAt },
 		},
 	}
-	if err := WithHostVerificationAdmission(backend)(e); err != nil {
+	if err := WithHostVerificationAdmission(backend, newHostRoomForTest)(e); err != nil {
 		t.Fatalf("WithHostVerificationAdmission: %v", err)
 	}
 	return e
@@ -64,6 +65,16 @@ func recordHostConformance(
 		t.Fatalf("RecordBackendConformance: %v", err)
 	}
 }
+
+// hostRoomForTest is the room an admitted host job runs in; the gate tests
+// never run a command in it.
+type hostRoomForTest struct{}
+
+func (hostRoomForTest) Run(context.Context, string, []string) (verify.StepResult, error) {
+	return verify.StepResult{}, nil
+}
+
+func newHostRoomForTest() (verify.Room, error) { return hostRoomForTest{}, nil }
 
 // verificationTask is a run's verification job for the production writer's
 // export: its verification id is the one the task's producer derives.
@@ -262,6 +273,94 @@ func TestHostVerificationAdmissionRefusesWardInvocations(t *testing.T) {
 	}
 }
 
+// TestHostVerificationAdmissionDerivesReentryAndHandoffIDs proves the gate
+// admits a re-entry's and a handoff merge check's verification job when its
+// id derives from the task's own sealed successor or publication, and
+// refuses one derived from another run's successor or another publication.
+func TestHostVerificationAdmissionDerivesReentryAndHandoffIDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := hostVerificationEngine(t, domain.ModeAttendedDev, hostVerificationBackend())
+	successor := reentrySuccessorForTest(
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced)
+	reentry := newReentryTask("project-reentry", successor)
+
+	firstCycle := verificationTask("run-reentry", productionInvocationID("run-reentry"))
+	firstCycle.PublicationID = domain.ProductionPublicationInvocationID("run-reentry")
+	firstHandoff := firstCycle
+	firstHandoff.VerificationID = handoffVerificationInvocationID(firstCycle)
+	reentryHandoff := reentry
+	reentryHandoff.VerificationID = handoffVerificationInvocationID(reentry)
+
+	for name, task := range map[string]productionPublicationTask{
+		"re-entry":                 reentry,
+		"handoff of a first cycle": firstHandoff,
+		"handoff of a re-entry":    reentryHandoff,
+	} {
+		got, err := e.admitHostVerification(ctx, task)
+		if err != nil {
+			t.Errorf("%s: admitHostVerification = %v, want admitted", name, err)
+			continue
+		}
+		if got.InvocationID != task.VerificationID {
+			t.Errorf("%s: admission invocation = %q, want %q", name, got.InvocationID, task.VerificationID)
+		}
+	}
+
+	otherSuccessor := successor
+	otherSuccessor.RunID = "run-other"
+	otherSuccessor.PredecessorItemID = productionReadyItemID("run-other")
+	otherSuccessor.PriorReviewInvocationID = ProductionReviewInvocationID("run-other", 1)
+	stolen := reentry
+	stolen.VerificationID = reentryVerificationInvocationID(otherSuccessor)
+	borrowed := reentry
+	borrowed.Successor = &otherSuccessor
+	otherPublication := firstHandoff
+	otherPublication.PublicationID = domain.ProductionPublicationInvocationID("run-other")
+	otherPublication.VerificationID = handoffVerificationInvocationID(otherPublication)
+	mismatchedPublication := reentry
+	mismatchedPublication.PublicationID = domain.ProductionPublicationInvocationID("run-reentry")
+	for name, task := range map[string]productionPublicationTask{
+		"another run's re-entry id":              stolen,
+		"another run's successor":                borrowed,
+		"another publication's handoff":          otherPublication,
+		"re-entry id beside a stray publication": mismatchedPublication,
+	} {
+		if _, err := e.admitHostVerification(ctx, task); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Errorf("%s: admitHostVerification = %v, want ErrParentKeyMismatch", name, err)
+		}
+	}
+
+	// A ward role stays refused on a re-entry task too.
+	writer := reentry
+	writer.VerificationID = productionInvocationID("run-reentry")
+	var refusal *HostVerificationRefusal
+	if _, err := e.admitHostVerification(ctx, writer); !errors.As(err, &refusal) ||
+		!strings.Contains(refusal.Reason, string(domain.RoleImplementer)) {
+		t.Errorf("writer id on a re-entry task = %v, want the ward-role refusal", err)
+	}
+}
+
+// TestHostVerificationRoomConstructionRefuses: an admitted job whose room the
+// configured constructor cannot build is refused, never run elsewhere.
+func TestHostVerificationRoomConstructionRefuses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := hostVerificationEngine(t, domain.ModeAttendedDev, hostVerificationBackend())
+	broken := errors.New("no executor root")
+	e.newHostVerificationRoom = func() (verify.Room, error) { return nil, broken }
+	task := verificationTask("run-room", productionInvocationID("run-room"))
+	if _, _, err := e.admitHostVerificationRoom(ctx, task); !errors.Is(err, ErrHostVerificationNotAdmissible) ||
+		!errors.Is(err, broken) {
+		t.Fatalf("admitHostVerificationRoom = %v, want a refusal carrying the constructor's error", err)
+	}
+	e.newHostVerificationRoom = newHostRoomForTest
+	room, admission, err := e.admitHostVerificationRoom(ctx, task)
+	if err != nil || room == nil || admission.InvocationID != task.VerificationID {
+		t.Fatalf("admitHostVerificationRoom = %v, %+v, %v; want the room", room, admission, err)
+	}
+}
+
 // TestHostVerificationAdmissionNeedsConfiguration pins the gate's
 // composition checks: no backend, no admitter, or a backend of another class
 // is never admitted, and the ward admitter refuses the executor as its
@@ -278,11 +377,14 @@ func TestHostVerificationAdmissionNeedsConfiguration(t *testing.T) {
 	if _, err := (&Engine{hostVerification: hostVerificationBackend()}).admitHostVerification(ctx, task); !errors.Is(err, ErrHostVerificationNotAdmissible) {
 		t.Errorf("no admitter = %v, want refused", err)
 	}
-	if err := WithHostVerificationAdmission(nil)(&Engine{}); err == nil {
+	if err := WithHostVerificationAdmission(nil, newHostRoomForTest)(&Engine{}); err == nil {
 		t.Error("WithHostVerificationAdmission accepted a nil backend")
 	}
+	if err := WithHostVerificationAdmission(hostVerificationBackend(), nil)(&Engine{}); err == nil {
+		t.Error("WithHostVerificationAdmission accepted a nil room constructor")
+	}
 	ward := fake.RunnerBackend{BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff)}
-	if err := WithHostVerificationAdmission(ward)(&Engine{}); err == nil {
+	if err := WithHostVerificationAdmission(ward, newHostRoomForTest)(&Engine{}); err == nil {
 		t.Error("WithHostVerificationAdmission accepted a ward-class backend")
 	}
 
@@ -326,4 +428,39 @@ func hostVerificationAdmissionEqual(a, b HostVerificationAdmission) bool {
 		slices.Equal(a.Capabilities, b.Capabilities) &&
 		a.BackendConfigurationDigest == b.BackendConfigurationDigest &&
 		a.OperatingMode == b.OperatingMode && a.AdmittedAt.Equal(b.AdmittedAt)
+}
+
+// TestVerificationRoomsKeepsACanceledGateRetryable: a pass canceled while the
+// gate reads the store, or a gate failure with a transient cause, is not the
+// gate's verdict, so it stays retryable rather than becoming a durable failed
+// verification. A plain gate error on a live pass is a refusal.
+func TestVerificationRoomsKeepsACanceledGateRetryable(t *testing.T) {
+	t.Parallel()
+	recipe := []byte(`{"commands":[{"argv":["/usr/bin/true"],"room":"macos_host"}],"capture":"none"}`)
+	gateErr := errors.New("read host conformance: interrupted")
+	w := &productionPublicationWorkflow{hostVerificationRoom: func(
+		context.Context, productionPublicationTask,
+	) (verify.Room, HostVerificationAdmission, error) {
+		return nil, HostVerificationAdmission{}, gateErr
+	}}
+	task := verificationTask("run-cancel", productionInvocationID("run-cancel"))
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	var unavailable *hostVerificationUnavailable
+	_, err := w.verificationRooms(canceled, task, hostRoomForTest{}, recipe)
+	if errors.As(err, &unavailable) || !productionPublicationRetryableFailure(err) {
+		t.Fatalf("canceled gate = %v, want retryable and not a refusal", err)
+	}
+	_, err = w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe)
+	if !errors.As(err, &unavailable) || !errors.Is(err, gateErr) {
+		t.Fatalf("live gate error = %v, want a refusal carrying it", err)
+	}
+
+	// A refusal whose cause is an environmental failure, such as a store
+	// read past its deadline, is not a verdict either.
+	gateErr = &HostVerificationRefusal{Reason: "read conformance", cause: context.DeadlineExceeded}
+	_, err = w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe)
+	if errors.As(err, &unavailable) || !productionPublicationRetryableFailure(err) {
+		t.Fatalf("transient gate failure = %v, want retryable and not a refusal", err)
+	}
 }

@@ -288,12 +288,16 @@ type productionPublicationWorkflow struct {
 	// image's recipe or recipe-bearing evidence is gated, read the set
 	// through recipes or recipesIn, which add the repository's adopted
 	// recipes; an item or artifact with no such evidence may pass it as is.
-	operatorRecipes                 map[domain.Digest]bool
-	repositoryID                    int64
-	newRoom                         func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
-	newBoundRoom                    func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
-	proveVerificationAbsent         func(context.Context, domain.Run, domain.InvocationID) error
-	rebuild                         *ProjectImageRebuild
+	operatorRecipes         map[domain.Digest]bool
+	repositoryID            int64
+	newRoom                 func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
+	newBoundRoom            func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	proveVerificationAbsent func(context.Context, domain.Run, domain.InvocationID) error
+	rebuild                 *ProjectImageRebuild
+	// hostVerificationRoom admits a verification job onto the host executor
+	// and builds its room (Engine.admitHostVerificationRoom). engine.New sets
+	// it; nil admits nothing.
+	hostVerificationRoom            func(context.Context, productionPublicationTask) (verify.Room, HostVerificationAdmission, error)
 	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
 	claimDispatch                   func(context.Context, domain.RunID) error
 	reviewSource                    exec.ReviewSource

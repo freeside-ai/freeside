@@ -513,6 +513,8 @@ directory named before it in the same bullet. All under `daemon/`:
   verification executor's backend and its declaration),
   `internal/engine/host_verification_admission.go` (admits a verification
   job onto the host executor and never a ward role),
+  `cmd/freesided/macverify_executor.go` (builds the host executor and
+  chooses the durable proof it declares from),
   `internal/domain/wardless_admission.go`, `cmd/freesided/claude_driver.go`
   (`storeAdmissionAuthority`, which wires admission and import authority,
   and the daemon's GitHub wiring: the keystore, minter, janitor, and the

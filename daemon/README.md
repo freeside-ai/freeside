@@ -3088,6 +3088,51 @@ available fails before any command runs; it never runs the command in
 another room. The project image's offline proof runs only the
 `project_image` commands, because the image never runs the others.
 
+**The daemon asks for the executor only when a recipe needs it.** Every
+verification job (a first cycle, a remediation round, a readiness re-entry,
+and a handoff's merge check) reads its recipe through the project-image room.
+A recipe with no `macos_host` command runs as it always has, and the host
+admission gate is never asked. A recipe with one asks the gate for this job
+before any command runs. The gate admits the job only when the daemon has an
+executor configured and the job's invocation derives from the task's own run,
+successor, or publication. Under `unattended` it also needs the executor's
+`supports_credential_free_host_verification` declaration and a passed
+conformance record for its current configuration digest. Under `attended_dev`
+the class has no capability floor, so an executor with no passed record is
+admitted, and only the pre-job probe confines each command. An
+admission is logged (`host verification admitted`, with the run, invocation,
+backend, configuration digest, and mode) and writes no durable record; the
+verification report names each step's `room`. A refusal runs nothing and
+takes the outcome of its path:
+
+| Path | Outcome of a refused executor |
+| --- | --- |
+| First cycle or remediation round | A failed verification whose evidence starts `Host verification refused:` and names the class and the refusal; it blocks with the ordinary rerun actions |
+| Readiness re-entry | The cycle stops with a reason naming the class and the refusal |
+| Handoff merge check | The handoff stops on the same evidence, and nothing is published |
+
+A shutdown that interrupts the gate's store read, or a transient store or
+host failure under it, retries on a later pass instead of failing the
+verification.
+
+**One reservation covers both rooms.** Each verification job (a first
+cycle, remediation round, readiness re-entry, or handoff merge check) takes
+one verification memory reservation (the project's verification size plus
+one VM overhead) before it reads the recipe, and holds it across every
+command, whichever room runs it; recipe commands run one at a time, so a
+container and a slot command are never live together. The executor reserves
+nothing of its own, and its host processes have no memory cap, so the
+reservation is a budget figure for them, not a limit. Release needs both
+rooms' proofs. The image room's is ward's, over every container of every pass
+of the invocation. The executor writes no records for that proof to read, so
+a pass whose slot returns `macverify.ErrAbsenceUnproven` keeps the
+reservation even when ward proves every container gone, and the verification
+retries. That hold covers the pass alone: the executor never re-inspects a
+quarantined slot, so a later pass whose own proofs pass releases while the
+slot's processes may still run (#3000). A busy executor
+(`macverify.ErrNoFreeSlot`) also retries. Decision record:
+`devlog/2026-11-09-2207-verification-room-selection.md`.
+
 **`-protected-path <class>=<pattern>` widens a protected-path class.** Repeat
 it once per pattern. The class is the trust profile's
 `extra_<class>_patterns` field: `automation_control`, `reviewer_instruction`,
@@ -3371,9 +3416,9 @@ verification executor (`credential_free_host_verification`, package
 `internal/macverify`), needs only its own
 `supports_credential_free_host_verification` declaration, earned by its own
 conformance pass, and runs only a run's verification job. The class is
-declared and its room, conformance pass, and pre-job probe exist (Install the
-macOS Verification Executor), but the daemon neither runs the pass nor places
-a job on the room yet (#2882), and doctor does not check it. Pass `-operating-mode
+declared, the daemon builds it from its `-macverify-*` flags and places each
+`macos_host` recipe command on its room (Prove the Executor), and doctor does
+not check it. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
 unattended daemon. Use the `digest` field from that daemon's startup log record
 whose message is `effective reviewer configuration`; it is computed from the
@@ -4554,8 +4599,29 @@ a passing conformance pass is durably recorded for its configuration digest
 (the daemon binary, profile, anchor rules, slots, root, and toolchain pin).
 `macverify.NewSuite` builds the pass and `Suite.Full` runs it; give it
 `WithConformanceRecorder`, since a pass with no recorder never declares.
-Nothing in the daemon runs it yet. Decision record:
-`devlog/2026-11-09-1830-macos-conformance-probe.md`.
+Decision record: `devlog/2026-11-09-1830-macos-conformance-probe.md`.
+
+**Configure the daemon.** `freesided` builds the executor from four flags.
+With no `-macverify-root` it configures none, and the gate refuses every
+`macos_host` job.
+
+| Flag | Value |
+| --- | --- |
+| `-macverify-root` | The installed executor root, such as `/Library/Freeside/macverify`; empty (the default) configures no executor |
+| `-macverify-slots` | The slot account names the install created, comma-separated; default `fvslot1,fvslot2` |
+| `-macverify-xcode-build` | The Xcode build number `xcodebuild -version` prints, such as `17F42`; required with a root |
+| `-macverify-swift` | The `swiftlang-` token `swift --version` prints; required with a root |
+
+An invalid configuration fails startup. Under `-run-conformance` the daemon
+runs `Suite.Full` with the store's recorder at startup, after the ward's
+suite, and a failed pass fails startup. Otherwise it restores the newest
+`credential_free_host_verification` record when that record passed for the
+current configuration digest. A missing, failed, or stale record does not
+stop startup: the daemon logs that the executor declares nothing. Under
+`unattended`, each `macos_host` job is then refused by name until a pass
+under `-run-conformance`; under `attended_dev`, jobs are still admitted.
+Since the digest names the daemon binary, a rebuilt `freesided` needs a fresh
+pass. `freesided deputy` configures no executor yet (#2978).
 
 **The pass.** Full refuses off macOS and records nothing there. Otherwise it
 first withdraws the declaration and records a `superseded` marker, so a pass

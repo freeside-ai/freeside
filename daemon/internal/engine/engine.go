@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -76,6 +77,9 @@ type Engine struct {
 	// (see WithHostVerificationAdmission); nil means no verification job can
 	// be admitted on the host.
 	hostVerification exec.ConfigurationBoundBackend
+	// newHostVerificationRoom builds the room an admitted host verification
+	// job runs in; it is set with hostVerification.
+	newHostVerificationRoom func() (verify.Room, error)
 	// derive supplies the per-attempt workspace and base when configured
 	// (see WithAdmissionDerivation); nil keeps the static environment.
 	derive AdmissionDerivation
@@ -212,6 +216,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		e.productionPublication.signet = e.signet
 		e.productionPublication.validateDelivery = e.productionDeliveryValidator
 		e.productionPublication.feedbackAdmission = e.admission
+		e.productionPublication.hostVerificationRoom = e.admitHostVerificationRoom
 		if e.inference.SupportsSite(inference.AdjudicatorSiteID) {
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,

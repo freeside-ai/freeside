@@ -257,6 +257,9 @@ type productionPublicationHarness struct {
 	// machineCapacity, when set, is the memory bound the next engine starts
 	// with; a budget recorded in the store then bounds its launches.
 	machineCapacity *ward.LaunchBound
+	// engineOptions are added to every engine the harness builds after its
+	// own, such as the host verification executor.
+	engineOptions []engine.Option
 }
 
 // productionBaseManifests are the npm manifests the production harness
@@ -1001,6 +1004,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 	if p.machineCapacity != nil {
 		options = append(options, engine.WithMachineCapacity(*p.machineCapacity))
 	}
+	options = append(options, p.engineOptions...)
 	options = append(options, extraOptions...)
 	workflow, err := engine.New(p.store, p.attention, p.driver, options...)
 	if err != nil {
