@@ -247,11 +247,7 @@ func newSpecificationFixtureAllowing(t *testing.T, specApproval bool, maxIterati
 	t.Helper()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "state.db")
-	st := storetest.Open(t, dbPath, store.Options{
-		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
-			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		},
-	})
+	st := storetest.Open(t, dbPath, unattendedExportStoreOptions())
 	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
 	if err != nil {
 		t.Fatal(err)
@@ -513,11 +509,7 @@ func (f specificationFixture) reopen(t *testing.T) specificationFixture {
 	if err := f.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened := storetest.Open(t, f.dbPath, store.Options{
-		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
-			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		},
-	})
+	reopened := storetest.Open(t, f.dbPath, unattendedExportStoreOptions())
 	f.store = reopened
 	f.signet = signet.NewService(reopened, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return *f.now }))

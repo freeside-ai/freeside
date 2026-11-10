@@ -88,6 +88,23 @@ func RecordExecutionExport(
 		) {
 			return recordExportOnly(ctx, st, executionExport, replay.Usage)
 		}
+		// A discussion on a specification card runs under the same
+		// specification run and stage and has the same shape: an export with no
+		// publication task. Its ID names a command, not the run, so the arm
+		// above cannot see it; its marker decides instead (issue #2991).
+		var discussion bool
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			discussion, err = authenticateSpecificationDiscussionExport(
+				ctx, tx, executionExport.InvocationID, admission.RunID, admission.StageID,
+			)
+			return err
+		}); err != nil {
+			return fmt.Errorf("authenticate specification-discussion export: %w", err)
+		}
+		if discussion {
+			return recordExportOnly(ctx, st, executionExport, replay.Usage)
+		}
 		var run domain.Run
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
@@ -107,6 +124,35 @@ func RecordExecutionExport(
 	}
 	return fmt.Errorf("execution admission %q has invalid operating mode %q: %w",
 		admission.InvocationID, admission.OperatingMode, domain.ErrInvalidOperatingMode)
+}
+
+// authenticateSpecificationDiscussionExport reports whether invocationID is a
+// specification discussion, whose unattended export records export-only. It
+// decides from the invocation's own outbox marker, never the ID prefix: a
+// discussion ID names a command, not a run, so only the marker binds it to
+// the admitted run. A KindSpecificationDiscussionRequested marker is
+// re-checked with AuthenticateSpecificationDiscussionTransition against the
+// admitted run and stage, the check admission ran, and one that fails it
+// returns true with the error, so the caller records nothing and never falls
+// through to another arm. An absent marker or another kind returns false.
+func authenticateSpecificationDiscussionExport(
+	ctx context.Context,
+	tx *store.ReadTx,
+	invocationID domain.InvocationID,
+	runID domain.RunID,
+	stageID domain.StageID,
+) (bool, error) {
+	entry, err := tx.GetOutbox(ctx, string(invocationID))
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if entry.Kind != KindSpecificationDiscussionRequested {
+		return false, nil
+	}
+	return true, AuthenticateSpecificationDiscussionTransition(ctx, tx, entry, runID, stageID)
 }
 
 // recordProductionExportAndReportUsage commits the production export and
@@ -130,9 +176,9 @@ func recordProductionExportAndReportUsage(
 }
 
 // recordExportOnly records an export that mints no publication task, with
-// its usage in the same write. The attended and specification invocations it
-// serves are collected later and append the same measurements again, which
-// converges on the rows written here.
+// its usage in the same write. The attended, specification, and discussion
+// invocations it serves are collected later and append the same measurements
+// again, which converges on the rows written here.
 func recordExportOnly(
 	ctx context.Context,
 	st *store.Store,
