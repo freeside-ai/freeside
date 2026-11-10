@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -218,7 +219,7 @@ func eventually(t *testing.T, what string, ok func() bool) {
 func TestDaemonNotifiesAPhoneOncePerItem(t *testing.T) {
 	root := t.TempDir()
 	sink := newNtfySink(t, http.StatusOK)
-	approval := "approval-" + domain.ItemID(DefaultFakeRunID)
+	approval := "approval-" + domain.ItemID(daemoncompose.DefaultFakeRunID)
 	link := "freeside://attention/items/" + string(approval) + "?channel=ntfy&attempt=1"
 	accepted := func(h *daemon, device domain.DeviceID) func() bool {
 		return func() bool {
@@ -285,8 +286,8 @@ func TestDaemonNotifiesAPhoneOncePerItem(t *testing.T) {
 func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	approvalID := "approval-" + domain.ItemID(DefaultFakeRunID)
-	feedbackID := "feedback-" + domain.ItemID(DefaultFakeRunID)
+	approvalID := "approval-" + domain.ItemID(daemoncompose.DefaultFakeRunID)
+	feedbackID := "feedback-" + domain.ItemID(daemoncompose.DefaultFakeRunID)
 	sink := newNtfySink(t, http.StatusOK)
 
 	// The publish handler runs on the sink's goroutine, so it takes the
@@ -398,7 +399,7 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 // never the device's topic or the publish URL.
 func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 	t.Parallel()
-	approval := "approval-" + domain.ItemID(DefaultFakeRunID)
+	approval := "approval-" + domain.ItemID(daemoncompose.DefaultFakeRunID)
 
 	t.Run("rejected", func(t *testing.T) {
 		t.Parallel()
@@ -481,7 +482,7 @@ func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	t.Cleanup(func() { _ = h.Close() })
-	approval := "approval-" + domain.ItemID(DefaultFakeRunID)
+	approval := "approval-" + domain.ItemID(daemoncompose.DefaultFakeRunID)
 	waitForItem(t, h.attention, approval)
 	pairDevice(t, h, "phone")
 

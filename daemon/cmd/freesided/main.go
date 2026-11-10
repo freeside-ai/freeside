@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -65,11 +66,6 @@ const (
 	defaultGitHubRemoteBase    = "https://github.com"
 	defaultJanitorInterval     = 30 * time.Second
 	defaultJanitorRemovalBound = 10
-)
-
-const (
-	DefaultFakeRunID     domain.RunID     = "run-walking-skeleton"
-	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
 )
 
 type repositoryIDFlag struct {
@@ -338,7 +334,7 @@ func main() {
 		os.Exit(2)
 	}
 	if *listScenariosOnly {
-		if err := ListScenarios(os.Stdout); err != nil {
+		if err := daemoncompose.ListScenarios(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(1)
 		}
@@ -643,7 +639,7 @@ type config struct {
 	// over fakes (-driver scenario). It is refused outside the ephemeral tier,
 	// because the fake backend's conformance record claims a containment
 	// nothing provides.
-	Scenario *Scenario
+	Scenario *daemoncompose.Scenario
 	// DeputyLaunch is set only by deputy: the composition this daemon serves
 	// under, which every new submission must bind (deputyLaunch.admit).
 	DeputyLaunch *deputyLaunch
@@ -720,7 +716,7 @@ func (cfg config) storeOptions() (store.Options, error) {
 		if opts.ApprovedRecipes == nil {
 			opts.ApprovedRecipes = map[domain.Digest]bool{}
 		}
-		opts.ApprovedRecipes[verify.RecipeDigest(ScenarioRecipe)] = true
+		opts.ApprovedRecipes[verify.RecipeDigest(daemoncompose.ScenarioRecipe)] = true
 		return opts, nil
 	}
 	if cfg.Claude == nil {
@@ -966,11 +962,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	if fixture != "" {
-		if err := SeedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
+		if err := daemoncompose.SeedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
 			return nil, err
 		}
 	}
-	localBackups, err := MaintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
+	localBackups, err := daemoncompose.MaintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -988,7 +984,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
 		imageUpkeep           *engine.ImageUpkeep
-		scenarioWiring        *ScenarioComposition
+		scenarioWiring        *daemoncompose.ScenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 		late                  = &startupBindings{}
@@ -997,7 +993,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
 		manualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
 	if cfg.FakeDriverEnabled {
-		workflow, err = ComposeFakeWorkflow(
+		workflow, err = daemoncompose.ComposeFakeWorkflow(
 			st, attention, autoScriptStageDriver{StageDriver: driver}, lock, bound, cfg.Logger)
 		if err != nil {
 			return nil, err
@@ -1006,7 +1002,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// writes reach reads this engine, not nil.
 		late.workflow = workflow
 		if cfg.SeedWalkingSkeleton {
-			if err := SeedWalkingSkeleton(parent, workflow); err != nil {
+			if err := daemoncompose.SeedWalkingSkeleton(parent, workflow); err != nil {
 				return nil, err
 			}
 		}
@@ -1019,12 +1015,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		claudeWiring, workflow, imageUpkeep = claude.claudeWiring, claude.workflow, claude.imageUpkeep
 	} else if cfg.Scenario != nil {
-		var parts ScenarioParts
+		var parts daemoncompose.ScenarioParts
 		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
-		scenarioWiring, err = ComposeScenario(ctx, parts)
+		scenarioWiring, err = daemoncompose.ComposeScenario(ctx, parts)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
