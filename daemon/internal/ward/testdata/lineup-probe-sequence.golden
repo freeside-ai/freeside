@@ -16,10 +16,10 @@ delete-network freeside-lineup-probe-<id1>-egress
 list-networks
 
 # Injected failures: step, error class, content evidence, claim, teardown, runtime.
-probe-container create plain no-evidence attempted=true owned=false fingerprint=empty teardown=failed reaped
-probe-container inspect plain no-evidence attempted=true owned=true fingerprint=empty teardown=ok reaped
-probe-container allowlist conformance:credential_separation no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
-probe-container start plain no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
+probe-container create conformance:teardown no-evidence attempted=true owned=false fingerprint=empty teardown=failed reaped
+probe-container inspect conformance:teardown no-evidence attempted=true owned=true fingerprint=empty teardown=ok reaped
+probe-container allowlist conformance:credential_separation no-evidence attempted=true owned=true fingerprint=empty teardown=ok reaped
+probe-container start conformance:teardown no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
 probe-container copy plain no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
-probe-container stopped plain no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
-probe-container delete plain no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
+probe-container stopped conformance:teardown no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
+probe-container delete conformance:teardown no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
