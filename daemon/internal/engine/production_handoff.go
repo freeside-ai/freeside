@@ -224,11 +224,8 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 		if err != nil {
 			return domain.HandoffCheck{}, nil, err
 		}
-		if w.afterVerification != nil {
-			if err := w.afterVerification(); err != nil {
-				return domain.HandoffCheck{}, nil, fmt.Errorf("after handoff verification: %w",
-					errors.Join(err, errProductionCrashSeam))
-			}
+		if err := w.runAfterVerification("handoff verification"); err != nil {
+			return domain.HandoffCheck{}, nil, err
 		}
 	}
 	// Only a failed step is the remediator's to fix. A merge that passed with

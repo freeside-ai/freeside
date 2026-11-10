@@ -1137,6 +1137,19 @@ func sameOptionalDigest(a, b *domain.Digest) bool {
 	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
+// runAfterVerification runs the test-only crash seam that follows a stored
+// verification on the forward, reentry, and handoff paths. label names the
+// verification in the returned error.
+func (w *productionPublicationWorkflow) runAfterVerification(label string) error {
+	if w.afterVerification == nil {
+		return nil
+	}
+	if err := w.afterVerification(); err != nil {
+		return fmt.Errorf("after %s: %w", label, errors.Join(err, errProductionCrashSeam))
+	}
+	return nil
+}
+
 func (w *productionPublicationWorkflow) reconcileTask(
 	ctx context.Context, task productionPublicationTask,
 ) (outcome productionTaskOutcome, resultErr error) {
@@ -1460,11 +1473,8 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if w.afterVerification != nil {
-			if err := w.afterVerification(); err != nil {
-				return productionTaskOutcome{}, fmt.Errorf("after production verification: %w",
-					errors.Join(err, errProductionCrashSeam))
-			}
+		if err := w.runAfterVerification("production verification"); err != nil {
+			return productionTaskOutcome{}, err
 		}
 	}
 	if !checkpoint.Authorization.AuthorizesPublication {
