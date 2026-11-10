@@ -309,10 +309,11 @@ func composeClaudeWorkflow(
 		Lock: lock, Bound: bound,
 		Backend: claudeWiring.backend, AdmissionFloor: admissionFloor(cfg.Claude.OperatingMode),
 		Admission: claudeWiring.env, AdmissionNow: func() time.Time { return time.Now().UTC() },
-		Derive:      claudeWiring.derive,
-		SelectImage: claudeWiring.selectImage,
-		Logger:      cfg.Logger,
-		UsageSink:   claudeUsageCaptures,
+		Derive:           claudeWiring.derive,
+		SelectImage:      claudeWiring.selectImage,
+		HostVerification: claudeWiring.hostVerification,
+		Logger:           cfg.Logger,
+		UsageSink:        claudeUsageCaptures,
 	}
 	judgmentBudget := inference.Budget{
 		Window: 24 * time.Hour,

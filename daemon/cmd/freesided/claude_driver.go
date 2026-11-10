@@ -32,6 +32,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/exportscan"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -93,6 +94,9 @@ type claudeDriverConfig struct {
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
+	// HostVerification names the macOS verification executor; an empty root
+	// configures none (composeHostVerificationExecutor).
+	HostVerification macverifyExecutorConfig
 	// StateRoot and CredentialsDir locate the GitHub App authority and
 	// credential material the exact-base transport authenticates with.
 	StateRoot                   string
@@ -1422,8 +1426,11 @@ type claudeComposition struct {
 	selectImage     engine.ImageSelection
 	bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
 	runConformance  func(context.Context) error
-	closer          sessionCloser
-	janitor         *janitorSession
+	// hostVerification is the macOS verification executor, nil when none
+	// is configured.
+	hostVerification *macverify.Backend
+	closer           sessionCloser
+	janitor          *janitorSession
 	// observeRepositoryTip is the conditional ref read through the publish
 	// reconciler (§5.11 conditional requests) for the active-resource
 	// reconciler's tip watch and image upkeep, which feed project-image
@@ -1834,6 +1841,11 @@ func composeClaudeDriver(
 	); err != nil {
 		return nil, err
 	}
+	hostVerification, err := composeHostVerificationExecutor(
+		ctx, st, cfg.HostVerification, cfg.RunConformance, logger, proveHostVerification)
+	if err != nil {
+		return nil, err
+	}
 
 	driver, driverErr := claude.New(claude.Config{
 		Lifetime:     ctx,
@@ -1925,6 +1937,7 @@ func composeClaudeDriver(
 	observeRefTip := refTipObserver(reconciler)
 	composition := &claudeComposition{
 		driver: driver, backend: backend, authority: authority,
+		hostVerification: hostVerification,
 		selectionFailure: selectionFailure,
 		followUpFiler:    followUpFiler,
 		reviewReplier:    reviewReplier,

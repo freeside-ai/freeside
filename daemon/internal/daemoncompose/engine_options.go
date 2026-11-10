@@ -9,6 +9,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/macverify"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -20,9 +22,10 @@ import (
 // Contract: the builder passes every value through unchanged and decides
 // none of them. Required fields always become their option, nil or not, so
 // the engine's own checks still fail startup on a missing part. Optional
-// fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink) become
-// their option only when non-nil, because each of those engine options
-// rejects nil; a nil optional field means the part is not installed.
+// fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink,
+// HostVerification) become their option only when non-nil, because each of
+// those engine options rejects nil; a nil optional field means the part is
+// not installed.
 type ProductionEngine struct {
 	// Required.
 	Lock  *daemonlock.Lock
@@ -45,6 +48,9 @@ type ProductionEngine struct {
 	HealthRefresh func(context.Context) error
 	Logger        *slog.Logger
 	UsageSink     engine.ClaudeUsageSink
+	// HostVerification, when set, is the macOS verification executor the
+	// engine admits macos_host recipe commands onto.
+	HostVerification *macverify.Backend
 }
 
 // Options returns the engine Options in the order the Claude workflow has
@@ -76,6 +82,16 @@ func (p ProductionEngine) Options() []engine.Option {
 	}
 	if p.UsageSink != nil {
 		options = append(options, engine.WithClaudeUsageSink(p.UsageSink))
+	}
+	if backend := p.HostVerification; backend != nil {
+		options = append(options, engine.WithHostVerificationAdmission(backend,
+			func() (verify.Room, error) {
+				room, err := macverify.NewRoom(backend, macverify.RoomOptions{})
+				if err != nil {
+					return nil, err
+				}
+				return room, nil
+			}))
 	}
 	return options
 }
