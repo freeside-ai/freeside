@@ -30,7 +30,7 @@ func TestTranscriptToleratesBacktickEscape(t *testing.T) {
 
 func TestTranscriptRoundTrip(t *testing.T) {
 	want := specify.Output{Specification: &specify.Specification{
-		Summary: "Ready.", Body: "# Specification", Addressals: []specify.Addressal{},
+		Summary: "Ready.", Body: "# Specification\n\nRequire approval.", Addressals: []specify.Addressal{},
 	}}
 	body, err := specify.EncodeTranscript(want)
 	if err != nil {
@@ -130,6 +130,28 @@ func TestTranscriptRejectsInvalidStructuredOutput(t *testing.T) {
 			// The error quotes the prefix with %q.
 			if quoted := strconv.Quote(tc.prefix); !strings.Contains(err.Error(), quoted[1:len(quoted)-1]) {
 				t.Fatalf("error = %v, want prefix %q", err, tc.prefix)
+			}
+		})
+	}
+}
+
+// The placeholder the Wave 9 exit run recorded (#3017) is refused whether
+// the transcript carries it as structured_output or as result text.
+func TestTranscriptRefusesHeadingOnlySpecification(t *testing.T) {
+	const placeholder = `{"specification":{"summary":"s","body":"# T","addressals":[]}}`
+	quoted, err := json.Marshal(placeholder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, field := range map[string]string{
+		"structured output": `"structured_output":` + placeholder,
+		"result text":       `"result":` + string(quoted),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := specify.DecodeTranscript(strings.NewReader(
+				`{"type":"result","subtype":"success","is_error":false,` + field + "}\n"))
+			if !errors.Is(err, specify.ErrInvalidOutput) || !strings.Contains(err.Error(), "no content below its headings") {
+				t.Fatalf("error = %v, want heading-only refusal", err)
 			}
 		})
 	}
