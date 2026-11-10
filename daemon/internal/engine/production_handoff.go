@@ -681,7 +681,14 @@ func (w *productionPublicationWorkflow) retireReentryTask(
 	if found {
 		imported = checkpoint.Imported
 	}
-	recovered, err := w.recoverDefinitiveBlockedTask(ctx, task, binding, imported, checkpoint, found, false)
+	// A retired cycle reads no ready item or publication intent, so its
+	// progress says only whether a checkpoint exists, the one fact
+	// blocked-item recovery needs from it besides readiness.
+	progress := productionPublicationProgressUnverified
+	if found {
+		progress = productionPublicationProgressVerified
+	}
+	recovered, err := w.recoverDefinitiveBlockedTask(ctx, task, binding, imported, checkpoint, progress)
 	if err != nil || recovered != nil {
 		return derefOutcome(recovered), err
 	}

@@ -98,6 +98,8 @@
 //     bindings
 //   - production_publication_task.go publication task keys and the restart
 //     reconstruction of a stored task row
+//   - production_publication_progress.go how far a forward-route task got
+//     before this pass, read from its checkpoint, ready item, and intent
 //   - production_publication_completion.go authenticating a publication's
 //     terminal and ready records
 //   - production_export_record.go committing the trusted export and the
