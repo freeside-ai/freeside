@@ -120,9 +120,11 @@ Look for each of these before and during the run; most have bitten twice.
 - **A stopped daemon answers `/health` and records nothing.** A durable
   stop keeps reads serving, so `/health` stays 200 while the daemon cannot
   mint a GitHub token, see a merge, or record a completion. The stop state
-  is the STOPPED banner in the client or an open `daemon_durable_stop`
-  item; "janitor is not active" in the log is a cue to read it, not proof,
-  because a janitor that is absent or still starting logs the same error.
+  is the Stopped notice above the client's list, or an open
+  `daemon_durable_stop` finding in Settings > System Health, which
+  `freesided inspect health` lists; "janitor is not active" in the log is
+  a cue to read it, not proof, because a janitor that is absent or still
+  starting logs the same error.
   Read the stop state right before handing over the merge, again while the
   merge waits, and before waiting on the completion fact. Hand the link
   over with the deadline: until #1996 lands, a daemon that has made an
@@ -146,10 +148,10 @@ Look for each of these before and during the run; most have bitten twice.
   arrived.
 - **An agent can press a card's buttons, not the menus.** Background app
   control drives the Ephemeral client's cards without taking the pointer,
-  so it is safe on a shared Mac. The card's More Actions menu and the
-  menu-bar Start and Stop need full-screen control, which the owner
-  approves each time; a deputy run needs neither, since `prod` keeps
-  running (#2080).
+  so it is safe on a shared Mac. The card's More Actions menu needs
+  full-screen control, which the owner approves each time. The menu-bar
+  Start and Stop needed it too until #1988 gave them a command; a deputy
+  run needs neither, since `prod` keeps running (#2080).
   Record that the agent, not the operator, drove: a card the agent reads
   is not an operator's unprompted reading.
 - **The liveness probe logs its own notices.** `probe.log` beside the
@@ -163,10 +165,12 @@ Look for each of these before and during the run; most have bitten twice.
   stdout. Filter it out (`grep -v pairing_code`) before tailing or grepping
   either into a transcript. The retired harness's failure paths dumped an
   unfiltered `tail -50` of that log (#1559).
-- **Reading the store after the daemon stops.** A `?mode=ro` open fails once
-  the daemon is gone. Copy `freeside.db` with its `-wal` and `-shm` files,
-  if present (never the neighboring key files), to scratch and open the
-  copy normally. Copying the database alone, or opening it with
+- **Reading the store after the daemon stops.** `freesided inspect` reads a
+  stopped root itself, under the daemon lock (daemon/README.md, Read A
+  Task's Record), so use it first. For a query it can't answer, a
+  `?mode=ro` open fails once the daemon is gone. Copy `freeside.db` with
+  its `-wal` and `-shm` files, if present (never the neighboring key
+  files), to scratch and open the copy normally. Copying the database alone, or opening it with
   `?immutable=1`, skips commits still in the WAL after an unclean exit.
 - **Decide cards promptly; nothing times out now.** The retired harness's
   observation deadline (`FREESIDE_REAL_RUN_TIMEOUT_SECONDS`) once ran
@@ -189,9 +193,10 @@ Look for each of these before and during the run; most have bitten twice.
 - **A retained root holds admission on old health items.** Open blocking
   system-health notices from earlier runs (a durable stop, for one) hold the
   next run at admission with `blocking_system_health` until an operator
-  resolves them in a client; advisory notices never hold it. No read lists
-  them before launch, and resolving one needs a client on the running
-  daemon, so the SKILL.md Preflight bullet "The state root is usable" sets
+  resolves them in a client; advisory notices never hold it. The pre-spend
+  record's `health_items` lists them before launch, but resolving one
+  needs a client on the running daemon (Settings > System Health since
+  #2920), so the SKILL.md Preflight bullet "The state root is usable" sets
   the expectation and Run the Deputy step 2 (the pairing checkpoint) says
   how to resolve and record them before the first approval (#2043).
 - **Retained-session resume is gone.** The retired harness's
@@ -219,7 +224,8 @@ Look for each of these before and during the run; most have bitten twice.
   their own creation, with no deliveries (#2217). Read each item's `status`,
   `conclusion`, and `deliveries` after raising it; `items[]` alone passes a
   born-closed item. Since #2217 merged, both stay open after completion
-  (run 132's fixture pass), but delivery still needs a paired device.
+  (run 132's fixture pass), but delivery still needs a paired device, and
+  since #2931 one whose notifications switch is on.
 - **The image's agent CLI must serve the lineup's models.** A built image
   can carry an older CLI than its pin (#2209). Before the real run, run
   `freesided probe-lineup` on the real run's root (daemon/README.md, Probe
@@ -261,9 +267,9 @@ Look for each of these before and during the run; most have bitten twice.
   (seen on run 125; not filed).
 - **A retained root's old cards may never clear.** Closure cards for a
   merged work unit stay open (#2218), and a card can reopen after its
-  approval (#2219). No `freesided` read lists effect-proposal cards yet
-  (#2226), so inspect them from a copy of the stopped store and leave them
-  for the owner rather than deciding them.
+  approval (#2219). `freesided inspect proposals` lists the root's open
+  proposal cards (#2226); read them there and leave them for the owner
+  rather than deciding them.
 - **A failed specification stage ends a one-task run.** `freesided
   reattempt` retries the implementation run, which exists only after spec
   approval, so it refuses a task whose specification failed; the
@@ -288,8 +294,8 @@ Look for each of these before and during the run; most have bitten twice.
   fetcher authenticates only the scope repository's issue endpoints, so a
   specifier that asks for one of the fixture's pull requests gets a 404 and
   the specification fails (#2311, run 132's line-4 check).
-- **The liveness probe's topic is its own.** It is not the device topic on
-  the client's Devices screen, and it works with no daemon. Hand the
+- **The liveness probe's topic is its own.** It is not the device topic in
+  the client's Settings > Notifications, and it works with no daemon. Hand the
   operator the probe topic privately (never in a record) to subscribe in
   the iPhone's ntfy app before the environment check. Uninstall the dev
   probe as soon as the deputy ends, or it reports the stopped deputy as a
@@ -297,6 +303,20 @@ Look for each of these before and during the run; most have bitten twice.
 - **Spend is a lower bound.** Usage isn't recorded for the implementation
   writer or the reviewer (#2212); the implementation transcript's result
   event carries `total_cost_usd`.
+- **A freshly paired device gets no notifications.** Since #2931 a
+  device's notifications are off until its switch goes on, and the daemon
+  then owes it only items opened afterwards. A phone paired to a fresh root
+  has a topic it has never subscribed to, and the client shows Copy Topic
+  only with the switch on, so even `notify-test` has nowhere to arrive
+  until the operator turns it on and subscribes. Do both at the pairing
+  checkpoint, and only for a gate that names a notification; everywhere
+  else an item with no `deliveries` is the designed result.
+- **System-health findings are not in the inbox.** Since #2920 every
+  `system_health` finding shows in Settings > System Health on both
+  clients: the daemon's stop notices, and the `stall` and `held-work`
+  alerts an exit run raises. A task whose only open item is one reads
+  Working, not Needs You. Tell the operator where to look, or a raised
+  alert reads as missing.
 
 ## Mode And Flags Past Trackers Required
 

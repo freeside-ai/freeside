@@ -29,7 +29,7 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 | --- | --- |
 | Rehearsal | <fixture pass: the pass's build SHA, and when the real run started from a newer tip, that SHA and the `scripts/runtime-diff.sh` verdict line; root; settings digest; canonical issue; task and run ids; `billable_cost`; record checks, alerts raised, lease released: passed or the finding> |
 | State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
-| Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes> |
+| Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes; the iPhone's notifications switch: off, or on from `<time>` for <gate>> |
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
 | Campaign <n>, implementation attempt <k> | <run id; outcome; if failed, the finding and whether an item was raised> |
 | Review | <review id; model and reasoning; instruction digest; round outcomes> |
@@ -49,9 +49,12 @@ recorded before launch.
 **Actions exercised on real items:** <action (card, device)> ...
 **Not evidenced this run:** <action: why; what covers it instead> ...
 **Synthetic-trigger proofs:** <alert: `freesided raise-item` command; item
-ID; what arrived and what the card showed, per device> ... These items were
-raised by command, not by the condition: they prove delivery and display,
-and the daemon's tests prove the condition raises the item.
+ID and its `status` in the task record, or for `stall` its listing in
+`freesided inspect health`; where the card showed and what it said,
+per device; the notification only where the gate expected one> ... These
+items were raised by command, not by the condition: they prove the item
+reaches the clients and how it displays, and the daemon's tests prove the
+condition raises the item.
 
 ### Findings
 

@@ -31,8 +31,9 @@ section it links.
    ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
 3. Prepare the operator's devices
    ([Prepare The Operator's Devices](#prepare-the-operators-devices)).
-4. Start the deputy on the real root, pair both clients, test their
-   notifications, and resolve a retained root's health items
+4. Start the deputy on the real root, pair both clients, set up and test
+   the iPhone's notifications when a gate names one, and resolve a retained
+   root's health items
    ([Start And Verify](#start-and-verify)).
 5. Submit the target from the CLI ([Start And Verify](#start-and-verify)),
    or, in client-target mode, the visibility seed and then the composer's
@@ -195,8 +196,15 @@ successful client pairing instead. Renewal does not consume or create a
 workflow attempt, restart the deputy, or authorize another submission. Any
 campaign-specific minting budget still applies.
 
-Once both clients are paired, send each a test notification, as the deputy's
-OS user:
+When a run has to show that a card's notification arrives, set the iPhone
+up for it once both clients are paired and before that card opens. A newly
+paired device's notifications switch is off, the daemon notifies a device
+only for items opened after its switch went on, and a phone paired to a
+fresh root has a topic it has never subscribed to (app/README.md, Phone
+Notifications). The operator turns the iPhone's switch on, in Settings
+under Notifications, and follows the steps shown below it: subscribe the
+ntfy app to the topic **Copy Topic** copies. Then send a test notification,
+as the deputy's OS user:
 
 ```sh
 freesided notify-test -state-dir <root>/daemon
@@ -204,14 +212,21 @@ freesided notify-test -state-dir <root>/daemon
 
 It prints a line per paired device, ending `accepted by ntfy` or the failure
 ([Control Socket and Pairing Codes](../daemon/README.md#control-socket-and-pairing-codes)).
-Acceptance is the provider's, so the operator confirms that each notice
-arrived. A phone can't send itself one yet (#1959).
+Acceptance is the provider's, so the operator confirms that the notice
+arrived on the iPhone. Nothing on the Mac listens for ntfy, so its line
+proves only that the provider accepted the notice. A phone can't send itself
+one yet (#1959). The test goes to every paired device whatever its switch
+says, so its arrival proves the channel and nothing about a card.
+
+When no gate names a notification, skip the setup and the test and leave the
+switch off: the card in the client is the proof, and the item records no
+delivery to that device.
 
 A standing root keeps the system-health items its earlier runs left open, and
 a restart does not close them. The blocking ones hold the next run's first
 admission with reason `blocking_system_health` until an operator resolves
-them in a paired client: Inbox > System health in the Mac client, with the
-action the item's card offers (on run 117, More Actions > Resume Unattended
+them in a paired client: Settings > System Health, with the action the
+finding's card offers (on run 117, More Actions > Resume Unattended
 closed the run-116 `daemon_durable_stop` notice; Acknowledge only records,
 and the item stays open). Advisory items never hold admission. Resolve them
 once the clients are paired and before the first approval, then confirm
@@ -240,7 +255,8 @@ timeline, runs, attention items, and publication outcome as versioned JSON
 ([Read A Task's Record](../daemon/README.md#read-a-tasks-record)). A published
 run's outcome names the pull request of exactly the exported head. Each
 attention item carries its per-device `deliveries`, so the record also shows
-whether a card's notification reached each paired client. For one run's
+whether a card's notification reached each paired client whose notifications
+are on. For one run's
 derived supervision state, read
 `freesided follow -db <root>/daemon/freeside.db -run <run-id> -snapshot`.
 
@@ -271,7 +287,12 @@ with the deputy still serving:
    so nothing can merge ahead of it. Read
    `gh pr view <number> --repo <owner/repo> --json isDraft,body` before the
    decision and after it: afterwards the pull request has left draft and
-   carries the final reference.
+   carries the final reference. The card itself is in the run's
+   `closure_cards` in the task record: the one whose
+   `merge.candidate_head_sha` is the outcome's `head_sha`, with its
+   `decision` once the operator decides. While it is open,
+   `freesided inspect proposals` lists it too
+   ([Read A Task's Record](../daemon/README.md#read-a-tasks-record)).
 2. **The walkthrough.** Fetch the run on both paired clients and exercise
    the ready-card actions the run needs; in an exit run, the ones its
    contract lists. Record which actions ran, the task and
@@ -280,10 +301,11 @@ with the deputy still serving:
    head. Health from the default service on port 7331 does not prove this
    run is still available at its paired endpoint.
 3. **The stopped-daemon check.** Right before the merge, look on the Mac for
-   the STOPPED banner or an open `daemon_durable_stop` notice in Inbox >
-   System health. A daemon that stopped itself records no completion, and
-   the review-growth alert depends on that fact. The notice names the
-   daemon, not a task, so no `freesided` read shows it.
+   the Stopped notice above the list, or an open `daemon_durable_stop`
+   finding in Settings > System Health. A daemon that stopped itself records
+   no completion, and the review-growth alert depends on that fact. The
+   notice names the daemon, not a task, so the task record never shows it;
+   `freesided inspect health` lists it among the root's open items.
 4. **The merge.** The pull request merges; on real work in an exit run, the
    owner merges it.
 5. **The completion fact.** Wait for the run's `publication.completion` in
@@ -297,10 +319,13 @@ with the deputy still serving:
    is the only point where all three work: `review-growth` is refused until
    the completion fact is recorded, and ending the deputy stops its daemon.
    Each command prints the raised item's ID and type. A run-bound item
-   (`held-work`, `review-growth`) shows in `inspect task`'s `items[]` with a
-   `deliveries` entry per paired device. The `stall` notice names the
-   daemon, not a run, so no `freesided` read shows it; the operator's report
-   is its delivery evidence. A refusal (a daemon that is not `ephemeral`, no
+   (`held-work`, `review-growth`) shows in `inspect task`'s `items[]`, with
+   a `deliveries` entry for each paired device whose notifications are on.
+   The `stall` notice names the daemon, not a run, so it shows in
+   `freesided inspect health` and not in the task record. In the clients,
+   `stall` and `held-work` are system-health findings and show in Settings >
+   System Health, never in the inbox; the review card shows in the inbox.
+   A refusal (a daemon that is not `ephemeral`, no
    daemon, a run with no completion) is a finding, not something to work
    around.
 7. **The record checks** above, on the final task record.
@@ -508,7 +533,7 @@ triggers synthetically with `freesided raise-item`
 ([Walk Through, Merge, And Raise The Alerts](#walk-through-merge-and-raise-the-alerts)).
 With no paired client on the fixture root, the record shows each run-bound
 item but no `deliveries`: the pass proves the daemon side only, and the
-`stall` item's proof is the ID `raise-item` prints.
+`stall` item's proof is its ID among `freesided inspect health`'s open items.
 
 On this private fixture, both publication author sites fall back until the
 publisher can read a private repository's source issue (#2360). The pull
@@ -915,9 +940,11 @@ carries depends on where the issue lives:
   holds it there until the closure card is decided. An approval that keeps
   the resolves flag marks it ready with `Closes #<number>`; a decline, or an
   approval that turns the flag off, marks it ready with `Refs #<number>`.
-  The card is an effect-proposal card in a paired client's inbox;
-  `freesided inspect task` doesn't list it, because its subject is the
-  proposal batch, not the task (#2226). Only the approval path has run live.
+  The card is an effect-proposal card in a paired client's inbox. Its
+  subject is the proposal batch, not the task, so `freesided inspect task`
+  lists it under the run's `closure_cards` and never in `items`, and
+  `freesided inspect proposals` lists it while it is open. Only the approval
+  path has run live.
 - **An issue in another repository:** `Source issue: <url>`, which closes
   nothing.
 
