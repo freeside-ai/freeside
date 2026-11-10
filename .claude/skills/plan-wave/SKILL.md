@@ -42,6 +42,11 @@ contract that names the fields to bring back, and keep their raw output out
 of this session's context. A Wave 8 planning session lost its context twice
 in its first hour.
 
+Before the first delegate, tell the user how many you expect to run and
+what each reads, and go ahead on their word or within a budget they have
+already set (AGENTS.md, Context Discipline). Where the platform offers a
+choice, give mechanical reads the cheapest capable model.
+
 ## Derive the Wave Before Acting
 
 Wave content is never hard-coded here; the plan as it stands today is the
@@ -228,6 +233,21 @@ milestones exist is the half-scheduled state the sweep detects.
 - **One issue per unit.** Where the work list names an existing issue,
   stage or rescope it in place. New issues come from the work-unit template
   with the fields docs/coordination.md (Work-Unit Issues) lists.
+- **Check for live work first.** Before editing an existing issue, read
+  its claims, its planning reservation, its open PRs, and the open
+  trackers that list it (docs/coordination.md, Claiming).
+  `scripts/trackercollect unit` gathers that evidence; an `UNKNOWN` entry
+  in its report means that state isn't established, and a `kind:contract`
+  issue always carries one, so read that issue's comments and PRs
+  directly. An issue with a live claim, an open PR, or an active
+  reservation has someone working from its contract: coordinate before
+  changing it (AGENTS.md, Forge Edits). Here that means the owner decides
+  whether the wave's rescope lands now or after that work hands off. An
+  issue an open ad hoc tracker lists starts by fiat (docs/coordination.md,
+  Tracking Issues), and staging it opens the scheduling door on it too:
+  ask the owner before staging it. A Dependencies change to an issue
+  another open tracker lists owes that tracker's repair in the same
+  operation (docs/coordination.md, Tracking Issues).
 - **Order.** Shape and sequencing come from the row, written as typed
   relationships in the Dependencies field (docs/coordination.md,
   Relationship Types). Write a `starts-after` edge only where the dependent
@@ -317,8 +337,10 @@ return contract is one line per surface: the surface, exists or not, and
   Operator) on the fixture repository against the midpoint build, not the
   skill's preflight, whose resolved-exit-set check can't hold mid-wave, and
   files what it finds against this wave. Neither unit closes through a
-  merged PR and both start by the owner's word, so both go under
-  `### Owner-run` (docs/tracker-format.md, units).
+  merged PR and both start by the owner's word, so both carry
+  `needs-human` and no milestone and go under `### Owner-run`
+  (docs/coordination.md, Tracking Issues). Without the label the
+  scheduling-state report lists them as `invisible`.
 - **Carry prior findings.** Find every open deferral a prior audit or exit
   run filed against a criterion this wave's exit claims. Each is scheduled
   in this wave or carved out of the exit by a recorded owner decision; ask
