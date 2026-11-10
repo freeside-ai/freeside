@@ -20,7 +20,15 @@ var (
 // runMacverifyMain installs, checks, or removes the macOS verification
 // executor's host state. Only flag parsing and output live here; every
 // create, adopt, and delete decision is internal/macverify's.
+//
+// The hidden probe verb is the confinement probe the executor's room runs as
+// a slot, from a copy of this binary, so the probe is the build the
+// conformance record names. It needs no host setup and prints only its
+// report.
 func runMacverifyMain(args []string) {
+	if len(args) > 0 && args[0] == "probe" {
+		os.Exit(macverify.RunProbe(args[1:], os.Stdout))
+	}
 	host, err := macverify.NewSystemHost()
 	if err == nil {
 		err = runMacverifyCommand(args, os.Stdout, host, defaultMacverifyOperator())

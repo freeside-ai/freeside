@@ -3,10 +3,11 @@
 // Command probe is the macverify live suite's workload: the suite runs it
 // through the room as a real slot and reads its report. Each check prints
 // "ok <name>" or "FAIL <name>: <detail>", and the probe exits 1 if any
-// failed.
+// failed. The network, write, and home-reset confinements are the daemon's
+// own probe's (freesided macverify probe), which the room runs before every
+// command; confine checks only what that probe does not.
 //
-//	probe confine <loopback-port> <operator-home>
-//	probe home-clean
+//	probe confine
 //	probe kill-self
 //	probe linger
 package main
@@ -28,7 +29,6 @@ import "C"
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,22 +38,14 @@ import (
 	"time"
 )
 
-const homeMarker = "freeside-probe-marker"
-
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: probe confine|home-clean|kill-self|linger")
+		fmt.Fprintln(os.Stderr, "usage: probe confine|kill-self|linger")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
 	case "confine":
-		if len(os.Args) != 4 {
-			fmt.Fprintln(os.Stderr, "usage: probe confine <loopback-port> <operator-home>")
-			os.Exit(2)
-		}
-		os.Exit(confine(os.Args[2], os.Args[3]))
-	case "home-clean":
-		os.Exit(homeClean())
+		os.Exit(confine())
 	case "kill-self":
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		time.Sleep(time.Minute)
@@ -85,28 +77,16 @@ func (r *report) check(name string, err error) {
 	fmt.Printf("ok %s\n", name)
 }
 
-func confine(port, operatorHome string) int {
+func confine() int {
 	var r report
-	r.check("loopback-refused", expectFailure(func() error {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 3*time.Second)
-		if err == nil {
-			_ = conn.Close()
-		}
-		return err
-	}))
-	r.check("resolver-empty", expectFailure(func() error {
-		_, err := net.LookupHost("github.com")
-		return err
-	}))
 	marker := fmt.Sprintf("freeside-probe-%d", os.Getpid())
-	for _, dir := range []string{"/private/tmp", "/Users/Shared", operatorHome} {
-		r.check("write-denied "+dir, expectFailure(func() error { return writeFile(filepath.Join(dir, marker)) }))
-	}
-	wd, err := os.Getwd()
-	r.check("write-job-dir", errors(err, writeFile(filepath.Join(wd, marker))))
-	r.check("write-home", writeFile(filepath.Join(os.Getenv("HOME"), homeMarker)))
+	r.check("write-home", writeFile(filepath.Join(os.Getenv("HOME"), marker)))
 	r.check("write-tmpdir", writeFile(filepath.Join(os.Getenv("TMPDIR"), marker)))
-	r.check("job-dir-owner", jobDirOwned(wd))
+	wd, err := os.Getwd()
+	if err == nil {
+		err = jobDirOwned(wd)
+	}
+	r.check("job-dir-owner", err)
 	r.check("environment", environmentAllowlist())
 	r.check("no-window-server-session", func() error {
 		if C.has_window_server_session() != 0 {
@@ -120,40 +100,8 @@ func confine(port, operatorHome string) int {
 	return 0
 }
 
-func homeClean() int {
-	var r report
-	_, err := os.Lstat(filepath.Join(os.Getenv("HOME"), homeMarker))
-	if err == nil {
-		err = fmt.Errorf("%s survived from an earlier job", homeMarker)
-	} else if os.IsNotExist(err) {
-		err = nil
-	}
-	r.check("home-reset", err)
-	if r.failed {
-		return 1
-	}
-	return 0
-}
-
-func expectFailure(attempt func() error) error {
-	if err := attempt(); err != nil {
-		fmt.Printf("  (refused as expected: %v)\n", err)
-		return nil
-	}
-	return fmt.Errorf("succeeded")
-}
-
 func writeFile(path string) error {
 	return os.WriteFile(path, []byte("probe\n"), 0o600)
-}
-
-func errors(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // jobDirOwned checks the job directory, the workspace's parent, is this

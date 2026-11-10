@@ -19,33 +19,44 @@ import (
 
 // fakeLauncher stands in for slot-run: it creates the job directory prepare
 // would and records every operation, so the room's sequencing and absence
-// rule run without root.
+// rule run without root. A job prepared from probeDir is a probe job: its
+// run plays probe, and the recipe-only hooks below leave it alone.
 type fakeLauncher struct {
-	root string
+	root     string
+	probeDir string
 
 	mu       sync.Mutex
 	calls    []string
 	prepares []prepareCall
 	runs     []runRequest
+	// profiles maps a job id to the profile prepare installed.
+	profiles map[string][]byte
 
-	// jobDirMode is the mode prepare gives the job directory; zero is 0700.
+	// jobDirMode is the mode a recipe job's prepare gives the job directory;
+	// zero is 0700.
 	jobDirMode os.FileMode
 	// uid is what prepare and reap report; zero is the test's own uid.
 	uid int
 	// reapUID overrides the uid reap reports.
 	reapUID int
-	// prepareHook runs inside prepare before it acts; a non-nil error is
-	// prepare's result.
+	// prepareHook runs inside a recipe job's prepare before it acts; a
+	// non-nil error is prepare's result.
 	prepareHook func(ctx context.Context) error
-	prepareErr  error
-	// reportSwiftCache overrides the Swift cache key prepare reports.
+	// prepareErr fails every prepare, probe jobs included.
+	prepareErr error
+	// reportSwiftCache overrides the Swift cache key a recipe job's prepare
+	// reports.
 	reportSwiftCache *string
 	reapErr          error
 	cleanupErr       error
-	// command plays the command; reaped closes on the first reap.
+	// command plays a recipe command; reaped closes on the first reap after
+	// it starts.
 	command  func(req runRequest, out io.Writer, reaped <-chan struct{}) runOutcome
 	reaped   chan struct{}
-	reapOnce sync.Once
+	reapOnce *sync.Once
+	// probe plays a probe job and returns its report and exit status; nil
+	// reports every check of the job's argv ok.
+	probe func(req runRequest, profile []byte) (string, int)
 	// live answers ownsProcess; nil means the slot owns nothing.
 	live func(uid int) bool
 }
@@ -57,11 +68,50 @@ type prepareCall struct {
 
 func newFakeLauncher() *fakeLauncher {
 	return &fakeLauncher{
-		reaped: make(chan struct{}),
+		profiles: make(map[string][]byte),
+		reaped:   make(chan struct{}),
+		reapOnce: &sync.Once{},
 		command: func(runRequest, io.Writer, <-chan struct{}) runOutcome {
 			return runOutcome{}
 		},
 	}
+}
+
+func isProbeArgv(argv []string) bool {
+	return len(argv) > len(probeCommand) && slices.Equal(argv[:len(probeCommand)], probeCommand)
+}
+
+// specFromArgv rebuilds the probe spec a probe argv was built from.
+func specFromArgv(argv []string) probeSpec {
+	mode, args := argv[len(probeCommand)], argv[len(probeCommand)+1:]
+	switch mode {
+	case probeModeSandbox:
+		return sandboxProbe(sandboxTargets{
+			loopbackPort: args[0], resolverHost: args[1], tcp: args[2], udp: args[3], outsideDirs: args[4:],
+		})
+	case probeModePacketFilter:
+		return packetFilterProbe(args[0], args[1])
+	case probeModeHomeMark:
+		return homeMarkProbe()
+	case probeModeHomeClean:
+		return homeCleanProbe()
+	}
+	panic("unknown probe mode " + mode)
+}
+
+// passingReport is the report a confined slot's probe prints for spec.
+func passingReport(spec probeSpec) string {
+	var b strings.Builder
+	for _, c := range spec.checks {
+		b.WriteString("  (refused as expected: operation not permitted)\n")
+		b.WriteString("ok " + c.name + "\n")
+	}
+	return b.String()
+}
+
+// failingReport is spec's passing report with check failed instead.
+func failingReport(spec probeSpec, check string) string {
+	return strings.Replace(passingReport(spec), "ok "+check+"\n", "FAIL "+check+": succeeded\n", 1)
 }
 
 func (f *fakeLauncher) record(call string) {
@@ -83,8 +133,10 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 	f.prepares = append(f.prepares, prepareCall{
 		slot: slot, jobID: jobID, workdir: workdir, swiftCache: swiftCache, profile: slices.Clone(profile),
 	})
+	f.profiles[jobID] = slices.Clone(profile)
 	f.mu.Unlock()
-	if f.prepareHook != nil {
+	recipe := workdir != f.probeDir
+	if recipe && f.prepareHook != nil {
 		if err := f.prepareHook(ctx); err != nil {
 			return preparedJob{}, err
 		}
@@ -96,9 +148,9 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 	if err := os.MkdirAll(filepath.Dir(jobDir), 0o750); err != nil {
 		return preparedJob{}, err
 	}
-	mode := f.jobDirMode
-	if mode == 0 {
-		mode = 0o700
+	mode := os.FileMode(0o700)
+	if recipe && f.jobDirMode != 0 {
+		mode = f.jobDirMode
 	}
 	if err := os.Mkdir(jobDir, mode); err != nil {
 		return preparedJob{}, err
@@ -107,7 +159,7 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 		return preparedJob{}, err
 	}
 	reported := swiftCache
-	if f.reportSwiftCache != nil {
+	if recipe && f.reportSwiftCache != nil {
 		reported = *f.reportSwiftCache
 	}
 	return preparedJob{
@@ -124,15 +176,32 @@ func (f *fakeLauncher) run(req runRequest, out io.Writer) (<-chan runOutcome, er
 	f.record("run " + req.Slot)
 	f.mu.Lock()
 	f.runs = append(f.runs, req)
+	profile := f.profiles[req.JobID]
 	f.mu.Unlock()
 	done := make(chan runOutcome, 1)
-	go func() { done <- f.command(req, out, f.reaped) }()
+	if isProbeArgv(req.Argv) {
+		report, exit := passingReport(specFromArgv(req.Argv)), 0
+		if f.probe != nil {
+			report, exit = f.probe(req, profile)
+		}
+		_, _ = io.WriteString(out, report)
+		done <- runOutcome{ExitCode: exit}
+		return done, nil
+	}
+	f.mu.Lock()
+	reaped := make(chan struct{})
+	f.reaped, f.reapOnce = reaped, &sync.Once{}
+	f.mu.Unlock()
+	go func() { done <- f.command(req, out, reaped) }()
 	return done, nil
 }
 
 func (f *fakeLauncher) reap(_ context.Context, slot string) (int, error) {
 	f.record("reap " + slot)
-	f.reapOnce.Do(func() { close(f.reaped) })
+	f.mu.Lock()
+	reaped, once := f.reaped, f.reapOnce
+	f.mu.Unlock()
+	once.Do(func() { close(reaped) })
 	if f.reapErr != nil {
 		return 0, f.reapErr
 	}
@@ -158,6 +227,24 @@ func (f *fakeLauncher) snapshot() ([]string, []prepareCall, []runRequest) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.calls), slices.Clone(f.prepares), slices.Clone(f.runs)
+}
+
+// recipeJobs returns the prepares and runs of recipe jobs only.
+func (f *fakeLauncher) recipeJobs() ([]prepareCall, []runRequest) {
+	_, prepares, runs := f.snapshot()
+	prepares = slices.DeleteFunc(prepares, func(p prepareCall) bool { return p.workdir == f.probeDir })
+	runs = slices.DeleteFunc(runs, func(r runRequest) bool { return isProbeArgv(r.Argv) })
+	return prepares, runs
+}
+
+// probeJob is the launcher calls of one passing probe job on slot.
+func probeJob(slot string) []string {
+	return []string{"prepare " + slot, "run " + slot, "reap " + slot, "cleanup " + slot}
+}
+
+// withProbe is calls prefixed with the pre-job probe's on slot1.
+func withProbe(calls ...string) []string {
+	return append(probeJob("slot1"), calls...)
 }
 
 const testProfile = "(version 1)(allow default)(deny network*)"
@@ -186,6 +273,8 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 	}
 	installHelper(t, room.helperPath, helperScript)
 	fake.root = root
+	fake.probeDir = t.TempDir()
+	room.probeWorkspace = func() (string, error) { return fake.probeDir, nil }
 	room.launcher = fake
 	room.helperOwner = uint32(os.Getuid()) //nolint:gosec // G115: a uid fits
 	room.hostSupported = true
@@ -225,10 +314,11 @@ func TestRunPreparesRunsAndReleasesSlot(t *testing.T) {
 	if res.ExitCode != 0 || string(res.Output) != "hello\n" || res.Truncated {
 		t.Fatalf("result = %+v", res)
 	}
-	calls, prepares, runs := fake.snapshot()
-	if want := []string{"prepare slot1", "run slot1", "reap slot1", "cleanup slot1"}; !slices.Equal(calls, want) {
+	calls, _, _ := fake.snapshot()
+	if want := withProbe("prepare slot1", "run slot1", "reap slot1", "cleanup slot1"); !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
 	}
+	prepares, runs := fake.recipeJobs()
 	p := prepares[0]
 	if p.slot != "slot1" || p.workdir != workdir || string(p.profile) != testProfile {
 		t.Fatalf("prepare = %+v", p)
@@ -258,22 +348,27 @@ func TestRunPreparesRunsAndReleasesSlot(t *testing.T) {
 
 func TestRunRefusesJobDirectoryNotPrivateToSlot(t *testing.T) {
 	t.Parallel()
-	for name, setup := range map[string]func(*fakeLauncher){
-		"group readable": func(f *fakeLauncher) { f.jobDirMode = 0o750 },
-		"other uid":      func(f *fakeLauncher) { f.uid = os.Getuid() + 1 },
+	refused := []string{"prepare slot1", "reap slot1", "cleanup slot1"}
+	for name, tc := range map[string]struct {
+		setup func(*fakeLauncher)
+		calls []string
+	}{
+		// The mode applies to the recipe job, so its probe passes first.
+		"group readable": {setup: func(f *fakeLauncher) { f.jobDirMode = 0o750 }, calls: withProbe(refused...)},
+		// A slot that is another uid refuses the probe's job already.
+		"other uid": {setup: func(f *fakeLauncher) { f.uid = os.Getuid() + 1 }, calls: refused},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeLauncher()
-			setup(fake)
+			tc.setup(fake)
 			room := newTestRoom(t, fake)
 
 			_, err := room.Run(t.Context(), t.TempDir(), []string{"true"})
 			if err == nil || !strings.Contains(err.Error(), "0700") || errors.Is(err, ErrAbsenceUnproven) {
 				t.Fatalf("Run error = %v, want a job directory refusal", err)
 			}
-			calls, _, _ := fake.snapshot()
-			if want := []string{"prepare slot1", "reap slot1", "cleanup slot1"}; !slices.Equal(calls, want) {
-				t.Fatalf("calls = %v, want %v (no run, then teardown)", calls, want)
+			if calls, _, _ := fake.snapshot(); !slices.Equal(calls, tc.calls) {
+				t.Fatalf("calls = %v, want %v (no run, then teardown)", calls, tc.calls)
 			}
 			if _, err := room.pool.lease(); err != nil {
 				t.Fatalf("slot not released after a proven teardown: %v", err)
@@ -306,7 +401,7 @@ func TestRunTimeoutKillsBySlotUID(t *testing.T) {
 		t.Fatalf("result = %+v, want the signal death -1", res)
 	}
 	calls, _, _ := fake.snapshot()
-	if want := []string{"prepare slot1", "run slot1", "reap slot1", "reap slot1", "cleanup slot1"}; !slices.Equal(calls, want) {
+	if want := withProbe("prepare slot1", "run slot1", "reap slot1", "reap slot1", "cleanup slot1"); !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
 	}
 }
@@ -329,7 +424,7 @@ func TestRunQuarantinesSlotWhenCanceledCommandNeverExits(t *testing.T) {
 		t.Fatalf("Run = %+v, %v; want ErrAbsenceUnproven for a helper still running", res, err)
 	}
 	calls, _, _ := fake.snapshot()
-	if want := []string{"prepare slot1", "run slot1", "reap slot1"}; !slices.Equal(calls, want) {
+	if want := withProbe("prepare slot1", "run slot1", "reap slot1"); !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v, want %v (no teardown under a live helper)", calls, want)
 	}
 	if _, err := room.pool.lease(); !errors.Is(err, ErrNoFreeSlot) {
@@ -351,7 +446,7 @@ func TestRunQuarantinesSlotWhenPrepareIsAbandoned(t *testing.T) {
 		t.Fatalf("Run error = %v, want ErrAbsenceUnproven", err)
 	}
 	calls, _, _ := fake.snapshot()
-	if want := []string{"prepare slot1"}; !slices.Equal(calls, want) {
+	if want := withProbe("prepare slot1"); !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v, want %v (no teardown racing prepare)", calls, want)
 	}
 	if _, err := room.pool.lease(); !errors.Is(err, ErrNoFreeSlot) {
@@ -377,7 +472,7 @@ func TestRunCanceledDuringPrepareFinishesPrepareThenTearsDown(t *testing.T) {
 		t.Fatalf("Run error = %v, want the cancellation with absence proven", err)
 	}
 	calls, _, _ := fake.snapshot()
-	if want := []string{"prepare slot1", "reap slot1", "cleanup slot1"}; !slices.Equal(calls, want) {
+	if want := withProbe("prepare slot1", "reap slot1", "cleanup slot1"); !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v, want %v (no command after cancellation)", calls, want)
 	}
 	if _, err := room.pool.lease(); err != nil {
@@ -520,8 +615,8 @@ func TestRunRefusesWhenEverySlotIsLeased(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
-	if _, prepares, _ := fake.snapshot(); len(prepares) != 1 {
-		t.Fatalf("prepared %d jobs, want only the first", len(prepares))
+	if prepares, _ := fake.recipeJobs(); len(prepares) != 1 {
+		t.Fatalf("prepared %d recipe jobs, want only the first", len(prepares))
 	}
 }
 

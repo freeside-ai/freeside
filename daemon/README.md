@@ -3343,9 +3343,9 @@ verification executor (`credential_free_host_verification`, package
 `internal/macverify`), needs only its own
 `supports_credential_free_host_verification` declaration, earned by its own
 conformance pass, and runs only a run's verification job. The class is
-declared and its room exists (Set Up the macOS Verification Executor by
-Hand), but nothing runs its pass or places a job on it yet (#2879, #2882), and
-doctor does not check it. Pass `-operating-mode
+declared and its room, conformance pass, and pre-job probe exist (Install the
+macOS Verification Executor), but the daemon neither runs the pass nor places
+a job on the room yet (#2882), and doctor does not check it. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
 unattended daemon. Use the `digest` field from that daemon's startup log record
 whose message is `effective reviewer configuration`; it is computed from the
@@ -4268,8 +4268,9 @@ one trusted recipe command per job as an unprivileged slot account on the
 daemon host. Its `Room` is the executor's `verify.Room`. The executor needs
 host state only an administrator can create, so `freesided macverify` installs
 it as a one-shot operator step under `sudo`, like the installers in
-`app/README.md`; the daemon never holds root. The conformance pass and the
-pre-job probe are #2879.
+`app/README.md`; the daemon never holds root. A conformance pass earns the
+executor's declaration, and a probe before every command re-checks it (Prove
+the Executor).
 
 **Launch path.** `freesided` runs as the operator's LaunchAgent, so it has no
 root, yet launching as a slot needs root. The room reaches root through one
@@ -4458,12 +4459,15 @@ cannot nest inside the room's profile. `-skipMacroValidation` and
 `-skipPackagePluginValidation` stand in for the trust prompt a fresh slot home
 has never answered. Decision record: `devlog/2026-11-09-0909-macos-swift-cache.md`.
 
-**Run the live suites.** The room suite runs a probe through the production
-room as a real slot of an installed executor: loopback refused, resolver
-empty, writes outside the job directory refused, no window-server session,
-the home reset between jobs, a signal death read as `-1`, a timeout that
-reaps a descendant that left its session, and the helper refusing accounts
-outside `slots.conf`:
+**Run the live suites.** The room suite runs probes through the production
+room as real slots of an installed executor, with the packet-filter rules
+install loads: the full conformance pass over every slot, the pre-job probe
+refusing a command under a profile that confines nothing, the checks the
+pre-job probe leaves out (the job's environment and directory owner, writable
+home and `TMPDIR`, no window-server session), a signal death read as `-1`, a
+timeout that reaps a descendant that left its session, and the helper refusing
+accounts outside `slots.conf`. Set `FREESIDE_MACVERIFY_OFF_HOST_UDP` to an
+`IP:port` DNS server when the resolver in `/etc/resolv.conf` does not answer:
 
 ```sh
 FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify \
@@ -4486,7 +4490,7 @@ FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_SWIFT_LIVE_TEST=1 \
 The install suite builds `freesided`, installs two slots under names disjoint
 from the default install (`fvtest1` and `fvtest2`, ids from 470, root
 `/Library/Freeside/macverify-livetest`), checks the accounts, files, and
-loaded anchor, runs the confinement probe as an installed slot, and removes
+loaded anchor, runs a confined job as an installed slot, and removes
 everything. It runs `sudo -n`, so refresh sudo in the same terminal first:
 
 ```sh
@@ -4514,6 +4518,86 @@ ancestors that pass install's check. It reports anything else as left, and an
 absent install is a no-op. The pf enable reference the boot job took stays until the next
 reboot; pf then runs only the stock rules. Each slot's per-user temporary and
 cache directories under `/private/var/folders` stay too.
+
+#### Prove the Executor
+
+The backend declares `supports_credential_free_host_verification` only after
+a passing conformance pass is durably recorded for its configuration digest
+(the daemon binary, profile, anchor rules, slots, root, and toolchain pin).
+`macverify.NewSuite` builds the pass and `Suite.Full` runs it; give it
+`WithConformanceRecorder`, since a pass with no recorder never declares.
+Nothing in the daemon runs it yet. Decision record:
+`devlog/2026-11-09-1830-macos-conformance-probe.md`.
+
+**The pass.** Full refuses off macOS and records nothing there. Otherwise it
+first withdraws the declaration and records a `superseded` marker, so a pass
+that fails or never finishes leaves nothing declared. It refuses a helper
+that differs from the embedded copy, a host toolchain that differs from the
+pin, and a slot that is leased or quarantined. Then it runs a positive
+control for every network check as the daemon user, since a slot's refusal
+proves nothing when the target was unreachable anyway: it connects to its own
+loopback listener, resolves `github.com`, connects to that name's first IPv4
+address on port 443, and gets an answer from the first off-host `nameserver`
+in `/etc/resolv.conf`. `SuiteFixture` overrides each target. Last, on every
+slot, it runs four probe jobs through the room's ordinary job path:
+
+| Job | Profile | Checks | Confinement |
+| --- | --- | --- | --- |
+| `sandbox` | configured | `loopback-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
+| `sandbox` | configured | `write-denied` in `/private/tmp`, `/Users/Shared`, and the daemon user's home; `write-job-dir` | `write_confinement` |
+| `packet-filter` | permissive (`(allow default)`) | `tcp-dropped`, `udp-dropped` to the control targets | `packet_filter` |
+| `home-mark`, then `home-clean` | configured | a marker left in the slot's home is gone in the next job | `home_reset` |
+
+A sandbox check passes only on `EPERM`, the sandbox's own refusal, so an
+unreachable target or a missing directory fails it. A packet-filter check
+runs with the sandbox off and passes only on a timeout, `EHOSTUNREACH`, or
+`EACCES`, what pf's `block drop` for the slot's uid produces; it fails on a
+connection, on `EPERM` (the sandbox was on after all), and on any other
+error, such as a refused connection, that means a packet left the host. A
+failure is a `*macverify.ConformanceFailure` that names the confinement and
+the slot (none for a failed control) and matches `macverify.ErrConformance`.
+The pass then records `failed`. A pass that a newer pass or a pre-job probe
+failure superseded records nothing and says so.
+
+**The pre-job probe.** Before every recipe command, the room runs the
+`sandbox` job on the leased slot under the configured profile, against fixed
+targets: a loopback listener it opens, `github.com`, `192.0.2.1:443`,
+`192.0.2.1:53`, and the three directories above. It needs no positive control,
+because `EPERM` is the sandbox's answer whatever the target. A confinement
+failure refuses the command before it runs, quarantines the slot until the
+daemon restarts, and withdraws the declaration in memory. A pass refuses a
+quarantined slot, so the declaration stays withdrawn until the restart, which
+restores the latest durable record; the probe then runs again before the next
+command and quarantines a slot that is still broken. The withdrawal writes no
+record, so the log does not show it. An operational failure (the slot would
+not prepare, the probe could not be staged or ran past its two-minute limit,
+the job was canceled) fails the command, releases the slot, and keeps the
+declaration.
+
+**The probe is the daemon.** Both run `freesided macverify probe <mode> …`, a
+hidden verb, as the slot. The daemon copies its own executable once, for
+every room, into a private directory under the daemon user's `TMPDIR`
+(`freeside-macverify-probe-*`), checks the copy against the binary digest in
+the configuration before every use, and copies it again if the temporary-file
+sweep removed it. When the binary on disk no longer matches the running one,
+every job is refused until the daemon restarts.
+
+**Cost per command.** The pre-job probe is one more slot job before each
+recipe command: the room hashes its staged copy, the prepare copies the daemon
+binary (tens of megabytes) into the job directory, the checks return at once,
+and the slot is reaped and torn down.
+
+**Read the record.** The newest `credential_free_host_verification` row in
+the conformance log is the executor's record; only `passed` with the current
+configuration digest admits it. Copy the database (Inspect A Live Database)
+and query it:
+
+```sh
+freesided snapshot -db <live-db> <output-path>
+sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, proved_at
+  FROM backend_conformance_records WHERE backend = 'credential_free_host_verification'
+  ORDER BY id DESC LIMIT 1"
+```
 
 ## External Review Replies
 
