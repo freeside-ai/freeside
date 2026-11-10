@@ -23,9 +23,6 @@ import (
 // fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink) become
 // their option only when non-nil, because each of those engine options
 // rejects nil; a nil optional field means the part is not installed.
-//
-// It uses no package-main helper, so it can move out of package main
-// unchanged apart from exporting its names.
 type ProductionEngine struct {
 	// Required.
 	Lock  *daemonlock.Lock

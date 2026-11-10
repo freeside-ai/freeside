@@ -22,9 +22,10 @@ import (
 // 17s with it, and about 30s with it on a heavily loaded host: the engine's
 // serial reconcile pass slows several times under the race detector.
 //
-// The bound exceeds the quota-park scenario's 2-minute reset (scenario.go),
-// so it no longer proves the allowed reading, rather than the reset, released
-// the park; TestScenarioQuotaParkResumes checks that against the start time.
+// The bound exceeds the quota-park scenario's 2-minute reset
+// (daemoncompose.QuotaParkScenario), so it no longer proves the allowed
+// reading, rather than the reset, released the park;
+// TestScenarioQuotaParkResumes checks that against the start time.
 // It stays under go test's default 10-minute timeout, so a hang still fails
 // with the waiting test's own message.
 const scenarioWaitBound = 3 * time.Minute
