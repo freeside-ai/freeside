@@ -62,6 +62,14 @@ type Engine struct {
 	taskExecutionMu             sync.Mutex
 	taskExecutions              map[domain.TaskID]*taskExecution
 
+	// taskNamesMu guards the dedupe state of the taskNames queue.
+	// taskNamesActive holds each task queued or in the worker, so repeated
+	// dispatch passes queue a task once; taskNamesFullWarned limits the
+	// full-queue warning to once per full spell.
+	taskNamesMu         sync.Mutex
+	taskNamesActive     map[domain.TaskID]struct{}
+	taskNamesFullWarned bool
+
 	// triageMu serializes specifier triage calls (triageSpecifier).
 	triageMu sync.Mutex
 	// artifacts reads persisted agent evidence by digest (a blocked
@@ -192,6 +200,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	e := &Engine{
 		store: st, signet: attention, driver: driver,
 		taskNames:             make(chan domain.Run, taskNameQueueCapacity),
+		taskNamesActive:       make(map[domain.TaskID]struct{}),
 		fakePublicationPolicy: &fakePublicationPolicyRecovery{store: st},
 		logger:                slog.New(slog.DiscardHandler),
 	}

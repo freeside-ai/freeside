@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -378,6 +381,44 @@ func TestTaskNameQueueDoesNotWaitWithoutWorker(t *testing.T) {
 	if err := WithInference(taskNamingClient(t, namer))(e); err != nil {
 		t.Fatal(err)
 	}
+	var logs bytes.Buffer
+	if err := WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))(e); err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.run("specification-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Distinct tasks, because the queue dedupes copies of one task. The
+	// worker never runs, so the extra tasks need not exist in the store.
+	e.enqueueTaskName(run)
+	for i := range taskNameQueueCapacity + 2 {
+		other := run
+		other.TaskID = domain.TaskID(fmt.Sprintf("queued-task-%d", i))
+		e.enqueueTaskName(other)
+	}
+	if len(e.taskNames) != taskNameQueueCapacity || len(namer.Requests()) != 0 ||
+		taskNameForRun(t, f.store, run.ID).Source != domain.DisplayNameSourceIdentifier {
+		t.Fatal("saturated queue must keep identifier fallback without calling inference")
+	}
+	if got := strings.Count(logs.String(), "task naming queue full"); got != 1 {
+		t.Fatalf("full-queue warnings = %d, want one per full spell:\n%s", got, logs.String())
+	}
+}
+
+func TestTaskNameQueueSkipsQueuedTask(t *testing.T) {
+	t.Parallel()
+	f := newSpecificationFixture(t, true, 3)
+	f.submit(t)
+	namer := inferencefake.New()
+	e := f.newEngine(t, f.newDriver(t))
+	if err := WithInference(taskNamingClient(t, namer))(e); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	if err := WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))(e); err != nil {
+		t.Fatal(err)
+	}
 	run, err := f.run("specification-run")
 	if err != nil {
 		t.Fatal(err)
@@ -385,10 +426,54 @@ func TestTaskNameQueueDoesNotWaitWithoutWorker(t *testing.T) {
 	for range taskNameQueueCapacity + 1 {
 		e.enqueueTaskName(run)
 	}
-	if len(e.taskNames) != taskNameQueueCapacity || len(namer.Requests()) != 0 ||
-		taskNameForRun(t, f.store, run.ID).Source != domain.DisplayNameSourceIdentifier {
-		t.Fatal("saturated queue must keep identifier fallback without calling inference")
+	if len(e.taskNames) != 1 || len(namer.Requests()) != 0 || logs.Len() != 0 {
+		t.Fatalf("queued %d copies of one task, %d inference requests, logs:\n%s",
+			len(e.taskNames), len(namer.Requests()), logs.String())
 	}
+}
+
+func TestTaskNameQueueRequeuesTaskAfterNaming(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newSpecificationFixture(t, true, 3)
+		f.submit(t)
+		e := f.newEngine(t, f.newDriver(t))
+		started, release := make(chan struct{}, 1), make(chan struct{})
+		namer := taskNamingDriverFunc(func(context.Context, inference.Request, inference.Secret) (inference.Response, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return inference.Response{}, errors.New("provider unavailable")
+		})
+		if err := WithInference(taskNamingClient(t, namer))(e); err != nil {
+			t.Fatal(err)
+		}
+		run, err := f.run("specification-run")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop := startTaskNameWorker(t, e)
+		e.enqueueTaskName(run)
+		<-started
+		for range taskNameQueueCapacity + 1 {
+			e.enqueueTaskName(run)
+		}
+		// Read before releasing the worker; assert after stopping it, so a
+		// failure never leaves the bubble with a blocked goroutine.
+		queuedWhileNaming := len(e.taskNames)
+		close(release)
+		synctest.Wait()
+		stop()
+		if queuedWhileNaming != 0 {
+			t.Fatalf("queued %d copies of a task the worker is naming", queuedWhileNaming)
+		}
+		e.enqueueTaskName(run)
+		if len(e.taskNames) != 1 {
+			t.Fatalf("queued %d entries for a task whose naming finished, want 1", len(e.taskNames))
+		}
+	})
 }
 
 func TestEngineRunCancelsTaskNameWorker(t *testing.T) {
