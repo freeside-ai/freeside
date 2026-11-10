@@ -308,7 +308,7 @@ func (r *intakeReconciler) admit(
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("encode publication: %w", err)
 	}
-	publicationDigest := submissionBytes(publicationBody).digest
+	publicationDigest := domain.Digest(contentaddr.Sum(publicationBody))
 	project, err := domain.NewProject(init.ProjectID, init.Repo, init.RepositoryID)
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("project authority: %w", err)
@@ -678,7 +678,7 @@ func (r *intakeReconciler) startSpec(
 		if err := json.Unmarshal(attempt.Publication, &publication); err != nil {
 			return engine.SpecificationRunSpec{}, fmt.Errorf("decode admitted publication: %w", err)
 		}
-		if attempt.PublicationDigest == "" || submissionBytes(attempt.Publication).digest != attempt.PublicationDigest {
+		if attempt.PublicationDigest == "" || domain.Digest(contentaddr.Sum(attempt.Publication)) != attempt.PublicationDigest {
 			return engine.SpecificationRunSpec{}, fmt.Errorf("admitted publication disagrees with attempt: %w", domain.ErrParentKeyMismatch)
 		}
 		publicationDigest, publicationBytes = attempt.PublicationDigest, attempt.Publication
@@ -697,7 +697,7 @@ func (r *intakeReconciler) startSpec(
 		if err != nil {
 			return engine.SpecificationRunSpec{}, fmt.Errorf("encode legacy publication: %w", err)
 		}
-		publicationDigest = submissionBytes(body).digest
+		publicationDigest = domain.Digest(contentaddr.Sum(body))
 	}
 	if err := publication.Validate(); err != nil {
 		return engine.SpecificationRunSpec{}, fmt.Errorf("validate publication: %w", err)

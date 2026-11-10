@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
@@ -155,7 +156,8 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workItem := submissionBytes(intakeWorkItemDocument(occurrence))
+	workItemBody := intakeWorkItemDocument(occurrence)
+	workItemDigest := domain.Digest(contentaddr.Sum(workItemBody))
 	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, init.PolicyKeys)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +166,7 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workItemArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, workItem.digest, domain.EvidenceMediaTextMarkdown, int64(len(workItem.body)))
+	workItemArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, workItemDigest, domain.EvidenceMediaTextMarkdown, int64(len(workItemBody)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +174,13 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.blobs.Put(workItem.digest, bytes.NewReader(workItem.body)); err != nil {
+	if _, err := f.blobs.Put(workItemDigest, bytes.NewReader(workItemBody)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.blobs.Put(resolvedPolicy.Digest, bytes.NewReader(policyBody)); err != nil {
 		t.Fatal(err)
 	}
-	reserved := engine.NewReservedSpecificationRun(specificationRunID, init.ProjectID, workItem.digest, resolvedPolicy.Digest)
+	reserved := engine.NewReservedSpecificationRun(specificationRunID, init.ProjectID, workItemDigest, resolvedPolicy.Digest)
 	reserved.CampaignID, reserved.AttemptNumber = campaignID, 1
 	project, err := domain.NewProject(init.ProjectID, init.Repo, init.RepositoryID)
 	if err != nil {
@@ -193,7 +195,7 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 		}
 		if err := tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
 			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
-			SourceDigest: workItem.digest, PublicationDigest: submissionBytes(literal).digest, Publication: literal,
+			SourceDigest: workItemDigest, PublicationDigest: domain.Digest(contentaddr.Sum(literal)), Publication: literal,
 			SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 		}); err != nil {
 			return err
