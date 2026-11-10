@@ -3,8 +3,10 @@ package usagecollect
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -106,6 +108,59 @@ func TestApplyCollectionAnswers(t *testing.T) {
 	}, nil, at)
 	if err := sorted.Validate(); err != nil || sorted.Plan != nil || sorted.ModelWindows != nil {
 		t.Errorf("supported = %+v, %v", sorted, err)
+	}
+}
+
+// TestApplyCollectionBoundsDetail covers the stored detail's bound: a long
+// error or answer detail keeps its start and its end within
+// maxCollectionDetailBytes, and a short one is stored as it came.
+func TestApplyCollectionBoundsDetail(t *testing.T) {
+	t.Parallel()
+	at := applyAt.Add(time.Hour)
+	long := "collect: " + strings.Repeat("x", 8<<20) + ": unknown window"
+	supported := ward.UsageCollection{
+		Availability: domain.AvailabilitySupported,
+		Windows: []domain.WindowReading{
+			{Window: "five_hour", EnrollmentID: enrollFirst, Generation: 1, Status: domain.WindowStatusAllowed, ObservedAt: at},
+		},
+	}
+	for _, tc := range []struct {
+		name   string
+		result ward.UsageCollection
+		err    error
+	}{
+		{"failed collection", ward.UsageCollection{}, errors.New(long)},
+		{"supported answer", func() ward.UsageCollection { r := supported; r.Detail = long; return r }(), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			detail := applyCollection(heldRecord(), tc.result, tc.err, at).LastAttempt.Detail
+			if len(detail) > maxCollectionDetailBytes {
+				t.Fatalf("detail is %d bytes, more than %d", len(detail), maxCollectionDetailBytes)
+			}
+			if !strings.HasPrefix(detail, "collect: xxx") || !strings.HasSuffix(detail, "xxx: unknown window") ||
+				!strings.Contains(detail, collectionDetailMarker) {
+				t.Fatalf("detail lost its start or end: %q", detail)
+			}
+		})
+	}
+
+	// A multi-byte rune across either cut point is kept whole or dropped. The
+	// shift on both ends moves each cut through every offset of a 3-byte rune.
+	for shift := range 3 {
+		pad := strings.Repeat("a", shift)
+		detail := boundedDetail(pad + strings.Repeat("€", 1000) + pad)
+		if len(detail) > maxCollectionDetailBytes || !utf8.ValidString(detail) {
+			t.Errorf("shift %d: detail is %d bytes, valid UTF-8 %t", shift, len(detail), utf8.ValidString(detail))
+		}
+	}
+
+	exact := strings.Repeat("z", maxCollectionDetailBytes)
+	if got := boundedDetail(exact); got != exact {
+		t.Errorf("a detail of exactly %d bytes was cut to %d", maxCollectionDetailBytes, len(got))
+	}
+	if got := boundedDetail(exact + "z"); len(got) > maxCollectionDetailBytes || !strings.Contains(got, collectionDetailMarker) {
+		t.Errorf("a detail one byte over the bound = %d bytes, %q", len(got), got)
 	}
 }
 

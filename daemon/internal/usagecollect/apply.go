@@ -52,11 +52,50 @@ func applyCollection(
 	case domain.AvailabilityFailed:
 		status = domain.CollectionAttemptFailed
 	}
-	record.LastAttempt = &domain.CollectionAttempt{Status: status, At: at, Detail: detail}
+	record.LastAttempt = &domain.CollectionAttempt{Status: status, At: at, Detail: boundedDetail(detail)}
 	record.Enrollments = withAvailability(record.Enrollments, domain.EnrollmentAvailability{
 		EnrollmentID: record.Collector, Answer: answer, ObservedAt: at,
 	})
 	return record
+}
+
+// maxCollectionDetailBytes bounds the attempt detail the record stores and
+// every paired client receives. A collector's error or detail can carry text
+// that came from outside the daemon, such as a window name an agent wrote.
+const maxCollectionDetailBytes = 512
+
+// collectionDetailHeadBytes is how much of an over-long detail's start is
+// kept; the rest of the budget goes to its end, because a wrapped error
+// carries its cause last.
+const collectionDetailHeadBytes = 128
+
+// collectionDetailMarker joins the head and tail of a cut detail.
+const collectionDetailMarker = " … "
+
+// boundedDetail returns detail unchanged when it fits
+// maxCollectionDetailBytes, and otherwise its head and tail joined by
+// collectionDetailMarker, cut on rune boundaries as
+// exec.TruncateFailureSummary cuts a failure summary. The package may not
+// import internal/exec (containment_test.go), so the cut is its own.
+func boundedDetail(detail string) string {
+	if len(detail) <= maxCollectionDetailBytes {
+		return detail
+	}
+	head := collectionDetailHeadBytes
+	for head > 0 && continuationByte(detail[head]) {
+		head--
+	}
+	tail := len(detail) - (maxCollectionDetailBytes - collectionDetailHeadBytes - len(collectionDetailMarker))
+	for tail < len(detail) && continuationByte(detail[tail]) {
+		tail++
+	}
+	return detail[:head] + collectionDetailMarker + detail[tail:]
+}
+
+// continuationByte reports whether b continues a UTF-8 sequence (10xxxxxx),
+// so a cut before it would split a rune.
+func continuationByte(b byte) bool {
+	return b&0xC0 == 0x80
 }
 
 // withAvailability returns entries with entry in place of any earlier answer

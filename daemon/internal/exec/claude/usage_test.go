@@ -239,6 +239,10 @@ func TestExtractUsageCaptureNilOnDoubt(t *testing.T) {
 		{"event reset past year 9999", `"resetsAt":1793934000`, `"resetsAt":253402300800`, false},
 		{"event without a window", `,"rateLimitType":"seven_day"`, ``, false},
 		{"event status not a token", `"status":"allowed"`, `"status":"Allowed!"`, false},
+		// A token past 64 bytes drops the capture.
+		{"65-byte window", `{"seven_day":{`, `{"` + strings.Repeat("w", 65) + `":{`, false},
+		{"65-byte event window", `"rateLimitType":"seven_day"`, `"rateLimitType":"` + strings.Repeat("w", 65) + `"`, false},
+		{"65-byte event status", `"status":"allowed"`, `"status":"` + strings.Repeat("s", 65) + `"`, false},
 		{"no result", `{"type":"result","subtype":"success","is_error":false}`, `{"type":"assistant"}`, false},
 		{"duplicate key", `"subtype":"success","response":{"subscription_type"`, `"subtype":"success","subtype":"success","response":{"subscription_type"`, false},
 		{"plain text line", `{"type":"result","subtype":"success","is_error":false}`, "{\"type\":\"result\"}\nwarning: not json", false},
