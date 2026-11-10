@@ -450,6 +450,64 @@ type AdmissionRefusal struct {
 	// (explicit null) when the refusal came before the launch resolved.
 	LaunchStage  *StageName `json:"launch_stage"`
 	LaunchDigest *Digest    `json:"launch_digest"`
+	// Unserved names which part of the selection the daemon does not serve,
+	// for an agent_resolution refusal that knows it; nil (explicit null)
+	// otherwise, and for every hold recorded before the field existed.
+	Unserved *AdmissionUnserved `json:"unserved"`
+}
+
+// AgentSelectionPart names one part of an agent selection's names. The zero
+// value "" is invalid by design.
+type AgentSelectionPart string
+
+const (
+	// AgentSelectionPartEnrollment: the daemon holds no such enrollment.
+	AgentSelectionPartEnrollment AgentSelectionPart = "enrollment"
+	// AgentSelectionPartModel: the enrollment does not serve the model.
+	AgentSelectionPartModel AgentSelectionPart = "model"
+	// AgentSelectionPartEffort: the enrollment does not serve the effort for
+	// the model.
+	AgentSelectionPartEffort AgentSelectionPart = "effort"
+)
+
+// AllAgentSelectionParts is the single registration point for selection
+// parts.
+var AllAgentSelectionParts = []AgentSelectionPart{
+	AgentSelectionPartEnrollment, AgentSelectionPartModel, AgentSelectionPartEffort,
+}
+
+func (p AgentSelectionPart) valid() bool {
+	switch p {
+	case AgentSelectionPartEnrollment, AgentSelectionPartModel, AgentSelectionPartEffort:
+		return true
+	default:
+		return false
+	}
+}
+
+// AdmissionUnserved is the part of a refused selection the daemon does not
+// serve. It never carries the selection's text, which an operator typed and
+// a credential can be pasted into: EnrollmentID is the ID of the enrollment
+// row the store holds, set exactly when the part is the model or the effort.
+// A typed enrollment that matches no row names part enrollment and no ID.
+type AdmissionUnserved struct {
+	Part         AgentSelectionPart  `json:"part"`
+	EnrollmentID *ClientEnrollmentID `json:"enrollment_id"`
+}
+
+// Validate reports whether the unserved part is structurally sound.
+func (u AdmissionUnserved) Validate() error {
+	if !u.Part.valid() {
+		return fmt.Errorf("unserved part %q: %w", u.Part, ErrInvalidAgentSelectionPart)
+	}
+	if (u.Part == AgentSelectionPartEnrollment) != (u.EnrollmentID == nil) {
+		return fmt.Errorf("unserved part %s names an enrollment only for a model or effort: %w",
+			u.Part, ErrHoldDetailMismatch)
+	}
+	if u.EnrollmentID != nil && *u.EnrollmentID == "" {
+		return fmt.Errorf("unserved part %s enrollment: %w", u.Part, ErrEmptyField)
+	}
+	return nil
 }
 
 // Validate reports whether the refusal detail is structurally sound.
@@ -468,6 +526,14 @@ func (r AdmissionRefusal) Validate() error {
 	}
 	if r.LaunchDigest != nil && *r.LaunchDigest == "" {
 		return fmt.Errorf("admission refusal %s launch digest: %w", r.Check, ErrEmptyField)
+	}
+	if r.Unserved != nil {
+		if r.Check != AdmissionCheckAgentResolution {
+			return fmt.Errorf("admission refusal %s names an unserved part: %w", r.Check, ErrHoldDetailMismatch)
+		}
+		if err := r.Unserved.Validate(); err != nil {
+			return fmt.Errorf("admission refusal %s: %w", r.Check, err)
+		}
 	}
 	return nil
 }

@@ -8312,7 +8312,7 @@ public enum Components {
             case agent_snapshot = "agent_snapshot"
             case agent_admission = "agent_admission"
         }
-        /// The typed detail of an admission_policy_refused hold, mirrored from domain.AdmissionRefusal: the refused check and, once each resolved, the agent and the launch it refused. The agent is a name from the admitted agent tree; refusal error text never appears here.
+        /// The typed detail of an admission_policy_refused hold, mirrored from domain.AdmissionRefusal: the refused check and, once each resolved, the agent and the launch it refused, and for an agent_resolution refusal which part of the selection the daemon does not serve. The agent is a name from the admitted agent tree; refusal error text never appears here.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AdmissionRefusal`.
@@ -8373,6 +8373,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_digest`.
             public var launch_digest: Components.Schemas.AdmissionRefusal.launch_digestPayload?
+            /// Which part of the selection the daemon does not serve; set only beside check agent_resolution, and null for every other refusal and for a hold recorded before the field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/unserved`.
+            public struct unservedPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/unserved/value1`.
+                public var value1: Components.Schemas.AdmissionUnserved
+                /// Creates a new `unservedPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AdmissionUnserved) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Which part of the selection the daemon does not serve; set only beside check agent_resolution, and null for every other refusal and for a hold recorded before the field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/unserved`.
+            public var unserved: Components.Schemas.AdmissionRefusal.unservedPayload?
             /// Creates a new `AdmissionRefusal`.
             ///
             /// - Parameters:
@@ -8380,22 +8406,26 @@ public enum Components {
             ///   - agent: The refused agent's name; null when the refusal came before an agent resolved.
             ///   - launch_stage: The refused launch's stage; null exactly when launch_digest is, when the refusal came before the launch resolved.
             ///   - launch_digest: The refused launch's digest; null exactly when launch_stage is.
+            ///   - unserved: Which part of the selection the daemon does not serve; set only beside check agent_resolution, and null for every other refusal and for a hold recorded before the field existed.
             public init(
                 check: Components.Schemas.AdmissionCheck,
                 agent: Swift.String? = nil,
                 launch_stage: Components.Schemas.AdmissionRefusal.launch_stagePayload? = nil,
-                launch_digest: Components.Schemas.AdmissionRefusal.launch_digestPayload? = nil
+                launch_digest: Components.Schemas.AdmissionRefusal.launch_digestPayload? = nil,
+                unserved: Components.Schemas.AdmissionRefusal.unservedPayload? = nil
             ) {
                 self.check = check
                 self.agent = agent
                 self.launch_stage = launch_stage
                 self.launch_digest = launch_digest
+                self.unserved = unserved
             }
             public enum CodingKeys: String, CodingKey {
                 case check
                 case agent
                 case launch_stage
                 case launch_digest
+                case unserved
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -8415,13 +8445,71 @@ public enum Components {
                     Components.Schemas.AdmissionRefusal.launch_digestPayload.self,
                     forKey: .launch_digest
                 )
+                self.unserved = try container.decodeIfPresent(
+                    Components.Schemas.AdmissionRefusal.unservedPayload.self,
+                    forKey: .unserved
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "check",
                     "agent",
                     "launch_stage",
-                    "launch_digest"
+                    "launch_digest",
+                    "unserved"
                 ])
             }
+        }
+        /// The part of a refused selection the daemon does not serve, mirrored from domain.AdmissionUnserved. It never carries what the operator typed, since a credential can be pasted into a selection.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AdmissionUnserved`.
+        public struct AdmissionUnserved: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AdmissionUnserved/part`.
+            public var part: Components.Schemas.AgentSelectionPart
+            /// The ID of the enrollment the daemon holds, never the typed text; set exactly when part is model or effort, and null for enrollment.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionUnserved/enrollment_id`.
+            public var enrollment_id: Swift.String?
+            /// Creates a new `AdmissionUnserved`.
+            ///
+            /// - Parameters:
+            ///   - part:
+            ///   - enrollment_id: The ID of the enrollment the daemon holds, never the typed text; set exactly when part is model or effort, and null for enrollment.
+            public init(
+                part: Components.Schemas.AgentSelectionPart,
+                enrollment_id: Swift.String? = nil
+            ) {
+                self.part = part
+                self.enrollment_id = enrollment_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case part
+                case enrollment_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.part = try container.decode(
+                    Components.Schemas.AgentSelectionPart.self,
+                    forKey: .part
+                )
+                self.enrollment_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "part",
+                    "enrollment_id"
+                ])
+            }
+        }
+        /// A part of an agent selection, mirrored from domain.AgentSelectionPart: enrollment (the daemon holds no such enrollment), model (the enrollment does not serve the model), or effort (the enrollment does not serve the effort for the model).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentSelectionPart`.
+        @frozen public enum AgentSelectionPart: String, Codable, Hashable, Sendable, CaseIterable {
+            case enrollment = "enrollment"
+            case model = "model"
+            case effort = "effort"
         }
         /// The daemon-derived run result mirrored from domain.RunOutcome. Pending can coexist with a current hold; blocked means a definitive publication_blocked milestone, not merely a transient hold. A run with no observation history (a pre-migration-0024 legacy run, which is deliberately not backfilled, and with no nonterminal invocation observation) classifies as unobserved, never pending, so a legacy terminal run is not shown as in flight; a legacy run still executing across the upgrade has a nonterminal invocation observation and reports pending. Completed means the work unit satisfied its completion criterion after publication (a work_unit_completed milestone); it outranks published and blocked and is terminal.
         ///

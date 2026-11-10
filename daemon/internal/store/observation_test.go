@@ -279,6 +279,24 @@ func TestRunHoldAdmissionDetail(t *testing.T) {
 		t.Fatalf("hold = %+v, want detail %+v", got.Hold, full)
 	}
 
+	// Each unserved part round-trips with the held enrollment it names; the
+	// check-only write below clears it.
+	enrollment := domain.ClientEnrollmentID("claude-ig")
+	for _, unserved := range []domain.AdmissionUnserved{
+		{Part: domain.AgentSelectionPartEnrollment},
+		{Part: domain.AgentSelectionPartModel, EnrollmentID: &enrollment},
+		{Part: domain.AgentSelectionPartEffort, EnrollmentID: &enrollment},
+	} {
+		detail := &domain.AdmissionRefusal{
+			Check: domain.AdmissionCheckAgentResolution, LaunchStage: &stage, LaunchDigest: &launch,
+			Unserved: &unserved,
+		}
+		recordHold(detail, admissionEpoch)
+		if got = observeRun(t, s, f.run.ID); got.Hold == nil || !reflect.DeepEqual(got.Hold.Detail, detail) {
+			t.Fatalf("unserved %s: hold = %+v, want detail %+v", unserved.Part, got.Hold, detail)
+		}
+	}
+
 	checkOnly := &domain.AdmissionRefusal{Check: domain.AdmissionCheckCapabilityBelowFloor}
 	recordHold(checkOnly, admissionEpoch.Add(time.Minute))
 	got = observeRun(t, s, f.run.ID)

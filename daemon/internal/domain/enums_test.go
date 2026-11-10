@@ -338,6 +338,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["AdmissionCheck"] = append(valids["AdmissionCheck"], v.valid)
 	}
 	invalids["AdmissionCheck"] = AdmissionCheck("").valid
+	for _, v := range AllAgentSelectionParts {
+		valids["AgentSelectionPart"] = append(valids["AgentSelectionPart"], v.valid)
+	}
+	invalids["AgentSelectionPart"] = AgentSelectionPart("").valid
 	for _, v := range AllRunLifecycles {
 		valids["RunLifecycle"] = append(valids["RunLifecycle"], v.valid)
 	}

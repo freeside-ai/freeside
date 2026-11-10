@@ -1,0 +1,21 @@
+{
+  "run_id": "run-1",
+  "invocation_id": "inv-1",
+  "reason": "admission_policy_refused",
+  "detail": {
+    "check": "agent_resolution",
+    "agent": null,
+    "launch_stage": "implementation",
+    "launch_digest": "sha256:implementation-launch",
+    "unserved": {
+      "part": "model",
+      "enrollment_id": "claude-ig"
+    }
+  },
+  "image_upkeep": null,
+  "usage_pool": null,
+  "quota_window": null,
+  "machine_capacity": null,
+  "first_observed_at": "2026-01-02T03:05:05Z",
+  "last_observed_at": "2026-01-02T03:06:05Z"
+}

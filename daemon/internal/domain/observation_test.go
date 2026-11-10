@@ -476,6 +476,44 @@ func TestRunHoldObservationValidate(t *testing.T) {
 				Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage, LaunchDigest: &digest,
 			}
 		}, ErrEmptyField},
+		{"unserved beside another check", func(h *RunHoldObservation) {
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentPrompt, Unserved: &AdmissionUnserved{Part: AgentSelectionPartEnrollment},
+			}
+		}, ErrHoldDetailMismatch},
+		{"unknown unserved part", func(h *RunHoldObservation) {
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentResolution, Unserved: &AdmissionUnserved{Part: "vibes"},
+			}
+		}, ErrInvalidAgentSelectionPart},
+		{"unserved enrollment with an id", func(h *RunHoldObservation) {
+			enrollment := ClientEnrollmentID("claude-ig")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentResolution, Unserved: &AdmissionUnserved{
+				Part: AgentSelectionPartEnrollment, EnrollmentID: &enrollment,
+			}}
+		}, ErrHoldDetailMismatch},
+		{"unserved model without an id", func(h *RunHoldObservation) {
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentResolution, Unserved: &AdmissionUnserved{Part: AgentSelectionPartModel},
+			}
+		}, ErrHoldDetailMismatch},
+		{"unserved effort without an id", func(h *RunHoldObservation) {
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentResolution, Unserved: &AdmissionUnserved{Part: AgentSelectionPartEffort},
+			}
+		}, ErrHoldDetailMismatch},
+		{"unserved model with an empty id", func(h *RunHoldObservation) {
+			enrollment := ClientEnrollmentID("")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentResolution, Unserved: &AdmissionUnserved{
+				Part: AgentSelectionPartModel, EnrollmentID: &enrollment,
+			}}
+		}, ErrEmptyField},
 		{"image upkeep beside another reason", func(h *RunHoldObservation) {
 			h.ImageUpkeep = &ImageUpkeepHold{Pending: ImageUpkeepPendingRebuild}
 		}, ErrHoldDetailMismatch},
