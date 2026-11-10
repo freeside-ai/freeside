@@ -1374,29 +1374,23 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, productionPublicationRetryableError(err)
 		}
-		candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
+		// A recovered candidate names the tip its publication was decided
+		// against: the sealed check's, or the evidence base for an intent
+		// committed before handoff checks existed.
+		sealed, found, err := w.loadHandoffCheck(ctx, task)
 		if err != nil {
-			return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
-		}
-		if err := w.applySealedHandoffCheck(ctx, task, &candidate); err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
-			return productionTaskOutcome{}, err
+		var handoff *domain.HandoffCheck
+		if found {
+			handoff = &sealed
 		}
-		history, err := publish.LoadDispositionHistory(
-			ctx, w.store, candidate, reviewInstructions.ResultDigest,
+		candidate, heldCandidate, err := w.composePublicationCandidate(
+			ctx, task, binding, checkpoint, adoptedProfile, report, reviewInstructions, handoff,
 		)
-		if err != nil {
-			if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
-				return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
-			}
-			if errors.Is(err, domain.ErrParentKeyMismatch) {
-				return w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
-			}
-			return productionTaskOutcome{}, fmt.Errorf("load recovered publication disposition history: %w", err)
+		if err != nil || heldCandidate != nil {
+			return derefOutcome(heldCandidate), err
 		}
-		candidate.DispositionHistory = &history
 		if progress == productionPublicationProgressReady {
 			published, err := w.loadReadyPublicationOutcome(
 				ctx, task, binding, checkpoint, candidate, readiness,
@@ -1583,28 +1577,12 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	); err != nil {
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
-	candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
-	if err != nil {
-		return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
-	}
-	candidate.BaseSHA = handoff.TipSHA
-	candidate.HandoffCheck = &handoff
-	if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
-		return productionTaskOutcome{}, err
-	}
-	dispositionHistory, err := publish.LoadDispositionHistory(
-		ctx, w.store, candidate, reviewInstructions.ResultDigest,
+	candidate, heldCandidate, err := w.composePublicationCandidate(
+		ctx, task, binding, checkpoint, adoptedProfile, report, reviewInstructions, &handoff,
 	)
-	if err != nil {
-		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
-			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
-		}
-		if errors.Is(err, domain.ErrParentKeyMismatch) {
-			return w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
-		}
-		return productionTaskOutcome{}, fmt.Errorf("load publication disposition history: %w", err)
+	if err != nil || heldCandidate != nil {
+		return derefOutcome(heldCandidate), err
 	}
-	candidate.DispositionHistory = &dispositionHistory
 	if published, found, err := w.loadPublicationOutcome(
 		ctx, task, candidate, w.convergePublicationOutcome,
 	); err != nil {
@@ -2648,6 +2626,58 @@ func (w *productionPublicationWorkflow) supersedeBlockedHold(
 		return err
 	}
 	return w.attention.PutItem(ctx, item)
+}
+
+// composePublicationCandidate composes the candidate the forward and recovery
+// branches of reconcileTask publish or recover: its metadata, its handoff
+// tip, its successor binding, and its disposition history. A non-nil outcome
+// is a durable hold the caller returns.
+//
+// The handoff check is an input because the branches choose it differently.
+// Forward passes the check reconcileHandoff just returned. Recovery passes
+// the publication's sealed check, so the body and closure it renders name
+// the tip the publication was decided against, or nil for an intent
+// committed before handoff checks existed, which keeps its evidence base.
+// Authoring and closure admission run before this, on forward only.
+func (w *productionPublicationWorkflow) composePublicationCandidate(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	adoptedProfile *domain.Digest,
+	report []byte,
+	reviewInstructions exec.ReviewInstructionBinding,
+	handoff *domain.HandoffCheck,
+) (publish.Candidate, *productionTaskOutcome, error) {
+	candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
+	if err != nil {
+		held, holdErr := w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
+		return publish.Candidate{}, &held, holdErr
+	}
+	if handoff != nil {
+		candidate.BaseSHA = handoff.TipSHA
+		candidate.HandoffCheck = handoff
+	}
+	if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
+		return publish.Candidate{}, nil, err
+	}
+	history, err := publish.LoadDispositionHistory(
+		ctx, w.store, candidate, reviewInstructions.ResultDigest,
+	)
+	if err != nil {
+		var held productionTaskOutcome
+		switch {
+		case errors.Is(err, domain.ErrReviewConfigurationUnapproved):
+			held, err = w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+		case errors.Is(err, domain.ErrParentKeyMismatch):
+			held, err = w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
+		default:
+			return publish.Candidate{}, nil, fmt.Errorf("load publication disposition history: %w", err)
+		}
+		return publish.Candidate{}, &held, err
+	}
+	candidate.DispositionHistory = &history
+	return candidate, nil, nil
 }
 
 // productionCandidate composes the publication candidate. Its title and body

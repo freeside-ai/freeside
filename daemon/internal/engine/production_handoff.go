@@ -525,22 +525,6 @@ func (w *productionPublicationWorkflow) loadHandoffStop(
 	return stop, true, nil
 }
 
-// applySealedHandoffCheck binds a recovered candidate to its publication's
-// sealed handoff check, when one was sealed, so the body and closure it
-// renders name the tip the publication was decided against. A publication
-// committed before handoff checks existed keeps its evidence base.
-func (w *productionPublicationWorkflow) applySealedHandoffCheck(
-	ctx context.Context, task productionPublicationTask, candidate *publish.Candidate,
-) error {
-	check, found, err := w.loadHandoffCheck(ctx, task)
-	if err != nil || !found {
-		return err
-	}
-	candidate.BaseSHA = check.TipSHA
-	candidate.HandoffCheck = &check
-	return nil
-}
-
 // withPublishedHandoff names on a published candidate's readiness detail the
 // tip its sealed handoff check resolved and the verified merge into it. A
 // publication intent committed before handoff checks existed has no sealed
