@@ -155,7 +155,7 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v7`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v8`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
@@ -176,8 +176,10 @@ can load repository instructions outside the daemon's instruction bundle.
 The conformance transcript must still report no plugins. From 2.1.319 the
 agent image's managed settings disable every built-in plugin the pinned CLI
 registers, because the policy-only `cc-plugin-sec-default` ignores
-`--settings` (#2922; `images/agent-claude/README.md`). The flag stays, now
-redundant, so every delivery's command stays byte-identical. `file_v6` delivers
+`--settings` (#2922; `images/agent-claude/README.md`). The plugin setting
+stays, now redundant, so every delivery's command stays byte-identical; from
+`file_v8` the same flag also carries the attribution setting, which nothing
+else sets. `file_v6` delivers
 it as `file_v5` does and, off a specification run's stage, also asks the CLI
 for its usage answer after the turn (#2543). The root shell installs a small
 Node driver, `usage_driver.cjs`, in a root-owned, world-readable directory
@@ -193,11 +195,15 @@ of it is in doubt, and nothing about the stage's outcome depends on it. On a
 specification run's stage the command is `file_v5`'s. `file_v7` delivers it
 as `file_v6` does and differs only in declaring one more reserved evidence
 source on every stage, the review guide at
-`.freeside-evidence/review-guide.json` (#2750). Conformance launches use
-`file_v7` too. Existing intents retain the protocol they started under:
-`file_v1` through `file_v6` their launch commands, and argument delivery its
-original 31-KiB limit. This changes transport; it neither retries a failed
-invocation nor grants successor publication.
+`.freeside-evidence/review-guide.json` (#2750). `file_v8` delivers it as
+`file_v7` does and differs only in its `--settings` value, which also empties
+the CLI's commit and PR attribution (`"attribution":{"commit":"","pr":""}`)
+on every stage: the CLI's default attribution tells the writer to add a
+`Co-Authored-By` trailer, which commit plans refuse (#3028). Conformance
+launches use `file_v8` too. Existing intents retain the protocol they started
+under: `file_v1` through `file_v7` their launch commands, and argument
+delivery its original 31-KiB limit. This changes transport; it neither retries
+a failed invocation nor grants successor publication.
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
 Claude image, synthetic text larger than the argument limit, and a mock

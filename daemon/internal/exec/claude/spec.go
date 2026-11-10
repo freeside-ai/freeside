@@ -100,9 +100,19 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 
 // launchDelivery is the protocol every new Claude launch selects. Stored
 // intents keep the member they were started under.
-const launchDelivery = stage.PromptFileV7
+const launchDelivery = stage.PromptFileV8
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
+
+// pluginSettings is the --settings value file_v5 through file_v7 pass. The
+// pinned CLI's safe mode excludes installed plugins, but its bundled
+// agents-md plugin can still load repository instructions.
+const pluginSettings = `{"enabledPlugins":{"agents-md@builtin":false}}`
+
+// attributionOffSettings is file_v8's --settings value: pluginSettings plus
+// empty commit and PR attribution. The CLI's default attribution tells the
+// writer to add a Co-Authored-By trailer, which commit plans refuse (#3028).
+const attributionOffSettings = `{"attribution":{"commit":"","pr":""},"enabledPlugins":{"agents-md@builtin":false}}`
 
 // ValidatePromptInputs runs the production Claude renderer over one fully
 // materialized bundle. Specification uses it before committing a follow-up
@@ -626,7 +636,7 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
 	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5,
-		stage.PromptFileV6, stage.PromptFileV7:
+		stage.PromptFileV6, stage.PromptFileV7, stage.PromptFileV8:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -760,23 +770,26 @@ func (p claudeProvider) HandoffSpec(
 		specification := spec.StageID == domain.SpecificationStageID(spec.RunID)
 		outputSchema := ""
 		if (in.PromptDelivery == stage.PromptFileV4 || in.PromptDelivery == stage.PromptFileV5 ||
-			in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7) && specification {
+			in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7 ||
+			in.PromptDelivery == stage.PromptFileV8) && specification {
 			outputSchema = specify.OutputJSONSchema
 		}
 		settings := ""
-		if in.PromptDelivery == stage.PromptFileV5 || in.PromptDelivery == stage.PromptFileV6 ||
-			in.PromptDelivery == stage.PromptFileV7 {
-			// The pinned CLI's safe mode excludes installed plugins, but its
-			// bundled agents-md plugin can still load repository instructions.
-			settings = `{"enabledPlugins":{"agents-md@builtin":false}}`
+		switch in.PromptDelivery {
+		case stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7:
+			settings = pluginSettings
+		case stage.PromptFileV8:
+			settings = attributionOffSettings
+		case "", stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3,
+			stage.PromptFileV4:
 		}
 		// file_v6 runs the usage driver only off a specification stage, so the
 		// specifier's command, transcript, and structured_output stay file_v5's.
-		usageDriver := (in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7) &&
-			!specification
+		usageDriver := (in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7 ||
+			in.PromptDelivery == stage.PromptFileV8) && !specification
 		// file_v7 declares the review guide source on every stage; only the
 		// implementer and remediator prompts ask for the file.
-		reviewGuide := in.PromptDelivery == stage.PromptFileV7
+		reviewGuide := in.PromptDelivery == stage.PromptFileV7 || in.PromptDelivery == stage.PromptFileV8
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
 		hs.Agent.Command = agentCommandWithSettings(
@@ -794,7 +807,8 @@ func (p claudeProvider) HandoffSpec(
 		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
 		return withPromptFile(launcherFilesDeferred)
-	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7:
+	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7,
+		stage.PromptFileV8:
 		return withPromptFile(launcherFilesDeferredStderr)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
