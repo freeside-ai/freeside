@@ -2533,9 +2533,11 @@
             // cause from the recorded hold (#1599).
             // A park on an exhausted quota window that offers another agent
             // draws its move menu under the callout (#869).
+            // A task line whose model its enrollment doesn't serve names the
+            // refused part as the task's guidance (#2992).
             for (name, slug) in [
                 ("Machine capacity", "machine-capacity"), ("Usage pool", "usage-pool"),
-                ("Quota window", "quota-window"),
+                ("Quota window", "quota-window"), ("Model unserved", "model-unserved"),
             ] {
                 let wait = HoldPresentationFixtures.make(name)
                 var waitTask = approvalFixture.task
@@ -3037,8 +3039,10 @@
             // recorded fact (#1599): the full pool, the machine's memory
             // reservations, and a stored identity_parallelism hold, which
             // names no pool and so states no fact.
+            // An admission hold names the selection part it refused (#2992).
             for (name, slug) in [
                 ("Usage pool", "usage-pool"), ("Machine capacity", "machine-capacity"), ("Capacity", "identity"),
+                ("Model unserved", "model-unserved"),
             ] {
                 guard let hold = HoldPresentationFixtures.hold(name, runID: activeRun.run.id) else {
                     preconditionFailure("\(name) has no recorded hold fixture")
