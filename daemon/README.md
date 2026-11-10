@@ -3655,6 +3655,7 @@ onboard from a `main` that already carries `.freeside/verify.json`.
 
   ```sh
   -protected-path 'automation_control=.githooks/**' \
+  -protected-path 'automation_control=.github/**' \
   -protected-path 'verification_control=.freeside/**' \
   -protected-path 'verification_control=api/vacuum.ruleset.yaml' \
   -protected-path 'verification_control=daemon/.golangci.yml' \
@@ -3679,7 +3680,11 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   control-plane hold. The reasons for each entry are in
   `devlog/2026-10-27-1204-freeside-protected-paths.md`; the `api/` and
   `scripts/` additions follow the same rule, the scripts `check.sh` or a CI
-  workflow runs to decide pass or fail, plus the API lint ruleset. The
+  workflow runs to decide pass or fail, plus the API lint ruleset.
+  `.github/**` is protected whole, since the defaults leave out files such
+  as the pull request template. That makes the reviewer-instruction files
+  under `.github/` hold publication too, not just surface
+  (`devlog/2026-11-10-1040-app-steps-executor-switch.md`). The
   `scripts/test-*.sh` suites stay unprotected, like daemon `_test.go` files.
 - **Deputy scope:** set the deputy's `repository.allowed_paths` to
   `["api/**", "daemon/**", "docs/**", "scripts/**"]`. An `api/openapi.yaml`
