@@ -2,12 +2,16 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
+	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -201,5 +205,197 @@ func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.
 		return requireNoPublicationTask(ctx, t, tx)
 	}); err != nil {
 		t.Fatalf("verify export-only record: %v", err)
+	}
+}
+
+// enqueueSpecificationDiscussion drives f's attended engine until a discuss
+// command on the specification card has enqueued its discussion marker, and
+// returns the discussion invocation. The marker stays undispatched, so a
+// test can admit the invocation itself.
+func enqueueSpecificationDiscussion(t *testing.T, f specificationFixture) domain.InvocationID {
+	t.Helper()
+	driver := f.newDriver(t)
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0, specify.Output{
+		Specification: &specify.Specification{
+			Summary:    "The bounded implementation plan is ready.",
+			Body:       "# Approved Specification\n\nImplement the bounded workflow.",
+			Addressals: []specify.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	itemID := domain.ItemID("spec-approval-implementation-run-1")
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatalf("prepare specification pass %d: %v", pass, err)
+		}
+		if _, err := f.signet.GetAttentionItem(t.Context(), itemID); err == nil {
+			break
+		}
+	}
+	item, snapshot := f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "explain-specification", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests,
+			Message:         "Why does the specification keep the workflow bounded?",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("enqueue discussion: %v", err)
+	}
+	discussionID := specDiscussionInvocationID("explain-specification")
+	var marker store.QueueEntry
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		marker, err = tx.GetOutbox(t.Context(), string(discussionID))
+		return err
+	}); err != nil || marker.Kind != KindSpecificationDiscussionRequested || marker.Dispatched() {
+		t.Fatalf("discussion marker = %+v, error = %v", marker, err)
+	}
+	return discussionID
+}
+
+// specificationAdmissionBase is the base the fixture's specification
+// invocation was admitted at, which binds the project's repository.
+func specificationAdmissionBase(t *testing.T, st *store.Store) domain.BaseRevision {
+	t.Helper()
+	var admission domain.ExecutionAdmission
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(t.Context(), specificationInvocationID("specification-run", 1))
+		return err
+	}); err != nil {
+		t.Fatalf("specification admission: %v", err)
+	}
+	return admission.Base
+}
+
+// discussionInputDigest is the input digest the discussion invocation's
+// durable record binds, which its admission must name.
+func discussionInputDigest(t *testing.T, st *store.Store, invocationID domain.InvocationID) domain.Digest {
+	t.Helper()
+	var digest domain.Digest
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		invocation, err := tx.GetAgentInvocation(t.Context(), invocationID)
+		if err != nil {
+			return err
+		}
+		digest, err = invocation.ComputeInputDigest()
+		return err
+	}); err != nil {
+		t.Fatalf("discussion input digest: %v", err)
+	}
+	return digest
+}
+
+// appendAttempt adds invocationID's attempt to run's stageID and stores the
+// run, as the engine does when it starts an invocation.
+func appendAttempt(
+	t *testing.T, st *store.Store, run domain.Run, stageID domain.StageID, invocationID domain.InvocationID,
+) domain.Run {
+	t.Helper()
+	for i, stage := range run.Stages {
+		if stage.ID != stageID {
+			continue
+		}
+		stage.Attempts = append(stage.Attempts, domain.Attempt{
+			ID: attemptIDFor(invocationID), StageID: stageID,
+			Number: len(stage.Attempts) + 1, InvocationID: invocationID,
+		})
+		run.Stages[i] = stage
+		if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+			return tx.PutRun(t.Context(), run)
+		}); err != nil {
+			t.Fatalf("append attempt: %v", err)
+		}
+		return run
+	}
+	t.Fatalf("run %q has no stage %q", run.ID, stageID)
+	return domain.Run{}
+}
+
+// TestRecordExecutionExportSpecificationDiscussionArmMintsNoPublicationTask
+// covers issue #2991: a discussion on a specification card runs under the
+// specification run, but its ID (specification-discussion-<command>) is not
+// the inv-specify-<run>-<iter> identity the #768 arm recognizes. Before the
+// discussion arm, the unattended branch fell through to loadProductionRequest,
+// which found no production marker for the specification run, and the
+// export-record step retried forever: the reply never posted and the task
+// could not be stopped. The arm authenticates the discussion marker and
+// records the export export-only, minting no publication task.
+func TestRecordExecutionExportSpecificationDiscussionArmMintsNoPublicationTask(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	f := newSpecificationFixture(t, true, 4)
+	discussionID := enqueueSpecificationDiscussion(t, f)
+	base := specificationAdmissionBase(t, f.store)
+	profileDigest := seedUnattendedAdmissionTrust(t, f.store, base)
+
+	const runID = domain.RunID("specification-run")
+	stageID := specificationStageID(runID)
+	run, err := f.run(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run = appendAttempt(t, f.store, run, stageID, discussionID)
+	admission := recordUnattendedAdmission(t, f.store, run, stageID, base, discussionID,
+		discussionInputDigest(t, f.store, discussionID), "auth-1", profileDigest)
+
+	if err := RecordExecutionExport(ctx, f.store, unattendedExecutionExport(t, admission), ProductionReplay{}, nil, nil); err != nil {
+		t.Fatalf("record unattended specification-discussion export: %v", err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetExecutionExportRecord(ctx, discussionID); err != nil {
+			return err
+		}
+		return requireNoPublicationTask(ctx, t, tx)
+	}); err != nil {
+		t.Fatalf("verify export-only record: %v", err)
+	}
+}
+
+// TestRecordExecutionExportSpecificationDiscussionRefusesForeignRun pins the
+// discussion arm's gate: a discussion marker admitted under a run that is not
+// its specification run fails authentication, so the export records nothing
+// rather than falling through to another arm.
+func TestRecordExecutionExportSpecificationDiscussionRefusesForeignRun(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	f := newSpecificationFixture(t, true, 4)
+	discussionID := enqueueSpecificationDiscussion(t, f)
+	base := specificationAdmissionBase(t, f.store)
+	profileDigest := seedUnattendedAdmissionTrust(t, f.store, base)
+
+	specificationRun, err := f.run("specification-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const foreignRunID = domain.RunID("foreign-run")
+	foreignStageID := specificationStageID(foreignRunID)
+	foreign := domain.Run{
+		ID: foreignRunID, ProjectID: specificationRun.ProjectID,
+		SpecDigest: specificationRun.SpecDigest, PolicyDigest: specificationRun.PolicyDigest,
+		Stages: []domain.Stage{{ID: foreignStageID, RunID: foreignRunID, Name: "specification"}},
+	}
+	foreign = appendAttempt(t, f.store, foreign, foreignStageID, discussionID)
+	admission := recordUnattendedAdmission(t, f.store, foreign, foreignStageID, base, discussionID,
+		discussionInputDigest(t, f.store, discussionID), "auth-1", profileDigest)
+
+	err = RecordExecutionExport(ctx, f.store, unattendedExecutionExport(t, admission), ProductionReplay{}, nil, nil)
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("record foreign-run discussion export = %v, want %v", err, domain.ErrParentKeyMismatch)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetExecutionExportRecord(ctx, discussionID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign-run discussion export record = %v, want none", err)
 	}
 }
