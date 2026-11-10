@@ -42,6 +42,24 @@ func (p *slotPool) lease() (string, error) {
 	return "", fmt.Errorf("%w: %d slots, %d quarantined", ErrNoFreeSlot, len(p.slots), len(p.quarantined))
 }
 
+// leaseNamed leases exactly slot, refusing one that is leased, quarantined,
+// or not in the pool. The conformance pass proves each slot by name and
+// never waits for one.
+func (p *slotPool) leaseNamed(slot string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case !slices.Contains(p.slots, slot):
+		return fmt.Errorf("slot %s is not in the pool", slot)
+	case p.quarantined[slot]:
+		return fmt.Errorf("slot %s is quarantined", slot)
+	case p.leased[slot]:
+		return fmt.Errorf("%w: slot %s is leased", ErrNoFreeSlot, slot)
+	}
+	p.leased[slot] = true
+	return nil
+}
+
 func (p *slotPool) release(slot string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

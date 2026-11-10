@@ -32,8 +32,8 @@ var ErrInvalidConfig = errors.New("macverify: invalid configuration")
 var ErrHostUnsupported = errors.New("macverify: host verification executor requires macOS")
 
 // Config is the normalized configuration the executor's conformance pass
-// proves (#2879). Every field enters ConfigurationDigest, so changing any of
-// them invalidates a restored proof.
+// (Suite.Full) proves. Every field enters ConfigurationDigest, so changing
+// any of them invalidates a restored proof.
 type Config struct {
 	// ExecutorRoot is the absolute directory the executor's job directories
 	// and slot templates live under.
@@ -144,10 +144,11 @@ func New(cfg Config) (*Backend, error) {
 // Name identifies the backend in policy, refusals, and audit records.
 func (b *Backend) Name() string { return BackendName }
 
-// Capabilities returns the executor's declaration: empty until a passed
-// conformance record for this configuration is restored, then exactly
-// supports_credential_free_host_verification. A pre-job probe failure
-// empties it again. Off macOS it is always empty.
+// Capabilities returns the executor's declaration: empty until a recorded,
+// passing Suite.Full or a restored passed record for this configuration,
+// then exactly supports_credential_free_host_verification. A newer pass
+// beginning or a pre-job probe failure empties it again. Off macOS it is
+// always empty.
 func (b *Backend) Capabilities() exec.CapabilitySet {
 	caps := exec.NewCapabilitySet()
 	if b == nil || !b.initialized || !hostSupported {
@@ -224,11 +225,49 @@ func (b *Backend) RestoreConformance(record domain.BackendConformance) error {
 	return nil
 }
 
+// beginConformanceProof starts a new proof generation: it clears the
+// declaration and, still under the guard, runs the durable superseding step
+// (nil when no recorder is configured), as the ward's does. A failed
+// superseding append aborts the begin with the declaration cleared, the safe
+// direction.
+func (b *Backend) beginConformanceProof(record func() error) (uint64, error) {
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	b.proofGeneration++
+	b.proven.Store(false)
+	if record != nil {
+		if err := record(); err != nil {
+			return 0, err
+		}
+	}
+	return b.proofGeneration, nil
+}
+
+// concludeConformanceProof runs a pass's durable record step and then
+// publishes its result, both under the guard and only while generation is
+// still current, so an older pass that finishes last records and publishes
+// nothing. The record runs first and a failed record publishes false: the
+// declaration is never observable before the pass's own row is
+// durable-latest. published reports whether generation was still current.
+func (b *Backend) concludeConformanceProof(generation uint64, proved bool, record func() error) (published bool, recordErr error) {
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	if generation != b.proofGeneration {
+		return false, nil
+	}
+	if record != nil {
+		recordErr = record()
+	}
+	b.proven.Store(proved && recordErr == nil)
+	return true, recordErr
+}
+
 // withdrawConformance clears the declaration after a pre-job probe found a
-// confinement broken. It takes a generation too, so a restore cannot
-// publish over it. The failed slot stays quarantined, so the declaration
-// returns only when a restart restores the durable record; the pre-job probe
-// then runs again before every command. The withdrawal is in memory only.
+// confinement broken. It takes a generation too, so a pass that began
+// before the failure cannot publish over it. The failed slot stays
+// quarantined and a pass refuses it, so in practice the declaration returns
+// only when a restart restores the durable record; the pre-job probe then
+// runs again before every command. The withdrawal is in memory only.
 func (b *Backend) withdrawConformance() {
 	b.proofMu.Lock()
 	defer b.proofMu.Unlock()

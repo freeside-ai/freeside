@@ -16,10 +16,16 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
-// declareProven sets the backend's declaration as a restored record would.
+// declareProven publishes the backend's declaration as a passing pass would.
 func declareProven(t *testing.T, b *Backend) {
 	t.Helper()
-	b.proven.Store(true)
+	generation, err := b.beginConformanceProof(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published, _ := b.concludeConformanceProof(generation, true, nil); !published || !b.proven.Load() {
+		t.Fatal("could not declare the test backend proven")
+	}
 }
 
 func TestRunPreJobProbeRunsTheSandboxModeFirst(t *testing.T) {

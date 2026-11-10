@@ -9,12 +9,22 @@
 // Each job is confined four ways: network access denied by a sandbox profile
 // and by packet-filter rules keyed on the slot's uid, writes confined to the
 // job directory, dependencies taken only from a trusted offline cache keyed by
-// digest, and the slot's home reset between jobs. The executor's full
-// conformance pass (#2879) proves all four and earns the declaration.
+// digest, and the slot's home reset between jobs. The conformance pass,
+// Suite.Full, proves the network, write, and home confinements on every slot
+// as that slot, each beside a positive control run as the daemon user, and
+// earns the declaration (suite.go). The offline cache is enforced per job
+// instead: the room refuses a workspace whose cache entry is missing.
 //
 // The package declares the backend (its class, its configuration digest, and
-// the re-gate on the declaration) and builds its Room, the executor's
-// verify.Room. The conformance suite and pre-job probe are #2879.
+// the re-gate on the declaration), builds its Room, the executor's
+// verify.Room, and runs its conformance pass. Before every recipe command the
+// room runs the pre-job probe on the leased slot: the sandbox network and
+// write checks again, under the configured profile. A failed check
+// quarantines the slot and withdraws the declaration until the daemon
+// restarts and restores its durable record.
+// The probe is the daemon's own binary (RunProbe, behind the hidden
+// freesided macverify probe verb), copied into a workspace and checked
+// against the digest the configuration digest names (probe.go).
 //
 // The Room runs each recipe command as a slot account leased from a pool, in
 // the slot's own launchd context, under the configured sandbox profile. The
@@ -34,14 +44,19 @@
 //
 // Tier A gates. The backend declares the capability only from a passed
 // BackendConformance record for its own class and current configuration
-// digest, and only on darwin. A fresh backend declares nothing, and a record
-// for another class, another configuration, or a non-passing outcome is
-// refused rather than published. The Room refuses a job unless the
-// installed helper is the embedded one and root-owned, the host's Xcode and
-// Swift match the configuration's pin, and a workspace holding a
-// Package.resolved has a complete offline Swift dependency cache entry for its
-// key (swiftcache.go); it re-checks the job directory and cache entry prepare
-// reports, and releases a slot only once its uid owns no process. Populate
-// (swiftcache_populate.go) admits only https dependency URLs and writes an
-// entry's record last, after proving the entry resolves offline.
+// digest, and only on darwin: one Full recorded and published under the
+// generation guard (backend.go), or one RestoreConformance accepts. A fresh
+// backend declares nothing, a record for another class, another
+// configuration, or a non-passing outcome is refused rather than published,
+// a pass with no recorder never declares, and a superseded pass publishes
+// nothing. A probe report proves its checks only when it is exact
+// (checkProbeReport). The Room refuses a job unless the installed helper is
+// the embedded one and root-owned, the host's Xcode and Swift match the
+// configuration's pin, a workspace holding a Package.resolved has a complete
+// offline Swift dependency cache entry for its key (swiftcache.go), and the
+// leased slot passes the pre-job probe; it re-checks the job directory and
+// cache entry prepare reports, and releases a slot only once its uid owns no
+// process. Populate (swiftcache_populate.go) admits only https dependency
+// URLs and writes an entry's record last, after proving the entry resolves
+// offline.
 package macverify

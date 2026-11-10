@@ -38,6 +38,10 @@ const probeExecutable = "probe"
 
 var probeCommand = []string{"./" + probeExecutable, "macverify", "probe"}
 
+// permissiveProfile turns the sandbox off, so the packet-filter mode sees the
+// anchor alone.
+var permissiveProfile = []byte("(version 1)\n(allow default)\n")
+
 type probeCheck struct {
 	name        string
 	confinement Confinement

@@ -1,8 +1,11 @@
 package macverify
 
 import (
+	"context"
 	"errors"
 	"fmt"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // Confinement names one of the confinements the conformance pass and the
@@ -67,3 +70,10 @@ func (e *ConformanceFailure) Error() string {
 
 // Unwrap makes errors.Is(err, ErrConformance) match the class.
 func (e *ConformanceFailure) Unwrap() error { return ErrConformance }
+
+// ConformanceRecorder persists a completed pass's BackendConformance record.
+// Its method set is the ward's, so the daemon's store-backed recorder serves
+// both; macverify defines it rather than importing the store.
+type ConformanceRecorder interface {
+	RecordBackendConformance(ctx context.Context, record domain.BackendConformance) error
+}

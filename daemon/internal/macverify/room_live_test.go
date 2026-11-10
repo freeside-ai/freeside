@@ -40,7 +40,7 @@ func liveRoom(t *testing.T) (*Room, Config) {
 	cfg := Config{
 		ExecutorRoot:      root,
 		SandboxProfile:    DefaultSandboxProfile(),
-		PacketFilterRules: []byte("# the live suite does not load packet-filter rules (#2879)\n"),
+		PacketFilterRules: PacketFilterRules(strings.Split(slots, ",")),
 		Slots:             strings.Split(slots, ","),
 		Toolchain:         toolchain,
 	}
