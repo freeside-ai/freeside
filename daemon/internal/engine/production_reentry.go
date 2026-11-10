@@ -853,7 +853,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	}
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 	if err != nil {
-		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, err))
+		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))
 	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: task.HeadSHA, BaseSHA: baseSHA, EvaluatedSHA: binding.evaluatedSHA,
@@ -868,7 +868,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 			binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
 		)},
 	})
-	if releaseErr := w.releaseVerification(ctx, task, err); releaseErr != nil {
+	if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
 		return productionReentryCheckpoint{}, errors.Join(err, releaseErr)
 	}
 	if err != nil {

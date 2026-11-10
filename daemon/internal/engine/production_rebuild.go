@@ -517,7 +517,7 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 		return domain.ProjectImage{}, nil, err
 	}
 	_, recipe, err := w.roomAndRecipe(ctx, task, binding, binding.image)
-	if releaseErr := w.releaseVerification(ctx, task, err); releaseErr != nil {
+	if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
 		return domain.ProjectImage{}, nil, errors.Join(err, releaseErr)
 	}
 	if err != nil {

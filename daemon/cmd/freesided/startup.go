@@ -473,6 +473,9 @@ func composeClaudeWorkflow(
 			}
 			return room, nil
 		},
+		ProveVerificationAbsent: func(ctx context.Context, run domain.Run, invocation domain.InvocationID) error {
+			return verificationOwnership.ProveInvocationAbsent(ctx, run.TaskID, run.ID, invocation)
+		},
 	}
 	if cfg.Claude.OperatingMode == domain.ModeUnattended {
 		production.HealthRefresh = func(refreshCtx context.Context) error {

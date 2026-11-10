@@ -136,6 +136,12 @@ type ProductionPublicationConfig struct {
 	// NewBoundRoom supplies concrete task-bound ownership for production.
 	// NewRoom remains the isolated test/attended factory.
 	NewBoundRoom func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	// ProveVerificationAbsent proves every container the invocation's bound
+	// rooms started, in every pass, is absent and its command joined, and
+	// marks a failure to prove with ward.ErrVerificationAbsenceUnproven. The
+	// verification reservation is released only on its proof. Required
+	// whenever NewBoundRoom is set.
+	ProveVerificationAbsent func(context.Context, domain.Run, domain.InvocationID) error
 	// RebuildProjectImage lets the lane rebuild the project image for a
 	// candidate whose dependency change stays within policy (plan §5.7). Nil
 	// leaves every such candidate refused as rebuild_not_configured.
@@ -286,6 +292,7 @@ type productionPublicationWorkflow struct {
 	repositoryID                    int64
 	newRoom                         func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
 	newBoundRoom                    func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	proveVerificationAbsent         func(context.Context, domain.Run, domain.InvocationID) error
 	rebuild                         *ProjectImageRebuild
 	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
 	claimDispatch                   func(context.Context, domain.RunID) error
@@ -382,6 +389,11 @@ func newProductionPublicationWorkflow(
 		cfg.ShadowReviewDefaultRate != 0 || cfg.ShadowReviewFailure != nil {
 		return nil, errors.New("partial shadow review configuration")
 	}
+	if cfg.NewBoundRoom != nil && cfg.ProveVerificationAbsent == nil {
+		// A bound room's containers outlive its pass, so only the
+		// cross-pass proof may release the reservation.
+		return nil, errors.New("bound verification rooms need an absence proof")
+	}
 	if strings.TrimSpace(cfg.WorkDir) == "" {
 		return nil, errors.New("empty work directory")
 	}
@@ -428,6 +440,7 @@ func newProductionPublicationWorkflow(
 		newRoom: cfg.NewRoom, reviewSource: cfg.ReviewSource,
 		reviewAdmitter:           cfg.ReviewAdmission,
 		newBoundRoom:             cfg.NewBoundRoom,
+		proveVerificationAbsent:  cfg.ProveVerificationAbsent,
 		rebuild:                  cfg.RebuildProjectImage,
 		imageUpkeepPending:       cfg.ImageUpkeepPending,
 		remediationPromptPackage: cfg.RemediationPromptPackageDigest,

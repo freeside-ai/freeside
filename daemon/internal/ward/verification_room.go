@@ -22,14 +22,19 @@ type verificationCommand func(
 	context.Context, string, []string, int64,
 ) (verify.StepResult, error)
 
-const verificationCleanupTimeout = 2 * time.Minute
+// VerificationCleanupTimeout bounds a verification call's owned cleanup,
+// which runs detached from the call's context so a canceled call is still
+// reaped. ProveInvocationAbsent's callers bound its retried cleanup the same
+// way.
+const VerificationCleanupTimeout = 2 * time.Minute
 
 var errVerificationProcessUnproven = procbound.ErrQuiescenceUnproven
 
 // ErrVerificationAbsenceUnproven marks a verification call whose container
 // or runner process was not proved gone. Every other return, an error
-// included, proves the call left nothing running, which is what ends a
-// verification job's memory reservation (plan §5.4).
+// included, proves the call left nothing running. A verification job's
+// memory reservation ends only once every call of the job is so proved
+// (plan §5.4); ProveInvocationAbsent re-checks that across rooms.
 var ErrVerificationAbsenceUnproven = errors.New("verification container absence is unproven")
 
 func confirmVerificationProcessExit(cmd *exec.Cmd, err error) error {
@@ -230,7 +235,7 @@ func (r *ProjectImageRoom) runImageCommand(
 		}
 	}
 	cleanupCtx, cancelCleanup := context.WithTimeout(
-		context.WithoutCancel(ctx), verificationCleanupTimeout,
+		context.WithoutCancel(ctx), VerificationCleanupTimeout,
 	)
 	cleanupErr := r.cleanupOwnedContainers(cleanupCtx, id, owner)
 	cancelCleanup()
