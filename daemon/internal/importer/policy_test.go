@@ -392,7 +392,7 @@ func TestImportControlPlanePaths(t *testing.T) {
 // onboarding passes as -protected-path flags. daemon/README.md (Onboard
 // Freeside) carries the copy the owner runs; change both together.
 var freesideProtectedPaths = domain.ProtectedPathConfig{
-	ExtraAutomationControlPatterns: []string{".githooks/**"},
+	ExtraAutomationControlPatterns: []string{".githooks/**", ".github/**"},
 	ExtraVerificationControlPatterns: []string{
 		".freeside/**",
 		"api/vacuum.ruleset.yaml",
@@ -413,10 +413,11 @@ var freesideProtectedPaths = domain.ProtectedPathConfig{
 }
 
 // TestImportFreesideProtectedPaths shows Freeside's widening turns an
-// agent's edit to its hooks, recipe, verification scripts, API lint
-// configuration, prompts, or plan into a publish-blocking control-plane
-// finding, while ordinary daemon/, docs/, api/, and scripts/ edits, a
-// script's own regression suite included, draw none.
+// agent's edit to its hooks, any file under .github/ (the pull request
+// template included, which the defaults leave out), recipe, verification
+// scripts, API lint configuration, prompts, or plan into a publish-blocking
+// control-plane finding, while ordinary app/, daemon/, devlog/, docs/, api/,
+// and scripts/ edits, a script's own regression suite included, draw none.
 func TestImportFreesideProtectedPaths(t *testing.T) {
 	t.Parallel()
 	if err := freesideProtectedPaths.Validate(); err != nil {
@@ -426,19 +427,21 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 		kind     FindingKind
 		category domain.ControlPlaneCategory
 	}{
-		".githooks/pre-commit":        {FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration},
-		".freeside/verify.json":       {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"daemon/.golangci.yml":        {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"scripts/check.sh":            {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"scripts/check-vocabulary.sh": {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"api/vacuum.ruleset.yaml":     {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"scripts/run-convergence.sh":  {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"prompts/system.md":           {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
-		"policy/materiality.yaml":     {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
-		"docs/plan.md":                {FindingMaterialityRulesPath, domain.ControlPlaneMaterialityRules},
+		".githooks/pre-commit":             {FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration},
+		".github/pull_request_template.md": {FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration},
+		".freeside/verify.json":            {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"daemon/.golangci.yml":             {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"scripts/check.sh":                 {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"scripts/check-vocabulary.sh":      {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"api/vacuum.ruleset.yaml":          {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"scripts/run-convergence.sh":       {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"prompts/system.md":                {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
+		"policy/materiality.yaml":          {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
+		"docs/plan.md":                     {FindingMaterialityRulesPath, domain.ControlPlaneMaterialityRules},
 	}
 	unflagged := []string{
 		"daemon/cmd/freesided/main.go", "docs/intro.md", "api/README.md", "scripts/test-check.sh",
+		"app/Package.swift", "devlog/README.md",
 	}
 	baseFiles := map[string]string{}
 	for path := range want {
