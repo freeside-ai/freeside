@@ -105,7 +105,7 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 	wiring := &claudeComposition{
 		janitor: &janitorSession{janitor: &stubJanitorRunner{}},
 	}
-	cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
+	cfg := claudeStartupConfig{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
 	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, func(context.Context) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
 	t.Parallel()
 	st := schedTestStore(t)
-	cfg := config{
+	cfg := claudeStartupConfig{
 		Claude:         &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev},
 		DoctorInterval: 15 * time.Minute,
 	}
@@ -170,7 +170,7 @@ func TestScheduledDoctorPassStartsUsageCollection(t *testing.T) {
 		runConformance: func(context.Context) error { return nil },
 	}
 	collections := 0
-	sched, err := newClaudeScheduler(st, config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}},
+	sched, err := newClaudeScheduler(st, claudeStartupConfig{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}},
 		wiring, func(context.Context) error { return nil },
 		func(context.Context) error {
 			collections++

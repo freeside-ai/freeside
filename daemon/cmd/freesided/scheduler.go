@@ -209,7 +209,7 @@ func newFakeScheduler(st *store.Store) (*scheduler.Scheduler, error) {
 
 func newClaudeScheduler(
 	st *store.Store,
-	cfg config,
+	cfg claudeStartupConfig,
 	wiring *claudeComposition,
 	runDoctor func(context.Context) error,
 	collectUsage func(context.Context) error,
@@ -283,7 +283,7 @@ func newClaudeScheduler(
 // a restart preserves cadence (a missed fire coalesces with a recorded gap
 // rather than resetting); a reconfigured interval re-arms under the next
 // generation.
-func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg config) error {
+func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg claudeStartupConfig) error {
 	now := time.Now().UTC()
 	for _, job := range []struct {
 		id       domain.ScheduleID

@@ -254,6 +254,21 @@ func newScenarioParts(
 	}, nil
 }
 
+// claudeStartupConfig is the part of the daemon's configuration the
+// Claude composition and its loops read. Each field means what the
+// config field of the same name does.
+type claudeStartupConfig struct {
+	Claude           *claudeDriverConfig
+	Logger           *slog.Logger
+	StateDir         string
+	DBPath           string
+	ApprovedRecipes  map[domain.Digest]bool
+	IntakeInitiators []intakeInitiator
+	DoctorInterval   time.Duration
+	// Now is the attention service clock; nil is the wall clock.
+	Now func() time.Time
+}
+
 // claudeWorkflow is what the Claude composition hands the rest of startup.
 type claudeWorkflow struct {
 	claudeWiring *claudeComposition
@@ -269,7 +284,7 @@ type claudeWorkflow struct {
 // to late as it composes each.
 func composeClaudeWorkflow(
 	ctx context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
+	lock *daemonlock.Lock, bound ward.LaunchBound, cfg claudeStartupConfig,
 	manualProjects map[domain.ProjectID]engine.ManualInitiator, claudeUsageCaptures engine.ClaudeUsageSink,
 	doctorConvergenceLock *sync.Mutex, startupSessionCloser *sessionCloser, late *startupBindings,
 ) (_ *claudeWorkflow, err error) {
@@ -286,7 +301,7 @@ func composeClaudeWorkflow(
 		// to serve it.
 		var roleFailure *roleAdmissionError
 		if errors.As(err, &roleFailure) {
-			err = errors.Join(err, reportRoleFailure(ctx, st, roleFailure, startupNow(cfg.now)))
+			err = errors.Join(err, reportRoleFailure(ctx, st, roleFailure, startupNow(cfg.Now)))
 		}
 		return nil, err
 	}
@@ -505,7 +520,7 @@ func composeClaudeWorkflow(
 				ProjectID:                 domain.ProjectID("project-system"),
 				ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
 				Mode:                      domain.ModeUnattended,
-				Now:                       cfg.now,
+				Now:                       cfg.Now,
 			}).ConvergeReviewConfiguration(refreshCtx)
 		}
 	}
@@ -516,7 +531,7 @@ func composeClaudeWorkflow(
 	late.workflow = workflow
 	// Before any loop admits: report why selection is not active, if it
 	// is not.
-	if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.now)); err != nil {
+	if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("activate agent selection: %w", err)
 	}
 	// The same for the judgment roles: name each one the lineup cannot
@@ -545,7 +560,7 @@ func composeClaudeWorkflow(
 	if reconcileErr != nil {
 		return nil, fmt.Errorf("reconcile orphaned handoffs: %w", reconcileErr)
 	}
-	if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.now)); err != nil {
+	if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("report quarantined stage intents: %w", err)
 	}
 	return &claudeWorkflow{claudeWiring: claudeWiring, workflow: workflow, imageUpkeep: imageUpkeep}, nil
@@ -595,11 +610,12 @@ type claudeLoops struct {
 
 // composeClaudeLoops builds the Claude loops without starting any, so it
 // runs before startup makes durable-stop recovery available, and
-// publishes the image-upkeep trigger to late.
-func (d *daemon) composeClaudeLoops(
-	parent context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore, cfg config,
+// publishes the image-upkeep trigger to late. collectUsage is the usage
+// coordinator's collection pass, which the scheduled doctor pass starts.
+func composeClaudeLoops(
+	parent context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore, cfg claudeStartupConfig,
 	claudeWiring *claudeComposition, workflow *engine.Engine, imageUpkeep *engine.ImageUpkeep,
-	runDoctor func(context.Context) error, late *startupBindings,
+	runDoctor func(context.Context) error, collectUsage func(context.Context) error, late *startupBindings,
 ) (_ *claudeLoops, err error) {
 	var (
 		claudeSched          *scheduler.Scheduler
@@ -609,7 +625,7 @@ func (d *daemon) composeClaudeLoops(
 	)
 	// The doctor and janitor cadences live on the §5.16 durable scheduler;
 	// their initial coverage remains the direct startup passes before this.
-	claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, d.usage.CollectAll, imageUpkeep)
+	claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, collectUsage, imageUpkeep)
 	if err != nil {
 		return nil, err
 	}

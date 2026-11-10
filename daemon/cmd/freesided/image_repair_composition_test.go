@@ -135,7 +135,7 @@ func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
 	t.Parallel()
 	st := storetest.Open(t, t.TempDir()+"/freesided.db", store.Options{})
 	t.Cleanup(func() { _ = st.Close() })
-	cfg := config{Claude: &claudeDriverConfig{SeedRoot: t.TempDir(), Repo: "owner/repo", RepositoryID: 7}}
+	cfg := claudeStartupConfig{Claude: &claudeDriverConfig{SeedRoot: t.TempDir(), Repo: "owner/repo", RepositoryID: 7}}
 	for name, selection := range map[string]engine.ImageSelection{
 		"attended": nil,
 		"unattended": func(context.Context, domain.InvocationID, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {

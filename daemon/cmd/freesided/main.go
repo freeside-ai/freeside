@@ -683,6 +683,15 @@ func enabledShadowReviewRate(source exec.ReviewSource, configured float64) float
 	return configured
 }
 
+// claudeStartup is the configuration the Claude composition reads.
+func (cfg config) claudeStartup() claudeStartupConfig {
+	return claudeStartupConfig{
+		Claude: cfg.Claude, Logger: cfg.Logger, StateDir: cfg.StateDir, DBPath: cfg.DBPath,
+		ApprovedRecipes: cfg.ApprovedRecipes, IntakeInitiators: cfg.IntakeInitiators,
+		DoctorInterval: cfg.DoctorInterval, Now: cfg.now,
+	}
+}
+
 // execution is the mode this configuration runs: a Claude driver, the fake
 // driver, or neither.
 func (cfg config) execution() executionMode {
@@ -990,6 +999,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 		late                  = &startupBindings{}
+		claudeStartup         = cfg.claudeStartup()
 	)
 	usageRefreshAge, usage, claudeUsageCaptures := newUsageCollection(st, cfg)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
@@ -1010,7 +1020,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	} else if cfg.Claude != nil {
 		var claude *claudeWorkflow
-		claude, err = composeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, cfg, manualProjects,
+		claude, err = composeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, claudeStartup, manualProjects,
 			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late)
 		if err != nil {
 			return nil, err
@@ -1125,8 +1135,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		fakeSched.SetLogger(cfg.Logger)
 	} else if claudeWiring != nil {
-		loops, err = d.composeClaudeLoops(parent, st, attention, blobs, cfg, claudeWiring, workflow, imageUpkeep,
-			runDoctor, late)
+		loops, err = composeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
+			runDoctor, d.usage.CollectAll, late)
 		if err != nil {
 			return nil, err
 		}

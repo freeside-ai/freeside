@@ -68,7 +68,7 @@ func composeImageUpkeep(
 	st *store.Store,
 	attention *signet.Service,
 	blobs signet.EvidenceBlobWriter,
-	cfg config,
+	cfg claudeStartupConfig,
 	wiring *claudeComposition,
 	rebuild *engine.ProjectImageRebuild,
 	manualProjects map[domain.ProjectID]engine.ManualInitiator,
@@ -104,10 +104,10 @@ func composeImageUpkeep(
 			defer doctorLock.Unlock()
 			return (operations.Doctor{
 				Store: st, Attention: attention, ProjectID: schedulerSystemProjectID,
-				Mode: cfg.Claude.OperatingMode, Now: cfg.now,
+				Mode: cfg.Claude.OperatingMode, Now: cfg.Now,
 			}).ConvergeImageUpkeep(ctx, fault)
 		},
-		Now:    cfg.now,
+		Now:    cfg.Now,
 		Logger: logger.With("subsystem", "image_upkeep"),
 	}
 	// A maintenance task runs at its refusal's tip only through per-attempt
@@ -168,7 +168,7 @@ func pendingImageRepairTask(
 // raised in, in a stable order: the label-intake projects of the daemon's
 // repository, then the manual-submission projects. Upkeep takes the first
 // one registered for the repository.
-func imageUpkeepProjects(cfg config, manualProjects map[domain.ProjectID]engine.ManualInitiator) []domain.ProjectID {
+func imageUpkeepProjects(cfg claudeStartupConfig, manualProjects map[domain.ProjectID]engine.ManualInitiator) []domain.ProjectID {
 	var projects []domain.ProjectID
 	for _, initiator := range cfg.IntakeInitiators {
 		if initiator.RepositoryID == cfg.Claude.RepositoryID {
