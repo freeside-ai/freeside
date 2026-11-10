@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/admissionauth"
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -1330,7 +1331,7 @@ func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compo
 			}
 		}
 	}
-	if _, err := resolvedPathAllowlist(resolvedPolicy, resolvedPolicy.Digest, cfg.AllowedPaths); err != nil {
+	if _, err := admissionauth.ResolvedPathAllowlist(resolvedPolicy, resolvedPolicy.Digest, cfg.AllowedPaths); err != nil {
 		return compositionIdentity{}, err
 	}
 	if workUnit != nil {

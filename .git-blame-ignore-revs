@@ -94,3 +94,6 @@ d1f03460940ca89c2a773852720fdd2a740efefd
 
 # Rename the publication transport classifier for all its callers (#2858)
 b4fb2369d0b8f08ac11dc78a6824d3ce6298f0f5
+
+# Move freesided's admission authority to internal/admissionauth (#2552)
+c169cc154c25efb54cbddf5d77d24629f96d41cf

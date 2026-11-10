@@ -17,8 +17,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
-	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestParseOnboardConfigRefusesLoopbackRegistry(t *testing.T) {
@@ -587,61 +585,5 @@ func TestTrustedInstallationChecksEveryLocalRegistration(t *testing.T) {
 				t.Fatalf("trustedInstallation = %+v, want %+v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestAttendedImportUsesCurrentActiveTrustProfile(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
-		Repo: "example/repo", RepositoryID: 44,
-		PRExecution:                domain.PRExecutionAuditedSameRepo,
-		CandidateAutomationChanges: domain.AutomationChangesBlocked,
-		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
-		CommitPlan:                 domain.CommitPlanSingleCommit,
-		MessageRuleset:             domain.MessageRulesetGitHub1,
-		WorkflowAuditDigest:        "sha256:workflow-audit",
-		Review: domain.ReviewSettings{
-			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 7, 31, 6, 15, 0, 0, time.UTC)
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		if err := tx.RecordInactiveTrustProfile(ctx, profile, now); err != nil {
-			return err
-		}
-		return tx.ActivateTrustProfile(ctx, profile.Repo, profile.ProfileDigest, now)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	authority := storeAdmissionAuthority{store: st}
-	admission := domain.ExecutionAdmission{
-		ID: "sha256:attended-admission", OperatingMode: domain.ModeAttendedDev,
-		Base: domain.BaseRevision{Repo: profile.Repo, RepositoryID: profile.RepositoryID},
-	}
-	got, err := authority.importTrustProfile(ctx, admission)
-	if err != nil {
-		t.Fatalf("attended import profile: %v", err)
-	}
-	if got.ProfileDigest != profile.ProfileDigest {
-		t.Fatalf("attended import profile = %s, want %s", got.ProfileDigest, profile.ProfileDigest)
-	}
-	admission.OperatingMode = domain.ModeUnattended
-	digest := profile.ProfileDigest
-	admission.TrustProfileDigest = &digest
-	got, err = authority.importTrustProfile(ctx, admission)
-	if err != nil {
-		t.Fatalf("bound unattended import profile: %v", err)
-	}
-	if got.ProfileDigest != profile.ProfileDigest {
-		t.Fatalf("unattended import profile = %s, want %s", got.ProfileDigest, profile.ProfileDigest)
-	}
-	admission.TrustProfileDigest = nil
-	if _, err := authority.importTrustProfile(ctx, admission); !errors.Is(err, domain.ErrEmptyField) {
-		t.Fatalf("unbound unattended import profile = %v, want ErrEmptyField", err)
 	}
 }

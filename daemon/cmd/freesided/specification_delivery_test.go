@@ -118,21 +118,6 @@ func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testi
 	}
 }
 
-func TestStoreAdmissionAuthorityRejectsMissingSpecificationMarker(t *testing.T) {
-	t.Parallel()
-	st, _, _, _ := deliveryValidatorFixture(t, true)
-	authority := storeAdmissionAuthority{store: st}
-	specification, err := authority.authenticateSpecificationInvocation(
-		t.Context(), "inv-specify-run-missing-2", domain.ExecutionAdmission{
-			RunID: "run-missing", StageID: "specify-run-missing",
-		},
-	)
-	if !specification || !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("missing specification marker = specification %t, error %v; want fail-closed ErrNotFound",
-			specification, err)
-	}
-}
-
 func deliveryStartSpec(
 	t *testing.T, run domain.Run, promptDigest domain.Digest, prior []domain.Digest,
 ) exec.StartSpec {
