@@ -1,4 +1,4 @@
-package main
+package daemoncompose
 
 import (
 	"bytes"
@@ -28,13 +28,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// scenarioComposition is the production engine composed over the scenario's
+// ScenarioComposition is the production engine composed over the scenario's
 // fakes: what run starts as daemon components and what it closes.
-type scenarioComposition struct {
-	workflow  *engine.Engine
-	scheduler *scheduler.Scheduler
+type ScenarioComposition struct {
+	Workflow  *engine.Engine
+	Scheduler *scheduler.Scheduler
 	forge     *http.Server
-	listener  net.Listener
+	Listener  net.Listener
 }
 
 // The prompt packages a scenario run's stage inputs name. The materializer
@@ -45,9 +45,43 @@ var (
 	scenarioRemediationPromptPackage   = []byte("<!-- freeside:render-prior-artifacts=v1 -->\nScenario remediator prompt package.\n")
 )
 
-// composeScenario seeds the scenario's world and composes the production
+// ScenarioParts are what run hands ComposeScenario. AdmissionFloor through
+// PublicationWatches are values the scenario cannot compute for itself from
+// outside package main, because their helpers live there; run builds each
+// exactly as the scenario built it in package main. The admission floor,
+// validators, and watches come from the helpers the Claude composition
+// uses; the import authority and export recorder are its types, built bare,
+// without the Claude composition's path, author, or usage configuration.
+type ScenarioParts struct {
+	Store     *store.Store
+	Attention *signet.Service
+	Blobs     *signet.BlobStore
+	Lock      *daemonlock.Lock
+	Bound     ward.LaunchBound
+	DBPath    string
+	Logger    *slog.Logger
+	Scenario  *Scenario
+
+	// AdmissionFloor is the unattended admission floor.
+	AdmissionFloor []exec.Capability
+	// ImplementationDeliveryValidation and SpecificationDeliveryValidation
+	// check that a stage's prompt inputs are deliverable, over one
+	// production materializer.
+	ImplementationDeliveryValidation func(context.Context, exec.StartSpec) error
+	SpecificationDeliveryValidation  func(context.Context, exec.StartSpec) error
+	// Imports and Exports are the store's import authority and export
+	// recorder, which the scripted delivery uses the way the ward pipeline
+	// does.
+	Imports ScenarioImportAuthority
+	Exports ScenarioExportLookup
+	// PublicationWatches are the publication deadline registrations every
+	// production scheduler runs.
+	PublicationWatches map[domain.ScheduleKind]scheduler.Registration
+}
+
+// ComposeScenario seeds the scenario's world and composes the production
 // engine over it through the builder the Claude branch uses
-// (productionEngine), with the scripted stage driver and review source, an
+// (ProductionEngine), with the scripted stage driver and review source, an
 // in-process forge on 127.0.0.1:0, and process-level verification. Each part
 // it leaves out is an explicit zero value with its reason. It runs
 // unattended because production publication holds every other mode's work
@@ -55,13 +89,11 @@ var (
 //
 // run refuses a non-ephemeral environment before calling it: the fake
 // backend's conformance record claims a containment no process here has.
-func composeScenario(
-	ctx context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, cfg config, bound ward.LaunchBound,
-) (_ *scenarioComposition, err error) {
+func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioComposition, err error) {
+	st, blobs := parts.Store, parts.Blobs
 	now := func() time.Time { return time.Now().UTC() }
-	sc := *cfg.Scenario
-	world, err := seedScenario(ctx, st, cfg.DBPath, sc, now())
+	sc := *parts.Scenario
+	world, err := seedScenario(ctx, st, parts.DBPath, sc, now())
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +116,8 @@ func composeScenario(
 	forge := fakeforge.New(fakeforge.Config{
 		Repo: scenarioRepo, Token: scenarioForgeToken,
 		Report: func(format string, args ...any) {
-			if cfg.Logger != nil {
-				cfg.Logger.Warn("scenario forge: " + fmt.Sprintf(format, args...))
+			if parts.Logger != nil {
+				parts.Logger.Warn("scenario forge: " + fmt.Sprintf(format, args...))
 			}
 		},
 	})
@@ -131,6 +163,7 @@ func composeScenario(
 	}
 	driver := scenarioStageDriver{
 		StageDriver: fakeStages, scenario: sc, store: st, blobs: blobs,
+		imports: parts.Imports, exports: parts.Exports,
 		baseDir: world.BaseDir, workDir: filepath.Join(world.Dir, "deliveries"),
 	}
 	fakeReviews, err := fake.NewReviewSourceAt(filepath.Join(world.Dir, "review-source"))
@@ -138,19 +171,15 @@ func composeScenario(
 		return nil, fmt.Errorf("open scenario review source: %w", err)
 	}
 	reviews := scenarioReviewSource{ReviewSource: fakeReviews}
-	materializer, err := productionMaterializer(blobs)
-	if err != nil {
-		return nil, err
-	}
 	fetcher, err := specify.NewFetcher(st, blobs, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	identity := scenarioIdentityID
-	production := productionEngine{
-		Lock: lock, Bound: bound,
-		Backend: world.Backend, AdmissionFloor: admissionFloor(domain.ModeUnattended),
+	identity := ScenarioIdentityID
+	production := ProductionEngine{
+		Lock: parts.Lock, Bound: parts.Bound,
+		Backend: world.Backend, AdmissionFloor: parts.AdmissionFloor,
 		Admission: engine.AdmissionEnvironment{
 			OperatingMode: domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,
 			EgressProfile: domain.EgressProviderOnly, ImageRef: world.Image.ImageRef,
@@ -169,11 +198,11 @@ func composeScenario(
 				BaseRef: scenarioBaseRef, BaseSHA: world.BaseSHA,
 			}, nil
 		},
-		DeliveryValidation: productionImplementationDeliveryValidator(materializer),
+		DeliveryValidation: parts.ImplementationDeliveryValidation,
 		Specification: engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: now,
 			PromptPackageDigest: digests["specification"],
-			ValidateDelivery:    productionSpecificationDeliveryValidator(materializer),
+			ValidateDelivery:    parts.SpecificationDeliveryValidation,
 		},
 		Cancellation: engine.TaskCancellationRuntime{
 			Timeout: time.Minute,
@@ -200,7 +229,7 @@ func composeScenario(
 		Publication: engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(world.Dir, "publication"),
 			Transport: transport, Publisher: publisher, Artifacts: blobs,
-			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(scenarioRecipe): true},
+			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(ScenarioRecipe): true},
 			// The scenario approves its one recipe above and records no
 			// image-policy adoption, so no adoption's recipes can apply. A
 			// scenario that seeds an adoption must set scenarioRepositoryID.
@@ -248,31 +277,30 @@ func composeScenario(
 		// and no doctor runs without a Claude config (newDoctorPass); the
 		// scenario's review configuration is the fake's fixed default.
 		HealthRefresh: nil,
-		Logger:        cfg.Logger,
+		Logger:        parts.Logger,
 		// The scripted stage driver runs no Claude writer turn, so there is
 		// no usage capture to sink.
 		UsageSink: nil,
 	}
-	workflow, err := engine.New(st, attention, driver, production.options()...)
+	workflow, err := engine.New(st, parts.Attention, driver, production.Options()...)
 	if err != nil {
 		return nil, err
 	}
-	sched, err := scheduler.New(st, domain.ModeUnattended, now,
-		publicationWatchRegistrations(st))
+	sched, err := scheduler.New(st, domain.ModeUnattended, now, parts.PublicationWatches)
 	if err != nil {
 		return nil, err
 	}
-	sched.SetLogger(cfg.Logger)
-	return &scenarioComposition{
-		workflow: workflow, scheduler: sched, listener: listener,
+	sched.SetLogger(parts.Logger)
+	return &ScenarioComposition{
+		Workflow: workflow, Scheduler: sched, Listener: listener,
 		forge: &http.Server{Handler: forge, ReadHeaderTimeout: 5 * time.Second},
 	}, nil
 }
 
-// serveForge serves the in-process forge until ctx ends.
-func (c *scenarioComposition) serveForge(ctx context.Context, logger *slog.Logger) error {
+// ServeForge serves the in-process forge until ctx ends.
+func (c *ScenarioComposition) ServeForge(ctx context.Context, logger *slog.Logger) error {
 	served := make(chan error, 1)
-	go func() { served <- c.forge.Serve(c.listener) }()
+	go func() { served <- c.forge.Serve(c.Listener) }()
 	select {
 	case err := <-served:
 		return fmt.Errorf("scenario forge: %w", err)

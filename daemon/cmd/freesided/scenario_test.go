@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -22,16 +22,17 @@ import (
 // 17s with it, and about 30s with it on a heavily loaded host: the engine's
 // serial reconcile pass slows several times under the race detector.
 //
-// The bound exceeds the quota-park scenario's 2-minute reset (scenario.go),
-// so it no longer proves the allowed reading, rather than the reset, released
-// the park; TestScenarioQuotaParkResumes checks that against the start time.
+// The bound exceeds the quota-park scenario's 2-minute reset
+// (daemoncompose.QuotaParkScenario), so it no longer proves the allowed
+// reading, rather than the reset, released the park;
+// TestScenarioQuotaParkResumes checks that against the start time.
 // It stays under go test's default 10-minute timeout, so a hang still fails
 // with the waiting test's own message.
 const scenarioWaitBound = 3 * time.Minute
 
 func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
 	t.Parallel()
-	clean := cleanScenario()
+	clean := daemoncompose.CleanScenario()
 	for _, tc := range []struct {
 		name string
 		cfg  config
@@ -57,50 +58,6 @@ func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
 				t.Fatalf("refused start touched the store: %v", err)
 			}
 		})
-	}
-}
-
-func TestListScenarios(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	if err := listScenarios(&out); err != nil {
-		t.Fatal(err)
-	}
-	want := "clean\t" + cleanScenario().Description + "\n" +
-		"quota-park\t" + quotaParkScenario().Description + "\n"
-	if got := out.String(); got != want {
-		t.Fatalf("listScenarios = %q, want %q", got, want)
-	}
-	if _, err := lookupScenario("nope"); err == nil || !strings.Contains(err.Error(), "not one of: clean, quota-park") {
-		t.Fatalf("lookupScenario(nope) = %v, want the known names", err)
-	}
-}
-
-// TestSeedScenarioRepositoryRebuildsAPartialStart covers a start that died
-// after git init but before the base commit: the next start rebuilds the
-// repository instead of failing on the missing ref forever.
-func TestSeedScenarioRepositoryRebuildsAPartialStart(t *testing.T) {
-	t.Parallel()
-	files := cleanScenario().BaseFiles
-	fresh, err := seedScenarioRepository(filepath.Join(t.TempDir(), "repository"), files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	partial := filepath.Join(t.TempDir(), "repository")
-	if err := os.MkdirAll(partial, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := scenarioGit(partial, "init", "-q", "-b", scenarioBaseRef); err != nil {
-		t.Fatal(err)
-	}
-	for pass := range 2 {
-		got, err := seedScenarioRepository(partial, files)
-		if err != nil {
-			t.Fatalf("pass %d: %v", pass, err)
-		}
-		if got != fresh {
-			t.Fatalf("pass %d: base %s, want %s", pass, got, fresh)
-		}
 	}
 }
 
@@ -149,7 +106,7 @@ func TestScenarioFromFlags(t *testing.T) {
 // seeding finds its repository and records in place.
 func TestScenarioCleanRunPublishes(t *testing.T) {
 	t.Parallel()
-	clean := cleanScenario()
+	clean := daemoncompose.CleanScenario()
 	cfg := scenarioConfig(t, &clean)
 	h := startDaemon(t, cfg)
 	submitted := submitAndApproveScenario(t, h, cfg)
@@ -161,7 +118,7 @@ func TestScenarioCleanRunPublishes(t *testing.T) {
 	assertScenarioPublished(t, h.attention, submitted.TaskID, submitted.RunID)
 	// A read that names the scenario's recipe goes through the running
 	// daemon's control route, which must approve what its store approves.
-	source, err := openObservation(t.Context(), cfg.DBPath, verify.RecipeDigest(scenarioRecipe))
+	source, err := openObservation(t.Context(), cfg.DBPath, verify.RecipeDigest(daemoncompose.ScenarioRecipe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +146,7 @@ func TestScenarioCleanRunPublishes(t *testing.T) {
 // the engine's synctest cases cover the reset itself.
 func TestScenarioQuotaParkResumes(t *testing.T) {
 	t.Parallel()
-	quota := quotaParkScenario()
+	quota := daemoncompose.QuotaParkScenario()
 	cfg := scenarioConfig(t, &quota)
 	h := startDaemon(t, cfg)
 	submitted := submitAndApproveScenario(t, h, cfg)
@@ -242,7 +199,7 @@ func assertStartedBeforeReset(t *testing.T, attention *signet.Service, task doma
 	t.Fatalf("run %s recorded no %s milestone; events: %+v", run, domain.MilestoneInvocationStarted, timeline.Events)
 }
 
-func scenarioConfig(t *testing.T, played *scenario) config {
+func scenarioConfig(t *testing.T, played *daemoncompose.Scenario) config {
 	t.Helper()
 	return config{
 		DBPath: filepath.Join(t.TempDir(), "freeside.db"), ListenAddr: "127.0.0.1:0",
@@ -259,7 +216,7 @@ func submitAndApproveScenario(t *testing.T, h *daemon, cfg config) submitResult 
 	submitted, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		DBPath: cfg.DBPath, TaskPath: filepath.Join(inputs, "task.md"),
 		PolicyPath: filepath.Join(inputs, "policy.json"), PublicationPath: filepath.Join(inputs, "publication.json"),
-		WorkUnitPath: filepath.Join(inputs, "work-unit.json"), ProjectID: scenarioProjectID,
+		WorkUnitPath: filepath.Join(inputs, "work-unit.json"), ProjectID: daemoncompose.ScenarioProjectID,
 	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -346,18 +303,18 @@ func recordScenarioAllowedReading(t *testing.T, st *store.Store, pool domain.Usa
 	manifest := domain.Digest("sha256:" + strings.Repeat("5", 64))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		at := time.Now().UTC()
-		lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, scenarioIdentityID, "inv-scenario-collect",
+		lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, daemoncompose.ScenarioIdentityID, "inv-scenario-collect",
 			&domain.LeaseGenerationBinding{
-				EnrollmentID: scenarioEnrollmentID, AuthStoreVolume: "scenario-collect",
+				EnrollmentID: daemoncompose.ScenarioEnrollmentID, AuthStoreVolume: "scenario-collect",
 				StoreManifestDigest: manifest,
 			}, at, at.Add(10*time.Minute))
 		if err != nil {
 			return err
 		}
 		generation, err := tx.AppendEnrollmentGeneration(ctx, domain.EnrollmentGeneration{
-			EnrollmentID: scenarioEnrollmentID, AuthStoreVolume: "scenario-collect",
+			EnrollmentID: daemoncompose.ScenarioEnrollmentID, AuthStoreVolume: "scenario-collect",
 			StoreManifestDigest: manifest, LeaseFence: lease.Fence,
-			AccountBinding: scenarioAccountBinding, RecordedAt: at,
+			AccountBinding: daemoncompose.ScenarioAccountBinding, RecordedAt: at,
 		}, at)
 		if err != nil {
 			return err
@@ -369,7 +326,7 @@ func recordScenarioAllowedReading(t *testing.T, st *store.Store, pool domain.Usa
 		reset := at.Add(time.Hour)
 		record.LastAttempt = &domain.CollectionAttempt{Status: domain.CollectionAttemptSucceeded, At: at}
 		record.Windows = []domain.WindowReading{{
-			Window: window, EnrollmentID: scenarioEnrollmentID, Generation: generation.Ordinal,
+			Window: window, EnrollmentID: daemoncompose.ScenarioEnrollmentID, Generation: generation.Ordinal,
 			Status: domain.WindowStatusAllowed, ResetsAt: &reset, ObservedAt: at,
 		}}
 		return tx.RecordPoolUsageObservation(ctx, record, at)

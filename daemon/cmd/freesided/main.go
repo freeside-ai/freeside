@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -65,11 +66,6 @@ const (
 	defaultGitHubRemoteBase    = "https://github.com"
 	defaultJanitorInterval     = 30 * time.Second
 	defaultJanitorRemovalBound = 10
-)
-
-const (
-	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
-	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
 )
 
 type repositoryIDFlag struct {
@@ -338,7 +334,7 @@ func main() {
 		os.Exit(2)
 	}
 	if *listScenariosOnly {
-		if err := listScenarios(os.Stdout); err != nil {
+		if err := daemoncompose.ListScenarios(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(1)
 		}
@@ -643,7 +639,7 @@ type config struct {
 	// over fakes (-driver scenario). It is refused outside the ephemeral tier,
 	// because the fake backend's conformance record claims a containment
 	// nothing provides.
-	Scenario *scenario
+	Scenario *daemoncompose.Scenario
 	// DeputyLaunch is set only by deputy: the composition this daemon serves
 	// under, which every new submission must bind (deputyLaunch.admit).
 	DeputyLaunch *deputyLaunch
@@ -720,7 +716,7 @@ func (cfg config) storeOptions() (store.Options, error) {
 		if opts.ApprovedRecipes == nil {
 			opts.ApprovedRecipes = map[domain.Digest]bool{}
 		}
-		opts.ApprovedRecipes[verify.RecipeDigest(scenarioRecipe)] = true
+		opts.ApprovedRecipes[verify.RecipeDigest(daemoncompose.ScenarioRecipe)] = true
 		return opts, nil
 	}
 	if cfg.Claude == nil {
@@ -966,11 +962,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	if fixture != "" {
-		if err := seedStartupFixture(parent, st, fixture, cfg); err != nil {
+		if err := daemoncompose.SeedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
 			return nil, err
 		}
 	}
-	localBackups, err := maintainLocalBackups(parent, st, blobs, localBackupFiles, cfg)
+	localBackups, err := daemoncompose.MaintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -988,7 +984,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
 		imageUpkeep           *engine.ImageUpkeep
-		scenarioWiring        *scenarioComposition
+		scenarioWiring        *daemoncompose.ScenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 		late                  = &startupBindings{}
@@ -997,9 +993,18 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
 		manualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
 	if cfg.FakeDriverEnabled {
-		workflow, err = composeFakeWorkflow(parent, st, attention, driver, lock, bound, cfg, late)
+		workflow, err = daemoncompose.ComposeFakeWorkflow(
+			st, attention, autoScriptStageDriver{StageDriver: driver}, lock, bound, cfg.Logger)
 		if err != nil {
 			return nil, err
+		}
+		// Published before the seed, so an attention option the seed's
+		// writes reach reads this engine, not nil.
+		late.workflow = workflow
+		if cfg.SeedWalkingSkeleton {
+			if err := daemoncompose.SeedWalkingSkeleton(parent, workflow); err != nil {
+				return nil, err
+			}
 		}
 	} else if cfg.Claude != nil {
 		var claude *claudeWorkflow
@@ -1010,7 +1015,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		claudeWiring, workflow, imageUpkeep = claude.claudeWiring, claude.workflow, claude.imageUpkeep
 	} else if cfg.Scenario != nil {
-		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg, bound)
+		var parts daemoncompose.ScenarioParts
+		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
+		}
+		scenarioWiring, err = daemoncompose.ComposeScenario(ctx, parts)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
@@ -1019,10 +1029,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// before then still owns the listener.
 		defer func() {
 			if err != nil {
-				_ = scenarioWiring.listener.Close()
+				_ = scenarioWiring.Listener.Close()
 			}
 		}()
-		workflow = scenarioWiring.workflow
+		workflow = scenarioWiring.Workflow
 		late.workflow = workflow
 	}
 	// The live credential-integrity probe exists only in Claude mode, where

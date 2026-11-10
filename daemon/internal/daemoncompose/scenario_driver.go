@@ -1,4 +1,4 @@
-package main
+package daemoncompose
 
 import (
 	"bytes"
@@ -34,13 +34,33 @@ import (
 // does, before the fake reports the stage complete.
 type scenarioStageDriver struct {
 	*fake.StageDriver
-	scenario scenario
+	scenario Scenario
 	store    *store.Store
 	blobs    *signet.BlobStore
+	imports  ScenarioImportAuthority
+	exports  ScenarioExportLookup
 	// baseDir is the repository the delivery imports over; workDir holds
 	// each delivery's workspace, handoff, and checkout while it is built.
 	baseDir string
 	workDir string
+}
+
+// ScenarioImportAuthority reconstructs a delivery's import options from its
+// admission records, as the publication lane will replay them. Its method
+// is stage.AdmissionAuthority's ImportOptionsRecord.
+type ScenarioImportAuthority interface {
+	ImportOptionsRecord(
+		ctx context.Context, id domain.InvocationID, spec exec.StartSpec, base importer.Options,
+	) (importer.Options, error)
+}
+
+// ScenarioExportLookup reports whether an invocation's execution export is
+// already recorded. Its method is stage.ExportRecorder's
+// LookupExecutionExportRecord.
+type ScenarioExportLookup interface {
+	LookupExecutionExportRecord(
+		ctx context.Context, id domain.InvocationID,
+	) (domain.ExecutionExport, bool, error)
 }
 
 func (d scenarioStageDriver) Start(ctx context.Context, id domain.InvocationID, spec exec.StartSpec) error {
@@ -110,8 +130,7 @@ var scenarioCommitDate = time.Unix(1700000000, 0).UTC()
 // retried after a crash finds the export already recorded and records
 // nothing.
 func (d scenarioStageDriver) deliver(ctx context.Context, id domain.InvocationID, spec exec.StartSpec) error {
-	recorder := exportRecorder{store: d.store}
-	if _, recorded, err := recorder.LookupExecutionExportRecord(ctx, id); err != nil || recorded {
+	if _, recorded, err := d.exports.LookupExecutionExportRecord(ctx, id); err != nil || recorded {
 		return err
 	}
 	var admission domain.ExecutionAdmission
@@ -144,7 +163,7 @@ func (d scenarioStageDriver) deliver(ctx context.Context, id domain.InvocationID
 	if _, err := scenarioGit(d.workDir, "clone", "-q", "--no-hardlinks", d.baseDir, checkout); err != nil {
 		return err
 	}
-	options, err := (storeAdmissionAuthority{store: d.store, blobs: d.blobs}).ImportOptionsRecord(
+	options, err := d.imports.ImportOptionsRecord(
 		ctx, id, spec, importer.Options{BaseSHA: spec.Base.BaseSHA, CommitDate: scenarioCommitDate},
 	)
 	if err != nil {
@@ -197,7 +216,7 @@ func (d scenarioStageDriver) putExport(manifest export.Manifest, handoff string)
 	return digest, nil
 }
 
-func specificationOutput(sc scenario) specify.Output {
+func specificationOutput(sc Scenario) specify.Output {
 	specification := sc.Specification
 	return specify.Output{Specification: &specification}
 }
@@ -224,5 +243,5 @@ type scenarioRoom struct {
 }
 
 func (scenarioRoom) ReadRecipe(context.Context) ([]byte, error) {
-	return bytes.Clone(scenarioRecipe), nil
+	return bytes.Clone(ScenarioRecipe), nil
 }

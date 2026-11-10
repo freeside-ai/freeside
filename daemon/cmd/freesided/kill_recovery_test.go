@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -93,9 +94,9 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			first := startProcessFixture(t, root, ntfy.URL, tc.checkpoint, marker)
 			client := pairProcessDevice(t, first.ready)
 			client.turnNotificationsOn(t)
-			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
+			approval := client.waitForItem(t, domain.ItemID("approval-"+string(daemoncompose.DefaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
-			feedback := client.waitForItem(t, domain.ItemID("feedback-"+string(defaultFakeRunID)))
+			feedback := client.waitForItem(t, domain.ItemID("feedback-"+string(daemoncompose.DefaultFakeRunID)))
 			waitForNotification(t, ntfy, feedback.Item.ID)
 			client.submit(t, killTestCommandID, feedback, domain.ActionDiscuss, "exercise restart recovery")
 
@@ -518,7 +519,7 @@ func (c *processClient) waitForAcceptedResult(t *testing.T) {
 	deadline := time.Now().Add(processWaitBound)
 	for time.Now().Before(deadline) {
 		var item signet.AttentionItemSnapshot
-		if c.getJSON(t, deadline, "/attention/items/feedback-"+string(defaultFakeRunID), &item) == http.StatusOK &&
+		if c.getJSON(t, deadline, "/attention/items/feedback-"+string(daemoncompose.DefaultFakeRunID), &item) == http.StatusOK &&
 			item.Item.ConversationID != nil {
 			var conversation signet.ConversationSnapshot
 			if c.getJSON(t, deadline, "/conversations/"+string(*item.Item.ConversationID), &conversation) == http.StatusOK &&
@@ -613,11 +614,11 @@ func assertKillRecoveryState(t *testing.T, root string, acceptedResults int) {
 	)
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		run, err = tx.GetRun(ctx, defaultFakeRunID)
+		run, err = tx.GetRun(ctx, daemoncompose.DefaultFakeRunID)
 		if err != nil {
 			return err
 		}
-		item, err = tx.GetAttentionItem(ctx, domain.ItemID("feedback-"+string(defaultFakeRunID)))
+		item, err = tx.GetAttentionItem(ctx, domain.ItemID("feedback-"+string(daemoncompose.DefaultFakeRunID)))
 		if err != nil {
 			return err
 		}
@@ -661,7 +662,7 @@ func assertKillRecoveryState(t *testing.T, root string, acceptedResults int) {
 		t.Fatalf("reopen permanent fake: %v", err)
 	}
 	err = driver.Start(ctx, killTestInvocationID, exec.StartSpec{
-		RunID: defaultFakeRunID, StageID: domain.StageID("feedback-" + string(defaultFakeRunID)),
+		RunID: daemoncompose.DefaultFakeRunID, StageID: domain.StageID("feedback-" + string(daemoncompose.DefaultFakeRunID)),
 	})
 	if !errors.Is(err, exec.ErrDuplicateStart) {
 		t.Fatalf("re-start committed fake intent error = %v, want ErrDuplicateStart", err)

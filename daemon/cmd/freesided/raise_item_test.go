@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -411,7 +412,7 @@ func TestRaisedHeldWorkItemSurvivesTheSweep(t *testing.T) {
 	defer func() { _ = h.Close() }()
 	ctx := t.Context()
 	result, err := runRaiseItemCommand(ctx, raiseItemCommandConfig{
-		DBPath: dbPath, Alert: raiseAlertHeldWork, RunID: defaultFakeRunID,
+		DBPath: dbPath, Alert: raiseAlertHeldWork, RunID: daemoncompose.DefaultFakeRunID,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -21,7 +21,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
-	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -41,7 +40,7 @@ type startupBindings struct {
 	claudeWiring   *claudeComposition
 	agentCatalog   *signet.AgentCatalog
 	upkeepTrigger  *imageUpkeepTrigger
-	scenarioWiring *scenarioComposition
+	scenarioWiring *daemoncompose.ScenarioComposition
 }
 
 // validateRunConfig checks the flag combinations that no default can
@@ -69,66 +68,6 @@ func validateRunConfig(cfg config) error {
 		}
 	}
 	return nil
-}
-
-// seedStartupFixture seeds the named fixture into a store that must hold
-// no runs or attention items yet.
-func seedStartupFixture(parent context.Context, st *store.Store, fixture seedfixture.Name, cfg config) error {
-	inventory, err := seedfixture.Seed(parent, st, fixture)
-	if errors.Is(err, seedfixture.ErrStoreNotEmpty) {
-		return fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", cfg.DBPath)
-	}
-	if err != nil {
-		// The fixture commits in several transactions, so a failure after
-		// the first leaves a partial fixture that the emptiness check then
-		// refuses to reseed.
-		return fmt.Errorf("-seed-fixture %s: %w (store %q may be partially seeded; delete it before retrying)",
-			fixture, err, cfg.DBPath)
-	}
-	if cfg.Logger != nil {
-		cfg.Logger.Info("seeded fixture", "fixture", fixture,
-			"projects", inventory.Projects, "tasks", inventory.Tasks, "runs", inventory.Runs,
-			"attention_items", inventory.AttentionItems)
-	}
-	return nil
-}
-
-// maintainLocalBackups runs the startup backup pass and returns the
-// producer whose loop startServing starts.
-func maintainLocalBackups(
-	parent context.Context, st *store.Store, blobs *signet.BlobStore, localBackupFiles *store.LocalBackupFiles,
-	cfg config,
-) (*store.LocalBackupProducer, error) {
-	// Backup evidence is maintained before anything can admit work. Orphan
-	// reconciliation in composeClaudeWorkflow resumes writers through the
-	// unattended admission gate, which reads backup health, so a pass that has not yet scanned the
-	// live database would let that gate see a stale checkpoint's verdict.
-	localBackups, err := localBackupFiles.NewProducer(st)
-	if err != nil {
-		return nil, err
-	}
-	// A store written before proposal paths persisted their evidence bodies
-	// holds carrier rows whose bytes the closure scan cannot verify. Rebuild
-	// them from the durable proposal rows first, so this pass already sees them.
-	// A failed rebuild is reported, never fatal, for the reason below: it
-	// re-gates every proposal row, including ones no backup pass reads, and a
-	// body it could not write still surfaces as unhealthy backup closure.
-	if restored, err := signet.RestoreProposalEvidence(parent, st, blobs); err != nil {
-		fmt.Fprintln(os.Stderr, "freesided:", err)
-	} else if restored > 0 && cfg.Logger != nil {
-		cfg.Logger.Info("restored effect-proposal evidence bodies", "count", restored)
-	}
-	if err := localBackups.Maintain(parent); err != nil {
-		// A durable row this binary cannot reconstruct is reported, never
-		// fatal: startup is the one pass an operator cannot retry past, and
-		// the dominant cause is a downgrade that starting is what lets them
-		// undo. Backup health carries the refusal (store.ErrBackupClosureIncomplete).
-		if !errors.Is(err, store.ErrBackupClosureIncomplete) {
-			return nil, err
-		}
-		fmt.Fprintln(os.Stderr, "freesided:", err)
-	}
-	return localBackups, nil
 }
 
 // newUsageCollection builds the usage coordinator, the age at which a
@@ -271,32 +210,30 @@ func newAttentionService(
 	return attention
 }
 
-// composeFakeWorkflow builds the fake-driver engine, publishes it to late,
-// and seeds the walking-skeleton run when asked.
-func composeFakeWorkflow(
-	parent context.Context, st *store.Store, attention *signet.Service, driver *fake.StageDriver,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config, late *startupBindings,
-) (workflow *engine.Engine, err error) {
-	walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock), engine.WithMachineCapacity(bound)}
-	if cfg.Logger != nil {
-		walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
-	}
-	workflow, err = engine.New(
-		st, attention, autoScriptStageDriver{StageDriver: driver}, walkingSkeletonOptions...)
+// newScenarioParts gathers what ComposeScenario takes, including the values
+// it needs from package main's helpers: the unattended admission floor,
+// both delivery validators over one production materializer, the store's
+// import authority and export recorder, and the publication watches. Each
+// is the value the scenario computed for itself before it left package
+// main.
+func newScenarioParts(
+	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
+	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
+) (daemoncompose.ScenarioParts, error) {
+	materializer, err := productionMaterializer(blobs)
 	if err != nil {
-		return nil, err
+		return daemoncompose.ScenarioParts{}, err
 	}
-	late.workflow = workflow
-	// Even explicit fake execution starts without sample work unless asked.
-	if cfg.SeedWalkingSkeleton {
-		if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
-			RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
-			SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
-		}); err != nil {
-			return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
-		}
-	}
-	return workflow, nil
+	return daemoncompose.ScenarioParts{
+		Store: st, Attention: attention, Blobs: blobs, Lock: lock, Bound: bound,
+		DBPath: cfg.DBPath, Logger: cfg.Logger, Scenario: cfg.Scenario,
+		AdmissionFloor:                   admissionFloor(domain.ModeUnattended),
+		ImplementationDeliveryValidation: productionImplementationDeliveryValidator(materializer),
+		SpecificationDeliveryValidation:  productionSpecificationDeliveryValidator(materializer),
+		Imports:                          storeAdmissionAuthority{store: st, blobs: blobs},
+		Exports:                          exportRecorder{store: st},
+		PublicationWatches:               publicationWatchRegistrations(st),
+	}, nil
 }
 
 // claudeWorkflow is what the Claude composition hands the rest of startup.
@@ -351,7 +288,7 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, err
 	}
-	production := productionEngine{
+	production := daemoncompose.ProductionEngine{
 		Lock: lock, Bound: bound,
 		Backend: claudeWiring.backend, AdmissionFloor: admissionFloor(cfg.Claude.OperatingMode),
 		Admission: claudeWiring.env, AdmissionNow: func() time.Time { return time.Now().UTC() },
@@ -550,7 +487,7 @@ func composeClaudeWorkflow(
 			}).ConvergeReviewConfiguration(refreshCtx)
 		}
 	}
-	workflow, err = engine.New(st, attention, stageDriver, production.options()...)
+	workflow, err = engine.New(st, attention, stageDriver, production.Options()...)
 	if err != nil {
 		return nil, err
 	}
@@ -810,14 +747,14 @@ func (d *daemon) startClaudeLoops(
 // startScenarioLoops starts the scenario's forge, publication lane, and
 // scheduler, at the point where the Claude loops would start.
 func (d *daemon) startScenarioLoops(
-	parent, ctx context.Context, cfg config, scenarioWiring *scenarioComposition, workflow *engine.Engine,
+	parent, ctx context.Context, cfg config, scenarioWiring *daemoncompose.ScenarioComposition, workflow *engine.Engine,
 ) {
 	// The scenario's own loops: the in-process forge publication talks
 	// to, the publication lane, and the durable scheduler's publication
 	// watches. The forge is an HTTP server like the API, so its exit is
 	// the same component failure.
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, daemonshell.ComponentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
+		d.ComponentExited(parent, ctx, daemonshell.ComponentHTTP, scenarioWiring.ServeForge(ctx, cfg.Logger))
 	})
 	d.Go(func() {
 		d.ComponentExited(parent, ctx, daemonshell.ComponentProductionPublication,
@@ -825,6 +762,6 @@ func (d *daemon) startScenarioLoops(
 	})
 	d.Go(func() {
 		d.ComponentExited(parent, ctx, daemonshell.ComponentScheduler,
-			scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
+			scenarioWiring.Scheduler.Run(ctx, cfg.SchedulerInterval))
 	})
 }

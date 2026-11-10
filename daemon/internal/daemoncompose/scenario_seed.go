@@ -1,4 +1,4 @@
-package main
+package daemoncompose
 
 import (
 	"context"
@@ -26,18 +26,18 @@ import (
 const (
 	scenarioRepo         = "freeside-scenario/scenario"
 	scenarioRepositoryID = int64(1)
-	scenarioProjectID    = domain.ProjectID("project-scenario")
+	ScenarioProjectID    = domain.ProjectID("project-scenario")
 	scenarioBaseRef      = "main"
-	scenarioIdentityID   = domain.AuthIdentityID("auth-scenario")
+	ScenarioIdentityID   = domain.AuthIdentityID("auth-scenario")
 	// The quota scenario's enrollment on the scenario identity.
-	scenarioAccountBinding = "acct-scenario"
-	scenarioEnrollmentID   = domain.ClientEnrollmentID("auth-scenario/claude_code")
+	ScenarioAccountBinding = "acct-scenario"
+	ScenarioEnrollmentID   = domain.ClientEnrollmentID("auth-scenario/claude_code")
 	scenarioForgeToken     = "scenario-token"
 )
 
-// scenarioRecipe is the verification recipe the scenario's project image
+// ScenarioRecipe is the verification recipe the scenario's project image
 // bakes. It runs one host process that always passes.
-var scenarioRecipe = []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`)
+var ScenarioRecipe = []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`)
 
 var scenarioCommitAuthor = engine.ProductionCommitAuthor{AppSlug: "freeside-scenario", BotUserID: 1}
 
@@ -63,7 +63,7 @@ type scenarioWorld struct {
 //
 // The backend's conformance proof is a claim the fake cannot back. Only the
 // ephemeral refusal in run keeps it out of a supervised store.
-func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc scenario, now time.Time) (scenarioWorld, error) {
+func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc Scenario, now time.Time) (scenarioWorld, error) {
 	world := scenarioWorld{Dir: filepath.Join(filepath.Dir(dbPath), "scenario")}
 	world.BaseDir = filepath.Join(world.Dir, "repository")
 	baseSHA, err := seedScenarioRepository(world.BaseDir, sc.BaseFiles)
@@ -81,7 +81,7 @@ func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc scenar
 	}
 	if world.Image, err = domain.NewProjectImage(domain.ProjectImageInput{
 		Repository: scenarioRepo, RepositoryID: scenarioRepositoryID,
-		CommitSHA: baseSHA, RecipeDigest: verify.RecipeDigest(scenarioRecipe),
+		CommitSHA: baseSHA, RecipeDigest: verify.RecipeDigest(ScenarioRecipe),
 		PreparationCommand: []string{"/usr/bin/true"},
 		BaseImageRef:       scenarioImageRef("base", "1"),
 		ImageRef:           scenarioImageRef("project", "2"),
@@ -127,17 +127,17 @@ func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc scenar
 // with no enrollment has no collector to own a refusal mark, so the refusal
 // would raise a failure card instead of parking.
 func seedScenarioRecords(
-	ctx context.Context, st *store.Store, sc scenario, world scenarioWorld,
+	ctx context.Context, st *store.Store, sc Scenario, world scenarioWorld,
 	ceiling domain.CapabilitySnapshot, now time.Time,
 ) error {
 	identity := domain.AuthIdentity{
-		ID: scenarioIdentityID, Provider: domain.AuthProviderClaude, AuthStoreMutationLease: true,
+		ID: ScenarioIdentityID, Provider: domain.AuthProviderClaude, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "scenario-credentials", RefreshStrategy: domain.RefreshOnDemand,
 		},
 	}
 	if sc.QuotaRefusal != nil {
-		identity.AccountBinding = scenarioAccountBinding
+		identity.AccountBinding = ScenarioAccountBinding
 	}
 	conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: domain.ConformancePassed,
@@ -162,7 +162,7 @@ func seedScenarioRecords(
 		}
 		if sc.QuotaRefusal != nil {
 			if err := tx.RecordClientEnrollment(ctx, domain.ClientEnrollment{
-				ID: scenarioEnrollmentID, AuthIdentityID: identity.ID,
+				ID: ScenarioEnrollmentID, AuthIdentityID: identity.ID,
 				HarnessClient: domain.HarnessClientClaudeCode, Route: "anthropic-subscription",
 				AuthMethod: domain.AuthMethodSetupToken, CredentialMode: domain.CredentialSubscriptionContained,
 				RefreshStrategy: domain.RefreshOnDemand, AccountBinding: identity.AccountBinding,
@@ -252,7 +252,7 @@ func writeTree(dir string, files map[string]string) error {
 // writeScenarioSubmission writes the four inputs `freesided submit` reads
 // for the scenario's task, under dir: task.md, policy.json,
 // publication.json, and work-unit.json.
-func writeScenarioSubmission(dir string, sc scenario) error {
+func writeScenarioSubmission(dir string, sc Scenario) error {
 	provenance := domain.KeyProvenance{
 		Source: domain.ProvenanceOverride,
 		Digest: scenarioDigest([]byte("scenario " + sc.Name + " policy")),

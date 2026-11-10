@@ -1,4 +1,4 @@
-package main
+package daemoncompose
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// productionEngine is the one place a production composition (the Claude
+// ProductionEngine is the one place a production composition (the Claude
 // workflow and the scenario) turns its parts into engine options, so the two
 // cannot drift apart unseen: a part one of them leaves out is an explicit
 // zero value at its call site.
@@ -23,10 +23,7 @@ import (
 // fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink) become
 // their option only when non-nil, because each of those engine options
 // rejects nil; a nil optional field means the part is not installed.
-//
-// It uses no package-main helper, so it can move out of package main
-// unchanged apart from exporting its names.
-type productionEngine struct {
+type ProductionEngine struct {
 	// Required.
 	Lock  *daemonlock.Lock
 	Bound ward.LaunchBound
@@ -50,9 +47,9 @@ type productionEngine struct {
 	UsageSink     engine.ClaudeUsageSink
 }
 
-// options returns the engine options in the order the Claude workflow has
+// Options returns the engine Options in the order the Claude workflow has
 // always applied them.
-func (p productionEngine) options() []engine.Option {
+func (p ProductionEngine) Options() []engine.Option {
 	options := []engine.Option{
 		engine.WithDaemonLock(p.Lock),
 		engine.WithMachineCapacity(p.Bound),
