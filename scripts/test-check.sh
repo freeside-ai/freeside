@@ -270,6 +270,73 @@ assert_contains 'build --only-use-versions-from-resolved-file --target FreesideM
 assert_contains 'test --only-use-versions-from-resolved-file --filter FreesideAPITests|FreesideModelTests'
 rm -f "$stub" "$stub.args"
 
+# The executor cases compare each tool's whole argument list, so an unset
+# APP_MACVERIFY shows CI's command line unchanged and a set one shows the
+# exact flags the executor's room needs, nothing more.
+app_args_match() { # <stub> <expected>; compares the stub's recorded arguments
+  if [ "$(cat "$1.args")" = "$2" ]; then
+    pass=$((pass + 1))
+  else
+    OUT=$(cat "$1.args")
+    report_failure "unexpected arguments from $(basename "$1")"
+  fi
+}
+app_root=$(cd "$SCRIPT_DIR/.." && pwd)
+app_job=$(dirname "$app_root")
+xcode_base() { # <scheme> <destination>; the arguments CI's xcodebuild gets
+  printf '%s\n' -project Freeside.xcodeproj -scheme "$1" -destination "$2" \
+    -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates \
+    -skipPackagePluginValidation
+}
+xcode_room_options=$(printf '%s\n' -derivedDataPath "$app_job/derived-data" \
+  -clonedSourcePackagesDirPath "$app_job/source-packages" \
+  -disablePackageRepositoryCache -scmProvider system -skipMacroValidation \
+  -IDEPackageSupportDisableManifestSandbox=YES \
+  -IDEPackageSupportDisablePluginExecutionSandbox=YES)
+xcode_settings=$'CODE_SIGNING_ALLOWED=NO\nCOMPILER_INDEX_STORE_ENABLE=NO'
+# shellcheck disable=SC2016 # $(inherited) is xcodebuild's, not the shell's
+xcode_room_setting='OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox'
+ios_settings=$'ARCHS=arm64\nONLY_ACTIVE_ARCH=YES'
+
+begin_case "app test, build-mac, and build-ios add nothing without APP_MACVERIFY"
+swift_stub=$(make_stub swift 0)
+xcode_stub=$(make_stub xcodebuild 0)
+PATH="$TMP:$PATH" APP_MACVERIFY='' run_check app test
+assert_rc 0
+app_args_match "$swift_stub" $'test\n--only-use-versions-from-resolved-file'
+PATH="$TMP:$PATH" APP_MACVERIFY='' run_check app build-mac
+assert_rc 0
+app_args_match "$xcode_stub" "$(xcode_base FreesideMac platform=macOS)
+$xcode_settings
+build"
+PATH="$TMP:$PATH" APP_MACVERIFY='' run_check app build-ios
+assert_rc 0
+app_args_match "$xcode_stub" "$(xcode_base FreesideIOS 'generic/platform=iOS Simulator')
+$xcode_settings
+$ios_settings
+build"
+
+begin_case "APP_MACVERIFY adds exactly the executor flags to app test, build-mac, and build-ios"
+PATH="$TMP:$PATH" APP_MACVERIFY=1 run_check app test
+assert_rc 0
+app_args_match "$swift_stub" $'test\n--only-use-versions-from-resolved-file\n--disable-sandbox'
+PATH="$TMP:$PATH" APP_MACVERIFY=1 run_check app build-mac
+assert_rc 0
+app_args_match "$xcode_stub" "$(xcode_base FreesideMac platform=macOS)
+$xcode_room_options
+$xcode_settings
+$xcode_room_setting
+build"
+PATH="$TMP:$PATH" APP_MACVERIFY=1 run_check app build-ios
+assert_rc 0
+app_args_match "$xcode_stub" "$(xcode_base FreesideIOS 'generic/platform=iOS Simulator')
+$xcode_room_options
+$xcode_settings
+$xcode_room_setting
+$ios_settings
+build"
+rm -f "$swift_stub" "$swift_stub.args" "$xcode_stub" "$xcode_stub.args"
+
 begin_case "app format covers hand-written Swift and excludes generated sources"
 stub=$(make_stub xcrun 0)
 PATH="$TMP:$PATH" run_check app format

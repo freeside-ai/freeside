@@ -29,6 +29,19 @@
 #   VACUUM         command for the OpenAPI linter (default: `go run`
 #                  of the pinned vacuum module, ~7 minutes cold)
 #
+# macOS verification executor:
+#   APP_MACVERIFY  non-empty runs `app test`, `app build-mac`, and
+#                  `app build-ios` the way a slot of the macOS verification
+#                  executor needs (daemon/README.md, Install the macOS
+#                  Verification Executor): `swift test` gains
+#                  --disable-sandbox, and xcodebuild reads the job's seeded
+#                  ../source-packages through git, writes ../derived-data,
+#                  and runs with SwiftPM's and Xcode's sandboxes off, since
+#                  neither nests inside the room's. Unset or empty, the
+#                  steps run exactly as CI runs them. The trusted recipe
+#                  sets it because it can't name a `..` path itself
+#                  (devlog/2026-11-10-1040-app-steps-executor-switch.md).
+#
 # Daemon Go flags:
 #   Every daemon step appends -trimpath to GOFLAGS: unset becomes
 #   -trimpath, and GOFLAGS=-p=2 becomes "-p=2 -trimpath". Without it Go
@@ -159,6 +172,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 GOLANGCI_LINT=${GOLANGCI_LINT:-golangci-lint}
 SHELLCHECK=${SHELLCHECK:-shellcheck}
 VACUUM=${VACUUM:-go run github.com/daveshanley/vacuum@v0.29.9}
+APP_MACVERIFY=${APP_MACVERIFY:-}
 
 COMPONENTS='daemon app api scripts convergence docs'
 steps_for() { # <component>; prints the component's steps in default order
@@ -590,7 +604,11 @@ app_format() (
     -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
   run xcrun swift-format lint --strict "${files[@]}"
 )
-app_test() { in_dir "$ROOT/app" swift test --only-use-versions-from-resolved-file; }
+app_test() {
+  local flags=(--only-use-versions-from-resolved-file)
+  [[ -z $APP_MACVERIFY ]] || flags+=(--disable-sandbox)
+  in_dir "$ROOT/app" swift test "${flags[@]}"
+}
 # The Linux-clean targets alone, as the Linux CI job runs them in the
 # swift image: FreesideModel and its tests beside FreesideAPI's. On macOS
 # it runs the same suites but proves less: an Apple-only import in the
@@ -603,10 +621,24 @@ app_linux() {
 xcodebuild_scheme() { # <scheme> <destination> [build-setting...]
   local scheme=$1 destination=$2
   shift 2
-  in_dir "$ROOT/app" xcodebuild -project Freeside.xcodeproj -scheme "$scheme" \
-    -destination "$destination" -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackageUpdates -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO "$@" build
+  local options=(-project Freeside.xcodeproj -scheme "$scheme"
+    -destination "$destination" -onlyUsePackageVersionsFromResolvedFile
+    -skipPackageUpdates -skipPackagePluginValidation)
+  local settings=(CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO)
+  if [[ -n $APP_MACVERIFY ]]; then
+    # The executor's job directory holds the workspace, the seeded
+    # source-packages/, and room for derived-data/ beside it.
+    local job
+    job=$(dirname "$ROOT")
+    options+=(-derivedDataPath "$job/derived-data"
+      -clonedSourcePackagesDirPath "$job/source-packages"
+      -disablePackageRepositoryCache -scmProvider system -skipMacroValidation
+      -IDEPackageSupportDisableManifestSandbox=YES
+      -IDEPackageSupportDisablePluginExecutionSandbox=YES)
+    # shellcheck disable=SC2016 # $(inherited) is xcodebuild's, not the shell's
+    settings+=('OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox')
+  fi
+  in_dir "$ROOT/app" xcodebuild "${options[@]}" "${settings[@]}" "$@" build
 }
 app_build_mac() { xcodebuild_scheme FreesideMac 'platform=macOS'; }
 app_build_ios() {
