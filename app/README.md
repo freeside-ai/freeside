@@ -685,6 +685,10 @@ A view opts out only with a reason in a comment beside its
   cover is selectable on the task timeline. The task timeline's campaign
   headers and run-card headers carry menus that copy their exact ids; the
   same values are selectable in the page's Identifiers footer.
+- **Menu labels.** The task's menu and the card's More Actions menu turn
+  selection off, because a selectable label becomes the view that answers
+  for the menu button's spoken label (#2993). Their labels name a control
+  and carry nothing to copy.
 
 ## Task Cancellation Contract
 
