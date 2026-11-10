@@ -3312,23 +3312,30 @@ included. Without them, lint's heap reaches the room's limit and the step
 slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
 then `bash scripts/check.sh docs`, then `env VACUUM=vacuum bash
 scripts/check.sh api`, then `check.sh scripts` with the same Go limits,
-because `trackercollect` runs `go build`, `test`, and `vet`. Measured at
-`d03b0b88` in Freeside's project image, one container per step, every step
-passing:
+because `trackercollect` runs `go build`, `test`, and `vet`, then `bash
+scripts/check.sh app linux`. Measured on 2026-11-10 with this recipe on
+`main` at `c40bf92b7`, in Freeside's mixed Go and Swift image
+(`-go-module-dir daemon -swift-package-dir app`), one container per step,
+each prepared as the proof prepares it:
 
-| Step | Unreclaimable peak | Wall |
-| --- | --- | --- |
-| build | 807 MiB | 33 s |
-| test | 1040 MiB | 268 s |
-| vet | 1217 MiB | 53 s |
-| lint | 1323 MiB | 124 s |
-| docs | 15 MiB | under 1 s |
-| api | 100 MiB | under 1 s |
-| scripts (four steps, before vocabulary) | 324 MiB | 107 s |
+| Step | Result | Unreclaimable peak | Wall |
+| --- | --- | --- | --- |
+| build | passes | 844 MiB | 43 s |
+| test | fails (#3013) | 1211 MiB | 267 s |
+| vet | passes | 1280 MiB | 83 s |
+| lint | passes | 1600 MiB | 121 s |
+| docs | passes | 50 MiB | 1 s |
+| api | passes | 139 MiB | 1 s |
+| scripts | fails (#3013) | 286 MiB | 66 s |
+| app linux | passes | 1283 MiB | 99 s |
 
-Each step started from a cold build cache on a host at load average 5 to
-8. The decision and the rejected options are in
-`devlog/2026-10-22-1241-proof-memory-bound.md`.
+Each step started from a cold build cache on a host at load average 6 to
+31. `daemon test` and `scripts` fail in the mixed image at `main` too, on
+test assumptions the proof's workspace breaks (#3013), so Freeside's recipe
+proof can't pass until that lands. Lint's peak is over the 1536 MiB margin
+`devlog/2026-10-22-1241-proof-memory-bound.md` set, though under the room's
+2048 MiB; at `d03b0b88` it measured 1323 MiB. That note has the decision
+and the rejected options.
 
 A Swift image for Freeside's `app` package, with the recipe
 `swift build --package-path app --only-use-versions-from-resolved-file
@@ -3641,15 +3648,34 @@ recorded before execution.
 
 ### Onboard Freeside
 
-Freeside onboards itself for `daemon/`, `docs/`, `api/`, and `scripts/`
-(plan §11, revision 92). It runs the `freesided onboard` flow above with
+Freeside onboards itself for its whole repository except `images/` (plan
+§11, revisions 92 and 113). It runs the `freesided onboard` flow above with
 these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
-- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs the
-  four commands sized above, all in the project image; it names no
-  `macos_host` command yet.
-- **Toolchain:** `-go-module-dir daemon`. The root has no `go.mod`.
+- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs nine
+  commands. Five run in the project image: the four `daemon`, `docs`, `api`,
+  and `scripts` commands sized above, then
+  `bash scripts/check.sh app linux`. Four run on the macOS verification
+  executor (`macos_host`): `app format`, `app test`,
+  `app build-mac`, and `app build-ios`. The last three run as
+  `env APP_MACVERIFY=1 bash scripts/check.sh app <step>`. The switch adds
+  the executor flags documented under Install the macOS Verification
+  Executor, because the recipe can't name the job's `../source-packages`
+  itself: `verify.ParseRecipe` refuses a `..` path segment. `app generate`
+  stays out of the recipe: it needs the network, and `api digest` already
+  fails on a stale generated client.
+- **Toolchain:** `-go-module-dir daemon -swift-package-dir app`. The root
+  has neither `go.mod` nor `Package.swift`, and the one image bakes both.
+- **Prerequisites:** the executor installed and proved on the daemon host
+  (Install the macOS Verification Executor, Prove the Executor), and a Swift
+  cache entry for the onboarded commit (`freesided swift-cache populate`).
+  `freesided deputy` configures no executor yet (#2978), so a deputy run
+  can't execute the `macos_host` commands until it does.
+- **Executor measurements:** `app format` passes as a slot. The other three
+  `macos_host` commands are unproven as slots: the executor defects in #3009
+  stop a slot after its first job. #3016 measures all four once #3009
+  lands.
 - **Protected paths:** exactly these flags, in this order. Quote each
   pattern so the shell does not expand `**`.
 
@@ -3686,10 +3712,26 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   under `.github/` hold publication too, not just surface
   (`devlog/2026-11-10-1040-app-steps-executor-switch.md`). The
   `scripts/test-*.sh` suites stay unprotected, like daemon `_test.go` files.
-- **Deputy scope:** set the deputy's `repository.allowed_paths` to
-  `["api/**", "daemon/**", "docs/**", "scripts/**"]`. An `api/openapi.yaml`
-  change still fails the recipe's `api digest` step, because its fix is in
-  `app/`, outside the allowed paths, so schema work stays human-run.
+- **Deputy scope:** set the deputy's `repository.allowed_paths` to every
+  top-level entry but `images/`:
+
+  ```json
+  [".agents/**", ".claude/**", ".freeside/**", ".githooks/**", ".github/**",
+   ".git-blame-ignore-revs", ".gitattributes", "AGENTS.md", "CLAUDE.md",
+   "CONTRIBUTING.md", "LICENSE", "LICENSING-PHILOSOPHY.md", "README.md",
+   "api/**", "app/**", "daemon/**", "devlog/**", "docs/**", "policy/**",
+   "prompts/**", "scripts/**"]
+  ```
+
+  Allowed doesn't lift the importer's built-in classes. An edit to
+  `AGENTS.md`, `CLAUDE.md`, `.claude/**`, or `.agents/skills/**` draws an
+  advisory reviewer-instruction finding and publishes with it surfaced. An
+  edit to `.gitattributes` draws a waivable git-metadata finding. An edit to
+  a protected path above holds publication. A new top-level entry needs its
+  own allowed-path decision. `app/` is allowed, but an `api/openapi.yaml`
+  change still fails the recipe's `api digest` step: its fix is a
+  regenerated client, and `app generate` needs the network the writer's
+  room lacks, so schema work stays human-run.
 
 ### Run Real Work With The Deputy
 
