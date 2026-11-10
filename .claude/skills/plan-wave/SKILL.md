@@ -17,7 +17,13 @@ cited section at the step that uses it, and when this file and a cited
 section disagree, the section wins.
 
 The wave number N comes from the invocation argument. If it is missing, or
-does not match a row of the §11 coordination table, stop and ask.
+does not match a row of the §11 coordination table, stop and ask. A row the
+table marks as folded into another gets no tracker: stop and name the row
+that carries its work.
+
+The prior wave, wherever this file names it, is the latest wave before N
+that has a tracker, open or closed. After a folded row that is not wave
+N-1.
 
 Every wave since Wave 1 grew well past its planned unit set, mostly from
 contract and capability gaps found at implementation start, and every wave
@@ -35,6 +41,11 @@ the sweep queue, per-unit premise checks) to delegates, each with a return
 contract that names the fields to bring back, and keep their raw output out
 of this session's context. A Wave 8 planning session lost its context twice
 in its first hour.
+
+Before the first delegate, tell the user how many you expect to run and
+what each reads, and go ahead on their word or within a budget they have
+already set (AGENTS.md, Context Discipline). Where the platform offers a
+choice, give mechanical reads the cheapest capable model.
 
 ## Derive the Wave Before Acting
 
@@ -77,11 +88,53 @@ gap, exit finding, other), a split, a rescope, a removal, and an exit-run or
 audit finding. Note which classes recurred; the premise check and sizing
 below look for them first.
 
+Two measured records join that read. Both cover the span since the prior
+planning date (the prior tracker's creation), and both go to the scratch
+directory, not to chat:
+
+- **Estimates against actuals.** A merged PR whose issue carried an
+  estimate records its authored count beside it (docs/coordination.md,
+  Unit Sizing). Collect the pairs:
+
+  ```sh
+  gh pr list --repo freeside-ai/freeside --state merged --limit 500 \
+    --search '"authored lines" estimate in:body merged:>DATE' \
+    --json number,body --jq '.[] | [.number,
+      ([.body | scan("[^\n]*authored lines[^\n]*estimate[^\n]*")]
+       | join(" "))] | select(.[1] != "") | @tsv' \
+    > "$SCRATCH/estimate-pairs.tsv"
+  ```
+
+  A PR that words its bullet another way is missed, so count the pairs
+  and treat a handful as a weak sample. For each pair, divide the actual
+  by the estimate, taking the middle of an estimated range. Keep the
+  median ratio, and list each pair that ran past double with what kind of
+  unit it was. Sizing below applies both.
+- **Landing measures.** The four measures AGENTS.md (Coordination model,
+  Reassess when) asks for after a wave under the current rules. The
+  script keeps fetched PR heads and merge objects in the repository it
+  reads, so run it on a scratch clone, as its header asks for a large run:
+
+  ```sh
+  git clone -q --no-checkout \
+    --reference "$(git rev-parse --git-common-dir)" \
+    "$(git remote get-url origin)" "$SCRATCH/landing-repo"
+  python3 -I scripts/landing-measures.py --since DATE \
+    --repo-path "$SCRATCH/landing-repo" --snapshot "$SCRATCH/landing" \
+    > "$SCRATCH/landing-measures.md"
+  ```
+
+  Start it in the background and read it at Close Out: it reads every
+  merged PR's check runs, which took over two minutes for a single day of
+  merges. The script's header says what each measure can't see. This
+  session reports the measures and reassesses nothing: whether the
+  coordination rules change is the owner's decision.
+
 Before proceeding, write down: the wave's units in order; each unit's
 acceptance source; wave-specific preconditions; any rescoping or splitting
 the plan assigns to this wave's scheduling; any open owner decision the wave
-must anchor to as the plan says it stands; the Row drift list; and the
-calibration classes.
+must anchor to as the plan says it stands; the Row drift list; the
+calibration classes; and the estimate ratio with the pairs behind it.
 
 ## Preconditions (Stop on Failure)
 
@@ -110,12 +163,13 @@ than planning around it:
 - **Width within what was demonstrated.** Applied again after
   decomposition, once the unit count and chains exist. Compare this wave's
   unit count and its longest `starts-after` chain, counted in units, with
-  the prior wave's final Units count and its longest chain at close; compare
-  the fronts it needs with the width AGENTS.md (Coordination model) records.
-  When the wave exceeds any of them, stop and present a split-or-slip
+  the prior wave's final Units count and its longest chain at close.
+  AGENTS.md (Coordination model) sets no fixed width: review bandwidth is
+  the limit, and those two counts are what the prior wave showed it can
+  carry. When the wave exceeds either, stop and present a split-or-slip
   proposal: which units move to a later wave or which chain breaks where.
-  A first wave of a new phase has no prior tracker to compare; say so and
-  ask.
+  For the first wave of a new phase, the prior wave's counts come from
+  another phase and may not compare; say so and ask.
 
 ## Create the Tracking Issue
 
@@ -169,7 +223,8 @@ milestones exist is the half-scheduled state the sweep detects.
 3. **Staged is not scheduled.** Milestone and listing publish together at
    Close Out (docs/coordination.md, Work-Unit Issues), so nothing becomes
    agent-actionable mid-planning. A dormant `kind:contract` deferral is
-   staged only once it has a valid place in the assessed contract order
+   staged like any other: the label classifies the change for contract
+   review and implies no order and no limit on open contract units
    (AGENTS.md, Contract Changes). When the table assigns a general deferral
    drain to a later wave, pull in only what this wave needs.
 
@@ -178,14 +233,37 @@ milestones exist is the half-scheduled state the sweep detects.
 - **One issue per unit.** Where the work list names an existing issue,
   stage or rescope it in place. New issues come from the work-unit template
   with the fields docs/coordination.md (Work-Unit Issues) lists.
-- **Order.** Shape and sequencing come from the row. Encode every ordering
-  as a typed relationship in the Dependencies field (docs/coordination.md,
-  Relationship Types), and contract ordering and assessments as AGENTS.md
-  (Contract Changes) requires.
-- **Labels and milestone.** Labels as docs/coordination.md (Work-Unit
-  Issues, Lane Glossary) assigns them, with a one-line rationale on the
-  issue wherever the assignment needs judgment. The milestone is assigned
-  only at Close Out.
+- **Check for live work first.** Before editing an existing issue, read
+  its claims, its planning reservation, its open PRs, and the open
+  trackers that list it (docs/coordination.md, Claiming).
+  `scripts/trackercollect unit` gathers that evidence; an `UNKNOWN` entry
+  in its report means that state isn't established, and a `kind:contract`
+  issue always carries one, so read that issue's comments and PRs
+  directly. An issue with a live claim, an open PR, or an active
+  reservation has someone working from its contract: coordinate before
+  changing it (AGENTS.md, Forge Edits). Here that means the owner decides
+  whether the wave's rescope lands now or after that work hands off. An
+  issue an open ad hoc tracker lists starts by fiat (docs/coordination.md,
+  Tracking Issues), and staging it opens the scheduling door on it too:
+  ask the owner before staging it. A Dependencies change to an issue
+  another open tracker lists owes that tracker's repair in the same
+  operation (docs/coordination.md, Tracking Issues).
+- **Order.** Shape and sequencing come from the row, written as typed
+  relationships in the Dependencies field (docs/coordination.md,
+  Relationship Types). Write a `starts-after` edge only where the dependent
+  is written against the prerequisite's result (AGENTS.md, Coordination,
+  rule 3), and name that result in the line's note: a contract change its
+  consumers build on (AGENTS.md, Contract Changes), or a migration that
+  rewrites the same rows or rebuilds the same table (docs/coordination.md,
+  Migrations). Work on the same subject, or an expected textual conflict,
+  gets no edge; it resolves at landing. A row edge that fails this test is
+  row drift that changes order: record it and stop for the owner's
+  direction, as the reconciliation above requires, before writing or
+  dropping it. Use `merges-after` where only landing order matters.
+- **Labels and milestone.** One `kind:*` label by the work's nature, as
+  docs/coordination.md (Work-Unit Issues, Deferral Escalation) assigns
+  them, with a one-line rationale on the issue wherever the choice needs
+  judgment. The milestone is assigned only at Close Out.
 - **Acceptance.** Where the row targets an exit list, each criterion lands
   verbatim in the one unit responsible for it, and the complete exit
   evaluation lives on the tracker. Otherwise the cited sections'
@@ -217,17 +295,27 @@ milestones exist is the half-scheduled state the sweep detects.
   each mechanical commit listed in `.git-blame-ignore-revs` at the merge,
   all under one rename setting. On PRs with no mechanical commit it matches
   the forge's file totals to within a few lines. A listed SHA that a rebase
-  rewrote is not skipped, so the count errs high, never to zero. Write the
-  estimate, the reference PR, and declared regenerated output and
-  mechanical commits into the unit's Scope. A unit over budget is split now
-  along a Unit Sizing seam, or kept larger only by a recorded owner
-  decision; ask, don't decide.
+  rewrote is not skipped, so the count errs high, never to zero.
+
+  Then correct that figure with the pairs the calibration read collected:
+  multiply it by their median ratio. Recorded estimates have run low, and
+  an uncorrected one repeats the error (docs/coordination.md, Unit
+  Sizing). The corrected figure is the unit's estimate: the one read
+  against the budget, and the one its PR later records its actual count
+  beside. Keep the raw figure and the ratio in parentheses after it, and
+  say so there when the unit resembles one that ran past double. With no
+  pairs to read, say so and leave the figure as it is. Write the estimate,
+  the reference PR, and declared regenerated output and mechanical
+  commits into the unit's Scope. A unit over budget is split now along a
+  Unit Sizing seam, or kept larger only by a recorded owner decision; ask,
+  don't decide.
 
 ## Ground the Units
 
 Before Close Out, check every unit against the repository. Delegate the
-checks per unit or per lane; the return contract is one line per surface:
-the surface, exists or not, and `file:line`.
+checks per unit, or per group of units that touch the same package; the
+return contract is one line per surface: the surface, exists or not, and
+`file:line`.
 
 - **Premise check.** Each unit's Affected interfaces/contracts field lists
   the shared-package surfaces, migrations, endpoints, and app surfaces the
@@ -249,8 +337,10 @@ the surface, exists or not, and `file:line`.
   Operator) on the fixture repository against the midpoint build, not the
   skill's preflight, whose resolved-exit-set check can't hold mid-wave, and
   files what it finds against this wave. Neither unit closes through a
-  merged PR and both start by the owner's word, so both go under
-  `### Owner-run` (docs/tracker-format.md, units).
+  merged PR and both start by the owner's word, so both carry
+  `needs-human` and no milestone and go under `### Owner-run`
+  (docs/coordination.md, Tracking Issues). Without the label the
+  scheduling-state report lists them as `invisible`.
 - **Carry prior findings.** Find every open deferral a prior audit or exit
   run filed against a criterion this wave's exit claims. Each is scheduled
   in this wave or carved out of the exit by a recorded owner decision; ask
@@ -301,10 +391,16 @@ resolve it.
 - **Notes.** In the collapsed Notes block: the Row drift list; one
   paragraph of calibration naming the classes from the prior wave the
   planner looked for and what the premise check found; each reference PR
-  behind a size estimate; sweep dispositions; surfaced forks; and
-  scheduling rationale.
+  behind a size estimate, and the ratio that corrected the estimates with
+  the number of pairs behind it; the four landing measures in one
+  paragraph; sweep dispositions; surfaced forks; and scheduling rationale.
 - **Decision note.** Only when a trigger in AGENTS.md (Decision Notes)
   applies. Decomposition and sweep status live on the tracker, never in a
   note.
 - **Report.** Tell the user what was scheduled, what was re-deferred, what
-  drift was found, and what waits on the owner. Do not start any unit.
+  drift was found, and what waits on the owner. Name every unit whose
+  Dependencies carry `merges-after`, with its prerequisite: no tool reads
+  that relation at landing, so it holds only through the order the owner
+  approves or types (docs/coordination.md, Relationship Types). Give the
+  landing measures in a line each, for the owner to read against
+  AGENTS.md (Coordination model, Reassess when). Do not start any unit.
