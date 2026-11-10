@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,60 @@ func TestResolveAgentSelectionRefusals(t *testing.T) {
 			tc.mutate(&in)
 			if _, err := domain.ResolveAgentSelection(in); !errors.Is(err, tc.want) {
 				t.Fatalf("ResolveAgentSelection = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveAgentSelectionNamesTheUnservedPart: a refusal under the
+// served-tuple rule matches its served sentinel beside ErrAgentJoinInvalid,
+// keeping the text it always printed, and no other refusal matches either
+// sentinel, so admission names a part only for these legs.
+func TestResolveAgentSelectionNamesTheUnservedPart(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		mutate func(*domain.AgentSelectionInput)
+		part   error // nil: the refusal names no part
+	}{
+		{"a model the catalog lacks", func(in *domain.AgentSelectionInput) {
+			in.Names.Model = "gpt-5.6-luna"
+		}, domain.ErrDiscoveredModelUnserved},
+		{"an effort the model does not report", func(in *domain.AgentSelectionInput) {
+			in.Names.Effort = "max"
+		}, domain.ErrDiscoveredEffortUnserved},
+		{"an effort outside the native table under the bridge", func(in *domain.AgentSelectionInput) {
+			in.Catalog, in.Names.Effort = nil, "vibes"
+		}, domain.ErrDiscoveredEffortUnserved},
+		{"the native-default id on codex", func(in *domain.AgentSelectionInput) {
+			in.Names.Model, in.Names.Effort = domain.ClaudeCodeNativeDefaultRouteModelID, "harness_default"
+		}, domain.ErrDiscoveredModelUnserved},
+		{"a disabled identity", func(in *domain.AgentSelectionInput) {
+			in.Identity.Enabled = false
+		}, nil},
+		{"a model list that does not admit the model", func(in *domain.AgentSelectionInput) {
+			in.Models = &domain.RouteModelList{Mode: domain.ModelListDeny, Models: []string{"gpt-5.6-sol"}}
+		}, nil},
+		{"a model a launch would read as an option", func(in *domain.AgentSelectionInput) {
+			in.Names.Model = "--yolo"
+		}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := selectionInput(t)
+			tc.mutate(&in)
+			_, err := domain.ResolveAgentSelection(in)
+			if !errors.Is(err, domain.ErrAgentJoinInvalid) {
+				t.Fatalf("ResolveAgentSelection = %v, want ErrAgentJoinInvalid", err)
+			}
+			for _, sentinel := range []error{domain.ErrDiscoveredModelUnserved, domain.ErrDiscoveredEffortUnserved} {
+				if got, want := errors.Is(err, sentinel), errors.Is(tc.part, sentinel); got != want {
+					t.Errorf("errors.Is(%v, %v) = %t, want %t", err, sentinel, got, want)
+				}
+				if strings.Contains(err.Error(), sentinel.Error()) {
+					t.Errorf("refusal text %q gained the sentinel's", err)
+				}
 			}
 		})
 	}

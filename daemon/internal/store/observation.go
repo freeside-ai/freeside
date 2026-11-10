@@ -43,6 +43,7 @@ const (
 		FROM invocation_observations WHERE run_id = ? ORDER BY invocation_id`
 	selectRunHoldSQL = `SELECT run_id, invocation_id, reason,
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
+			detail_unserved_part, detail_unserved_enrollment,
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
 			quota_reading_observed_at, quota_resets_at, quota_set_at, quota_alternate_agents,
@@ -52,12 +53,13 @@ const (
 	replaceRunHoldSQL = `INSERT INTO run_hold_observations
 		(run_id, invocation_id, reason,
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
+			detail_unserved_part, detail_unserved_enrollment,
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
 			quota_reading_observed_at, quota_resets_at, quota_set_at, quota_alternate_agents,
 			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
 			first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
@@ -65,6 +67,8 @@ const (
 			detail_agent = excluded.detail_agent,
 			detail_launch_stage = excluded.detail_launch_stage,
 			detail_launch_digest = excluded.detail_launch_digest,
+			detail_unserved_part = excluded.detail_unserved_part,
+			detail_unserved_enrollment = excluded.detail_unserved_enrollment,
 			upkeep_pending = excluded.upkeep_pending,
 			upkeep_refusal_id = excluded.upkeep_refusal_id,
 			upkeep_item_id = excluded.upkeep_item_id,
@@ -192,7 +196,7 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 			h.FirstObservedAt = firstAt
 		}
 	}
-	var invocation, check, agent, launchStage, launchDigest any
+	var invocation, check, agent, launchStage, launchDigest, unservedPart, unservedEnrollment any
 	if h.InvocationID != nil {
 		invocation = string(*h.InvocationID)
 	}
@@ -203,6 +207,12 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 		}
 		if d.LaunchStage != nil {
 			launchStage, launchDigest = string(*d.LaunchStage), string(*d.LaunchDigest)
+		}
+		if u := d.Unserved; u != nil {
+			unservedPart = string(u.Part)
+			if u.EnrollmentID != nil {
+				unservedEnrollment = string(*u.EnrollmentID)
+			}
 		}
 	}
 	var pending, refusal, item, task any
@@ -250,7 +260,7 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 		capacityBudget, capacityAhead = c.BudgetMiB, c.Ahead
 	}
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
-		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest,
+		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest, unservedPart, unservedEnrollment,
 		pending, refusal, item, task, usagePool,
 		quotaPool, quotaWindow, quotaSource, quotaInvocation, quotaReadingAt, quotaResetsAt, quotaSetAt, quotaAlternates,
 		capacityReservation, capacityReserved, capacityBudget, capacityAhead,
@@ -423,6 +433,7 @@ func (tx *ReadTx) GetRunHold(
 	var (
 		storedRun, reason, first, last                string
 		invocation, check, agent, stage, launchDigest sql.NullString
+		unservedPart, unservedEnrollment              sql.NullString
 		pending, refusal, item, task, usagePool       sql.NullString
 		quotaPool, quotaWindow, quotaSource           sql.NullString
 		quotaInvocation, quotaReadingAt               sql.NullString
@@ -432,6 +443,7 @@ func (tx *ReadTx) GetRunHold(
 	)
 	err := tx.tx.QueryRowContext(ctx, selectRunHoldSQL, runID).
 		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest,
+			&unservedPart, &unservedEnrollment,
 			&pending, &refusal, &item, &task, &usagePool,
 			&quotaPool, &quotaWindow, &quotaSource, &quotaInvocation, &quotaReadingAt, &quotaResetsAt, &quotaSetAt,
 			&quotaAlternates,
@@ -478,7 +490,18 @@ func (tx *ReadTx) GetRunHold(
 			d := domain.Digest(launchDigest.String)
 			h.Detail.LaunchDigest = &d
 		}
-	case agent.Valid || stage.Valid || launchDigest.Valid:
+		switch {
+		case unservedPart.Valid:
+			h.Detail.Unserved = &domain.AdmissionUnserved{Part: domain.AgentSelectionPart(unservedPart.String)}
+			if unservedEnrollment.Valid {
+				id := domain.ClientEnrollmentID(unservedEnrollment.String)
+				h.Detail.Unserved.EnrollmentID = &id
+			}
+		case unservedEnrollment.Valid:
+			return domain.RunHoldObservation{}, false,
+				fmt.Errorf("get run hold %s: unserved enrollment without its part: %w", runID, domain.ErrHoldDetailMismatch)
+		}
+	case agent.Valid || stage.Valid || launchDigest.Valid || unservedPart.Valid || unservedEnrollment.Valid:
 		// A detail column without its check is not a detail the contract
 		// can express; dropping it would hide the inconsistency.
 		return domain.RunHoldObservation{}, false,

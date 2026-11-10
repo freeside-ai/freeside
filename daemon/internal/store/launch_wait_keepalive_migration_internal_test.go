@@ -12,6 +12,7 @@ import (
 // 0132 holds: launch waits with no keepalive column.
 func rewindLaunchWaitKeepalive(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindRunHoldUnservedDetail(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE launch_waits DROP COLUMN kept_at`,
 		`DELETE FROM schema_migrations WHERE name = '0133_launch_wait_keepalive.sql'`,

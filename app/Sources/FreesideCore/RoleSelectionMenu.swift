@@ -56,7 +56,7 @@ struct RoleSelectionMenu: View {
                 Text("\(agent) · set by name").tag(EnrollmentEntry.byName).disabled(true)
             }
             if let chosen, dropped == .enrollment {
-                Text("\(chosen.enrollment_id) · no longer offered")
+                Text("\(chosen.enrollment_id) · not offered")
                     .tag(EnrollmentEntry.enrollment(chosen.enrollment_id)).disabled(true)
             }
         }
@@ -69,7 +69,7 @@ struct RoleSelectionMenu: View {
                         Text(model.name).tag(model.id)
                     }
                     if option == nil {
-                        Text("\(chosen.model_id) · no longer offered").tag(chosen.model_id).disabled(true)
+                        Text("\(chosen.model_id) · not offered").tag(chosen.model_id).disabled(true)
                     }
                 }
                 .pickerStyle(.inline)
@@ -81,7 +81,7 @@ struct RoleSelectionMenu: View {
                             Text(AgentChoiceDisplay.effortLabel(effort)).tag(effort)
                         }
                         if dropped == .effort {
-                            Text("\(AgentChoiceDisplay.effortLabel(chosen.effort)) · no longer offered")
+                            Text("\(AgentChoiceDisplay.effortLabel(chosen.effort)) · not offered")
                                 .tag(chosen.effort).disabled(true)
                         }
                     }

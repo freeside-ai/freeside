@@ -538,6 +538,46 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(taskHolds.allSatisfy { $0.reason == .admission_policy_refused && $0.detail == nil })
     }
 
+    @Test func aCachedAdmissionHoldWithoutAnUnservedPartLoads() throws {
+        // A cache written before #2992 holds admission details with no
+        // unserved key; the generated decoder reads the missing key as nil,
+        // so the cache loads without a format bump.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.runTimelines = RunFixtures.defaultTimelines()
+        for index in state.runTimelines.indices where state.runTimelines[index].hold != nil {
+            state.runTimelines[index].hold?.value1.reason = .admission_policy_refused
+            state.runTimelines[index].hold?.value1.detail = .init(value1: .init(check: .agent_resolution))
+        }
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var runTimelines = try #require(persistedState["runTimelines"] as? [[String: Any]])
+        var stripped = 0
+        for index in runTimelines.indices {
+            guard var hold = runTimelines[index]["hold"] as? [String: Any],
+                var detail = hold["detail"] as? [String: Any]
+            else { continue }
+            detail.removeValue(forKey: "unserved")
+            hold["detail"] = detail
+            runTimelines[index]["hold"] = hold
+            stripped += 1
+        }
+        #expect(stripped > 0)
+        persistedState["runTimelines"] = runTimelines
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let loaded = try #require(store.load())
+        let holds = loaded.runTimelines.compactMap { $0.hold?.value1 }
+        #expect(holds.count == stripped)
+        #expect(holds.allSatisfy { $0.detail?.value1.check == .agent_resolution && $0.detail?.value1.unserved == nil })
+    }
+
     @Test func anArtifactSourcedTaskRoundTripsItsSourceDigest() throws {
         let (store, directory) = temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }

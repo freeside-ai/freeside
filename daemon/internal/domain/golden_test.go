@@ -2132,6 +2132,24 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	// A task line whose enrollment does not serve the model it names: the
+	// refusal names the part and the held enrollment, never the typed model.
+	unservedEnrollment := domain.ClientEnrollmentID("claude-ig")
+	unservedStage := domain.StageNameImplementation
+	unservedLaunch := domain.Digest("sha256:implementation-launch")
+	admissionUnservedHold := domain.RunHoldObservation{
+		RunID: "run-1", InvocationID: &obsInvocationID,
+		Reason: domain.HoldAdmissionPolicyRefused,
+		Detail: &domain.AdmissionRefusal{
+			Check:       domain.AdmissionCheckAgentResolution,
+			LaunchStage: &unservedStage, LaunchDigest: &unservedLaunch,
+			Unserved: &domain.AdmissionUnserved{
+				Part: domain.AgentSelectionPartModel, EnrollmentID: &unservedEnrollment,
+			},
+		},
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+	}
 	upkeepRefusalID := domain.Digest("sha256:" + strings.Repeat("e1", 32))
 	upkeepItemID := domain.ItemID("item-image-policy-adoption")
 	upkeepTaskID := domain.TaskID("task-image-maintenance")
@@ -2753,6 +2771,7 @@ func TestGolden(t *testing.T) {
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
 		{"run_hold_observation_admission_refusal", admissionHoldObservation},
+		{"run_hold_observation_admission_unserved", admissionUnservedHold},
 		{"run_hold_observation_usage_pool", usagePoolHold},
 		{"run_hold_observation_image_upkeep_rebuild", rebuildHold},
 		{"run_hold_observation_image_upkeep_adoption", adoptionHold},

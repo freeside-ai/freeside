@@ -523,16 +523,20 @@ package enum RunDisplay {
         }
     }
 
-    /// A capacity hold's typed fact in words, beside the hold's label, which
-    /// stays one short phrase per reason. Reads only the fact that belongs to
-    /// the hold's reason, and only when the hold is `runID`'s: another run's
-    /// hold, another reason, or a missing fact (a stored
-    /// `identity_parallelism` hold names no pool) has none. The words carry
-    /// no tense, because a finished run's hold is a past observation. The
-    /// memory figures are the reservations the hold recorded, not live use.
+    /// A hold's typed fact in words, beside the hold's label, which stays one
+    /// short phrase per reason: a capacity hold's pool or memory, and the
+    /// selection part an admission hold refused. Reads only the fact that
+    /// belongs to the hold's reason, and only when the hold is `runID`'s:
+    /// another run's hold, another reason, or a missing fact (a stored
+    /// `identity_parallelism` hold names no pool, and most admission holds
+    /// name no part) has none. The words carry no tense, because a finished
+    /// run's hold is a past observation. The memory figures are the
+    /// reservations the hold recorded, not live use.
     package static func holdFact(_ hold: Components.Schemas.RunHold, runID: String) -> String? {
         guard hold.run_id == runID else { return nil }
         switch hold.reason {
+        case .admission_policy_refused:
+            return hold.detail?.value1.unserved.map { unservedFact($0.value1) }
         case .usage_pool_exhausted:
             return hold.usage_pool.map { "Pool \($0) at its limit of parallel runs" }
         case .machine_capacity:
@@ -547,6 +551,18 @@ package enum RunDisplay {
             }
         default:
             return nil
+        }
+    }
+
+    /// The part of a refused selection the daemon doesn't serve, naming the
+    /// enrollment the daemon holds for a model or effort. The hold never
+    /// carries what the operator typed, so neither does this.
+    package static func unservedFact(_ unserved: Components.Schemas.AdmissionUnserved) -> String {
+        let enrollment = unserved.enrollment_id ?? "the enrollment"
+        switch unserved.part {
+        case .enrollment: return "The enrollment isn't one the daemon holds"
+        case .model: return "The model isn't one \(enrollment) serves"
+        case .effort: return "The effort isn't one \(enrollment) serves for this model"
         }
     }
 

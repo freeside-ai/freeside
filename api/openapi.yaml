@@ -3925,10 +3925,12 @@ components:
       description: >
         The typed detail of an admission_policy_refused hold, mirrored from
         domain.AdmissionRefusal: the refused check and, once each resolved,
-        the agent and the launch it refused. The agent is a name from the
-        admitted agent tree; refusal error text never appears here.
+        the agent and the launch it refused, and for an agent_resolution
+        refusal which part of the selection the daemon does not serve. The
+        agent is a name from the admitted agent tree; refusal error text never
+        appears here.
       additionalProperties: false
-      required: [check, agent, launch_stage, launch_digest]
+      required: [check, agent, launch_stage, launch_digest, unserved]
       properties:
         check:
           $ref: "#/components/schemas/AdmissionCheck"
@@ -3949,6 +3951,42 @@ components:
           allOf:
             - $ref: "#/components/schemas/Digest"
           description: The refused launch's digest; null exactly when launch_stage is.
+        unserved:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AdmissionUnserved"
+          description: >
+            Which part of the selection the daemon does not serve; set only
+            beside check agent_resolution, and null for every other refusal
+            and for a hold recorded before the field existed.
+
+    AdmissionUnserved:
+      type: object
+      description: >
+        The part of a refused selection the daemon does not serve, mirrored
+        from domain.AdmissionUnserved. It never carries what the operator
+        typed, since a credential can be pasted into a selection.
+      additionalProperties: false
+      required: [part, enrollment_id]
+      properties:
+        part:
+          $ref: "#/components/schemas/AgentSelectionPart"
+        enrollment_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The ID of the enrollment the daemon holds, never the typed text;
+            set exactly when part is model or effort, and null for enrollment.
+
+    AgentSelectionPart:
+      type: string
+      description: >
+        A part of an agent selection, mirrored from domain.AgentSelectionPart:
+        enrollment (the daemon holds no such enrollment), model (the
+        enrollment does not serve the model), or effort (the enrollment does
+        not serve the effort for the model).
+      enum: [enrollment, model, effort]
 
     RunOutcome:
       type: string

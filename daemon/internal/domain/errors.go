@@ -74,6 +74,7 @@ var (
 	ErrInvalidObservedStatus            = errors.New("invalid observed invocation status")
 	ErrInvalidRunHoldReason             = errors.New("invalid run hold reason")
 	ErrInvalidAdmissionCheck            = errors.New("invalid admission check")
+	ErrInvalidAgentSelectionPart        = errors.New("invalid agent selection part")
 	ErrInvalidRunOutcome                = errors.New("invalid run outcome")
 	ErrInvalidScheduleKind              = errors.New("invalid schedule kind")
 	ErrInvalidScheduleStatus            = errors.New("invalid schedule status")

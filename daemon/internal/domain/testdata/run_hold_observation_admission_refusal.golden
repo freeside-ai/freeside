@@ -6,7 +6,8 @@
     "check": "agent_prompt",
     "agent": "implementer-agent",
     "launch_stage": "specification",
-    "launch_digest": "sha256:specification-launch"
+    "launch_digest": "sha256:specification-launch",
+    "unserved": null
   },
   "image_upkeep": null,
   "usage_pool": null,

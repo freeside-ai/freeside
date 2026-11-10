@@ -85,13 +85,20 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 		efforts []string
 		model   string
 		want    string
+		part    domain.AgentSelectionPart
 	}{
-		{"a catalog lacking the model", []string{"high"}, "claude-other-test", "is not in enrollment"},
+		{
+			"a catalog lacking the model",
+			[]string{"high"},
+			"claude-other-test", "is not in enrollment",
+			domain.AgentSelectionPartModel,
+		},
 		{
 			"a catalog whose model lacks the effort",
 			[]string{"low", "medium"},
 			"claude-implementer-test",
 			"is not one the model reports",
+			domain.AgentSelectionPartEffort,
 		},
 	}
 	for _, tc := range refusals {
@@ -103,8 +110,9 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
 			}
-			assertAdmissionDetail(t, err, domain.AdmissionCheckAgentResolution,
-				agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer))
+			assertUnservedDetail(t, err, domain.AdmissionCheckAgentResolution,
+				agentTestWriterLine, agentTestLaunch(t, f, domain.RoleImplementer),
+				&domain.AdmissionUnserved{Part: tc.part, EnrollmentID: &f.enrollment.ID})
 		})
 	}
 

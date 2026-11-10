@@ -515,7 +515,9 @@ directory named before it in the same bullet. All under `daemon/`:
   job onto the host executor and never a ward role),
   `cmd/freesided/macverify_executor.go` (builds the host executor and
   chooses the durable proof it declares from),
-  `internal/domain/wardless_admission.go`, `cmd/freesided/claude_driver.go`
+  `internal/domain/wardless_admission.go`,
+  `internal/domain/agent_selection.go` (the served-tuple rule admission
+  enforces when it resolves a selection), `cmd/freesided/claude_driver.go`
   (`storeAdmissionAuthority`, which wires admission and import authority,
   and the daemon's GitHub wiring: the keystore, minter, janitor, and the
   publish, follow-up-filing, and issue-read token sources),

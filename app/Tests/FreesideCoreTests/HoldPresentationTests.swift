@@ -102,6 +102,31 @@ import Testing
         #expect(RunDisplay.holdFact(misplaced, runID: "run") == nil)
     }
 
+    /// An admission hold names the selection part it refused, and the
+    /// enrollment the daemon holds for a model or effort (#2992). A hold
+    /// with no part reads as it always did.
+    @Test func admissionHoldNamesTheUnservedPart() throws {
+        var hold = try #require(HoldPresentationFixtures.hold("Model unserved", runID: "run"))
+        #expect(RunDisplay.holdFact(hold, runID: "run") == "The model isn't one claude-ig serves")
+        hold.detail?.value1.unserved = .init(value1: .init(part: .effort, enrollment_id: "claude-ig"))
+        #expect(RunDisplay.holdFact(hold, runID: "run") == "The effort isn't one claude-ig serves for this model")
+        hold.detail?.value1.unserved = .init(value1: .init(part: .enrollment))
+        #expect(RunDisplay.holdFact(hold, runID: "run") == "The enrollment isn't one the daemon holds")
+        hold.detail?.value1.unserved = nil
+        #expect(RunDisplay.holdFact(hold, runID: "run") == nil)
+        hold.detail = nil
+        #expect(RunDisplay.holdFact(hold, runID: "run") == nil)
+    }
+
+    @Test func admissionGuidanceNamesTheUnservedPart() throws {
+        let unserved = try #require(HoldPresentationFixtures.make("Model unserved").position)
+        #expect(unserved.hold == "Current policy prevents execution")
+        #expect(unserved.guidance == "The model isn't one claude-ig serves. Change the task's agent.")
+        // An admission hold that names no part keeps today's guidance.
+        let unnamed = HoldPresentationFixtures.make("Configuration unavailable").position
+        #expect(unnamed?.guidance.contains("Change the task's agent") == false)
+    }
+
     /// A quota-window park offers its hold's agents to move to, and only
     /// while the position is current and its recorded hold is that park.
     @Test func quotaWindowParkOffersItsAgentsWhileCurrent() throws {
@@ -332,7 +357,7 @@ enum HoldPresentationFixtures {
         let reason: Components.Schemas.RunHoldReason?
         switch name {
         case "Input unavailable": reason = .input_unavailable
-        case "Configuration unavailable": reason = .admission_policy_refused
+        case "Configuration unavailable", "Model unserved": reason = .admission_policy_refused
         case "Unattended operation stopped": reason = .operation_stopped
         case "Missing cause": reason = nil
         case "Machine capacity": reason = .machine_capacity
@@ -386,6 +411,16 @@ enum HoldPresentationFixtures {
                                 harness: .claude_code,
                                 model: "claude-opus-5-5", qualification: .different_pool)
                         ])),
+                first_observed_at: observed, last_observed_at: observed)
+        case "Model unserved":
+            // A task line names a model its enrollment doesn't serve (#2992):
+            // the hold names the part and the enrollment, never the model.
+            return .init(
+                run_id: runID, invocation_id: "inv-\(runID)-unserved", reason: .admission_policy_refused,
+                detail: .init(
+                    value1: .init(
+                        check: .agent_resolution,
+                        unserved: .init(value1: .init(part: .model, enrollment_id: "claude-ig")))),
                 first_observed_at: observed, last_observed_at: observed)
         case "Machine capacity":
             return .init(

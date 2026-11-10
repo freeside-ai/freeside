@@ -488,8 +488,9 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 		want   string
 		// check is the refusal's hold detail; named says whether it names the
 		// agent and the launch, which it does once both resolved.
-		check domain.AdmissionCheck
-		named bool
+		check    domain.AdmissionCheck
+		named    bool
+		unserved *domain.AdmissionUnserved // nil: the refusal names no part
 	}{
 		{
 			name:   "the attempt runs a prompt the line does not select",
@@ -527,8 +528,9 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 				}
 				selection.Tree.Lineup = lineup
 			},
-			want:  "its enrollment cannot be read",
-			check: domain.AdmissionCheckAgentResolution,
+			want:     "its enrollment cannot be read",
+			check:    domain.AdmissionCheckAgentResolution,
+			unserved: &domain.AdmissionUnserved{Part: domain.AgentSelectionPartEnrollment},
 		},
 		{
 			name: "the launch source refuses the role",
@@ -565,7 +567,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			} else if tc.check != domain.AdmissionCheckAgentLaunch {
 				launch = agentTestLaunch(t, f, domain.RoleImplementer)
 			}
-			assertAdmissionDetail(t, err, tc.check, agent, launch)
+			assertUnservedDetail(t, err, tc.check, agent, launch, tc.unserved)
 		})
 	}
 }
@@ -581,12 +583,23 @@ func agentTestLaunch(t *testing.T, f *agentAdmissionFixture, role domain.RoleNam
 }
 
 // assertAdmissionDetail checks the hold detail a refusal records: its check,
-// the agent's name (empty for none), and the launch (nil for none).
+// the agent's name (empty for none), the launch (nil for none), and no
+// unserved part.
 func assertAdmissionDetail(
 	t *testing.T, err error, check domain.AdmissionCheck, agent string, launch *domain.LaunchSpec,
 ) {
 	t.Helper()
-	want := domain.AdmissionRefusal{Check: check}
+	assertUnservedDetail(t, err, check, agent, launch, nil)
+}
+
+// assertUnservedDetail is assertAdmissionDetail with the unserved part the
+// detail names (nil for none).
+func assertUnservedDetail(
+	t *testing.T, err error, check domain.AdmissionCheck, agent string, launch *domain.LaunchSpec,
+	unserved *domain.AdmissionUnserved,
+) {
+	t.Helper()
+	want := domain.AdmissionRefusal{Check: check, Unserved: unserved}
 	if agent != "" {
 		want.Agent = &agent
 	}

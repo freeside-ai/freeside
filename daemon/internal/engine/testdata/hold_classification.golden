@@ -226,7 +226,8 @@
       "check": "generation_integrity_marked",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": true,
     "unattended_dispatch_refusal": false,
@@ -242,7 +243,8 @@
       "check": "egress_profile_not_enforceable",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": true,
     "unattended_dispatch_refusal": false,
@@ -258,7 +260,8 @@
       "check": "egress_policy_refused",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": true,
     "unattended_dispatch_refusal": false,
@@ -274,7 +277,8 @@
       "check": "backend_capability_refused",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -290,7 +294,8 @@
       "check": "backend_pre_job_refused",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -306,7 +311,8 @@
       "check": "admission_floor_unknown",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -322,7 +328,8 @@
       "check": "capability_below_floor",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -338,7 +345,8 @@
       "check": "credential_mode_not_approved",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -354,7 +362,8 @@
       "check": "waiver_not_configured",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -370,7 +379,8 @@
       "check": "repository_identity_mismatch",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -386,7 +396,8 @@
       "check": "path_boundary_mismatch",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -402,7 +413,8 @@
       "check": "trust_profile_superseded",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -418,7 +430,8 @@
       "check": "review_configuration_unapproved",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": false,
     "unattended_dispatch_refusal": true,
@@ -434,7 +447,8 @@
       "check": "agent_admission",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": true,
     "unattended_dispatch_refusal": false,
@@ -494,7 +508,8 @@
       "check": "generation_integrity_marked",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": true,
     "unattended_dispatch_refusal": false,
@@ -510,7 +525,8 @@
       "check": "egress_policy_refused",
       "agent": null,
       "launch_stage": null,
-      "launch_digest": null
+      "launch_digest": null,
+      "unserved": null
     },
     "invocation_dispatch_hold": true,
     "unattended_dispatch_refusal": true,

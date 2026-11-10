@@ -243,6 +243,11 @@ package enum TaskDisplay {
                         ?? "The configured agent account is busy."
                 position.guidance = "\(cause) This work is queued; no action is needed for this wait."
             }
+            if position.holdReason == .admission_policy_refused,
+                let unserved = position.holdFacts?.detail?.value1.unserved?.value1
+            {
+                position.guidance = "\(RunDisplay.unservedFact(unserved)). Change the task's agent."
+            }
             if let dispute = reviewDisputeItem(task, run: run, attentionItems: attentionItems) {
                 position.status = AttentionDisplay.title(dispute.item)
                 position.guidance = "Resolve the review dispute."
