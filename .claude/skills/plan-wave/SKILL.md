@@ -77,11 +77,53 @@ gap, exit finding, other), a split, a rescope, a removal, and an exit-run or
 audit finding. Note which classes recurred; the premise check and sizing
 below look for them first.
 
+Two measured records join that read. Both cover the span since the prior
+planning date (the prior tracker's creation), and both go to the scratch
+directory, not to chat:
+
+- **Estimates against actuals.** A merged PR whose issue carried an
+  estimate records its authored count beside it (docs/coordination.md,
+  Unit Sizing). Collect the pairs:
+
+  ```sh
+  gh pr list --repo freeside-ai/freeside --state merged --limit 500 \
+    --search '"authored lines" estimate in:body merged:>DATE' \
+    --json number,body --jq '.[] | [.number,
+      ([.body | scan("[^\n]*authored lines[^\n]*estimate[^\n]*")]
+       | join(" "))] | select(.[1] != "") | @tsv' \
+    > "$SCRATCH/estimate-pairs.tsv"
+  ```
+
+  A PR that words its bullet another way is missed, so count the pairs
+  and treat a handful as a weak sample. For each pair, divide the actual
+  by the estimate, taking the middle of an estimated range. Keep the
+  median ratio, and list each pair that ran past double with what kind of
+  unit it was. Sizing below applies both.
+- **Landing measures.** The four measures AGENTS.md (Coordination model,
+  Reassess when) asks for after a wave under the current rules. The
+  script keeps fetched PR heads and merge objects in the repository it
+  reads, so run it on a scratch clone, as its header asks for a large run:
+
+  ```sh
+  git clone -q --no-checkout \
+    --reference "$(git rev-parse --git-common-dir)" \
+    "$(git remote get-url origin)" "$SCRATCH/landing-repo"
+  python3 -I scripts/landing-measures.py --since DATE \
+    --repo-path "$SCRATCH/landing-repo" --snapshot "$SCRATCH/landing" \
+    > "$SCRATCH/landing-measures.md"
+  ```
+
+  Start it in the background and read it at Close Out: it reads every
+  merged PR's check runs, which took over two minutes for a single day of
+  merges. The script's header says what each measure can't see. This
+  session reports the measures and reassesses nothing: whether the
+  coordination rules change is the owner's decision.
+
 Before proceeding, write down: the wave's units in order; each unit's
 acceptance source; wave-specific preconditions; any rescoping or splitting
 the plan assigns to this wave's scheduling; any open owner decision the wave
-must anchor to as the plan says it stands; the Row drift list; and the
-calibration classes.
+must anchor to as the plan says it stands; the Row drift list; the
+calibration classes; and the estimate ratio with the pairs behind it.
 
 ## Preconditions (Stop on Failure)
 
@@ -227,11 +269,20 @@ milestones exist is the half-scheduled state the sweep detects.
   each mechanical commit listed in `.git-blame-ignore-revs` at the merge,
   all under one rename setting. On PRs with no mechanical commit it matches
   the forge's file totals to within a few lines. A listed SHA that a rebase
-  rewrote is not skipped, so the count errs high, never to zero. Write the
-  estimate, the reference PR, and declared regenerated output and
-  mechanical commits into the unit's Scope. A unit over budget is split now
-  along a Unit Sizing seam, or kept larger only by a recorded owner
-  decision; ask, don't decide.
+  rewrote is not skipped, so the count errs high, never to zero.
+
+  Then correct that figure with the pairs the calibration read collected:
+  multiply it by their median ratio. Recorded estimates have run low, and
+  an uncorrected one repeats the error (docs/coordination.md, Unit
+  Sizing). The corrected figure is the unit's estimate: the one read
+  against the budget, and the one its PR later records its actual count
+  beside. Keep the raw figure and the ratio in parentheses after it, and
+  say so there when the unit resembles one that ran past double. With no
+  pairs to read, say so and leave the figure as it is. Write the estimate,
+  the reference PR, and declared regenerated output and mechanical
+  commits into the unit's Scope. A unit over budget is split now along a
+  Unit Sizing seam, or kept larger only by a recorded owner decision; ask,
+  don't decide.
 
 ## Ground the Units
 
@@ -312,8 +363,9 @@ resolve it.
 - **Notes.** In the collapsed Notes block: the Row drift list; one
   paragraph of calibration naming the classes from the prior wave the
   planner looked for and what the premise check found; each reference PR
-  behind a size estimate; sweep dispositions; surfaced forks; and
-  scheduling rationale.
+  behind a size estimate, and the ratio that corrected the estimates with
+  the number of pairs behind it; the four landing measures in one
+  paragraph; sweep dispositions; surfaced forks; and scheduling rationale.
 - **Decision note.** Only when a trigger in AGENTS.md (Decision Notes)
   applies. Decomposition and sweep status live on the tracker, never in a
   note.
@@ -321,5 +373,6 @@ resolve it.
   drift was found, and what waits on the owner. Name every unit whose
   Dependencies carry `merges-after`, with its prerequisite: no tool reads
   that relation at landing, so it holds only through the order the owner
-  approves or types (docs/coordination.md, Relationship Types). Do not
-  start any unit.
+  approves or types (docs/coordination.md, Relationship Types). Give the
+  landing measures in a line each, for the owner to read against
+  AGENTS.md (Coordination model, Reassess when). Do not start any unit.
