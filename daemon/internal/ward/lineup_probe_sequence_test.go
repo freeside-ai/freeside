@@ -129,3 +129,41 @@ func lineupProbeFailureRow(t *testing.T, step string) string {
 	}
 	return helperRoleErrorClass(err) + " " + helperRoleEvidence(err) + " " + claim + " " + teardown + " " + rt.leftovers()
 }
+
+// TestProbeLineupImageReportsAMemoryLimitKill pins the helper-role runner's
+// memory-limit check on the probe container: a kill reaches the caller as an
+// unwrapped *MemoryLimitError for the probe's launch class and size, before
+// anything is exported, and teardown still removes the container and the
+// network.
+func TestProbeLineupImageReportsAMemoryLimitKill(t *testing.T) {
+	t.Parallel()
+	rt := newLineupProbeSequenceRuntime(t)
+	// The container's name is random, so its boot log is scripted at
+	// create. The hook runs under the fake's lock, so it writes the map
+	// directly.
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if strings.HasPrefix(spec.Name, lineupProbeContainerPrefix) {
+			rt.bootLogs = map[string][]byte{spec.Name: bootLogKilling(t, spec.Name)}
+		}
+		return nil
+	}
+	_, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil)
+	mle, ok := err.(*MemoryLimitError) //nolint:errorlint // the contract is an unwrapped *MemoryLimitError
+	if !ok {
+		t.Fatalf("ProbeLineupImage = %v (%T), want an unwrapped *MemoryLimitError", err, err)
+	}
+	if mle.Class != LaunchReview || mle.Size != DefaultLaunchSize(LaunchReview) {
+		t.Fatalf("memory-limit error = class %s size %s, want class %s size %s",
+			mle.Class, mle.Size, LaunchReview, DefaultLaunchSize(LaunchReview))
+	}
+	rt.mu.Lock()
+	for _, call := range rt.calls {
+		if strings.HasPrefix(call, "export ") {
+			t.Errorf("the probe exported a container killed at its memory limit: %q", call)
+		}
+	}
+	rt.mu.Unlock()
+	if left := rt.leftovers(); left != "reaped" {
+		t.Fatalf("runtime after the probe: %s, want nothing left", left)
+	}
+}
