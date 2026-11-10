@@ -517,6 +517,9 @@ directory named before it in the same bullet. All under `daemon/`:
   (`storeAdmissionAuthority`, which wires admission and import authority,
   and the daemon's GitHub wiring: the keystore, minter, janitor, and the
   publish, follow-up-filing, and issue-read token sources),
+  `cmd/freesided/agent_selection.go` (writes the adapter conformance
+  record that admission's launch-coverage step reads, and binds the
+  proof's launch to a generation's credential volume),
   `internal/exec/claude/spec.go` (the credential mount),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
   `internal/exec/capability.go`, and the `CredentialMode` and
