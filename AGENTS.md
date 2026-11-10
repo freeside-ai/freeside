@@ -517,10 +517,13 @@ directory named before it in the same bullet. All under `daemon/`:
   chooses the durable proof it declares from),
   `internal/domain/wardless_admission.go`,
   `internal/domain/agent_selection.go` (the served-tuple rule admission
-  enforces when it resolves a selection), `cmd/freesided/claude_driver.go`
-  (`storeAdmissionAuthority`, which wires admission and import authority,
-  and the daemon's GitHub wiring: the keystore, minter, janitor, and the
-  publish, follow-up-filing, and issue-read token sources),
+  enforces when it resolves a selection), `internal/admissionauth/`
+  (the admission and import authority, which re-checks a recorded
+  admission, its path policy, its specification or production marker, and
+  its commit author before the driver starts or imports, and its trust
+  profile at import), `cmd/freesided/claude_driver.go` (the daemon's GitHub
+  wiring: the keystore, minter, janitor, and the publish, follow-up-filing,
+  and issue-read token sources),
   `cmd/freesided/agent_selection.go` (writes the adapter conformance
   record that admission's launch-coverage step reads, and binds the
   proof's launch to a generation's credential volume),

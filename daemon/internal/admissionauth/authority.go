@@ -21,19 +21,59 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// Authority binds private driver state back to the durable
-// admission and the trust profile its mode requires at import. Unattended
-// execution uses its exact admission-bound revision; attended_dev resolves the
-// currently active profile. The state file is replay data, not an
-// authorization source.
+// Authority binds private driver state back to the durable admission and
+// the trust profile its mode requires at import. The driver's state file is
+// replay data, not an authorization source, so every call re-checks it
+// against durable and current state. Every entry point first re-checks the
+// admission itself, in this order:
+//
+//   - The recorded admission. Start and import read it under current
+//     admission policy (store.ReadTx.GetExecutionAdmission); terminal replay
+//     (AuthenticateAdmission, ImportOptionsRecord) authenticates the immutable
+//     record without it.
+//   - Current backend conformance, before a start or recovery only
+//     (AuthenticateStart): an intent admitted under one backend configuration
+//     cannot start under another.
+//   - The resolved policy's digest against the admission and, under current
+//     policy, its path allowlist against this daemon's configured
+//     AllowedPaths (ResolvedPathAllowlist).
+//   - The start spec against the admission.
+//
+// AuthenticateStart and AuthenticateImport then re-check the invocation's
+// marker in the outbox: a specification invocation must carry an
+// authenticated specification transition, and an invocation shaped like one
+// without its marker fails closed. Any other invocation's commit-author
+// claim must match the live GitHub App identity from CommitAuthors, resolved
+// at start and cached per invocation in StartAuthors.
+//
+// ImportOptions and ImportOptionsRecord instead re-check, in order: the trust
+// profile (the admission-bound revision, or for attended_dev the
+// repository's currently active profile) and its repository against the
+// admitted base; the run's specification digest against the admission and
+// the specification bytes against that digest, for the fallback commit
+// message; the specification marker, which selects the finding profile; and
+// the commit author. ImportOptions revalidates the author against the live
+// App identity; ImportOptionsRecord reads the durable claim without live
+// GitHub authority, so terminal replay survives a restart.
 type Authority struct {
-	Store         *store.Store
-	Blobs         *signet.BlobStore
-	AllowedPaths  []string
+	Store *store.Store
+	// Blobs serves the approved specification the fallback commit message
+	// derives from; import refuses without it.
+	Blobs *signet.BlobStore
+	// AllowedPaths is this daemon's configured path allowlist, which a run's
+	// resolved paths policy must equal exactly.
+	AllowedPaths []string
+	// CommitAuthors resolves the live GitHub App identity; without it a
+	// production commit-author claim is refused.
 	CommitAuthors CommitAuthorResolver
-	StartAuthors  *CommitAuthorCache
+	// StartAuthors caches start-time commit-author authentication per
+	// invocation; nil authenticates on every start.
+	StartAuthors *CommitAuthorCache
 }
 
+// CommitAuthorResolver resolves the GitHub App identity selected for a
+// repository. Both methods authenticate the current App binding; the
+// authority calls Resolve at start and Revalidate at the import boundary.
 type CommitAuthorResolver interface {
 	Resolve(context.Context, string) (publish.AppBotIdentity, error)
 	Revalidate(context.Context, string) (publish.AppBotIdentity, error)
@@ -47,11 +87,17 @@ type productionCommitAuthorAuthenticationBinding struct {
 	botUserID int64
 }
 
+// CommitAuthorCache remembers which invocations authenticated their commit
+// author at start, keyed by the repository and App identity they
+// authenticated against; import forgets the entry. Its zero value is not
+// usable; use NewCommitAuthorCache.
 type CommitAuthorCache struct {
 	mu      sync.Mutex
 	entries map[domain.InvocationID]productionCommitAuthorAuthenticationBinding
 }
 
+// NewCommitAuthorCache returns an empty cache, bounded to
+// maxProductionCommitAuthorAuthentications entries.
 func NewCommitAuthorCache() *CommitAuthorCache {
 	return &CommitAuthorCache{
 		entries: map[domain.InvocationID]productionCommitAuthorAuthenticationBinding{},

@@ -53,14 +53,15 @@ var (
 )
 
 // ScenarioParts are what run hands ComposeScenario. AdmissionFloor through
-// AgentExpiryMargin are values the scenario cannot compute for itself from
-// outside package main, because their helpers live there; run builds each
+// AgentExpiryMargin are values the scenario does not compute for itself:
+// all but Imports have their helpers in package main, and Imports is an
+// internal/admissionauth Authority that run still builds. Run builds each
 // but AgentExpiryMargin exactly as the scenario built it in package main,
 // and passes the Claude composition's margin. The admission floor,
 // validators, watches, and expiry margin come from what the Claude
-// composition uses; the import authority and export recorder are its types,
-// built bare, without the Claude composition's path, author, or usage
-// configuration.
+// composition uses; the import authority and export recorder are the types
+// it uses, built bare, without the Claude composition's path, author, or
+// usage configuration.
 type ScenarioParts struct {
 	Store     *store.Store
 	Attention *signet.Service
