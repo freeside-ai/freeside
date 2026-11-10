@@ -26,6 +26,12 @@ public struct PendingParkedTaskMove: Codable, Equatable, Sendable {
     }
 }
 
+/// Why a move failed, on the task it names, so only that task's page says so.
+package struct ParkedTaskMoveFailure: Equatable, Sendable {
+    package let taskID: String
+    package let message: String
+}
+
 /// Sends the operator's move of a task parked on its implementer's exhausted
 /// quota window to an enrollment the hold offers (`move_parked_task`, issue #869),
 /// modeled on `RoutingPolicyModel`: the command persists before it is sent,
@@ -42,7 +48,7 @@ package final class ParkedTaskMoveModel {
     package init(coordinator: SyncCoordinator) { self.coordinator = coordinator }
 
     package var sending: Bool { coordinator.parkedTaskMoveSending }
-    package var failure: String? {
+    package var failure: ParkedTaskMoveFailure? {
         get { coordinator.parkedTaskMoveFailure }
         set { coordinator.parkedTaskMoveFailure = newValue }
     }
@@ -68,18 +74,25 @@ package final class ParkedTaskMoveModel {
             payload: .move_parked_task(.init(kind: .move_parked_task, task_id: taskID, choice: choice)))
         let entry = PendingParkedTaskMove(command: command, syncEpoch: epoch)
         guard coordinator.retainParkedTaskMove(entry) else {
-            failure = "The move couldn't be saved on this device. Nothing was sent. Try again."
+            failure = .init(
+                taskID: taskID, message: "The move couldn't be saved on this device. Nothing was sent. Try again.")
             return
         }
         await send(entry)
     }
 
-    /// Explicit retry only: resends the saved command unchanged, and only in
-    /// the epoch it was made in (sync settles it in any other).
+    /// Whether Retry can resend the saved move: the daemon hasn't answered
+    /// it, it was made in the current epoch (sync settles it in any other),
+    /// and the device is still paired.
+    package var canRetry: Bool {
+        guard let entry = pending else { return false }
+        return entry.receipt == nil && entry.syncEpoch == coordinator.cursors?.syncEpoch
+            && coordinator.store.freshness != .unauthenticated
+    }
+
+    /// Explicit retry only: resends the saved command unchanged.
     package func retry() async {
-        guard let entry = pending, entry.receipt == nil, entry.syncEpoch == coordinator.cursors?.syncEpoch,
-            coordinator.store.freshness != .unauthenticated
-        else { return }
+        guard canRetry, let entry = pending else { return }
         await send(entry)
     }
 
@@ -110,7 +123,8 @@ package final class ParkedTaskMoveModel {
                     // longer qualifies or serves the choice: the daemon
                     // recorded nothing.
                     coordinator.finishParkedTaskMove()
-                    failure = "The daemon refused the move (status \(status)). Nothing was changed."
+                    let message = "The daemon refused the move (status \(status)). Nothing was changed."
+                    failure = entry.taskID.map { .init(taskID: $0, message: message) }
                     await coordinator.refreshAfterCommit()
                 case 401, 403: coordinator.store.freshness = .unauthenticated
                 default: break

@@ -517,6 +517,14 @@ struct TaskPageView: View {
             snapshot.task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds(timeline))
     }
 
+    /// The header's parked-task move at `position`, or nil while it has
+    /// nothing to say. Internal so a test can check the header's choice.
+    func parkedTaskMove(at position: TaskDisplay.Position?) -> ParkedTaskMoveView? {
+        let move = ParkedTaskMoveView(
+            coordinator: coordinator, taskID: snapshot.task.id, offers: TaskDisplay.moveOffers(position))
+        return move.isQuiet ? nil : move
+    }
+
     /// Layer 0: what the work is and where it stands, without scrolling
     /// (5.6): the task's project, issue, and stage over its name, one status
     /// line, the hold when there is one, and where to act. The task id lives
@@ -551,12 +559,10 @@ struct TaskPageView: View {
                 holdCallout(hold)
             }
             // A quota-window park may offer agents on other pools; moving
-            // to one is the operator's choice, never a fallback.
-            let offers = TaskDisplay.moveOffers(position)
-            if !offers.isEmpty {
-                ParkedTaskMoveView(
-                    model: coordinator.parkedTaskMove, taskID: task.id, offers: offers, pools: coordinator.usagePools)
-            }
+            // to one is the operator's choice, never a fallback. A saved move
+            // or its refusal stays after the hold clears, so its Retry is
+            // never out of reach.
+            if let move = parkedTaskMove(at: position) { move }
             switch lines.visibleGuidance(attention: position?.attention == true) {
             case .link(let title):
                 // The card the guidance names is on the page, so it says
