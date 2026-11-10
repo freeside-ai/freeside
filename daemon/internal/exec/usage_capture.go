@@ -40,12 +40,21 @@ type ClaudeRateLimitEvent struct {
 // wrote from growing the stage result it rides on.
 const maxClaudeUsageWindows = 16
 
+// maxClaudeUsageTokenBytes bounds each window name and status token. The
+// pinned CLI's tokens are under 20 bytes (five_hour, seven_day,
+// allowed_warning); the bound leaves room for new ones while keeping a
+// transcript the agent wrote from growing the capture, the stage result, and
+// the collection detail that names an unknown window. A CLI token past it
+// drops the whole capture, so raise it when the CLI adopts a longer name.
+const maxClaudeUsageTokenBytes = 64
+
 // Validate checks the capture's shape: a non-nil capture is observed at a
 // UTC instant and carries at least one window or event, at most
 // maxClaudeUsageWindows of each, windows and events are each sorted by
-// window and unique, every name is a lowercase usage token, every share is a
-// percentage, and every reset is a UTC instant JSON can encode (years 0 to
-// 9999), so a valid capture always marshals.
+// window and unique, every name and status is a lowercase usage token of at
+// most maxClaudeUsageTokenBytes, every share is a percentage, and every
+// reset is a UTC instant JSON can encode (years 0 to 9999), so a valid
+// capture always marshals.
 func (c ClaudeUsageCapture) Validate() error {
 	if c.ObservedAt.IsZero() || c.ObservedAt.Location() != time.UTC {
 		return fmt.Errorf("claude usage observed_at must be a non-zero UTC instant: %w", ErrInvalidClaudeUsage)
@@ -58,8 +67,8 @@ func (c ClaudeUsageCapture) Validate() error {
 			len(c.Windows), len(c.Events), maxClaudeUsageWindows, ErrInvalidClaudeUsage)
 	}
 	for i, w := range c.Windows {
-		if !usageToken(w.Window) {
-			return fmt.Errorf("claude usage windows[%d] window %q: %w", i, w.Window, ErrInvalidClaudeUsage)
+		if err := checkUsageToken(fmt.Sprintf("windows[%d] window", i), w.Window); err != nil {
+			return err
 		}
 		if i > 0 && c.Windows[i-1].Window >= w.Window {
 			return fmt.Errorf("claude usage windows[%d] %q is not after %q: %w",
@@ -73,9 +82,11 @@ func (c ClaudeUsageCapture) Validate() error {
 		}
 	}
 	for i, e := range c.Events {
-		if !usageToken(e.Window) || !usageToken(e.Status) {
-			return fmt.Errorf("claude usage events[%d] window %q status %q: %w",
-				i, e.Window, e.Status, ErrInvalidClaudeUsage)
+		if err := checkUsageToken(fmt.Sprintf("events[%d] window", i), e.Window); err != nil {
+			return err
+		}
+		if err := checkUsageToken(fmt.Sprintf("events[%d] status", i), e.Status); err != nil {
+			return err
 		}
 		if i > 0 && c.Events[i-1].Window >= e.Window {
 			return fmt.Errorf("claude usage events[%d] %q is not after %q: %w",
@@ -84,6 +95,20 @@ func (c ClaudeUsageCapture) Validate() error {
 		if !resetValid(e.ResetsAt) {
 			return fmt.Errorf("claude usage events[%d] resets_at is not an encodable UTC instant: %w", i, ErrInvalidClaudeUsage)
 		}
+	}
+	return nil
+}
+
+// checkUsageToken refuses value, the capture's field, unless it is a usage
+// token. An over-long value is reported by its length, not its text, so the
+// error stays small.
+func checkUsageToken(field, value string) error {
+	if len(value) > maxClaudeUsageTokenBytes {
+		return fmt.Errorf("claude usage %s is %d bytes, more than %d: %w",
+			field, len(value), maxClaudeUsageTokenBytes, ErrInvalidClaudeUsage)
+	}
+	if !usageToken(value) {
+		return fmt.Errorf("claude usage %s %q: %w", field, value, ErrInvalidClaudeUsage)
 	}
 	return nil
 }

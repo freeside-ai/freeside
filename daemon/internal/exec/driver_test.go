@@ -341,6 +341,24 @@ func TestStageResultClaudeUsage(t *testing.T) {
 			}
 			return c
 		}, false},
+		// A token is at most 64 bytes, so an agent-written transcript can't
+		// grow the capture or the collection detail that names it.
+		{"64-byte window", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: strings.Repeat("w", 64)}}
+			return c
+		}, true},
+		{"65-byte window", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: strings.Repeat("w", 65)}}
+			return c
+		}, false},
+		{"65-byte event window", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: strings.Repeat("w", 65), Status: "allowed"}}
+			return c
+		}, false},
+		{"65-byte event status", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: strings.Repeat("s", 65)}}
+			return c
+		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -358,6 +376,25 @@ func TestStageResultClaudeUsage(t *testing.T) {
 				t.Fatalf("Validate() = %v, want ErrInvalidClaudeUsage", err)
 			}
 		})
+	}
+}
+
+// TestClaudeUsageLongTokenErrorOmitsToken pins that the refusal of an
+// over-long token reports its length, not its text, so an 8 MiB window name
+// yields a short error.
+func TestClaudeUsageLongTokenErrorOmitsToken(t *testing.T) {
+	t.Parallel()
+	name := strings.Repeat("w", 8<<20)
+	capture := exec.ClaudeUsageCapture{
+		ObservedAt: time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC),
+		Windows:    []exec.ClaudeUsageWindow{{Window: name}},
+	}
+	err := capture.Validate()
+	if !errors.Is(err, exec.ErrInvalidClaudeUsage) {
+		t.Fatalf("Validate() = %v, want ErrInvalidClaudeUsage", err)
+	}
+	if len(err.Error()) > 200 || strings.Contains(err.Error(), name[:65]) {
+		t.Fatalf("Validate() error is %d bytes or carries the token: %.200s", len(err.Error()), err)
 	}
 }
 
