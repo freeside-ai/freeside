@@ -918,6 +918,44 @@ func reenrollStartupRole(t *testing.T, st *store.Store, enrollment domain.Client
 	}
 }
 
+// enrollSecondSubscription enrolls a second Claude identity whose one
+// generation copies source's, on its own auth-store volume, and returns the
+// new enrollment. A test moves lineup lines onto it to put roles on a
+// healthy subscription beside a marked one.
+func enrollSecondSubscription(t *testing.T, st *store.Store, source engine.RoleAgent, at time.Time) domain.ClientEnrollment {
+	t.Helper()
+	ctx := t.Context()
+	identity, enrollment, generation := source.Identity, source.Enrollment, source.Generation
+	identity.ID, identity.AccountBinding = "claude-second", "second@example.test"
+	enrollment.ID, enrollment.AuthIdentityID = "claude-second/claude_code", identity.ID
+	enrollment.AccountBinding = identity.AccountBinding
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
+			return err
+		}
+		if err := tx.RecordClientEnrollment(ctx, enrollment, at); err != nil {
+			return err
+		}
+		lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, identity.ID, "second-enroll",
+			&domain.LeaseGenerationBinding{
+				EnrollmentID: enrollment.ID, AuthStoreVolume: "second-auth", StoreManifestDigest: generation.StoreManifestDigest,
+			}, at, at.Add(time.Minute))
+		if err != nil {
+			return err
+		}
+		generation.EnrollmentID, generation.AuthStoreVolume = enrollment.ID, "second-auth"
+		generation.Ordinal = 0
+		generation.AccountBinding, generation.LeaseFence, generation.RecordedAt = identity.AccountBinding, lease.Fence, at
+		if _, err := tx.AppendEnrollmentGeneration(ctx, generation, at); err != nil {
+			return err
+		}
+		return tx.ReleaseAuthStoreMutationLease(ctx, identity.ID, "second-enroll", lease.Fence, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return enrollment
+}
+
 func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -942,34 +980,7 @@ func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 		}
 		// A second subscription runs the implementer and remediator. The
 		// specifier stays on the generation that will be marked.
-		identity, enrollment, generation := source.Identity, source.Enrollment, source.Generation
-		identity.ID, identity.AccountBinding = "claude-second", "second@example.test"
-		enrollment.ID, enrollment.AuthIdentityID = "claude-second/claude_code", identity.ID
-		enrollment.AccountBinding = identity.AccountBinding
-		if err := st.Write(ctx, func(tx *store.WriteTx) error {
-			if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
-				return err
-			}
-			if err := tx.RecordClientEnrollment(ctx, enrollment, at); err != nil {
-				return err
-			}
-			lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, identity.ID, "second-enroll",
-				&domain.LeaseGenerationBinding{
-					EnrollmentID: enrollment.ID, AuthStoreVolume: "second-auth", StoreManifestDigest: generation.StoreManifestDigest,
-				}, at, at.Add(time.Minute))
-			if err != nil {
-				return err
-			}
-			generation.EnrollmentID, generation.AuthStoreVolume = enrollment.ID, "second-auth"
-			generation.Ordinal = 0
-			generation.AccountBinding, generation.LeaseFence, generation.RecordedAt = identity.AccountBinding, lease.Fence, at
-			if _, err := tx.AppendEnrollmentGeneration(ctx, generation, at); err != nil {
-				return err
-			}
-			return tx.ReleaseAuthStoreMutationLease(ctx, identity.ID, "second-enroll", lease.Fence, at)
-		}); err != nil {
-			t.Fatal(err)
-		}
+		enrollment := enrollSecondSubscription(t, st, source, at)
 		moved := lineupSelection(t, tree, domain.RoleImplementer)
 		for i := range tree.Lineup {
 			if tree.Lineup[i].Selection.Names == moved.Names() {

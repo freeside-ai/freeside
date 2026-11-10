@@ -2355,8 +2355,11 @@ func runClaudeConformance(
 	if err := suite.Full(ctx); err != nil {
 		return err
 	}
-	// Only a passed ward suite reaches here, so an adapter record never
-	// outlives the runner proof it rests on.
+	// Only a passed ward suite reaches here, so no new adapter record rests
+	// on a failed runner proof. A proof that cannot run (the implementer
+	// runs another adapter, or its generation is marked) records nothing,
+	// and the adapter's last record stands across an image change: that
+	// record is scoped to the harness build its digest names, not the image.
 	return proveClaudeAdapter(ctx, st, backend, cfg, leaser)
 }
 
