@@ -86,7 +86,25 @@ public enum AttachmentGroup<Item>: Identifiable {
 /// attaches whole or not at all: a tree missing a file the operator chose
 /// would mislead the agent. A file and a folder never share a name, since
 /// the daemon refuses a name that is also a folder of another.
+///
+/// A spec approval's Discuss sheet keeps its attachments in a draft for a
+/// message (#2995): the same limits, named for a message, and bytes already
+/// in the draft are refused, since the daemon rejects a message that names
+/// one digest twice. A message takes no folders.
 public struct TaskAttachmentDraft: Equatable, Sendable {
+    /// What the attachments go with.
+    public enum Holder: Equatable, Sendable {
+        case task
+        case message
+
+        var noun: String {
+            switch self {
+            case .task: "task"
+            case .message: "message"
+            }
+        }
+    }
+
     public enum Addition: Equatable, Sendable {
         case added(DraftAttachment)
         /// One sentence that names the rule, ready to show the operator.
@@ -100,8 +118,11 @@ public struct TaskAttachmentDraft: Equatable, Sendable {
     }
 
     public private(set) var items: [DraftAttachment] = []
+    public let holder: Holder
 
-    public init() {}
+    public init(for holder: Holder = .task) {
+        self.holder = holder
+    }
 
     public var isEmpty: Bool { items.isEmpty }
     public var totalBytes: Int { items.reduce(0) { $0 + $1.sizeBytes } }
@@ -115,7 +136,7 @@ public struct TaskAttachmentDraft: Equatable, Sendable {
         }
         guard items.count < TaskAttachmentLimits.maxCount else {
             return .refused(
-                "\(name) wasn't added: a task can have at most "
+                "\(name) wasn't added: a \(holder.noun) can have at most "
                     + "\(TaskAttachmentLimits.maxCount.formatted()) attachments.")
         }
         let mediaType = TaskAttachmentLimits.sniff(bytes)
@@ -127,8 +148,17 @@ public struct TaskAttachmentDraft: Equatable, Sendable {
         let total = totalBytes + bytes.count
         guard total <= TaskAttachmentLimits.maxTotalBytes else {
             return .refused(
-                "\(name) would bring this task's attachments to \(Self.mebibytes(total)); "
+                "\(name) would bring this \(holder.noun)'s attachments to \(Self.mebibytes(total)); "
                     + "they can total at most \(Self.mebibytes(TaskAttachmentLimits.maxTotalBytes)).")
+        }
+        if holder == .message {
+            let digest = Self.digest(of: bytes)
+            if let held = items.first(where: { $0.digest == digest }) {
+                return .refused(
+                    held.name == name
+                        ? "\(name) is already attached."
+                        : "\(name) has the same contents as \(held.name), which is already attached.")
+            }
         }
         let unique = uniqueName(name)
         guard TaskAttachmentLimits.validName(unique) else {

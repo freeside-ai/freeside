@@ -94,6 +94,20 @@ public final class InboxStore {
     /// moves and releases ignore it (their loss only offers a harmless,
     /// idempotent verbatim resend on relaunch).
     public var pendingCommandsObserver: (() -> Bool)?
+    /// Keeps the bytes of the attachments a pending discuss command names
+    /// (#2995), so Retry can upload them again after a failed upload, a
+    /// lost response, or a relaunch. The coordinator wires it, as it wires
+    /// `pendingCommandsObserver`, to the store that keeps a task
+    /// submission's bytes.
+    struct PendingCommandAttachments {
+        /// Saves every digest's bytes, or keeps none and returns false.
+        let save: ([String: Data]) -> Bool
+        let load: (String) -> Data?
+        /// Deletes each digest no pending command or saved submission
+        /// names.
+        let release: (Set<String>) -> Void
+    }
+    var pendingCommandAttachments: PendingCommandAttachments?
     /// Reports every comprehension-telemetry mutation (an enqueue, or a drain
     /// that sent or dropped events) so the sync coordinator persists the queue
     /// and the registered-capability fingerprint as they change (plan §8). The
@@ -542,8 +556,15 @@ public final class InboxStore {
     /// failed, the just-claimed slot is rolled back and `notPersisted`
     /// returned; with no observer wired (a bare store in tests) there is
     /// no cache to gate on and the in-memory claim stands.
+    ///
+    /// `attachmentBytes`, the bytes of the attachments the command names,
+    /// are saved before the claim, so a recorded command never names bytes
+    /// that weren't written. Saving and claiming stay one synchronous step:
+    /// a release from another command's settling can't run between them and
+    /// delete bytes this command is about to name. Bytes with no attachment
+    /// store wired (a bare store) can't be kept, so the claim fails closed.
     public func registerPendingCommand(
-        _ command: Components.Schemas.ClientCommand
+        _ command: Components.Schemas.ClientCommand, attachmentBytes: [String: Data] = [:]
     ) -> PendingCommandRegistration {
         // Only decision commands use the per-item pending ledger; a
         // submit_task command binds to no item and is never registered here.
@@ -551,15 +572,27 @@ public final class InboxStore {
         guard pendingCommandsByItemID[itemID] == nil,
             !navigationReservations.contains(itemID)
         else { return .slotOccupied }
+        if !attachmentBytes.isEmpty {
+            guard let attachments = pendingCommandAttachments, attachments.save(attachmentBytes) else {
+                return .notPersisted
+            }
+        }
         pendingCommandsByItemID[itemID] =
             PendingCommandEntry(command: command, state: .inFlight)
         if let observer = pendingCommandsObserver, observer() == false {
             // The write failed and left disk untouched, so dropping the
             // in-memory entry restores the pre-claim state exactly.
             pendingCommandsByItemID[itemID] = nil
+            pendingCommandAttachments?.release(Set(attachmentBytes.keys))
             return .notPersisted
         }
         return .registered
+    }
+
+    /// The saved bytes of an attachment a pending command names; nil when
+    /// none were saved.
+    func pendingCommandAttachmentBytes(digest: String) -> Data? {
+        pendingCommandAttachments?.load(digest)
     }
 
     /// Moves the slot between in-flight and unresolved, only while it
@@ -577,10 +610,16 @@ public final class InboxStore {
     /// Clears the slot only while it still holds the command that
     /// settled: a late completion from an older replay must never
     /// release a newer command's slot.
+    /// Its attachment bytes go too, unless another pending command or a
+    /// saved task submission names them.
     public func clearPendingCommand(itemID: String, commandID: String) {
-        guard pendingCommandsByItemID[itemID]?.command.command_id == commandID else { return }
+        guard let entry = pendingCommandsByItemID[itemID], entry.command.command_id == commandID else { return }
         pendingCommandsByItemID[itemID] = nil
-        _ = pendingCommandsObserver?()
+        // A failed write leaves the cache naming this command, so a
+        // relaunch restores it; its bytes stay for that resend.
+        guard pendingCommandsObserver?() ?? true else { return }
+        let digests = entry.command.attachmentDigests
+        if !digests.isEmpty { pendingCommandAttachments?.release(digests) }
     }
 
     /// Restores a persisted ledger at relaunch (#115). Only empty slots

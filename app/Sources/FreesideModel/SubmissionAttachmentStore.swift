@@ -1,10 +1,11 @@
 import Foundation
 import FreesideAPI
 
-/// The bytes of attachments a saved, unconfirmed task submission names, by
-/// digest, so Retry can upload them again after a lost response or a
-/// relaunch (#2590). It holds nothing else: the coordinator deletes bytes as
-/// soon as no saved submission names them, so attachments are not cached
+/// The bytes of attachments a saved, unconfirmed task submission (#2590) or
+/// a pending discuss command (#2995) names, by digest, so Retry can upload
+/// them again after a failed upload, a lost response, or a relaunch. It
+/// holds nothing else: the coordinator deletes bytes as soon as no saved
+/// submission or pending command names them, so attachments are not cached
 /// long-term (plan §5.14).
 public protocol SubmissionAttachmentStore: Sendable {
     func save(digest: String, bytes: Data) throws
@@ -84,5 +85,17 @@ public final class InMemorySubmissionAttachmentStore: SubmissionAttachmentStore,
 
     public func storedDigests() -> Set<String> {
         lock.withLock { Set(bytesByDigest.keys) }
+    }
+}
+
+extension Components.Schemas.ClientCommand {
+    /// The digests of the attachments this command names: a task
+    /// submission's or a discuss message's; none for any other command.
+    var attachmentDigests: Set<String> {
+        switch payload {
+        case .submit_task(let payload): Set((payload.attachments ?? []).map(\.digest))
+        case .decision(let payload): Set(payload.attachments ?? [])
+        default: []
+        }
     }
 }
