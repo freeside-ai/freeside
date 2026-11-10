@@ -1,6 +1,6 @@
 # Tracker Comment Templates
 
-Three records an exit run writes on the tracker. The diagram follows
+Four records an exit run writes on the tracker. The diagram follows
 `docs/tracker-format.md` (§status) with Freeside's additions in
 docs/coordination.md (Tracking Issues); this file only fixes the section
 order so consecutive runs read alike. Replace every bracketed placeholder;
@@ -28,8 +28,9 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 | Step | Result |
 | --- | --- |
 | Rehearsal | <fixture pass: the pass's build SHA, and when the real run started from a newer tip, that SHA and the `scripts/runtime-diff.sh` verdict line; root; settings digest; canonical issue; task and run ids; `billable_cost`; record checks, alerts raised, lease released: passed or the finding> |
+| Seeded pass, <gate> | <the mechanism and its command; build SHA; root and each difference from the rehearsal, or the scenario's name; task and run ids; the record fields that show the response; `billable_cost`> |
 | State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
-| Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes> |
+| Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes; the iPhone's notifications switch: off, or on from `<time>` for <gate>> |
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
 | Campaign <n>, implementation attempt <k> | <run id; outcome; if failed, the finding and whether an item was raised> |
 | Review | <review id; model and reasoning; instruction digest; round outcomes> |
@@ -44,14 +45,26 @@ recorded before launch.
 
 | Gate | Trigger | Expected on Mac | Expected on iPhone | When | Result |
 | --- | --- | --- | --- | --- | --- |
-| <gate> | <real, synthetic, or none> | <expected> | <expected> | <point in the run> | <result> |
+| <gate> | <real, synthetic, seeded, or none> | <expected> | <expected> | <point in the run> | <result> |
+
+**Exit-proof unit (#<n>):** <each Acceptance line in its own words:
+evidenced by <row or record>, or not evidenced and why> ... The unit's
+checkboxes and state are untouched until the owner accepts the run.
 
 **Actions exercised on real items:** <action (card, device)> ...
 **Not evidenced this run:** <action: why; what covers it instead> ...
 **Synthetic-trigger proofs:** <alert: `freesided raise-item` command; item
-ID; what arrived and what the card showed, per device> ... These items were
-raised by command, not by the condition: they prove delivery and display,
-and the daemon's tests prove the condition raises the item.
+ID and its `status` in the task record, or for `stall` its listing in
+`freesided inspect health`; where the card showed and what it said,
+per device; the notification only where the gate expected one> ... These
+items were raised by command, not by the condition: they prove the item
+reaches the clients and how it displays, and the daemon's tests prove the
+condition raises the item.
+**Seeded-condition proofs:** <gate: the mechanism and its command; the
+pass it ran on; the record fields that show the response, such as a line's
+`passed_over` or a run's hold and reset> ... These conditions were seeded
+or injected, not produced by the provider: they prove what the daemon does
+once the condition holds.
 
 ### Findings
 
@@ -66,13 +79,13 @@ records it.
 
 - #<n>: <which stated outcome it contradicts, in one line>.
 
-| Issue | What's wrong | Sev | Lane | Disposition | Reason or trigger |
-| --- | --- | --- | --- | --- | --- |
-| #<n> | <one line> | P<1-3> | <lane> | Fixed in-run, PR #<n> | <why every run would hit it> |
-| #<n> | <one line> | P<1-3> | <lane> | Deferred, suggested to block on | <which stated outcome it contradicts> |
-| #<n> | <one line> | P<1-3> | <lane> | Deferred | <trigger that promotes it> |
-| #<n> | <one line> | P<1-3> | <lane> | Required (owner, <date>) | <which stated outcome it contradicts> |
-| #<n> | <one line> | P<1-3> | <lane> | Investigate (owner, <date>) | <what a proven gap would require> |
+| Issue | What's wrong | Sev | Disposition | Reason or trigger |
+| --- | --- | --- | --- | --- |
+| #<n> | <one line> | P<1-3> | Fixed in-run, PR #<n> | <why every run would hit it> |
+| #<n> | <one line> | P<1-3> | Deferred, suggested to block on | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | Deferred | <trigger that promotes it> |
+| #<n> | <one line> | P<1-3> | Required (owner, <date>) | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | Investigate (owner, <date>) | <what a proven gap would require> |
 
 Not filed: <symptom>, covered by #<n>; <symptom>, appears covered by #<n>,
 please confirm.
@@ -86,19 +99,20 @@ records the owner's Required and Investigate findings.>
 
 Prerequisites: <what is already merged; `main` at `<sha>`>.
 
-**Startable now (structural only):** <units, or why none is startable>.
+**Startable now (structural only):** <each unit as a bare `#N`, or
+`#N (contract)`; or why none is startable>.
 
-**Typed chains:** <every arrow is `starts-after` unless marked>. <lane
-group>: #a → #b → #c. <lane group>: ...
-
-**Cross-cutting gates:** <contract serialization; refute-first units;
-shared-file one-writer chains; the four-front cap>.
+**Typed chains:** <every arrow is `starts-after` unless marked>.
+#a → #b → #c; #d → #e. <Units with no relationship start freely and are
+not listed here.>
 
 **Critical path:** <chain>, <n> units.
 
-| Front | Lane labels | Independent territory | Coordination boundary |
-| --- | --- | --- | --- |
-| <front> | `lane:<x>` | <paths or surfaces> | <what stops it crossing> |
+**Landing order:** <each `merges-after` pair, which only the owner's
+approval order or `--order` enforces; or none>.
+
+**Tier A units:** <units on a Tier A path, which keep refute-first, a
+fresh-context review, and a decision note; or none>.
 
 ```mermaid
 flowchart LR
@@ -162,6 +176,47 @@ issue.> The tracker stays open.
 Resume after <condition>, using <the documented path>.
 ```
 
+## Exit-Preparation Comment (Mid-Wave Rehearsal)
+
+One comment per attempt, posted when the attempt ends, whether or not a
+pass completed (SKILL.md, A Mid-Wave Rehearsal).
+
+```markdown
+## Exit Preparation: Mid-Wave Rehearsal (#<unit>), Attempt <k>
+
+**<Bottom line: did a pass complete, and which of the unit's Acceptance
+lines does this attempt evidence, in two sentences.>** <What stopped it, or
+what needs an owner call.>
+
+Evidence basis: `main` at `<sha>`, the state root `<name>`, and the task
+record. No operator took part, and no unit issue's checklist was edited.
+
+### The Pass
+
+| Step | Result |
+| --- | --- |
+| Rehearsal | <as the exit-run comment's Rehearsal row; for an attempt that stopped, the step it reached and the refusal or error, verbatim> |
+| Seeded pass, <line> | <as the exit-run comment's Seeded pass row> |
+| Spend | <per role; total> |
+
+**Acceptance (#<unit>):** <each line in its own words: evidenced by <row
+or record>, not evidenced and why, or needs an owner call>.
+
+### Findings
+
+<The exit-run comment's Findings section, with the proposal.>
+
+### What I Verified And What I Didn't
+
+- Passed: <...>.
+- Checked: <...>.
+- Not run: <...>.
+```
+
+Record the owner's answer as a dated status revision under the bottom
+line: the pass accepted, and any Acceptance line the owner narrowed or
+moved to the exit proof.
+
 ## Tracker Body Update
 
 Make these edits to the body in the same operation as the comment, after
@@ -176,8 +231,8 @@ reading the current body:
   bullet's text and Evidence instead. A clean run adds no Exit bullet: the
   comment is the record, and the owner ticks the existing bullets.
 - Add the exit set, the findings the owner made Required or Investigate
-  before exit, to `## Units` as bare `- [ ] #<n>` lines under their lane
-  group. On a wave tracker, listing is half of scheduling (AGENTS.md Work
+  before exit, to `## Units` as bare `- [ ] #<n>` lines in its one flat
+  list. On a wave tracker, listing is half of scheduling (AGENTS.md Work
   Units): set the phase milestone on each in the same edit. An ad hoc
   tracker schedules nothing and sets no milestone. A `needs-human` finding
   in the exit set goes under `### Owner-run`, unmilestoned.

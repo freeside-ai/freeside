@@ -1,17 +1,18 @@
 ---
 name: exit-run
-description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive freesided deputy against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
+description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive freesided deputy against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to run a tracker's mid-wave rehearsal (the fixture pass alone), to re-run a prior exit run, or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
 ---
 
-# Exit Run (Spine)
+# Exit Run
 
-You are the spine role (AGENTS.md, Coordination). An exit run is the
-close-condition proof for a tracker: the production pipeline runs on a real
-issue in a real project, from the current default-branch tip, and the run's
-evidence and findings decide whether the tracker can close. This session
-owns the whole run: preparation, driving the deputy, collecting evidence,
-filing findings, proposing exit dispositions, and recording everything on the
-tracker. Three parties share it:
+An exit run is the close-condition proof for a tracker: the production
+pipeline runs on a real issue in a real project, from the current
+default-branch tip, and the run's evidence and findings decide whether the
+tracker can close. It starts by the owner's word, never by a label or a
+listing (AGENTS.md, Coordination Gates). This session owns the whole run:
+preparation, driving the deputy, collecting evidence, filing findings,
+proposing exit dispositions, and recording everything on the tracker.
+Three parties share it:
 
 - **You** drive the deputy and the forge, and write every record.
 - **The operator** does what needs a human or a physical device: pairs the
@@ -42,11 +43,16 @@ with the settings naming a manual-submission file). Read it from the tracker's E
 exit-gate comment, which may also pin daemon flags or target properties
 (`references/prior-runs.md` lists the ones past trackers required).
 
+`/exit-run <tracker> rehearsal`, or a rehearsal unit's number in place of
+the target, runs a mid-wave rehearsal instead: the fixture pass alone, with
+no target and no operator (A Mid-Wave Rehearsal).
+
 Every run has two passes on the same `freesided` build SHA, or on a
 newer one `scripts/runtime-diff.sh` carries the pass to: a fixture pass on
 Freeside's fixture repository (Rehearse Before The Operator), then the real
-run. Derive the exit contract (below), then state the derived mode, its
-reason, the expected spend of both passes, and every gate the contract
+run. A contract with a seeded-condition row can add a pass for it (A
+Seeded Pass). Derive the exit contract (below), then state the derived mode, its
+reason, the expected spend of every pass, and every gate the contract
 leaves without a trigger, and wait for the user's go-ahead before
 preflight: a run costs real money, opens a real PR on someone's
 repository, and takes the operator's afternoon, so a wrong reading should
@@ -62,15 +68,23 @@ order:
    Notes block. A tracker written before `docs/tracker-format.md` carries
    the close condition in its intro and the dispositions on its unit
    lines.
-2. Every prior exit-run comment on the same tracker, newest first. They
+2. The exit-proof unit, when the tracker has one. Wave planning lists
+   it under `### Owner-run`, and its Objective names this skill. Each of
+   its Acceptance lines is a row of the run record with its evidence
+   units. Its comments, and the status revisions on the tracker's
+   rehearsal comments, carry the owner calls made since planning (an
+   accepted rehearsal, a narrowed criterion). Where it and the tracker's
+   Exit section differ, say so in the go-ahead message; don't pick one.
+3. Every prior exit-run comment on the same tracker, newest first. They
    carry the gates still open, the evidence gaps a previous run left (an
    action nobody exercised on a real item, a check that ran as a no-op), and
    owner decisions that narrowed the remaining exit (for example "only a
    live Stop check remains").
-3. For a wave tracker, the plan §11 row and the internal-exit subsection its
+4. For a wave tracker, the plan §11 row and the internal-exit subsection its
    phase parenthetical names: the exit evaluation is written against those
-   elements, one row each.
-4. `references/prior-runs.md`, the digest of previous exit runs, and the
+   elements, one row each. A row the table marks as folded has no tracker;
+   its work is in the row that carries it.
+5. `references/prior-runs.md`, the digest of previous exit runs, and the
    latest two or three exit-run comments on other trackers: the tracker
    issues among
    `gh search issues --repo <owner/repo> "exit run" --sort updated`. The
@@ -90,9 +104,10 @@ target (#1275 is the precedent), or record the gate as not measurable,
 before the run rather than after.
 
 The **gate table** plans every check before launch, one row per gate the
-tracker's Exit section names (template in `references/checkpoints.md`):
+tracker's Exit section names and per Acceptance line of the exit-proof
+unit that no Exit bullet covers (template in `references/checkpoints.md`):
 the trigger, the expected result on the Mac and on the iPhone, and the
-point in the run where it must happen. A trigger is one of three things:
+point in the run where it must happen. A trigger is one of four things:
 
 - **A real condition the run produces:** the specification card, the
   published pull request and its ready card, the source-issue closure card
@@ -106,25 +121,51 @@ point in the run where it must happen. A trigger is one of three things:
   memory or this file; its help says which need a run (daemon/README.md,
   Operational Commands). The command raises the item each condition
   raises, on the run's own daemon. Mark each such row a
-  **synthetic-trigger proof**: it proves the item is delivered and shown,
-  and the Go tests, not the run, prove the condition raises it.
+  **synthetic-trigger proof**: it proves the item reaches the clients and
+  is shown, and the Go tests, not the run, prove the condition raises it.
+- **A seeded or injected condition:** for a gate whose real condition
+  would spend real allowance or can't be produced on demand (an exhausted
+  usage window, a provider's quota refusal). The gate or the exit-proof
+  unit names the mechanism, and daemon/README.md holds its command (Seed
+  An Exhausted Window For An Exit Run; Run A Scenario, which lists every
+  scenario and what it plays): read it on the run's build. The tracker says which gates the real run proves and which
+  a seeded pass proves; where it doesn't, ask before the go-ahead. Mark
+  each such row a **seeded-condition proof**: it proves what the daemon
+  does once the condition holds, not that the provider produces the
+  condition. A Seeded Pass (below) says how it runs.
 - **None.** A gate no real condition and no `raise-item` alert can reach
   goes into the contract and the go-ahead message as untriggered, with
   what would give it a trigger, before launch. Never discover it after.
+
+**What a row expects on a device** is the card, where the client shows it.
+A decision card is in the inbox, with the unviewed mark until someone opens
+it; the mark is daemon-held, so it agrees on both devices. A
+`system_health` finding, which `stall` and `held-work` raise, is in
+Settings > System Health and never in the inbox. A notification is expected
+only on a row whose gate names one. Device notifications are off until
+someone turns a device's switch on, the daemon then owes that device only
+the items opened afterwards, and only the iPhone listens (app/README.md,
+Phone Notifications). For such a row, plan the switch, the phone's ntfy
+subscription, and a test notification into the pairing checkpoint, ahead
+of the item. On every other row an item with no
+`deliveries` is the designed result, not a finding. Decision record:
+`devlog/2026-11-09-2328-exit-run-proves-cards.md`.
 
 The point in the run is **before the merge** for anything that needs the
 ready pull request open (an external review, a ready-card action), or
 **after the merge and the completion fact** for `review-growth`, which is
 refused until the run's work unit is recorded complete, and the alerts
-raised with it (Walk Through on Both Clients).
+raised with it (Walk Through on Both Clients). A seeded row's point is its
+seeded pass, or the rehearsal when its seed rides it.
 
 The closure card is **before the merge**, and first among those: under the
 human gate, the pull request stays a draft until the card is decided
 (docs/production-walkthrough.md, The Publication File And Work-Unit
-Declaration). The card is not in the task record, and until #2226 adds a
-read for it, its evidence is the client inbox card and the forge's draft
-read (docs/production-walkthrough.md, Walk Through, Merge, And Raise The
-Alerts).
+Declaration). The card is not in the task record's `items[]`: read it in
+the run's `closure_cards`, and in `freesided inspect proposals` while it is
+open (daemon/README.md, Read A Task's Record). The forge's draft read is
+the other half of its evidence (docs/production-walkthrough.md, Walk
+Through, Merge, And Raise The Alerts).
 
 ## Preflight (Stop on Failure)
 
@@ -265,9 +306,11 @@ bold; this section says what makes a pass count. Decision record:
    request yourself; the owner's merge rule covers real-work pull requests
    on real targets, and the fixture is reset before the next pass. After
    the completion fact, raise each alert the gate table triggers
-   synthetically. The run-bound alerts must show in `items[]`; record the
-   `stall` item's ID, which is its only proof on a root with no paired
-   device.
+   synthetically. The run-bound alerts must show in `items[]`, and the
+   `stall` item among `freesided inspect health`'s open items. On a root
+   with no paired device those reads are the only proof, so record each
+   run-bound item's ID and `status` from the task record, and the `stall`
+   item's ID from `inspect health`, where a listed item is an open one.
 7. **End it** (**End it before the real run**). The four record checks
    pass and the deputy exits 0 with the lease released. An abandoned lease
    is recovered with `rig recover` before the real run starts, and the
@@ -281,6 +324,75 @@ and run ids, `billable_cost`, and the result of the record checks, the
 alerts, and the lease release. A pass that fails is an Exit Preparation
 comment on the tracker with the defect filed, and no operator step happens
 until a later pass completes.
+
+### A Seeded Pass
+
+A seeded-condition row (Derive the Exit Contract) runs on a seeded pass: a
+fixture pass, or a scenario instance, with the condition seeded. A row
+that needs a person, or a driver other than the deputy, gets a pass of its
+own after the rehearsal completes, because the rehearsal stays unattended.
+A seed that needs neither may ride the rehearsal pass, as #2396's routing
+seed did, when every key of the fixture's table keeps its value.
+docs/production-walkthrough.md (Rehearse Before The Real Run, **A seeded
+pass**) holds the procedure; this says what makes one count.
+
+1. **The mechanism is the gate's**, run as daemon/README.md documents it
+   on this build. A gate that names a mechanism the build doesn't have is
+   an untriggered row, not something to approximate.
+2. **It changes only what the seed needs.** A pass on the deputy starts
+   from the fixture's settings on a fresh root, and its record names each
+   difference from the rehearsal (a second writer agent on a second pool,
+   for one). A scenario instance has no fixture settings; record its
+   scenario name and build.
+3. **The record shows the response, not the seed.** Read the fields the
+   gate names from the task record: a line's `passed_over` provenance for
+   routing, a run's hold and its reset for a park. The seeding command's
+   own output proves only that the seed was written.
+4. **A row that needs a device gets a checkpoint of its own**
+   (`references/checkpoints.md`, A Seeded Pass), with the clients paired
+   to that pass's daemon and the daemon left serving until the operator
+   has answered. Nothing is asked of the operator until the rehearsal has
+   completed and the environment checkpoint has passed.
+5. **A scenario's specification approval is a step of the pass.** The
+   `quota-park` scenario waits for one before the refusal plays, and
+   `freesided` has no command for it. In an exit run the operator approves
+   it in a paired client, as the first row of that checkpoint. A mid-wave
+   rehearsal has no operator: approve it through the client API on the
+   scenario's ephemeral instance, as #2396's fourth attempt did, and say
+   so in the record. That is no precedent for a card on a deputy pass or
+   a real run, where a card that needs a person stays a person's.
+
+Record each seeded pass as its own row of the run record, beside the
+Rehearsal row; a seed that rode the rehearsal is named in both rows.
+
+### A Mid-Wave Rehearsal
+
+A wave tracker can carry a rehearsal unit under `### Owner-run`: the
+fixture pass alone, on `main` partway through the wave, so a defect
+surfaces mid-wave and not at the exit run. It starts by the owner's word.
+Run this section's fixture pass, and any seeded pass the unit's Acceptance
+names, with these differences from an exit run:
+
+- **No real target and no operator.** There is no go-ahead on real spend
+  and no checkpoint. Preflight's checks of the real project don't apply,
+  and its exit set can't be resolved mid-wave; run `prelaunch` on the
+  pass's own root instead, and record the `main` SHA the pass builds.
+- **The contract is the unit's Acceptance list.** Say which line each
+  step evidences.
+- **Record every attempt when it happens**, as an Exit Preparation comment
+  on the tracker (`references/tracker-comment.md`), an attempt that stops
+  before a pass completes included. Of #2396's four attempts, the second
+  was recorded nowhere when it stopped and the third only on its defect's
+  issue, so the tracker learned of both from the fourth's comment.
+- **File findings and propose dispositions as a run does** (File Findings,
+  Propose Exit Dispositions), against this wave's tracker.
+- **The owner accepts the pass.** Leave the unit's checkboxes and state
+  alone, and report which Acceptance lines the record evidences and which
+  need an owner call. Record the owner's answer as a dated status revision
+  on the comment, any call that changes what the exit proof must show
+  included: the exit run's contract reads it there. Then, on the owner's
+  word, close the unit with a link to the comment and tick its Owner-run
+  entry, as for the exit-proof unit (Record on the Tracker).
 
 ## Run the Deputy
 
@@ -314,11 +426,15 @@ the operator.
 2. **Checkpoint: pairing and health.** Once the daemon is up, send the
    pairing list: pair both clients against the deputy's `api_url` (a fresh
    state root) or confirm both still reach the retained root's paired
-   endpoint. Start And Verify holds the code renewal, the test
-   notification you send once both report paired, and the health-item
-   resolution. Record a redacted receipt and which device paired, never
-   the code; each device's test-notification result; and each health
-   item's id and the action taken, or why an advisory item stays open.
+   endpoint. Start And Verify holds the code renewal, the notification
+   setup and its test, and the health-item resolution. Record a redacted
+   receipt and which device paired, never the code; whether the iPhone's
+   switch went on, for which gate, and its test notification's result; and
+   each health item's id and the action taken, or why an advisory item
+   stays open. Ask for the notification rows only when the gate table has
+   a row that expects a notification: a freshly paired phone can't receive
+   even the test until its switch is on and its ntfy app has subscribed to
+   the new topic.
    Before the first approval, the health read clears admission (Start And
    Verify's health paragraph) and the operator has synced the run's task
    on the iPhone, so the approval card is there to compare. A blocking
@@ -361,7 +477,8 @@ the operator.
    Through on Both Clients), not a checkpoint of its own. Record the draft
    state and the reference from the forge read before the decision and
    after it (docs/production-walkthrough.md, Walk Through, Merge, And Raise
-   The Alerts), beside the device and the decision.
+   The Alerts), beside the device and the card's `decision` from the run's
+   `closure_cards`.
 
 **One task per run.** Never resubmit. Each `submit` creates new work, and
 a relaunch that leaves a second task for the target puts a second card in
@@ -379,9 +496,10 @@ A defect that stops the run is a finding first: file it, then stop and
 report. Running this skill authorizes no implementation.
 
 - An in-run fix proceeds only when the owner assigns it in this session,
-  and it still passes the Coordination Gates (claims, `exclusive-with`,
-  contract serialization): a shared-package change is a contract unit even
-  when it is one line.
+  and it still passes the Coordination Gates (AGENTS.md): its own claim and
+  its `starts-after` prerequisites. A shared-package change is a contract
+  unit even when it is one line (AGENTS.md, Contract Changes), and a change
+  on a Tier A path keeps the Tier A bar (AGENTS.md, Assurance Tiers).
 - An assigned fix lands on its own branch and PR from the current tip and
   is verified before the run resumes. The run record marks the finding
   **Fixed in-run** only when the fix is merged and the exercised runtime
@@ -412,13 +530,16 @@ this section says what to ask, what counts, and what to record.
 and spend come from the task record (daemon/README.md, Read A Task's
 Record): each item's `status`, `conclusion`, and per-device `deliveries`,
 the task `timeline`, and each run's `conclusion` and `billable_cost`; the
-follow snapshot adds the derived state. The closure card is the exception:
-it is not in `items[]`, so the operator's inbox report and the forge's
-draft read are its record (Derive the Exit Contract). Ask the operator only
-what a screen shows. On the Mac, prefer a window capture through computer
-use when the operator has granted it: an agent can drive a card's buttons
-without the pointer, but the card's More Actions menu and the menu-bar
-Start and Stop need full-screen control (#1988). On the iPhone, the
+follow snapshot adds the derived state. Two kinds of item sit outside
+`items[]`: the closure card, which is in the run's `closure_cards` (Derive
+the Exit Contract), and a `system_health` finding that names the daemon,
+such as the `stall` notice, which is in `freesided inspect health`. Ask the
+operator only what a screen shows. On the Mac, prefer a window capture
+through computer use when the operator has granted it: an agent can drive
+a card's buttons without the pointer, but the card's More Actions menu
+needs full-screen control. `prod`'s Start and Stop have a command, which is
+the operator's to run (app/README.md, Control The Supervised Daemon From A
+Command). On the iPhone, the
 operator's screenshot is the evidence, requested in the checkpoint list,
 never one question at a time. So:
 
@@ -452,14 +573,17 @@ never one question at a time. So:
 - After the merge, record the completion fact and the resolved ready item.
 - Then, while the run's daemon still serves, raise each alert the gate
   table triggers, as the walkthrough's alert step says (commands in
-  daemon/README.md, Operational Commands), and record each item ID and
-  each run-bound item's `deliveries`. Then send the **post-merge alerts**
-  checkpoint list: the operator reports, per alert and per device, what
-  the notification and the card show, and you record the item ID beside
-  each report. Every one of these is a synthetic-trigger proof and the
-  record says so: nothing stalled, nothing was held, and no review round
-  stands behind the review card, so the operator reads the cards and
-  decides nothing on them. A refusal is a finding, not something to work
+  daemon/README.md, Operational Commands), and record each item ID, each
+  run-bound item's `status` and `deliveries` from the task record, and the
+  `stall` item's listing among `inspect health`'s open items. Then send
+  the **post-merge alerts** checkpoint list: the operator reports, per
+  alert and per device, where the card shows and what it says, and you
+  record the item ID beside each report. A notification is part of the
+  report only on a row that expects one (Derive the Exit Contract). Every
+  one of these is a synthetic-trigger proof and the record says so:
+  nothing stalled, nothing was held, and no review round stands behind
+  the review card, so the operator reads the cards and decides nothing on
+  them. A refusal is a finding, not something to work
   around. `TestRaiseItemSequenceSurvivesCompletionSweep` in
   `daemon/cmd/freesided/raise_item_test.go` runs the README block's order
   on a completed fixture run through the completion sweep and a delivery
@@ -489,20 +613,24 @@ contract someone can pick up by fiat.
   comment there, not a duplicate. A finding an open issue already covers is
   listed as "not filed, covered by #N" in the tracker comment so the reader
   can check the claim.
-- **Labels:** `deferral` as the origin label, plus `lane:*` from the unit's
-  declared paths via the canonical lane table (docs/coordination.md) and
-  `kind:*` per type. A shared-package change is `kind:contract` and
-  `lane:spine`. No milestone on an ad hoc tracker's findings; on a wave
-  tracker the spine assigns it at scheduling, not here. A finding only the
-  maintainer can act on (a credential, a repository setting, GitHub App
-  administration) gets `needs-human` and no lane label instead
-  (docs/coordination.md, Deferral escalation); it is never milestoned or
-  listed as a schedulable unit, whatever its exit disposition, and the
-  comment's table is where its disposition lives.
-- **Dependencies:** record typed relationships in the issue's Dependencies
-  field when the finding depends on another unit or shares its files. The
-  tracker comment's chains are derived from these fields, so a relationship
-  that exists only in the comment is a repair waiting to happen.
+- **Labels:** `deferral` as the origin label, plus one `kind:*` label by
+  the work's nature (docs/coordination.md, Deferral Escalation); a
+  shared-package change is `kind:contract`. No milestone at filing, on
+  either kind of tracker: a finding joins the unscheduled queue, and one
+  the owner adopts into a wave tracker's exit set gets its milestone with
+  its listing (Record on the Tracker). A finding only the maintainer can
+  act on (a credential, a repository setting, GitHub App administration)
+  gets `needs-human` (docs/coordination.md, Deferral Escalation); it is
+  never milestoned or listed as a schedulable unit, whatever its exit
+  disposition, and the comment's table is where its disposition lives.
+- **Dependencies:** record a typed relationship in the issue's
+  Dependencies field only where the finding's fix must be written against
+  another unit's result (AGENTS.md, Coordination, rule 3). Sharing files
+  with another unit gets no edge; that resolves at landing. The field
+  takes one parseable shape, and a finding with no relationship gets a
+  bare `none` (docs/coordination.md, Work-Unit Issues). The tracker
+  comment's chains are derived from these fields, so a relationship that
+  exists only in the comment is a repair waiting to happen.
 - **Severity and exit disposition are separate.** State severity (P1 to
   P3) from the defect's reach in the issue's Objective and in the tracker
   table; the template has no severity field and status labels are not
@@ -510,7 +638,7 @@ contract someone can pick up by fiat.
 - **In-run fixes** are still findings: file the issue, link the PR, mark it
   fixed in the table.
 - **Deputy and exercise defects** (the deputy command, its settings, the
-  walkthrough procedure) are findings too, labeled by their lane. A
+  walkthrough procedure) are findings too, labeled like any other. A
   procedure that lost evidence is a defect in the procedure, not operator
   error; say so and file it.
 - **Keep private material out.** No pairing codes, credentials, device
@@ -562,23 +690,30 @@ note.
 
 - **Bottom line first:** can the tracker close, and if not, what stands
   between here and closure, in two sentences.
-- **Run record** as a table: the fixture pass, state root, clients and
-  their commit, each campaign and attempt with its result, review, task
-  record, spend, PR, base and head.
+- **Run record** as a table: the fixture pass, each seeded pass, state
+  root, clients and their commit, each campaign and attempt with its
+  result, review, task record, spend, PR, base and head.
 - **Gate table** from the contract, each row with its result.
+- **Exit-proof unit**, when the tracker has one: one line per Acceptance
+  line, saying what evidences it or why it isn't evidenced.
 - **Actions exercised** on real items, per device, and the ones not
   evidenced with why.
 - **Synthetic-trigger proofs**, apart from the real items: per raised alert,
-  the command, the item ID, and what each device received.
-- **Findings table:** issue, what's wrong, severity, lane, disposition,
-  reason or trigger, with the suggested-to-block-on group above it.
+  the command, the item ID, and where each device showed the card.
+- **Seeded-condition proofs**, apart from both: per seeded row, the
+  mechanism, the pass it ran on, and the record fields that show the
+  response.
+- **Findings table:** issue, what's wrong, severity, disposition, reason
+  or trigger, with the suggested-to-block-on group above it.
 - **Start order** for the exit set the owner adopted (Required and
   Investigate before exit; a diagnosis must finish before closure). A
   proposal has no exit set, so add this section with the status revision
-  that records the owner's answer: Startable now, typed chains,
-  cross-cutting gates (contract serialization, refute-first, four-front
-  cap), critical path, parallel lanes, and the Mermaid diagram. Derive it
-  from the issues' Dependencies fields.
+  that records the owner's answer: Startable now, typed chains, the
+  critical path, each `merges-after` pair the owner has to order at
+  landing, the units that carry the Tier A bar, and the Mermaid diagram.
+  Derive it from the issues' Dependencies fields. Propose no phases,
+  groups, or concurrency limits: units start freely (AGENTS.md,
+  Coordination), and a contract unit takes no place in any order.
 - **What was verified and what wasn't,** in `Passed:`, `Checked:`,
   `Not run:` form, including any evidence caveat (a store edit, a device
   that wasn't available).
@@ -593,7 +728,9 @@ as one edit. On a wave
 tracker a listed unit needs the phase milestone in the same edit
 (milestone and listing publish together, AGENTS.md Work
 Units), so a finding the owner defers stays off that list with its
-`deferral` label. Read the body first and preserve
+`deferral` label. That listing is the planner's scheduling write; this
+session makes it only for the exit set the owner adopted, and schedules
+nothing else. Read the body first and preserve
 everything else (AGENTS.md, Forge Edits). Verify both saved results. From
 then on the body is the live projection: merge cleanup (AGENTS.md, Merge
 Cleanup) refreshes the body, not this comment. The comment is the dated
@@ -602,6 +739,16 @@ owner's adopted dispositions, or an owner decision that changes its order,
 goes in as a dated status revision at the top. A rerun posts its own
 comment under its own run label and leaves the earlier ones untouched, so
 the derivation step can read every prior run newest first.
+
+The exit-proof unit is the owner's to close. Leave its checkboxes and
+state alone when the comment is posted: the comment's Exit-proof unit
+lines are the proposal. Once the owner accepts the run, and on the owner's
+word, tick the Acceptance lines the run evidenced, close the unit with a
+comment that links the exit-run comment, and tick its entry under
+`### Owner-run` in the tracker body: no merge closes an owner-run unit, so
+merge cleanup never ticks it. Fold that into the dispositions' body edit
+when there is one. A line the run didn't evidence stays unticked and the
+unit stays open.
 
 ## Close Out
 
@@ -615,7 +762,11 @@ the derivation step can read every prior run newest first.
   status never goes in a note.
 - Report to the user: whether the tracker can close, the exit set with
   its critical path, what waits on the owner, and what waits on the
-  operator. Do not claim, start, or plan any unit; `Plan #N` and
+  operator. Name every exit-set unit whose Dependencies carry
+  `merges-after`, with its prerequisite: no tool reads that relation at
+  landing, so it holds only through the order the owner approves or types
+  (docs/coordination.md, Relationship Types). Do not claim, start, or plan
+  any unit; `Plan #N` and
   `Handle #N` are the owner's.
 - Suggest a fresh session for the follow-up units. This session's context
   is the run; the fix sessions need the issues.
@@ -633,9 +784,11 @@ win when this skill or its references disagree with them:
   and the task record's fields: daemon/README.md, under Run Real Work With
   The Deputy, Run The Pre-Spend Checks Before A Launch, Operational
   Commands, and Read A Task's Record.
+- Seeding a condition: daemon/README.md, under Seed An Exhausted Window
+  For An Exit Run and Run A Scenario.
 - The Stop check: docs/task-cancellation-check.md.
-- The tracking-issue format and the lane table: docs/coordination.md and
-  docs/tracker-format.md.
+- The tracking-issue format and a finding's labels: docs/coordination.md
+  (Tracking Issues, Deferral Escalation) and docs/tracker-format.md.
 - The Forge Edits and label rules: AGENTS.md.
 
 `references/checkpoints.md` restates this skill's operator steps as lists;
