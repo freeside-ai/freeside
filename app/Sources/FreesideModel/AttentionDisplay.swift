@@ -814,7 +814,12 @@ package enum AttentionDisplay {
         _ admitted: Components.Schemas.InvocationAdmissionFacts?
     ) -> [FactRow] {
         guard let admitted else { return [] }
-        return RunDisplay.profileRows(admitted).map { .init($0.label, $0.value) }
+        // The enrollment and selection digest are identifiers, so they render
+        // monospaced like the card's Invocation row.
+        let identifiers: Set = ["Enrollment", "Selection"]
+        return RunDisplay.profileRows(admitted).map {
+            .init($0.label, $0.value, monospaced: identifiers.contains($0.label))
+        }
     }
 
     static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {

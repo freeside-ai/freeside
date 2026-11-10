@@ -334,8 +334,8 @@ import Testing
     @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
         let expected: [Components.Schemas.AttentionType: [String]] = [
             .execution_failure: [
-                "Outcome", "Cause", "Stage", "Invocation", "Harness", "Model", "Effort", "Cost Owner",
-                "Credential Mode", "Egress Profile", "Isolation Class",
+                "Outcome", "Cause", "Stage", "Invocation", "Harness", "Model", "Effort", "Enrollment",
+                "Selection", "Cost Owner", "Credential Mode", "Egress Profile", "Isolation Class",
             ],
             .review_diminishing_returns: ["Cost so Far", "Diff Growth"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
@@ -410,15 +410,19 @@ import Testing
 
     @Test func typedLeadsRenderTheirDaemonValues() {
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        let failureFacts = AttentionDisplay.cardFacts(
+            AttentionFixtures.fixture(type: .execution_failure).item, now: now)
         #expect(
-            AttentionDisplay.cardFacts(
-                AttentionFixtures.fixture(type: .execution_failure).item, now: now
-            ).map(\.value)
+            failureFacts.map(\.value)
                 == [
                     "Failed", "Invalid configuration", "Implementation", "inv-execution_failure", "Claude Code",
-                    "claude-opus-5-5", "High", "platform-team", "Subscription, contained", "Provider only",
+                    "claude-opus-5-5", "High", "anthropic-a/claude_code", "sha256:eeeeeeeeeeee…",
+                    "platform-team", "Subscription, contained", "Provider only",
                     "Fresh VM, read-only volume handoff",
                 ])
+        // The identifiers render monospaced, the admission's other facts plain.
+        #expect(
+            failureFacts.filter(\.monospaced).map(\.label) == ["Invocation", "Enrollment", "Selection"])
         // An item raised before the daemon recorded its admission shows only
         // the failure's own facts.
         var unrecorded = AttentionFixtures.fixture(type: .execution_failure).item
