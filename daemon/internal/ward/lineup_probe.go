@@ -420,18 +420,8 @@ func (r *lineupProbeRun) probe(ctx context.Context, p LineupProbe) (LineupProbeO
 	if err != nil {
 		return LineupProbeOutput{}, fmt.Errorf("inspect lineup probe network: %w", err)
 	}
-	// The gate trusts nothing a Runtime returns, so the network is attested
-	// host-only here rather than assumed from how CreateNetwork made it.
-	if report.Name != r.network {
-		return LineupProbeOutput{}, errors.New("lineup probe network inspection identified the wrong network")
-	}
-	if report.Mode != NetworkHostOnly {
-		return LineupProbeOutput{}, errors.New("lineup probe network is not host-only")
-	}
-	if r.networkObj.fingerprint, err = ownedFingerprint(
-		report.CreationDate, report.Labels, report.LabelsObserved, r.owner,
-	); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("lineup probe network ownership: %w", err)
+	if r.networkObj.fingerprint, err = attestHostOnlyNetwork(report, r.network, r.owner, "lineup probe"); err != nil {
+		return LineupProbeOutput{}, err
 	}
 	r.proxy, err = startConnectProxy(
 		context.WithoutCancel(ctx), report.IPv4Gateway, report.IPv4Subnet,

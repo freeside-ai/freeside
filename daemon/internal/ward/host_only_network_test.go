@@ -52,3 +52,25 @@ func TestAttestHostOnlyNetwork(t *testing.T) {
 		t.Fatalf("fingerprint = %q, want the creation date %q", fingerprint, good.CreationDate)
 	}
 }
+
+// TestObserveCodexReviewNetworkRefusesAnUnfingerprintedNetwork pins the one
+// network refusal ObserveCodexReviewNetwork adds after the shared check: a
+// runtime that reports no creation date passes attestHostOnlyNetwork with an
+// empty fingerprint, and the Codex observation still refuses it.
+func TestObserveCodexReviewNetworkRefusesAnUnfingerprintedNetwork(t *testing.T) {
+	t.Parallel()
+	cfg, req := testCodexReview(t)
+	owner := testOwnershipLabel()
+	report := NetworkReport{
+		NetworkSummary: NetworkSummary{
+			Name: codexReviewNetworkName(req.RunID), Mode: NetworkHostOnly,
+			Labels: []Label{owner}, LabelsObserved: true,
+		},
+		IPv4Gateway: "127.0.0.1", IPv4Subnet: "127.0.0.0/24",
+	}
+	_, err := ObserveCodexReviewNetwork(cfg, req.RunID, owner, report)
+	var cf *ConformanceFailure
+	if !errors.As(err, &cf) || cf.Check != CheckAgentEgress {
+		t.Fatalf("Observe = %v, want a %s conformance failure", err, CheckAgentEgress)
+	}
+}
