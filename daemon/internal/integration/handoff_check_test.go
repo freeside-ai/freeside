@@ -501,6 +501,61 @@ func TestHandoffDoesNotReresolveAnAdvanceAfterTheSeal(t *testing.T) {
 	}
 }
 
+// TestHandoffRecoversAPublicationAgainstTheSealedTip: a process stopped right
+// after the publication effect, at a target that advanced before the handoff,
+// resumes through the recovery branch. The recovered candidate binds the
+// sealed tip, so the policy-approved close, bound to the merge into that tip,
+// still renders, and the pass converges on the one ref and PR the interrupted
+// pass published without rewriting its body.
+func TestHandoffRecoversAPublicationAgainstTheSealedTip(t *testing.T) {
+	t.Parallel()
+	source := engine.ProductionPublication{SourceIssue: "https://github.com/" + fakePublicationRepo + "/issues/82"}
+	h := newPublicationHarnessWithBaseFiles(
+		t, []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`), productionBaseManifests())
+	p := newProductionPublicationHarnessWithMetadata(t, h, "", nil, nil, nil, source, nil, "")
+	output, err := json.Marshal(map[string]any{
+		"title": "Authored PR title", "body": "## Why\n\nAuthored body prose.\n\n## What\n\n- Handle empty input.",
+		"reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Reported checks passed.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+	explain := inferencefake.Script{Response: inference.Response{Output: output, ComputeUnits: 5}}
+	propose := inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}}
+	scriptPublicationSites(t, p, explain, &propose)
+	p.startAndRecordExport(t)
+	advanced, reviews := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterPublication: func() error { return errors.New("stop after the publication effect") },
+	}, true)
+	if result, err := p.reconcileLanes(); err == nil {
+		t.Fatalf("publication seam did not interrupt the pass: %#v", result)
+	}
+	interrupted := p.forge.PullRequests()
+	if len(interrupted) != 1 || !strings.Contains(interrupted[0].Body, "Closes #82") {
+		t.Fatalf("interrupted pass did not publish the policy-approved close: %d PRs", len(interrupted))
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.reconcileUntilReady(t, 3)
+
+	p.assertHandoffVerified(t, advanced)
+	p.assertReviewedOnce(t, reviews)
+	p.assertReadyDetailNamesHandoff(t, advanced, p.handoffCheck(t).Merge.MergeSHA)
+	// Recovery verifies nothing and builds no merge: it binds the check the
+	// interrupted pass sealed.
+	if p.room.runs != 2 || p.transport.MergeCount() != 1 {
+		t.Fatalf("verification runs = %d, merges = %d, want 2 and 1",
+			p.room.runs, p.transport.MergeCount())
+	}
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
+		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
+	}
+	if recovered := p.forge.PullRequests()[0]; recovered.Body != interrupted[0].Body {
+		t.Fatalf("recovery rewrote the published body:\n%s\nwant:\n%s", recovered.Body, interrupted[0].Body)
+	}
+}
+
 // TestHandoffTipIsBoundToItsOwnAudit: the sealed check names the audit row
 // its tip came from, an audit of the run's own target ref (#2073). An audit
 // of another ref of the same repository, recorded after the seal at another
