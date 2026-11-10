@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -120,7 +121,7 @@ func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testi
 
 func TestStoreAdmissionAuthorityRejectsMissingSpecificationMarker(t *testing.T) {
 	t.Parallel()
-	st, _, _, _ := deliveryValidatorFixture(t, true)
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	authority := storeAdmissionAuthority{store: st}
 	specification, err := authority.authenticateSpecificationInvocation(
 		t.Context(), "inv-specify-run-missing-2", domain.ExecutionAdmission{

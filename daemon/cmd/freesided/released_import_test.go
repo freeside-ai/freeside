@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,30 +13,17 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
-	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	root := t.TempDir()
-	work, policyFile, publicationFile := writeSubmissionInputs(t, root)
-	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "freeside.db"), TaskPath: work,
-		PolicyPath: policyFile, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationFile, ProjectID: "released-import",
-	}
-	seedTemplateStore(t, cfg.DBPath)
-	submitted, err := runSubmitCommand(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
 	health := domain.BackupHealth{
 		Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
 		ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
 	}
-	st := storetest.Open(t, cfg.DBPath, store.Options{
+	fixture := newSubmissionFixture(t, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
@@ -46,34 +32,11 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 			return health, nil
 		}),
 	})
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var submittedPolicy domain.ResolvedPolicy
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		submittedPolicy, err = tx.GetResolvedPolicy(ctx, submitted.SpecificationRunID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	policy, err := domain.NewResolvedPolicy("released-production", submittedPolicy.Keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	production, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
-		RunID: policy.RunID, ProjectID: submitted.ProjectID,
-		SpecArtifactID: submitted.SourceArtifactID, PolicyArtifactID: submitted.SpecificationPolicyArtifactID,
-		ResolvedPolicy: policy,
-		Publication: engine.ProductionPublication{
-			Title: "Recover the result", Body: "## Why\n\nRecover completed work.\n",
-			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
-		},
+	st, blobs := fixture.Store, fixture.Blobs
+	production := fixture.SubmitProduction(t, "released-production", engine.ProductionPublication{
+		Title: "Recover the result", Body: "## Why\n\nRecover completed work.\n",
+		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: "example/repo", RepositoryID: 44,
 		PRExecution: domain.PRExecutionAuditedSameRepo, CandidateAutomationChanges: domain.AutomationChangesBlocked,
@@ -154,7 +117,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	resolver := &countingProductionCommitAuthorResolver{identity: publish.AppBotIdentity{AppSlug: "freeside-test", BotUserID: 12345}}
+	resolver := &countingProductionCommitAuthorResolver{Identity: publish.AppBotIdentity{AppSlug: "freeside-test", BotUserID: 12345}}
 	authority := storeAdmissionAuthority{store: st, blobs: blobs, allowedPaths: []string{"daemon/**"}, commitAuthors: resolver}
 	spec := exec.StartSpecFromAdmission(admission)
 	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
@@ -172,7 +135,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(opts.Policy.Allowlist, authority.allowedPaths) {
 		t.Fatalf("current import options = %#v, %v", opts, err)
 	}
-	if resolver.revalidateCalls == 0 {
+	if resolver.RevalidateCalls == 0 {
 		t.Fatal("current import omitted live author revalidation")
 	}
 	authority.allowedPaths = []string{"different/**"}
