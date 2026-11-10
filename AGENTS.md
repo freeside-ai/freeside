@@ -513,20 +513,25 @@ directory named before it in the same bullet. All under `daemon/`:
   verification executor's backend and its declaration),
   `internal/engine/host_verification_admission.go` (admits a verification
   job onto the host executor and never a ward role),
-  `cmd/freesided/macverify_executor.go` (builds the host executor and
-  chooses the durable proof it declares from),
+  `cmd/freesided/macverify_executor.go` (parses the host executor's
+  flags), `internal/daemoncompose/macverify_executor.go` (builds the host
+  executor and chooses the durable proof it declares from),
   `internal/domain/wardless_admission.go`,
   `internal/domain/agent_selection.go` (the served-tuple rule admission
   enforces when it resolves a selection), `internal/admissionauth/`
   (the admission and import authority, which re-checks a recorded
   admission, its path policy, its specification or production marker, and
   its commit author before the driver starts or imports, and its trust
-  profile at import), `cmd/freesided/claude_driver.go` (the daemon's GitHub
-  wiring: the keystore, minter, janitor, and the publish, follow-up-filing,
-  and issue-read token sources),
-  `cmd/freesided/agent_selection.go` (writes the adapter conformance
-  record that admission's launch-coverage step reads, and binds the
-  proof's launch to a generation's credential volume),
+  profile at import), `internal/daemoncompose/claude_driver.go` (the
+  daemon's GitHub wiring: the keystore, minter, janitor, and the publish,
+  follow-up-filing, and issue-read token sources),
+  `internal/daemoncompose/agent_selection.go` (writes the adapter
+  conformance record that admission's launch-coverage step reads, and
+  binds the proof's launch to a generation's credential volume),
+  `internal/daemoncompose/agent_cutover.go` (`reviewCredential` reads the
+  setup token a review admission runs with),
+  `internal/daemoncompose/auth_adopt.go` (`ValidReviewLaunchModel`, the
+  model shape a review admission accepts),
   `internal/exec/claude/spec.go` (the credential mount),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
   `internal/exec/capability.go`, and the `CredentialMode` and
@@ -660,8 +665,9 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/domain/codex_reenrollment_recovery.go`,
   `internal/domain/generation_integrity.go`,
   `internal/signet/codex_reenrollment_recovery.go`,
-  `internal/operations/credential_integrity.go`, and in `cmd/freesided/`
-  the files `auth*.go`, `credential_*.go`, `judgment_credential.go`,
+  `internal/operations/credential_integrity.go`,
+  `internal/daemoncompose/judgment_credential.go`, and in
+  `cmd/freesided/` the files `auth*.go`, `credential_*.go`,
   `enroll_codex.go`, and `renew_codex.go`.
 - **Backups that carry credentials and restores that replace data:**
   `internal/store/backup.go`, `internal/store/local_backup*.go`,
