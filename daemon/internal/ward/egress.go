@@ -677,6 +677,30 @@ func (b *Backend) realizedAllowlist(hs HandoffSpec, proxy *connectProxy) ([]stri
 	return allowlist, nil
 }
 
+// attestHostOnlyNetwork checks a fresh inspection of a network this
+// invocation just created: the report names the network, its mode is
+// host-only, and it carries the invocation's ownership label. The gate
+// trusts nothing a Runtime returns, so a caller attests the network here
+// rather than assuming it from how CreateNetwork made it. Every refusal is
+// a ConformanceFailure for CheckAgentEgress whose reason starts with label.
+//
+// It returns the ownership fingerprint: the creation date, empty when the
+// runtime reports none, in which case the ownership label is the whole
+// evidence. A caller that needs a non-empty fingerprint refuses "" itself.
+func attestHostOnlyNetwork(report NetworkReport, name string, owner Label, label string) (string, error) {
+	if report.Name != name {
+		return "", failf(CheckAgentEgress, "%s network inspection identified the wrong network", label)
+	}
+	if report.Mode != NetworkHostOnly {
+		return "", failf(CheckAgentEgress, "%s network is not host-only", label)
+	}
+	fingerprint, err := ownedFingerprint(report.CreationDate, report.Labels, report.LabelsObserved, owner)
+	if err != nil {
+		return "", failw(CheckAgentEgress, err, "%s network ownership is unproven: %v", label, err)
+	}
+	return fingerprint, nil
+}
+
 // prepareProviderEgress creates the run's host-only network and starts its
 // proxy. The returned allowlist is the proxy's own, already checked against
 // the requested profile.
@@ -691,15 +715,9 @@ func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, nam
 	if err != nil {
 		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "inspect provider network: %v", err)
 	}
-	if report.Name != names.Network {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network inspection identified the wrong network")
-	}
-	if report.Mode != NetworkHostOnly {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network is not host-only")
-	}
-	st.network.fingerprint, err = ownedFingerprint(report.CreationDate, report.Labels, report.LabelsObserved, st.ownershipLabel)
+	st.network.fingerprint, err = attestHostOnlyNetwork(report, names.Network, st.ownershipLabel, "provider")
 	if err != nil {
-		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "provider network ownership is unproven: %v", err)
+		return NetworkReport{}, "", nil, err
 	}
 	proxy, err := startRegistryConnectProxy(
 		ctx,

@@ -337,9 +337,11 @@ func lineupProbeOption(flag, value string) string {
 // and host-only before its CONNECT proxy starts, a proxy that admits only the
 // credential's provider endpoint, and a container verified against its spec
 // before it starts, given its credential once it runs, and exported once it
-// stops on its own. Every object it creates carries a fresh ownership label
-// and is removed before it returns. authorize, when set, grants the container
-// and network names before either is created, as preflight's helpers do.
+// stops on its own within its memory limit; a memory-limit kill returns the
+// helper role runner's *MemoryLimitError. Every object it creates carries a
+// fresh ownership label and is removed before it returns. authorize, when
+// set, grants the container and network names before either is created, as
+// preflight's helpers do.
 func ProbeLineupImage(
 	ctx context.Context, rt Runtime, p LineupProbe, authorize RuntimeResourceAuthorizer,
 ) (LineupProbeOutput, error) {
@@ -420,18 +422,8 @@ func (r *lineupProbeRun) probe(ctx context.Context, p LineupProbe) (LineupProbeO
 	if err != nil {
 		return LineupProbeOutput{}, fmt.Errorf("inspect lineup probe network: %w", err)
 	}
-	// The gate trusts nothing a Runtime returns, so the network is attested
-	// host-only here rather than assumed from how CreateNetwork made it.
-	if report.Name != r.network {
-		return LineupProbeOutput{}, errors.New("lineup probe network inspection identified the wrong network")
-	}
-	if report.Mode != NetworkHostOnly {
-		return LineupProbeOutput{}, errors.New("lineup probe network is not host-only")
-	}
-	if r.networkObj.fingerprint, err = ownedFingerprint(
-		report.CreationDate, report.Labels, report.LabelsObserved, r.owner,
-	); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("lineup probe network ownership: %w", err)
+	if r.networkObj.fingerprint, err = attestHostOnlyNetwork(report, r.network, r.owner, "lineup probe"); err != nil {
+		return LineupProbeOutput{}, err
 	}
 	r.proxy, err = startConnectProxy(
 		context.WithoutCancel(ctx), report.IPv4Gateway, report.IPv4Subnet,
@@ -447,42 +439,25 @@ func (r *lineupProbeRun) probe(ctx context.Context, p LineupProbe) (LineupProbeO
 		Labels:  slices.Clone(r.labels), Network: r.network,
 		Size: DefaultLaunchSize(LaunchReview),
 	}
-	r.container.attempted = true
-	if err := r.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("create lineup probe container: %w", err)
-	}
-	r.container.owned = true
-	rep, err := r.rt.Inspect(ctx, r.name)
-	if err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("inspect lineup probe container: %w", err)
-	}
-	if r.container.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, r.owner); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("lineup probe container ownership: %w", err)
-	}
-	if err := verifyAgentAllowlist(rep, spec); err != nil {
+	// readProof is the runner's one step between the stop and the delete,
+	// so it carries the export; the output leaves through out, and the
+	// runner gets no proof bytes to judge.
+	var out LineupProbeOutput
+	if err := r.ops.runHelperRole(ctx, helperRole{
+		spec: spec, label: "lineup probe container", claim: &r.container, owner: r.owner,
+		check: CheckTeardown, class: LaunchReview, timeout: lineupProbeTimeout,
+		verify:     func(rep InspectReport) error { return verifyAgentAllowlist(rep, spec) },
+		afterStart: func(ctx context.Context) error { return r.deliver(ctx, p.Credential) },
+		readProof: func(ctx context.Context) ([]byte, error) {
+			var err error
+			out, err = r.collect(ctx, p.outputCap())
+			return nil, err
+		},
+	}); err != nil {
 		return LineupProbeOutput{}, err
 	}
-	if err := r.rt.StartContainer(ctx, r.name); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("start lineup probe container: %w", err)
-	}
-	if err := r.deliver(ctx, p.Credential); err != nil {
-		return LineupProbeOutput{}, err
-	}
-	if err := r.ops.waitStopped(ctx, r.name, r.container, r.owner, lineupProbeTimeout); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("lineup probe container: %w", err)
-	}
-	out, err := r.collect(ctx, p.outputCap())
-	if err != nil {
-		return LineupProbeOutput{}, err
-	}
+	// The container has stopped, and the proxy stays open until teardown.
 	out.ProviderReached = !r.proxy.LastProviderByte().IsZero()
-	if err := r.rt.DeleteContainer(ctx, r.name); err != nil {
-		return LineupProbeOutput{}, fmt.Errorf("delete lineup probe container: %w", err)
-	}
-	if err := r.ops.verifyContainerAbsent(ctx, r.name, r.container, r.owner, CheckTeardown); err != nil {
-		return LineupProbeOutput{}, err
-	}
-	r.container = objectClaim{}
 	return out, nil
 }
 

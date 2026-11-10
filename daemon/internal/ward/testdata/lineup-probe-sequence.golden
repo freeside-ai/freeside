@@ -1,0 +1,25 @@
+# Successful Claude writer probe: runtime calls in order.
+create-network freeside-lineup-probe-<id1>-egress
+inspect-network freeside-lineup-probe-<id1>-egress
+create-container freeside-lineup-probe-<id1>
+inspect freeside-lineup-probe-<id1>
+start-container freeside-lineup-probe-<id1>
+copy freeside-lineup-probe-<id1> <host-dir> /lineup-probe-stage
+copy freeside-lineup-probe-<id1> <host-dir> /lineup-probe-ready
+inspect freeside-lineup-probe-<id1>
+inspect freeside-lineup-probe-<id1>
+export freeside-lineup-probe-<id1>
+delete-container freeside-lineup-probe-<id1>
+list-containers
+list-networks
+delete-network freeside-lineup-probe-<id1>-egress
+list-networks
+
+# Injected failures: step, error class, content evidence, claim, teardown, runtime.
+probe-container create conformance:teardown no-evidence attempted=true owned=false fingerprint=empty teardown=failed reaped
+probe-container inspect conformance:teardown no-evidence attempted=true owned=true fingerprint=empty teardown=ok reaped
+probe-container allowlist conformance:credential_separation no-evidence attempted=true owned=true fingerprint=empty teardown=ok reaped
+probe-container start conformance:teardown no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
+probe-container copy plain no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
+probe-container stopped conformance:teardown no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped
+probe-container delete conformance:teardown no-evidence attempted=true owned=true fingerprint=set teardown=ok reaped

@@ -1007,15 +1007,13 @@ func ObserveCodexReviewNetwork(
 			CheckAgentEgress, "Codex review provider network ownership claim is invalid",
 		)
 	}
-	if report.Name != codexReviewNetworkName(runID) || report.Mode != NetworkHostOnly {
-		return CodexReviewNetworkObservation{}, failf(
-			CheckAgentEgress, "Codex review provider network identity or mode diverged",
-		)
-	}
-	fingerprint, err := ownedFingerprint(
-		report.CreationDate, report.Labels, report.LabelsObserved, ownershipLabel,
+	fingerprint, err := attestHostOnlyNetwork(
+		report, codexReviewNetworkName(runID), ownershipLabel, "Codex review provider",
 	)
-	if err != nil || fingerprint == "" {
+	if err != nil {
+		return CodexReviewNetworkObservation{}, err
+	}
+	if fingerprint == "" {
 		return CodexReviewNetworkObservation{}, failf(
 			CheckAgentEgress, "Codex review provider network ownership is not fingerprinted",
 		)
