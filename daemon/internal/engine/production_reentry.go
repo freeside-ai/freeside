@@ -853,13 +853,18 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		}
 		binding = bound
 	}
-	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
-	if err != nil {
-		return productionReentryCheckpoint{}, err
-	}
 	recipes, err := w.recipes(ctx)
 	if err != nil {
 		return productionReentryCheckpoint{}, err
+	}
+	// The room reserves its memory as a first cycle's does, under this
+	// task's verification invocation: the cycle's own, or a handoff's.
+	if err := w.reserveVerification(ctx, task, binding); err != nil {
+		return productionReentryCheckpoint{}, err
+	}
+	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
+	if err != nil {
+		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, err))
 	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: task.HeadSHA, BaseSHA: baseSHA, EvaluatedSHA: binding.evaluatedSHA,
@@ -874,6 +879,9 @@ func (w *productionPublicationWorkflow) verifyReentry(
 			binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
 		)},
 	})
+	if releaseErr := w.releaseVerification(ctx, task, err); releaseErr != nil {
+		return productionReentryCheckpoint{}, errors.Join(err, releaseErr)
+	}
 	if err != nil {
 		if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
 			err = productionPublicationRetryableError(err)

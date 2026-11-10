@@ -158,10 +158,12 @@ func (w *productionPublicationWorkflow) reserveVerification(
 		if orderErr := recordLaunchOrder(ctx, w.store, w.attention, task.RunID, id, err, now); orderErr != nil {
 			return errors.Join(err, orderErr)
 		}
-		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
+		return &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
+			fmt.Errorf("reserve verification memory: %w", err))}
 	}
 	if launchMemoryRefusal(err) {
-		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
+		return &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
+			fmt.Errorf("reserve verification memory: %w", err))}
 	}
 	if err != nil {
 		return err
@@ -171,6 +173,20 @@ func (w *productionPublicationWorkflow) reserveVerification(
 	}
 	return releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID)
 }
+
+// verificationReservationRefused is a verification job's reservation the
+// budget refused, for now or for good, naming the invocation that asked.
+// recordRetryableHold records the hold and the notice under that invocation,
+// because it can differ from the task's own: a handoff verifies its merge
+// under verify-handoff-<publication>, and only that invocation's wait leaves
+// the memory order when the budget is lowered below it.
+type verificationReservationRefused struct {
+	invocationID domain.InvocationID
+	err          error
+}
+
+func (e *verificationReservationRefused) Error() string { return e.err.Error() }
+func (e *verificationReservationRefused) Unwrap() error { return e.err }
 
 // releaseVerification ends the verification job's reservation once its room
 // returned with every container proved absent, which is any return but one

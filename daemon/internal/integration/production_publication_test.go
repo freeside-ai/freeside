@@ -254,6 +254,9 @@ type productionPublicationHarness struct {
 	// agents, when set, is the lineup the next engine admits writers
 	// through, so each writer admission carries an agent binding.
 	agents *engine.AgentSelection
+	// machineCapacity, when set, is the memory bound the next engine starts
+	// with; a budget recorded in the store then bounds its launches.
+	machineCapacity *ward.LaunchBound
 }
 
 // productionBaseManifests are the npm manifests the production harness
@@ -994,6 +997,9 @@ func (p *productionPublicationHarness) newEngineForMode(
 			AfterTaskLockRelease: seams.afterLockRelease,
 			TransitionHook:       seams.transitionHook,
 		}))
+	}
+	if p.machineCapacity != nil {
+		options = append(options, engine.WithMachineCapacity(*p.machineCapacity))
 	}
 	options = append(options, extraOptions...)
 	workflow, err := engine.New(p.store, p.attention, p.driver, options...)
