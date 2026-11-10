@@ -29,8 +29,9 @@ type VerificationOwnership struct {
 }
 
 type verificationCall struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	invocation domain.InvocationID
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 type verificationOwner struct {
@@ -94,7 +95,7 @@ func (o *VerificationOwnership) begin(ctx context.Context, binding verificationO
 		return nil, "", nil, err
 	}
 	callCtx, cancel := context.WithCancel(ctx)
-	call := verificationCall{cancel: cancel, done: make(chan struct{})}
+	call := verificationCall{invocation: binding.InvocationID, cancel: cancel, done: make(chan struct{})}
 	o.live[path] = call
 	finish := func(joined bool) error {
 		defer cancel()
@@ -145,29 +146,109 @@ func (o *VerificationOwnership) StopRun(ctx context.Context, task domain.TaskID,
 			return ctx.Err()
 		}
 	}
-	entries, err := os.ReadDir(dir)
+	names, err := verificationRecordNames(dir)
 	if err != nil {
 		return err
 	}
+	return o.proveRecordsAbsent(ctx, dir, names, task, run, "")
+}
+
+// ProveInvocationAbsent retries owned cleanup for every recorded container
+// call of one invocation, across all of its rooms and passes, and proves each
+// such container absent and each such command joined. It re-checks the
+// private ownership records, never the caller's view of which rooms ran, so a
+// container an earlier pass left behind still blocks the proof. Unlike
+// StopRun it writes no stopped fence and cancels nothing: a later room of the
+// run still launches. A live call of the invocation is refused rather than
+// reaped, and a record it cannot read or check fails the proof whatever
+// invocation it names, since it may be this one's. A run with no records for
+// the invocation has nothing left to prove. Every failure to prove is marked
+// ErrVerificationAbsenceUnproven.
+func (o *VerificationOwnership) ProveInvocationAbsent(
+	ctx context.Context, task domain.TaskID, run domain.RunID, invocation domain.InvocationID,
+) error {
+	if task == "" || run == "" || invocation == "" {
+		return domain.ErrEmptyID
+	}
+	dir := filepath.Join(o.root, verificationRunKey(run))
+	names, err := o.quiescentRecordNames(dir, invocation)
+	if err != nil {
+		return errors.Join(ErrVerificationAbsenceUnproven, err)
+	}
+	proof := o.proveRecordsAbsent(ctx, dir, names, task, run, invocation)
+	// A call of the invocation that began while the proof ran is one the
+	// snapshot missed.
+	after, err := o.quiescentRecordNames(dir, invocation)
+	for _, name := range after {
+		if err != nil {
+			break
+		}
+		if slices.Contains(names, name) {
+			continue
+		}
+		var record verificationOwner
+		if record, err = readVerificationRecord(dir, name, task, run); err == nil && record.InvocationID == invocation {
+			err = errors.New("verification call began during the absence proof")
+		}
+	}
+	if proof = errors.Join(proof, err); proof != nil {
+		return errors.Join(ErrVerificationAbsenceUnproven, proof)
+	}
+	return nil
+}
+
+// quiescentRecordNames snapshots the run's records under the lock begin
+// writes them under, refusing while a call of the invocation is live: its
+// container is still running, and owned cleanup would delete it.
+func (o *VerificationOwnership) quiescentRecordNames(dir string, invocation domain.InvocationID) ([]string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for path, call := range o.live {
+		if filepath.Dir(path) == dir && call.invocation == invocation {
+			return nil, fmt.Errorf("verification %s has a live call", invocation)
+		}
+	}
+	names, err := verificationRecordNames(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return names, err
+}
+
+func verificationRecordNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
+}
+
+// proveRecordsAbsent retries exact owned cleanup for each named record and
+// proves its containers absent and its command joined. An empty invocation
+// selects every record; otherwise a consistent record of another invocation
+// is skipped, while an inconsistent one still fails the proof.
+func (o *VerificationOwnership) proveRecordsAbsent(
+	ctx context.Context, dir string, names []string,
+	task domain.TaskID, run domain.RunID, invocation domain.InvocationID,
+) error {
 	var pending error
 	room := &ProjectImageRoom{runtime: o.runtime}
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".json") {
+	for _, name := range names {
+		record, err := readVerificationRecord(dir, name, task, run)
+		if err != nil {
+			pending = errors.Join(pending, err)
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		body, err := os.ReadFile(path) // #nosec G304 -- directory entry beneath the hashed run's private ownership directory.
-		var record verificationOwner
-		if err == nil {
-			err = json.Unmarshal(body, &record)
-		}
-		if err != nil || record.Version != 1 || record.TaskID != task || record.RunID != run || record.InvocationID == "" ||
-			record.Owner.Key != ownershipLabelKey || record.Owner.Value == "" ||
-			entry.Name() != verificationRunKey(domain.RunID(record.Owner.Value))+".json" {
-			pending = errors.Join(pending, err, errors.New("verification ownership record is inconsistent"))
+		if invocation != "" && record.InvocationID != invocation {
 			continue
 		}
-		cidPath := strings.TrimSuffix(path, ".json") + ".cid"
+		cidPath := filepath.Join(dir, strings.TrimSuffix(name, ".json")+".cid")
 		id, idErr := readVerificationContainerID(cidPath)
 		if idErr != nil && !errors.Is(idErr, os.ErrNotExist) {
 			pending = errors.Join(pending, idErr)
@@ -179,6 +260,22 @@ func (o *VerificationOwnership) StopRun(ctx context.Context, task domain.TaskID,
 		}
 	}
 	return pending
+}
+
+// readVerificationRecord reads one record of the run's directory and checks
+// it names this task and run and the owner label its file name binds.
+func readVerificationRecord(dir, name string, task domain.TaskID, run domain.RunID) (verificationOwner, error) {
+	body, err := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- directory entry beneath the hashed run's private ownership directory.
+	var record verificationOwner
+	if err == nil {
+		err = json.Unmarshal(body, &record)
+	}
+	if err != nil || record.Version != 1 || record.TaskID != task || record.RunID != run || record.InvocationID == "" ||
+		record.Owner.Key != ownershipLabelKey || record.Owner.Value == "" ||
+		name != verificationRunKey(domain.RunID(record.Owner.Value))+".json" {
+		return verificationOwner{}, errors.Join(err, errors.New("verification ownership record is inconsistent"))
+	}
+	return record, nil
 }
 
 func (r *ProjectImageRoom) verifyOwnedContainersAbsent(ctx context.Context, id string, owner Label) error {

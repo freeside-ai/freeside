@@ -142,3 +142,183 @@ func TestTaskCancellationCoverageSurvivesRestartAndEpochChange(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An earlier room's unproven container blocks the invocation's proof after a
+// later room of the same invocation runs clean, until a retried cleanup
+// removes it; the proof leaves other invocations alone and fences nothing.
+func TestVerificationInvocationAbsenceCoversEveryRoom(t *testing.T) {
+	t.Parallel()
+	runtime := newFakeRuntime(t)
+	owned, err := NewVerificationOwnership(filepath.Join(t.TempDir(), "owned"), runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls [][]string
+	runner := verificationRunner(t, runtime, make([]verify.StepResult, 8), &calls)
+	boundRoom := func() *ProjectImageRoom {
+		room := newProjectImageRoom("container", verificationProjectImage(t, []string{"prepare"}), runtime,
+			runner, runner, verify.DefaultMaxRoomOutputBytes, DefaultLaunchSize(LaunchVerification))
+		if err := owned.Bind(room, "task", "run", "verify"); err != nil {
+			t.Fatal(err)
+		}
+		return room
+	}
+	stuck := true
+	runtime.onDeleteContainer = func(id string) (bool, error) {
+		if stuck && id == "verification-1" {
+			return false, errors.New("runtime refused the delete")
+		}
+		return false, nil
+	}
+	if _, err := boundRoom().Run(t.Context(), t.TempDir(), []string{"verify"}); !errors.Is(err, ErrVerificationAbsenceUnproven) {
+		t.Fatalf("first room = %v, want unproven", err)
+	}
+	if _, err := boundRoom().Run(t.Context(), t.TempDir(), []string{"verify"}); err != nil {
+		t.Fatalf("second room = %v", err)
+	}
+	other, err := newOwnershipLabel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, finish, err := owned.begin(t.Context(), verificationOwner{Version: 1, TaskID: "task", RunID: "run", InvocationID: "other"}, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := finish(false); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ctrs["other"] = &fakeCtr{spec: ContainerSpec{Labels: []Label{other}}, stopped: true, created: "other-created"}
+
+	if err := owned.ProveInvocationAbsent(t.Context(), "task", "run", "verify"); !errors.Is(err, ErrVerificationAbsenceUnproven) {
+		t.Fatalf("proof with the first room's container listed = %v", err)
+	}
+	stuck = false
+	if err := owned.ProveInvocationAbsent(t.Context(), "task", "run", "verify"); err != nil {
+		t.Fatalf("proof after the retried cleanup = %v", err)
+	}
+	if runtime.ctrs["verification-1"] != nil || runtime.ctrs["other"] == nil {
+		t.Fatal("proof did not reap exactly its invocation's containers")
+	}
+	if _, err := boundRoom().Run(t.Context(), t.TempDir(), []string{"verify"}); err != nil {
+		t.Fatalf("room after the proof = %v, want no fence", err)
+	}
+}
+
+func TestVerificationInvocationAbsenceFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// arrange leaves the run in the state under test and returns what
+		// makes the proof pass afterwards, or nil when nothing should.
+		arrange func(t *testing.T, owned *VerificationOwnership, runtime *fakeRuntime, dir string) func()
+	}{
+		{"live-call", func(t *testing.T, owned *VerificationOwnership, runtime *fakeRuntime, _ string) func() {
+			owner, err := newOwnershipLabel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, finish, err := owned.begin(t.Context(), verificationOwner{Version: 1, TaskID: "task", RunID: "run", InvocationID: "verify"}, owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime.ctrs["live"] = &fakeCtr{spec: ContainerSpec{Labels: []Label{owner}}, stopped: true, created: "live-created"}
+			return func() {
+				if runtime.ctrs["live"] == nil {
+					t.Fatal("proof reaped a live call's container")
+				}
+				if err := finish(true); err != nil {
+					t.Fatal(err)
+				}
+				delete(runtime.ctrs, "live")
+			}
+		}},
+		{"no-quiescence-proof", func(t *testing.T, owned *VerificationOwnership, _ *fakeRuntime, _ string) func() {
+			owner, err := newOwnershipLabel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, finish, err := owned.begin(t.Context(), verificationOwner{Version: 1, TaskID: "task", RunID: "run", InvocationID: "verify"}, owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := finish(false); err != nil {
+				t.Fatal(err)
+			}
+			return nil
+		}},
+		{"call-began-during-proof", func(t *testing.T, owned *VerificationOwnership, runtime *fakeRuntime, _ string) func() {
+			begin := func() func(bool) error {
+				owner, err := newOwnershipLabel()
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _, finish, err := owned.begin(t.Context(), verificationOwner{Version: 1, TaskID: "task", RunID: "run", InvocationID: "verify"}, owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return finish
+			}
+			if err := begin()(true); err != nil {
+				t.Fatal(err)
+			}
+			// The proof lists containers for the snapshot's record; a call that
+			// begins and ends then is one the snapshot missed.
+			runtime.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+				runtime.onListContainers = nil
+				if err := begin()(true); err != nil {
+					t.Error(err)
+				}
+				return list, nil
+			}
+			return func() {}
+		}},
+		{"unreadable-record", func(t *testing.T, owned *VerificationOwnership, _ *fakeRuntime, dir string) func() {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "damaged.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runtime := newFakeRuntime(t)
+			root := filepath.Join(t.TempDir(), "owned")
+			owned, err := NewVerificationOwnership(root, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settle := tc.arrange(t, owned, runtime, filepath.Join(root, verificationRunKey("run")))
+			if err := owned.ProveInvocationAbsent(t.Context(), "task", "run", "verify"); !errors.Is(err, ErrVerificationAbsenceUnproven) {
+				t.Fatalf("proof = %v, want unproven", err)
+			}
+			if settle == nil {
+				return
+			}
+			settle()
+			if err := owned.ProveInvocationAbsent(t.Context(), "task", "run", "verify"); err != nil {
+				t.Fatalf("proof once settled = %v", err)
+			}
+		})
+	}
+}
+
+func TestVerificationInvocationAbsenceWithoutRecords(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "owned")
+	owned, err := NewVerificationOwnership(root, newFakeRuntime(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owned.ProveInvocationAbsent(t.Context(), "task", "run", "verify"); err != nil {
+		t.Fatalf("proof for a run with no records = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, verificationRunKey("run"))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("proof created the run directory: %v", err)
+	}
+	if err := owned.ProveInvocationAbsent(t.Context(), "task", "run", ""); !errors.Is(err, domain.ErrEmptyID) {
+		t.Fatalf("proof without an invocation = %v", err)
+	}
+}
