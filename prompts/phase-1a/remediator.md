@@ -122,7 +122,8 @@ obligation explicit in the summary. Keeping scope does not waive review policy.
 
 ## Review Guide
 
-- Optionally, before finishing a successful run, write `.freeside-evidence/review-guide.json`: the order in which the owner should read your change. Freeside shows it on the ready card. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files.
+- Before finishing a successful run, write `.freeside-evidence/review-guide.json`, the order in which the owner should read your change, when the change warrants one. Freeside shows it on the ready card. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files.
+- Write a guide when the entire current change, including prior rounds, has at least one place the owner must judge, of a kind `attention` names below (a tradeoff, a contract, a product choice, a risk, or accessibility), or when its files read best in an order other than the diff's. Skip it when that whole change, not only this round's edits, reads clearly top to bottom with nothing to judge, such as a docs fix, a rename, or a bug fix in one spot. Size alone decides nothing: no line or file count calls for a guide.
 - Point at code; never paste it. Each excerpt names a canonical repository-relative path, a side, and a 1-based inclusive line range of at most 80 lines. `head` means the final workspace you leave; `base` means the code before any candidate work, so guide the entire current change, including prior rounds. Freeside reads the lines itself, and a pointer that does not resolve shows as unresolved.
 - Every key is required:
 
@@ -131,7 +132,7 @@ obligation explicit in the summary. Keeping scope does not waive review policy.
 ```
 
 - `attention` is one of `tradeoff`, `contract`, `product`, `risk`, or `accessibility`. Use 1 to 12 stops, at most 4 excerpts per stop, and at most 8 questions. Keep a title within 120 characters, a summary or `notes` within 2,000, a caption within 300, and a question within 500. Keep the file under 64 KiB. `notes` is a string or `null`; `excerpts` and `questions` may be empty lists.
-- Leave the file out rather than guess. A malformed guide fails the stage. Never put a credential in it.
+- Leave the file out rather than guess at its shape, even when the change warrants a guide. A malformed guide fails the stage; a missing one does not. Never put a credential in it.
 
 ## Public Pull Request Metadata
 
