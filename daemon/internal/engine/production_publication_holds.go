@@ -120,22 +120,29 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 }
 
 // recordRetryableHold records the hold behind a retryable reconcile failure:
+// machine_capacity, or the can-never-fit notice, for a verification job the
+// memory budget refused, under the invocation that reserved;
 // image_upkeep_pending for a task waiting on an image (a re-entry whose base
 // waits on upkeep, or a rebuild the busy builder could not start), and
 // publication_environment for any other environmental back-off.
 func (w *productionPublicationWorkflow) recordRetryableHold(
 	ctx context.Context, task productionPublicationTask, err error,
 ) error {
+	invocationID := task.verificationInvocationID()
+	var reservation *verificationReservationRefused
+	if errors.As(err, &reservation) {
+		invocationID = reservation.invocationID
+	}
 	if launchMemoryRefusal(err) {
 		return noticeLaunchMemoryRefusal(
-			ctx, w.store, w.attention, &w.holdPace, task.RunID, task.verificationInvocationID(), task.ProjectID, err)
+			ctx, w.store, w.attention, &w.holdPace, task.RunID, invocationID, task.ProjectID, err)
 	}
 	var capacity *domain.MachineCapacityError
 	if errors.As(err, &capacity) {
 		// Recorded each retry window, which paces it, so its numbers stay
 		// current while the job waits.
 		return w.store.Write(ctx, func(tx *store.WriteTx) error {
-			return recordRunHold(ctx, tx, task.RunID, task.verificationInvocationID(),
+			return recordRunHold(ctx, tx, task.RunID, invocationID,
 				domain.HoldMachineCapacity, holdDetailFor(err), w.now().UTC())
 		})
 	}
