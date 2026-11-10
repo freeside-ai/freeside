@@ -619,7 +619,7 @@ func (e *Engine) enqueueSpecificationRevisionCampaign(
 			"specification revision feedback exceeds the comment bound: %w", domain.ErrParentKeyMismatch)
 	}
 	feedbackDigest := domain.Digest(contentaddr.Sum([]byte(feedbackBody)))
-	feedbackID := domain.ArtifactID("spec-feedback-" + command.CommandID)
+	feedbackID := domain.SpecificationFeedbackArtifactID(command.CommandID)
 	feedback, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: feedbackID, Type: domain.ArtifactKindResearch, Digest: feedbackDigest,
 		Provenance: domain.Provenance{

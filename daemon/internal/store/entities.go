@@ -963,9 +963,11 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 		return tx.gateInitialSpecificationItem(ctx, item)
 	}
 	facts := item.SpecRevision
-	itemSuffix, ok := strings.CutPrefix(string(item.ID), "spec-approval-")
+	itemSuffix, ok := domain.CutSpecificationApprovalPrefix(string(item.ID))
 	currentPrefix, suffixOK := strings.CutSuffix(string(item.ID), fmt.Sprintf("-%d", facts.Iteration))
-	if !ok || itemSuffix == "" || !suffixOK || currentPrefix == "spec-approval-" ||
+	// The last comparison refuses an ID whose implementation run is empty, the
+	// one ID where the prefix left after removing the iteration is bare.
+	if !ok || !suffixOK || item.ID == domain.SpecificationApprovalItemID("", facts.Iteration) ||
 		item.Subject.RunID == nil {
 		return domain.ErrParentKeyMismatch
 	}
@@ -1038,8 +1040,8 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 	if err := tx.gateSpecRevisionItem(ctx, priorItem); err != nil {
 		return err
 	}
-	priorSuffix, ok := strings.CutPrefix(string(priorItem.ID), "spec-approval-")
-	if !ok || priorSuffix == "" || facts.PriorSpecArtifactID != domain.ArtifactID("spec-"+priorSuffix) {
+	priorSuffix, ok := domain.CutSpecificationApprovalPrefix(string(priorItem.ID))
+	if !ok || facts.PriorSpecArtifactID != domain.ArtifactID("spec-"+priorSuffix) {
 		return domain.ErrParentKeyMismatch
 	}
 	priorClaim, err := tx.gateSpecificationClaim(
@@ -1077,8 +1079,8 @@ func (tx *ReadTx) gateSpecRevisionItem(ctx context.Context, item domain.Attentio
 			return domain.ErrParentKeyMismatch
 		}
 	}
-	implementationRunID, ok := strings.CutPrefix(currentPrefix, "spec-approval-")
-	if !ok || implementationRunID == "" {
+	implementationRunID, ok := domain.CutSpecificationApprovalPrefix(currentPrefix)
+	if !ok {
 		return domain.ErrParentKeyMismatch
 	}
 	expectedAddressalsID := domain.ArtifactID(fmt.Sprintf(
@@ -1314,7 +1316,7 @@ func blockedWaitTerminalIdentityMatches(
 		domain.RunID(implementationRun) == *approval.Subject.RunID {
 		return false
 	}
-	return approval.ID == domain.ItemID("spec-approval-"+implementationIteration)
+	return approval.ID == domain.SpecificationApprovalItemID(domain.RunID(implementationRun), terminal.Iteration)
 }
 
 func blockedWaitTerminalSummaryMatches(

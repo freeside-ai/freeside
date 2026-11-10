@@ -42,7 +42,7 @@ func specDiscussionInvocationID(commandID string) domain.InvocationID {
 }
 
 func specDiscussionArtifactID(commandID string) domain.ArtifactID {
-	return domain.ArtifactID("spec-discussion-" + commandID)
+	return domain.SpecificationDiscussionArtifactID(commandID)
 }
 
 func specDiscussionInputArtifactIDs(

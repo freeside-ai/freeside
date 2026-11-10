@@ -601,7 +601,7 @@ func (c SpecRevisionComment) validate(revisionIteration int) error {
 	if c.CommentID == "" || c.CommentID != strings.TrimSpace(c.CommentID) ||
 		!utf8.ValidString(c.CommentID) || c.ArtifactID == "" || c.Digest == "" ||
 		c.RaisedOnItemID == "" || c.Iteration < 1 || c.Iteration >= revisionIteration ||
-		c.ArtifactID != ArtifactID("spec-feedback-"+c.CommentID) ||
+		c.ArtifactID != SpecificationFeedbackArtifactID(c.CommentID) ||
 		c.Body == "" || c.Body != strings.TrimSpace(c.Body) || !utf8.ValidString(c.Body) ||
 		len(c.Body) > MaxSpecRevisionCommentBytes ||
 		Digest(contentaddr.Sum([]byte(c.Body))) != c.Digest {

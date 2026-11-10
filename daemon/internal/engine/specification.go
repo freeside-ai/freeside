@@ -244,10 +244,11 @@ type specificationPriorArtifactEnvelope struct {
 }
 
 func specificationFeedbackEnvelopeID(id domain.ArtifactID) string {
-	for _, prefix := range []string{"spec-feedback-", "answer-"} {
-		if value, ok := strings.CutPrefix(string(id), prefix); ok && value != "" {
-			return value
-		}
+	if commandID, ok := domain.SpecificationFeedbackCommandID(id); ok {
+		return commandID
+	}
+	if value, ok := strings.CutPrefix(string(id), "answer-"); ok && value != "" {
+		return value
 	}
 	return ""
 }
@@ -261,10 +262,10 @@ func (e *Engine) encodeSpecificationPriorArtifact(
 		role = "prior_specification"
 	case domain.ArtifactKindResearch:
 		role = "research"
-		if strings.HasPrefix(string(artifact.ID), "spec-feedback-") ||
+		if domain.HasSpecificationFeedbackArtifactPrefix(artifact.ID) ||
 			strings.HasPrefix(string(artifact.ID), "answer-") {
 			role = "human_feedback"
-		} else if strings.HasPrefix(string(artifact.ID), "spec-discussion-") {
+		} else if domain.HasSpecificationDiscussionArtifactPrefix(artifact.ID) {
 			role = "discussion"
 		}
 	case domain.ArtifactKindPolicy,
@@ -1246,7 +1247,7 @@ func (r specificationRequest) validateWithPublication(validatePublication func(P
 	}
 	feedback := make(map[domain.ArtifactID]struct{}, len(r.FeedbackArtifactIDs))
 	for _, id := range r.FeedbackArtifactIDs {
-		if id == "" || !strings.HasPrefix(string(id), "spec-feedback-") {
+		if id == "" || !domain.HasSpecificationFeedbackArtifactPrefix(id) {
 			return fmt.Errorf("invalid feedback artifact %q: %w", id, domain.ErrParentKeyMismatch)
 		}
 		if _, ok := seen[id]; !ok {
@@ -1557,7 +1558,7 @@ func verifyRevisionRoot(
 		!operatorFeedbackCommandMatchesItem(command, item) {
 		return "", "", "", domain.ErrParentKeyMismatch
 	}
-	feedback = domain.ArtifactID("spec-feedback-" + *attempt.RevisionCommandID)
+	feedback = domain.SpecificationFeedbackArtifactID(*attempt.RevisionCommandID)
 	feedbackArtifact, err := tx.GetArtifact(ctx, feedback)
 	if err != nil {
 		return "", "", "", err
@@ -1927,7 +1928,7 @@ func verifySpecificationApproval(
 	terminal specificationTerminal,
 	specification domain.Artifact,
 ) (domain.AttentionItem, []domain.Command, error) {
-	expectedID := domain.ItemID(fmt.Sprintf("spec-approval-%s-%d", request.ImplementationRunID, request.Iteration))
+	expectedID := domain.SpecificationApprovalItemID(request.ImplementationRunID, request.Iteration)
 	if terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != expectedID {
 		return domain.AttentionItem{}, nil, fmt.Errorf(
 			"specification terminal %q approval identity mismatch: %w",
@@ -2267,7 +2268,7 @@ func verifySpecificationChain(
 				"request_changes command %q is not bound to approval item %q: %w",
 				command.CommandID, item.ID, domain.ErrParentKeyMismatch)
 		}
-		feedbackID := domain.ArtifactID("spec-feedback-" + command.CommandID)
+		feedbackID := domain.SpecificationFeedbackArtifactID(command.CommandID)
 		feedbackArtifact, err := tx.GetArtifact(ctx, feedbackID)
 		if err != nil {
 			return verifiedSpecificationBinding{}, err
@@ -2666,8 +2667,8 @@ func (e *Engine) validateSpecificationAddressals(
 ) error {
 	expected := make(map[string]struct{}, len(request.FeedbackArtifactIDs))
 	for _, id := range request.FeedbackArtifactIDs {
-		commentID := strings.TrimPrefix(string(id), "spec-feedback-")
-		if commentID == "" || commentID == string(id) {
+		commentID, ok := domain.SpecificationFeedbackCommandID(id)
+		if !ok {
 			return fmt.Errorf("feedback artifact %q has no comment id: %w", id, specify.ErrInvalidOutput)
 		}
 		if _, duplicate := expected[commentID]; duplicate {
@@ -2767,8 +2768,8 @@ func (e *Engine) specificationTranscriptDecoder(
 	}
 	commentIDs := make(map[string]string, len(request.FeedbackArtifactIDs))
 	for _, id := range request.FeedbackArtifactIDs {
-		commentID := strings.TrimPrefix(string(id), "spec-feedback-")
-		if commentID == "" || commentID == string(id) {
+		commentID, ok := domain.SpecificationFeedbackCommandID(id)
+		if !ok {
 			return nil, fmt.Errorf("legacy feedback artifact %q has no comment id: %w",
 				id, specify.ErrInvalidOutput)
 		}
@@ -3028,7 +3029,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		}
 		return false, err
 	}
-	itemID := domain.ItemID(fmt.Sprintf("spec-approval-%s-%d", request.ImplementationRunID, request.Iteration))
+	itemID := domain.SpecificationApprovalItemID(request.ImplementationRunID, request.Iteration)
 	reason := specification.Summary
 	createdAt := e.specification.now().UTC()
 	summaryArtifactID := domain.ArtifactID(fmt.Sprintf(
@@ -3437,7 +3438,11 @@ func (e *Engine) readSpecRevisionComment(
 	if err != nil {
 		return domain.SpecRevisionComment{}, err
 	}
-	commentID := strings.TrimPrefix(string(artifactID), "spec-feedback-")
+	commentID, ok := domain.SpecificationFeedbackCommandID(artifactID)
+	if !ok {
+		return domain.SpecRevisionComment{}, fmt.Errorf(
+			"feedback artifact %q has no comment id: %w", artifactID, domain.ErrParentKeyMismatch)
+	}
 	var command domain.Command
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -3501,7 +3506,7 @@ func (e *Engine) readSpecRevisionComment(
 }
 
 func specApprovalIteration(itemID domain.ItemID, implementationRunID domain.RunID) (int, error) {
-	prefix := fmt.Sprintf("spec-approval-%s-", implementationRunID)
+	prefix := domain.SpecificationApprovalItemIDPrefix(implementationRunID)
 	suffix := strings.TrimPrefix(string(itemID), prefix)
 	iteration, err := strconv.Atoi(suffix)
 	if err != nil || suffix == string(itemID) || iteration < 1 {
@@ -4115,7 +4120,7 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 	if _, err := e.specification.blobs.Put(digest, strings.NewReader(feedbackMessage)); err != nil {
 		return err
 	}
-	feedbackID := domain.ArtifactID("spec-feedback-" + command.CommandID)
+	feedbackID := domain.SpecificationFeedbackArtifactID(command.CommandID)
 	feedback, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: feedbackID, Type: domain.ArtifactKindResearch, Digest: digest,
 		Provenance: domain.Provenance{

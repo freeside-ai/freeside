@@ -89,7 +89,7 @@ func (r SpecificationDiscussionInvocationIntent) Validate() error {
 		return fmt.Errorf("invalid specification discussion invocation identity: %w", ErrParentKeyMismatch)
 	}
 	commandID := strings.TrimPrefix(string(r.DiscussInvocationID), "inv-")
-	discussionArtifactID := ArtifactID("spec-discussion-" + commandID)
+	discussionArtifactID := SpecificationDiscussionArtifactID(commandID)
 	if r.Version != SpecificationDiscussionInvocationIntentVersion || r.SpecificationRunID == "" ||
 		r.ImplementationRunID == "" || r.ProjectID == "" || r.Iteration < 1 || commandID == "" ||
 		!specificationDiscussionInvocationIDMatches(r.InvocationID, commandID) || r.ConversationID == "" ||
