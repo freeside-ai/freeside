@@ -289,6 +289,13 @@ func (r *Room) runOnSlot(ctx context.Context, slot string, profile []byte, workd
 	}
 	if err := r.teardown(ctx, slot, jobID, preparedUID); err != nil {
 		r.pool.quarantine(slot)
+		if runErr == nil {
+			// The result is dropped with the slot, so the error keeps the
+			// one fact an operator needs to tell a failed command from a
+			// failed teardown.
+			return verify.StepResult{}, fmt.Errorf("%w: slot %s: after the command exited %d: %w",
+				ErrAbsenceUnproven, slot, result.ExitCode, err)
+		}
 		return verify.StepResult{}, fmt.Errorf("%w: slot %s: %w", ErrAbsenceUnproven, slot, errors.Join(err, runErr))
 	}
 	if runErr != nil {
