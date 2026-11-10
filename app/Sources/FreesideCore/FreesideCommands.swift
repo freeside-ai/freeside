@@ -2,15 +2,21 @@ import FreesideAPI
 import SwiftUI
 
 enum DecisionKeyboardGate {
+    /// Whether Return takes the recommendation. It takes it only while the
+    /// recommendation's button holds the card's fill (R6), so Return never
+    /// sends a control the card draws outlined: while a finding pick holds
+    /// the fill, the acceptance would drop the pick (#3011).
     static func canTakeRecommendation(
         rankedRecommendation: Components.Schemas.Action?,
         presentedRecommendation: Components.Schemas.Action?,
+        recommendationHoldsFill: Bool,
         actionsEnabled: Bool,
         isSubmittable: Bool,
         inputIsReady: Bool
     ) -> Bool {
         guard let rankedRecommendation,
-            rankedRecommendation == presentedRecommendation
+            rankedRecommendation == presentedRecommendation,
+            recommendationHoldsFill
         else { return false }
         return actionsEnabled && isSubmittable && inputIsReady
     }

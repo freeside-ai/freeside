@@ -541,9 +541,7 @@ struct DecisionDetailView: View {
                 actionButton(
                     recommendation.action,
                     item: item,
-                    tone: AttentionDisplay.confirmationConsequence(
-                        recommendation.action,
-                        for: item) == nil ? .primary : .destructive,
+                    tone: recommendationTone(recommendation.action, item: item),
                     showsIcon: false
                 )
                 .padding(.horizontal)
@@ -2465,19 +2463,37 @@ struct DecisionDetailView: View {
         Binding(
             get: { alternativeSelections[proposal.finding_id] ?? proposal.route },
             set: { route in
-                if route == proposal.route {
-                    alternativeSelections.removeValue(forKey: proposal.finding_id)
-                } else {
-                    alternativeSelections[proposal.finding_id] = route
-                }
+                alternativeSelections = Self.selections(
+                    alternativeSelections, picking: route, for: proposal)
             }
         )
+    }
+
+    /// The held picks after the operator picks `route` for a finding: a
+    /// route other than the proposed one is held, and the proposed route
+    /// clears the pick, so the fill returns to the acceptance (R6).
+    static func selections(
+        _ selections: [String: Components.Schemas.AdjudicationRoute],
+        picking route: Components.Schemas.AdjudicationRoute,
+        for proposal: Components.Schemas.FindingAdjudicationProposal
+    ) -> [String: Components.Schemas.AdjudicationRoute] {
+        var next = selections
+        next[proposal.finding_id] = route == proposal.route ? nil : route
+        return next
     }
 
     private func selectedAlternatives(
         _ binding: Components.Schemas.FindingAdjudicationBinding
     ) -> [Components.Schemas.AlternativeChoice] {
         Self.selectedAlternatives(binding, selections: alternativeSelections)
+    }
+
+    /// Whether the operator holds a route pick on the item's findings, which
+    /// moves the card's fill to Choose Another Route (R6). It counts only
+    /// picks on findings the binding lists, as the command sends them.
+    private func holdsPick(_ item: Components.Schemas.AttentionItem) -> Bool {
+        guard let binding = item.finding_adjudication?.value1 else { return false }
+        return !selectedAlternatives(binding).isEmpty
     }
 
     // A routed dispute draws each finding in the shape of findingCards: a
@@ -3053,9 +3069,7 @@ struct DecisionDetailView: View {
             actionButton(
                 recommendation.action,
                 item: item,
-                tone: AttentionDisplay.confirmationConsequence(
-                    recommendation.action,
-                    for: item) == nil ? .primary : .destructive,
+                tone: recommendationTone(recommendation.action, item: item),
                 showsIcon: false
             )
             // The iOS sticky footer appears when this button is off screen, so
@@ -3149,6 +3163,21 @@ struct DecisionDetailView: View {
             actionRanking(item).recommended == recommendation.action
         else { return nil }
         return recommendation
+    }
+
+    /// The recommendation button's tone, shared by its block and the iPhone
+    /// footer: destructive when it confirms, filled when it holds the card's
+    /// one fill (R6), and outlined while a held pick holds it instead.
+    private func recommendationTone(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) -> FreesideActionButtonStyle.Tone {
+        if AttentionDisplay.confirmationConsequence(action, for: item) != nil {
+            return .destructive
+        }
+        return DecisionCardComposition.recommendationIsFilled(
+            for: item, ranking: actionRanking(item), holdsPick: holdsPick(item))
+            ? .primary : .secondary
     }
 
     /// Whether the card draws the recommendation as a module ahead of its
@@ -3987,7 +4016,8 @@ struct DecisionDetailView: View {
     ) -> some View {
         let ranking = actionRanking(item)
         let controlGap = CardScale.controlGap
-        let filledAction = DecisionCardComposition.filledAction(for: item, ranking: ranking)
+        let filledAction = DecisionCardComposition.filledAction(
+            for: item, ranking: ranking, holdsPick: holdsPick(item))
         // Position, because a repeated action fills only its first button.
         let filled = filledAction.flatMap(ranking.principal.firstIndex(of:))
         VStack(alignment: .leading, spacing: controlGap) {
@@ -4058,7 +4088,8 @@ struct DecisionDetailView: View {
             actionButton(
                 reviewing,
                 item: item,
-                tone: DecisionCardComposition.filledAction(for: item, ranking: ranking) == reviewing
+                tone: DecisionCardComposition.filledAction(
+                    for: item, ranking: ranking, holdsPick: holdsPick(item)) == reviewing
                     ? .primary : .secondary)
         }
     }
@@ -4265,9 +4296,12 @@ struct DecisionDetailView: View {
         private var canTakeRecommendation: Bool {
             guard let item = model.snapshot?.item else { return false }
             let recommendation = DecisionRecommendationPresentation.of(item)
+            let ranking = actionRanking(item)
             return DecisionKeyboardGate.canTakeRecommendation(
-                rankedRecommendation: actionRanking(item).recommended,
+                rankedRecommendation: ranking.recommended,
                 presentedRecommendation: recommendation?.action,
+                recommendationHoldsFill: DecisionCardComposition.recommendationIsFilled(
+                    for: item, ranking: ranking, holdsPick: holdsPick(item)),
                 actionsEnabled: model.actionsEnabled,
                 isSubmittable: recommendation.map { model.isSubmittable($0.action) } ?? false,
                 inputIsReady: recommendation.map {

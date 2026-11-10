@@ -32,6 +32,7 @@ import Testing
             DecisionKeyboardGate.canTakeRecommendation(
                 rankedRecommendation: .approve,
                 presentedRecommendation: .approve,
+                recommendationHoldsFill: true,
                 actionsEnabled: true,
                 isSubmittable: true,
                 inputIsReady: true))
@@ -39,6 +40,7 @@ import Testing
             !DecisionKeyboardGate.canTakeRecommendation(
                 rankedRecommendation: nil,
                 presentedRecommendation: .approve,
+                recommendationHoldsFill: true,
                 actionsEnabled: true,
                 isSubmittable: true,
                 inputIsReady: true))
@@ -46,7 +48,22 @@ import Testing
             !DecisionKeyboardGate.canTakeRecommendation(
                 rankedRecommendation: .approve,
                 presentedRecommendation: .approve,
+                recommendationHoldsFill: true,
                 actionsEnabled: false,
+                isSubmittable: true,
+                inputIsReady: true))
+    }
+
+    /// Return follows the fill (R6): while a held finding pick moves the
+    /// fill to Choose Another Route, Return does not send the acceptance,
+    /// which would drop the pick (#3011).
+    @Test func returnLeavesARecommendationThatDoesNotHoldTheFill() {
+        #expect(
+            !DecisionKeyboardGate.canTakeRecommendation(
+                rankedRecommendation: .accept_recommended_route,
+                presentedRecommendation: .accept_recommended_route,
+                recommendationHoldsFill: false,
+                actionsEnabled: true,
                 isSubmittable: true,
                 inputIsReady: true))
     }
