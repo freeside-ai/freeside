@@ -17,7 +17,13 @@ cited section at the step that uses it, and when this file and a cited
 section disagree, the section wins.
 
 The wave number N comes from the invocation argument. If it is missing, or
-does not match a row of the §11 coordination table, stop and ask.
+does not match a row of the §11 coordination table, stop and ask. A row the
+table marks as folded into another gets no tracker: stop and name the row
+that carries its work.
+
+The prior wave, wherever this file names it, is the latest wave before N
+that has a tracker, open or closed. After a folded row that is not wave
+N-1.
 
 Every wave since Wave 1 grew well past its planned unit set, mostly from
 contract and capability gaps found at implementation start, and every wave
@@ -157,8 +163,8 @@ than planning around it:
   the limit, and those two counts are what the prior wave showed it can
   carry. When the wave exceeds either, stop and present a split-or-slip
   proposal: which units move to a later wave or which chain breaks where.
-  A first wave of a new phase has no prior tracker to compare; say so and
-  ask.
+  For the first wave of a new phase, the prior wave's counts come from
+  another phase and may not compare; say so and ask.
 
 ## Create the Tracking Issue
 
