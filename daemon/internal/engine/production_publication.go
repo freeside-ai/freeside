@@ -1304,26 +1304,14 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		}
 	}
 
-	checkpoint, found, err := w.loadCheckpoint(ctx, task, binding)
+	// Progress is the state read here, at the start of the pass. Verification
+	// writes a checkpoint further down, and nothing after it reads progress.
+	progress, checkpoint, err := w.readPublicationProgress(ctx, task, binding, imported)
 	if err != nil {
 		return productionTaskOutcome{}, err
-	}
-	readyExists, err := w.hasReadyItemRecord(ctx, task)
-	if err != nil {
-		return productionTaskOutcome{}, err
-	}
-	if readyExists && !found {
-		return productionTaskOutcome{}, fmt.Errorf(
-			"ready item %q has no verification checkpoint: %w",
-			task.readyItemID(), domain.ErrParentKeyMismatch,
-		)
-	}
-	if found && !reflect.DeepEqual(checkpoint.Imported, imported) {
-		return productionTaskOutcome{}, fmt.Errorf("verification checkpoint import account disagrees with reconstruction: %w",
-			domain.ErrParentKeyMismatch)
 	}
 	blocked, err := w.recoverDefinitiveBlockedTask(
-		ctx, task, binding, imported, checkpoint, found, readyExists,
+		ctx, task, binding, imported, checkpoint, progress,
 	)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -1335,98 +1323,72 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
-	if found {
-		finalizedIntent, err := w.hasFinalizedPublicationIntent(ctx, task.PublicationID)
+	switch progress {
+	case productionPublicationProgressUnverified, productionPublicationProgressVerified:
+	case productionPublicationProgressIntentFinalized, productionPublicationProgressReady:
+		readiness, _, err := w.assertReviewedCandidate(
+			ctx, task, binding, checkpoint, reviewInstructions,
+		)
+		if err != nil {
+			if errors.Is(err, errShadowReviewStopped) {
+				return productionTaskOutcome{}, fmt.Errorf(
+					"shadow review stopped after publication state existed: %w",
+					domain.ErrParentKeyMismatch,
+				)
+			}
+			if errors.Is(err, errShadowReviewBlocksReady) {
+				return productionTaskOutcome{}, nil
+			}
+			if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+				return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+			}
+			if errors.Is(err, domain.ErrParentKeyMismatch) {
+				return w.holdBlockedTask(
+					ctx, task, checkpoint.Imported,
+					"Publication is durably held because this published run lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration. Restore the approved reviewer configuration or disposition the run manually.",
+					domain.HoldTrustBlocked,
+				)
+			}
+			return productionTaskOutcome{}, err
+		}
+		// A ready item recovered below is compared with one rebuilt from
+		// this readiness, so its detail names the same handoff tip.
+		readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if readyExists || finalizedIntent {
-			readiness, _, err := w.assertReviewedCandidate(
-				ctx, task, binding, checkpoint, reviewInstructions,
+		report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.verificationInvocationID())
+		if err != nil {
+			return productionTaskOutcome{}, productionPublicationRetryableError(err)
+		}
+		candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
+		if err != nil {
+			return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
+		}
+		if err := w.applySealedHandoffCheck(ctx, task, &candidate); err != nil {
+			return productionTaskOutcome{}, err
+		}
+		if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
+			return productionTaskOutcome{}, err
+		}
+		history, err := publish.LoadDispositionHistory(
+			ctx, w.store, candidate, reviewInstructions.ResultDigest,
+		)
+		if err != nil {
+			if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
+				return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
+			}
+			if errors.Is(err, domain.ErrParentKeyMismatch) {
+				return w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
+			}
+			return productionTaskOutcome{}, fmt.Errorf("load recovered publication disposition history: %w", err)
+		}
+		candidate.DispositionHistory = &history
+		if progress == productionPublicationProgressReady {
+			published, err := w.loadReadyPublicationOutcome(
+				ctx, task, binding, checkpoint, candidate, readiness,
 			)
 			if err != nil {
-				if errors.Is(err, errShadowReviewStopped) {
-					return productionTaskOutcome{}, fmt.Errorf(
-						"shadow review stopped after publication state existed: %w",
-						domain.ErrParentKeyMismatch,
-					)
-				}
-				if errors.Is(err, errShadowReviewBlocksReady) {
-					return productionTaskOutcome{}, nil
-				}
-				if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
-					return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
-				}
-				if errors.Is(err, domain.ErrParentKeyMismatch) {
-					return w.holdBlockedTask(
-						ctx, task, checkpoint.Imported,
-						"Publication is durably held because this published run lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration. Restore the approved reviewer configuration or disposition the run manually.",
-						domain.HoldTrustBlocked,
-					)
-				}
-				return productionTaskOutcome{}, err
-			}
-			// A ready item recovered below is compared with one rebuilt from
-			// this readiness, so its detail names the same handoff tip.
-			readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
-			if err != nil {
-				return productionTaskOutcome{}, err
-			}
-			report, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.verificationInvocationID())
-			if err != nil {
-				return productionTaskOutcome{}, productionPublicationRetryableError(err)
-			}
-			candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
-			if err != nil {
-				return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
-			}
-			if err := w.applySealedHandoffCheck(ctx, task, &candidate); err != nil {
-				return productionTaskOutcome{}, err
-			}
-			if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
-				return productionTaskOutcome{}, err
-			}
-			history, err := publish.LoadDispositionHistory(
-				ctx, w.store, candidate, reviewInstructions.ResultDigest,
-			)
-			if err != nil {
-				if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
-					return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
-				}
-				if errors.Is(err, domain.ErrParentKeyMismatch) {
-					return w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
-				}
-				return productionTaskOutcome{}, fmt.Errorf("load recovered publication disposition history: %w", err)
-			}
-			candidate.DispositionHistory = &history
-			if readyExists {
-				published, err := w.loadReadyPublicationOutcome(
-					ctx, task, binding, checkpoint, candidate, readiness,
-				)
-				if err != nil {
-					if held, handled, holdErr := w.holdPublicationRepairRefusal(
-						ctx, task, checkpoint.Imported, err,
-					); handled {
-						return held, holdErr
-					}
-					return productionTaskOutcome{}, err
-				}
-				return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
-			}
-			published, outcomeFound, err := w.loadPublicationOutcome(
-				ctx, task, candidate, w.convergePublicationOutcome,
-			)
-			if err != nil {
-				if isDurablePublicationConflict(err) {
-					return w.holdBlockedTask(
-						ctx, task, imported,
-						durablePublicationConflictReason(err),
-						domain.HoldExternalConflict,
-					)
-				}
-				if productionPublicationPermanentExternalFailure(err) {
-					return w.holdBlockedTask(ctx, task, imported, productionBlockExternal, domain.HoldExternalConflict)
-				}
 				if held, handled, holdErr := w.holdPublicationRepairRefusal(
 					ctx, task, checkpoint.Imported, err,
 				); handled {
@@ -1434,9 +1396,31 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				}
 				return productionTaskOutcome{}, err
 			}
-			if outcomeFound {
-				return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
+			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
+		}
+		published, outcomeFound, err := w.loadPublicationOutcome(
+			ctx, task, candidate, w.convergePublicationOutcome,
+		)
+		if err != nil {
+			if isDurablePublicationConflict(err) {
+				return w.holdBlockedTask(
+					ctx, task, imported,
+					durablePublicationConflictReason(err),
+					domain.HoldExternalConflict,
+				)
 			}
+			if productionPublicationPermanentExternalFailure(err) {
+				return w.holdBlockedTask(ctx, task, imported, productionBlockExternal, domain.HoldExternalConflict)
+			}
+			if held, handled, holdErr := w.holdPublicationRepairRefusal(
+				ctx, task, checkpoint.Imported, err,
+			); handled {
+				return held, holdErr
+			}
+			return productionTaskOutcome{}, err
+		}
+		if outcomeFound {
+			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 		}
 	}
 	recipes, err := w.recipes(ctx)
@@ -1448,7 +1432,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if found || pendingIntent {
+		if progress.hasCheckpoint() || pendingIntent {
 			return w.holdBlockedTask(
 				ctx, task, imported,
 				"Publication is durably held because current trust no longer approves the admitted project-image recipe. Restore that approval to recover the committed publication intent.",
@@ -1461,7 +1445,8 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			publishBlockTrustRule(domain.TrustRuleRecipeUnapproved),
 		)
 	}
-	if !found {
+	switch progress {
+	case productionPublicationProgressUnverified:
 		checkpoint, err = w.verifyAndCheckpoint(ctx, task, binding, imported, checkoutDir)
 		if verificationMemoryLimit(err) {
 			return w.completeBlockedTask(
@@ -1476,6 +1461,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err := w.runAfterVerification("production verification"); err != nil {
 			return productionTaskOutcome{}, err
 		}
+	case productionPublicationProgressVerified, productionPublicationProgressIntentFinalized:
+	case productionPublicationProgressReady:
+		// The ready arm of the recovery switch above always returns.
+		return productionTaskOutcome{}, fmt.Errorf("publication progress %q reached verification", progress)
 	}
 	if !checkpoint.Authorization.AuthorizesPublication {
 		return w.completeBlockedTask(
@@ -2892,8 +2881,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	binding productionBinding,
 	imported importer.Result,
 	checkpoint productionVerificationCheckpoint,
-	checkpointFound bool,
-	readyExists bool,
+	progress productionPublicationProgress,
 ) (*productionTaskOutcome, error) {
 	var current domain.AttentionItem
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -2914,7 +2902,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		return nil, fmt.Errorf("production blocked item %q has unexpected decisions: %w",
 			current.ID, domain.ErrParentKeyMismatch)
 	}
-	if readyExists {
+	if progress == productionPublicationProgressReady {
 		return nil, fmt.Errorf("run %q has both ready and definitive blocked items: %w",
 			task.RunID, domain.ErrParentKeyMismatch)
 	}
@@ -2940,7 +2928,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		// Recipe approval is checked before verification on both the first
 		// pass and recovery, so this definitive result never carries evidence.
 	case productionBlockVerification:
-		if !checkpointFound || checkpoint.Authorization.AuthorizesPublication {
+		if !progress.hasCheckpoint() || checkpoint.Authorization.AuthorizesPublication {
 			return nil, fmt.Errorf("production blocked item %q has an impossible verification reason: %w",
 				current.ID, domain.ErrParentKeyMismatch)
 		}
@@ -2949,7 +2937,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		// A retired re-entry is ended before any checkpoint is read, with no
 		// evidence.
 	case productionBlockHandoffVerification:
-		if !checkpointFound || !checkpoint.Authorization.AuthorizesPublication {
+		if !progress.hasCheckpoint() || !checkpoint.Authorization.AuthorizesPublication {
 			return nil, fmt.Errorf("production blocked item %q has an impossible handoff reason: %w",
 				current.ID, domain.ErrParentKeyMismatch)
 		}
@@ -2960,7 +2948,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		artifacts = handoffArtifacts
 	case productionBlockTrust, productionBlockBaseAdvanced, productionBlockHandoffConflict,
 		productionBlockReentryConflict, productionBlockReentryVerification, productionBlockReentryRoundLimit:
-		if !checkpointFound || !checkpoint.Authorization.AuthorizesPublication {
+		if !progress.hasCheckpoint() || !checkpoint.Authorization.AuthorizesPublication {
 			return nil, fmt.Errorf("production blocked item %q has an impossible publication reason: %w",
 				current.ID, domain.ErrParentKeyMismatch)
 		}
@@ -2969,7 +2957,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		// A first cycle's killed verification records no checkpoint and no
 		// evidence. An unpublished re-entry's carries the authorizing
 		// checkpoint it re-verified, like its other base-advance blocks.
-		if checkpointFound {
+		if progress.hasCheckpoint() {
 			if !checkpoint.Authorization.AuthorizesPublication {
 				return nil, fmt.Errorf("production blocked item %q has an impossible memory-limit reason: %w",
 					current.ID, domain.ErrParentKeyMismatch)
