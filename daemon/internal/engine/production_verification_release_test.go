@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -176,6 +178,31 @@ func TestVerificationReleaseWithoutBoundRooms(t *testing.T) {
 	}
 	if err := rf.release(t, errors.New("recipe failed")); err != nil || rf.held(t) {
 		t.Fatalf("proved room: release = %v, held = %v", err, rf.held(t))
+	}
+}
+
+// TestVerificationReleaseHoldsForAnUnprovenHostSlot: the host executor
+// writes no ownership records, so a pass whose slot absence is unproven keeps
+// the reservation even when ward proves every container gone, after ward's
+// proof has run its cleanup. The hold covers that pass alone: a later pass
+// whose own proofs pass releases it (#3000).
+func TestVerificationReleaseHoldsForAnUnprovenHostSlot(t *testing.T) {
+	t.Parallel()
+	slot := fmt.Errorf("slot teardown: %w", macverify.ErrAbsenceUnproven)
+	for name, bound := range map[string]bool{"bound": true, "unbound": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rf := newReleaseFixture(t, bound)
+			if err := rf.release(t, slot); err != nil || !rf.held(t) {
+				t.Fatalf("unproven slot: release = %v, held = %v", err, rf.held(t))
+			}
+			if bound && len(rf.asked) != 1 {
+				t.Fatalf("ward proof ran %d times for the unproven slot's pass, want once", len(rf.asked))
+			}
+			if err := rf.release(t, nil); err != nil || rf.held(t) {
+				t.Fatalf("later proved pass: release = %v, held = %v", err, rf.held(t))
+			}
+		})
 	}
 }
 

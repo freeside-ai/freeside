@@ -462,6 +462,9 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if reason, stop := reentryRebuildRefusedReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
+		if reason, stop := reentryHostVerificationRefusedReason(task, base.BaseSHA, err); stop {
+			return w.stopReentryCycle(ctx, task, reason, nil)
+		}
 		if reason, stop := reentryUnservedBaseReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
@@ -855,11 +858,18 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))
 	}
+	// A refused host executor returns *hostVerificationUnavailable, which
+	// the caller stops the cycle on: nothing ran, and a re-entry records no
+	// failed checkpoint without a verifier report.
+	rooms, err := w.verificationRooms(ctx, task, room, recipe)
+	if err != nil {
+		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, nil))
+	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: task.HeadSHA, BaseSHA: baseSHA, EvaluatedSHA: binding.evaluatedSHA,
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
 		RecipePath:      verify.DefaultRecipePath,
-		Rooms:           map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: room},
+		Rooms:           rooms,
 		ApprovedRecipes: recipes, Changes: changes,
 		// A stable per-cycle time, as on a first cycle: the evidence is
 		// content-addressed and write-once, so a re-run must reproduce it.

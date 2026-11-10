@@ -10,14 +10,15 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 // HostVerificationAdmission is what the host verification gate admitted: the
 // credential-free macOS verification executor (§5.7, macOS Execution), named
 // by its class, with the declaration and configuration it was admitted
-// under, for one run's verification job. It is an in-memory result that room
-// selection (#2882) consumes; no durable record of it exists yet, because
-// that unit owns the job's evidence and restart paths.
+// under, for one run's verification job. It is an in-memory result room
+// selection logs and then drops: no durable record of it exists, because a
+// restart reruns verification from its checkpoint and admits again.
 type HostVerificationAdmission struct {
 	InvocationID               domain.InvocationID
 	RunID                      domain.RunID
@@ -60,21 +61,28 @@ func (r *HostVerificationRefusal) Unwrap() []error {
 }
 
 // WithHostVerificationAdmission configures the credential-free macOS
-// verification executor as the engine's host verification backend. Only a
+// verification executor as the engine's host verification backend, and
+// newRoom as the constructor of the room its admitted jobs run in. Only a
 // backend named by that class is accepted, and the ward admitter refuses
 // one (WithAdmission), so the executor serves verification and nothing else.
 // The gate also needs WithAdmission, for the operating mode and clock; it
 // checks that on each call, since option order is not fixed.
-func WithHostVerificationAdmission(backend exec.ConfigurationBoundBackend) Option {
+func WithHostVerificationAdmission(
+	backend exec.ConfigurationBoundBackend, newRoom func() (verify.Room, error),
+) Option {
 	return func(e *Engine) error {
 		if backend == nil {
 			return errors.New("with host verification admission: nil backend")
+		}
+		if newRoom == nil {
+			return errors.New("with host verification admission: nil room constructor")
 		}
 		if backend.Name() != string(domain.BackendCredentialFreeHostVerification) {
 			return fmt.Errorf("with host verification admission: backend %q is not the %q class",
 				backend.Name(), domain.BackendCredentialFreeHostVerification)
 		}
 		e.hostVerification = backend
+		e.newHostVerificationRoom = newRoom
 		return nil
 	}
 }
@@ -84,8 +92,9 @@ func WithHostVerificationAdmission(backend exec.ConfigurationBoundBackend) Optio
 //
 //   - the operating mode is attended_dev or unattended;
 //   - the job is the task's own verification invocation, derived from its
-//     producing invocation, and never an invocation a ward role (writer,
-//     remediator, specifier) runs under;
+//     producing invocation, from its sealed successor (a re-entry), or from
+//     its own publication (the handoff merge check), and never an
+//     invocation a ward role (writer, remediator, specifier) runs under;
 //   - the executor's live declaration clears the class-aware minimum for the
 //     operating mode (domain.RequiredCapabilities): nothing under
 //     attended_dev, exactly supports_credential_free_host_verification under
@@ -113,10 +122,9 @@ func (e *Engine) admitHostVerification(
 	if role, ok := wardInvocationRole(task.RunID, invocationID); ok {
 		return refuse(fmt.Sprintf("invocation runs the ward role %s", role), nil)
 	}
-	if task.VerificationID == "" ||
-		task.VerificationID != productionVerificationInvocationIDForProducer(task.RunID, task.ProducingInvocationID) {
-		return refuse(fmt.Sprintf("invocation is not run %s's verification of %s",
-			task.RunID, task.ProducingInvocationID), domain.ErrParentKeyMismatch)
+	if !ownVerificationInvocation(task) {
+		return refuse(fmt.Sprintf("invocation is not one of run %s's verifications", task.RunID),
+			domain.ErrParentKeyMismatch)
 	}
 
 	backend := e.hostVerification
@@ -169,6 +177,52 @@ func (e *Engine) admitHostVerification(
 		OperatingMode:              mode,
 		AdmittedAt:                 e.admission.now().UTC(),
 	}, nil
+}
+
+// ownVerificationInvocation reports whether task.VerificationID is one the
+// task's own authority derives: its producer's verification (a first cycle or
+// a remediation round), its sealed successor's re-entry verification, or the
+// handoff merge check of its own publication. A successor of another run
+// derives nothing here.
+func ownVerificationInvocation(task productionPublicationTask) bool {
+	if task.VerificationID == "" {
+		return false
+	}
+	if task.VerificationID == productionVerificationInvocationIDForProducer(task.RunID, task.ProducingInvocationID) {
+		return true
+	}
+	publication := domain.ProductionPublicationInvocationID(task.RunID)
+	if successor := task.Successor; successor != nil {
+		if successor.RunID != task.RunID {
+			return false
+		}
+		if task.VerificationID == reentryVerificationInvocationID(*successor) &&
+			task.PublicationID == successor.PublicationID() {
+			return true
+		}
+		publication = successor.PublicationID()
+	}
+	return task.PublicationID == publication && task.VerificationID == handoffVerificationInvocationID(task)
+}
+
+// admitHostVerificationRoom admits task's verification job onto the host
+// executor (admitHostVerification) and builds the room it runs in. A room the
+// constructor cannot build is a refusal too: the configuration that failed it
+// fails it again on every call.
+func (e *Engine) admitHostVerificationRoom(
+	ctx context.Context, task productionPublicationTask,
+) (verify.Room, HostVerificationAdmission, error) {
+	admission, err := e.admitHostVerification(ctx, task)
+	if err != nil {
+		return nil, HostVerificationAdmission{}, err
+	}
+	room, err := e.newHostVerificationRoom()
+	if err != nil {
+		return nil, HostVerificationAdmission{}, &HostVerificationRefusal{
+			InvocationID: admission.InvocationID, Reason: "construct the executor's room", cause: err,
+		}
+	}
+	return room, admission, nil
 }
 
 // wardInvocationRole reports the ward role an invocation of run would run
