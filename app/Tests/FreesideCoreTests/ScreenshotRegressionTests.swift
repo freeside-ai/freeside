@@ -4142,20 +4142,41 @@
                         expandedFindingsDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize, compactLayout: true))))
             // A held alternative on a closed card: the picker is inside the
-            // disclosure, so the face is the only place the choice shows.
+            // disclosure, so the face is the only place the choice shows. The
+            // card is validated so its controls draw enabled: the held pick
+            // fills Choose Another Route and outlines the acceptance (R6,
+            // #3011), which a disabled control would not show.
+            let selectedAlternativeSnapshot = AttentionFixtures.findingAdjudicationRealisticMessages()
+            let selectedAlternativeStore = InboxStore(
+                client: APIClientFactory.mock(server: MockServer(items: [selectedAlternativeSnapshot])))
+            selectedAlternativeStore.replaceAll(with: [selectedAlternativeSnapshot])
+            await preloadReferences(realisticFindings, into: selectedAlternativeStore)
+            let selectedAlternativeModel = DecisionModel(
+                store: selectedAlternativeStore, itemID: realisticFindings.id)
+            await selectedAlternativeModel.validate()
+            await selectedAlternativeModel.refreshActionSurface()
+            #expect(selectedAlternativeModel.validation == .validated)
             let selectedAlternativeDetail = DecisionDetailView(
-                store: store,
+                store: selectedAlternativeStore,
                 itemID: realisticFindings.id,
                 alternativeSelections: ["review-finding-17": .dispute],
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                now: screenshotNow)
+                now: screenshotNow,
+                model: selectedAlternativeModel)
             surfaces.append(
                 Surface(
                     name: "decision-finding_adjudication-alternative-selected",
                     view: AnyView(
                         selectedAlternativeDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize))))
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-alternative-selected-phone",
+                    width: 390,
+                    view: AnyView(
+                        selectedAlternativeDetail.screenshotCard(
+                            realisticFindings, at: dynamicTypeSize, compactLayout: true))))
             // The first finding's reason expanded in place with Less, the
             // second still clamped with More (#2608), on both platforms and
             // in both appearances.

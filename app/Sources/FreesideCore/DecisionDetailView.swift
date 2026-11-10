@@ -541,9 +541,7 @@ struct DecisionDetailView: View {
                 actionButton(
                     recommendation.action,
                     item: item,
-                    tone: AttentionDisplay.confirmationConsequence(
-                        recommendation.action,
-                        for: item) == nil ? .primary : .destructive,
+                    tone: recommendationTone(recommendation.action, item: item),
                     showsIcon: false
                 )
                 .padding(.horizontal)
@@ -2490,6 +2488,14 @@ struct DecisionDetailView: View {
         Self.selectedAlternatives(binding, selections: alternativeSelections)
     }
 
+    /// Whether the operator holds a route pick on the item's findings, which
+    /// moves the card's fill to Choose Another Route (R6). It counts only
+    /// picks on findings the binding lists, as the command sends them.
+    private func holdsPick(_ item: Components.Schemas.AttentionItem) -> Bool {
+        guard let binding = item.finding_adjudication?.value1 else { return false }
+        return !selectedAlternatives(binding).isEmpty
+    }
+
     // A routed dispute draws each finding in the shape of findingCards: a
     // bordered item whose face holds the severity and title, where the
     // finding is and who raised it, and the routes the operator picks from,
@@ -3063,9 +3069,7 @@ struct DecisionDetailView: View {
             actionButton(
                 recommendation.action,
                 item: item,
-                tone: AttentionDisplay.confirmationConsequence(
-                    recommendation.action,
-                    for: item) == nil ? .primary : .destructive,
+                tone: recommendationTone(recommendation.action, item: item),
                 showsIcon: false
             )
             // The iOS sticky footer appears when this button is off screen, so
@@ -3159,6 +3163,21 @@ struct DecisionDetailView: View {
             actionRanking(item).recommended == recommendation.action
         else { return nil }
         return recommendation
+    }
+
+    /// The recommendation button's tone, shared by its block and the iPhone
+    /// footer: destructive when it confirms, filled when it holds the card's
+    /// one fill (R6), and outlined while a held pick holds it instead.
+    private func recommendationTone(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) -> FreesideActionButtonStyle.Tone {
+        if AttentionDisplay.confirmationConsequence(action, for: item) != nil {
+            return .destructive
+        }
+        return DecisionCardComposition.recommendationIsFilled(
+            for: item, ranking: actionRanking(item), holdsPick: holdsPick(item))
+            ? .primary : .secondary
     }
 
     /// Whether the card draws the recommendation as a module ahead of its
@@ -3997,7 +4016,8 @@ struct DecisionDetailView: View {
     ) -> some View {
         let ranking = actionRanking(item)
         let controlGap = CardScale.controlGap
-        let filledAction = DecisionCardComposition.filledAction(for: item, ranking: ranking)
+        let filledAction = DecisionCardComposition.filledAction(
+            for: item, ranking: ranking, holdsPick: holdsPick(item))
         // Position, because a repeated action fills only its first button.
         let filled = filledAction.flatMap(ranking.principal.firstIndex(of:))
         VStack(alignment: .leading, spacing: controlGap) {
@@ -4068,7 +4088,8 @@ struct DecisionDetailView: View {
             actionButton(
                 reviewing,
                 item: item,
-                tone: DecisionCardComposition.filledAction(for: item, ranking: ranking) == reviewing
+                tone: DecisionCardComposition.filledAction(
+                    for: item, ranking: ranking, holdsPick: holdsPick(item)) == reviewing
                     ? .primary : .secondary)
         }
     }
