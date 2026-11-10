@@ -39,15 +39,20 @@ VALUES (?1, ?2, ?3, ?4, ?4)
 ON CONFLICT (invocation_id) DO UPDATE SET refused_at = excluded.refused_at`
 	deleteLaunchWaitSQL = `DELETE FROM launch_waits WHERE invocation_id = ?`
 	launchWaitSQL       = `SELECT refused_at FROM launch_waits WHERE invocation_id = ?`
-	listLaunchWaitsSQL  = `SELECT invocation_id, run_id, task_created_at, refused_at FROM launch_waits`
+	listLaunchWaitsSQL  = `SELECT invocation_id, run_id, task_created_at, refused_at, kept_at FROM launch_waits`
+	keepLaunchWaitSQL   = `UPDATE launch_waits SET kept_at = ? WHERE invocation_id = ?`
 )
 
-// A launch still pursued is refused, and so refreshes its wait, at least
-// every LaunchWaitRefresh; the gate drops a wait not refreshed within
-// launchWaitLease, because nothing pursues that launch any more: its review
-// failed for good, its task was blocked, or its shadow arm was abandoned. The
-// lease is several refreshes long, so a slow pass never drops a live wait;
-// one that does lapse costs only its place in the order, never the budget.
+// A launch still pursued is refused, and so refreshes its wait, each time its
+// lane retries it, at most once every LaunchWaitRefresh. The production
+// publication lane is serial, so while one long pass works on another task it
+// retries none of its waits; the engine keeps alive the waits refused recently
+// enough that the lane may still pursue them, about every LaunchWaitRefresh,
+// until the pass returns (KeepLaunchWaits). The gate drops a wait whose latest refusal
+// and latest keepalive are both older than launchWaitLease, because nothing
+// pursues that launch any more: its review failed for good, its task was
+// blocked, its shadow arm was abandoned, or its daemon is gone and writes
+// neither. A lapsed wait costs only its place in the order, never the budget.
 const (
 	LaunchWaitRefresh = time.Minute
 	launchWaitLease   = 5 * LaunchWaitRefresh
@@ -268,6 +273,16 @@ type launchWait struct {
 	run           domain.RunID
 	taskCreatedAt time.Time
 	refusedAt     time.Time
+	// keptAt is the latest keepalive a publication pass wrote, zero when none.
+	keptAt time.Time
+}
+
+// refreshedAt is the latest refusal or keepalive, which the lease runs from.
+func (w launchWait) refreshedAt() time.Time {
+	if w.keptAt.After(w.refusedAt) {
+		return w.keptAt
+	}
+	return w.refusedAt
 }
 
 // before orders waits by task submission; the invocation id breaks a tie so
@@ -281,9 +296,9 @@ func (w launchWait) before(other launchWait) bool {
 
 // launchesAhead counts the waits for memory that come before this launch in
 // task submission order. A wait whose launch now holds memory, whose refusal
-// has lapsed (launchWaitLease), or whose run can no longer launch is no longer
-// in the order; it is deleted here, so a launch nothing pursues cannot block
-// everyone behind it.
+// and keepalive have both lapsed (launchWaitLease), or whose run can no longer
+// launch is no longer in the order; it is deleted here, so a launch nothing
+// pursues cannot block everyone behind it.
 func (tx *WriteTx) launchesAhead(
 	ctx context.Context, reservation domain.LaunchReservation, holders []domain.InvocationID, at time.Time,
 ) (int, error) {
@@ -301,7 +316,7 @@ func (tx *WriteTx) launchesAhead(
 		if wait.invocation == reservation.InvocationID {
 			continue
 		}
-		live := !slices.Contains(holders, wait.invocation) && at.Sub(wait.refusedAt) < launchWaitLease
+		live := !slices.Contains(holders, wait.invocation) && at.Sub(wait.refreshedAt()) < launchWaitLease
 		if live {
 			if live, err = tx.reviewRunCanLaunch(ctx, wait.run); err != nil {
 				return 0, err
@@ -325,9 +340,10 @@ func (tx *ReadTx) listLaunchWaits(ctx context.Context) ([]launchWait, error) {
 		var (
 			wait                 launchWait
 			createdAt, refusedAt string
+			keptAt               sql.NullString
 			err                  error
 		)
-		if err := row.Scan(&wait.invocation, &wait.run, &createdAt, &refusedAt); err != nil {
+		if err := row.Scan(&wait.invocation, &wait.run, &createdAt, &refusedAt, &keptAt); err != nil {
 			return launchWait{}, err
 		}
 		if wait.taskCreatedAt, err = parseTime(createdAt); err != nil {
@@ -335,6 +351,11 @@ func (tx *ReadTx) listLaunchWaits(ctx context.Context) ([]launchWait, error) {
 		}
 		if wait.refusedAt, err = parseTime(refusedAt); err != nil {
 			return launchWait{}, fmt.Errorf("launch wait %q refused_at: %w", wait.invocation, err)
+		}
+		if keptAt.Valid {
+			if wait.keptAt, err = parseTime(keptAt.String); err != nil {
+				return launchWait{}, fmt.Errorf("launch wait %q kept_at: %w", wait.invocation, err)
+			}
 		}
 		return wait, nil
 	}, listLaunchWaitsSQL)
@@ -380,6 +401,35 @@ func (tx *WriteTx) RecordLaunchWait(
 	return nil
 }
 
+// KeepLaunchWaits keeps alive, at at, the waits a running production
+// publication pass may still be pursuing: those last refused at or after since
+// minus launchWaitLease, where since is the start of the previous pass, or of
+// this one when it is the first. The set does not tell lanes apart, so it also
+// holds dispatch-loop waits. A wait the lane pursues is refused again in every
+// pass that reaches its task, so it stays in that set; one nothing pursues
+// drops out after two passes at most and then lapses. A wait already lapsed at
+// at stays lapsed: a keepalive extends a live wait, never revives one. The
+// keepalive moves only kept_at, never refused_at, so it cannot carry itself
+// forward from one pass to the next. Waits are not synchronized state, so this writes no
+// client revision. Times are compared parsed, not as text, because
+// RFC3339Nano trims trailing zeros.
+func (tx *InternalTx) KeepLaunchWaits(ctx context.Context, since, at time.Time) error {
+	waits, err := tx.listLaunchWaits(ctx)
+	if err != nil {
+		return fmt.Errorf("keep launch waits: %w", err)
+	}
+	pursuedSince := since.Add(-launchWaitLease)
+	for _, wait := range waits {
+		if wait.refusedAt.Before(pursuedSince) || at.Sub(wait.refreshedAt()) >= launchWaitLease {
+			continue
+		}
+		if _, err := tx.tx.ExecContext(ctx, keepLaunchWaitSQL, formatTime(at), wait.invocation); err != nil {
+			return fmt.Errorf("keep launch %q wait: %w", wait.invocation, err)
+		}
+	}
+	return nil
+}
+
 // LaunchWaiting reports whether a launch is in the memory order.
 func (tx *ReadTx) LaunchWaiting(ctx context.Context, invocation domain.InvocationID) (bool, error) {
 	_, waiting, err := tx.LaunchWaitRefusedAt(ctx, invocation)
@@ -387,7 +437,8 @@ func (tx *ReadTx) LaunchWaiting(ctx context.Context, invocation domain.Invocatio
 }
 
 // LaunchWaitRefusedAt reports whether a launch is in the memory order and the
-// latest refusal its wait records.
+// latest refusal its wait records. A keepalive (KeepLaunchWaits) is not a
+// refusal and does not move it.
 func (tx *ReadTx) LaunchWaitRefusedAt(
 	ctx context.Context, invocation domain.InvocationID,
 ) (time.Time, bool, error) {

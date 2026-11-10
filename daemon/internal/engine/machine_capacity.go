@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -178,7 +180,10 @@ func noticeLaunchMemoryRefusal(
 // one refused for anything else, such as a pool slot taken since it joined,
 // leaves it, so it holds back no launch on another pool. A refused launch is retried every pass and every write
 // advances the revision, so the order is written only when it changes or the
-// wait is due a refresh. With no budget nothing joins, so nothing is written.
+// wait is due a refresh. Between a publication-lane launch's refusals, the
+// pass running keeps its wait alive (launchWaitKeeper), so a wait's refused_at
+// stays its latest real refusal, which this throttles by. With no budget
+// nothing joins, so nothing is written.
 // A launch that joins fits the budget, so a notice that a smaller budget
 // refused it for good no longer describes its run and is retired.
 func recordLaunchOrder(
@@ -215,4 +220,63 @@ func recordLaunchOrder(
 		return releaseProductionQuarantine(ctx, st, attention, launchMemoryRefusedPrefix, runID)
 	}
 	return nil
+}
+
+// launchWaitKeeper keeps the production publication lane's memory waits alive
+// while one of its passes runs (store.KeepLaunchWaits). The lane is serial, so
+// it refuses a launch it waits on again only when a pass reaches that launch's
+// task; one long verification of another task would otherwise outlast the
+// wait's lease and let a newer launch take memory ahead of it (#2953). A
+// daemon that is gone runs no pass, so its waits still lapse.
+type launchWaitKeeper struct {
+	// mu holds for a whole pass, so lastStart is the start of the pass
+	// before this one even when two callers reconcile the lane at once.
+	mu        sync.Mutex
+	lastStart time.Time
+}
+
+// keepDuring runs pass and, until it returns, writes a keepalive about every
+// store.LaunchWaitRefresh for the waits refused since the previous pass's
+// start minus the lease, or this pass's on the first pass after a start. Each
+// tick reads the waits afresh, so a wait first refused earlier in this pass
+// is kept from the next tick on. A failed keepalive is logged, not returned:
+// it costs a wait at most its place in the order, and the pass itself
+// surfaces a broken store. The ticker goroutine is joined before return.
+func (k *launchWaitKeeper) keepDuring(
+	ctx context.Context, st *store.Store, now func() time.Time, logger *slog.Logger, pass func(),
+) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	start := now()
+	since := k.lastStart
+	if since.IsZero() {
+		since = start
+	}
+	k.lastStart = start
+
+	keepCtx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(store.LaunchWaitRefresh)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-keepCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			err := st.WriteInternal(keepCtx, func(tx *store.InternalTx) error {
+				return tx.KeepLaunchWaits(keepCtx, since, now())
+			})
+			if err != nil && keepCtx.Err() == nil {
+				logger.WarnContext(keepCtx, "launch wait keepalive failed", "error", err)
+			}
+		}
+	}()
+	defer func() {
+		stop()
+		<-done
+	}()
+	pass()
 }

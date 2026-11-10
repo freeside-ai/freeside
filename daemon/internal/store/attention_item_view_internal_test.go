@@ -12,6 +12,7 @@ import (
 // 0131 holds: no attention item views.
 func rewindAttentionItemViews(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindLaunchWaitKeepalive(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE attention_item_views`,
 		`DELETE FROM schema_migrations WHERE name = '0132_attention_item_views.sql'`,

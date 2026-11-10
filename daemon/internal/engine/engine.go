@@ -91,6 +91,9 @@ type Engine struct {
 	// WithMachineCapacity); each launch reads the budget in force through
 	// launchBoundAt.
 	launchBound ward.LaunchBound
+	// launchWaits keeps the publication lane's memory waits alive while a
+	// pass runs; process state only.
+	launchWaits launchWaitKeeper
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
 	pace observationPace
@@ -337,7 +340,13 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	if err := e.productionPublication.observeClosedWorkflows(ctx); err != nil {
 		return ReconcileResult{}, err
 	}
-	publication, err := e.productionPublication.reconcile(ctx)
+	var (
+		publication productionPublicationResult
+		err         error
+	)
+	e.launchWaits.keepDuring(ctx, e.store, e.productionPublication.now, e.logger, func() {
+		publication, err = e.productionPublication.reconcile(ctx)
+	})
 	result := ReconcileResult{
 		RunTransitions:            publication.feedbackTransitions,
 		ResultsAccepted:           publication.accepted,

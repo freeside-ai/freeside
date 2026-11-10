@@ -321,6 +321,102 @@ func TestMachineCapacityDropsALapsedWait(t *testing.T) {
 	}
 }
 
+func keepWaits(t *testing.T, st *Store, since, at time.Time) {
+	t.Helper()
+	if err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+		return tx.KeepLaunchWaits(t.Context(), since, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestMachineCapacityKeepsAKeptWait: a wait a publication pass keeps alive
+// holds its place past its refusal's lease and lapses one lease after the
+// keepalive, and the keepalive leaves the refusal the engine throttles by
+// unchanged (#2953).
+func TestMachineCapacityKeepsAKeptWait(t *testing.T) {
+	t.Parallel()
+	st := openSlotStore(t)
+	seedCapacityRuns(t, st, "1-holder", "2-older", "3-newer")
+	holder := verificationLaunch("1-holder", 2048)
+	older, newer := verificationLaunch("2-older", 2048), verificationLaunch("3-newer", 1024)
+	if err := reserve(t, st, holder); err != nil {
+		t.Fatal(err)
+	}
+	refuseAndWait(t, st, older)
+
+	kept := slotAt.Add(launchWaitLease - time.Second)
+	keepWaits(t, st, slotAt, kept)
+	if err := st.Read(t.Context(), func(tx *ReadTx) error {
+		refusedAt, waiting, err := tx.LaunchWaitRefusedAt(t.Context(), older.InvocationID)
+		if err == nil && (!waiting || !refusedAt.Equal(slotAt)) {
+			err = fmt.Errorf("refused at %v (waiting %t), want %v", refusedAt, waiting, slotAt)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var refusal *domain.MachineCapacityError
+	if err := reserveAt(t, st, newer, slotAt.Add(launchWaitLease+30*time.Second)); !errors.As(err, &refusal) ||
+		refusal.Hold.Ahead != 1 {
+		t.Fatalf("newer launch behind a kept wait = %v, want a refusal with one ahead", err)
+	}
+	if err := reserveAt(t, st, newer, kept.Add(launchWaitLease)); err != nil {
+		t.Fatalf("newer launch behind a lapsed keepalive: %v", err)
+	}
+	if err := st.Read(t.Context(), func(tx *ReadTx) error {
+		waiting, err := tx.LaunchWaiting(t.Context(), older.InvocationID)
+		if err == nil && waiting {
+			err = errors.New("the lapsed wait was not dropped")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestKeepLaunchWaitsSkipsAWaitNothingPursues: a wait last refused before the
+// previous pass's start minus the lease is one the lane stopped pursuing, so
+// a pass does not keep it and it lapses on its refusal's lease.
+func TestKeepLaunchWaitsSkipsAWaitNothingPursues(t *testing.T) {
+	t.Parallel()
+	st := openSlotStore(t)
+	seedCapacityRuns(t, st, "1-holder", "2-stale", "3-newer")
+	holder := verificationLaunch("1-holder", 2048)
+	stale, newer := verificationLaunch("2-stale", 2048), verificationLaunch("3-newer", 1024)
+	if err := reserve(t, st, holder); err != nil {
+		t.Fatal(err)
+	}
+	refuseAndWait(t, st, stale)
+
+	since := slotAt.Add(launchWaitLease + time.Second)
+	keepWaits(t, st, since, since.Add(LaunchWaitRefresh))
+	if err := reserveAt(t, st, newer, slotAt.Add(launchWaitLease)); err != nil {
+		t.Fatalf("newer launch behind an unkept wait past its lease: %v", err)
+	}
+}
+
+// TestKeepLaunchWaitsLeavesALapsedWaitLapsed: a keepalive extends a live wait
+// but never revives one whose lease already ran out, even when its refusal is
+// recent enough for the pass to keep.
+func TestKeepLaunchWaitsLeavesALapsedWaitLapsed(t *testing.T) {
+	t.Parallel()
+	st := openSlotStore(t)
+	seedCapacityRuns(t, st, "1-holder", "2-lapsed", "3-newer")
+	holder := verificationLaunch("1-holder", 2048)
+	lapsed, newer := verificationLaunch("2-lapsed", 2048), verificationLaunch("3-newer", 1024)
+	if err := reserve(t, st, holder); err != nil {
+		t.Fatal(err)
+	}
+	refuseAndWait(t, st, lapsed)
+
+	at := slotAt.Add(launchWaitLease)
+	keepWaits(t, st, slotAt, at)
+	if err := reserveAt(t, st, newer, at.Add(time.Second)); err != nil {
+		t.Fatalf("newer launch behind a wait that lapsed before its keepalive: %v", err)
+	}
+}
+
 // TestMachineCapacityReplaysUnderTheOverheadItReserved: a held launch replayed
 // after the runtime's overhead changed keeps the reservation it holds rather
 // than conflicting, which would fail every dispatch pass, and a released one
