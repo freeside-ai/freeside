@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +39,25 @@ const defaultPrepareTimeout = 15 * time.Minute
 const cancelExitGrace = 5 * time.Second
 
 const absencePollInterval = 20 * time.Millisecond
+
+// probeTimeout bounds one probe command. Under the sandbox every check fails
+// at once; the packet-filter mode waits out two dropped attempts.
+const probeTimeout = 2 * time.Minute
+
+// maxProbeReport bounds a probe's report; a longer one is truncated and
+// fails closed.
+const maxProbeReport = 64 << 10
+
+// The pre-job probe's off-host targets are TEST-NET-1 literals (RFC 5737).
+// The sandbox refuses a connect or send with EPERM before routing, so the
+// check needs no network and no name, and an unconfined probe's attempt goes
+// nowhere and fails the check. The resolver host is a name that resolves
+// for the daemon.
+const (
+	preJobResolverHost = "github.com"
+	preJobTCP          = "192.0.2.1:443"
+	preJobUDP          = "192.0.2.1:53"
+)
 
 // RoomOptions tunes a Room. The zero value selects the defaults.
 type RoomOptions struct {
@@ -74,6 +95,14 @@ type Room struct {
 	// swiftCacheMasked makes the room serve no Swift dependency cache, so
 	// the live suite can show a job without it attempts the network.
 	swiftCacheMasked bool
+	// backend's declaration is withdrawn when a pre-job probe finds a
+	// confinement broken.
+	backend *Backend
+	// outsideDirs are where the sandbox probe must be refused writing.
+	outsideDirs []string
+	// probeWorkspace returns the directory holding the probe executable
+	// (the backend's stageProbe outside tests).
+	probeWorkspace func() (string, error)
 }
 
 var _ verify.Room = (*Room)(nil)
@@ -101,7 +130,11 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 		return nil, fmt.Errorf("%w: negative room wait delay", ErrInvalidConfig)
 	}
 	helper := helperPath(b.cfg.ExecutorRoot)
-	return &Room{
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("%w: the daemon user's home: %w", ErrInvalidConfig, err)
+	}
+	r := &Room{
 		root:            b.cfg.ExecutorRoot,
 		profile:         b.cfg.SandboxProfile,
 		pool:            b.slots,
@@ -115,7 +148,14 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 		hostSupported:   hostSupported,
 		toolchain:       b.cfg.Toolchain,
 		hostToolchain:   HostToolchain,
-	}, nil
+		backend:         b,
+		// The two world-writable directories show the refusal is the
+		// sandbox's and not file permissions; EPERM shows the same for the
+		// daemon user's home.
+		outsideDirs: []string{"/private/tmp", "/Users/Shared", home},
+	}
+	r.probeWorkspace = b.stageProbe
+	return r, nil
 }
 
 // Run executes argv as a leased slot in a copy of workdir. A nonzero exit or
@@ -128,10 +168,16 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 // configuration's pin (checkToolchain); a workspace holding a
 // Package.resolved has a complete Swift dependency cache entry for its key,
 // and prepare seeded exactly that entry (swiftCacheFor, checkPrepared); the
-// prepared job directory is the slot's own at 0700 (checkPrepared); and,
-// before the slot is released, no process owned by the slot's uid survives
-// (teardown). A slot that fails the last, or whose helper the room stopped
-// waiting for, is quarantined and Run returns ErrAbsenceUnproven.
+// leased slot passes the pre-job probe, its sandbox network and write
+// confinements, before the command is launched (preJobProbe); the prepared
+// job directory is the slot's own at 0700 (checkPrepared); and, before the
+// slot is released, no process owned by the slot's uid survives (teardown).
+// A slot that fails the last, or whose helper the room stopped waiting for,
+// is quarantined and Run returns ErrAbsenceUnproven. A slot that fails the
+// pre-job probe is quarantined, the backend's declaration is withdrawn, and
+// Run returns the *ConformanceFailure; a probe that could not run (prepare
+// failed, the probe could not be staged) fails the command and withdraws
+// nothing.
 func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.StepResult, error) {
 	if r == nil || r.launcher == nil || r.pool == nil {
 		return verify.StepResult{}, errors.New("macverify room is not initialized")
@@ -155,10 +201,6 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 	if err != nil {
 		return verify.StepResult{}, err
 	}
-	jobID, err := newJobID()
-	if err != nil {
-		return verify.StepResult{}, err
-	}
 	if err := ctx.Err(); err != nil {
 		return verify.StepResult{}, err
 	}
@@ -166,7 +208,81 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 	if err != nil {
 		return verify.StepResult{}, err
 	}
-	result, preparedUID, runErr := r.runJob(ctx, slot, jobID, workdir, swiftCache, argv)
+	if err := r.preJobProbe(ctx, slot); err != nil {
+		var failure *ConformanceFailure
+		switch {
+		case errors.Is(err, ErrAbsenceUnproven):
+			// runOnSlot quarantined the slot.
+		case errors.As(err, &failure):
+			r.pool.quarantine(slot)
+			r.backend.withdrawConformance()
+		default:
+			r.pool.release(slot)
+		}
+		return verify.StepResult{}, fmt.Errorf("pre-job probe: %w", err)
+	}
+	result, err := r.runOnSlot(ctx, slot, r.profile, workdir, swiftCache, argv, r.maxOutput)
+	if !errors.Is(err, ErrAbsenceUnproven) {
+		r.pool.release(slot)
+	}
+	return result, err
+}
+
+// preJobProbe runs the sandbox mode of the probe on slot, under the
+// configured profile, against a loopback listener the daemon holds and the
+// fixed pre-job targets. A *ConformanceFailure means a confinement failed;
+// any other error means the probe could not run.
+func (r *Room) preJobProbe(ctx context.Context, slot string) error {
+	workspace, err := r.probeWorkspace()
+	if err != nil {
+		return err
+	}
+	// Nothing accepts: the kernel completes a handshake to a listening
+	// socket on its own, so an unconfined probe's connect would succeed.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("probe listener: %w", err)
+	}
+	defer func() { _ = listener.Close() }()
+	spec := sandboxProbe(sandboxTargets{
+		loopbackPort: strconv.Itoa(listener.Addr().(*net.TCPAddr).Port),
+		resolverHost: preJobResolverHost,
+		tcp:          preJobTCP,
+		udp:          preJobUDP,
+		outsideDirs:  r.outsideDirs,
+	})
+	return r.runProbe(ctx, slot, workspace, r.profile, spec)
+}
+
+// runProbe runs one probe job on a slot the caller has leased and checks its
+// report. It returns runOnSlot's error as it is, a probe the caller canceled
+// or probeTimeout cut short as an operational error, and a report that does
+// not prove every check as a *ConformanceFailure. The timeout is operational
+// because it covers prepare, which a loaded host can slow, while every probe
+// check gives up on its own within seconds, confined or not.
+func (r *Room) runProbe(ctx context.Context, slot, workspace string, profile []byte, spec probeSpec) error {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	res, err := r.runOnSlot(probeCtx, slot, profile, workspace, "", spec.argv(), maxProbeReport)
+	if err != nil {
+		return fmt.Errorf("%s probe: %w", spec.mode, err)
+	}
+	if err := probeCtx.Err(); err != nil {
+		return fmt.Errorf("%s probe did not finish: %w", spec.mode, err)
+	}
+	return checkProbeReport(slot, spec, res)
+}
+
+// runOnSlot runs one job on a slot the caller has leased: prepare, run, and
+// tear down. Recipe commands and probes take this one path. On an error
+// wrapping ErrAbsenceUnproven it has quarantined the slot; otherwise the
+// slot is free of the job and the caller releases it.
+func (r *Room) runOnSlot(ctx context.Context, slot string, profile []byte, workdir, swiftCache string, argv []string, maxOutput int64) (verify.StepResult, error) {
+	jobID, err := newJobID()
+	if err != nil {
+		return verify.StepResult{}, err
+	}
+	result, preparedUID, runErr := r.runJob(ctx, slot, jobID, profile, workdir, swiftCache, argv, maxOutput)
 	if errors.Is(runErr, errHelperAbandoned) {
 		// Tearing down under a live helper would race it, and the teardown
 		// could not prove the helper would not touch the slot afterwards.
@@ -177,7 +293,6 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 		r.pool.quarantine(slot)
 		return verify.StepResult{}, fmt.Errorf("%w: slot %s: %w", ErrAbsenceUnproven, slot, errors.Join(err, runErr))
 	}
-	r.pool.release(slot)
 	if runErr != nil {
 		return verify.StepResult{}, runErr
 	}
@@ -187,9 +302,9 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 // runJob prepares the slot and runs the command. It returns the uid prepare
 // reported (zero if prepare failed), for the teardown to cross-check. An
 // error wrapping errHelperAbandoned means a helper may still be running.
-func (r *Room) runJob(ctx context.Context, slot, jobID, workdir, swiftCache string, argv []string) (verify.StepResult, int, error) {
+func (r *Room) runJob(ctx context.Context, slot, jobID string, profile []byte, workdir, swiftCache string, argv []string, maxOutput int64) (verify.StepResult, int, error) {
 	prepareCtx, cancelPrepare := context.WithTimeout(context.WithoutCancel(ctx), r.prepareTimeout)
-	prepared, err := r.launcher.prepare(prepareCtx, slot, jobID, workdir, r.profile, swiftCache)
+	prepared, err := r.launcher.prepare(prepareCtx, slot, jobID, workdir, profile, swiftCache)
 	cancelPrepare()
 	if err != nil {
 		return verify.StepResult{}, 0, fmt.Errorf("prepare slot %s: %w", slot, err)
@@ -208,7 +323,7 @@ func (r *Room) runJob(ctx context.Context, slot, jobID, workdir, swiftCache stri
 		Params: sandboxParams(jobDir, prepared),
 		Argv:   slices.Clone(argv),
 	}
-	out := procbound.NewTailBuffer(r.maxOutput)
+	out := procbound.NewTailBuffer(maxOutput)
 	done, err := r.launcher.run(req, out)
 	if err != nil {
 		return verify.StepResult{}, prepared.UID, fmt.Errorf("launch in slot %s: %w", slot, err)

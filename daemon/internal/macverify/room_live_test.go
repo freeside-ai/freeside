@@ -5,11 +5,9 @@ package macverify
 import (
 	"context"
 	"errors"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,51 +81,20 @@ func TestLiveRoomConfinesASlot(t *testing.T) {
 	runConfineProbe(t, room)
 }
 
-// runConfineProbe runs the probe's confinement checks as the room's first
-// free slot, then checks the next job finds that slot's home reset.
+// runConfineProbe runs the fixture probe's checks as the room's first free
+// slot. Run passing means the pre-job probe, the test binary answering the
+// probe verb (TestMain), proved the network and write confinements first.
 func runConfineProbe(t *testing.T, room *Room) {
 	t.Helper()
-	workspace := probeWorkspace(t)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
-		}
-	}()
-	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	operatorHome, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res, err := room.Run(t.Context(), workspace, []string{"./probe", "confine", port, operatorHome})
+	res, err := room.Run(t.Context(), probeWorkspace(t), []string{"./probe", "confine"})
 	t.Logf("confine probe exit %d:\n%s", res.ExitCode, res.Output)
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("confine probe = exit %d, %v", res.ExitCode, err)
 	}
-	for _, check := range []string{
-		"loopback-refused", "resolver-empty", "write-denied /private/tmp", "write-denied " + operatorHome,
-		"write-job-dir", "write-home", "job-dir-owner", "environment", "no-window-server-session",
-	} {
+	for _, check := range []string{"write-home", "write-tmpdir", "job-dir-owner", "environment", "no-window-server-session"} {
 		if !strings.Contains(string(res.Output), "ok "+check+"\n") {
 			t.Errorf("probe did not pass %s", check)
 		}
-	}
-
-	// The confine probe left a marker in the slot's home. Sequential jobs
-	// lease the first free slot, so the next job runs as the same slot and
-	// must find its home reset.
-	res, err = room.Run(t.Context(), workspace, []string{"./probe", "home-clean"})
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("home-clean probe = exit %d, %v\n%s", res.ExitCode, err, res.Output)
 	}
 }
 

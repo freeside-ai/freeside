@@ -85,8 +85,12 @@ type Backend struct {
 	cfg Config
 	// daemonIdentity binds a restored proof to the exact freesided binary
 	// that earned it, as the ward's does: rebuilding the gate implementation
-	// requires a fresh pass.
+	// requires a fresh pass. daemonPath and daemonDigest are its parts:
+	// stageProbe copies that path into the probe workspace and checks the
+	// copy against that digest, so the probe is the binary the digest names.
 	daemonIdentity string
+	daemonPath     string
+	daemonDigest   string
 	initialized    bool
 	// slots is shared by every Room built over this backend, so leases and
 	// quarantine hold across them: the uid absence proof assumes one job per
@@ -94,9 +98,12 @@ type Backend struct {
 	slots  *slotPool
 	proven atomic.Bool
 	// proofMu makes the generation check and the publication one decision,
-	// so a restore cannot race a later live pass (#2879).
+	// so a restore cannot race a later live pass.
 	proofMu         sync.Mutex
 	proofGeneration uint64
+	// probeMu guards probeDir, the probe workspace stageProbe keeps.
+	probeMu  sync.Mutex
+	probeDir string
 }
 
 type conformanceConfiguration struct {
@@ -124,11 +131,14 @@ func New(cfg Config) (*Backend, error) {
 	cfg.SandboxProfile = slices.Clone(cfg.SandboxProfile)
 	cfg.PacketFilterRules = slices.Clone(cfg.PacketFilterRules)
 	cfg.Slots = slices.Clone(cfg.Slots)
-	daemonIdentity, err := daemonConfigurationIdentity()
+	daemonPath, daemonDigest, err := daemonExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("%w: daemon executable identity: %w", ErrInvalidConfig, err)
 	}
-	return &Backend{cfg: cfg, daemonIdentity: daemonIdentity, initialized: true, slots: newSlotPool(cfg.Slots)}, nil
+	return &Backend{
+		cfg: cfg, daemonIdentity: daemonPath + "@" + daemonDigest, daemonPath: daemonPath, daemonDigest: daemonDigest,
+		initialized: true, slots: newSlotPool(cfg.Slots),
+	}, nil
 }
 
 // Name identifies the backend in policy, refusals, and audit records.
@@ -136,7 +146,8 @@ func (b *Backend) Name() string { return BackendName }
 
 // Capabilities returns the executor's declaration: empty until a passed
 // conformance record for this configuration is restored, then exactly
-// supports_credential_free_host_verification. Off macOS it is always empty.
+// supports_credential_free_host_verification. A pre-job probe failure
+// empties it again. Off macOS it is always empty.
 func (b *Backend) Capabilities() exec.CapabilitySet {
 	caps := exec.NewCapabilitySet()
 	if b == nil || !b.initialized || !hostSupported {
@@ -213,12 +224,33 @@ func (b *Backend) RestoreConformance(record domain.BackendConformance) error {
 	return nil
 }
 
-func daemonConfigurationIdentity() (string, error) {
-	path, err := os.Executable()
+// withdrawConformance clears the declaration after a pre-job probe found a
+// confinement broken. It takes a generation too, so a restore cannot
+// publish over it. The failed slot stays quarantined, so the declaration
+// returns only when a restart restores the durable record; the pre-job probe
+// then runs again before every command. The withdrawal is in memory only.
+func (b *Backend) withdrawConformance() {
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	b.proofGeneration++
+	b.proven.Store(false)
+}
+
+// daemonExecutable returns this process's executable path and its digest.
+func daemonExecutable() (path, digest string, err error) {
+	path, err = os.Executable()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	f, err := os.Open(path) //nolint:gosec // G304: hashes this process's own executable
+	digest, err = fileDigest(path)
+	if err != nil {
+		return "", "", err
+	}
+	return path, digest, nil
+}
+
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: hashes this process's own executable or the room's copy of it
 	if err != nil {
 		return "", err
 	}
@@ -227,5 +259,79 @@ func daemonConfigurationIdentity() (string, error) {
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return path + "@" + contentaddr.Format(h.Sum(nil)), nil
+	return contentaddr.Format(h.Sum(nil)), nil
+}
+
+// stageProbe returns the probe workspace: a daemon-owned directory holding a
+// copy of the daemon's executable named probe, which prepare copies into the
+// job like any workspace. Every room over the backend shares the one copy.
+// It stages the copy on first use, and again when the copy is gone or
+// differs (the system's sweep of temporary files can remove it under a
+// long-running daemon). The copy must hash to the digest the configuration
+// digest names, so the probe is the binary the proof is bound to; a binary
+// replaced on disk since New is refused until the daemon restarts.
+func (b *Backend) stageProbe() (string, error) {
+	b.probeMu.Lock()
+	defer b.probeMu.Unlock()
+	if b.probeDir != "" {
+		digest, err := fileDigest(filepath.Join(b.probeDir, probeExecutable))
+		if err == nil && digest == b.daemonDigest {
+			return b.probeDir, nil
+		}
+		_ = os.RemoveAll(b.probeDir)
+		b.probeDir = ""
+	}
+	dir, err := os.MkdirTemp("", "freeside-macverify-probe-")
+	if err != nil {
+		return "", fmt.Errorf("stage probe: %w", err)
+	}
+	// The workspace path the helper reads is the canonical one, not one
+	// through the /var symlink.
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("stage probe: %w", err)
+	}
+	dir = canonical
+	if err := stageProbeIn(dir, b.daemonPath, b.daemonDigest); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	b.probeDir = dir
+	return dir, nil
+}
+
+// stageProbeIn copies the daemon executable at path into dir as the probe
+// and refuses a copy whose digest is not want.
+func stageProbeIn(dir, path, want string) error {
+	dst := filepath.Join(dir, probeExecutable)
+	if err := copyExecutable(path, dst); err != nil {
+		return fmt.Errorf("stage probe: %w", err)
+	}
+	digest, err := fileDigest(dst)
+	if err != nil {
+		return fmt.Errorf("stage probe: %w", err)
+	}
+	if digest != want {
+		return fmt.Errorf("stage probe: the daemon executable %s is %s on disk, but the daemon started as %s; restart the daemon",
+			path, digest, want)
+	}
+	return nil
+}
+
+func copyExecutable(src, dst string) error {
+	in, err := os.Open(src) //nolint:gosec // G304: the daemon's own executable
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755) //nolint:gosec // G302,G304: the probe must be executable by the slot that runs its copy
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

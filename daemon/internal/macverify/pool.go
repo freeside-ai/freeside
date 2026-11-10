@@ -11,7 +11,8 @@ import (
 // pool never waits: queueing belongs to the engine's admission (#2882).
 var ErrNoFreeSlot = errors.New("macverify: no free verification slot")
 
-// slotPool leases one slot per job. A quarantined slot, one whose absence
+// slotPool leases one slot per command, held across its pre-job probe and
+// the command itself. A quarantined slot, one whose absence
 // proof failed, is never leased again by this daemon process; after a
 // restart, slot-run's prepare refuses it until it owns no process.
 type slotPool struct {
