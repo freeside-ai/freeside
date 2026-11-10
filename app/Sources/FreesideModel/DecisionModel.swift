@@ -2,6 +2,7 @@ import Crypto
 import Foundation
 import FreesideAPI
 import Observation
+import OpenAPIRuntime
 
 /// One attention item's decision surface: revalidates the item's current
 /// state on open, exposes exactly the actions the item requests, and
@@ -12,6 +13,11 @@ import Observation
 /// pending-command ledger: it survives this model's recreation, blocks
 /// every new command for the item, and resolves only through a verbatim
 /// resend (plan §5.14 sync test 4).
+///
+/// A spec approval's Discuss may carry attachments (#2995): their bytes are
+/// saved with the pending command, then uploaded by digest before the
+/// command is sent, on the first send and on Retry alike, since the command
+/// names only digests.
 @MainActor
 @Observable
 public final class DecisionModel {
@@ -42,6 +48,11 @@ public final class DecisionModel {
         appliedRecord.map { acceptedCommandIDs[$0.action]?.count ?? 0 } ?? 0
     }
     public private(set) var submissionError: String?
+    /// Whether the item's unresolved command is known not to have been
+    /// sent: one of its attachments failed to upload, so the command never
+    /// left (#2995). False after a relaunch or on a recreated card, where
+    /// only a resend can tell.
+    public private(set) var unsentAfterFailedUpload = false
     public private(set) var proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?
     public private(set) var effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
 
@@ -56,6 +67,11 @@ public final class DecisionModel {
     /// may write the outcome, so a stale late failure cannot clobber a
     /// newer success (or vice versa).
     private var validationGeneration = 0
+    /// The names of the attachments this card sent, by digest, so an
+    /// upload failure names the file. A command restored after a relaunch
+    /// carries only digests, so its failures name the attachment by
+    /// position.
+    private var attachmentNamesByDigest: [String: String] = [:]
     /// Advances only after this model durably claims the item's pending-command
     /// slot. Message composers use it to distinguish a submission that started
     /// from one rejected locally before any command could leave the device.
@@ -700,15 +716,33 @@ public final class DecisionModel {
         await submit(.snooze, snoozeUntil: until)
     }
 
+    /// Whether Discuss on this item may carry attachments: only a spec
+    /// approval's discussion hands them to an agent (#2995). The other
+    /// discuss-capable cards' replies never see the files, and finding
+    /// adjudication reads them only as bounded text.
+    public var acceptsDiscussAttachments: Bool {
+        snapshot?.item._type == .spec_approval
+    }
+
+    /// Sends a discuss message with `attachments` in the order given. The
+    /// message text stays required; attachments are refused on any item
+    /// but a spec approval.
     @discardableResult
-    public func submitDiscuss(message: String) async -> Bool {
+    public func submitDiscuss(message: String, attachments: [DraftAttachment] = []) async -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             submissionError = "enter a message before sending"
             return false
         }
+        guard attachments.isEmpty || acceptsDiscussAttachments else {
+            submissionError = "only a specification discussion can carry attachments"
+            return false
+        }
+        for attachment in attachments {
+            attachmentNamesByDigest[attachment.digest] = attachment.name
+        }
         let generationBefore = submissionClaimGeneration
-        await submit(.discuss, message: trimmed)
+        await submit(.discuss, message: trimmed, attachments: attachments)
         return submissionClaimGeneration != generationBefore
     }
 
@@ -853,6 +887,7 @@ public final class DecisionModel {
         findingRoutes: [Components.Schemas.FindingRouteChoice]? = nil,
         message: String? = nil,
         answerRoute: Components.Schemas.AnswerRoute? = nil,
+        attachments: [DraftAttachment] = [],
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil,
         trustDetailsRevealed: Bool = false,
         pullRequestDestination: URL? = nil
@@ -869,6 +904,7 @@ public final class DecisionModel {
             (action == .choose_alternative_route) == (alternativeChoices != nil),
             (action == .adjudicate_findings) == (findingRoutes != nil),
             action == .open_pr || pullRequestDestination == nil,
+            attachments.isEmpty || (action == .discuss && acceptsDiscussAttachments),
             ([
                 .discuss, .request_changes, .answer_and_retry, .answer_without_retry,
                 .return_to_agent,
@@ -915,6 +951,9 @@ public final class DecisionModel {
                     },
                     alternate_agent_choice: alternateAgentChoice.map { .init(value1: $0) },
                     answer_route: answerRoute.map { .init(value1: $0) },
+                    // Nil, not empty, for none, so a text-only command
+                    // keeps its shape.
+                    attachments: attachments.isEmpty ? nil : attachments.map(\.digest),
                     task_proposal_revision: revision.map {
                         .init(value1: $0)
                     },
@@ -952,7 +991,8 @@ public final class DecisionModel {
         // sees the pending entry and cannot mint a second command, and a
         // relaunch after a lost response still has the command_id to replay
         // (#163). Only a definitive outcome below releases the slot.
-        switch store.registerPendingCommand(command) {
+        let attachmentBytes = attachments.reduce(into: [String: Data]()) { $0[$1.digest] = $1.bytes }
+        switch store.registerPendingCommand(command, attachmentBytes: attachmentBytes) {
         case .registered:
             submissionClaimGeneration += 1
         case .slotOccupied:
@@ -966,14 +1006,17 @@ public final class DecisionModel {
             return
         }
         submissionError = nil
+        unsentAfterFailedUpload = false
         // A new submission supersedes the previously displayed record; a
         // stale one would also mask the lost-response retry affordance.
         appliedRecord = nil
         phase = .submitting(action)
-        // If an epoch eviction lands while the command is in flight, the
-        // conflict replacement below is from a possibly dead epoch; the
-        // generation captured here gates certifying it (#162).
+        // If an epoch eviction lands while the command or its uploads are
+        // in flight, the conflict replacement below is from a possibly
+        // dead epoch; the generation captured here gates certifying it
+        // (#162).
         let generationBefore = store.cacheGeneration
+        guard await sendsAfterUploadingAttachments(of: command) else { return }
         do {
             let output = try await store.client.submitCommand(body: .json(command))
             switch output {
@@ -1458,6 +1501,7 @@ public final class DecisionModel {
             let pendingAction = pending.decisionAction
         else { return }
         submissionError = nil
+        unsentAfterFailedUpload = false
         phase = .submitting(pendingAction)
         if pendingAction == .snooze {
             // validate() claims the unresolved slot and performs replay
@@ -1469,7 +1513,13 @@ public final class DecisionModel {
         // a concurrent retry while it runs.
         store.setPendingCommandState(
             itemID: itemID, commandID: pending.command_id, state: .inFlight)
+        // A stored digest's upload is the daemon's no-op, so Retry uploads
+        // every saved attachment again whether or not the first send got
+        // that far.
+        // Captured before the uploads, so an eviction during them gates
+        // the replay as one during the resend would.
         let generationBefore = store.cacheGeneration
+        guard await sendsAfterUploadingAttachments(of: pending) else { return }
         switch await replayLostResponse(pending, since: generationBefore) {
         case .recovered:
             // The stale or unknown snapshot converges on canonical state;
@@ -1513,6 +1563,61 @@ public final class DecisionModel {
             phase = .idle
             await validate()
         }
+    }
+
+    /// Uploads, in order, the saved bytes of every attachment `command`
+    /// names, and says whether the command may be sent. When it may not, it
+    /// has settled the slot: a 422 (the bytes no longer hash to the digest)
+    /// or another non-authentication 4xx is final, so the command is
+    /// cleared as not sent; a transport failure, a 5xx, or authentication
+    /// leaves it unresolved, known unsent, for Retry. A digest with no saved
+    /// bytes is skipped: the daemon answers the command with a 400 if it
+    /// doesn't hold the digest, which already clears it as not recorded.
+    private func sendsAfterUploadingAttachments(of command: Components.Schemas.ClientCommand) async -> Bool {
+        let digests = command.decisionPayload?.attachments ?? []
+        for (index, digest) in digests.enumerated() {
+            guard let bytes = store.pendingCommandAttachmentBytes(digest: digest) else { continue }
+            let name = attachmentNamesByDigest[digest] ?? "attachment \(index + 1)"
+            let failure: String
+            do {
+                let output = try await store.client.uploadAttachment(
+                    path: .init(digest: digest), body: .binary(HTTPBody(bytes)))
+                switch output {
+                case .created, .ok:
+                    continue
+                case .unprocessableContent:
+                    notSent(command, "\(name) changed after it was saved, so the message wasn't sent")
+                    return false
+                case .undocumented(let statusCode, _):
+                    switch statusCode {
+                    case 401, 403:
+                        store.freshness = .unauthenticated
+                    case 400..<500:
+                        notSent(
+                            command, "the daemon refused \(name) (status \(statusCode)), so the message wasn't sent")
+                        return false
+                    default:
+                        break
+                    }
+                    failure = "\(name) didn't upload (status \(statusCode))"
+                }
+            } catch {
+                failure = "\(name) didn't upload: the daemon couldn't be reached"
+            }
+            store.setPendingCommandState(itemID: itemID, commandID: command.command_id, state: .unresolved)
+            phase = .idle
+            unsentAfterFailedUpload = true
+            submissionError = failure
+            return false
+        }
+        return true
+    }
+
+    /// Clears a command that can never be sent, saying why.
+    private func notSent(_ command: Components.Schemas.ClientCommand, _ reason: String) {
+        store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+        phase = .idle
+        submissionError = reason
     }
 
     private enum ReplayOutcome {

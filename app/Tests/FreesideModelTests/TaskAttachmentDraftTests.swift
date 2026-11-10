@@ -106,6 +106,44 @@ import Testing
         #expect(sentence.hasPrefix("last wasn't added: a task can have at most "))
     }
 
+    @Test func aMessageNamesItsOwnLimits() throws {
+        // Distinct bytes: a message refuses bytes it already holds.
+        var draft = TaskAttachmentDraft(for: .message)
+        for index in 0..<3 {
+            _ = draft.add(
+                name: "f\(index)", claimedMediaType: nil, bytes: Data(repeating: UInt8(index), count: 32 << 20))
+        }
+        _ = draft.add(name: "rest", claimedMediaType: nil, bytes: Self.file(size: 4 << 20))
+        let total = try #require(refusal(draft.add(name: "one", claimedMediaType: nil, bytes: Data("1".utf8))))
+        #expect(total == "one would bring this message's attachments to 100.1 MiB; they can total at most 100 MiB.")
+
+        var full = TaskAttachmentDraft(for: .message)
+        for index in 0..<TaskAttachmentLimits.maxCount {
+            _ = full.add(name: "f\(index)", claimedMediaType: nil, bytes: Data("\(index)".utf8))
+        }
+        let count = try #require(refusal(full.add(name: "last", claimedMediaType: nil, bytes: Data())))
+        #expect(count.hasPrefix("last wasn't added: a message can have at most "))
+    }
+
+    /// The daemon rejects a discuss message that names one digest twice
+    /// (#2995); a task numbers the repeated name instead.
+    @Test func aMessageRefusesBytesItAlreadyHolds() throws {
+        let bytes = Self.png(size: 16)
+        var message = TaskAttachmentDraft(for: .message)
+        #expect(added(message.add(name: "screen.png", claimedMediaType: "image/png", bytes: bytes)) != nil)
+        #expect(
+            refusal(message.add(name: "screen.png", claimedMediaType: "image/png", bytes: bytes))
+                == "screen.png is already attached.")
+        #expect(
+            refusal(message.add(name: "copy.png", claimedMediaType: "image/png", bytes: bytes))
+                == "copy.png has the same contents as screen.png, which is already attached.")
+        #expect(message.items.map(\.name) == ["screen.png"])
+
+        var task = TaskAttachmentDraft()
+        _ = task.add(name: "screen.png", claimedMediaType: "image/png", bytes: bytes)
+        #expect(added(task.add(name: "copy.png", claimedMediaType: "image/png", bytes: bytes)) != nil)
+    }
+
     @Test func aRepeatedNameIsNumberedBeforeItsExtension() {
         var draft = TaskAttachmentDraft()
         let names = ["image.png", "image.png", "image.png", "README", "README", ".env", ".env", "a.tar.gz", "a.tar.gz"]

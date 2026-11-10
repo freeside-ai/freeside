@@ -107,8 +107,9 @@ public final class SyncCoordinator {
     public private(set) var lastUpdatedAt: Date?
 
     private let cache: CacheStore
-    /// The bytes of the attachments `pendingTaskSubmissions` name, so a
-    /// retry can upload them again.
+    /// The bytes of the attachments `pendingTaskSubmissions` and the
+    /// store's pending discuss commands name, so a retry can upload them
+    /// again.
     private let submissionAttachments: any SubmissionAttachmentStore
     /// Overlapping sync rounds resolve by recency, as the store's
     /// refresh and validation generations do: only the newest round may
@@ -304,10 +305,10 @@ public final class SyncCoordinator {
                 sequence: cached.comprehensionSequence ?? 0,
                 fingerprint: cached.registeredCapabilityFingerprint,
                 owningDeviceID: cached.comprehensionDeviceID)
-            // Bytes no restored submission names belong to a submission
-            // that finished, that the filter above dropped (another device
-            // or daemon), or that a crash left between the bytes and the
-            // command. Only a cache that loaded can say so: one that can't
+            // Bytes no restored submission or pending command names belong
+            // to one that finished, that a filter above dropped (another
+            // device or daemon), or that a crash left between the bytes and
+            // the command. Only a cache that loaded can say so: one that can't
             // be read yet (an iPhone launched before first unlock) may
             // still hold the submissions that name them.
             releaseSubmissionAttachments(submissionAttachments.storedDigests())
@@ -332,6 +333,12 @@ public final class SyncCoordinator {
         store.pendingCommandsObserver = { [weak self] in
             self?.persist() ?? false
         }
+        // A discuss command's attachment bytes live beside a task
+        // submission's (#2995), so one release rule covers both.
+        store.pendingCommandAttachments = .init(
+            save: { [weak self] in self?.saveSubmissionAttachments($0) ?? false },
+            load: { [weak self] in self?.submissionAttachments.load(digest: $0) },
+            release: { [weak self] in self?.releaseSubmissionAttachments($0) })
         // Persist the telemetry queue on every mutation, like the ledger, so a
         // queued event survives a relaunch (plan §8).
         store.comprehensionObserver = { [weak self] in _ = self?.persist() }
@@ -1186,15 +1193,9 @@ public final class SyncCoordinator {
             case .submit_task = command.payload
         else { return false }
         let previous = pendingTaskSubmissions[command.command_id]
-        guard previous == nil || previous == command else { return false }
-        do {
-            for (digest, bytes) in attachmentBytes {
-                try submissionAttachments.save(digest: digest, bytes: bytes)
-            }
-        } catch {
-            releaseSubmissionAttachments(Set(attachmentBytes.keys))
-            return false
-        }
+        guard previous == nil || previous == command,
+            saveSubmissionAttachments(attachmentBytes)
+        else { return false }
         pendingTaskSubmissions[command.command_id] = command
         guard persist() else {
             pendingTaskSubmissions[command.command_id] = previous
@@ -1206,8 +1207,10 @@ public final class SyncCoordinator {
 
     func finishTaskSubmission(_ commandID: String) {
         let finished = pendingTaskSubmissions.removeValue(forKey: commandID)
-        persist()
-        releaseSubmissionAttachments(Self.attachmentDigests(of: finished))
+        // A failed write leaves the cache naming this submission, so a
+        // relaunch restores it; its bytes stay for that resend.
+        guard persist() else { return }
+        releaseSubmissionAttachments(finished?.attachmentDigests ?? [])
     }
 
     /// The saved bytes of an attachment a saved submission names.
@@ -1215,19 +1218,28 @@ public final class SyncCoordinator {
         submissionAttachments.load(digest: digest)
     }
 
-    /// Deletes each of `digests` that no saved submission names.
-    private func releaseSubmissionAttachments(_ digests: Set<String>) {
-        let named = pendingTaskSubmissions.values.reduce(into: Set<String>()) {
-            $0.formUnion(Self.attachmentDigests(of: $1))
-        }
-        for digest in digests.subtracting(named) {
-            submissionAttachments.delete(digest: digest)
+    /// Saves every one of `bytesByDigest`, or keeps none that nothing
+    /// else names and says so.
+    private func saveSubmissionAttachments(_ bytesByDigest: [String: Data]) -> Bool {
+        do {
+            for (digest, bytes) in bytesByDigest {
+                try submissionAttachments.save(digest: digest, bytes: bytes)
+            }
+            return true
+        } catch {
+            releaseSubmissionAttachments(Set(bytesByDigest.keys))
+            return false
         }
     }
 
-    private static func attachmentDigests(of command: Components.Schemas.ClientCommand?) -> Set<String> {
-        guard case .submit_task(let payload)? = command?.payload else { return [] }
-        return Set((payload.attachments ?? []).map(\.digest))
+    /// Deletes each of `digests` that no saved submission and no pending
+    /// discuss command names.
+    private func releaseSubmissionAttachments(_ digests: Set<String>) {
+        let commands = Array(pendingTaskSubmissions.values) + store.pendingCommandsByItemID.values.map(\.command)
+        let named = commands.reduce(into: Set<String>()) { $0.formUnion($1.attachmentDigests) }
+        for digest in digests.subtracting(named) {
+            submissionAttachments.delete(digest: digest)
+        }
     }
 
     /// Persist exact retry identity before sending; failed writes roll back.

@@ -762,6 +762,40 @@
                                 submit: { _, _ in true }))))
             }
 
+            // A spec approval's Discuss composer with attachments (#2995):
+            // an image chip with its thumbnail and a file chip after the
+            // field, then the Attach chip, on Mac and phone, by day and by
+            // dusk.
+            var discussAttachments = TaskAttachmentDraft(for: .message)
+            _ = discussAttachments.add(
+                name: "Layout bug.png", claimedMediaType: "image/png", bytes: AttentionFixtures.fixtureImagePNG)
+            _ = discussAttachments.add(
+                name: "crash.log", claimedMediaType: "text/plain", bytes: Data(repeating: 0x61, count: 48_213))
+            for (name, width, scheme) in [
+                ("discuss-composer-attachments", CGFloat(480), ColorScheme.light),
+                ("discuss-composer-attachments-phone", CGFloat(390), ColorScheme.light),
+                ("discuss-composer-attachments-dark", CGFloat(480), ColorScheme.dark),
+                ("discuss-composer-attachments-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            MessageComposerSheet(
+                                eyebrow: "Discuss",
+                                ask: "What do you want to ask the agent?",
+                                consequence: "The item stays open while the agent replies.",
+                                submitLabel: "Send",
+                                rendersInteractiveControls: false,
+                                thread: .init(
+                                    snapshot: discussThread, attachments: store.attachments,
+                                    loadsAttachments: false, now: screenshotNow),
+                                attachments: .constant(discussAttachments),
+                                submit: { _, _ in true }))))
+            }
+
             // The New Task composer (#1330, #2581): the text area over the
             // project chip and the Agents chip (#1602), on Mac and phone,
             // empty and filled, each by day and by dusk.

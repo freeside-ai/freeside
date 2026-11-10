@@ -4,11 +4,19 @@
 
     /// The New Task text area on the Mac: an NSTextView that intercepts the
     /// history arrows and, when the sheet wires a submit, Return. It reports
-    /// its laid-out text height so the sheet can grow it with the draft.
+    /// its laid-out text height so the sheet can grow it with the draft. A
+    /// spec approval's Discuss sheet uses it too (#2995), for its paste and
+    /// drop of attachments, with no history.
     struct TaskPromptEditor: NSViewRepresentable {
         @Binding var text: String
-        let history: [String]
+        /// The prompts Up recalls, newest first; nil for a field that
+        /// recalls none.
+        let history: [String]?
         let browse: TaskPromptBrowseState
+        /// What VoiceOver calls the field.
+        var fieldLabel = "Work to do"
+        /// The face the text draws in; nil for the composer's statement face.
+        var textFont: NSFont?
         /// Submits if the draft can send, and says whether it did. Return
         /// never inserts a line while a submit is wired, so a draft that
         /// can't send ignores it. Nil keeps Return native (it inserts a line).
@@ -18,6 +26,10 @@
         /// Takes pasted or dropped files and images instead of inserting
         /// them. Nil keeps paste and drop native.
         var onAttach: ((ComposerAttachmentIntake.Pasted) -> Void)?
+        /// Whether the text view has keyboard focus, for a field that draws
+        /// its own focus ring: SwiftUI's focus state doesn't reach an
+        /// AppKit view.
+        var isFocused: Binding<Bool>?
         @Environment(\.isEnabled) private var isEnabled
 
         /// The serif statement face the composer's text area draws in.
@@ -46,7 +58,6 @@
             editor.textContainer?.widthTracksTextView = true
             editor.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
             editor.textContainerInset = .zero
-            editor.setAccessibilityLabel("Work to do")
             scroll.documentView = editor
             updateNSView(scroll, context: context)
             return scroll
@@ -56,12 +67,17 @@
             guard let editor = scroll.documentView as? PromptTextView else { return }
             editor.onEdit = { text = $0 }
             editor.browse = browse
-            editor.history = history
+            editor.history = history ?? []
             editor.onSubmit = onSubmit
             editor.onAttach = onAttach
+            editor.onFocusChange = isFocused.map { binding in
+                { focused in DispatchQueue.main.async { binding.wrappedValue = focused } }
+            }
+            editor.setAccessibilityLabel(fieldLabel)
             editor.setAccessibilityHelp(
                 (onSubmit == nil ? "" : "Return submits and Shift-Return starts a new line. ")
-                    + "Press Up on the first line to recall recent prompts. Down restores your draft.")
+                    + (history == nil
+                        ? "" : "Press Up on the first line to recall recent prompts. Down restores your draft."))
             // Reported after this update, never during it: SwiftUI warns on
             // state changed while it draws.
             editor.onContentHeightChange = contentHeight.map { binding in
@@ -69,7 +85,7 @@
             }
             editor.isEditable = isEnabled
             editor.isSelectable = isEnabled
-            editor.font = Self.font
+            editor.font = textFont ?? Self.font
             editor.textColor = NSColor(Color.ink)
             editor.insertionPointColor = NSColor(Color.ink)
             if editor.string != text {
@@ -93,6 +109,7 @@
         var onSubmit: (() -> Bool)?
         var onContentHeightChange: ((CGFloat) -> Void)?
         var onAttach: ((ComposerAttachmentIntake.Pasted) -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
         private var isRecalling = false
         private var reportedHeight: CGFloat?
 
@@ -101,6 +118,18 @@
             if !isRecalling { browse.edited() }
             onEdit?(string)
             reportContentHeight()
+        }
+
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { onFocusChange?(true) }
+            return became
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let resigned = super.resignFirstResponder()
+            if resigned { onFocusChange?(false) }
+            return resigned
         }
 
         // A width change reflows the text, so its height may change too.

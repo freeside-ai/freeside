@@ -12,7 +12,9 @@ import UniformTypeIdentifiers
 /// an image (HEIC, TIFF) are re-encoded first, so the daemon sees an image
 /// and the task page can show it. On the Mac a folder goes to
 /// `ComposerFolderIntake` (#2591); on iPhone it is refused. A package (an
-/// app, a Keynote document) is refused on both.
+/// app, a Keynote document) is refused on both. A composer that takes no
+/// folders (a spec approval's Discuss, #2995) refuses one on both, before
+/// reading it.
 enum ComposerAttachmentIntake {
     /// Named bytes ready for `TaskAttachmentDraft.add`, a folder's files
     /// ready for `addFolder`, a repository path to insert into the task
@@ -53,7 +55,9 @@ enum ComposerAttachmentIntake {
     /// read. `repository` (the project's `owner/repo`) and `held` (what the
     /// composer and the batch so far take) decide a folder; a file ignores
     /// them.
-    static func file(at url: URL, repository: String?, held: TaskAttachmentDraft.Usage) -> Item {
+    static func file(
+        at url: URL, repository: String?, held: TaskAttachmentDraft.Usage, takesFolders: Bool = true
+    ) -> Item {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let name = url.lastPathComponent
@@ -64,6 +68,7 @@ enum ComposerAttachmentIntake {
             return .refused("\(name) is a package, such as an app or a document bundle, and can't be attached.")
         }
         if values?.isDirectory == true {
+            guard takesFolders else { return .refused(noFoldersSentence(name)) }
             #if os(macOS)
                 return ComposerFolderIntake.item(at: url, repository: repository, held: held)
             #else
@@ -84,10 +89,12 @@ enum ComposerAttachmentIntake {
     /// Reads `urls` in order, counting each item read against the limits
     /// of the next, so a batch of folders can't together read past the
     /// task's count or total before the draft refuses them.
-    static func files(at urls: [URL], repository: String?, held: TaskAttachmentDraft.Usage) -> [Item] {
+    static func files(
+        at urls: [URL], repository: String?, held: TaskAttachmentDraft.Usage, takesFolders: Bool = true
+    ) -> [Item] {
         var held = held
         return urls.map { url in
-            let item = file(at: url, repository: repository, held: held)
+            let item = file(at: url, repository: repository, held: held, takesFolders: takesFolders)
             held = taking(item, held)
             return item
         }
@@ -104,6 +111,11 @@ enum ComposerAttachmentIntake {
         case .repositoryPath, .refused:
             held
         }
+    }
+
+    /// The refusal for a folder offered to a composer that takes none.
+    static func noFoldersSentence(_ name: String) -> String {
+        "\(name) is a folder. A message attaches files, not folders."
     }
 
     /// The sentence under the composer for a folder attached without its
@@ -172,7 +184,8 @@ enum ComposerAttachmentIntake {
     /// provider's image when it offers one. `repository` and `held` decide
     /// a folder, as `files(at:repository:held:)` says.
     static func items(
-        from providers: [NSItemProvider], origin: ImageOrigin, repository: String?, held: TaskAttachmentDraft.Usage
+        from providers: [NSItemProvider], origin: ImageOrigin, repository: String?, held: TaskAttachmentDraft.Usage,
+        takesFolders: Bool = true
     ) async -> [Item] {
         var items: [Item] = []
         var held = held
@@ -181,7 +194,7 @@ enum ComposerAttachmentIntake {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
                 let url = await fileURL(from: provider), !hasImage || isReadable(url)
             {
-                let item = file(at: url, repository: repository, held: held)
+                let item = file(at: url, repository: repository, held: held, takesFolders: takesFolders)
                 held = taking(item, held)
                 items.append(item)
             } else if hasImage {
