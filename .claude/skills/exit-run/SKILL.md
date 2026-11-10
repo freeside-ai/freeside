@@ -52,9 +52,14 @@ newer one `scripts/runtime-diff.sh` carries the pass to: a fixture pass on
 Freeside's fixture repository (Rehearse Before The Operator), then the real
 run. A contract with a seeded-condition row can add a pass for it (A
 Seeded Pass). Derive the exit contract (below), then state the derived mode, its
-reason, the expected spend of every pass, and every gate the contract
-leaves without a trigger, and wait for the user's go-ahead before
-preflight: a run costs real money, opens a real PR on someone's
+reason, the expected spend of every pass, every gate the contract leaves
+without a trigger, and the real run's lineup: each writer role's model and
+effort (specifier, the escalated specifier when set, implementer,
+remediator), judgment's, and review's, and whether it came from the
+tracker or the walkthrough's default (docs/production-walkthrough.md,
+Choose The Real Run's Writers). Then wait for the user's go-ahead, which
+approves the lineup with the spend, before preflight: a run costs real
+money, opens a real PR on someone's
 repository, and takes the operator's afternoon, so a wrong reading should
 cost one message, not a run.
 
@@ -215,7 +220,10 @@ with a partial run.
   is the managed repository's name, the same on every run, with no run or
   wave suffix (the daemon guide's rule under that table). One input only
   you can judge: a stale prompt package passes every check, so confirm the
-  packages come from the approved default-branch commit. The fixture pass
+  packages come from the approved default-branch commit. The written
+  `settings.json`'s `writers.*` and `judgment.*` values match the lineup
+  the user approved at the go-ahead; read them from this root's file,
+  never from an earlier root's (#3024). The fixture pass
   exercises the CLI-mode inputs; in client-target mode the real run's
   deputy start is the first check of the manual-submission file, still
   before the pairing checkpoint.
