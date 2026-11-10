@@ -1,10 +1,13 @@
 package signet_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -181,11 +184,15 @@ func assertNoCredentialMaterial(t *testing.T, f fixture, body string, tokens ...
 // TestHTTPActivityRecordingFailureDoesNotDenyTheRequest: last_seen_at is
 // advisory, so a request whose activity cannot be recorded is still served.
 // The authorizer here vouches for a device with no row, which the activity
-// table's foreign key rejects.
+// table's foreign key rejects. That failure is not a cancellation, so it
+// still warns.
 func TestHTTPActivityRecordingFailureDoesNotDenyTheRequest(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	handler := signet.NewHTTPHandler(f.service, func(*http.Request) (domain.DeviceID, bool) {
+	var logs bytes.Buffer
+	service := signet.NewService(f.store,
+		signet.WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))))
+	handler := signet.NewHTTPHandler(service, func(*http.Request) (domain.DeviceID, bool) {
 		return "device-without-a-row", true
 	})
 
@@ -202,5 +209,35 @@ func TestHTTPActivityRecordingFailureDoesNotDenyTheRequest(t *testing.T) {
 			t.Errorf("device %q last_seen_at = %v, want null: the only request came from an unrecorded device",
 				entry.Device.ID, entry.LastSeenAt)
 		}
+	}
+	if !strings.Contains(logs.String(), `level=WARN msg="record device activity"`) {
+		t.Errorf("failed activity write logged no warning:\n%s", logs.String())
+	}
+}
+
+// TestHTTPCanceledRequestActivityLogsAtDebug: a client that ends its request
+// before the activity write begins cancels the write. That is logged at
+// debug, not warn, so a client that hangs up while the write waits for the
+// lock does not bury the log. The response status is not asserted, because
+// the handler's own read also sees the canceled context.
+func TestHTTPCanceledRequestActivityLogsAtDebug(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var logs bytes.Buffer
+	service := signet.NewService(f.store,
+		signet.WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+	handler := signet.NewHTTPHandler(service, func(*http.Request) (domain.DeviceID, bool) {
+		return f.device.ID, true
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	request := httptest.NewRequestWithContext(ctx, http.MethodGet, "/devices", nil)
+	request.Header.Set("Authorization", "Bearer unused")
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	got := logs.String()
+	if strings.Contains(got, `level=WARN msg="record device activity"`) ||
+		!strings.Contains(got, `level=DEBUG msg="record device activity"`) {
+		t.Errorf("canceled activity write must log at debug, not warn:\n%s", got)
 	}
 }
