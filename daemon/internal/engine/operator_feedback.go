@@ -1159,19 +1159,9 @@ func (w *productionPublicationWorkflow) operatorFeedbackPatch(
 		return nil, err
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // daemon-owned scratch
-	parentInfo, err := os.Stat(scratch)
-	if err != nil {
-		return nil, err
-	}
-	checkout, err := w.transport.FetchBase(
-		ctx, binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, filepath.Join(scratch, "checkout"))
-	if err != nil {
-		return nil, err
-	}
-	checkoutDir, err := validatePublicationCheckoutBinding(
-		checkout, binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, filepath.Join(scratch, "checkout"), parentInfo)
+	// A marked fetch failure keeps the fetch error's text and errors.Is
+	// behavior, so it returns unchanged like any other error here.
+	_, checkoutDir, err := w.fetchAdmittedBase(ctx, scratch, binding.admission.Base)
 	if err != nil {
 		return nil, err
 	}

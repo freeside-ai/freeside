@@ -1137,6 +1137,19 @@ func sameOptionalDigest(a, b *domain.Digest) bool {
 	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
+// runAfterVerification runs the test-only crash seam that follows a stored
+// verification on the forward, reentry, and handoff paths. label names the
+// verification in the returned error.
+func (w *productionPublicationWorkflow) runAfterVerification(label string) error {
+	if w.afterVerification == nil {
+		return nil
+	}
+	if err := w.afterVerification(); err != nil {
+		return fmt.Errorf("after %s: %w", label, errors.Join(err, errProductionCrashSeam))
+	}
+	return nil
+}
+
 func (w *productionPublicationWorkflow) reconcileTask(
 	ctx context.Context, task productionPublicationTask,
 ) (outcome productionTaskOutcome, resultErr error) {
@@ -1214,36 +1227,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, err
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // run-owned scratch
-	parentInfo, err := os.Stat(scratch)
-	if err != nil {
-		return productionTaskOutcome{}, err
+	checkout, checkoutDir, err := w.fetchAdmittedBase(ctx, scratch, binding.admission.Base)
+	var fetchErr *publicationBaseFetchError
+	if errors.As(err, &fetchErr) {
+		return w.publicationTransportFailure(ctx, task, "fetch exact publication base", fetchErr.err)
 	}
-	checkout, err := w.transport.FetchBase(
-		ctx, binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, filepath.Join(scratch, "checkout"),
-	)
-	if err != nil {
-		if isDefinitiveTrustRefusal(err) {
-			return w.holdBlockedTask(
-				ctx, task, importer.Result{CommitSHA: task.HeadSHA}, productionBlockTrust,
-				domain.HoldTrustBlocked,
-			)
-		}
-		if productionPublicationPermanentExternalFailure(err) {
-			return w.holdBlockedTask(
-				ctx, task, importer.Result{CommitSHA: task.HeadSHA}, productionBlockExternal,
-				domain.HoldExternalConflict,
-			)
-		}
-		if productionPublicationRetryableFailure(err) {
-			err = productionPublicationRetryableError(err)
-		}
-		return productionTaskOutcome{}, fmt.Errorf("fetch exact publication base: %w", err)
-	}
-	checkoutDir, err := validatePublicationCheckoutBinding(
-		checkout, binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, filepath.Join(scratch, "checkout"), parentInfo,
-	)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -1485,11 +1473,8 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if w.afterVerification != nil {
-			if err := w.afterVerification(); err != nil {
-				return productionTaskOutcome{}, fmt.Errorf("after production verification: %w",
-					errors.Join(err, errProductionCrashSeam))
-			}
+		if err := w.runAfterVerification("production verification"); err != nil {
+			return productionTaskOutcome{}, err
 		}
 	}
 	if !checkpoint.Authorization.AuthorizesPublication {

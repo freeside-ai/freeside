@@ -372,19 +372,11 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		return productionTaskOutcome{}, err
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // run-owned scratch
-	parentInfo, err := os.Stat(scratch)
-	if err != nil {
-		return productionTaskOutcome{}, err
+	checkout, checkoutDir, err := w.fetchAdmittedBase(ctx, scratch, base)
+	var fetchErr *publicationBaseFetchError
+	if errors.As(err, &fetchErr) {
+		return w.publicationTransportFailure(ctx, task, "fetch exact re-entry base", fetchErr.err)
 	}
-	checkout, err := w.transport.FetchBase(
-		ctx, base.Repo, base.BaseRef, base.BaseSHA, filepath.Join(scratch, "checkout"))
-	if err != nil {
-		return w.reentryTransportFailure(ctx, task, "fetch exact re-entry base", err)
-	}
-	checkoutDir, err := validatePublicationCheckoutBinding(
-		checkout, base.Repo, base.BaseRef, base.BaseSHA,
-		filepath.Join(scratch, "checkout"), parentInfo,
-	)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -408,7 +400,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if errors.Is(err, publish.ErrRemoteMissingHead) {
 			return w.stopReentryCycle(ctx, task, reentryMissingHeadReason(task, cycle.branch), nil)
 		}
-		return w.reentryTransportFailure(ctx, task, "fetch pull request head", err)
+		return w.publicationTransportFailure(ctx, task, "fetch pull request head", err)
 	}
 	// A cycle evaluates its head and nothing else. A base_advanced authority
 	// sealed before plan revision 110 once evaluated the head's merge into the
@@ -479,11 +471,8 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if w.afterVerification != nil {
-			if err := w.afterVerification(); err != nil {
-				return productionTaskOutcome{}, fmt.Errorf("after production verification: %w",
-					errors.Join(err, errProductionCrashSeam))
-			}
+		if err := w.runAfterVerification("production verification"); err != nil {
+			return productionTaskOutcome{}, err
 		}
 	}
 	if !stored.clean() {
@@ -523,10 +512,10 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	return w.completeReentryTask(ctx, task, binding, checkpoint, checkout, reviewInstructions)
 }
 
-// reentryTransportFailure classifies a transport failure the way the first
-// cycle classifies a failed base fetch: a definitive refusal holds the run,
-// and anything else is retried or surfaced.
-func (w *productionPublicationWorkflow) reentryTransportFailure(
+// publicationTransportFailure classifies a failed transport call on any
+// publication path (forward, reentry, and handoff): a definitive refusal
+// holds the run, and anything else is retried or surfaced under step.
+func (w *productionPublicationWorkflow) publicationTransportFailure(
 	ctx context.Context, task productionPublicationTask, step string, err error,
 ) (productionTaskOutcome, error) {
 	held := importer.Result{CommitSHA: task.HeadSHA}
@@ -1345,7 +1334,7 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 			if errors.Is(err, publish.ErrRemoteMissingHead) {
 				return w.stopReentryCycle(ctx, task, reentryMissingHeadReason(task, cycle.branch), nil)
 			}
-			return w.reentryTransportFailure(ctx, task, "observe pull request head before readiness", err)
+			return w.publicationTransportFailure(ctx, task, "observe pull request head before readiness", err)
 		}
 		if err := runDurableTransitionHook(w.transitionHook,
 			DurableTransitionReadyItem, DurableTransitionBefore); err != nil {

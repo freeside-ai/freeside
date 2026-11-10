@@ -117,7 +117,7 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 	}
 	check, sealedNow, err := w.sealHandoffTip(ctx, task, binding)
 	if err != nil {
-		outcome, err := w.reentryTransportFailure(ctx, task, "resolve the handoff tip", err)
+		outcome, err := w.publicationTransportFailure(ctx, task, "resolve the handoff tip", err)
 		return domain.HandoffCheck{}, &outcome, err
 	}
 	if check.Proved() {
@@ -159,7 +159,7 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 			// for this publication.
 			return block(productionBlockBaseAdvanced, checkpoint.Artifacts)
 		}
-		outcome, err := w.reentryTransportFailure(ctx, task, "build the handoff merge", err)
+		outcome, err := w.publicationTransportFailure(ctx, task, "build the handoff merge", err)
 		return domain.HandoffCheck{}, &outcome, err
 	}
 	identity := check.MergeIdentity()
@@ -224,11 +224,8 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 		if err != nil {
 			return domain.HandoffCheck{}, nil, err
 		}
-		if w.afterVerification != nil {
-			if err := w.afterVerification(); err != nil {
-				return domain.HandoffCheck{}, nil, fmt.Errorf("after handoff verification: %w",
-					errors.Join(err, errProductionCrashSeam))
-			}
+		if err := w.runAfterVerification("handoff verification"); err != nil {
+			return domain.HandoffCheck{}, nil, err
 		}
 	}
 	// Only a failed step is the remediator's to fix. A merge that passed with
