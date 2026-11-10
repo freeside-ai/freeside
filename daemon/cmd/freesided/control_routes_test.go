@@ -204,7 +204,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	var snapshot bytes.Buffer
-	if err := observe.Run(ctx, []string{"-db", dbPath, "-run", string(defaultFakeRunID), "-snapshot"}, &snapshot, io.Discard, openObservation); err != nil {
+	if err := observe.Run(ctx, []string{"-db", dbPath, "-run", string(DefaultFakeRunID), "-snapshot"}, &snapshot, io.Discard, openObservation); err != nil {
 		t.Fatal(err)
 	}
 	if !json.Valid(snapshot.Bytes()) {
@@ -345,7 +345,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	var direct bytes.Buffer
-	if err := observe.Run(t.Context(), []string{"-db", dbPath, "-run", string(defaultFakeRunID), "-snapshot"}, &direct, io.Discard, openObservation); err != nil {
+	if err := observe.Run(t.Context(), []string{"-db", dbPath, "-run", string(DefaultFakeRunID), "-snapshot"}, &direct, io.Discard, openObservation); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(snapshot.Bytes(), direct.Bytes()) {

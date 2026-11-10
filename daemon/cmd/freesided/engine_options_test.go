@@ -27,25 +27,25 @@ func TestProductionEngineOptionsInstallOptionalPartsOnlyWhenSet(t *testing.T) {
 	// Lock, capacity, admission, derivation, delivery validation,
 	// specification, cancellation, publication.
 	const required = 8
-	if got := len(productionEngine{}.options()); got != required {
+	if got := len(ProductionEngine{}.Options()); got != required {
 		t.Fatalf("options with no optional part = %d, want %d", got, required)
 	}
-	for name, set := range map[string]func(*productionEngine){
-		"image selection": func(p *productionEngine) {
+	for name, set := range map[string]func(*ProductionEngine){
+		"image selection": func(p *ProductionEngine) {
 			p.SelectImage = func(context.Context, domain.InvocationID, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {
 				return "", nil
 			}
 		},
-		"inference":      func(p *productionEngine) { p.Inference = &inference.Client{} },
-		"health refresh": func(p *productionEngine) { p.HealthRefresh = func(context.Context) error { return nil } },
-		"logger":         func(p *productionEngine) { p.Logger = slog.New(slog.DiscardHandler) },
-		"usage sink":     func(p *productionEngine) { p.UsageSink = stubClaudeUsageSink{} },
+		"inference":      func(p *ProductionEngine) { p.Inference = &inference.Client{} },
+		"health refresh": func(p *ProductionEngine) { p.HealthRefresh = func(context.Context) error { return nil } },
+		"logger":         func(p *ProductionEngine) { p.Logger = slog.New(slog.DiscardHandler) },
+		"usage sink":     func(p *ProductionEngine) { p.UsageSink = stubClaudeUsageSink{} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			var p productionEngine
+			var p ProductionEngine
 			set(&p)
-			if got := len(p.options()); got != required+1 {
+			if got := len(p.Options()); got != required+1 {
 				t.Fatalf("options with %s set = %d, want %d", name, got, required+1)
 			}
 		})

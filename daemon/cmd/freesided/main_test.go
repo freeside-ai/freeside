@@ -1030,7 +1030,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("put device: %v", err)
 	}
-	approval, err := h.attention.GetAttentionItem(ctx, "approval-"+domain.ItemID(defaultFakeRunID))
+	approval, err := h.attention.GetAttentionItem(ctx, "approval-"+domain.ItemID(DefaultFakeRunID))
 	if err != nil {
 		t.Fatalf("get approval: %v", err)
 	}
@@ -1044,7 +1044,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	feedback := waitForItem(t, h.attention, "feedback-"+domain.ItemID(defaultFakeRunID))
+	feedback := waitForItem(t, h.attention, "feedback-"+domain.ItemID(DefaultFakeRunID))
 	if _, err := h.attention.Submit(ctx, signet.ClientCommand{
 		CommandID: "discuss-main", DeviceID: "device-1", ExpectedEntityVersion: feedback.EntityVersion,
 		Payload: signet.DecisionPayload{
@@ -1057,7 +1057,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		run, err := h.attention.GetRun(ctx, defaultFakeRunID)
+		run, err := h.attention.GetRun(ctx, DefaultFakeRunID)
 		if err != nil {
 			t.Fatalf("get run: %v", err)
 		}
@@ -1106,10 +1106,10 @@ func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
 	})
 
 	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
-		if _, err := tx.GetRun(ctx, defaultFakeRunID); !errors.Is(err, store.ErrNotFound) {
+		if _, err := tx.GetRun(ctx, DefaultFakeRunID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("get walking-skeleton run = %v, want ErrNotFound", err)
 		}
-		if _, err := tx.GetAttentionItem(ctx, "approval-"+domain.ItemID(defaultFakeRunID)); !errors.Is(err, store.ErrNotFound) {
+		if _, err := tx.GetAttentionItem(ctx, "approval-"+domain.ItemID(DefaultFakeRunID)); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("get walking-skeleton approval = %v, want ErrNotFound", err)
 		}
 		return nil

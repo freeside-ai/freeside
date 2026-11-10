@@ -411,7 +411,7 @@ func TestRaisedHeldWorkItemSurvivesTheSweep(t *testing.T) {
 	defer func() { _ = h.Close() }()
 	ctx := t.Context()
 	result, err := runRaiseItemCommand(ctx, raiseItemCommandConfig{
-		DBPath: dbPath, Alert: raiseAlertHeldWork, RunID: defaultFakeRunID,
+		DBPath: dbPath, Alert: raiseAlertHeldWork, RunID: DefaultFakeRunID,
 	})
 	if err != nil {
 		t.Fatal(err)

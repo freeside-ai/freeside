@@ -12,12 +12,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 )
 
-// scenario is one scripted run the ephemeral scenario daemon (-driver
-// scenario) plays on the production engine composition: the task it submits,
+// Scenario is one scripted run the ephemeral Scenario daemon (-driver
+// Scenario) plays on the production engine composition: the task it submits,
 // the repository the task runs against, and what each stage returns. Every
 // stage is answered by a fake, so a run costs nothing and gives the same
 // sequence of states every time. The format is private to the ephemeral tier.
-type scenario struct {
+type Scenario struct {
 	Name        string
 	Description string
 	// Task is the task source `freesided submit` registers.
@@ -32,23 +32,23 @@ type scenario struct {
 	// QuotaRefusal, when set, makes the provider refuse the first
 	// implementation attempt on a quota window. The task parks until the
 	// window resets, then the next attempt delivers.
-	QuotaRefusal *scenarioQuotaRefusal
+	QuotaRefusal *ScenarioQuotaRefusal
 }
 
-// scenarioQuotaRefusal is the refusal a quota scenario's first
+// ScenarioQuotaRefusal is the refusal a quota scenario's first
 // implementation attempt fails with.
-type scenarioQuotaRefusal struct {
+type ScenarioQuotaRefusal struct {
 	Window string
 	// ResetAfter is how long after the refusal the window resets: long
 	// enough to watch the park, short enough to wait out the resume.
 	ResetAfter time.Duration
 }
 
-var scenarios = []scenario{cleanScenario(), quotaParkScenario()}
+var scenarios = []Scenario{CleanScenario(), QuotaParkScenario()}
 
-func cleanScenario() scenario {
+func CleanScenario() Scenario {
 	title := "Describe the scenario repository"
-	return scenario{
+	return Scenario{
 		Name:        "clean",
 		Description: "one task runs specification through publication with no findings",
 		Task:        "Describe what the scenario repository is for in its README.\n",
@@ -69,18 +69,18 @@ func cleanScenario() scenario {
 	}
 }
 
-// quotaParkScenario is clean with a provider quota refusal on the first
+// QuotaParkScenario is clean with a provider quota refusal on the first
 // implementation attempt (#2421).
-func quotaParkScenario() scenario {
-	s := cleanScenario()
+func QuotaParkScenario() Scenario {
+	s := CleanScenario()
 	s.Name = "quota-park"
 	s.Description = "the provider refuses the first implementation on a quota window; " +
 		"the task parks until the reset, then publishes"
-	s.QuotaRefusal = &scenarioQuotaRefusal{Window: "five_hour", ResetAfter: 2 * time.Minute}
+	s.QuotaRefusal = &ScenarioQuotaRefusal{Window: "five_hour", ResetAfter: 2 * time.Minute}
 	return s
 }
 
-func lookupScenario(name string) (scenario, error) {
+func LookupScenario(name string) (Scenario, error) {
 	for _, s := range scenarios {
 		if s.Name == name {
 			return s, nil
@@ -90,13 +90,13 @@ func lookupScenario(name string) (scenario, error) {
 	for i, s := range scenarios {
 		names[i] = s.Name
 	}
-	return scenario{}, fmt.Errorf("-scenario %q is not one of: %s", name, strings.Join(names, ", "))
+	return Scenario{}, fmt.Errorf("-scenario %q is not one of: %s", name, strings.Join(names, ", "))
 }
 
 // scenarioFromFlags resolves -scenario against -driver: the scenario to play
 // under -driver scenario, or nil under any other driver. Each refusal is a
 // usage error main reports with exit status 2.
-func scenarioFromFlags(execution executionMode, name string) (*scenario, error) {
+func scenarioFromFlags(execution executionMode, name string) (*Scenario, error) {
 	if execution != executionScenario {
 		if name != "" {
 			return nil, errors.New("-scenario requires -driver scenario")
@@ -106,16 +106,16 @@ func scenarioFromFlags(execution executionMode, name string) (*scenario, error) 
 	if name == "" {
 		return nil, errors.New("-driver scenario requires -scenario NAME (see -list-scenarios)")
 	}
-	played, err := lookupScenario(name)
+	played, err := LookupScenario(name)
 	if err != nil {
 		return nil, err
 	}
 	return &played, nil
 }
 
-// listScenarios prints each scenario's name and description, one per line,
+// ListScenarios prints each scenario's name and description, one per line,
 // for -list-scenarios.
-func listScenarios(w io.Writer) error {
+func ListScenarios(w io.Writer) error {
 	for _, s := range scenarios {
 		if _, err := fmt.Fprintf(w, "%s\t%s\n", s.Name, s.Description); err != nil {
 			return err
@@ -126,13 +126,13 @@ func listScenarios(w io.Writer) error {
 
 // allowedPaths is the run's path policy: exactly the files the implementer
 // delivers, in sorted order.
-func (s scenario) allowedPaths() []string {
+func (s Scenario) allowedPaths() []string {
 	return slices.Sorted(maps.Keys(s.Delivery))
 }
 
 // workspace is the candidate's whole tree: the base with the delivery
 // written over it.
-func (s scenario) workspace() map[string]string {
+func (s Scenario) workspace() map[string]string {
 	tree := maps.Clone(s.BaseFiles)
 	maps.Copy(tree, s.Delivery)
 	return tree

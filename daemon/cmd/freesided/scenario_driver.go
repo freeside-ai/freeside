@@ -34,30 +34,30 @@ import (
 // does, before the fake reports the stage complete.
 type scenarioStageDriver struct {
 	*fake.StageDriver
-	scenario scenario
+	scenario Scenario
 	store    *store.Store
 	blobs    *signet.BlobStore
-	imports  scenarioImportAuthority
-	exports  scenarioExportLookup
+	imports  ScenarioImportAuthority
+	exports  ScenarioExportLookup
 	// baseDir is the repository the delivery imports over; workDir holds
 	// each delivery's workspace, handoff, and checkout while it is built.
 	baseDir string
 	workDir string
 }
 
-// scenarioImportAuthority reconstructs a delivery's import options from its
+// ScenarioImportAuthority reconstructs a delivery's import options from its
 // admission records, as the publication lane will replay them. Its method
 // is stage.AdmissionAuthority's ImportOptionsRecord.
-type scenarioImportAuthority interface {
+type ScenarioImportAuthority interface {
 	ImportOptionsRecord(
 		ctx context.Context, id domain.InvocationID, spec exec.StartSpec, base importer.Options,
 	) (importer.Options, error)
 }
 
-// scenarioExportLookup reports whether an invocation's execution export is
+// ScenarioExportLookup reports whether an invocation's execution export is
 // already recorded. Its method is stage.ExportRecorder's
 // LookupExecutionExportRecord.
-type scenarioExportLookup interface {
+type ScenarioExportLookup interface {
 	LookupExecutionExportRecord(
 		ctx context.Context, id domain.InvocationID,
 	) (domain.ExecutionExport, bool, error)
@@ -216,7 +216,7 @@ func (d scenarioStageDriver) putExport(manifest export.Manifest, handoff string)
 	return digest, nil
 }
 
-func specificationOutput(sc scenario) specify.Output {
+func specificationOutput(sc Scenario) specify.Output {
 	specification := sc.Specification
 	return specify.Output{Specification: &specification}
 }
@@ -243,5 +243,5 @@ type scenarioRoom struct {
 }
 
 func (scenarioRoom) ReadRecipe(context.Context) ([]byte, error) {
-	return bytes.Clone(scenarioRecipe), nil
+	return bytes.Clone(ScenarioRecipe), nil
 }

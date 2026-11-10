@@ -41,7 +41,7 @@ type startupBindings struct {
 	claudeWiring   *claudeComposition
 	agentCatalog   *signet.AgentCatalog
 	upkeepTrigger  *imageUpkeepTrigger
-	scenarioWiring *scenarioComposition
+	scenarioWiring *ScenarioComposition
 }
 
 // validateRunConfig checks the flag combinations that no default can
@@ -71,9 +71,9 @@ func validateRunConfig(cfg config) error {
 	return nil
 }
 
-// seedStartupFixture seeds the named fixture into a store that must hold
+// SeedStartupFixture seeds the named fixture into a store that must hold
 // no runs or attention items yet.
-func seedStartupFixture(
+func SeedStartupFixture(
 	parent context.Context, st *store.Store, fixture seedfixture.Name, dbPath string, logger *slog.Logger,
 ) error {
 	inventory, err := seedfixture.Seed(parent, st, fixture)
@@ -95,9 +95,9 @@ func seedStartupFixture(
 	return nil
 }
 
-// maintainLocalBackups runs the startup backup pass and returns the
+// MaintainLocalBackups runs the startup backup pass and returns the
 // producer whose loop startServing starts.
-func maintainLocalBackups(
+func MaintainLocalBackups(
 	parent context.Context, st *store.Store, blobs *signet.BlobStore, localBackupFiles *store.LocalBackupFiles,
 	logger *slog.Logger,
 ) (*store.LocalBackupProducer, error) {
@@ -273,8 +273,8 @@ func newAttentionService(
 	return attention
 }
 
-// composeFakeWorkflow builds the fake-driver engine over driver.
-func composeFakeWorkflow(
+// ComposeFakeWorkflow builds the fake-driver engine over driver.
+func ComposeFakeWorkflow(
 	st *store.Store, attention *signet.Service, driver exec.StageDriver,
 	lock *daemonlock.Lock, bound ward.LaunchBound, logger *slog.Logger,
 ) (*engine.Engine, error) {
@@ -285,12 +285,12 @@ func composeFakeWorkflow(
 	return engine.New(st, attention, driver, walkingSkeletonOptions...)
 }
 
-// seedWalkingSkeleton starts the walking-skeleton sample run on workflow.
+// SeedWalkingSkeleton starts the walking-skeleton sample run on workflow.
 // Even explicit fake execution starts without sample work unless asked, so
 // run calls it only under -seed-walking-skeleton.
-func seedWalkingSkeleton(parent context.Context, workflow *engine.Engine) error {
+func SeedWalkingSkeleton(parent context.Context, workflow *engine.Engine) error {
 	if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
-		RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
+		RunID: DefaultFakeRunID, ProjectID: defaultFakeProjectID,
 		SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
 	}); err != nil {
 		return fmt.Errorf("seed walking-skeleton run: %w", err)
@@ -298,7 +298,7 @@ func seedWalkingSkeleton(parent context.Context, workflow *engine.Engine) error 
 	return nil
 }
 
-// newScenarioParts gathers what composeScenario takes, including the values
+// newScenarioParts gathers what ComposeScenario takes, including the values
 // it needs from package main's helpers: the unattended admission floor,
 // both delivery validators over one production materializer, the store's
 // import authority and export recorder, and the publication watches. Each
@@ -307,12 +307,12 @@ func seedWalkingSkeleton(parent context.Context, workflow *engine.Engine) error 
 func newScenarioParts(
 	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
 	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
-) (scenarioParts, error) {
+) (ScenarioParts, error) {
 	materializer, err := productionMaterializer(blobs)
 	if err != nil {
-		return scenarioParts{}, err
+		return ScenarioParts{}, err
 	}
-	return scenarioParts{
+	return ScenarioParts{
 		Store: st, Attention: attention, Blobs: blobs, Lock: lock, Bound: bound,
 		DBPath: cfg.DBPath, Logger: cfg.Logger, Scenario: cfg.Scenario,
 		AdmissionFloor:                   admissionFloor(domain.ModeUnattended),
@@ -376,7 +376,7 @@ func composeClaudeWorkflow(
 	if err != nil {
 		return nil, err
 	}
-	production := productionEngine{
+	production := ProductionEngine{
 		Lock: lock, Bound: bound,
 		Backend: claudeWiring.backend, AdmissionFloor: admissionFloor(cfg.Claude.OperatingMode),
 		Admission: claudeWiring.env, AdmissionNow: func() time.Time { return time.Now().UTC() },
@@ -575,7 +575,7 @@ func composeClaudeWorkflow(
 			}).ConvergeReviewConfiguration(refreshCtx)
 		}
 	}
-	workflow, err = engine.New(st, attention, stageDriver, production.options()...)
+	workflow, err = engine.New(st, attention, stageDriver, production.Options()...)
 	if err != nil {
 		return nil, err
 	}
@@ -835,14 +835,14 @@ func (d *daemon) startClaudeLoops(
 // startScenarioLoops starts the scenario's forge, publication lane, and
 // scheduler, at the point where the Claude loops would start.
 func (d *daemon) startScenarioLoops(
-	parent, ctx context.Context, cfg config, scenarioWiring *scenarioComposition, workflow *engine.Engine,
+	parent, ctx context.Context, cfg config, scenarioWiring *ScenarioComposition, workflow *engine.Engine,
 ) {
 	// The scenario's own loops: the in-process forge publication talks
 	// to, the publication lane, and the durable scheduler's publication
 	// watches. The forge is an HTTP server like the API, so its exit is
 	// the same component failure.
 	d.Go(func() {
-		d.ComponentExited(parent, ctx, daemonshell.ComponentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
+		d.ComponentExited(parent, ctx, daemonshell.ComponentHTTP, scenarioWiring.ServeForge(ctx, cfg.Logger))
 	})
 	d.Go(func() {
 		d.ComponentExited(parent, ctx, daemonshell.ComponentProductionPublication,
@@ -850,6 +850,6 @@ func (d *daemon) startScenarioLoops(
 	})
 	d.Go(func() {
 		d.ComponentExited(parent, ctx, daemonshell.ComponentScheduler,
-			scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
+			scenarioWiring.Scheduler.Run(ctx, cfg.SchedulerInterval))
 	})
 }

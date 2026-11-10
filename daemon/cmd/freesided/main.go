@@ -68,7 +68,7 @@ const (
 )
 
 const (
-	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
+	DefaultFakeRunID     domain.RunID     = "run-walking-skeleton"
 	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
 )
 
@@ -338,7 +338,7 @@ func main() {
 		os.Exit(2)
 	}
 	if *listScenariosOnly {
-		if err := listScenarios(os.Stdout); err != nil {
+		if err := ListScenarios(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(1)
 		}
@@ -643,7 +643,7 @@ type config struct {
 	// over fakes (-driver scenario). It is refused outside the ephemeral tier,
 	// because the fake backend's conformance record claims a containment
 	// nothing provides.
-	Scenario *scenario
+	Scenario *Scenario
 	// DeputyLaunch is set only by deputy: the composition this daemon serves
 	// under, which every new submission must bind (deputyLaunch.admit).
 	DeputyLaunch *deputyLaunch
@@ -720,7 +720,7 @@ func (cfg config) storeOptions() (store.Options, error) {
 		if opts.ApprovedRecipes == nil {
 			opts.ApprovedRecipes = map[domain.Digest]bool{}
 		}
-		opts.ApprovedRecipes[verify.RecipeDigest(scenarioRecipe)] = true
+		opts.ApprovedRecipes[verify.RecipeDigest(ScenarioRecipe)] = true
 		return opts, nil
 	}
 	if cfg.Claude == nil {
@@ -966,11 +966,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	if fixture != "" {
-		if err := seedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
+		if err := SeedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
 			return nil, err
 		}
 	}
-	localBackups, err := maintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
+	localBackups, err := MaintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -988,7 +988,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
 		imageUpkeep           *engine.ImageUpkeep
-		scenarioWiring        *scenarioComposition
+		scenarioWiring        *ScenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 		late                  = &startupBindings{}
@@ -997,7 +997,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
 		manualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
 	if cfg.FakeDriverEnabled {
-		workflow, err = composeFakeWorkflow(
+		workflow, err = ComposeFakeWorkflow(
 			st, attention, autoScriptStageDriver{StageDriver: driver}, lock, bound, cfg.Logger)
 		if err != nil {
 			return nil, err
@@ -1006,7 +1006,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// writes reach reads this engine, not nil.
 		late.workflow = workflow
 		if cfg.SeedWalkingSkeleton {
-			if err := seedWalkingSkeleton(parent, workflow); err != nil {
+			if err := SeedWalkingSkeleton(parent, workflow); err != nil {
 				return nil, err
 			}
 		}
@@ -1019,12 +1019,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		claudeWiring, workflow, imageUpkeep = claude.claudeWiring, claude.workflow, claude.imageUpkeep
 	} else if cfg.Scenario != nil {
-		var parts scenarioParts
+		var parts ScenarioParts
 		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
-		scenarioWiring, err = composeScenario(ctx, parts)
+		scenarioWiring, err = ComposeScenario(ctx, parts)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
@@ -1033,10 +1033,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// before then still owns the listener.
 		defer func() {
 			if err != nil {
-				_ = scenarioWiring.listener.Close()
+				_ = scenarioWiring.Listener.Close()
 			}
 		}()
-		workflow = scenarioWiring.workflow
+		workflow = scenarioWiring.Workflow
 		late.workflow = workflow
 	}
 	// The live credential-integrity probe exists only in Claude mode, where
