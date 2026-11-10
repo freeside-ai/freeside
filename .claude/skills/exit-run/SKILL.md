@@ -3,15 +3,16 @@ name: exit-run
 description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive freesided deputy against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
 ---
 
-# Exit Run (Spine)
+# Exit Run
 
-You are the spine role (AGENTS.md, Coordination). An exit run is the
-close-condition proof for a tracker: the production pipeline runs on a real
-issue in a real project, from the current default-branch tip, and the run's
-evidence and findings decide whether the tracker can close. This session
-owns the whole run: preparation, driving the deputy, collecting evidence,
-filing findings, proposing exit dispositions, and recording everything on the
-tracker. Three parties share it:
+An exit run is the close-condition proof for a tracker: the production
+pipeline runs on a real issue in a real project, from the current
+default-branch tip, and the run's evidence and findings decide whether the
+tracker can close. It starts by the owner's word, never by a label or a
+listing (AGENTS.md, Coordination Gates). This session owns the whole run:
+preparation, driving the deputy, collecting evidence, filing findings,
+proposing exit dispositions, and recording everything on the tracker.
+Three parties share it:
 
 - **You** drive the deputy and the forge, and write every record.
 - **The operator** does what needs a human or a physical device: pairs the
@@ -379,9 +380,10 @@ A defect that stops the run is a finding first: file it, then stop and
 report. Running this skill authorizes no implementation.
 
 - An in-run fix proceeds only when the owner assigns it in this session,
-  and it still passes the Coordination Gates (claims, `exclusive-with`,
-  contract serialization): a shared-package change is a contract unit even
-  when it is one line.
+  and it still passes the Coordination Gates (AGENTS.md): its own claim and
+  its `starts-after` prerequisites. A shared-package change is a contract
+  unit even when it is one line (AGENTS.md, Contract Changes), and a change
+  on a Tier A path keeps the Tier A bar (AGENTS.md, Assurance Tiers).
 - An assigned fix lands on its own branch and PR from the current tip and
   is verified before the run resumes. The run record marks the finding
   **Fixed in-run** only when the fix is merged and the exercised runtime
@@ -489,20 +491,24 @@ contract someone can pick up by fiat.
   comment there, not a duplicate. A finding an open issue already covers is
   listed as "not filed, covered by #N" in the tracker comment so the reader
   can check the claim.
-- **Labels:** `deferral` as the origin label, plus `lane:*` from the unit's
-  declared paths via the canonical lane table (docs/coordination.md) and
-  `kind:*` per type. A shared-package change is `kind:contract` and
-  `lane:spine`. No milestone on an ad hoc tracker's findings; on a wave
-  tracker the spine assigns it at scheduling, not here. A finding only the
-  maintainer can act on (a credential, a repository setting, GitHub App
-  administration) gets `needs-human` and no lane label instead
-  (docs/coordination.md, Deferral escalation); it is never milestoned or
-  listed as a schedulable unit, whatever its exit disposition, and the
-  comment's table is where its disposition lives.
-- **Dependencies:** record typed relationships in the issue's Dependencies
-  field when the finding depends on another unit or shares its files. The
-  tracker comment's chains are derived from these fields, so a relationship
-  that exists only in the comment is a repair waiting to happen.
+- **Labels:** `deferral` as the origin label, plus one `kind:*` label by
+  the work's nature (docs/coordination.md, Deferral Escalation); a
+  shared-package change is `kind:contract`. No milestone at filing, on
+  either kind of tracker: a finding joins the unscheduled queue, and one
+  the owner adopts into a wave tracker's exit set gets its milestone with
+  its listing (Record on the Tracker). A finding only the maintainer can
+  act on (a credential, a repository setting, GitHub App administration)
+  gets `needs-human` (docs/coordination.md, Deferral Escalation); it is
+  never milestoned or listed as a schedulable unit, whatever its exit
+  disposition, and the comment's table is where its disposition lives.
+- **Dependencies:** record a typed relationship in the issue's
+  Dependencies field only where the finding's fix must be written against
+  another unit's result (AGENTS.md, Coordination, rule 3). Sharing files
+  with another unit gets no edge; that resolves at landing. The field
+  takes one parseable shape, and a finding with no relationship gets a
+  bare `none` (docs/coordination.md, Work-Unit Issues). The tracker
+  comment's chains are derived from these fields, so a relationship that
+  exists only in the comment is a repair waiting to happen.
 - **Severity and exit disposition are separate.** State severity (P1 to
   P3) from the defect's reach in the issue's Objective and in the tracker
   table; the template has no severity field and status labels are not
@@ -510,7 +516,7 @@ contract someone can pick up by fiat.
 - **In-run fixes** are still findings: file the issue, link the PR, mark it
   fixed in the table.
 - **Deputy and exercise defects** (the deputy command, its settings, the
-  walkthrough procedure) are findings too, labeled by their lane. A
+  walkthrough procedure) are findings too, labeled like any other. A
   procedure that lost evidence is a defect in the procedure, not operator
   error; say so and file it.
 - **Keep private material out.** No pairing codes, credentials, device
@@ -570,15 +576,17 @@ note.
   evidenced with why.
 - **Synthetic-trigger proofs**, apart from the real items: per raised alert,
   the command, the item ID, and what each device received.
-- **Findings table:** issue, what's wrong, severity, lane, disposition,
-  reason or trigger, with the suggested-to-block-on group above it.
+- **Findings table:** issue, what's wrong, severity, disposition, reason
+  or trigger, with the suggested-to-block-on group above it.
 - **Start order** for the exit set the owner adopted (Required and
   Investigate before exit; a diagnosis must finish before closure). A
   proposal has no exit set, so add this section with the status revision
-  that records the owner's answer: Startable now, typed chains,
-  cross-cutting gates (contract serialization, refute-first, four-front
-  cap), critical path, parallel lanes, and the Mermaid diagram. Derive it
-  from the issues' Dependencies fields.
+  that records the owner's answer: Startable now, typed chains, the
+  critical path, each `merges-after` pair the owner has to order at
+  landing, the units that carry the Tier A bar, and the Mermaid diagram.
+  Derive it from the issues' Dependencies fields. Propose no phases,
+  groups, or concurrency limits: units start freely (AGENTS.md,
+  Coordination), and a contract unit takes no place in any order.
 - **What was verified and what wasn't,** in `Passed:`, `Checked:`,
   `Not run:` form, including any evidence caveat (a store edit, a device
   that wasn't available).
@@ -593,7 +601,9 @@ as one edit. On a wave
 tracker a listed unit needs the phase milestone in the same edit
 (milestone and listing publish together, AGENTS.md Work
 Units), so a finding the owner defers stays off that list with its
-`deferral` label. Read the body first and preserve
+`deferral` label. That listing is the planner's scheduling write; this
+session makes it only for the exit set the owner adopted, and schedules
+nothing else. Read the body first and preserve
 everything else (AGENTS.md, Forge Edits). Verify both saved results. From
 then on the body is the live projection: merge cleanup (AGENTS.md, Merge
 Cleanup) refreshes the body, not this comment. The comment is the dated
@@ -615,7 +625,11 @@ the derivation step can read every prior run newest first.
   status never goes in a note.
 - Report to the user: whether the tracker can close, the exit set with
   its critical path, what waits on the owner, and what waits on the
-  operator. Do not claim, start, or plan any unit; `Plan #N` and
+  operator. Name every exit-set unit whose Dependencies carry
+  `merges-after`, with its prerequisite: no tool reads that relation at
+  landing, so it holds only through the order the owner approves or types
+  (docs/coordination.md, Relationship Types). Do not claim, start, or plan
+  any unit; `Plan #N` and
   `Handle #N` are the owner's.
 - Suggest a fresh session for the follow-up units. This session's context
   is the run; the fix sessions need the issues.
@@ -634,8 +648,8 @@ win when this skill or its references disagree with them:
   The Deputy, Run The Pre-Spend Checks Before A Launch, Operational
   Commands, and Read A Task's Record.
 - The Stop check: docs/task-cancellation-check.md.
-- The tracking-issue format and the lane table: docs/coordination.md and
-  docs/tracker-format.md.
+- The tracking-issue format and a finding's labels: docs/coordination.md
+  (Tracking Issues, Deferral Escalation) and docs/tracker-format.md.
 - The Forge Edits and label rules: AGENTS.md.
 
 `references/checkpoints.md` restates this skill's operator steps as lists;

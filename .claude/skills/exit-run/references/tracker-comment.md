@@ -66,13 +66,13 @@ records it.
 
 - #<n>: <which stated outcome it contradicts, in one line>.
 
-| Issue | What's wrong | Sev | Lane | Disposition | Reason or trigger |
-| --- | --- | --- | --- | --- | --- |
-| #<n> | <one line> | P<1-3> | <lane> | Fixed in-run, PR #<n> | <why every run would hit it> |
-| #<n> | <one line> | P<1-3> | <lane> | Deferred, suggested to block on | <which stated outcome it contradicts> |
-| #<n> | <one line> | P<1-3> | <lane> | Deferred | <trigger that promotes it> |
-| #<n> | <one line> | P<1-3> | <lane> | Required (owner, <date>) | <which stated outcome it contradicts> |
-| #<n> | <one line> | P<1-3> | <lane> | Investigate (owner, <date>) | <what a proven gap would require> |
+| Issue | What's wrong | Sev | Disposition | Reason or trigger |
+| --- | --- | --- | --- | --- |
+| #<n> | <one line> | P<1-3> | Fixed in-run, PR #<n> | <why every run would hit it> |
+| #<n> | <one line> | P<1-3> | Deferred, suggested to block on | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | Deferred | <trigger that promotes it> |
+| #<n> | <one line> | P<1-3> | Required (owner, <date>) | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | Investigate (owner, <date>) | <what a proven gap would require> |
 
 Not filed: <symptom>, covered by #<n>; <symptom>, appears covered by #<n>,
 please confirm.
@@ -86,19 +86,20 @@ records the owner's Required and Investigate findings.>
 
 Prerequisites: <what is already merged; `main` at `<sha>`>.
 
-**Startable now (structural only):** <units, or why none is startable>.
+**Startable now (structural only):** <each unit as a bare `#N`, or
+`#N (contract)`; or why none is startable>.
 
-**Typed chains:** <every arrow is `starts-after` unless marked>. <lane
-group>: #a → #b → #c. <lane group>: ...
-
-**Cross-cutting gates:** <contract serialization; refute-first units;
-shared-file one-writer chains; the four-front cap>.
+**Typed chains:** <every arrow is `starts-after` unless marked>.
+#a → #b → #c; #d → #e. <Units with no relationship start freely and are
+not listed here.>
 
 **Critical path:** <chain>, <n> units.
 
-| Front | Lane labels | Independent territory | Coordination boundary |
-| --- | --- | --- | --- |
-| <front> | `lane:<x>` | <paths or surfaces> | <what stops it crossing> |
+**Landing order:** <each `merges-after` pair, which only the owner's
+approval order or `--order` enforces; or none>.
+
+**Tier A units:** <units on a Tier A path, which keep refute-first, a
+fresh-context review, and a decision note; or none>.
 
 ```mermaid
 flowchart LR
@@ -176,8 +177,8 @@ reading the current body:
   bullet's text and Evidence instead. A clean run adds no Exit bullet: the
   comment is the record, and the owner ticks the existing bullets.
 - Add the exit set, the findings the owner made Required or Investigate
-  before exit, to `## Units` as bare `- [ ] #<n>` lines under their lane
-  group. On a wave tracker, listing is half of scheduling (AGENTS.md Work
+  before exit, to `## Units` as bare `- [ ] #<n>` lines in its one flat
+  list. On a wave tracker, listing is half of scheduling (AGENTS.md Work
   Units): set the phase milestone on each in the same edit. An ad hoc
   tracker schedules nothing and sets no milestone. A `needs-human` finding
   in the exit set goes under `### Owner-run`, unmilestoned.

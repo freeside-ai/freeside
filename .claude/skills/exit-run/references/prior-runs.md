@@ -150,7 +150,7 @@ Look for each of these before and during the run; most have bitten twice.
   menu-bar Start and Stop need full-screen control, which the owner
   approves each time; a deputy run needs neither, since `prod` keeps
   running (#2080).
-  Record that the spine, not the operator, drove: a card the spine reads
+  Record that the agent, not the operator, drove: a card the agent reads
   is not an operator's unprompted reading.
 - **The liveness probe logs its own notices.** `probe.log` beside the
   installed probe script records "sent recovered notice"; read it to
