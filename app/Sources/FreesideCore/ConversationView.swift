@@ -1,8 +1,14 @@
+import CoreGraphics
 import FreesideAPI
+import FreesideModel
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(iOS)
+    import PhotosUI
     import UIKit
+#elseif os(macOS)
+    import AppKit
 #endif
 
 /// Bounded conversation messages (visual audit D04), and what a message
@@ -384,10 +390,35 @@ struct MessageComposerSheet: View {
     /// `nil` for every use but Discuss, and for a first message, which has
     /// no thread to draw.
     var thread: Thread? = nil
+    /// The files the message carries, for a composer that attaches them:
+    /// a spec approval's Discuss (#2995), the one discussion that hands
+    /// files to an agent. `nil` for every other use, which draws no attach
+    /// control. The presenter owns the draft and sends it with the message.
+    var attachments: Binding<TaskAttachmentDraft>? = nil
     let submit: (String, Components.Schemas.AnswerRoute?) async -> Bool
     @State private var isSubmitting = false
     @State private var chosenRoute: Components.Schemas.AnswerRoute?
     @FocusState private var fieldIsFocused: Bool
+    /// The attachments' decoded image thumbnails, by digest.
+    @State private var thumbnails: [String: CGImage] = [:]
+    /// Why the latest items offered weren't attached, one sentence each.
+    @State private var refusals: [String] = []
+    /// Offered items still being read; Send waits for them, so none is
+    /// dropped from the message without a word.
+    @State private var loadsInFlight = 0
+    /// Cleared when the sheet goes away, so a read that finishes after a
+    /// Cancel or a send never adds to the presenter's next draft.
+    @State private var presentation = Presentation()
+    @State private var showsFileImporter = false
+    #if os(iOS)
+        @State private var showsPhotoPicker = false
+        @State private var photoSelection: [PhotosPickerItem] = []
+    #else
+        /// The Mac field that attaches pasted files draws its own focus
+        /// ring from this, since it is an AppKit view.
+        @State private var editorIsFocused = false
+        @State private var browse = TaskPromptBrowseState()
+    #endif
 
     private var selectedRoute: Components.Schemas.AnswerRoute? {
         chosenRoute ?? routeOptions.first
@@ -429,11 +460,13 @@ struct MessageComposerSheet: View {
             // the Return and Escape bindings the placements supplied.
             FreesideSheetActionRow(
                 submitLabel: submitLabel,
-                isSubmitEnabled: canSubmit && !isSubmitting,
+                isSubmitEnabled: canSubmit && !isSubmitting && loadsInFlight == 0,
                 submit: performSubmit,
                 cancel: { dismiss() })
         }
         .background(Color.ground2)
+        .modifier(AttachmentPickers(sheet: self))
+        .onDisappear { presentation.isOpen = false }
         .freesideSheetPresentation()
         .frame(minWidth: 380, minHeight: 340)
     }
@@ -485,7 +518,9 @@ struct MessageComposerSheet: View {
             KeywordLabel(text: "Message")
                 // The editor carries the same name.
                 .accessibilityHidden(true)
-            if rendersInteractiveControls {
+            if rendersInteractiveControls, attachments != nil {
+                attachingEditor
+            } else if rendersInteractiveControls {
                 TextEditor(text: $message)
                     .font(FreesideFont.callout)
                     .foregroundStyle(Color.ink)
@@ -518,6 +553,259 @@ struct MessageComposerSheet: View {
                     .font(FreesideFont.trailingSummary)
                     .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            if let attachments {
+                attachmentRow(attachments.wrappedValue)
+                    .padding(.top, 4)
+                    .disabled(isSubmitting)
+            }
+        }
+    }
+
+    /// The field of a composer that attaches files. On the Mac it is the
+    /// New Task composer's text view, which takes a pasted or dropped file
+    /// or image as an attachment where SwiftUI's editor would insert its
+    /// path. iPhone's editor never pastes a file, so it keeps the SwiftUI
+    /// one, and its Paste is in the Attach menu.
+    @ViewBuilder private var attachingEditor: some View {
+        #if os(macOS)
+            TaskPromptEditor(
+                text: $message, history: nil, browse: browse, fieldLabel: "Message", textFont: Self.fieldFont,
+                onAttach: attach(pasted:), isFocused: $editorIsFocused
+            )
+            .padding(Self.editorPadding)
+            .frame(minHeight: Self.fieldMinHeight)
+            .background(fieldFrame(isFocused: editorIsFocused))
+            .overlay(alignment: .topLeading) {
+                if message.isEmpty {
+                    placeholder
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+        #else
+            TextEditor(text: $message)
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                .scrollContentBackground(.hidden)
+                .focused($fieldIsFocused)
+                .padding(Self.editorPadding)
+                .frame(minHeight: Self.fieldMinHeight)
+                .background(fieldFrame(isFocused: fieldIsFocused))
+                .overlay(alignment: .topLeading) {
+                    if message.isEmpty {
+                        placeholder
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .accessibilityLabel("Message")
+        #endif
+    }
+
+    #if os(macOS)
+        /// The callout face the SwiftUI field draws in, for the AppKit one.
+        private static var fieldFont: NSFont {
+            _ = FreesideFont.registration
+            let size = FreesideFont.size(of: .callout)
+            return NSFont(name: "IBMPlexSans", size: size) ?? .systemFont(ofSize: size)
+        }
+    #endif
+
+    // MARK: Attachments
+
+    /// Each attachment as a removable chip, in the order added, then the
+    /// Attach control, then why the latest items weren't attached.
+    private func attachmentRow(_ draft: TaskAttachmentDraft) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
+                ForEach(draft.items) { item in
+                    ComposerAttachmentChip(attachment: item, thumbnail: thumbnail(for: item)) {
+                        remove(item)
+                    }
+                }
+                attachControl
+            }
+            if !refusals.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(refusals.enumerated()), id: \.offset) { _, refusal in
+                        Text(refusal)
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.waxText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// An image's thumbnail, decoded when it was attached. A static render
+    /// (the goldens) never attached it, so it decodes the draft's own.
+    private func thumbnail(for item: DraftAttachment) -> CGImage? {
+        guard item.isImage else { return nil }
+        if let decoded = thumbnails[item.digest] { return decoded }
+        return rendersInteractiveControls ? nil : ComposerAttachmentIntake.thumbnail(item.bytes)
+    }
+
+    /// The New Task composer's Attach chip: on iPhone a menu of Photos,
+    /// Files, and Paste; on the Mac a file picker, beside a drop on the
+    /// sheet and a paste into the field.
+    @ViewBuilder private var attachControl: some View {
+        let chip = ComposerChip(glyph: "+", text: "Attach")
+        if rendersInteractiveControls {
+            #if os(iOS)
+                Menu {
+                    Button("Photos", systemImage: "photo.on.rectangle") { showsPhotoPicker = true }
+                    Button("Files", systemImage: "folder") { showsFileImporter = true }
+                    PasteButton(supportedContentTypes: [.image, .fileURL]) { providers in
+                        let held = attachments?.wrappedValue.usage ?? TaskAttachmentDraft(for: .message).usage
+                        attach {
+                            await ComposerAttachmentIntake.items(
+                                from: providers, origin: .pasted, repository: nil, held: held, takesFolders: false)
+                        }
+                    }
+                } label: {
+                    chip
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .accessibilityLabel("Attach")
+            #else
+                Button {
+                    showsFileImporter = true
+                } label: {
+                    chip
+                }
+                .buttonStyle(.plain)
+                .help("Attach files or images. You can also drop or paste them.")
+                .accessibilityLabel("Attach files or images")
+            #endif
+        } else {
+            chip
+        }
+    }
+
+    /// Reads what `load` returns, off the main actor where it reads files,
+    /// and adds each item in order. The batch's refusals replace the last.
+    private func attach(_ load: @escaping @Sendable () async -> [ComposerAttachmentIntake.Item]) {
+        guard let attachments, !isSubmitting else { return }
+        let presentation = presentation
+        loadsInFlight += 1
+        Task {
+            let items = await load()
+            loadsInFlight -= 1
+            guard presentation.isOpen else { return }
+            var batchRefusals: [String] = []
+            for item in items {
+                switch item {
+                case .refused(let sentence):
+                    batchRefusals.append(sentence)
+                case .attachment(let name, let claim, let bytes):
+                    switch attachments.wrappedValue.add(name: name, claimedMediaType: claim, bytes: bytes) {
+                    case .added(let added):
+                        if added.isImage, thumbnails[added.digest] == nil {
+                            thumbnails[added.digest] = ComposerAttachmentIntake.thumbnail(bytes)
+                        }
+                    case .refused(let sentence):
+                        batchRefusals.append(sentence)
+                    }
+                // The intake refuses folders for this composer, so neither
+                // arrives; refuse them the same way should one.
+                case .folder(let name, _, _):
+                    batchRefusals.append(ComposerAttachmentIntake.noFoldersSentence(name))
+                case .repositoryPath(let path):
+                    batchRefusals.append(ComposerAttachmentIntake.noFoldersSentence(path))
+                }
+            }
+            refusals = batchRefusals
+        }
+    }
+
+    private func attach(files urls: [URL]) {
+        let held = attachments?.wrappedValue.usage ?? TaskAttachmentDraft(for: .message).usage
+        attach {
+            await Task.detached {
+                ComposerAttachmentIntake.files(at: urls, repository: nil, held: held, takesFolders: false)
+            }.value
+        }
+    }
+
+    private func attach(pasted: ComposerAttachmentIntake.Pasted) {
+        switch pasted {
+        case .files(let urls):
+            attach(files: urls)
+        case .image(let data):
+            attach { [ComposerAttachmentIntake.image(data, origin: .pasted)] }
+        }
+    }
+
+    private func remove(_ item: DraftAttachment) {
+        guard let attachments else { return }
+        attachments.wrappedValue.remove(name: item.name)
+        thumbnails[item.digest] = nil
+    }
+
+    /// Whether this presentation of the sheet is still on screen. A class,
+    /// so a read that outlives the sheet sees the change.
+    @MainActor private final class Presentation {
+        var isOpen = true
+    }
+
+    /// The pickers the Attach control opens and the sheet's drop target,
+    /// kept off the static goldens and off every composer that attaches
+    /// nothing.
+    private struct AttachmentPickers: ViewModifier {
+        let sheet: MessageComposerSheet
+
+        func body(content: Content) -> some View {
+            if sheet.rendersInteractiveControls, let attachments = sheet.attachments {
+                content
+                    // A file or image dropped anywhere on the sheet
+                    // attaches; the Mac text view routes its own drops the
+                    // same way.
+                    .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+                        guard !sheet.isSubmitting else { return false }
+                        let held = attachments.wrappedValue.usage
+                        sheet.attach {
+                            await ComposerAttachmentIntake.items(
+                                from: providers, origin: .pasted, repository: nil, held: held, takesFolders: false)
+                        }
+                        return true
+                    }
+                    // `.data` leaves out folders and packages.
+                    .fileImporter(
+                        isPresented: sheet.$showsFileImporter, allowedContentTypes: [.data],
+                        allowsMultipleSelection: true
+                    ) { result in
+                        if case .success(let urls) = result { sheet.attach(files: urls) }
+                    }
+                    #if os(iOS)
+                        .photosPicker(
+                            isPresented: sheet.$showsPhotoPicker, selection: sheet.$photoSelection,
+                            matching: .images
+                        )
+                        .onChange(of: sheet.photoSelection) {
+                            let picked = sheet.photoSelection
+                            guard !picked.isEmpty else { return }
+                            sheet.photoSelection = []
+                            sheet.attach {
+                                var items: [ComposerAttachmentIntake.Item] = []
+                                for item in picked {
+                                    if let data = try? await item.loadTransferable(type: Data.self) {
+                                        items.append(ComposerAttachmentIntake.image(data, origin: .photo))
+                                    } else {
+                                        items.append(.refused("A photo couldn't be loaded."))
+                                    }
+                                }
+                                return items
+                            }
+                        }
+                    #endif
+            } else {
+                content
             }
         }
     }

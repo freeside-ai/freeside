@@ -101,6 +101,9 @@ struct DecisionDetailView: View {
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
+    /// The files the open Discuss sheet will send, on a spec approval
+    /// (#2995). Emptied whenever a message sheet closes, sent or not.
+    @State private var discussAttachments = TaskAttachmentDraft(for: .message)
     @State private var specApprovalReader: SpecApprovalReader?
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var capabilityRetrySnapshot: Components.Schemas.AttentionItemSnapshot?
@@ -313,7 +316,9 @@ struct DecisionDetailView: View {
                     }
                 }
             }
-            .sheet(item: $messageEditor) { editor in
+            .sheet(
+                item: $messageEditor, onDismiss: { discussAttachments = TaskAttachmentDraft(for: .message) }
+            ) { editor in
                 switch editor {
                 case .discuss:
                     MessageComposerSheet(
@@ -325,9 +330,10 @@ struct DecisionDetailView: View {
                             .init(
                                 snapshot: $0, attachments: attachments,
                                 loadsAttachments: loadsAttachments, now: now)
-                        }
+                        },
+                        attachments: model.acceptsDiscussAttachments ? $discussAttachments : nil
                     ) { message, _ in
-                        await model.submitDiscuss(message: message)
+                        await model.submitDiscuss(message: message, attachments: discussAttachments.items)
                     }
                 case .requestChanges:
                     MessageComposerSheet(
@@ -2113,7 +2119,7 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
             RetryableReceipt(
                 isExpanded: .constant(expanded),
-                failureMessage: "the daemon did not answer")
+                failureMessage: "the daemon did not answer", isUnsent: false)
             lostResponseRetry
         }
         .padding()
@@ -2945,7 +2951,7 @@ struct DecisionDetailView: View {
             if offersLostResponseRetry {
                 RetryableReceipt(
                     isExpanded: $lostResponseExpanded,
-                    failureMessage: model.submissionError)
+                    failureMessage: model.submissionError, isUnsent: model.unsentAfterFailedUpload)
                 if !Self.drawsControlGroup(item) {
                     lostResponseRetry
                 }
@@ -3929,22 +3935,29 @@ struct DecisionDetailView: View {
 
     /// The uncertain receipt (R12): the accent notice, and the explanation
     /// one disclosure away. Its Retry is a button in the card's control
-    /// group (R14).
+    /// group (R14). A command whose attachment failed to upload is known
+    /// unsent (#2995), so its receipt says so rather than that it may be
+    /// recorded.
     private struct RetryableReceipt: View {
         @Binding var isExpanded: Bool
         let failureMessage: String?
+        let isUnsent: Bool
 
         var body: some View {
             VStack(alignment: .leading, spacing: 8) {
                 Notice(
                     tone: .accent, keyword: "Unconfirmed",
-                    sentence: "The daemon did not answer. Nothing is assumed."
+                    sentence: isUnsent
+                        ? "An attachment didn't upload. Nothing was sent."
+                        : "The daemon did not answer. Nothing is assumed."
                 )
                 .accessibilityElement(children: .combine)
                 SentenceDisclosure(label: "What Happened", isExpanded: $isExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(
-                            "The decision may already be recorded. Retry resends the same command and returns the original result."
+                            isUnsent
+                                ? "Retry uploads the attachments again and sends the same message."
+                                : "The decision may already be recorded. Retry resends the same command and returns the original result."
                         )
                         if let failureMessage {
                             Text(failureMessage)

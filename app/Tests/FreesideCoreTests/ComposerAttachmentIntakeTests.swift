@@ -50,6 +50,24 @@ import UniformTypeIdentifiers
                 == .refused("Tool.app is a package, such as an app or a document bundle, and can't be attached."))
     }
 
+    /// A spec approval's Discuss takes no folders (#2995), on either
+    /// platform.
+    @Test func aComposerThatTakesNoFoldersRefusesOne() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("screens", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("a".utf8).write(to: folder.appendingPathComponent("a.txt"))
+        let items = ComposerAttachmentIntake.files(
+            at: [folder, folder.appendingPathComponent("a.txt")], repository: nil,
+            held: TaskAttachmentDraft(for: .message).usage, takesFolders: false)
+        #expect(
+            items == [
+                .refused("screens is a folder. A message attaches files, not folders."),
+                .attachment(name: "a.txt", claimedMediaType: "text/plain", bytes: Data("a".utf8)),
+            ])
+    }
+
     #if os(macOS)
         @Test func aFolderIsWalkedOnTheMac() throws {
             let root = try temporaryDirectory()
