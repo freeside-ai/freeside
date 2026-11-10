@@ -91,3 +91,6 @@ cb2149328e0a134d423801a523e22790d176f5eb
 
 # Move the scenario, fake, and storage compositions to daemoncompose (#2862)
 d1f03460940ca89c2a773852720fdd2a740efefd
+
+# Rename the publication transport classifier for all its callers (#2858)
+b4fb2369d0b8f08ac11dc78a6824d3ce6298f0f5
