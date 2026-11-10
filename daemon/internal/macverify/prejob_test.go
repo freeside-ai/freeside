@@ -48,8 +48,8 @@ func TestRunPreJobProbeRunsTheSandboxModeFirst(t *testing.T) {
 	if !slices.Equal(argv[5:], wantTail) {
 		t.Fatalf("probe targets = %q, want %q", argv[5:], wantTail)
 	}
-	if !slices.Contains(room.outsideDirs, "/private/tmp") || !slices.Contains(room.outsideDirs, "/Users/Shared") {
-		t.Fatalf("outside directories = %v", room.outsideDirs)
+	if want := []string{"/private/tmp", "/Users/Shared"}; !slices.Equal(room.outsideDirs, want) {
+		t.Fatalf("outside directories = %v, want %v", room.outsideDirs, want)
 	}
 }
 

@@ -4688,12 +4688,15 @@ slot, it runs four probe jobs through the room's ordinary job path:
 | Job | Profile | Checks | Confinement |
 | --- | --- | --- | --- |
 | `sandbox` | configured | `loopback-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
-| `sandbox` | configured | `write-denied` in `/private/tmp`, `/Users/Shared`, and the daemon user's home; `write-job-dir` | `write_confinement` |
+| `sandbox` | configured | `write-denied` in `/private/tmp` and `/Users/Shared`; `write-job-dir` | `write_confinement` |
 | `packet-filter` | permissive (`(allow default)`) | `tcp-dropped`, `udp-dropped` to the control targets | `packet_filter` |
 | `home-mark`, then `home-clean` | configured | a marker left in the slot's home is gone in the next job | `home_reset` |
 
 A sandbox check passes only on `EPERM`, the sandbox's own refusal, so an
-unreachable target or a missing directory fails it. A packet-filter check
+unreachable target or a missing directory fails it. Only the sandbox can
+refuse a slot's write to those two world-writable directories. The daemon
+user's home is not a target: file permissions refuse the slot there anyway,
+as `EACCES` when the home is `0750`, so its answer cannot show the sandbox. A packet-filter check
 runs with the sandbox off and passes only on a timeout, `EHOSTUNREACH`, or
 `EACCES`, what pf's `block drop` for the slot's uid produces; it fails on a
 connection, on `EPERM` (the sandbox was on after all), and on any other
@@ -4706,7 +4709,7 @@ failure superseded records nothing and says so.
 **The pre-job probe.** Before every recipe command, the room runs the
 `sandbox` job on the leased slot under the configured profile, against fixed
 targets: a loopback listener it opens, `github.com`, `192.0.2.1:443`,
-`192.0.2.1:53`, and the three directories above. It needs no positive control,
+`192.0.2.1:53`, and the two directories above. It needs no positive control,
 because `EPERM` is the sandbox's answer whatever the target. A confinement
 failure refuses the command before it runs, quarantines the slot until the
 daemon restarts, and withdraws the declaration in memory. A pass refuses a
