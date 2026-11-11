@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 )
 
 // publicationUnsafeContentCorpus is the shared body-content escape corpus: text
@@ -317,6 +318,72 @@ func TestRenderAuthoredBodyProseMatchesGFMFenceGrammar(t *testing.T) {
 	}
 }
 
+// assertFencesTopLevel checks rendered prose the way GitHub reads it: every
+// fence opener outside a fence sits at column 0, where it is always top-level,
+// and no fence is open at the end, so nothing appended after the prose renders
+// as code (#3053).
+func assertFencesTopLevel(t *testing.T, rendered string) {
+	t.Helper()
+	var fence string
+	for i, line := range strings.Split(rendered, "\n") {
+		if fence != "" {
+			if publicationtext.ClosesFence(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if opener := publicationtext.FenceOpener(line); opener != "" {
+			if strings.HasPrefix(line, " ") {
+				t.Errorf("line %d opens an indented fence: %q\n%s", i+1, line, rendered)
+			}
+			fence = opener
+		}
+	}
+	if fence != "" {
+		t.Errorf("a %q fence is open at the end:\n%s", fence, rendered)
+	}
+}
+
+// A fence inside a list item or blockquote ends on GitHub where the container
+// ends, so the renderer emits every fence at column 0 and decides closure on
+// the emitted line. Otherwise a later top-level fence reads as the list
+// fence's closer and leaves the publisher's sections in code, or a closer
+// GitHub accepts goes unseen and the prose after it is emitted raw (#3053).
+func TestRenderAuthoredBodyProseEmitsFencesAtColumnZero(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, body, want string }{
+		{
+			name: "list fence left open before a top-level fence",
+			body: "## Why\n\n- Run:\n  ```sh\n  go test\n## How\n```\nx",
+			want: "## Why\n\n- Run:\n```sh\ngo test\n## How\n```\nx",
+		},
+		{
+			name: "closer indented past the list item's content",
+			body: "- Run:\n  ```\n     ```\n  @octocat",
+			want: "- Run:\n```\n   ```\n  `@octocat`",
+		},
+		{
+			name: "blockquote fence left open before a top-level fence",
+			body: "> Run:\n> ```sh\n> go test\n## How\n```\nx",
+			want: "&gt; Run:\n&gt; \\`\\`\\`sh\n&gt; go test\n## How\n```\nx\n```",
+		},
+		{
+			name: "well-formed ordered list fence",
+			body: "1. Run:\n   ```sh\n   go test\n   ```\n2. Next",
+			want: "1. Run:\n```sh\ngo test\n```\n2. Next",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := renderAuthoredBodyProse(tc.body)
+			if got != tc.want {
+				t.Errorf("rendered:\n%q\nwant:\n%q", got, tc.want)
+			}
+			assertFencesTopLevel(t, got)
+		})
+	}
+}
+
 func TestRenderAuthoredPublicationRendersEvidenceAndProvenanceInert(t *testing.T) {
 	t.Parallel()
 	ref := domain.PublicationEvidenceReference{ArtifactID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("b", 64))}
@@ -355,6 +422,7 @@ func TestRenderAuthoredPublicationIsDeterministic(t *testing.T) {
 	if first != second {
 		t.Fatal("renderer is not deterministic")
 	}
+	assertFencesTopLevel(t, renderAuthoredBodyProse(a.Body))
 	golden.Assert(t, "publication_render_v2_body", []byte(first))
 }
 
@@ -387,6 +455,7 @@ func TestRenderAuthoredPublicationV3EndsWithTheProse(t *testing.T) {
 	if body != renderAuthoredBodyProse(a.Body) {
 		t.Errorf("v3 body is not the rendered prose alone:\n%s", body)
 	}
+	assertFencesTopLevel(t, body)
 	for _, absent := range []string{"Produced by", "Evidence artifacts", "artifact-1", "sha256:", string(a.Digest), "\n---\n"} {
 		if strings.Contains(body, absent) {
 			t.Errorf("v3 body contains %q:\n%s", absent, body)

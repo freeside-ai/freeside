@@ -190,16 +190,32 @@ func renderAuthoredPublication(recipe string, a domain.PublicationAuthoring) (ti
 }
 
 // renderAuthoredBodyProse renders the author's Markdown body as neutralized live
-// Markdown, block by block. A fenced code block is emitted verbatim: GitHub
-// performs no autolinking, HTML, or emphasis inside code, so its content is
-// already inert. A fence left open at end of input is closed with the same
-// delimiter so nothing appended after the prose is drawn into the code block.
+// Markdown, block by block. A fenced code block's lines are emitted without
+// neutralization: GitHub performs no autolinking, HTML, or emphasis inside
+// code, so its content is already inert. A fence left open at end of input is
+// closed with the same delimiter so nothing appended after the prose is drawn
+// into the code block.
+//
+// That holds only if GitHub ends each fence on the line where this renderer
+// does, so every fence is emitted at column 0. The opener's indentation (0 to
+// 3 spaces) is stripped, up to as many leading spaces are stripped from each
+// line inside the fence, as GFM does with an indented fence's content, and
+// closure is decided on the emitted line. A column-0 opener is always
+// top-level on GitHub: no list item continues past a column-0 fence opener, and
+// prose outside fences has no blockquote, HTML block, table, or other fence,
+// because escapeInertText escapes >, <, |, backticks, and tildes and the screen
+// refuses tabs and carriage returns. Deciding closure on an indented opener
+// in the input instead would disagree with GitHub, which ends a list item's
+// fence when the list ends (#3053). The cost: a list item's code block renders
+// after the item rather than nested in it.
 func renderAuthoredBodyProse(bodyText string) string {
 	lines := strings.Split(bodyText, "\n")
 	var out []string
 	var fence string // nonempty while inside a fenced code block: the exact delimiter
+	var indent int   // the fence opener's indentation, stripped from its lines
 	for _, line := range lines {
 		if fence != "" {
+			line = stripLeadingSpaces(line, indent)
 			out = append(out, line)
 			if publicationtext.ClosesFence(line, fence) {
 				fence = ""
@@ -208,7 +224,9 @@ func renderAuthoredBodyProse(bodyText string) string {
 		}
 		if opener := publicationtext.FenceOpener(line); opener != "" {
 			fence = opener
-			out = append(out, line)
+			trimmed := strings.TrimLeft(line, " ")
+			indent = len(line) - len(trimmed)
+			out = append(out, trimmed)
 			continue
 		}
 		if m := atxHeadingRe.FindStringSubmatch(line); m != nil {
@@ -242,6 +260,15 @@ func renderAuthoredBodyProse(bodyText string) string {
 		rendered += "\n" + publicationtext.ClosingFence(fence)
 	}
 	return rendered
+}
+
+// stripLeadingSpaces removes up to n leading spaces from line.
+func stripLeadingSpaces(line string, n int) string {
+	i := 0
+	for i < n && i < len(line) && line[i] == ' ' {
+		i++
+	}
+	return line[i:]
 }
 
 // neutralizeInlineText renders one line of inline prose safe while keeping
