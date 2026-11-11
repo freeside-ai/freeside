@@ -182,4 +182,7 @@ Drop row 1 on a deputy pass and row 4 when the gate names no action. On
 the `quota-park` scenario the park lasts two minutes from the refusal, so
 send this list before the approval: the operator's approval starts the
 attempt the provider refuses, and rows 2 and 3 are read while the task is
-parked.
+parked. The park allocates the next attempt as a new run; `freesided
+follow -run <that run> -until park-ended -timeout <duration>
+-approved-recipe <digest>` waits for its
+admission, which ends the park. On the refused run it holds at once.
