@@ -711,9 +711,17 @@ struct TaskPageView: View {
             runs: (timeline?.sections.flatMap(\.runs) ?? []).map {
                 .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
             },
-            selected: chosenSection ?? (open.isEmpty ? .task : .decisions),
+            // The chip follows the seated card, not the open items, so an
+            // item opening under a reader leaves it where it was.
+            selected: chosenSection ?? (leadingItemID == nil ? .task : .decisions),
             rendersInteractiveControls: screenshotTimeline == nil,
             onSelect: { section in
+                // With no card seated the Decisions target isn't drawn, so
+                // the chip opens the item, as its one-line row does.
+                if section == .decisions, leadingItemID == nil, let newest = open.first {
+                    onOpenItem?(newest.item.id)
+                    return
+                }
                 // A one-run page's Runs chip goes where choosing that run
                 // from the popup would; with none it lands on the Timeline.
                 if section == .runs, let run = timeline?.sections.flatMap(\.runs).first {
