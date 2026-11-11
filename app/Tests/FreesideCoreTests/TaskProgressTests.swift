@@ -133,15 +133,16 @@ import Testing
 
     /// The row's context line carries the current phase and round after the
     /// project and issue (R31). A historical position has no current phase,
-    /// so it carries the round alone; a heading that only repeats the status
-    /// word and a task with no position add nothing.
+    /// so it carries the round alone, and a superseded specification run has
+    /// none (#1462); a heading that only repeats the status word and a task
+    /// with no position add nothing.
     @Test func rowContextCarriesTheCurrentPhaseAndRound() {
         let expected: [String: String?] = [
-            "Queued": "Implementation · Round 1", "Approval required": "Specification · Round 1",
+            "Queued": "Implementation · Round 1", "Approval required": "Specification",
             "Implementation": "Implementation · Round 1", "Review": "Review",
             "Verification": "Verification · Round 1", "Stop pending": "Implementation · Round 1",
             "History unavailable": "Implementation · Round 1", "Run unavailable": "Implementation",
-            "Stopped": "Round 1", "Failed": "Round 1", "Finished": "Round 1", "Superseded record": "Round 1",
+            "Stopped": "Round 1", "Failed": "Round 1", "Finished": "Round 1", "Superseded record": nil,
             "Abandoned": "Round 1", "Ready": nil, "Ready degraded": nil, "No position": nil,
         ]
         for (name, phase) in expected {

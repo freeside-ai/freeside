@@ -618,12 +618,16 @@ enum RunHistoryPresentation {
     /// history rail and the invocation observations.
     ///
     /// A review round reads `Review · Round <n>` and takes precedence, then
-    /// a remediator reads `Remediation for Review <n>`. Every
-    /// other invocation reads `<Stage> · Round <n>` with the daemon's
-    /// per-stage `Attempt.number`. That number restarts at 1 for each stage,
-    /// and the daemon appends a fresh `implement` stage for each remediation
-    /// and operator-feedback pass, so a run that recorded the same stage more
-    /// than once would show several rows all labelled "Round 1". When the
+    /// a remediator reads `Remediation for Review <n>`. A specification
+    /// invocation reads `Specification · Invocation <n>`: it may be a
+    /// research continuation, a Discuss reply, a revision, or a retry, and
+    /// the API records no fact that tells them apart, so it is not called a
+    /// round (#1462). Every other invocation reads `<Stage> · Round <n>` with
+    /// the daemon's per-stage `Attempt.number`. That number restarts at 1
+    /// for each stage, and the daemon appends a fresh `implement` stage for
+    /// each remediation and operator-feedback pass, so a run that recorded
+    /// the same stage more than once would show several rows all labelled
+    /// "Round 1". When the
     /// owning stage's canonical name (folding `implement` into
     /// `implementation`) repeats across `run.stages`, the label also names the
     /// pass in stage creation order: `Implementation · Pass 2 · Round 1`. The
@@ -650,6 +654,9 @@ enum RunHistoryPresentation {
             else { continue }
             let label = RunDisplay.stageLabel(stage.name)
             let canonical = RunDisplay.canonicalStageName(stage.name)
+            if canonical == Components.Schemas.StageName.specification.rawValue {
+                return "\(label) · Invocation \(attempt.number)"
+            }
             let sameName = stages.enumerated().filter {
                 RunDisplay.canonicalStageName($0.element.name) == canonical
             }

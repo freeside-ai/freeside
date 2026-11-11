@@ -34,8 +34,12 @@ package enum RunDisplay {
         }
     }
 
+    /// The stage's round: its attempt count. Specification has none, since
+    /// its attempts are invocations (a research continuation, a Discuss
+    /// reply, a revision, a retry) and the client can't tell them apart, so
+    /// a count would read a reply as a new round (#1462).
     static func round(_ stage: Components.Schemas.Stage) -> String? {
-        guard !stage.attempts.isEmpty else { return nil }
+        guard !stage.attempts.isEmpty, canonicalStageName(stage.name) != "specification" else { return nil }
         return "Round \(stage.attempts.count)"
     }
 
@@ -143,14 +147,26 @@ package enum RunDisplay {
             .map(AttentionDisplay.label) ?? name.capitalized
     }
 
-    /// The timeline title is the attempt number; a run outside a
-    /// campaign, or missing its attempt number, is titled by its short id.
-    /// The exact id is in the header's technical details.
+    /// The timeline title names the run's phase, as the task page's run
+    /// card does: `Specification` for a run whose only stage is
+    /// specification, `Implementation · Attempt N` for any other campaign
+    /// run that has a stage. `Run` carries no role, so a campaign run with
+    /// no stage yet keeps `Attempt N`. A run outside a campaign, or missing
+    /// its attempt number, is titled by its short id. The exact id is in
+    /// the header's technical details.
     package static func timelineTitle(_ run: Components.Schemas.Run) -> String {
         guard run.campaign_id != nil, let attempt = run.attempt_number else {
             return "Run \(ShortIdentifier.short(run.id))"
         }
-        return "Attempt \(attempt)"
+        if isSpecificationOnly(run) { return AttentionDisplay.label(.specification) }
+        if run.stages.isEmpty { return "Attempt \(attempt)" }
+        return "\(AttentionDisplay.label(.implementation)) · Attempt \(attempt)"
+    }
+
+    /// The daemon builds a specification run with a single specification
+    /// stage, and an implementation run never records one.
+    private static func isSpecificationOnly(_ run: Components.Schemas.Run) -> Bool {
+        run.stages.count == 1 && canonicalStageName(run.stages[0].name) == "specification"
     }
 
     private static func projectName(_ run: Components.Schemas.Run) -> String {
@@ -224,8 +240,7 @@ package enum RunDisplay {
     private static func isSpecificationHandoff(_ run: Components.Schemas.Run) -> Bool {
         run.campaign_id != nil && run.attempt_number != nil
             && run.lifecycle == .finished && run.superseded_by != nil
-            && run.stages.count == 1
-            && canonicalStageName(run.stages[0].name) == "specification"
+            && isSpecificationOnly(run)
     }
 
     static func identityLine(
@@ -235,7 +250,7 @@ package enum RunDisplay {
         let identity = "Attempt \(attempt)"
         if let successor = successorLabel(run, runs: runs) {
             if isSpecificationHandoff(run) {
-                return "\(identity) · handed off to implementation (\(successor))"
+                return "\(AttentionDisplay.label(.specification)) · handed off to implementation (\(successor))"
             }
             return "\(identity) · superseded by \(successor)"
         }
