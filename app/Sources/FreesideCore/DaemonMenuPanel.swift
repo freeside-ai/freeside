@@ -294,6 +294,8 @@
             Text(keys)
                 .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isStaticText)
                 .accessibilityLabel("Command Q")
         }
 

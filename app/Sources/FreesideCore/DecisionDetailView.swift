@@ -1084,6 +1084,8 @@ struct DecisionDetailView: View {
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .proseMeasure()
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isStaticText)
                 .accessibilityLabel(Text(binding.plain))
             }
             // effectProposalCardRows is empty for an effect kind this card
@@ -1265,6 +1267,8 @@ struct DecisionDetailView: View {
                                 if presentation.isExcerpt {
                                     Text("…")
                                         .font(FreesideFont.summary())
+                                        .accessibilityElement(children: .ignore)
+                                        .accessibilityAddTraits(.isStaticText)
                                         .accessibilityLabel("Excerpt ends here")
                                 }
                                 // Headings never repeat in a recognized report.
@@ -2216,6 +2220,8 @@ struct DecisionDetailView: View {
                                 .font(FreesideFont.optionLabel)
                                 .foregroundStyle(Color.ink)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityAddTraits(.isStaticText)
                                 .accessibilityLabel(Text(card.routeAccessibilityLabel))
                             ClampedText(
                                 text: card.rationale, font: FreesideFont.cardBody,
@@ -2230,6 +2236,8 @@ struct DecisionDetailView: View {
                                 .font(FreesideFont.cardBody)
                                 .foregroundStyle(Color.ink)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityAddTraits(.isStaticText)
                                 .accessibilityLabel(
                                     Text(card.selectionAccessibilityLabel(selected)))
                         }
@@ -3568,6 +3576,8 @@ struct DecisionDetailView: View {
             case .notImage(let bytes, let observedByteCount):
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Not an image", systemImage: "doc")
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityAddTraits(.isStaticText)
                         .accessibilityLabel("\(label) attachment, not an image")
                     Text(byteCount(observedByteCount))
                         .foregroundStyle(Color.inkDim)
@@ -3693,6 +3703,8 @@ struct DecisionDetailView: View {
                 .foregroundStyle(Color.inkDim)
                 .lineLimit(1)
                 .textSelection(.enabled)
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isStaticText)
                 .accessibilityLabel(
                     "\(label): \(reference.mediaType), \(byteCount(reference.sizeBytes))"
                 )

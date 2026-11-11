@@ -615,6 +615,8 @@ struct StateChip: View {
             }
         }
         .foregroundStyle(color)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityLabel(label)
     }
 }
@@ -2021,6 +2023,8 @@ struct CapacityBlock: View {
             .font(FreesideFont.trailingSummary)
             .fixedSize(horizontal: false, vertical: true)
             // A comma, not the drawn dot, between the reset and the clause.
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isStaticText)
             .accessibilityLabel([resetLine, parked].compactMap(\.self).joined(separator: ", "))
         if let resetsAt = capacity.resetsAt {
             text.exactInstant(resetsAt)

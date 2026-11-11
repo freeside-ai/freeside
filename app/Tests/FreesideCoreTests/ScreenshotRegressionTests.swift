@@ -177,6 +177,27 @@
             }
         }
 
+        /// Every light surface, inserted while an assistive client reads
+        /// (#2993; `AccessibilityLabelRecursionTests` explains the crash).
+        /// A dark surface has the same accessibility tree as its light
+        /// twin, so the pass skips it.
+        @Test func insertingASurfaceUnderAnAssistiveClientDoesNotRecurse() async throws {
+            guard let timeZone = TimeZone(secondsFromGMT: 0) else { throw ScreenshotError.missingGMT }
+            var recursing: [String: [String]] = [:]
+            for surface in try await makeSurfaces(at: .large) where surface.colorScheme == .light {
+                let width = surface.width ?? canvasWidth
+                let view = surface.view
+                    .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+                    .environment(\.calendar, Calendar(identifier: .gregorian))
+                    .environment(\.timeZone, timeZone)
+                    .environment(\.pinnedNow, screenshotNow)
+                    .transformEnvironment(\.horizontalSizeClass) { if width <= 430 { $0 = .compact } }
+                let elements = try AccessibilityInsertionProbe.recursingElements(in: view, width: width)
+                if !elements.isEmpty { recursing[surface.name] = elements }
+            }
+            #expect(recursing.isEmpty, "label lookups recursed on: \(recursing)")
+        }
+
         private func captureSurfaces(
             expected: [String: String],
             recording: Bool,

@@ -314,6 +314,8 @@ struct ConversationView: View {
             .lineLimit(bounded ? ConversationPresentation.collapsedLineLimit : nil)
             .fixedSize(horizontal: false, vertical: true)
             .wholeBodySelection()
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isStaticText)
             .accessibilityLabel(ConversationPresentation.accessibilityLabel(for: message, now: now))
     }
 

@@ -271,6 +271,8 @@ struct RoutingPolicyNotices: View {
                         .font(FreesideFont.monoValue)
                         .foregroundStyle(Color.inkDim)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityAddTraits(.isStaticText)
                         .accessibilityLabel("The daemon holds \(RoutingPolicyView.policyLine(current))")
                 }
             }

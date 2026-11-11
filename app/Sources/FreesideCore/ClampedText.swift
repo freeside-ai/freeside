@@ -82,6 +82,8 @@ struct ClampedText: View {
             .lineLimit(bounded ? lineLimit : nil)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isStaticText)
             .accessibilityLabel(Text(text))
     }
 
