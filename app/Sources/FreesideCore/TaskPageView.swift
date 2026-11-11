@@ -288,7 +288,6 @@ struct TaskPageView: View {
             }
             let conversations = conversations
             VStack(alignment: .leading, spacing: 22) {
-                attachmentsSection
                 stopStates
                 lineChangeStates
                 // Absent at zero, as Decisions is: the outline drops its
@@ -552,6 +551,7 @@ struct TaskPageView: View {
             status: status
         ) {
             documentsLine(timeline)
+            attachmentsFold
             // A parked status line already names the hold.
             if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage),
                 position?.hold.map(status.hasSuffix) != true
@@ -854,30 +854,37 @@ struct TaskPageView: View {
     }
 
     /// The files and images the operator attached when submitting (#2590),
-    /// in submitted order; absent when there are none. Images render inline
-    /// through the attachment loader. The daemon never deletes task
-    /// attachment bytes, so each reference is available. A folder's files
-    /// (#2591) fold under one row with its file count and total size, so a
-    /// large folder loads nothing until opened.
-    @ViewBuilder private var attachmentsSection: some View {
+    /// in submitted order, as one fold in the page head under the
+    /// documents line: they are the task's input, as the prompt is. Closed
+    /// at first and kept per task; absent when there are none. Images
+    /// render inline through the attachment loader. The daemon never
+    /// deletes task attachment bytes, so each reference is available. A
+    /// folder's files (#2591) fold under one row with its file count and
+    /// total size, so a large folder loads nothing until opened.
+    @ViewBuilder private var attachmentsFold: some View {
         let attachments = snapshot.task.attachments
         if !attachments.isEmpty {
-            VStack(alignment: .leading, spacing: 11) {
-                KeywordLabel(text: "Attachments")
-                ForEach(AttachmentGroup.grouped(attachments, name: \.name)) { group in
-                    switch group {
-                    case .file(let name, let attachment):
-                        attachmentRow(attachment, label: name)
-                    case .folder(let name, let files):
-                        SentenceDisclosure(
-                            label: name,
-                            summary: Self.folderSummary(files),
-                            spokenLabel: "Folder \(name), \(Self.folderSummary(files))",
-                            isExpanded: attachmentFolderFold(name)
-                        ) {
-                            VStack(alignment: .leading, spacing: 11) {
-                                ForEach(files, id: \.name) { file in
-                                    attachmentRow(file, label: String(file.name.dropFirst(name.count + 1)))
+            SentenceDisclosure(
+                label: "Attachments",
+                summary: Self.folderSummary(attachments),
+                isExpanded: fold(.attachments)
+            ) {
+                VStack(alignment: .leading, spacing: 11) {
+                    ForEach(AttachmentGroup.grouped(attachments, name: \.name)) { group in
+                        switch group {
+                        case .file(let name, let attachment):
+                            attachmentRow(attachment, label: name)
+                        case .folder(let name, let files):
+                            SentenceDisclosure(
+                                label: name,
+                                summary: Self.folderSummary(files),
+                                spokenLabel: "Folder \(name), \(Self.folderSummary(files))",
+                                isExpanded: attachmentFolderFold(name)
+                            ) {
+                                VStack(alignment: .leading, spacing: 11) {
+                                    ForEach(files, id: \.name) { file in
+                                        attachmentRow(file, label: String(file.name.dropFirst(name.count + 1)))
+                                    }
                                 }
                             }
                         }

@@ -253,6 +253,30 @@ import Testing
         #expect(others.allSatisfy { !reloaded.isExpanded($0, taskID: "task-a") })
     }
 
+    /// The head's Attachments fold persists under its own key, starts
+    /// closed, opens and closes per task, and is no other fold.
+    @Test func theAttachmentsFoldHasItsOwnKey() throws {
+        #expect(TaskTimelineDisclosurePreferences.Section.attachments.id == "attachments")
+        let others: [TaskTimelineDisclosurePreferences.Section] = [
+            .campaign(nil), .campaign("attachments"), .run("attachments"), .runDetails("attachments"),
+            .roundFacts("attachments"), .priorRounds("attachments"), .identifiers,
+        ]
+        #expect(!others.map(\.id).contains("attachments"))
+
+        let suite = "TaskPageLayersTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskTimelineDisclosurePreferences(defaults: defaults)
+        #expect(!store.isExpanded(.attachments, taskID: "task-a"))
+        store.setExpanded(true, .attachments, taskID: "task-a")
+        let reloaded = TaskTimelineDisclosurePreferences(defaults: defaults)
+        #expect(reloaded.isExpanded(.attachments, taskID: "task-a"))
+        #expect(!reloaded.isExpanded(.attachments, taskID: "task-b"))
+        #expect(others.allSatisfy { !reloaded.isExpanded($0, taskID: "task-a") })
+        reloaded.setExpanded(false, .attachments, taskID: "task-a")
+        #expect(!TaskTimelineDisclosurePreferences(defaults: defaults).isExpanded(.attachments, taskID: "task-a"))
+    }
+
     @Test func aMemoryOnlyStoreWritesNothing() {
         let store = TaskTimelineDisclosurePreferences(defaults: nil)
         store.setExpanded(true, .campaign("campaign-1"), taskID: "task-a")

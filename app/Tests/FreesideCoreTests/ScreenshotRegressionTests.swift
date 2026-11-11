@@ -2981,15 +2981,24 @@
                         claimed_media_type: path.hasSuffix(".png") ? "image/png" : "text/markdown",
                         size_bytes: 412_000)
                 }
-            for (name, width) in [("task-page-attachments", CGFloat?.none), ("task-page-attachments-390", 390)] {
-                surfaces.append(
-                    Surface(
-                        name: name,
-                        width: width,
-                        view: AnyView(
-                            TaskPageView(coordinator: attachedCoordinator, snapshot: attachedTask, onOpenRun: { _ in })
-                                .screenshotContent(retryTimeline)
-                        )))
+            // The files sit in the page head as one fold under the
+            // documents line: `task-page-attachments` draws it open,
+            // `-folded` closed, as a task first shows it.
+            for (base, open) in [("task-page-attachments", true), ("task-page-attachments-folded", false)] {
+                let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
+                disclosures.setExpanded(open, .attachments, taskID: attachedTask.task.id)
+                for (tail, width) in [("", CGFloat?.none), ("-390", 390)] {
+                    surfaces.append(
+                        Surface(
+                            name: base + tail,
+                            width: width,
+                            view: AnyView(
+                                TaskPageView(
+                                    coordinator: attachedCoordinator, snapshot: attachedTask, onOpenRun: { _ in }
+                                )
+                                .screenshotContent(retryTimeline, disclosures: disclosures)
+                            )))
+                }
             }
             // A remediation under way (#2100): the task's events return to
             // Implementation at the remediator's start, under the decision
