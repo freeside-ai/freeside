@@ -94,6 +94,34 @@ func TestAdjudicatorComposesModelGoalWithEngineAllowedCompatibility(t *testing.T
 	}
 }
 
+// TestAdjudicatorInstructionNamesInScopeRoute pins the rules that tell the
+// model when required work takes the engine's route. Without them a run's
+// model parked a missing decision note that its declared paths covered
+// (#1550): it read the note as work beyond the remediation surface.
+func TestAdjudicatorInstructionNamesInScopeRoute(t *testing.T) {
+	instruction := inference.AdjudicatorSite(inference.Budget{}).Instruction
+	for _, rule := range []string{
+		// What an allowed input means, and that the remediator's reach is the
+		// declared paths rather than the surface.
+		"Compatibility allowed means remediation_surface is inside declared_paths",
+		"may edit any path declared_paths matches, not only remediation_surface",
+		// In-scope required work, including a repository-required file, takes
+		// the engine's route.
+		"For required work whose fix stays inside declared_paths",
+		"adding a file the repository's instructions require",
+		"use compatibility:null and route:null",
+		// The park compatibilities are for a fix outside the declared paths.
+		"Use work_unit_revision_required or separate_work_required only when the fix must write a path outside declared_paths",
+		"name that path in rationale",
+		// The engine route needs an allowed input.
+		"Use compatibility:null with route:null only when that finding's input compatibility is allowed",
+	} {
+		if !strings.Contains(instruction, rule) {
+			t.Errorf("adjudicator instruction lacks %q", rule)
+		}
+	}
+}
+
 func TestAdjudicatorRejectsEngineCompositionWithoutAllowedInput(t *testing.T) {
 	driver := fake.New()
 	driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{

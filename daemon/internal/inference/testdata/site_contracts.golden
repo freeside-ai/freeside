@@ -33,7 +33,7 @@
     "site_id": "finding_adjudicator",
     "output_contract": "finding_adjudicator_output_v1",
     "has_instruction": true,
-    "contract_digest": "sha256:8965930eebde706b73366d39b1ffca028ee240c933712f1b0144976f44c77cd3"
+    "contract_digest": "sha256:2b975dc9d5e9f7b209e29738631e3384bfd94bb17c5144579ef2e2c08c9d3ac4"
   },
   {
     "site_id": "drift_auditor",
