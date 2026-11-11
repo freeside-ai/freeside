@@ -3,6 +3,7 @@ package stage
 import (
 	"context"
 	"fmt"
+	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -52,6 +53,15 @@ func (d *Driver) failedWriterResult(
 		contentaddr.Sum(evidence.Body) != evidence.Digest {
 		return result, fmt.Errorf("%w: invalid failure transcript", ErrRecoveryRetryable)
 	}
+	// Classified from the same verified bytes on the live and restart paths,
+	// so both commit the same result. A memory-limit kill keeps its cause.
+	if classifier, ok := d.provider.(QuotaRefusalClassifier); ok && result.Cause == "" {
+		if refusal := classifier.ClassifyQuotaRefusal(evidence.Body); refusal != nil {
+			result.Cause = domain.FailureCauseQuota
+			result.QuotaRefusal = refusal
+			result.Summary = truncateFailureSummary(quotaRefusalSummary(*refusal) + " " + result.Summary)
+		}
+	}
 	digest := domain.Digest(evidence.Digest)
 	claim := domain.AgentClaim{
 		Label:    "agent-transcript",
@@ -80,4 +90,14 @@ func (d *Driver) failedWriterResult(
 	result.Artifacts = []domain.Digest{digest}
 	result.Summary += " Diagnostic transcript retained as sensitive evidence."
 	return result, nil
+}
+
+// quotaRefusalSummary names the refused window and, when the provider gave
+// one, its reset, ahead of the writer's exit status.
+func quotaRefusalSummary(refusal domain.QuotaRefusal) string {
+	if refusal.ResetsAt == nil {
+		return fmt.Sprintf("Provider refused the turn on its %s quota window; it gave no reset.", refusal.Window)
+	}
+	return fmt.Sprintf("Provider refused the turn on its %s quota window until %s.",
+		refusal.Window, refusal.ResetsAt.UTC().Format(time.RFC3339))
 }

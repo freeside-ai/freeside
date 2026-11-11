@@ -2074,6 +2074,38 @@ freesided auth refresh-usage \
   -pool <usage_pool from freesided auth list>
 ```
 
+### A Real Writer's Quota Refusal
+
+A Claude writer turn the provider refuses on one quota window fails as a
+quota failure, which parks the task as any quota failure does
+(`docs/plan.md` §4). The pinned CLI exits 1 on a refused turn, and the stage
+driver reads the failed writer's retained transcript for its
+`rate_limit_event` records. When exactly one window's last event is
+`rejected`, the run fails with cause `quota` and that window, with the
+event's `resetsAt` as the reset when it has one. With no reset, the park
+takes one from the pool's usage reading, or raises the ordinary card when
+that has none either. The summary names the window and reset ahead of the
+exit status. The classifier lives in `exec.ClassifyClaudeQuotaRefusal`.
+
+The run fails with no cause, and so raises the ordinary `execution_failure`
+card, in every other case:
+
+- **No transcript:** the failure evidence is missing or unavailable.
+- **No single refusal:** no window is `rejected`, a later event for that
+  window clears it, or more than one window is `rejected`.
+- **Anything unreadable:** a line that isn't strict JSON, a malformed event,
+  a window name that isn't a usage token, or a reset that isn't a valid
+  instant. The failure transcript ends with the CLI's stderr, so a refused
+  turn that also wrote to stderr is unreadable here. The recorded 2.1.319
+  refusal wrote nothing there.
+
+A memory-limit kill keeps its `memory_limit` cause even when the transcript
+holds a refusal. A restart that falls between recording the run's outcome
+and committing its result keeps the `quota` cause but not the window, so
+that run raises the ordinary card. The classification is proven by a
+recorded loopback transcript of the pinned CLI
+(`internal/exec/claude/testdata/`), never by a live refusal.
+
 ### Seed An Exhausted Window For An Exit Run
 
 `freesided auth seed-exhausted` marks one pool's window exhausted until a

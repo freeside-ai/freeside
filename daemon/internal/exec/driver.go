@@ -219,7 +219,8 @@ type StageResult struct {
 	Cause domain.FailureCause `json:"cause,omitempty"`
 	// QuotaRefusal names the provider window behind a quota failure and its
 	// reset, when the driver knows them; present only beside a quota cause.
-	// No real driver classifies one yet, so only the fake sets it.
+	// The stage driver sets it from a failed Claude writer's transcript, and
+	// the fake sets it for scenarios.
 	QuotaRefusal *domain.QuotaRefusal `json:"quota_refusal,omitempty"`
 	// Usage carries numbers-only route telemetry. Nil means not observed.
 	Usage []UsageMeasurement `json:"usage"`
