@@ -61,6 +61,15 @@ func collectClaudeUsage(t *testing.T, capture exec.ClaudeUsageCapture) (ward.Usa
 	return collector.CollectUsage(context.Background(), claudeUsageRequest(1))
 }
 
+// fableModelWindows is the Fable window's scope every collection reports,
+// whether or not its capture names the window.
+var fableModelWindows = []domain.ModelWindow{
+	{RouteModelID: "claude-fable-5", Window: exec.ClaudeFableWindow},
+	{RouteModelID: "claude-fable-5-1", Window: exec.ClaudeFableWindow},
+	{RouteModelID: "claude-fable-5-2", Window: exec.ClaudeFableWindow},
+	{RouteModelID: "fable", Window: exec.ClaudeFableWindow},
+}
+
 func reading(window string, length time.Duration, used *int, resetsAt *time.Time, status domain.WindowStatus) domain.WindowReading {
 	return domain.WindowReading{
 		Window: window, EnrollmentID: claudeUsageEnrollment, Generation: 1, Status: status,
@@ -88,6 +97,15 @@ func TestClaudeUsageCollectorPinnedCLIWindows(t *testing.T) {
 			reading("seven_day", sevenDayLength, new(57), new(time.Date(2026, 11, 6, 3, 0, 0, 0, time.UTC)),
 				domain.WindowStatusAllowed),
 		}},
+		{"claude_usage_loopback_fable_2_1_319.jsonl", []domain.WindowReading{
+			// The event's reset wins over the answer's.
+			reading("five_hour", fiveHourLength, new(23), new(time.Unix(1794400000, 0).UTC()),
+				domain.WindowStatusAllowed),
+			reading("seven_day", sevenDayLength, new(10), new(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)),
+				domain.WindowStatusAllowed),
+			reading(exec.ClaudeFableWindow, sevenDayLength, new(11), new(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)),
+				domain.WindowStatusAllowed),
+		}},
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
@@ -95,8 +113,11 @@ func TestClaudeUsageCollectorPinnedCLIWindows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CollectUsage() error = %v", err)
 			}
-			if got.Availability != domain.AvailabilitySupported || got.Plan != nil || got.ModelWindows != nil {
-				t.Fatalf("CollectUsage() = %+v, want supported with no plan or model windows", got)
+			if got.Availability != domain.AvailabilitySupported || got.Plan != nil {
+				t.Fatalf("CollectUsage() = %+v, want supported with no plan", got)
+			}
+			if !reflect.DeepEqual(got.ModelWindows, fableModelWindows) {
+				t.Fatalf("model windows = %#v, want the Fable window's scope %#v", got.ModelWindows, fableModelWindows)
 			}
 			if !reflect.DeepEqual(got.Windows, tc.want) {
 				t.Fatalf("windows = %#v, want %#v", got.Windows, tc.want)
@@ -180,6 +201,15 @@ func TestClaudeUsageCollectorStatus(t *testing.T) {
 			},
 			wantDetail: "left out unknown windows overage, seven_day_opus",
 		},
+		{
+			name:    "a rejected Fable event exhausts the Fable window alone",
+			windows: []exec.ClaudeUsageWindow{{Window: "seven_day", UsedPercent: 40, ResetsAt: &answerReset}},
+			events:  []exec.ClaudeRateLimitEvent{{Window: exec.ClaudeFableWindow, Status: "rejected", ResetsAt: &eventReset}},
+			want: []domain.WindowReading{
+				reading("seven_day", sevenDayLength, new(40), &answerReset, domain.WindowStatusAllowed),
+				reading(exec.ClaudeFableWindow, sevenDayLength, nil, &eventReset, domain.WindowStatusExhausted),
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -196,6 +226,44 @@ func TestClaudeUsageCollectorStatus(t *testing.T) {
 				t.Fatalf("detail = %q, want it to contain %q", got.Detail, tc.wantDetail)
 			}
 		})
+	}
+}
+
+// TestClaudeUsageCollectorFableWindowHoldsOnlyFable pins that an exhausted
+// Fable window, on the record the collection writes, marks Fable route ids
+// and no other model, while the general windows still apply to every model.
+func TestClaudeUsageCollectorFableWindowHoldsOnlyFable(t *testing.T) {
+	t.Parallel()
+	reset := claudeUsageObservedAt.Add(72 * time.Hour)
+	got, err := collectClaudeUsage(t, exec.ClaudeUsageCapture{
+		ObservedAt: claudeUsageObservedAt,
+		Windows: []exec.ClaudeUsageWindow{
+			{Window: "seven_day", UsedPercent: 40, ResetsAt: &reset},
+			{Window: exec.ClaudeFableWindow, UsedPercent: 100, ResetsAt: &reset},
+		},
+		Events: []exec.ClaudeRateLimitEvent{{Window: exec.ClaudeFableWindow, Status: "rejected", ResetsAt: &reset}},
+	})
+	if err != nil {
+		t.Fatalf("CollectUsage() error = %v", err)
+	}
+	record := domain.PoolUsageObservation{ModelWindows: got.ModelWindows, Windows: got.Windows}
+	now := claudeUsageObservedAt.Add(time.Hour)
+	for _, model := range []string{"claude-fable-5-2", "fable"} {
+		marks := record.ExhaustedMarksForModel(model, now)
+		if len(marks) != 1 || marks[0].Window != exec.ClaudeFableWindow {
+			t.Fatalf("marks for %s = %#v, want the Fable window", model, marks)
+		}
+		if windows := record.WindowsForModel(model); !reflect.DeepEqual(windows, []string{"seven_day", exec.ClaudeFableWindow}) {
+			t.Fatalf("windows for %s = %v, want seven_day and the Fable window", model, windows)
+		}
+	}
+	for _, model := range []string{"claude-opus-5-5", "opus", domain.ClaudeCodeNativeDefaultRouteModelID} {
+		if marks := record.ExhaustedMarksForModel(model, now); len(marks) != 0 {
+			t.Fatalf("marks for %s = %#v, want none", model, marks)
+		}
+		if windows := record.WindowsForModel(model); !reflect.DeepEqual(windows, []string{"seven_day"}) {
+			t.Fatalf("windows for %s = %v, want seven_day alone", model, windows)
+		}
 	}
 }
 
