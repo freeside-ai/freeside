@@ -1,0 +1,13 @@
+{
+  "version": "freeside.export.manifest/v1",
+  "entries": [
+    {
+      "path": "README.md",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 97,
+      "digest": "sha256:a4a74a7291a8fca0a1a10dceb1e1e2834c19c945b367610f5b99b68b67ec8e5b",
+      "target": null
+    }
+  ]
+}
