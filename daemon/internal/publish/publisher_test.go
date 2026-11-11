@@ -2097,7 +2097,19 @@ func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
 	}
 }
 
-func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing.T) {
+// oneReviewedVerification reports whether body carries exactly one
+// Verification section, the review's outcome inside it, and no disposition
+// history: since #3022 the review reaches the body only through Verification.
+func oneReviewedVerification(body string) bool {
+	open := strings.Index(body, "<!-- freeside:verification -->")
+	end := strings.Index(body, "<!-- /freeside:verification -->")
+	return strings.Count(body, "<!-- freeside:verification -->") == 1 &&
+		strings.Count(body, "<!-- /freeside:verification -->") == 1 && open < end &&
+		strings.Contains(body[open:end], "- Passed: independent review") &&
+		!strings.Contains(body, "freeside:disposition-history")
+}
+
+func TestConvergeOutcomeRepairsExactVerificationWithoutCreating(t *testing.T) {
 	t.Parallel()
 	st := newExecutionBoundStore(t, executionChainOptions{})
 	seedDecisionRecords(t, st)
@@ -2131,9 +2143,8 @@ func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing
 	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, outcome); err != nil {
 		t.Fatalf("ConvergeOutcome: %v", err)
 	}
-	if got := gh.prs[0].Body; strings.Count(got, "<!-- freeside:disposition-history ") != 1 ||
-		strings.Count(got, "<!-- /freeside:disposition-history -->") != 1 {
-		t.Fatalf("recovered PR body does not contain one exact history section:\n%s", got)
+	if got := gh.prs[0].Body; !oneReviewedVerification(got) {
+		t.Fatalf("recovered PR body does not contain one exact Verification section with the review:\n%s", got)
 	}
 	writes := gh.writeRequests()
 	if len(writes) != 1 || !strings.HasPrefix(writes[0], http.MethodPatch+" ") {
@@ -2145,7 +2156,7 @@ func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing
 	}
 	gh.prs[0].Body = identity.Marker()
 	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, outcome); !errors.Is(err, publish.ErrPublicationConflict) {
-		t.Fatalf("closed PR missing history error = %v", err)
+		t.Fatalf("closed PR missing Verification error = %v", err)
 	}
 	if after := len(gh.writeRequests()); after != len(writes) {
 		t.Fatalf("closed recovery mutated PR: writes %d -> %d", len(writes), after)

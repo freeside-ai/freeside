@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 // Candidate is one publication's input: the verified candidate
@@ -59,8 +60,11 @@ type Candidate struct {
 	// onto the same branch and PR instead of minting new ones.
 	Title string
 	Body  string
-	// DispositionHistory is the publisher-owned forensic account rendered
-	// from durable review records and re-derived readiness authority.
+	// DispositionHistory is the publisher-owned forensic account derived
+	// from durable review records and re-derived readiness authority. The
+	// publication intent binds its canonical rendering by digest; the body
+	// shows only the review outcome and the declined and deferred findings
+	// it records, in Verification (#3022).
 	// LoadDispositionHistory binds it to the same durable store used by
 	// this Publisher's decision boundary. Execution-bound production publication
 	// requires it; attended and legacy publication paths omit it because they do
@@ -1331,9 +1335,9 @@ func prMatchesPublicationCoordinates(
 }
 
 // desiredPRContent is the deterministic PR content for a candidate: operator
-// prose, fixed-bounded verification, advisories and scope decision, disposition
-// history fitted to the remaining space with digest-bound truncation, and the
-// identity marker as the final line (plan §5.15 rule 4). Operator prose is never truncated. The final
+// prose, the bounded Verification section (what Freeside ran and what review
+// concluded), advisories and scope decision, and the identity marker as the
+// final line (plan §5.15 rule 4). Operator prose is never truncated. The final
 // ceiling check remains a fail-closed guard over the complete composition.
 func desiredPRContent(identity Identity, c Candidate, closure closureResolution) (title, body string, err error) {
 	prose := c.Body
@@ -1359,8 +1363,15 @@ func desiredPRContent(identity Identity, c Candidate, closure closureResolution)
 	if err != nil {
 		return "", "", err
 	}
+	// Verification carries what Freeside ran and what review concluded. The
+	// disposition history is no longer body text (#3022): the intent still
+	// binds its canonical rendering, and the store and clients hold it.
+	var ran *verify.Report
 	if artifact != nil {
-		section, err := renderVerification(report, artifact.Digest, artifact.Provenance.ProducerInvocationID, c.ImportResult.Claims)
+		ran = &report
+	}
+	if ran != nil || c.DispositionHistory != nil {
+		section, err := renderVerification(ran, c.DispositionHistory)
 		if err != nil {
 			return "", "", err
 		}
@@ -1371,18 +1382,6 @@ func desiredPRContent(identity Identity, c Candidate, closure closureResolution)
 	}
 	if c.ScopeDecision != nil {
 		section, err := renderScopeDecision(*c.ScopeDecision)
-		if err != nil {
-			return "", "", err
-		}
-		parts = append(parts, section)
-	}
-	if c.DispositionHistory != nil {
-		historyLimit := maxPullRequestBodyBytes - len(identity.Marker()) -
-			(len(parts)+1)*len("\n\n")
-		for _, part := range parts {
-			historyLimit -= len(part)
-		}
-		section, err := renderDispositionHistoryWithin(*c.DispositionHistory, historyLimit)
 		if err != nil {
 			return "", "", err
 		}

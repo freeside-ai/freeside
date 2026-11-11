@@ -697,11 +697,11 @@ func TestHandoffAtARewrittenTipBlocks(t *testing.T) {
 	p.assertHandoffBlocked(t, domain.PublicationBlockBaseAdvanced)
 }
 
-// TestHandoffPublishesTheDispositionHistory: the run's one round declined a
+// TestHandoffPublishesTheUnresolvedFindings: the run's one round declined a
 // finding and deferred another at the admitted base; the base advanced
-// before publication, and the handoff publishes that round's history
-// unchanged.
-func TestHandoffPublishesTheDispositionHistory(t *testing.T) {
+// before publication, and the handoff publishes that round's review outcome
+// and both findings unchanged.
+func TestHandoffPublishesTheUnresolvedFindings(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	driver := p.configureAdjudicator(t)
@@ -744,17 +744,20 @@ func TestHandoffPublishesTheDispositionHistory(t *testing.T) {
 		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
 	}
 	body := p.forge.PullRequests()[0].Body
+	// Since #3022 the review reaches the body through Verification: the one
+	// round the handoff ran, and each declined or deferred finding with its
+	// message as a labeled claim.
 	for _, want := range []string{
-		"### Review Round 1",
-		string(findings[0].ID), string(findings[1].ID),
-		string(domain.ReviewDispositionDeclined), string(domain.ReviewDispositionDeferred),
+		"- Passed: independent review, 1 round, 2 findings (0 fixed, 1 declined, 1 deferred)\n",
+		"  - Declined", "reviewer said (claim) <code>outside the approved task</code>",
+		"  - Deferred", "reviewer said (claim) <code>worth a follow-up</code>",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("published history lacks %q:\n%s", want, body)
+			t.Errorf("published review lacks %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "### Review Round 2") {
-		t.Errorf("published history names a round the handoff never ran:\n%s", body)
+	if strings.Contains(body, "freeside:disposition-history") {
+		t.Errorf("published body still carries the disposition history:\n%s", body)
 	}
 }
 

@@ -24,8 +24,8 @@ const (
 	dispositionHistoryCloseMarker     = "<!-- /" + dispositionHistoryMarkerName + " -->"
 )
 
-// dispositionHistoryInput is the trusted store snapshot rendered into a
-// published pull request (plan §5.15 rule 4 and §7). Reviews and dispositions
+// dispositionHistoryInput is the trusted store snapshot a publication binds
+// and summarizes in its Verification section (plan §5.15 rule 4 and §7). Reviews and dispositions
 // are immutable authority records; readiness is re-derived from the current
 // authorization, review, run policy, and compiled requirement registry.
 type dispositionHistoryInput struct {
@@ -65,11 +65,10 @@ const (
 	// maxRenderedDispositionClaimBytes keeps one third-party claim from
 	// consuming the forge-facing section budget by itself.
 	maxRenderedDispositionClaimBytes = 4 << 10
-	// The disposition-history budget ranges from an 8 KiB floor reserved when
-	// candidate prose is accepted to a 48 KiB ceiling used when the other body
-	// parts leave room. Composition shrinks only this section within that range,
-	// and every truncation remains bound to the complete rendered digest.
-	minRenderedDispositionHistoryBytes = publicationtext.MinRenderedDispositionHistoryBytes
+	// maxRenderedDispositionHistoryBytes bounds the canonical rendering the
+	// intent binds; a truncation remains bound to the complete rendered
+	// digest. The body no longer carries this rendering (#3022), so its
+	// former 8 KiB body floor now serves the Verification section's findings.
 	maxRenderedDispositionHistoryBytes = 48 << 10
 )
 
@@ -673,33 +672,19 @@ func (h DispositionHistory) digest() (domain.Digest, error) {
 	return domain.Digest(contentaddr.Sum([]byte(rendered))), nil
 }
 
-// RenderDispositionHistory deterministically renders the publisher-owned PR
-// section. Free text from reviewer or remediation records is HTML-escaped, and
-// disposition reasons are explicitly labeled as recorded claims rather than
-// daemon-authored facts.
+// RenderDispositionHistory deterministically renders the canonical form of
+// the history that the publication intent binds by digest
+// (DispositionHistoryDigest) and recovery compares. It was the body's
+// Disposition History section until #3022 and is no longer body text, but its
+// bytes must not change: an intent written before a change would fail recovery
+// with ErrPublicationConflict. Free text from reviewer or remediation records
+// is HTML-escaped, and disposition reasons are labeled as recorded claims.
 func RenderDispositionHistory(h DispositionHistory) (string, error) {
 	rendered, err := renderDispositionHistoryUnbounded(h)
 	if err != nil {
 		return "", err
 	}
 	return boundedDispositionHistory(rendered, maxRenderedDispositionHistoryBytes), nil
-}
-
-// renderDispositionHistoryWithin renders the canonical history into the
-// composition budget. The floor is reserved before candidate prose is
-// accepted, so a smaller limit indicates a broken publisher invariant.
-func renderDispositionHistoryWithin(h DispositionHistory, limit int) (string, error) {
-	if limit < minRenderedDispositionHistoryBytes {
-		return "", fmt.Errorf(
-			"render disposition history within %d bytes: limit is below %d-byte floor",
-			limit, minRenderedDispositionHistoryBytes,
-		)
-	}
-	rendered, err := renderDispositionHistoryUnbounded(h)
-	if err != nil {
-		return "", err
-	}
-	return boundedDispositionHistory(rendered, min(limit, maxRenderedDispositionHistoryBytes)), nil
 }
 
 func renderDispositionHistoryUnbounded(h DispositionHistory) (string, error) {
@@ -795,13 +780,27 @@ func boundedDispositionClaim(value string) string {
 // boundedClaim renders value as an escaped code span of at most limit
 // bytes, identifying any omitted bytes by the value's content address.
 func boundedClaim(value string, limit int) string {
+	return truncatedClaim(value, limit, func() string {
+		return " (truncated; content digest " + dispositionCode(contentaddr.Sum([]byte(value))) + ")"
+	})
+}
+
+// shortClaim is boundedClaim without the content digest, for the
+// Verification section, whose reader has no use for one; the full value stays
+// in the store.
+func shortClaim(value string, limit int) string {
+	return truncatedClaim(value, limit, func() string { return " (truncated)" })
+}
+
+// truncatedClaim renders value as an escaped code span and, when that exceeds
+// limit bytes, cuts it at a rune boundary and closes the span before note.
+func truncatedClaim(value string, limit int, note func() string) string {
 	rendered := dispositionCode(value)
 	if len(rendered) <= limit {
 		return rendered
 	}
 
-	digest := contentaddr.Sum([]byte(value))
-	suffix := "</code> (truncated; content digest " + dispositionCode(digest) + ")"
+	suffix := "</code>" + note()
 	prefix := rendered[len("<code>") : len(rendered)-len("</code>")]
 	limit = limit - len("<code>") - len(suffix)
 	for limit > 0 && !utf8.RuneStart(prefix[limit]) {

@@ -542,10 +542,8 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 				gh.mu.Lock()
 				prs := append([]fakePR(nil), gh.prs...)
 				gh.mu.Unlock()
-				if len(prs) != 1 ||
-					strings.Count(prs[0].Body, "<!-- freeside:disposition-history ") != 1 ||
-					strings.Count(prs[0].Body, "<!-- /freeside:disposition-history -->") != 1 {
-					t.Fatalf("committed retry duplicated disposition history: %#v", prs)
+				if len(prs) != 1 || !oneReviewedVerification(prs[0].Body) {
+					t.Fatalf("committed retry duplicated or lost the Verification section: %#v", prs)
 				}
 				return
 			}

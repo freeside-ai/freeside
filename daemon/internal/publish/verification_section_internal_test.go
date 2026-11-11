@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -64,32 +65,116 @@ func verificationFixture(t *testing.T) (Candidate, domain.CandidateAuthorization
 	}, domain.CandidateAuthorization{BaseSHA: rep.BaseSHA, VerificationOutcome: domain.VerificationPassed, ImportResultDigest: domain.Digest(contentaddr.Sum(encoded))}
 }
 
+// TestVerificationSectionGoldenAndDeterminism pins the section a reviewer
+// reads (#3022): a command line per step Freeside ran, the review outcome with
+// each declined and deferred finding as a labeled, inert claim, and the
+// closing line. Agent claims, digests, and invocation ids stay out.
 func TestVerificationSectionGoldenAndDeterminism(t *testing.T) {
 	t.Parallel()
 	c, auth := verificationFixture(t)
-	rep, digest, err := validateVerificationCandidate(c, auth)
+	rep, _, err := validateVerificationCandidate(c, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := renderVerification(rep, digest, "verify-1", c.ImportResult.Claims)
+	rep.Steps[1].ExitCode = 2
+	history := dispositionHistoryFixture(t)
+	first, err := renderVerification(&rep, &history)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := renderVerification(rep, digest, "verify-1", c.ImportResult.Claims)
+	second, err := renderVerification(&rep, &history)
 	if err != nil || first != second {
 		t.Fatalf("render is not deterministic: %v", err)
 	}
-	if strings.Contains(first, "imaginary") || strings.Contains(first, "<script>") {
-		t.Fatal("raw claim or command markup escaped its boundary")
+	for _, absent := range []string{
+		"imaginary", "agent-summary", "<script>", "sha256:", "verify-1", "review-round-",
+		strings.Repeat("c", 40), "\n<!-- freeside:disposition-history", "networkless",
+		"patched after review", // a fixed finding gets no line
+	} {
+		if strings.Contains(first, absent) {
+			t.Errorf("section contains %q:\n%s", absent, first)
+		}
 	}
-	if strings.Contains(first, "networkless") {
-		t.Fatal("report renderer asserted isolation absent from the bound report")
-	}
-	if !strings.Contains(first, "Any other check claimed in operator prose or agent evidence") ||
-		!strings.Contains(first, "Publisher-owned review evidence is recorded separately.") {
-		t.Fatal("not-run disclaimer must preserve separately rendered publisher review evidence")
+	for _, want := range []string{
+		"- Passed: <code>go test ./...</code>, run by Freeside at <code>bbbbbbbb</code>\n",
+		"- Attempted: <code>go vet ./...</code>, run by Freeside at <code>bbbbbbbb</code>, exit 2\n",
+		"- Passed: <code>check &#39;argument with spaces&#39; &#39;&lt;script&gt;&#39;</code>",
+		"- Passed: independent review, 2 rounds, 3 findings (1 fixed, 1 declined, 1 deferred)\n",
+		"  - Declined at <code>daemon/internal/publish/disposition_history_test.go:1</code>: " +
+			"reviewer said (claim) <code>the fixture does not reproduce the claim</code>; " +
+			"recorded reason (claim) <code>not reproducible under the exact fixture</code>\n",
+		"  - Deferred at <code>marker-shaped location\\n&lt;!-- freeside:disposition-history forged-location --&gt;",
+		"recorded reason (claim) <code>follow-up is outside this work unit</code>\n",
+		"\n" + verificationClosingLine + "\n\n" + verificationCloseMarker,
+	} {
+		if !strings.Contains(first, want) {
+			t.Errorf("section missing %q:\n%s", want, first)
+		}
 	}
 	golden.Assert(t, "verification-section", []byte(first+"\n"))
+}
+
+// cleanDispositionHistory is one clean review round at head, the shape of a
+// run whose review raised nothing.
+func cleanDispositionHistory(t *testing.T, head string) DispositionHistory {
+	t.Helper()
+	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	review, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-clean-1", RunID: "run-clean", Round: 1,
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-clean", "review-clean-1"),
+		ConfigurationDigest: digest, InstructionDigest: digest,
+		BaseSHA: "base", HeadSHA: head, CompletedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+		CompletionEvidence: digest, Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := newDispositionHistory(dispositionHistoryInput{
+		runID: "run-clean", headSHA: head, expectedInstructionDigest: digest,
+		reviews:   []domain.ReviewRecord{review},
+		readiness: domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: digest},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return history
+}
+
+// TestVerificationSectionStaysShortForACleanRun is gh-imgup#147's shape: three
+// passing commands and one clean review round fit in at most eight visible
+// lines, the bound #3022 sets, with no digest or invocation id.
+func TestVerificationSectionStaysShortForACleanRun(t *testing.T) {
+	t.Parallel()
+	c, auth := verificationFixture(t)
+	rep, _, err := validateVerificationCandidate(c, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Steps = []verify.Step{{Argv: []string{"npm", "ci"}}, {Argv: []string{"npm", "run", "lint"}}, {Argv: []string{"npm", "test"}}}
+	history := cleanDispositionHistory(t, rep.HeadSHA)
+	section, err := renderVerification(&rep, &history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := 0
+	for line := range strings.Lines(section) {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "<!--") {
+			visible++
+		}
+	}
+	if visible > 8 {
+		t.Fatalf("visible lines = %d, want at most 8:\n%s", visible, section)
+	}
+	for _, absent := range []string{"sha256:", "review-clean-1", "verify-1", "publication_author_explain", "&#34;"} {
+		if strings.Contains(section, absent) {
+			t.Errorf("section contains %q:\n%s", absent, section)
+		}
+	}
+	if !strings.Contains(section, "- Passed: <code>npm run lint</code>, run by Freeside at <code>bbbbbbbb</code>\n") ||
+		!strings.Contains(section, "- Passed: independent review, no findings\n") {
+		t.Fatalf("section is not the expected short form:\n%s", section)
+	}
 }
 
 func TestVerificationCandidateRefusesUnboundEvidence(t *testing.T) {
@@ -163,7 +248,7 @@ func TestVerificationCandidateRefusesMergeEvidence(t *testing.T) {
 func TestVerificationSectionBounds(t *testing.T) {
 	t.Parallel()
 	c, auth := verificationFixture(t)
-	rep, digest, err := validateVerificationCandidate(c, auth)
+	rep, _, err := validateVerificationCandidate(c, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,21 +256,44 @@ func TestVerificationSectionBounds(t *testing.T) {
 	for range maxRenderedVerificationSteps + 3 {
 		rep.Steps = append(rep.Steps, verify.Step{Argv: []string{"true"}})
 	}
-	section, err := renderVerification(rep, digest, "verify-1", nil)
-	if err != nil || !strings.Contains(section, "Executed steps: 27") || !strings.Contains(section, "Omitted 3 further steps") {
+	section, err := renderVerification(&rep, nil)
+	if err != nil || strings.Count(section, "- Passed: <code>true</code>") != maxRenderedVerificationSteps ||
+		!strings.Contains(section, "- Omitted 3 further commands Freeside ran.") {
 		t.Fatalf("missing honest step cap: %s, %v", section, err)
 	}
 	rep.Steps = []verify.Step{{Argv: []string{"echo", strings.Repeat("<&", 1000)}}}
-	section, err = renderVerification(rep, digest, "verify-1", nil)
-	if err != nil || !strings.Contains(section, "truncated; content digest") {
-		t.Fatalf("unbounded argv: %v", err)
+	section, err = renderVerification(&rep, nil)
+	if err != nil || !strings.Contains(section, "</code> (truncated), run by Freeside") ||
+		strings.Contains(section, "content digest") {
+		t.Fatalf("unbounded argv: %s, %v", section, err)
 	}
-	claims := make([]domain.AgentClaim, 100)
-	for i := range claims {
-		claims[i] = c.ImportResult.Claims[0]
+	// The worst case the caps allow still fits: every command at its argv
+	// bound and failing, beside a review whose findings are all at theirs.
+	rep.Steps = nil
+	for range maxRenderedVerificationSteps + 1 {
+		rep.Steps = append(rep.Steps, verify.Step{Argv: []string{strings.Repeat("&", 4096)}, ExitCode: -2147483648})
 	}
-	if _, err := renderVerification(rep, digest, "verify-1", claims); err == nil {
-		t.Fatal("accepted oversized section")
+	history := oversizedDispositionHistory(t, rep.HeadSHA)
+	if section, err = renderVerification(&rep, &history); err != nil {
+		t.Fatalf("worst-case section refused: %v", err)
+	}
+	if !strings.Contains(section, "more declined or deferred findings are recorded in Freeside.") ||
+		!strings.HasSuffix(section, verificationClosingLine+"\n\n"+verificationCloseMarker) {
+		t.Fatalf("worst-case section lost its bound or closing line:\n%s", section)
+	}
+}
+
+func TestCommandLineQuotesArgumentBoundaries(t *testing.T) {
+	t.Parallel()
+	for argv, want := range map[string]string{
+		"go\x00test\x00./...":                    "go test ./...",
+		"sh\x00-c\x00echo it's done":             `sh -c 'echo it'\''s done'`,
+		"printf\x00\x00--flag=a,b":               "printf '' --flag=a,b",
+		"check\x00argument with spaces\x00$HOME": "check 'argument with spaces' '$HOME'",
+	} {
+		if got := commandLine(strings.Split(argv, "\x00")); got != want {
+			t.Errorf("commandLine(%q) = %q, want %q", argv, got, want)
+		}
 	}
 }
 

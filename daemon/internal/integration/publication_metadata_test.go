@@ -273,7 +273,7 @@ func assertPublicMetadata(t *testing.T, p *productionPublicationHarness) string 
 		t.Fatalf("title = %q", prs[0].Title)
 	}
 	body := prs[0].Body
-	for _, want := range []string{"## Agent-reported implementation (claim)", "Producer:\n\n<pre><code>" + string(p.replay.InvocationID) + "</code></pre>", "Artifact digest: `sha256:", "Scope excludes live deployment", "Source issue: https://github.com/example/project/issues/82", "## Verification", "## Freeside Disposition History", "<!-- freeside:publication-identity="} {
+	for _, want := range []string{"## Agent-reported implementation (claim)", "Producer:\n\n<pre><code>" + string(p.replay.InvocationID) + "</code></pre>", "Artifact digest: `sha256:", "Scope excludes live deployment", "Source issue: https://github.com/example/project/issues/82", "## Verification", "- Passed: independent review", "<!-- freeside:publication-identity="} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q", want)
 		}
