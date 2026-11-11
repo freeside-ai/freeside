@@ -82,3 +82,18 @@ struct UnattendedGatePresentationTests {
         #expect(gate.chipLabel == "Unknown")
     }
 }
+
+/// A finding row says what it is about (#3026): a task finding names its
+/// task as the Unified List does, and any other names its project, in
+/// place of the raw diagnostic code.
+struct FindingRowContextTests {
+    @Test func aTaskFindingNamesItsTask() {
+        #expect(FindingRow.context(AttentionFixtures.heldWorkSystemHealth().item) == "Time grammar for inbox rows")
+    }
+
+    @Test func aSystemFindingNamesItsProject() {
+        let item = AttentionFixtures.blockingSystemHealth().item
+        #expect(FindingRow.context(item) == "owner/repo")
+        #expect(FindingRow.context(item) != item.health_diagnostic?.value1.code)
+    }
+}

@@ -1036,6 +1036,14 @@
                         since: blockingFinding.created_at)
                 ])
             let noFindings = InboxStore(client: client)
+            // The pane's findings add held work (#3026), a task finding whose
+            // row names its task and reason, beside the default inbox's.
+            let heldFinding = AttentionFixtures.heldWorkSystemHealth()
+            let healthStore = InboxStore(client: client)
+            healthStore.replaceAll(with: inbox + [heldFinding])
+            for snapshot in inbox + [heldFinding] {
+                await preloadReferences(snapshot.item, into: healthStore)
+            }
             func settingsSync(
                 _ devices: DevicesModel, routing: RoutingPolicyModel = routing, usage: AccountUsageModel = usage,
                 store: InboxStore = store,
@@ -1110,8 +1118,8 @@
                         name: "notifications-phone" + suffix, width: 390, colorScheme: scheme,
                         view: phonePane(.notifications, sync: settingsSync(phoneNotificationsModel))))
                 // Inside the staleness threshold, so the gate reads current.
-                let healthSync = settingsSync(devicesModel, age: 30)
-                let phoneHealthSync = settingsSync(phoneDevicesModel, age: 30)
+                let healthSync = settingsSync(devicesModel, store: healthStore, age: 30)
+                let phoneHealthSync = settingsSync(phoneDevicesModel, store: healthStore, age: 30)
                 let emptySync = settingsSync(
                     devicesModel, store: noFindings, unattendedOperation: .init(admission: .open, stops: []),
                     age: 30)
