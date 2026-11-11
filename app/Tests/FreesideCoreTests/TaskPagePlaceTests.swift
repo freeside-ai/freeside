@@ -148,7 +148,7 @@ import Testing
     ///
     /// The page's geometry is read through `TaskPagePlaceProbe`: SwiftUI
     /// builds no accessibility tree for a test host to find it by.
-    @Suite(.serialized) @MainActor struct TaskPagePlaceHostedTests {
+    @Suite(.serialized, .needsWindowServerSession) @MainActor struct TaskPagePlaceHostedTests {
         /// What the mock daemon serves beyond its seed, which its bootstrap
         /// transform reads.
         final class Served: Sendable {
