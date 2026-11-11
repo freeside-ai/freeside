@@ -659,6 +659,20 @@
             filtered.selectProjectFilter("freeside")
             try surfaces.append(
                 Surface(name: "unified-list-project-filter", width: 320, view: list(filtered, expanded: true)))
+            // Finished opened on a short page in the Mac sidebar, its Show
+            // More line under the rows.
+            let clear = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            clear.replaceAll(with: [])
+            let finishedOnly = try screenshotListPreferences()
+            finishedOnly.finishedExpanded = true
+            surfaces.append(
+                Surface(
+                    name: "unified-list-finished-page", width: 320,
+                    view: AnyView(
+                        UnifiedListView(
+                            store: clear, tasks: tasks, runs: runs,
+                            navigation: screenshotNavigation(selecting: nil), preferences: finishedOnly
+                        ).screenshotContent(now: screenshotNow, sidebarHeight: 640, finishedLimit: 2))))
             return surfaces
         }
 
@@ -3727,7 +3741,7 @@
                     lastUpdatedAt: stoppedFresh, reason: errorChainReason))
             // The inbox clear while a blocking finding is open (#2920): the
             // finding is not a Needs you row, so the detail column keeps the
-            // inbox-clear result and the phone's list its empty Needs you,
+            // inbox-clear result and the phone's list draws no Needs you rows,
             // with the standing notice above each carrying the stop.
             let findingOnly = InboxStore(client: client)
             findingOnly.replaceAll(with: [AttentionFixtures.blockingSystemHealth()])
@@ -4251,9 +4265,10 @@
                             expandedReasonDetail.screenshotCard(
                                 realisticFindings, at: dynamicTypeSize, compactLayout: true))))
             }
-            // Needs you with nothing open (R13): the glyph, the statement, and
-            // Working one line below. Drawn last: ahead of another surface it
-            // moves that surface's glyph antialiasing (#1698).
+            // The Mac sidebar at a window's height with nothing open: the
+            // space above stays empty and Working and Finished sit pinned at
+            // its foot. Drawn last: ahead of another surface it once moved
+            // that surface's glyph antialiasing (#1698).
             var settled = try #require(inbox.first)
             settled.item.status = .resolved
             let emptyStore = InboxStore(client: client)
@@ -4269,7 +4284,7 @@
                                 store: emptyStore, tasks: tasks,
                                 navigation: screenshotNavigation(selecting: nil),
                                 preferences: screenshotListPreferences()
-                            ).screenshotContent(now: screenshotNow))))
+                            ).screenshotContent(now: screenshotNow, sidebarHeight: 640))))
             }
             // The finding card's foot by day and by dusk, with three
             // attachments and two attachment claims so both counts have

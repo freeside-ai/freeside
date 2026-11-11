@@ -2,17 +2,14 @@ import Foundation
 import FreesideAPI
 import SwiftUI
 
-#if os(macOS)
-    import AppKit
-#elseif os(iOS)
-    import UIKit
-#endif
-
 /// The one list both clients draw: Needs You, then Working and Finished
 /// behind their disclosures, under a tools row. The list is a projection of
 /// what the client already holds (`UnifiedList`). An unsent New Task draft
 /// sits above Needs You as a line of its own, outside the projection and
-/// its selection (#2935).
+/// its selection (#2935). An empty Needs You draws nothing, and a section
+/// with no rows draws no head. On the Mac, Working and Finished rest at the
+/// sidebar's foot while everything fits and follow Needs You down once it
+/// doesn't; on iPhone they follow Needs You in one scrolling list.
 struct UnifiedListView: View {
     /// The Needs You count: the rows the filtered list draws. Absent until
     /// the list has loaded, when a zero would read as nothing needing you.
@@ -20,8 +17,9 @@ struct UnifiedListView: View {
         store.loadState == .loaded ? list.needsYou.count : nil
     }
 
-    /// What an empty Needs You says (R13), naming the project when one is
-    /// filtered; the detail pane beside it says the same two lines.
+    /// What the Mac's detail pane says once the operator concludes the last
+    /// open item (R13), naming the project when one is filtered. The list
+    /// itself draws nothing for an empty Needs You.
     static func emptyNeedsYou(projectID: String?) -> (title: String, description: String) {
         (
             projectID == nil ? "Nothing needs you." : "Nothing in this project needs you.",
@@ -75,6 +73,14 @@ struct UnifiedListView: View {
     var onRefresh: @MainActor () async -> Void = {}
     var onRevealTechnicalDetails: (String) -> Void = { _ in }
     @State private var projectFilterPresented = false
+    /// How many Finished rows an expanded Finished draws (`FinishedPage`);
+    /// collapsing it starts the page over.
+    @State private var finishedLimit = FinishedPage.initialLimit
+    #if os(macOS)
+        /// The column's keyboard focus, which a click on a row takes, so the
+        /// arrow keys, j/k, and Return act on the list.
+        @FocusState private var listFocused: Bool
+    #endif
 
     private var list: UnifiedList {
         UnifiedList(
@@ -118,8 +124,15 @@ struct UnifiedListView: View {
             if let launchProjectID { store.applyLaunchProjectFilter(launchProjectID) }
         }
         .onAppear { revealSelection() }
-        .onChange(of: navigation.path) { revealSelection() }
+        .onChange(of: navigation.path) {
+            revealSelection()
+            // Keep a page grown to a routed row once the selection moves on.
+            finishedLimit = max(finishedLimit, finishedPage(list).rows.count)
+        }
         .onChange(of: store.projectID) { repairSelection() }
+        .onChange(of: preferences.finishedExpanded) { _, expanded in
+            if !expanded { finishedLimit = FinishedPage.initialLimit }
+        }
         .onChange(of: store.projects) {
             if store.freshness == .fresh {
                 store.finishLaunchProjectRepair()
@@ -149,6 +162,12 @@ struct UnifiedListView: View {
     private func repairSelection(previouslyOpen: Set<String> = []) {
         guard store.loadState == .loaded else { return }
         navigation.repairSelection(in: list, previouslyOpen: previouslyOpen)
+    }
+
+    /// The Finished rows an expanded Finished draws: the page, grown to hold
+    /// the selected row.
+    private func finishedPage(_ list: UnifiedList) -> FinishedPage {
+        FinishedPage(list.finished, limit: finishedLimit, holding: selection)
     }
 
     /// A route to a row the filter hides drops the filter, so the operator
@@ -233,102 +252,173 @@ struct UnifiedListView: View {
         let names = TaskDisplay.ambiguousTaskIDs(list.rows.compactMap(\.taskSnapshot))
         #if os(iOS)
             List {
-                sections(list, ambiguousTaskIDs: names)
+                needsYouLines(list, ambiguousTaskIDs: names)
+                sectionLines(list, ambiguousTaskIDs: names)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         #else
-            List(selection: listSelection) {
-                sections(list, ambiguousTaskIDs: names)
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .onKeyPress(
-                characters: CharacterSet(charactersIn: "jk"), phases: .down
-            ) { press in
-                guard press.modifiers.isEmpty else { return .ignored }
-                navigation.moveAttentionSelection(by: press.characters == "j" ? 1 : -1, list: list)
-                return .handled
-            }
-            .onKeyPress(.return, phases: .down) { press in
-                guard press.modifiers.isEmpty,
-                    decisionCommandActions?.canTakeRecommendation == true
-                else { return .ignored }
-                decisionCommandActions?.takeRecommendation()
-                return .handled
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        // At least the sidebar's height, so while everything
+                        // fits the gap takes the slack and holds the sections
+                        // at the foot; past that the gap is gone and Needs
+                        // You pushes them down. Exact in one layout pass,
+                        // where a spacer row in a List would be measured
+                        // after the fact and jump for a frame.
+                        VStack(spacing: 0) {
+                            LazyVStack(spacing: 0) {
+                                needsYouLines(list, ambiguousTaskIDs: names)
+                            }
+                            Spacer(minLength: 0)
+                            LazyVStack(spacing: 0) {
+                                sectionLines(list, ambiguousTaskIDs: names)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .frame(minHeight: geometry.size.height, alignment: .top)
+                        // The column's own effect is off below; a control
+                        // inside that draws no ring of its own keeps the
+                        // system's.
+                        .focusEffectDisabled(false)
+                    }
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($listFocused)
+                    .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat]) { press in
+                        // Arrow keys arrive flagged as function keys, so
+                        // only a held modifier the operator chose declines.
+                        guard press.modifiers.isDisjoint(with: [.command, .option, .control, .shift])
+                        else { return .ignored }
+                        navigation.moveSelection(
+                            by: press.key == .downArrow ? 1 : -1, along: drawnRows(list), list: list)
+                        return .handled
+                    }
+                    .onKeyPress(characters: CharacterSet(charactersIn: "jk"), phases: .down) { press in
+                        guard press.modifiers.isEmpty else { return .ignored }
+                        navigation.moveAttentionSelection(by: press.characters == "j" ? 1 : -1, list: list)
+                        return .handled
+                    }
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.isEmpty,
+                            decisionCommandActions?.canTakeRecommendation == true
+                        else { return .ignored }
+                        decisionCommandActions?.takeRecommendation()
+                        return .handled
+                    }
+                    .onChange(of: selection) { _, selected in
+                        // The least scroll that shows the row, as the system
+                        // list did, for a key step or a route from elsewhere.
+                        guard let selected else { return }
+                        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(selected) }
+                    }
+                }
             }
         #endif
     }
 
     #if os(macOS)
-        private var listSelection: Binding<UnifiedSelection?> {
-            Binding(
-                get: { selection },
-                set: { id in
-                    navigation.select(list.rows.first { $0.id == id }?.destination)
-                })
+        /// The rows the column draws, top to bottom, that the arrow keys
+        /// walk: Needs You, then each expanded section's rows.
+        private func drawnRows(_ list: UnifiedList) -> [UnifiedRow] {
+            list.needsYou + (preferences.workingExpanded ? list.working : [])
+                + (preferences.finishedExpanded
+                    ? Array(finishedPage(list).rows) : [])
+        }
+
+        private func select(_ row: UnifiedRow) {
+            navigation.select(row.destination)
+            listFocused = true
         }
     #endif
 
+    /// The draft line and the Needs You rows: the top of the list.
     @ViewBuilder
-    private func sections(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
-        @Bindable var preferences = preferences
+    private func needsYouLines(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
         if let draftStore {
             DraftListRow(draftStore: draftStore, navigation: navigation)
         }
-        if list.needsYou.isEmpty {
-            sectionRow { needsYouEmptyState }
-        } else {
-            listRows(list.needsYou, ambiguousTaskIDs: ambiguousTaskIDs)
-        }
-        sectionRow {
+        listRows(list.needsYou, ambiguousTaskIDs: ambiguousTaskIDs)
+    }
+
+    /// Working and Finished, each drawn only while it has rows; an expanded
+    /// Finished draws a page of its newest rows, compact, and a Show More
+    /// line while older ones remain.
+    @ViewBuilder
+    private func sectionLines(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
+        @Bindable var preferences = preferences
+        if !list.working.isEmpty {
             ListSectionHead(
-                title: "Working", count: list.working.count, isExpanded: $preferences.workingExpanded)
-        }
-        if preferences.workingExpanded {
-            listRows(list.working, ambiguousTaskIDs: ambiguousTaskIDs)
-        }
-        sectionRow {
-            ListSectionHead(
-                title: "Finished", count: list.finished.count, isExpanded: $preferences.finishedExpanded)
-        }
-        if preferences.finishedExpanded {
-            listRows(list.finished, ambiguousTaskIDs: ambiguousTaskIDs)
-        }
-    }
-
-    /// A line of the list that selection passes over.
-    private func sectionRow(@ViewBuilder content: () -> some View) -> some View {
-        content().unifiedListLine()
-    }
-
-    private var needsYouEmptyState: some View {
-        let empty = Self.emptyNeedsYou(projectID: store.projectID)
-        return SidebarEmptyState(glyph: .inbox, title: empty.title, description: empty.description)
-            .padding(.bottom, 16)
-    }
-
-    private func listRows(_ rows: [UnifiedRow], ambiguousTaskIDs: Set<String>) -> some View {
-        ForEach(rows) { row in
-            Group {
-                #if os(iOS)
-                    NavigationLink(value: NavigationModel.PhoneRoute.destination(row.destination)) {
-                        rowView(row, ambiguousTaskIDs: ambiguousTaskIDs)
-                    }
-                #else
-                    rowView(row, ambiguousTaskIDs: ambiguousTaskIDs)
-                        .hidesSystemListSelection()
-                #endif
+                title: "Working", count: list.working.count, isExpanded: $preferences.workingExpanded
+            )
+            .unifiedListLine()
+            if preferences.workingExpanded {
+                listRows(list.working, ambiguousTaskIDs: ambiguousTaskIDs)
             }
-            .tag(row.id)
-            .task(id: timelineKey(row)) {
-                if let taskID = row.taskSnapshot?.task.id {
-                    await onLoadTimeline(taskID)
+        }
+        if !list.finished.isEmpty {
+            ListSectionHead(
+                title: "Finished", count: list.finished.count, isExpanded: $preferences.finishedExpanded
+            )
+            .unifiedListLine()
+            if preferences.finishedExpanded {
+                let page = finishedPage(list)
+                listRows(Array(page.rows), ambiguousTaskIDs: ambiguousTaskIDs, compact: true)
+                if page.hiddenCount > 0 {
+                    ShowMoreLine(count: page.nextStep) { finishedLimit += FinishedPage.step }
+                        .unifiedListLine()
                 }
             }
-            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+        }
+    }
+
+    /// Rows that select: on iPhone, list rows that push what they open; on
+    /// the Mac, rows of the column that select on a click. A tap rather
+    /// than a Button there, which would merge the row's VoiceOver elements
+    /// into one label; the container says which row is selected, as a
+    /// list's cells do, and takes VoiceOver's activate. A compact row loads
+    /// no timeline: it draws no stage.
+    private func listRows(
+        _ rows: [UnifiedRow], ambiguousTaskIDs: Set<String>, compact: Bool = false
+    ) -> some View {
+        ForEach(rows) { row in
+            let drawn = rowView(row, ambiguousTaskIDs: ambiguousTaskIDs, compact: compact)
+            #if os(iOS)
+                loadingTimeline(
+                    of: compact ? nil : row,
+                    NavigationLink(value: NavigationModel.PhoneRoute.destination(row.destination)) { drawn }
+                        .tag(row.id)
+                )
+                .listRowInsets(
+                    EdgeInsets(top: compact ? 1 : 4, leading: 12, bottom: compact ? 1 : 4, trailing: 12)
+                )
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            #else
+                loadingTimeline(
+                    of: compact ? nil : row,
+                    drawn
+                        .contentShape(Rectangle())
+                        .onTapGesture { select(row) }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityAddTraits(selection == row.id ? .isSelected : [])
+                        .accessibilityAction { select(row) }
+                )
+                .id(row.id)
+                .padding(.horizontal, 12 + UnifiedListView.sideMargin)
+                .padding(.vertical, compact ? 1 : 4)
+            #endif
+        }
+    }
+
+    /// Loads a task row's timeline, which its stage line reads; nil loads
+    /// nothing.
+    private func loadingTimeline(of row: UnifiedRow?, _ content: some View) -> some View {
+        content.task(id: row.flatMap(timelineKey)) {
+            if let taskID = row?.taskSnapshot?.task.id {
+                await onLoadTimeline(taskID)
+            }
         }
     }
 
@@ -341,9 +431,33 @@ struct UnifiedListView: View {
 
     @ViewBuilder
     private func rowView(
-        _ row: UnifiedRow, ambiguousTaskIDs: Set<String>, now: Date? = nil
+        _ row: UnifiedRow, ambiguousTaskIDs: Set<String>, compact: Bool = false, now: Date? = nil
     ) -> some View {
         let isSelected = selection == row.id
+        if compact {
+            switch row.content {
+            case .item(let snapshot):
+                FinishedRowView(
+                    subject: .item(snapshot.item), isSelected: isSelected, now: now,
+                    onRevealTechnicalDetails: { onRevealTechnicalDetails(snapshot.item.id) })
+            case .task(let snapshot, _):
+                FinishedRowView(
+                    subject: .task(
+                        snapshot.task,
+                        status: TaskDisplay.finishedRow(snapshot.task, position: taskPosition(snapshot).position)
+                            .keyword,
+                        showsIdentifier: ambiguousTaskIDs.contains(snapshot.task.id)),
+                    isSelected: isSelected, now: now)
+            }
+        } else {
+            fullRowView(row, ambiguousTaskIDs: ambiguousTaskIDs, isSelected: isSelected, now: now)
+        }
+    }
+
+    @ViewBuilder
+    private func fullRowView(
+        _ row: UnifiedRow, ambiguousTaskIDs: Set<String>, isSelected: Bool, now: Date?
+    ) -> some View {
         switch row.content {
         case .item(let snapshot):
             itemRow(snapshot.item, task: nil, isSelected: isSelected, now: now)
@@ -393,15 +507,20 @@ struct UnifiedListView: View {
 
     /// The list without List, whose AppKit-backed control ImageRenderer
     /// cannot draw off-screen: the sidebar as the operator sees it, each
-    /// section capped at `rowLimit` rows.
-    func screenshotContent(now: Date, rowLimit: Int = 4) -> some View {
+    /// section capped at `rowLimit` rows. A `sidebarHeight` frames the Mac
+    /// sidebar at that height, with Working and Finished at its foot.
+    func screenshotContent(
+        now: Date, rowLimit: Int = 4, sidebarHeight: CGFloat? = nil,
+        finishedLimit: Int = FinishedPage.initialLimit
+    ) -> some View {
         let list = list
         let names = TaskDisplay.ambiguousTaskIDs(list.rows.compactMap(\.taskSnapshot))
-        let screenshotRows = { (rows: [UnifiedRow]) in
+        let screenshotRows = { (rows: [UnifiedRow], compact: Bool) in
             ForEach(Array(rows.prefix(rowLimit))) { row in
-                rowView(row, ambiguousTaskIDs: names, now: now)
+                rowView(row, ambiguousTaskIDs: names, compact: compact, now: now)
             }
         }
+        let page = FinishedPage(list.finished, limit: finishedLimit)
         return VStack(alignment: .leading, spacing: 8) {
             tools(list)
                 .padding(.horizontal, -16)
@@ -409,25 +528,53 @@ struct UnifiedListView: View {
                 DraftRowView(row: row)
                     .padding(.bottom, DraftRowView.gapBelow)
             }
-            if list.needsYou.isEmpty {
-                needsYouEmptyState
+            screenshotRows(list.needsYou, false)
+            if sidebarHeight != nil {
+                Spacer(minLength: 0)
             }
-            screenshotRows(list.needsYou)
-            ListSectionHead(
-                title: "Working", count: list.working.count,
-                isExpanded: .constant(preferences.workingExpanded))
-            if preferences.workingExpanded {
-                screenshotRows(list.working)
+            if !list.working.isEmpty {
+                ListSectionHead(
+                    title: "Working", count: list.working.count,
+                    isExpanded: .constant(preferences.workingExpanded))
+                if preferences.workingExpanded {
+                    screenshotRows(list.working, false)
+                }
             }
-            ListSectionHead(
-                title: "Finished", count: list.finished.count,
-                isExpanded: .constant(preferences.finishedExpanded))
-            if preferences.finishedExpanded {
-                screenshotRows(list.finished)
+            if !list.finished.isEmpty {
+                ListSectionHead(
+                    title: "Finished", count: list.finished.count,
+                    isExpanded: .constant(preferences.finishedExpanded))
+                if preferences.finishedExpanded {
+                    screenshotRows(Array(page.rows), true)
+                    if page.hiddenCount > 0 {
+                        ShowMoreLine(count: page.nextStep) {}
+                    }
+                }
             }
         }
         .padding()
+        .frame(height: sidebarHeight, alignment: .top)
         .background(Color.sidebarGround)
+    }
+}
+
+/// The line under an expanded Finished's page that draws its next older
+/// rows (`FinishedPage`), in the dim mono of the section counts.
+struct ShowMoreLine: View {
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("Show \(count) More")
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .freesideFocusRing(cornerRadius: 4)
+        .accessibilityLabel("Show \(count) more finished")
     }
 }
 
@@ -460,13 +607,33 @@ private struct DraftListRow: View {
     }
 }
 
+extension UnifiedListView {
+    /// Where the system list drew its rows on the Mac, 8pt outside a row's
+    /// own inset; the column keeps it, so rows sit where they did under
+    /// the tools row.
+    fileprivate static let sideMargin: CGFloat = {
+        #if os(macOS)
+            8
+        #else
+            0
+        #endif
+    }()
+}
+
 extension View {
     /// A line of the list that selection passes over.
     fileprivate func unifiedListLine(bottomInset: CGFloat = 4) -> some View {
-        selectionDisabled()
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: bottomInset, trailing: 16))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+        #if os(iOS)
+            selectionDisabled()
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: bottomInset, trailing: 16))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        #else
+            padding(
+                EdgeInsets(
+                    top: 4, leading: 16 + UnifiedListView.sideMargin, bottom: bottomInset,
+                    trailing: 16 + UnifiedListView.sideMargin))
+        #endif
     }
 }
 
@@ -952,37 +1119,41 @@ struct InboxRowView: View {
         #endif
     }
 
-    @ViewBuilder
     private var contextMenu: some View {
+        AttentionItemMenu(
+            item: item, taskName: task?.task.display_names.task.text,
+            onRevealTechnicalDetails: onRevealTechnicalDetails)
+    }
+}
+
+/// An item row's context menu, the same for a full row and a compact
+/// Finished row: what it can copy, then Reveal in Identifiers.
+struct AttentionItemMenu: View {
+    let item: Components.Schemas.AttentionItem
+    var taskName: String?
+    var onRevealTechnicalDetails: () -> Void
+
+    var body: some View {
         let evidenceDigests = AttentionDisplay.uniqueEvidenceDigests(item)
-        if let task {
-            Button("Copy task name") { copy(task.task.display_names.task.text) }
+        if let taskName {
+            Button("Copy task name") { Clipboard.copy(taskName) }
         }
-        Button("Copy summary") { copy(AttentionDisplay.rowSummary(item)) }
-        Button("Copy item ID") { copy(item.id) }
+        Button("Copy summary") { Clipboard.copy(AttentionDisplay.rowSummary(item)) }
+        Button("Copy item ID") { Clipboard.copy(item.id) }
         if let subject = AttentionDisplay.copyableSubjectReference(item) {
-            Button(subject.label) { copy(subject.value) }
+            Button(subject.label) { Clipboard.copy(subject.value) }
         }
         if evidenceDigests.count == 1, let digest = evidenceDigests.first {
-            Button("Copy evidence digest") { copy(digest) }
+            Button("Copy evidence digest") { Clipboard.copy(digest) }
         } else if evidenceDigests.count > 1 {
             Menu("Copy evidence digest") {
                 ForEach(evidenceDigests, id: \.self) { digest in
-                    Button(digest) { copy(digest) }
+                    Button(digest) { Clipboard.copy(digest) }
                 }
             }
         }
         Divider()
         Button("Reveal in Identifiers") { onRevealTechnicalDetails() }
-    }
-
-    private func copy(_ value: String) {
-        #if os(macOS)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(value, forType: .string)
-        #elseif os(iOS)
-            UIPasteboard.general.string = value
-        #endif
     }
 }
 

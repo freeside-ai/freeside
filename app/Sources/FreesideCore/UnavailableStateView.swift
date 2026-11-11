@@ -63,25 +63,6 @@ extension View {
     }
 }
 
-/// A sidebar column's empty state, centered in the content area below the
-/// filters. The filters stay pinned at the top; only this block centers in
-/// the space beneath them, the way the detail pane's unavailable state
-/// centers in its own area. The call sites frame it with zero-minimum
-/// spacers so the empty column still collapses and never holds the sidebar,
-/// or the window, open the way a fixed-height empty state did.
-struct SidebarEmptyState: View {
-    let glyph: EmptyStateGlyph
-    let title: String
-    let description: String
-
-    var body: some View {
-        EmptyStateBlock(glyph: glyph, title: title, description: description)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal)
-            .padding(.top, 32)
-    }
-}
-
 /// The empty state itself (R13): the section's glyph at 28pt in faint ink,
 /// the statement in the serif, and one dim line under it, centered. The
 /// glyph is decoration, and the two lines read to VoiceOver as one element,

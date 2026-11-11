@@ -406,17 +406,29 @@ public final class NavigationModel {
     /// Next Item and Previous Item, and the sidebar's j and k: one step along
     /// the Needs you rows, opening what the row opens.
     package func moveAttentionSelection(by offset: Int, list: UnifiedList) {
-        let rows = list.needsYou
-        guard !rows.isEmpty else { return }
-        let selected = list.selection(attentionItemID: attentionSelection, taskID: taskSelection)
-        let currentIndex = rows.firstIndex { $0.id == selected }
-        let nextIndex: Int
-        if let currentIndex {
-            nextIndex = min(max(currentIndex + offset, rows.startIndex), rows.index(before: rows.endIndex))
-        } else {
-            nextIndex = offset < 0 ? rows.index(before: rows.endIndex) : rows.startIndex
+        if let row = step(by: offset, along: list.needsYou, list: list) {
+            route(to: row.destination)
         }
-        route(to: rows[nextIndex].destination)
+    }
+
+    /// The Mac sidebar's arrow keys: one step along the rows it draws,
+    /// Working and Finished included, selecting as a click does.
+    package func moveSelection(by offset: Int, along rows: [UnifiedRow], list: UnifiedList) {
+        if let row = step(by: offset, along: rows, list: list) {
+            select(row.destination)
+        }
+    }
+
+    /// The row `offset` steps from the selected one, holding at either end;
+    /// with no row of `rows` selected, a step forward lands on the first
+    /// and a step back on the last.
+    private func step(by offset: Int, along rows: [UnifiedRow], list: UnifiedList) -> UnifiedRow? {
+        guard !rows.isEmpty else { return nil }
+        let selected = list.selection(attentionItemID: attentionSelection, taskID: taskSelection)
+        guard let currentIndex = rows.firstIndex(where: { $0.id == selected }) else {
+            return offset < 0 ? rows.last : rows.first
+        }
+        return rows[min(max(currentIndex + offset, 0), rows.count - 1)]
     }
 
     public func moveAttentionSelection(by offset: Int, coordinator: SyncCoordinator) {

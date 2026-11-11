@@ -100,6 +100,34 @@ import Testing
         #expect(list.finished.isEmpty)
     }
 
+    @Test func finishedPagesItsNewestRowsAndCountsWhatRemains() {
+        let list = UnifiedList(
+            open: [], closed: [],
+            tasks: (0..<40).map { task("task-\($0)", lifecycle: .finished, activity: TimeInterval($0)) },
+            projectFilter: nil)
+
+        let first = FinishedPage(list.finished, limit: FinishedPage.initialLimit)
+        #expect(first.rows.map(\.id) == (30..<40).reversed().map { .task("task-\($0)") })
+        #expect(first.hiddenCount == 30)
+        #expect(first.nextStep == 25)
+
+        let second = FinishedPage(list.finished, limit: FinishedPage.initialLimit + FinishedPage.step)
+        #expect(second.rows.count == 35)
+        #expect(second.nextStep == 5)
+
+        let all = FinishedPage(list.finished, limit: 100)
+        #expect(all.rows.count == 40)
+        #expect(all.hiddenCount == 0)
+
+        // A route to an older row grows the page to hold it.
+        let held = FinishedPage(list.finished, limit: FinishedPage.initialLimit, holding: .task("task-20"))
+        #expect(held.rows.last?.id == .task("task-20"))
+        #expect(held.rows.count == 20)
+        #expect(held.hiddenCount == 20)
+        let within = FinishedPage(list.finished, limit: FinishedPage.initialLimit, holding: .task("task-35"))
+        #expect(within.rows.count == 10)
+    }
+
     @Test func quietTasksSplitByLifecycleAndOpenTheirTimelines() {
         let list = UnifiedList(
             open: [], closed: [],

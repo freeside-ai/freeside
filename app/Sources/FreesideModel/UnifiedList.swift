@@ -62,6 +62,30 @@ package struct UnifiedRow: Identifiable {
     }
 }
 
+/// The part of an expanded Finished the list draws: its newest rows up to
+/// `limit`, so years of finished work never climb over Needs you, and how
+/// many a Show More line would add next. Finished is newest first, so a
+/// page is always the most recent work.
+package struct FinishedPage {
+    package static let initialLimit = 10
+    package static let step = 25
+
+    package let rows: ArraySlice<UnifiedRow>
+    /// The rows past `limit`; a Show More line is drawn while any remain.
+    package let hiddenCount: Int
+
+    /// A `selected` row past `limit` grows the page to hold it, so a route
+    /// to older finished work draws the row it opens.
+    package init(_ finished: [UnifiedRow], limit: Int, holding selected: UnifiedSelection? = nil) {
+        let held = selected.flatMap { id in finished.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
+        rows = finished.prefix(max(0, limit, held))
+        hiddenCount = finished.count - rows.count
+    }
+
+    /// How many rows the next Show More reveals.
+    package var nextStep: Int { min(Self.step, hiddenCount) }
+}
+
 /// The list both clients draw, as a pure projection of the items and tasks
 /// the client already holds, joined by task id. Each task has exactly one
 /// row: one with an open item is in Needs you whatever its lifecycle.

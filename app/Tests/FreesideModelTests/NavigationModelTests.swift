@@ -768,6 +768,27 @@ import Testing
         #expect(navigation.path == [.attentionItem("item-a")])
     }
 
+    @Test func arrowKeysStepPastNeedsYouIntoTheSections() throws {
+        let (store, task) = task(holding: ["item-a"])
+        let rows = list(store, tasks: TaskFixtures.defaultTasks())
+        let quiet = try #require(rows.working.first ?? rows.finished.first)
+        let drawn = rows.needsYou + [quiet]
+        let navigation = NavigationModel(launchInputs: .standard())
+        #expect(rows.needsYou.map(\.id) == [.task(task.task.id)])
+
+        navigation.moveSelection(by: 1, along: drawn, list: rows)
+        #expect(navigation.path == [.attentionItem("item-a")])
+
+        navigation.moveSelection(by: 1, along: drawn, list: rows)
+        #expect(navigation.path == [quiet.destination], "j and k stop at Needs You; the arrow keys go on")
+
+        navigation.moveSelection(by: 1, along: drawn, list: rows)
+        #expect(navigation.path == [quiet.destination], "the last row holds")
+
+        navigation.moveSelection(by: -1, along: drawn, list: rows)
+        #expect(navigation.path == [.attentionItem("item-a")])
+    }
+
     @Test func anItemItsTaskOwnsLeadsTheTasksPage() {
         let (store, task) = task(holding: ["item-a", "item-b"])
         let rows = list(store, tasks: [task])
