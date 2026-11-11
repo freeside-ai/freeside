@@ -115,6 +115,10 @@ import Testing
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
             rows.append(.init(label: "Hold Code", value: hold.rawValue))
         }
+        // #3026 moved a finding's raw diagnostic code here from its facts.
+        if let diagnostic = item.health_diagnostic?.value1 {
+            rows.append(.init(label: "Diagnostic Code", value: diagnostic.code))
+        }
         rows.append(.init(label: "Item Version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
             rows.append(.init(label: "PR Head", value: item.pr_head_sha))

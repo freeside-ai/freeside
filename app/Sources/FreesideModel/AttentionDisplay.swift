@@ -357,10 +357,17 @@ package enum AttentionDisplay {
             guard let diagnostic = item.health_diagnostic?.value1 else {
                 return "A system-health condition needs attention."
             }
+            let lead = diagnosticLabel(diagnostic.code)
             guard diagnostic.impairs != Components.Schemas.ImpairedCapability.none else {
-                return "Diagnostic \(diagnostic.code) is open; no capability is impaired."
+                return "\(lead). No capability is impaired."
             }
-            return "\(label(diagnostic.impairs)) is impaired by diagnostic \(diagnostic.code)."
+            // An advisory finding names the capability it warns about but
+            // leaves admission open, so the row must not read as a closed
+            // gate beside the Admission row's "Open" (#3026).
+            guard SystemHealthFindings.isBlocking(item) else {
+                return "\(lead). Warns about \(label(diagnostic.impairs).lowercased()); admission stays open."
+            }
+            return "\(lead). \(label(diagnostic.impairs)) is impaired."
         case .blocked:
             return blockedWaitSentence(item) ?? "A run is waiting on a blocker."
         }
@@ -438,7 +445,8 @@ package enum AttentionDisplay {
         case .system_health:
             var rows: [FactRow] = []
             if let diagnostic = item.health_diagnostic?.value1 {
-                rows.append(.init("Diagnostic", diagnostic.code, monospaced: true))
+                // The label reads; the raw code stays copyable in Identifiers.
+                rows.append(.init("Diagnostic", diagnosticLabel(diagnostic.code)))
                 rows.append(.init("Impairs", label(diagnostic.impairs)))
             }
             // Whether the finding gates unattended admission is a fact about
@@ -1100,6 +1108,15 @@ package enum AttentionDisplay {
         RunDisplay.label(reason)
     }
 
+    /// A diagnostic code in words: its `_`, `.`, and `-` parts joined by
+    /// spaces, in sentence case, so `backup_age.stale` reads "Backup age
+    /// stale". Codes are free-form and some are built at runtime, so a rule
+    /// covers every one where a table of names could not.
+    package static func diagnosticLabel(_ code: String) -> String {
+        let words = code.split(whereSeparator: { "_.-".contains($0) }).joined(separator: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
     static func label(_ capability: Components.Schemas.ImpairedCapability) -> String {
         switch capability {
         case .unattended_admission: return "Unattended admission"
@@ -1340,6 +1357,9 @@ package enum AttentionDisplay {
         }
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
             rows.append(.init(label: "Hold Code", value: hold.rawValue))
+        }
+        if let diagnostic = item.health_diagnostic?.value1 {
+            rows.append(.init(label: "Diagnostic Code", value: diagnostic.code))
         }
         for elapsed in item.elapsed_deadlines ?? [] {
             guard let label = elapsedDeadlineIdentifierLabel(elapsed.kind) else { continue }
