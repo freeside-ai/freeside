@@ -9,7 +9,7 @@ and claim state, and its `schedule` subcommand reports issues that escape
 scheduling; see Contract Occupancy, Unit Coordination Evidence, and
 Scheduling State below.
 
-The runtime requires Go 1.27.3 and an authenticated `gh` CLI with access to the
+The runtime requires Go 1.27.4 and an authenticated `gh` CLI with access to the
 target repository. Run it from this module:
 
 ```sh
