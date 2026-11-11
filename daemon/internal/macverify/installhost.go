@@ -43,6 +43,14 @@ type FileInfo struct {
 	Mode fs.FileMode
 }
 
+// ServiceRun is a launchd job's run state: whether it is running, how many
+// times it has started since it was loaded, and how its last run exited.
+type ServiceRun struct {
+	Running      bool
+	Runs         int
+	LastExitCode int
+}
+
 // Host is every side effect install, check, and removal have on the machine.
 // The decisions stay in this package; a Host only reads and acts, so a fake
 // can stand in for the directory service, the filesystem, launchd, and pf.
@@ -86,6 +94,9 @@ type Host interface {
 
 	ServiceLoaded(label string) (bool, error)
 	BootstrapService(plistPath string) error
+	// ServiceRunState reads a loaded job's run state. Output it cannot read
+	// is an error, never a finished run.
+	ServiceRunState(label string) (ServiceRun, error)
 	BootoutService(label string) error
 
 	// AnchorRules lists the rules loaded in a pf anchor, as pfctl prints

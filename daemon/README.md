@@ -4438,7 +4438,18 @@ world-writable unless noted, and so is every ancestor of the root:
 loopback and the system resolver included, and confines writes to four
 `sandbox-exec -D` parameters: `JOB_DIR`, `SLOT_HOME`, `SLOT_TMP`, and
 `SLOT_CACHE` (the slot's `DARWIN_USER_TEMP_DIR` and `DARWIN_USER_CACHE_DIR`).
-The helper resets all four every job. The command's environment is exactly
+The helper resets all four every job. macOS leaves four entries in
+`SLOT_TMP` that neither root nor the slot can remove: `com.apple.trustd` and
+`com.apple.MTLCompilerService` (System Integrity Protection) and two
+`TemporaryItems` directories (one at the top, one in `com.apple.trustd`) that
+no one can list. The slot can write inside all four, so the reset keeps them
+only while each is empty: it lists the first two and reads each
+`TemporaryItems` directory's link count, which APFS raises by one per entry.
+Anything else that survives, or anything a job leaves inside them, fails
+the reset, and the slot is quarantined instead of carrying it to the next
+job. Known gap (#3009): a `swift test` run sometimes leaves an entry in the
+top-level `TemporaryItems`, which no one can remove, so that slot stays
+quarantined. The command's environment is exactly
 `HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`. A
 SwiftPM recipe command must pass `--disable-sandbox`: SwiftPM sandboxes its
 manifest build with `sandbox-exec`, which cannot nest inside the room's.
@@ -4483,7 +4494,10 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   runs `pfctl -E -a com.apple/freeside-macverify -f <root>/pf/anchor.conf` at
   load. Stock macOS loads `/etc/pf.conf` at boot but never enables pf, and the
   anchor does not survive a reboot, so the job reloads it and takes a pf
-  enable reference each boot.
+  enable reference each boot. Install loads the job and waits up to 30 seconds
+  for that first run, failing if it exits nonzero, so it never loads the
+  anchor itself while the job's load is in flight (pf refuses the second load
+  as `Resource busy`).
 
 Install prints the `macverify.Config` values it determines (`ExecutorRoot`
 and `Slots`); the daemon's `Config` also names the `Toolchain` pin below. A
@@ -4685,12 +4699,15 @@ slot, it runs four probe jobs through the room's ordinary job path:
 | Job | Profile | Checks | Confinement |
 | --- | --- | --- | --- |
 | `sandbox` | configured | `loopback-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
-| `sandbox` | configured | `write-denied` in `/private/tmp`, `/Users/Shared`, and the daemon user's home; `write-job-dir` | `write_confinement` |
+| `sandbox` | configured | `write-denied` in `/private/tmp` and `/Users/Shared`; `write-job-dir` | `write_confinement` |
 | `packet-filter` | permissive (`(allow default)`) | `tcp-dropped`, `udp-dropped` to the control targets | `packet_filter` |
 | `home-mark`, then `home-clean` | configured | a marker left in the slot's home is gone in the next job | `home_reset` |
 
 A sandbox check passes only on `EPERM`, the sandbox's own refusal, so an
-unreachable target or a missing directory fails it. A packet-filter check
+unreachable target or a missing directory fails it. Only the sandbox can
+refuse a slot's write to those two world-writable directories. The daemon
+user's home is not a target: file permissions refuse the slot there anyway,
+as `EACCES` when the home is `0750`, so its answer cannot show the sandbox. A packet-filter check
 runs with the sandbox off and passes only on a timeout, `EHOSTUNREACH`, or
 `EACCES`, what pf's `block drop` for the slot's uid produces; it fails on a
 connection, on `EPERM` (the sandbox was on after all), and on any other
@@ -4703,7 +4720,7 @@ failure superseded records nothing and says so.
 **The pre-job probe.** Before every recipe command, the room runs the
 `sandbox` job on the leased slot under the configured profile, against fixed
 targets: a loopback listener it opens, `github.com`, `192.0.2.1:443`,
-`192.0.2.1:53`, and the three directories above. It needs no positive control,
+`192.0.2.1:53`, and the two directories above. It needs no positive control,
 because `EPERM` is the sandbox's answer whatever the target. A confinement
 failure refuses the command before it runs, quarantines the slot until the
 daemon restarts, and withdraws the declaration in memory. A pass refuses a

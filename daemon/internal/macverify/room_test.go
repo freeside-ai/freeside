@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,6 +50,8 @@ type fakeLauncher struct {
 	reportSwiftCache *string
 	reapErr          error
 	cleanupErr       error
+	// recipeCleanupErr fails only a recipe job's cleanup.
+	recipeCleanupErr error
 	// command plays a recipe command; reaped closes on the first reap after
 	// it starts.
 	command  func(req runRequest, out io.Writer, reaped <-chan struct{}) runOutcome
@@ -211,8 +214,14 @@ func (f *fakeLauncher) reap(_ context.Context, slot string) (int, error) {
 	return f.slotUID(), nil
 }
 
-func (f *fakeLauncher) cleanup(_ context.Context, slot, _ string) error {
+func (f *fakeLauncher) cleanup(_ context.Context, slot, jobID string) error {
 	f.record("cleanup " + slot)
+	if f.recipeCleanupErr != nil {
+		prepares, _ := f.recipeJobs()
+		if slices.ContainsFunc(prepares, func(p prepareCall) bool { return p.jobID == jobID }) {
+			return f.recipeCleanupErr
+		}
+	}
 	return f.cleanupErr
 }
 
@@ -644,6 +653,26 @@ func TestRunQuarantinesSlotWhoseAbsenceIsUnproven(t *testing.T) {
 				t.Fatalf("prepared %d jobs, want the quarantined slot never leased again", len(prepares))
 			}
 		})
+	}
+}
+
+// TestRunNamesExitStatusWhenTeardownFails has a recipe command exit and its
+// cleanup fail, as a slot left with an entry it cannot remove does, and
+// checks the error still says how the command ended.
+func TestRunNamesExitStatusWhenTeardownFails(t *testing.T) {
+	t.Parallel()
+	for _, code := range []int{0, 3} {
+		fake := newFakeLauncher()
+		fake.command = func(runRequest, io.Writer, <-chan struct{}) runOutcome { return runOutcome{ExitCode: code} }
+		fake.recipeCleanupErr = errors.New("slot-run: rm: Operation not permitted")
+		room := newTestRoom(t, fake)
+
+		_, err := room.Run(t.Context(), t.TempDir(), []string{"true"})
+		want := fmt.Sprintf("after the command exited %d: ", code)
+		if !errors.Is(err, ErrAbsenceUnproven) || !strings.Contains(err.Error(), want) ||
+			!strings.Contains(err.Error(), "Operation not permitted") {
+			t.Fatalf("Run error = %v, want ErrAbsenceUnproven naming %q and the cleanup failure", err, want)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 )
 
 func testSpec() InstallSpec {
@@ -105,6 +106,54 @@ func TestInstallFresh(t *testing.T) {
 	if got := spec.Config(); got.ExecutorRoot != spec.Root || !slices.Equal(got.Slots, []string{"fvslot1", "fvslot2"}) ||
 		string(got.PacketFilterRules) != string(h.files[spec.anchorFilePath()].data) {
 		t.Errorf("Config = %+v", got)
+	}
+}
+
+// TestInstallWaitsForTheBootJobsLoad has the boot job's pfctl load land
+// some polls after bootstrap, as launchd runs it, and checks install never
+// loads the anchor itself, which failed with "Resource busy" on the
+// reference host while the job's load was in flight (#3009). The wait
+// sleeps on the real clock, so it runs in a synctest bubble.
+func TestInstallWaitsForTheBootJobsLoad(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h, spec := newFakeHost(), testSpec()
+		h.bootPolls = 5
+		if _, err := Install(spec, h); err != nil {
+			t.Fatalf("Install: %v", err)
+		}
+		if h.anchorLoads != 0 || h.inFlightLoads != 0 {
+			t.Fatalf("install loaded the anchor %d times (%d in flight), want the boot job's load only",
+				h.anchorLoads, h.inFlightLoads)
+		}
+		requireAllPresent(t, spec, h)
+	})
+}
+
+func TestInstallFailsWhenTheBootJobFails(t *testing.T) {
+	t.Parallel()
+	for name, setup := range map[string]struct {
+		host func(*fakeHost)
+		want string
+	}{
+		"nonzero exit": {func(h *fakeHost) { h.bootPolls, h.bootExit = 2, 1 }, "exited 1"},
+		"never ends":   {func(h *fakeHost) { h.bootNever = true }, "did not finish its first run"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				h, spec := newFakeHost(), testSpec()
+				setup.host(h)
+				_, err := Install(spec, h)
+				if err == nil || !strings.Contains(err.Error(), "boot job "+spec.Label) ||
+					!strings.Contains(err.Error(), setup.want) {
+					t.Fatalf("Install error = %v, want the boot job's failure naming %q", err, setup.want)
+				}
+				if h.anchorLoads != 0 {
+					t.Fatalf("install loaded the anchor %d times after the boot job failed", h.anchorLoads)
+				}
+			})
+		})
 	}
 }
 

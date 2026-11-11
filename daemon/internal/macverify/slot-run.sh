@@ -243,6 +243,67 @@ empty_dir() {
 	find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
+# macOS leaves entries in a slot's per-user temporary directory that neither
+# root nor the slot can remove (#3009): trustd's com.apple.trustd and
+# com.apple.MTLCompilerService carry System Integrity Protection, and the
+# TemporaryItems directories (one at the top, one in com.apple.trustd) can be
+# neither listed nor removed. The slot can write inside all four, and a file
+# a job leaves in a TemporaryItems directory reads back in the next job. So
+# each survivor is tolerated only when it is on this list, is a directory,
+# and is empty: the listable ones by their listing, a TemporaryItems by its
+# link count, which APFS raises by one for every entry. Anything a job
+# leaves in them fails cleanup, and the slot is quarantined instead of
+# carrying it to the next job.
+
+# These functions run inside prepare and cleanup, and sh has no local
+# variables, so theirs carry a ud_ prefix that nothing else uses.
+
+# listing sets ud_entries to the names in directory $1, or refuses.
+listing() {
+	ud_entries=$(find "$1" -mindepth 1 -maxdepth 1) || refuse "cannot list $1"
+}
+
+# unlistable_empty refuses unless $1 is a directory with no entries.
+unlistable_empty() {
+	[ -d "$1" ] && [ ! -L "$1" ] || refuse "$1 is not a directory"
+	[ "$(stat -f '%l' "$1")" -eq 2 ] || refuse "$1 holds entries no one can list or remove"
+}
+
+# empty_user_dir empties the slot's per-user temporary or cache directory,
+# leaving only the empty protected entries above.
+empty_user_dir() {
+	sudo -u "$slot" /usr/bin/chflags -R -P nouchg,nouappnd "$1" 2>/dev/null || :
+	# rm fails on the protected entries; what survives is checked below.
+	find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || :
+	listing "$1"
+	ud_left=$ud_entries
+	ud_allowed=
+	for ud_name in com.apple.trustd com.apple.MTLCompilerService TemporaryItems; do
+		ud_entry=$1/$ud_name
+		[ -e "$ud_entry" ] || [ -L "$ud_entry" ] || continue
+		[ -d "$ud_entry" ] && [ ! -L "$ud_entry" ] || refuse "$ud_entry is not a directory"
+		case $ud_name in
+		com.apple.trustd)
+			listing "$ud_entry"
+			if [ -n "$ud_entries" ]; then
+				[ "$ud_entries" = "$ud_entry/TemporaryItems" ] || refuse "cannot empty $ud_entry"
+				unlistable_empty "$ud_entry/TemporaryItems"
+			fi
+			;;
+		com.apple.MTLCompilerService)
+			listing "$ud_entry"
+			[ -z "$ud_entries" ] || refuse "cannot empty $ud_entry"
+			;;
+		TemporaryItems) unlistable_empty "$ud_entry" ;;
+		esac
+		ud_allowed=${ud_allowed:+$ud_allowed
+}$ud_entry
+	done
+	# find lists in directory order, not the order above, so compare sorted.
+	[ "$(printf '%s\n' "$ud_left" | sort)" = "$(printf '%s\n' "$ud_allowed" | sort)" ] ||
+		refuse "cannot empty $1: left $(printf '%s' "$ud_left" | tr '\n' ' ')"
+}
+
 reset_home() {
 	remove "$home"
 	ditto "$root/template/home" "$home"
@@ -280,8 +341,8 @@ op_prepare() {
 	chmod 0644 "$profile"
 	select_user_dirs
 	reset_home
-	empty_dir "$tmp"
-	empty_dir "$cache"
+	empty_user_dir "$tmp"
+	empty_user_dir "$cache"
 	mkdir -m 0700 "$jobdir"
 	chown "$slot" "$jobdir"
 	sudo -u "$slot" mkdir "$jobdir/workspace"
@@ -389,8 +450,8 @@ op_cleanup() {
 	rm -f "$profile" "$archive"
 	select_user_dirs
 	reset_home
-	empty_dir "$tmp"
-	empty_dir "$cache"
+	empty_user_dir "$tmp"
+	empty_user_dir "$cache"
 	assert_idle
 }
 

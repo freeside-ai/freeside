@@ -130,10 +130,6 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 		return nil, fmt.Errorf("%w: negative room wait delay", ErrInvalidConfig)
 	}
 	helper := helperPath(b.cfg.ExecutorRoot)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("%w: the daemon user's home: %w", ErrInvalidConfig, err)
-	}
 	r := &Room{
 		root:            b.cfg.ExecutorRoot,
 		profile:         b.cfg.SandboxProfile,
@@ -149,10 +145,12 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 		toolchain:       b.cfg.Toolchain,
 		hostToolchain:   HostToolchain,
 		backend:         b,
-		// The two world-writable directories show the refusal is the
-		// sandbox's and not file permissions; EPERM shows the same for the
-		// daemon user's home.
-		outsideDirs: []string{"/private/tmp", "/Users/Shared", home},
+		// Only the sandbox can refuse a slot's write to a world-writable
+		// directory, so EPERM there proves the confinement. The daemon
+		// user's home proves nothing more: file permissions already refuse
+		// the slot there, as EACCES or EPERM depending on the home's mode,
+		// and a 0750 home failed the EPERM check outright (#3009).
+		outsideDirs: []string{"/private/tmp", "/Users/Shared"},
 	}
 	r.probeWorkspace = b.stageProbe
 	return r, nil
@@ -291,6 +289,13 @@ func (r *Room) runOnSlot(ctx context.Context, slot string, profile []byte, workd
 	}
 	if err := r.teardown(ctx, slot, jobID, preparedUID); err != nil {
 		r.pool.quarantine(slot)
+		if runErr == nil {
+			// The result is dropped with the slot, so the error keeps the
+			// one fact an operator needs to tell a failed command from a
+			// failed teardown.
+			return verify.StepResult{}, fmt.Errorf("%w: slot %s: after the command exited %d: %w",
+				ErrAbsenceUnproven, slot, result.ExitCode, err)
+		}
 		return verify.StepResult{}, fmt.Errorf("%w: slot %s: %w", ErrAbsenceUnproven, slot, errors.Join(err, runErr))
 	}
 	if runErr != nil {

@@ -69,7 +69,9 @@ func readRecord(path string, attrs ...string) (map[string][]string, bool, error)
 }
 
 // parseDSPlist reads dscl -plist output: a dict of attribute name to an array
-// of strings, the names carrying a "dsAttrTypeStandard:" prefix.
+// of strings. dscl prefixes a name it maps to a standard attribute with
+// "dsAttrTypeStandard:" and any other with "dsAttrTypeNative:" (IsHidden is
+// native), so both prefixes are stripped and callers ask by the bare name.
 func parseDSPlist(data []byte) (map[string][]string, error) {
 	record := make(map[string][]string)
 	dec := xml.NewDecoder(bytes.NewReader(data))
@@ -98,7 +100,7 @@ func parseDSPlist(data []byte) (map[string][]string, error) {
 		case xml.CharData:
 			switch {
 			case element == "key":
-				key = strings.TrimPrefix(string(t), "dsAttrTypeStandard:")
+				key = strings.TrimPrefix(strings.TrimPrefix(string(t), "dsAttrTypeStandard:"), "dsAttrTypeNative:")
 			case element == "string" && inArray:
 				record[key] = append(record[key], string(t))
 			}
@@ -131,17 +133,24 @@ func (systemHost) User(name string) (Account, bool, error) {
 	if err != nil || !ok {
 		return Account{}, ok, err
 	}
+	a, err := accountFromRecord(name, record)
+	return a, err == nil, err
+}
+
+// accountFromRecord reads the attributes User asks dscl for.
+func accountFromRecord(name string, record map[string][]string) (Account, error) {
 	a := Account{
 		Name: name, Home: single(record, "NFSHomeDirectory"), Shell: single(record, "UserShell"),
 		Password: single(record, "Password"), Hidden: single(record, "IsHidden") == "1",
 	}
+	var err error
 	if a.UID, err = singleInt(record, "UniqueID"); err != nil {
-		return Account{}, false, fmt.Errorf("account %s: %w", name, err)
+		return Account{}, fmt.Errorf("account %s: %w", name, err)
 	}
 	if a.PrimaryGID, err = singleInt(record, "PrimaryGroupID"); err != nil {
-		return Account{}, false, fmt.Errorf("account %s: %w", name, err)
+		return Account{}, fmt.Errorf("account %s: %w", name, err)
 	}
-	return a, true, nil
+	return a, nil
 }
 
 // listByAttribute reads `dscl . -list <dir> <attr>`: one record name and its
@@ -400,6 +409,59 @@ func (systemHost) ServiceLoaded(label string) (bool, error) {
 func (systemHost) BootstrapService(plistPath string) error {
 	_, err := run(launchctlPath, "bootstrap", "system", plistPath)
 	return err
+}
+
+func (systemHost) ServiceRunState(label string) (ServiceRun, error) {
+	out, err := run(launchctlPath, "print", "system/"+label)
+	if err != nil {
+		return ServiceRun{}, err
+	}
+	return parseLaunchctlPrint(out)
+}
+
+// parseLaunchctlPrint reads the job's own state, runs, and last exit code
+// from launchctl print. Those are the lines one tab deep: nested blocks such
+// as the coalitions carry their own state lines. launchctl's format is
+// undocumented, so anything missing or malformed is an error, except a
+// missing runs line, which reads as no run yet and so never as finished.
+func parseLaunchctlPrint(out []byte) (ServiceRun, error) {
+	var r ServiceRun
+	var state, lastExit string
+	for line := range strings.Lines(string(out)) {
+		rest, ok := strings.CutPrefix(line, "\t")
+		if !ok || strings.HasPrefix(rest, "\t") {
+			continue
+		}
+		name, value, ok := strings.Cut(strings.TrimSpace(rest), " = ")
+		if !ok {
+			continue
+		}
+		switch name {
+		case "state":
+			state = value
+		case "runs":
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return ServiceRun{}, fmt.Errorf("launchctl print: runs %q: %w", value, err)
+			}
+			r.Runs = n
+		case "last exit code":
+			lastExit = value
+		}
+	}
+	if state == "" {
+		return ServiceRun{}, errors.New("launchctl print: no state line")
+	}
+	r.Running = state != "not running"
+	if r.Running || r.Runs == 0 {
+		return r, nil
+	}
+	code, err := strconv.Atoi(lastExit)
+	if err != nil {
+		return ServiceRun{}, fmt.Errorf("launchctl print: a finished job's last exit code %q: %w", lastExit, err)
+	}
+	r.LastExitCode = code
+	return r, nil
 }
 
 func (systemHost) BootoutService(label string) error {
