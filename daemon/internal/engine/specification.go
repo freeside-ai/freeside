@@ -2665,10 +2665,15 @@ func (e *Engine) specificationAttemptAlreadyAccepted(
 func (e *Engine) validateSpecificationAddressals(
 	ctx context.Context, request specificationRequest, specification specify.Specification,
 ) error {
-	expected := make(map[string]struct{}, len(request.FeedbackArtifactIDs))
-	for _, id := range request.FeedbackArtifactIDs {
-		commentID, ok := domain.SpecificationFeedbackCommandID(id)
-		if !ok {
+	// The prompt shows every human_feedback block, Request Changes comments
+	// and operator answers alike, with the id specificationFeedbackEnvelopeID
+	// writes, and asks the specifier to name it; so an addressal may name
+	// exactly those ids.
+	humanFeedbackIDs := slices.Concat(request.FeedbackArtifactIDs, request.AnswerArtifactIDs)
+	expected := make(map[string]struct{}, len(humanFeedbackIDs))
+	for _, id := range humanFeedbackIDs {
+		commentID := specificationFeedbackEnvelopeID(id)
+		if commentID == "" {
 			return fmt.Errorf("feedback artifact %q has no comment id: %w", id, specify.ErrInvalidOutput)
 		}
 		if _, duplicate := expected[commentID]; duplicate {
@@ -3386,8 +3391,18 @@ func (e *Engine) buildSpecRevision(
 		}
 		comments = append(comments, comment)
 	}
+	requestChanges := make(map[string]struct{}, len(comments))
+	for _, comment := range comments {
+		requestChanges[comment.CommentID] = struct{}{}
+	}
 	addressals := make([]domain.SpecAddressalClaim, 0, len(specification.Addressals))
 	for _, addressal := range specification.Addressals {
+		// The card pairs each claimed addressal with a Request Changes
+		// comment it shows, so an addressal of an operator's answer, which
+		// the validator also accepts, stays off the card.
+		if _, ok := requestChanges[addressal.CommentID]; !ok {
+			continue
+		}
 		addressals = append(addressals, domain.SpecAddressalClaim{
 			CommentID: addressal.CommentID, Response: addressal.Response,
 		})

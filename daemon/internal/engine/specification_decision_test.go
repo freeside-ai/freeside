@@ -250,6 +250,47 @@ func TestSpecificationNeedsDecisionAnswerReinvokesSpecifierWithHumanFeedback(t *
 	}
 }
 
+// TestSpecificationAcceptsAnAddressalOfTheAnswer pins #3021: the prompt shows
+// an operator's answer as a human_feedback block carrying the Answer and Retry
+// command id and tells the specifier to name that id in its addressals, so a
+// specification that does so is accepted rather than refused as
+// invalid_output.
+func TestSpecificationAcceptsAnAddressalOfTheAnswer(t *testing.T) {
+	t.Parallel()
+	f := newSpecificationFixture(t, false, 4)
+	driver := f.newDriver(t)
+	firstID := specificationInvocationID("specification-run", 1)
+	secondID := specificationInvocationID("specification-run", 2)
+	if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{Decisions: decisionsFixture()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := specifyfake.Script(driver, secondID, 0, 0, specify.Output{Specification: &specify.Specification{
+		Summary: "The implementation plan is ready.", Body: "# Specification\n\nTarget both API versions.",
+		Addressals: []specify.Addressal{{
+			CommentID: "answer-question", Response: "Targeted the current and previous API versions.",
+		}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+		t.Fatalf("first reconcile = %+v, %v", result, err)
+	}
+	questionID := domain.ItemID("question-" + string(firstID))
+	f.answerQuestion(t, questionID, "answer-question",
+		"Target the current and immediately previous API versions.")
+	if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 1 {
+		t.Fatalf("reconcileOperatorFeedback = %d, %v", created, err)
+	}
+	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+		t.Fatalf("second reconcile = %+v, %v", result, err)
+	}
+	if _, err := f.run("implementation-run"); err != nil {
+		t.Fatalf("implementation after the specification addressed the answer = %v", err)
+	}
+}
+
 func TestSpecificationNeedsDecisionAtIterationLimitRecordsFailure(t *testing.T) {
 	t.Parallel()
 	f := newSpecificationFixture(t, false, 1)
@@ -771,5 +812,62 @@ func TestSpecificationAnswerReplaySurvivesApprovalRevision(t *testing.T) {
 	}
 	if got := f.taskName(t); got.Text != "Approved Specification" || got.Source != domain.DisplayNameSourceSpecification {
 		t.Fatalf("task name after approval = %+v", got)
+	}
+}
+
+// TestSpecificationRevisionCardOmitsAnAddressalOfAnEarlierAnswer pins #3021's
+// revision case: a revision run keeps the earlier answer as human_feedback, so
+// the specifier may address it beside the Request Changes comment. The
+// specification is accepted, and the revision card claims only the Request
+// Changes response, since the card pairs each claim with a comment it shows.
+func TestSpecificationRevisionCardOmitsAnAddressalOfAnEarlierAnswer(t *testing.T) {
+	t.Parallel()
+	f := newSpecificationFixture(t, true, 4)
+	driver := f.newDriver(t)
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0,
+		specify.Output{Decisions: sketchDecisionsFixture()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 2), 0, 0,
+		specify.Output{Specification: &specify.Specification{
+			Summary: "The implementation plan is ready.",
+			Body:    "# Sketch Importer\n\nShip the importer, daemon only.", Addressals: []specify.Addressal{},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 3), 0, 0,
+		specify.Output{Specification: &specify.Specification{
+			Summary: "The revised implementation plan is ready.",
+			Body:    "# Sketch Importer\n\nShip the importer, daemon only, and name its replay invariant.",
+			Addressals: []specify.Addressal{
+				{CommentID: "answer-1", Response: "Kept the importer daemon only."},
+				{CommentID: "revise-answered-spec", Response: "Named the replay invariant."},
+			},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	answerRounds(t, f, engine, 1)
+
+	approval, snapshot := f.item(t, "spec-approval-implementation-run-2")
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "revise-answered-spec", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: approval.ID, Action: domain.ActionRequestChanges, ItemVersion: approval.ItemVersion,
+			ArtifactDigests: approval.ArtifactDigests, Message: "Name the replay invariant.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAnswerReplayConverges(t, engine, "after request_changes")
+
+	revised, _ := f.item(t, "spec-approval-implementation-run-3")
+	if revised.Status != domain.StatusOpen {
+		t.Fatalf("revised approval status = %s, want open", revised.Status)
+	}
+	if revised.SpecRevision == nil || len(revised.SpecRevision.ClaimedAddressals) != 1 ||
+		revised.SpecRevision.ClaimedAddressals[0].CommentID != "revise-answered-spec" {
+		t.Fatalf("revision card addressals = %+v, want only the Request Changes response", revised.SpecRevision)
 	}
 }
