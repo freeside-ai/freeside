@@ -2264,7 +2264,7 @@ enum TaskTimelinePresentation {
             switch self {
             case .issue(let number, _): "Issue #\(number)"
             case .prompt: "Prompt"
-            case .specification(_, let revision): revision.map { "Specification rev \($0)" } ?? "Specification"
+            case .specification(_, let revision): revision.map { "Specification v\($0)" } ?? "Specification"
             case .pullRequest(let number, _): "Pull request #\(number)"
             case .noPullRequest: "No pull request yet"
             }
@@ -2276,7 +2276,7 @@ enum TaskTimelinePresentation {
             case .issue(let number, _): "Issue \(number)"
             case .prompt: title
             case .specification(_, let revision):
-                revision.map { "Specification revision \($0)" } ?? "Specification"
+                revision.map { "Specification version \($0)" } ?? "Specification"
             case .pullRequest(let number, _): "Pull request \(number)"
             case .noPullRequest: title
             }

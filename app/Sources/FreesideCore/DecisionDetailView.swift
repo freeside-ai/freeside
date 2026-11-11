@@ -1756,7 +1756,7 @@ struct DecisionDetailView: View {
     }
 
     /// The specification as one bordered item under its keyword (frame
-    /// 5.1): which revision the daemon bound to this approval, and the
+    /// 5.1): which version the daemon bound to this approval, and the
     /// links that open it. A revision's diff is a second link on the same
     /// item, not a second item (frame 7.2).
     @ViewBuilder
@@ -1766,7 +1766,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         if let specification = Self.specificationClaim(in: item) {
             let title =
-                Self.specificationRevisionIteration(in: item).map { "Revision \($0)" }
+                Self.specificationRevisionIteration(in: item).map { "Version \($0)" }
                 ?? "Specification"
             let priorIteration = Self.priorSpecRevisionIteration(in: item)
             keywordSection("Specification") {
@@ -1798,7 +1798,7 @@ struct DecisionDetailView: View {
                         if let priorIteration {
                             readerLink(
                                 "Open Diff", reader: .diff,
-                                accessibilityLabel: "Open diff from revision \(priorIteration)",
+                                accessibilityLabel: "Open diff from version \(priorIteration)",
                                 rendersInteractiveControls: rendersInteractiveControls)
                         }
                     }
@@ -1836,7 +1836,7 @@ struct DecisionDetailView: View {
             if let priorIteration {
                 readerLink(
                     "Open Diff", reader: .diff,
-                    accessibilityLabel: "Open diff from revision \(priorIteration)",
+                    accessibilityLabel: "Open diff from version \(priorIteration)",
                     rendersInteractiveControls: rendersInteractiveControls)
             }
         }
@@ -1932,7 +1932,7 @@ struct DecisionDetailView: View {
             } else {
                 UnavailableStateView(
                     glyph: .inbox, title: "Diff unavailable",
-                    description: "This is the first specification revision.")
+                    description: "This is the first version of the specification.")
             }
         }
     }
@@ -2953,12 +2953,12 @@ struct DecisionDetailView: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         layout {
-            // A revised specification names its revision beside the type
-            // (frame 7.2); a first revision has nothing to tell apart.
+            // A revised specification names its version beside the type
+            // (frame 7.2); a first version has nothing to tell apart.
             if item._type == .spec_approval, Self.priorSpecRevisionIteration(in: item) != nil,
                 let iteration = Self.specificationRevisionIteration(in: item)
             {
-                StateChip(label: "Revision \(iteration)", color: .inkDim)
+                StateChip(label: "Version \(iteration)", color: .inkDim)
             }
             if AttentionDisplay.showsLifecycleBadge(item.status) {
                 StatusBadge(status: item.status)

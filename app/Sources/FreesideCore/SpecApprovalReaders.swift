@@ -18,9 +18,9 @@ enum SpecApprovalReader: String, Identifiable {
 }
 
 extension SpecApprovalReader {
-    /// The revision a reader shows, as the chip its header carries.
+    /// The version a reader shows, as the chip its header carries.
     static func revisionChip(_ revision: Int?) -> StateChip? {
-        revision.map { StateChip(label: "Revision \($0)", cut: .ink) }
+        revision.map { StateChip(label: "Version \($0)", cut: .ink) }
     }
 }
 

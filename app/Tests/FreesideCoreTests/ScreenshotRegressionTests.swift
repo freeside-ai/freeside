@@ -1449,7 +1449,7 @@
                     "spec_approval-superseded",
                     AttentionFixtures.closedByDaemon(
                         specification, id: "item-spec_approval-superseded", cause: .superseded, after: 2400,
-                        reason: "Superseded by revision 2 of the specification.", successor: specification.item.id)
+                        reason: "Superseded by version 2 of the specification.", successor: specification.item.id)
                 ),
                 ("system_health-resolved", AttentionFixtures.resolvedSystemHealth()),
                 (

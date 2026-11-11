@@ -144,7 +144,7 @@ import Testing
         #expect(
             links(page, history: page.history).contains(.specification(digest: approvedDigest, revision: nil)))
         #expect(SpecApprovalReader.revisionChip(nil) == nil)
-        #expect(SpecApprovalReader.revisionChip(revision)?.label == "Revision \(revision)")
+        #expect(SpecApprovalReader.revisionChip(revision)?.label == "Version \(revision)")
     }
 
     /// VoiceOver reads each part with somewhere to go as a link naming
@@ -155,7 +155,7 @@ import Testing
             (.issue(number: 712, url: url), "Issue #712", "Issue 712", "Opens on GitHub"),
             (.prompt(digest: promptDigest), "Prompt", "Prompt", "Opens the prompt reader"),
             (
-                .specification(digest: approvedDigest, revision: 2), "Specification rev 2", "Specification revision 2",
+                .specification(digest: approvedDigest, revision: 2), "Specification v2", "Specification version 2",
                 "Opens the specification reader"
             ),
             (
@@ -299,7 +299,7 @@ import Testing
         #expect(specification.framing.digestLabel == "Daemon-Bound Digest")
         #expect(specification.eyebrow == "Specification reader")
         #expect(specification.title == "Specification")
-        #expect(specification.chip?.label == "Revision 2")
+        #expect(specification.chip?.label == "Version 2")
         #expect(
             SpecificationReaderView(text: "# Spec", mediaType: .text_sol_markdown, digest: approvedDigest).framing
                 == .specification)

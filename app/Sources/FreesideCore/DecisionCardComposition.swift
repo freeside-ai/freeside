@@ -1768,7 +1768,7 @@ struct DecisionChangeRow: View {
     }
 
     init(specification diff: Components.Schemas.SpecDiff, sinceRevision prior: Int) {
-        keyword = "Change Since Revision \(prior)"
+        keyword = "Change Since Version \(prior)"
         counts = .init(added: diff.lines_added, removed: diff.lines_removed)
         measure = .lines
     }
