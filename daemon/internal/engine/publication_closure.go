@@ -22,10 +22,13 @@ import (
 // The source-issue-closure proposal step (#1419 Part D, plan revision 68). After
 // the author run and before the candidate body is composed, the engine admits a
 // source_issue_closure proposal for a v2 record with a closable source, then
-// binds the merge it observes now: under the default policy it records the
-// policy approval at publication and opens no card (a daemon_fallback gets the
-// non-holding notice instead); under the human gate it opens the effect_proposal
-// card and records no approval. The publisher, not this step, decides how the
+// binds the merge it observes now. Under the default policy the proposal is a
+// resolving policy_default one the propose site is never asked about (#3023):
+// the step records the policy approval at publication and opens no card. Under
+// the human gate the site proposes the flag and the step opens the
+// effect_proposal card and records no approval. Checkpoints written before
+// #3023 can still carry a default-policy propose_site answer, which records the
+// policy approval, or a daemon_fallback, which opens the non-holding notice. The publisher, not this step, decides how the
 // pull request references the issue; this step hands it the instance id and the
 // bound approval or open card.
 
@@ -37,7 +40,8 @@ const productionClosureCheckpointVersion = "1"
 // human gate for source-issue closures (mirrored in
 // publish.parseSourceIssueClosureHumanGate; the domain-change ban keeps the
 // constant out of a shared package, and each consumer reads the run's stored
-// policy itself). Absent or false is the default policy-approval mode.
+// policy itself). Absent or false is the default mode: always close, approved
+// by policy, without asking the propose site.
 const policySourceIssueClosureGate = "gates.source_issue_closure"
 
 // closureLaterPublicationReason closes an earlier publication's closure card
@@ -70,8 +74,8 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 // the seal left open, such as an external-review successor's card. A stored
 // row is untrusted at reconstruction: HasProposal reports whether a proposal
 // was admitted, InstanceID names it, and Origin selects the default policy
-// binding (a propose_site records the approval, a daemon_fallback opens the
-// notice). HasProposal == (InstanceID != "") is the invariant. Reason names a
+// binding (a policy_default or propose_site records the approval, a
+// daemon_fallback opens the notice). HasProposal == (InstanceID != "") is the invariant. Reason names a
 // daemon_fallback's cause in fixed text (proposeClosure); a row written before
 // causes were recorded carries none, and an empty Reason stays valid.
 type productionClosureCheckpoint struct {
@@ -265,10 +269,14 @@ func closureCallFallbackCause(proposed inference.ProposedClosure) string {
 	}
 }
 
-// proposeClosure asks the propose site whether the pull request should close the
+// proposeClosure decides the closure flag. Under the default policy
+// (gates.source_issue_closure absent or false) the policy itself sets a
+// resolving flag and the site is not asked (#3023): no input is built, no
+// provider dispatch is claimed, and inference need not be available. Under the
+// human gate it asks the propose site whether the pull request should close the
 // source issue. An unavailable site, an input-build fault, a call error, or a
-// returned fallback is a daemon_fallback proposal that never resolves and never
-// holds; its reason names the cause in fixed text. Only a clean answer carries a
+// returned fallback is a daemon_fallback proposal that never resolves; its
+// reason names the cause in fixed text. Only a clean answer carries a
 // propose_site origin and its resolve flag. A source-issue checkpoint fault
 // propagates for retry, as it does in authoring, rather than fixing a
 // permanent fallback for a store fault.
@@ -281,6 +289,9 @@ func (w *productionPublicationWorkflow) proposeClosure(
 	checkoutDir string,
 	report []byte,
 ) (domain.ClosureFlagOrigin, bool, string, error) {
+	if !parseSourceIssueClosureHumanGate(binding.resolvedPolicy) {
+		return domain.ClosureFlagOriginPolicyDefault, true, "", nil
+	}
 	if w.inference == nil || !w.inference.SupportsSite(inference.PublicationAuthorProposeSiteID) {
 		return domain.ClosureFlagOriginDaemonFallback, false, closureCauseSiteUnavailable, nil
 	}
@@ -379,8 +390,9 @@ func isClosureGateRejection(err error) bool {
 
 // bindClosureMerge binds the closure to the merge observed now. Under the human
 // gate the effect_proposal card is (re)opened and holds the pull request; under
-// the default policy a propose_site records the policy approval and opens no
-// card, and a daemon_fallback opens the non-holding notice. Every call is
+// the default policy a policy_default (or a propose_site checkpoint stored
+// before #3023) records the policy approval and opens no card, and a stored
+// daemon_fallback opens the non-holding notice. Every call is
 // idempotent for an unchanged merge and supersedes or re-records for a moved one.
 func (w *productionPublicationWorkflow) bindClosureMerge(
 	ctx context.Context,
@@ -415,7 +427,7 @@ func (w *productionPublicationWorkflow) bindClosureMergeOnce(
 		return err
 	}
 	switch closure.Origin {
-	case domain.ClosureFlagOriginProposeSite:
+	case domain.ClosureFlagOriginPolicyDefault, domain.ClosureFlagOriginProposeSite:
 		return w.store.Write(ctx, func(tx *store.WriteTx) error {
 			// The instance id is decoded from an untrusted stored checkpoint. Re-bind
 			// it to this run before recording an approval, so a restored or corrupted
@@ -577,7 +589,8 @@ func readClosureCheckpoint(
 
 // ProductionClosureAnswer is the source-issue-closure answer a publication
 // recorded. HasProposal is false when no proposal was made (no closable
-// source). Origin is the admitted proposal's origin, and Reason a
+// source). Origin is the admitted proposal's origin (policy_default for a
+// default-policy close), and Reason a
 // daemon_fallback's fixed-text cause, empty for a row written before causes
 // were recorded.
 type ProductionClosureAnswer struct {
@@ -621,7 +634,7 @@ func ProductionPublicationClosure(
 
 // validateClosureCheckpoint fails closed unless the decoded row matches the run
 // identity and holds the proposal invariant: HasProposal == (InstanceID != ""),
-// and a proposal carries one of the two valid origins.
+// and a proposal carries a valid origin.
 func validateClosureCheckpoint(got, want productionClosureCheckpoint) error {
 	switch {
 	case got.Version != productionClosureCheckpointVersion:
@@ -633,7 +646,8 @@ func validateClosureCheckpoint(got, want productionClosureCheckpoint) error {
 	case got.HasProposal != (got.InstanceID != ""):
 		return fmt.Errorf("closure checkpoint proposal/instance state inconsistent: %w", domain.ErrParentKeyMismatch)
 	case got.HasProposal && got.Origin != domain.ClosureFlagOriginProposeSite &&
-		got.Origin != domain.ClosureFlagOriginDaemonFallback:
+		got.Origin != domain.ClosureFlagOriginDaemonFallback &&
+		got.Origin != domain.ClosureFlagOriginPolicyDefault:
 		return fmt.Errorf("closure checkpoint origin %q: %w", got.Origin, domain.ErrParentKeyMismatch)
 	case !got.HasProposal && got.Origin != "":
 		return fmt.Errorf("closure checkpoint carries an origin without a proposal: %w", domain.ErrParentKeyMismatch)

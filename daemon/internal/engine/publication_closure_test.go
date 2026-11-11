@@ -88,6 +88,11 @@ func TestValidateClosureCheckpoint(t *testing.T) {
 	if err := validateClosureCheckpoint(proposal, want); err != nil {
 		t.Fatalf("valid proposal checkpoint rejected: %v", err)
 	}
+	policyDefault := proposal
+	policyDefault.Origin = domain.ClosureFlagOriginPolicyDefault
+	if err := validateClosureCheckpoint(policyDefault, want); err != nil {
+		t.Fatalf("valid policy_default checkpoint rejected: %v", err)
+	}
 	var legacy productionClosureCheckpoint
 	if err := json.Unmarshal([]byte(`{"version":"1","run_id":"run-x","publication_id":"pub-x","has_proposal":true,"instance_id":"proposal-1","origin":"propose_site"}`), &legacy); err != nil {
 		t.Fatal(err)

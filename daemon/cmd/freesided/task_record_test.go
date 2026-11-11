@@ -923,6 +923,11 @@ func TestTaskRecordReportsClosure(t *testing.T) {
 			`,"has_proposal":true,"instance_id":"proposal-1","origin":"propose_site"`,
 			`{"origin":"propose_site","fallback_cause":null}`,
 		},
+		{
+			"default policy close", kind,
+			`,"has_proposal":true,"instance_id":"proposal-1","origin":"policy_default"`,
+			`{"origin":"policy_default","fallback_cause":null}`,
+		},
 		{"no proposal made", kind, `,"has_proposal":false`, `{"origin":null,"fallback_cause":null}`},
 		{"unreadable row", "not_a_closure_checkpoint", "", ""},
 	} {
