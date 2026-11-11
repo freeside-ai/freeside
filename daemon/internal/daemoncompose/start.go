@@ -126,6 +126,10 @@ type ControlRouteInputs struct {
 	// CommitWorkflowClosure commits a task's workflow closure through the
 	// engine, or directly when no engine runs.
 	CommitWorkflowClosure func(context.Context, domain.TaskID, func() error) error
+	// CommitTaskStop commits a task's Stop through the engine, ordered
+	// against invocation launch as a client's Stop is, or directly when no
+	// engine runs.
+	CommitTaskStop func(context.Context, domain.TaskID, func() error) error
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -400,6 +404,12 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 				return commit()
 			}
 			return workflow.CommitTaskWorkflowClosure(ctx, id, commit)
+		},
+		CommitTaskStop: func(ctx context.Context, id domain.TaskID, commit func() error) error {
+			if workflow == nil {
+				return commit()
+			}
+			return workflow.CommitTaskStop(ctx, id, commit)
 		},
 	})
 	var fakeSched *scheduler.Scheduler

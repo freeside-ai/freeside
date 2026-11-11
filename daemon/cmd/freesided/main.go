@@ -146,6 +146,9 @@ func main() {
 		case "abandon":
 			runAbandonMain(os.Args[2:])
 			return
+		case "stop":
+			runStopMain(os.Args[2:])
+			return
 		case "raise-item":
 			runRaiseItemMain(os.Args[2:])
 			return

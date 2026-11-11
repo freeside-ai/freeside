@@ -117,6 +117,9 @@ type (
 		// opens the store itself never has one.
 		credentialIntegrityProbe daemoncompose.CredentialIntegrityProbe
 		commitWorkflowClosure    func(context.Context, domain.TaskID, func() error) error
+		// commitTaskStop orders a Stop against invocation launch, the guard
+		// a client's Stop runs under.
+		commitTaskStop func(context.Context, domain.TaskID, func() error) error
 		// usageCollection is the running daemon's usage collection. A
 		// command that opens the store itself never has one.
 		usageCollection *usagecollect.Coordinator

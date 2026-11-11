@@ -392,6 +392,10 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 			_, err := runReattemptCommand(ctx, reattemptCommandConfig{DBPath: dbPath, ParentRunID: "run-1", Reason: "Retry"})
 			return err
 		},
+		"stop": func() error {
+			_, err := runStopCommand(ctx, stopCommandConfig{DBPath: dbPath, TaskID: "task-1"})
+			return err
+		},
 		"comprehension measures": func() error { return runComprehensionCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
 		"comprehension defect": func() error {
 			return runComprehensionCommand(ctx, []string{"record-defect", "-db", dbPath, "-item", "item-1", "-claim", digest, "-reason", "reason"}, io.Discard, io.Discard)
