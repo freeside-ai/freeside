@@ -651,10 +651,14 @@ func submitProductionRunTx(ctx context.Context, tx *store.WriteTx, spec Producti
 		if !runCreated {
 			return nil
 		}
+		// The submission and the task start it records happen at one instant,
+		// so the timeline's same-instant tie-break, not microseconds between
+		// two clock reads, orders the start below its first submission.
+		submittedAt := time.Now().UTC()
 		observedInvocation := invocationID
 		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: spec.RunID, Kind: domain.MilestoneRunSubmitted,
-			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
+			InvocationID: &observedInvocation, RecordedAt: submittedAt,
 		}); err != nil {
 			return err
 		}
@@ -668,10 +672,10 @@ func submitProductionRunTx(ctx context.Context, tx *store.WriteTx, spec Producti
 				if err != nil {
 					return err
 				}
-				return tx.AdmitTaskStart(ctx, spec.RunID, time.Now().UTC(), cap)
+				return tx.AdmitTaskStart(ctx, spec.RunID, submittedAt, cap)
 			}
 		}
-		return tx.RecordTaskStart(ctx, spec.RunID, time.Now().UTC())
+		return tx.RecordTaskStart(ctx, spec.RunID, submittedAt)
 	}()
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
