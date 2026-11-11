@@ -352,3 +352,16 @@ func (tx *ComprehensionReadTx) ListDecidedCommands(ctx context.Context) ([]Decid
 	}
 	return decided, nil
 }
+
+// decodeComprehensionRows reads every comprehension event and defect for the
+// stored-row check (stored_rows.go) and discards them. It lives here because
+// the advisory-segregation guard lets only this file name the
+// observation-only reader.
+func decodeComprehensionRows(ctx context.Context, s *Store) error {
+	return s.ReadComprehension(ctx, func(tx *ComprehensionReadTx) error {
+		if err := discard(tx.ListComprehensionEvents(ctx)); err != nil {
+			return err
+		}
+		return discard(tx.ListComprehensionDefects(ctx))
+	})
+}
