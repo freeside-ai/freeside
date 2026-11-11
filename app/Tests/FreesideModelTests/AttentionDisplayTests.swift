@@ -19,6 +19,63 @@ import Testing
         }
     }
 
+    /// The quota failure's card shows each offer's usage reading (#3030),
+    /// one line per offer in the daemon's order, in the words the Choose
+    /// Another Agent dialog uses, so the card and the dialog agree.
+    @Test func otherAgentsRowCarriesEachOffersReading() throws {
+        let now = Date(timeIntervalSince1970: 1_767_400_000)
+        let locale = Locale(identifier: "en_US_POSIX")
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        let pools = UsageFixtures.alternatesUsagePools(now: now)
+        var item = try #require(
+            AttentionFixtures.alternatesInbox().first { $0.item.id == "item-execution_failure" }
+        ).item
+        let unlisted = "enrollment-no-pool"
+        item.alternate_agents?.append(
+            .init(
+                enrollment: unlisted, pool: "pool-unlisted", harness: .claude_code, model: "claude-opus",
+                qualification: .different_pool))
+
+        let rows = AttentionDisplay.cardFacts(item, now: now, pools: pools, locale: locale, timeZone: utc)
+            .filter { $0.label == "Other Agents" }
+        let row = try #require(rows.first)
+        #expect(rows.count == 1)
+        guard case .offers(let drawn) = row.form else {
+            Issue.record("Other Agents draws as \(row.form), not one block per offer")
+            return
+        }
+        #expect(drawn.map { "\($0.enrollment) · \($0.reading)" } == row.value.components(separatedBy: "\n"))
+
+        let lines = row.value.split(separator: "\n").map(String.init)
+        let offers = try #require(item.alternate_agents)
+        #expect(lines.count == offers.count)
+        for (line, offer) in zip(lines, offers) {
+            let reading =
+                AgentChoiceDisplay.reading(
+                    for: offer.enrollment, pools: pools, now: now, locale: locale, timeZone: utc)
+                ?? "no usage reading"
+            #expect(line == "\(offer.enrollment) · \(reading)")
+        }
+        let readAt = FreesideFormat.shortTime(
+            now.addingTimeInterval(-300), now: now, locale: locale, timeZone: utc)
+        #expect(lines[0] == "\(UsageFixtures.readingSecondEnrollmentID) · 5-hour: 65% left · read \(readAt)")
+        #expect(lines[1].hasPrefix("\(UsageFixtures.staleEnrollmentID) · "))
+        #expect(lines[1].contains(" · stale since "))
+        #expect(lines[2].hasPrefix("\(UsageFixtures.unsupportedCollectorID) · "))
+        #expect(lines[2].contains("unsupported"))
+        #expect(lines[3] == "\(unlisted) · no usage reading")
+    }
+
+    /// A failure with no offers keeps no Other Agents row, pools or not.
+    @Test func noOffersMeansNoOtherAgentsRow() {
+        let now = Date(timeIntervalSince1970: 1_767_400_000)
+        var item = AttentionFixtures.quotaFailure().item
+        item.alternate_agents = []
+        let facts = AttentionDisplay.cardFacts(
+            item, now: now, pools: UsageFixtures.alternatesUsagePools(now: now))
+        #expect(!facts.contains { $0.label == "Other Agents" })
+    }
+
     @Test func externalReviewDecisionNamesItsEffects() {
         let item = AttentionFixtures.routedReviewDispute().item
         #expect(AttentionDisplay.ask(item) == "How should these external review findings be handled?")

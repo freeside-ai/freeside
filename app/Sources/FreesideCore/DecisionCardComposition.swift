@@ -1119,9 +1119,14 @@ enum DecisionDisclosure: Hashable {
 ///
 /// `AttentionDisplay.cardFacts` carries coordinates only (a stage, a run, a
 /// round, an identifier), so on a type that folds them every one of its rows
-/// folds. A notice is not a coordinate: the commit-plan notice says something
-/// about the candidate the operator is deciding on, so it stays visible on
-/// every type.
+/// folds. The Other Agents row also carries each offer's usage reading, read
+/// from `pools`; its type doesn't fold. A notice is not a coordinate: the
+/// commit-plan notice says something about the candidate the operator is
+/// deciding on, so it stays visible on every type.
+///
+/// `pools`, `locale`, and `timeZone` take no defaults here, unlike
+/// `cardFacts`, so a card that places its facts names the pools it reads
+/// rather than dropping the readings by omission.
 struct DecisionFactPlacement: Equatable {
     static let foldedTitle = "Run and Binding Details"
 
@@ -1131,9 +1136,13 @@ struct DecisionFactPlacement: Equatable {
     init(
         _ item: Components.Schemas.AttentionItem,
         includesCommitPlan: Bool,
-        now: Date
+        now: Date,
+        pools: [Components.Schemas.UsagePoolSnapshot],
+        locale: Locale,
+        timeZone: TimeZone
     ) {
-        let facts = AttentionDisplay.cardFacts(item, now: now)
+        let facts = AttentionDisplay.cardFacts(
+            item, now: now, pools: pools, locale: locale, timeZone: timeZone)
         let notices: [AttentionDisplay.FactRow] =
             includesCommitPlan
             ? [item.commit_plan_notice?.value1].compactMap { $0 }.map {

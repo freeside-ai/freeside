@@ -928,7 +928,12 @@ struct DecisionDetailView: View {
         return DecisionRecordedContext(
             hasReason: DecisionCardComposition.reason(for: item) != nil,
             hasRunDetails: places(.foldedFacts, in: composition.foldedModules)
-                && !DecisionFactPlacement(item, includesCommitPlan: false, now: now).folded.isEmpty,
+                // Only which rows fold is read here, which no reading's
+                // wording changes, so the process locale and zone serve.
+                && !DecisionFactPlacement(
+                    item, includesCommitPlan: false, now: now, pools: usagePools, locale: .current,
+                    timeZone: .current
+                ).folded.isEmpty,
             hasReviewYield: places(.yieldChart, in: composition.foldedModules)
                 && (graphics.diminishingYield != nil || DecisionYieldPresentation(item) != nil),
             readingRows: Self.readingRows(item, unavailable: actionRanking(item).unavailable),
@@ -1054,11 +1059,15 @@ struct DecisionDetailView: View {
             // Drawn inside Recorded Context, which is already the fold, so
             // the rows sit under their keyword rather than a fold of their
             // own (#2607).
-            let placement = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
-            if !placement.folded.isEmpty {
-                factSection(DecisionFactPlacement.foldedTitle) {
-                    ForEach(placement.folded) { fact in
-                        factRow(fact)
+            TimeFormatEnvironment { locale, timeZone in
+                let placement = DecisionFactPlacement(
+                    item, includesCommitPlan: false, now: now, pools: usagePools, locale: locale,
+                    timeZone: timeZone)
+                if !placement.folded.isEmpty {
+                    factSection(DecisionFactPlacement.foldedTitle) {
+                        ForEach(placement.folded) { fact in
+                            factRow(fact)
+                        }
                     }
                 }
             }
@@ -1474,26 +1483,31 @@ struct DecisionDetailView: View {
         includesCommitPlan: Bool,
         drawsFold: Bool
     ) -> some View {
-        let placement = DecisionFactPlacement(
-            item, includesCommitPlan: includesCommitPlan, now: now)
-        // The diff draws as the Change row (R28); the rows around it keep
-        // the Facts section.
-        let change = item.diff_stats?.value1
-        let rows = placement.visible.filter {
-            change == nil || $0.label != AttentionDisplay.diffFactLabel
-        }
-        if let change, placement.visible.count != rows.count {
-            DecisionChangeRow(diff: change)
-        }
-        if !rows.isEmpty {
-            factSection(DecisionCardComposition.factsKeyword(for: item._type)) {
-                ForEach(rows) { fact in
-                    factRow(fact)
+        // The Other Agents row prints reading times, so the facts are built
+        // with the locale and zone installed where they draw.
+        TimeFormatEnvironment { locale, timeZone in
+            let placement = DecisionFactPlacement(
+                item, includesCommitPlan: includesCommitPlan, now: now, pools: usagePools,
+                locale: locale, timeZone: timeZone)
+            // The diff draws as the Change row (R28); the rows around it keep
+            // the Facts section.
+            let change = item.diff_stats?.value1
+            let rows = placement.visible.filter {
+                change == nil || $0.label != AttentionDisplay.diffFactLabel
+            }
+            if let change, placement.visible.count != rows.count {
+                DecisionChangeRow(diff: change)
+            }
+            if !rows.isEmpty {
+                factSection(DecisionCardComposition.factsKeyword(for: item._type)) {
+                    ForEach(rows) { fact in
+                        factRow(fact)
+                    }
                 }
             }
-        }
-        if drawsFold {
-            foldedFacts(placement)
+            if drawsFold {
+                foldedFacts(placement)
+            }
         }
     }
 
@@ -3417,6 +3431,23 @@ struct DecisionDetailView: View {
                 Text(fact.value)
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.ink)
+            }
+        case .offers(let offers):
+            // One block per offer, the enrollment over its reading, so a
+            // reading that wraps on the phone stays with its own offer.
+            StackedFact(label: fact.label) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(offers.indices, id: \.self) { index in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(offers[index].enrollment)
+                                .font(FreesideFont.monoValue)
+                            Text(offers[index].reading)
+                                .font(FreesideFont.cardBody)
+                        }
+                        .foregroundStyle(Color.ink)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
             }
         }
     }
