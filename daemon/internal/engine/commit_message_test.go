@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
 
@@ -79,7 +80,7 @@ func TestValidateProductionReplayOptionsCommitMessageCompatibility(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := []byte("# Preserve Replay Messages\n")
+	spec := []byte("# Preserve Replay Messages\n\nA run imported before an upgrade must still publish.\n")
 	specDigest := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	publication := ProductionPublication{
 		CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
@@ -97,10 +98,16 @@ func TestValidateProductionReplayOptionsCommitMessageCompatibility(t *testing.T)
 		},
 		resolvedPolicy: resolved, profile: profile,
 	}
-	current := baseOptions
-	current.CommitMessage = FallbackCommitMessage(FallbackCommitMessageInput{
+	derivation := FallbackCommitMessageInput{
 		Spec: spec, RunID: runID, SpecDigest: specDigest, Policy: policy,
-	})
+	}
+	current := baseOptions
+	current.CommitMessage = FallbackCommitMessage(derivation)
+	v1 := baseOptions
+	v1.CommitMessage = fallbackCommitMessageV1(derivation)
+	if v1.CommitMessage == current.CommitMessage {
+		t.Fatalf("fixture spec yields no reason, so v1 equals v2:\n%s", v1.CommitMessage)
+	}
 	for _, tc := range []struct {
 		name    string
 		options importer.Options
@@ -108,6 +115,7 @@ func TestValidateProductionReplayOptionsCommitMessageCompatibility(t *testing.T)
 	}{
 		{"legacy empty message", baseOptions, false},
 		{"current derived message", current, false},
+		{"v1 derived message", v1, false},
 		{"tampered message", func() importer.Options {
 			tampered := current
 			tampered.CommitMessage = "Tampered message"
@@ -218,5 +226,145 @@ func TestFallbackCommitMessageFloorSanitizesAndBoundsRunTrace(t *testing.T) {
 					runID, lineNumber+1, len([]byte(line)), line)
 			}
 		}
+	}
+}
+
+func fallbackCommitMessageGoldenInput() FallbackCommitMessageInput {
+	issue := 214
+	return FallbackCommitMessageInput{
+		Spec: []byte("# Retry Stalled Webhook Deliveries\n\n" +
+			"Webhook deliveries that time out are never retried, so a short provider\n" +
+			"outage silently drops events. Retrying with backoff recovers them without\n" +
+			"operator action. The retry budget is configurable.\n\n" +
+			"## Acceptance\n\n- A timed-out delivery is retried.\n"),
+		BoundIssue: &issue,
+		RunID:      "run-webhook-retry",
+		SpecDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		Policy:     importer.Policy{MessageRuleset: domain.MessageRulesetGitHub1},
+	}
+}
+
+// TestFallbackCommitMessageGoldens pins both recipes for one specification
+// with a reason paragraph. The v1 golden was captured from the pre-v2 code
+// and must never change: publication replay accepts runs imported under it.
+func TestFallbackCommitMessageGoldens(t *testing.T) {
+	t.Parallel()
+	in := fallbackCommitMessageGoldenInput()
+	golden.Assert(t, "fallback_commit_message_v1", []byte(fallbackCommitMessageV1(in)))
+	golden.Assert(t, "fallback_commit_message_v2", []byte(FallbackCommitMessage(in)))
+	for _, message := range []string{fallbackCommitMessageV1(in), FallbackCommitMessage(in)} {
+		if !FallbackCommitMessageMatches(in, message) {
+			t.Errorf("own derivation not matched:\n%s", message)
+		}
+	}
+	if FallbackCommitMessageMatches(in, FallbackCommitMessage(in)+"\n") {
+		t.Error("altered message matched")
+	}
+}
+
+func TestFallbackSpecificationReason(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("word ", 70)
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"plain paragraph", "Deliveries are dropped on timeout.", "Deliveries are dropped on timeout."},
+		{"joined lines", "Deliveries are\ndropped on timeout.\n\nMore.", "Deliveries are dropped on timeout."},
+		{"crlf", "Deliveries drop.\r\nOn timeout.\r\n", "Deliveries drop. On timeout."},
+		{"two-sentence cut", "First one. Second one! Third one?", "First one. Second one!"},
+		{"lowercase after period continues", "Use e.g. the retry path. Then stop.", "Use e.g. the retry path. Then stop."},
+		{"over-length pair keeps first", "First one. Then " + long + "end.", "First one."},
+		{"over-length first sentence", long + "end. Short.", ""},
+		{"stops at a list", "Reason here.\n- item", "Reason here."},
+		{"stops at a heading", "Reason here.\n## Next", "Reason here."},
+		{"indented continuation", "Reason\n    continues here.", "Reason continues here."},
+		{"title only", "", ""},
+		{"bullet first", "- item", ""},
+		{"ordered first", "1. item", ""},
+		{"paren ordered first", "2) item", ""},
+		{"heading first", "## Why", ""},
+		{"fence first", "```go\ncode\n```", ""},
+		{"tilde fence first", "~~~\ncode\n~~~", ""},
+		{"quote first", "> quoted", ""},
+		{"table first", "| a | b |", ""},
+		{"html first", "<div>x</div>", ""},
+		{"indented code first", "    code()", ""},
+		{"tab code first", "\tcode()", ""},
+		{"thematic break first", "***", ""},
+		{"setext heading", "Not prose\n---", ""},
+		{"issue reference", "Breaks #12 again.", ""},
+		{"close directive", "Fixes #3 for good.", ""},
+		{"cross-repo reference", "Mirrors owner/repo#4 now.", ""},
+		{"gh reference", "Mirrors GH-5 now.", ""},
+		{"mention", "Asked by @someone today.", ""},
+		{"url", "See https://example.com for more.", ""},
+		{"www host", "See www.example.com for more.", ""},
+		{"www after underscore", "See _www.example.com for more.", ""},
+		// A word longer than a line would be hard-split by wrapping, and
+		// the split could start a link token the screen never saw.
+		{"split www", "Q" + strings.Repeat("q", 71) + "www.example.com now.", ""},
+		{"split gh reference", "Q" + strings.Repeat("q", 71) + "GH-12 now.", ""},
+		{"split hex token", "Q" + strings.Repeat("q", 71) + "deadbeef12 now.", ""},
+		{"line-length word kept", strings.Repeat("Q", 72) + " stays.", strings.Repeat("Q", 72) + " stays."},
+		{"hex token", "Reverts deadbeef1 today.", ""},
+		{"escaped reference", "Breaks &#35;12 again.", ""},
+		{"secret", "Token ghp_" + strings.Repeat("x", 36) + " leaked.", ""},
+		{"publisher marker", "Writes freeside:marker text.", ""},
+		{"control character", "Bell \a rings.", ""},
+		{"trailer", "Signed-off-by: someone.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spec := "# Title\n\n" + tc.body
+			if got := fallbackSpecificationReason([]byte(spec)); got != tc.want {
+				t.Fatalf("reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFallbackCommitMessageDropsReasonFailingWholeMessage covers a reason
+// that passes its own screen but fails in the assembled message: the
+// result is the v1 message, never the rewrite floor.
+func TestFallbackCommitMessageDropsReasonFailingWholeMessage(t *testing.T) {
+	t.Parallel()
+	// Wrapping puts the trailer word at a line start, where the github/1
+	// trailer rule matches; on the reason's single line it does not.
+	trailer := "Z" + strings.Repeat("z", 69) + " Signed-off-by: someone."
+	base := FallbackCommitMessageInput{
+		RunID: "run-9", SpecDigest: "sha256:spec",
+		Policy: importer.Policy{MessageRuleset: domain.MessageRulesetGitHub1},
+	}
+	for _, tc := range []struct {
+		name   string
+		reason string
+		policy func(v1 string) importer.Policy
+	}{
+		{"wrapped trailer", trailer, func(string) importer.Policy { return base.Policy }},
+		{"byte cap", "A reason that fits alone.", func(v1 string) importer.Policy {
+			return importer.Policy{
+				MessageRuleset:        domain.MessageRulesetGitHub1,
+				MaxCommitMessageBytes: len(v1) + 10,
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := base
+			in.Spec = []byte("# Keep The Floor Away\n\n" + tc.reason + "\n")
+			if fallbackSpecificationReason(in.Spec) != tc.reason {
+				t.Fatalf("fixture reason was screened out on its own")
+			}
+			in.Policy = tc.policy(fallbackCommitMessageV1(in))
+			v1 := fallbackCommitMessageV1(in)
+			if strings.HasPrefix(v1, "REWRITE ME") {
+				t.Fatalf("fixture v1 is the floor:\n%s", v1)
+			}
+			if got := FallbackCommitMessage(in); got != v1 {
+				t.Fatalf("message = %q, want v1 %q", got, v1)
+			}
+		})
 	}
 }
