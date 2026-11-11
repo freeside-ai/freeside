@@ -305,6 +305,91 @@ func TestVerificationInvocationAbsenceFailsClosed(t *testing.T) {
 	}
 }
 
+// TestVerificationInvocationContainersAbsence: the operator-confirmed proof
+// passes an unjoined record once its containers are gone, where the strict
+// proof refuses it as unjoined, and fails closed on everything else the
+// strict proof does.
+func TestVerificationInvocationContainersAbsence(t *testing.T) {
+	t.Parallel()
+	unjoined := func(t *testing.T, owned *VerificationOwnership) Label {
+		t.Helper()
+		owner, err := newOwnershipLabel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, finish, err := owned.begin(t.Context(), verificationOwner{Version: 1, TaskID: "task", RunID: "run", InvocationID: "verify"}, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := finish(false); err != nil {
+			t.Fatal(err)
+		}
+		return owner
+	}
+	for _, tc := range []struct {
+		name    string
+		arrange func(t *testing.T, owned *VerificationOwnership, runtime *fakeRuntime, dir string)
+		proved  bool
+	}{
+		{"unjoined-containers-gone", func(t *testing.T, owned *VerificationOwnership, _ *fakeRuntime, _ string) {
+			unjoined(t, owned)
+		}, true},
+		{"container-present", func(t *testing.T, owned *VerificationOwnership, runtime *fakeRuntime, _ string) {
+			owner := unjoined(t, owned)
+			runtime.ctrs["owned"] = &fakeCtr{spec: ContainerSpec{Labels: []Label{owner}}, stopped: true, created: "owned-created"}
+			runtime.onDeleteContainer = func(string) (bool, error) {
+				return false, errors.New("runtime refused the delete")
+			}
+		}, false},
+		{"live-call", func(t *testing.T, owned *VerificationOwnership, _ *fakeRuntime, _ string) {
+			owner, err := newOwnershipLabel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, finish, err := owned.begin(t.Context(), verificationOwner{Version: 1, TaskID: "task", RunID: "run", InvocationID: "verify"}, owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = finish(true) })
+		}, false},
+		{"unreadable-record", func(t *testing.T, _ *VerificationOwnership, _ *fakeRuntime, dir string) {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "damaged.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runtime := newFakeRuntime(t)
+			root := filepath.Join(t.TempDir(), "owned")
+			owned, err := NewVerificationOwnership(root, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.arrange(t, owned, runtime, filepath.Join(root, verificationRunKey("run")))
+			err = owned.ProveInvocationContainersAbsent(t.Context(), "task", "run", "verify")
+			if tc.proved != (err == nil) || (err != nil && !errors.Is(err, ErrVerificationAbsenceUnproven)) {
+				t.Fatalf("container proof = %v, want proved %v", err, tc.proved)
+			}
+			if errors.Is(err, ErrVerificationCommandUnjoined) {
+				t.Fatalf("container proof refused for an unjoined command: %v", err)
+			}
+			if tc.name == "unjoined-containers-gone" {
+				strict := owned.ProveInvocationAbsent(t.Context(), "task", "run", "verify")
+				if !errors.Is(strict, ErrVerificationAbsenceUnproven) || !errors.Is(strict, ErrVerificationCommandUnjoined) {
+					t.Fatalf("strict proof = %v, want unproven as unjoined", strict)
+				}
+			}
+		})
+	}
+	if err := (&VerificationOwnership{}).ProveInvocationContainersAbsent(t.Context(), "task", "run", ""); !errors.Is(err, domain.ErrEmptyID) {
+		t.Fatalf("proof without an invocation = %v", err)
+	}
+}
+
 func TestVerificationInvocationAbsenceWithoutRecords(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "owned")
