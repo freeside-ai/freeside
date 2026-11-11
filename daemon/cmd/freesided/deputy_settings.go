@@ -35,8 +35,10 @@ const (
 // are tagged omitempty, and each absence keeps a file written before the key
 // existed at its revision: agent_tree.review_harness, whose absence means
 // codex_cli because every such file ran a Codex reviewer;
-// agent_tree.second_writer, whose absence means one writer subscription; and
-// writers.specifier_escalated, whose absence means no escalated line.
+// agent_tree.second_writer, whose absence means one writer subscription;
+// writers.specifier_escalated, whose absence means no escalated line; and
+// macos_verification, whose absence configures no macOS verification
+// executor.
 type deputySettings struct {
 	Version string `json:"version"`
 	// Listen is the leased listener paired clients reach the run at.
@@ -141,6 +143,10 @@ type deputySettings struct {
 		BaseBuildRef string   `json:"base_build_ref"`
 		DNS          []string `json:"dns"`
 	} `json:"build"`
+	// MacosVerification names the macOS verification executor macos_host
+	// recipe commands run on (#2978); every key is required when the object
+	// is present. Absent, the run configures none.
+	MacosVerification *deputyMacverify `json:"macos_verification,omitempty"`
 }
 
 // loadedDeputySettings is the decoded file and the digest of its exact bytes,
@@ -424,6 +430,9 @@ func (s *loadedDeputySettings) validate() error {
 	}
 	if s.stallFor, err = nonNegativeDuration(s.Timeouts.WriterStall); err != nil {
 		return fmt.Errorf("timeouts.writer_stall: %w", err)
+	}
+	if err := validateDeputyMacverify(s.MacosVerification); err != nil {
+		return err
 	}
 	// As in the script: without a base ref the proxy still names preflight's
 	// build egress, but there is no rebuild for DNS servers to serve.
