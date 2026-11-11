@@ -3612,3 +3612,26 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-08, in chat, on #2874;
 [decision note](../../devlog/2026-11-08-1223-whole-repository-self-management.md).)
+
+## Revision 114 ("The Default Policy Closes the Source Issue"):
+
+1. **Under the default policy, a closable source issue closes without model
+   judgment.** With `gates.source_issue_closure` absent or false, the daemon
+   sets the closure proposal's `resolves` flag itself and never asks the
+   publication-author propose site; the policy actor approves it, and the
+   publisher writes `Closes` for a verified or a recommended source alike
+   (Sections [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts), [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry), and [5.15](../plan.md#515-evidence-and-images)). The key set to
+   true keeps the human gate unchanged: the site proposes the flag, the
+   `effect_proposal` card opens, and the pull request stays a draft with
+   `Refs` until a person decides. This overturns revision 68's default, under
+   which the site's flag decided between `Closes` and `Refs`. The assumption
+   that changed: that the model's judgment was worth the friction. A site that
+   answered no, or failed and fell back, left a resolved issue open after the
+   merge with nothing on the ready card saying so (#3023). Accepted: a pull
+   request that only partly addresses its issue closes it on merge, with the
+   `Closes` line in the body for the merging person to see. Rejected: storing
+   and showing the model's reason, which explains the friction instead of
+   removing it.
+
+(Owner decision of 2026-11-10 on #3023;
+[decision note](../../devlog/2026-11-10-1818-default-policy-closes-source-issue.md).)
