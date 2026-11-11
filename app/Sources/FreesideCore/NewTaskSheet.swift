@@ -88,6 +88,14 @@ struct NewTaskSheet: View {
     #endif
     /// The Mac text view's laid-out height, which the text area grows to.
     @State private var textHeight: CGFloat = 0
+    /// The role whose agent picker is open. Its picks stay in the picker
+    /// until Done writes them to the draft (#3027).
+    @State private var openRole: Role?
+    #if os(iOS)
+        /// The editor's focus, cleared before a role picker rises so the
+        /// keyboard is down and every section of the picker is in reach.
+        @FocusState private var editorIsFocused: Bool
+    #endif
     @State private var isSubmitting = false
     /// The in-flight submit, held so dismissing the sheet cancels it
     /// and suppresses the completion's navigation (the submission itself may
@@ -456,6 +464,7 @@ struct NewTaskSheet: View {
             .overlay {
                 TextEditor(text: sourceBinding)
                     .font(FreesideFont.statement)
+                    .focused($editorIsFocused)
                     .scrollContentBackground(.hidden)
                     .accessibilityLabel("Work to do")
                     .accessibilityAction(named: "Submit") { performSubmit() }
@@ -467,8 +476,8 @@ struct NewTaskSheet: View {
 
     static let noTreeText = "The daemon has no agent tree, so it picks every agent."
 
-    /// One chip per task-line role, in role order, each a menu over the
-    /// catalog.
+    /// One chip per task-line role, in role order, each opening its role's
+    /// picker.
     private var roleChips: some View {
         WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
             ForEach(AgentChoiceDisplay.roleOrder, id: \.self) { role in
@@ -488,27 +497,50 @@ struct NewTaskSheet: View {
         let chip = RoleChip(
             role: title, value: chosenLabel,
             defaultValue: AgentChoiceDisplay.defaultSettingsLabel(
-                role: role, policy: model.routingPolicy, catalog: catalog))
-        // Only the chip is Freeside's; the menu stays system chrome, which
-        // `ImageRenderer` cannot draw, so the goldens show the chip.
+                role: role, policy: model.routingPolicy, catalog: catalog),
+            isActive: openRole == role)
+        // The goldens draw the chip; the picker has surfaces of its own.
         if rendersInteractiveControls {
             let defaultLabel = AgentChoiceDisplay.defaultLabel(
                 role: role, policy: model.routingPolicy, catalog: catalog)
-            Menu {
-                RoleSelectionMenu(
-                    offer: Self.roleMenuOffer(role, choices: choices, model: model), lineupLabel: defaultLabel
-                ) { draftStore.draft.choices[role] = $0 }
+            Button {
+                #if os(iOS)
+                    editorIsFocused = false
+                #endif
+                openRole = role
             } label: {
                 chip
             }
-            .menuStyle(.button)
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
             .accessibilityLabel("\(title) agent")
             .accessibilityValue(chosenLabel ?? defaultLabel)
+            .accessibilityHint("Opens the \(title.lowercased())'s agent picker")
+            // Anchored on the chip, so the Mac popover points at it.
+            .rolePickerPresentation(
+                isPresented: Binding(
+                    get: { openRole == role },
+                    set: { isPresented in if !isPresented, openRole == role { openRole = nil } })
+            ) {
+                RolePickerView(
+                    picker: Self.rolePicker(role, choices: choices, model: model), catalog: model.agentCatalog,
+                    policy: model.routingPolicy, pools: model.usagePools,
+                    onConfirm: { selection in
+                        draftStore.draft.choices[role] = selection
+                        openRole = nil
+                    },
+                    onCancel: { openRole = nil })
+            }
         } else {
             chip
         }
+    }
+
+    /// A role chip's picker as it opens: the synced catalog with the
+    /// draft's choice for the role staged.
+    static func rolePicker(
+        _ role: Role, choices: [Role: AgentChoiceDisplay.Selection], model: TaskSubmissionModel
+    ) -> RolePicker {
+        .draft(role: role, chosen: choices[role], catalog: model.agentCatalog)
     }
 
     /// What a role chip's menu offers: the synced catalog and usage pools,
