@@ -3662,12 +3662,21 @@ definitive blocks display the contract's closed reason codes; no free-text
 reason exists to show, and there is no percentage complete anywhere.
 
 The follow exits when the run's outcome is decided: `published`, `blocked`
-(with the block's reason code), `failed`, or `lost`. A completed execution is
-not yet an outcome, so a run awaiting publication (including one an attended
-daemon holds by design) keeps following until the operator interrupts, which
-reports the outcome as `pending`. Exit status reports whether the run could
-be observed, never the run's own verdict: following a blocked or failed run
-to its outcome succeeds.
+(with the block's reason code), `failed`, `lost`, or `completed`, or one of
+the outcomes for a run no milestone concludes but nothing will run again:
+`handed_off` (a specification run whose approved specification bound an
+implementation run), `stopped` (named by its task's confirmed cancellation),
+or `abandoned` (its workflow episode was closed by `freesided abandon`, and no
+stage attempt's invocation is still pending or running). A run already final from its
+milestones keeps that outcome; otherwise `handed_off` outranks `stopped`,
+which outranks `abandoned`. Follow, `resume`, `inspect task`, and the run API
+read these settled outcomes; the engine and its gates read the milestone
+outcome alone (`devlog/2026-11-11-1630-settled-run-outcomes.md`). A completed
+execution is not yet an outcome, so a run awaiting publication (including one
+an attended daemon holds by design) keeps following until the operator
+interrupts, which reports the outcome as `pending`. Exit status reports
+whether the run could be observed, never the run's own verdict: following a
+blocked or failed run to its outcome succeeds.
 
 Following reads the daemon's own durable observation projection through the
 control socket when it is running and through a locked direct store when it is
@@ -4980,6 +4989,12 @@ hold omits the field again. The lifecycle `state` can remain `pending` while
 held, and `outcome_reason` continues to describe a terminal publication block.
 A missing field means no visible
 hold, preserving compatibility with older snapshots.
+
+The snapshot's `state` names a final outcome by its own name, with two
+exceptions: a `published` run whose publication the supervisor has not yet
+accepted reads `publication_ready`, and a `handed_off` specification run keeps
+`implementation_bound`, the state it read before its hand-off became final. A
+`stopped` or `abandoned` run reads `stopped` or `abandoned`.
 
 ### Adjudication Dispatch Telemetry
 
