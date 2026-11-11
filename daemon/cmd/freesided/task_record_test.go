@@ -1076,3 +1076,55 @@ func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
 		t.Fatalf("closure with an unpublished successor = %s, want the published cycle's %s", got, want)
 	}
 }
+
+// TestTaskRecordConcludesConfirmedStop stops the fixture's running task and
+// confirms the stop (#3043). The record concludes the running run stopped and
+// final, as follow does, and keeps the replaced run's milestone conclusion.
+func TestTaskRecordConcludesConfirmedStop(t *testing.T) {
+	t.Parallel()
+	st, _ := openSeededStore(t)
+	ctx := t.Context()
+	id, admission, _ := fixtureRunningRun(t, st)
+	before := readRecord(t, st, id).Runs
+	state, err := st.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		receipt, _, err := tx.StopTask(ctx, domain.StopTaskRequest{
+			CommandID: "stop", DeviceID: "device", TaskID: id, ProjectID: "freeside",
+			ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+		}, taskRecordAsOf)
+		if err != nil {
+			return err
+		}
+		c := receipt.Cancellation
+		_, err = tx.AcknowledgeTaskCancellation(ctx, domain.TaskCancellationAcknowledgement{
+			ID: "confirmed", RequestID: c.RequestID, State: domain.TaskCancellationConfirmed,
+			TargetDigest: c.TargetDigest, EvidenceDigest: c.TargetDigest, RecordedAt: taskRecordAsOf,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("stop and confirm: %v", err)
+	}
+	after := readRecord(t, st, id).Runs
+	if len(after) != len(before) || len(after) < 2 {
+		t.Fatalf("runs = %d after the stop, %d before; want the fixture's replaced and running runs", len(after), len(before))
+	}
+	for i, run := range after {
+		want := before[i].Conclusion
+		if run.RunID == admission.RunID {
+			want = &taskRecordConclusion{Outcome: domain.RunOutcomeStopped, Final: true}
+		}
+		got := run.Conclusion
+		if len(run.Errors) != 0 || got == nil || want == nil || got.Outcome != want.Outcome || got.Final != want.Final ||
+			!equalPointers(got.HoldReason, want.HoldReason) || !equalPointers(got.TerminalStatus, want.TerminalStatus) {
+			t.Errorf("run %s: conclusion = %+v (errors %+v), want %+v", run.RunID, got, run.Errors, want)
+			continue
+		}
+		_, followed, err := observedb.Borrow(st).ObserveConclusion(ctx, run.RunID)
+		if err != nil || followed.Outcome != got.Outcome || followed.Final != got.Final {
+			t.Errorf("run %s: follow = %+v (%v), record = %+v", run.RunID, followed, err, got)
+		}
+	}
+}

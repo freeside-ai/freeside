@@ -220,17 +220,19 @@ package enum RunDisplay {
     }
 
     /// An unobserved run marks nothing current: the daemon recorded no
-    /// milestone, so the rail must not claim a stage is under way.
+    /// milestone, so the rail must not claim a stage is under way. A stopped
+    /// or abandoned run marks nothing current either: its stage neither
+    /// finished nor failed. A handed-off specification run finished its stage.
     private static func currentStageState(
         _ run: Components.Schemas.Run
     ) -> DecisionStageRailPresentation.State {
         switch run.outcome {
         case .failed, .lost: .failed
-        case .completed, .published: .completed
+        case .completed, .published, .handed_off: .completed
         case .pending:
             isSpecificationHandoff(run) ? .completed : (run.lifecycle == .active ? .current : .pending)
         case .blocked: run.lifecycle == .active ? .current : .pending
-        case .unobserved: .pending
+        case .unobserved, .stopped, .abandoned: .pending
         }
     }
 
@@ -492,6 +494,9 @@ package enum RunDisplay {
         case .blocked: "Blocked"
         case .failed: "Failed"
         case .lost: "Lost"
+        case .handed_off: "Handed Off"
+        case .stopped: "Stopped"
+        case .abandoned: "Abandoned"
         }
     }
 

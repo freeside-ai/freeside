@@ -440,9 +440,9 @@ func seedProductionSubmission(t *testing.T, ctx context.Context, f fixture, run 
 // TestSpecificationRunFinishesWhenImplementationBound is the #1183 acceptance:
 // a specification run leaves the active list once its production attempt is
 // approved and its implementation run bound, superseded by that implementation
-// run with its own outcome still pending. Before approval it is active and
-// unsuperseded, and the implementation run is never superseded by the
-// specification run.
+// run. Since #3043 its outcome is handed_off rather than pending. Before
+// approval it is active, pending, and unsuperseded, and the implementation
+// run is never superseded by the specification run.
 func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -463,9 +463,9 @@ func TestSpecificationRunFinishesWhenImplementationBound(t *testing.T) {
 
 	assertFinishedBoundToImplementation := func(source string, lifecycle domain.RunLifecycle, outcome domain.RunOutcome, superseded *domain.RunID) {
 		t.Helper()
-		if lifecycle != domain.RunLifecycleFinished || outcome != domain.RunOutcomePending ||
+		if lifecycle != domain.RunLifecycleFinished || outcome != domain.RunOutcomeHandedOff ||
 			superseded == nil || *superseded != run.ID {
-			t.Errorf("%s: specification run = lifecycle %s outcome %s superseded_by %v, want finished/pending superseded by %s",
+			t.Errorf("%s: specification run = lifecycle %s outcome %s superseded_by %v, want finished/handed_off superseded by %s",
 				source, lifecycle, outcome, superseded, run.ID)
 		}
 	}

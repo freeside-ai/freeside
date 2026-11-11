@@ -1039,6 +1039,10 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		conclusion, err = SettledRunConclusion(ctx, tx, value.Value, observation, conclusion)
+		if err != nil {
+			return asRunObservationIntegrityError(err)
+		}
 		facts, err := runProjectionFactsFor(ctx, tx, value.Value, observation)
 		if err != nil {
 			return asRunObservationIntegrityError(err)
@@ -1606,6 +1610,10 @@ func projectRunSnapshot(
 	conclusion, err := AuthenticatedRunConclusion(
 		ctx, tx, run, observation, publicationReadyMilestone(observation),
 	)
+	if err != nil {
+		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
+	}
+	conclusion, err = SettledRunConclusion(ctx, tx, run, observation, conclusion)
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
 	}

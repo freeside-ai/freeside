@@ -537,6 +537,14 @@ func authenticateRunConclusion(
 		return engine.ProductionPublicationIdentity{}, false, domain.RunConclusion{},
 			fmt.Errorf("authenticate run conclusion: %w", err)
 	}
+	// Follow, resume, and the supervision snapshot are read surfaces, so a
+	// run that handed off, was stopped, or was abandoned reads as final
+	// here; the engine keeps the unsettled conclusion (#3043).
+	conclusion, err = signet.SettledRunConclusion(ctx, tx, run, observation, conclusion)
+	if err != nil {
+		return engine.ProductionPublicationIdentity{}, false, domain.RunConclusion{},
+			fmt.Errorf("settle run conclusion: %w", err)
+	}
 	if !completed {
 		identity = engine.ProductionPublicationIdentity{}
 	}

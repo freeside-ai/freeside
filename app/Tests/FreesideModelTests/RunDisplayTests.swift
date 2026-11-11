@@ -319,6 +319,7 @@ import Testing
         var unbound = bound
         unbound.superseded_by = nil
         unbound.lifecycle = .active
+        unbound.outcome = .pending
         #expect(RunDisplay.identityLine(unbound, runs: []) == "Attempt 1")
         #expect(RunDisplay.secondaryLine(unbound) == .milestone("Run Submitted"))
         #expect(RunDisplay.stageRail(unbound).entries.first?.state == .current)
@@ -351,6 +352,7 @@ import Testing
         let outcomes: [(Components.Schemas.RunOutcome, DecisionStageRailPresentation.State)] = [
             (.pending, .pending), (.blocked, .pending), (.unobserved, .pending),
             (.failed, .failed), (.lost, .failed), (.completed, .completed), (.published, .completed),
+            (.handed_off, .completed), (.stopped, .pending), (.abandoned, .pending),
         ]
         for (outcome, finishedState) in outcomes {
             for specification in [false, true] {
@@ -472,6 +474,7 @@ import Testing
         let cases: [(Components.Schemas.RunOutcome, String)] = [
             (.pending, "In Progress"), (.published, "Ready"), (.completed, "Merged"),
             (.failed, "Failed"), (.lost, "Lost"), (.blocked, "Blocked"), (.unobserved, "Not Observed"),
+            (.handed_off, "Handed Off"), (.stopped, "Stopped"), (.abandoned, "Abandoned"),
         ]
         for (outcome, label) in cases { #expect(RunDisplay.label(outcome) == label) }
     }

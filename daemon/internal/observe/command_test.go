@@ -555,6 +555,25 @@ func TestFollowCommandReportsPersistedSpecificationAsImplementationBound(t *test
 		got.Lineage.ApprovedSpecDigest != approvedSpec {
 		t.Fatalf("persisted specification snapshot = %+v", got)
 	}
+	// The hand-off settles the run (#3043): its outcome is final, so a
+	// streaming follow ends on it instead of polling. An interrupted follow
+	// would print the pending outcome instead, so the deadline only bounds a
+	// regression; it is not the end this asserts.
+	if got.Outcome != domain.RunOutcomeHandedOff {
+		t.Fatalf("persisted specification outcome = %q, want handed_off", got.Outcome)
+	}
+	followCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	if err := Run(followCtx, []string{"-db", path, "-run", string(specificationRunID), "-interval", "10ms"},
+		&stdout, &stderr, func(ctx context.Context, path string, recipes ...domain.Digest) (Source, error) {
+			return observedb.Open(ctx, path, recipes...)
+		}); err != nil {
+		t.Fatalf("streaming follow: %v (stderr %s)", err, stderr.String())
+	}
+	if !strings.HasSuffix(stdout.String(), "outcome  handed_off\n") {
+		t.Fatalf("streaming follow output = %q, want it to end on handed_off", stdout.String())
+	}
 }
 
 // TestFollowCommandResumesAcrossReconnectAndDaemonRestart is the reconnect

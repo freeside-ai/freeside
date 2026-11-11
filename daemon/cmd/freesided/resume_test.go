@@ -116,6 +116,30 @@ func TestResumeReportsAuthenticatedPublishedOutcome(t *testing.T) {
 	}
 }
 
+// TestResumeRefusesSettledRuns pins the refusal for the settled outcomes
+// (#3043): only an abandoned run points to reattempt, since a stopped task's
+// cancellation fence refuses one and a handed-off run's work continues in its
+// implementation run.
+func TestResumeRefusesSettledRuns(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		outcome   domain.RunOutcome
+		hint      string
+		reattempt bool
+	}{
+		{domain.RunOutcomeHandedOff, "its implementation run took over", false},
+		{domain.RunOutcomeStopped, "the task was stopped", false},
+		{domain.RunOutcomeAbandoned, "use freesided reattempt", true},
+	} {
+		err := terminalResumeError("run-settled", domain.RunConclusion{Outcome: tc.outcome, Final: true})
+		if err == nil || !strings.Contains(err.Error(), `terminal in state "`+string(tc.outcome)+`"`) ||
+			!strings.Contains(err.Error(), tc.hint) ||
+			strings.Contains(err.Error(), "reattempt") != tc.reattempt {
+			t.Errorf("%s resume refusal = %v", tc.outcome, err)
+		}
+	}
+}
+
 // TestResumeTaskUsesNewestRun resumes the fixture's retry-campaign task,
 // whose failed first attempt (run-freeside-656) sorts after its running
 // retry by id, so only the ordinal picks the retry.

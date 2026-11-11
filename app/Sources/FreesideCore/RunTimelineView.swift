@@ -856,7 +856,8 @@ struct InvocationPresentation {
 
 /// Ready is quiet in hue but full contrast (a neutral tick in the text
 /// color, never green or the accent), in progress is water, blocked is
-/// the accent, failed and lost are wax, not observed is a dashed faint.
+/// the accent, failed and lost are wax, not observed is a dashed faint, and
+/// handed off, stopped, and abandoned are a plain faint: ended, not failed.
 struct RunOutcomeBadge: View {
     let outcome: Components.Schemas.RunOutcome
 
@@ -868,7 +869,7 @@ struct RunOutcomeBadge: View {
 
     private var color: Color {
         switch outcome {
-        case .unobserved: .inkDim
+        case .unobserved, .handed_off, .stopped, .abandoned: .inkDim
         case .pending: .waterText
         case .published, .completed: .ink
         case .blocked: .accentText

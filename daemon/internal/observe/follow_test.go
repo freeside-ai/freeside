@@ -733,6 +733,28 @@ func TestSupervisionStateSeparatesAttentionFromTerminalOutcome(t *testing.T) {
 			conclusion: Conclusion{Outcome: OutcomeBlocked, Final: true},
 			want:       SupervisionBlocked,
 		},
+		{
+			name: "a handed-off specification run stays implementation bound",
+			snapshot: observedb.Snapshot{
+				Observation: domain.RunObservation{RunID: fixtureRun}, Attempt: lineage,
+			},
+			conclusion: Conclusion{Outcome: OutcomeHandedOff, Final: true},
+			want:       SupervisionImplementationBound,
+		},
+		{
+			name:       "a stopped run is stopped",
+			snapshot:   observedb.Snapshot{},
+			conclusion: Conclusion{Outcome: OutcomeStopped, Final: true},
+			want:       SupervisionStopped,
+		},
+		{
+			name: "an abandoned run is abandoned over an open approval",
+			snapshot: observedb.Snapshot{AttentionItems: []observedb.AttentionItem{{
+				Type: domain.AttentionSpecApproval, RequestedDecision: []domain.Action{domain.ActionApprove},
+			}}},
+			conclusion: Conclusion{Outcome: OutcomeAbandoned, Final: true},
+			want:       SupervisionAbandoned,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := deriveSupervisionState(tc.snapshot, tc.conclusion); got != tc.want {
@@ -756,9 +778,14 @@ func TestAllSupervisionStatesAreValidAndUnique(t *testing.T) {
 		}
 		seen[state] = true
 	}
+	// Every outcome derives a registered state: most by name, handed_off as
+	// implementation_bound. An outcome whose bare non-final shape doesn't
+	// validate is a final outcome, so it is derived as final.
 	for _, outcome := range domain.AllRunOutcomes {
-		if state := SupervisionState(outcome); !state.valid() {
-			t.Errorf("run outcome %q has no registered supervision state", outcome)
+		conclusion := Conclusion{Outcome: outcome}
+		conclusion.Final = conclusion.Validate() != nil
+		if state := deriveSupervisionState(observedb.Snapshot{}, conclusion); !state.valid() {
+			t.Errorf("run outcome %q (final %t) derives unregistered state %q", outcome, conclusion.Final, state)
 		}
 	}
 }

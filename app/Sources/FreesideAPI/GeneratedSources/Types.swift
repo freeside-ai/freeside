@@ -8512,7 +8512,7 @@ public enum Components {
             case model = "model"
             case effort = "effort"
         }
-        /// The daemon-derived run result mirrored from domain.RunOutcome. Pending can coexist with a current hold; blocked means a definitive publication_blocked milestone, not merely a transient hold. A run with no observation history (a pre-migration-0024 legacy run, which is deliberately not backfilled, and with no nonterminal invocation observation) classifies as unobserved, never pending, so a legacy terminal run is not shown as in flight; a legacy run still executing across the upgrade has a nonterminal invocation observation and reports pending. Completed means the work unit satisfied its completion criterion after publication (a work_unit_completed milestone); it outranks published and blocked and is terminal.
+        /// The daemon-derived run result mirrored from domain.RunOutcome. Pending can coexist with a current hold; blocked means a definitive publication_blocked milestone, not merely a transient hold. A run with no observation history (a pre-migration-0024 legacy run, which is deliberately not backfilled, and with no nonterminal invocation observation) classifies as unobserved, never pending, so a legacy terminal run is not shown as in flight; a legacy run still executing across the upgrade has a nonterminal invocation observation and reports pending. Completed means the work unit satisfied its completion criterion after publication (a work_unit_completed milestone); it outranks published and blocked and is terminal. Handed_off, stopped, and abandoned are terminal outcomes for a run no milestone concludes but nothing will run again: handed_off is a specification run whose approved specification bound an implementation run that took over its work; stopped is a run its task's confirmed cancellation named; abandoned is a run of an abandoned workflow episode with no invocation still pending or running. A run already terminal from its milestones keeps that outcome, and handed_off outranks stopped, which outranks abandoned.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RunOutcome`.
@@ -8524,8 +8524,11 @@ public enum Components {
             case failed = "failed"
             case lost = "lost"
             case completed = "completed"
+            case handed_off = "handed_off"
+            case stopped = "stopped"
+            case abandoned = "abandoned"
         }
-        /// Whether a run still has something pending for the daemon or the operator (active) or is done with (finished), derived from RunOutcome and supersession. Finished covers completed, failed, lost, unobserved, and any run superseded by a retry or by implementation taking over an approved specification run's work; active covers pending, published with no completion yet, and blocked with no successor. A client splits the runs list on this field instead of re-deriving it.
+        /// Whether a run still has something pending for the daemon or the operator (active) or is done with (finished), derived from RunOutcome and supersession. Finished covers completed, failed, lost, unobserved, handed_off, stopped, abandoned, and any run superseded by a retry or by implementation taking over an approved specification run's work; active covers pending, published with no completion yet, and blocked with no successor. A client splits the runs list on this field instead of re-deriving it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RunLifecycle`.

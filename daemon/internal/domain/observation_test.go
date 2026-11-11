@@ -150,6 +150,161 @@ func TestRunConclusionValidateCompletedShape(t *testing.T) {
 	}
 }
 
+// TestRunConclusionValidateSettledShape pins that each settled outcome, like
+// completed, is final and carries neither a reason nor a terminal.
+func TestRunConclusionValidateSettledShape(t *testing.T) {
+	reason := HoldBaseAdvanced
+	terminal := ObservedStatusCanceled
+	for _, outcome := range []RunOutcome{RunOutcomeHandedOff, RunOutcomeStopped, RunOutcomeAbandoned} {
+		if err := (RunConclusion{Outcome: outcome, Final: true}).Validate(); err != nil {
+			t.Errorf("%s final: Validate() = %v", outcome, err)
+		}
+		for _, tc := range []struct {
+			name string
+			c    RunConclusion
+		}{
+			{"not final", RunConclusion{Outcome: outcome}},
+			{"with reason", RunConclusion{Outcome: outcome, Reason: &reason, Final: true}},
+			{"with terminal", RunConclusion{Outcome: outcome, Terminal: &terminal, Final: true}},
+		} {
+			if err := tc.c.Validate(); !errors.Is(err, ErrRunOutcomeDetailMismatch) {
+				t.Errorf("%s %s: Validate() = %v, want %v", outcome, tc.name, err, ErrRunOutcomeDetailMismatch)
+			}
+		}
+	}
+}
+
+// TestSettleRunConclusion pins the settlement step (#3043): each ending fact
+// alone, their precedence, an already-final conclusion kept with its detail,
+// and an abandoned run whose execution is still in flight left as it is.
+func TestSettleRunConclusion(t *testing.T) {
+	pending := RunConclusion{Outcome: RunOutcomePending}
+	unobserved := RunConclusion{Outcome: RunOutcomeUnobserved}
+	reason := HoldVerificationFindings
+	terminal := ObservedStatusFailed
+	ended := RunObservation{RunID: "run-1", Invocations: []InvocationObservation{{
+		InvocationID: "inv-1", RunID: "run-1", Status: ObservedStatusCompleted,
+		ObservedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+	}}}
+	inFlight := func(status ObservedInvocationStatus) RunObservation {
+		o := ended
+		o.Invocations = append(append([]InvocationObservation{}, ended.Invocations...), InvocationObservation{
+			InvocationID: "inv-2", RunID: "run-1", Status: status, Live: true,
+			ObservedAt: time.Date(2026, 11, 10, 12, 1, 0, 0, time.UTC),
+		})
+		return o
+	}
+	reviewing := ended
+	reviewing.Invocations = append(append([]InvocationObservation{}, ended.Invocations...), InvocationObservation{
+		InvocationID: "inv-review", RunID: "run-1", Status: ObservedStatusRunning,
+		ObservedAt: time.Date(2026, 11, 10, 12, 1, 0, 0, time.UTC),
+	})
+	run := Run{ID: "run-1", Stages: []Stage{{ID: "stage-1", RunID: "run-1", Attempts: []Attempt{
+		{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"},
+		{ID: "attempt-2", StageID: "stage-1", Number: 2, InvocationID: "inv-2"},
+	}}}}
+	settled := func(outcome RunOutcome) RunConclusion { return RunConclusion{Outcome: outcome, Final: true} }
+	all := RunEnding{HandedOff: true, Stopped: true, Abandoned: true}
+	for _, tc := range []struct {
+		name        string
+		conclusion  RunConclusion
+		observation RunObservation
+		ending      RunEnding
+		want        RunConclusion
+	}{
+		{"no ending", pending, ended, RunEnding{}, pending},
+		{"handed off", pending, ended, RunEnding{HandedOff: true}, settled(RunOutcomeHandedOff)},
+		{"stopped", pending, ended, RunEnding{Stopped: true}, settled(RunOutcomeStopped)},
+		{"abandoned", pending, ended, RunEnding{Abandoned: true}, settled(RunOutcomeAbandoned)},
+		{
+			"unobserved abandoned", unobserved,
+			RunObservation{RunID: "run-1"},
+			RunEnding{Abandoned: true},
+			settled(RunOutcomeAbandoned),
+		},
+		{"hand-off outranks stop", pending, ended, all, settled(RunOutcomeHandedOff)},
+		{
+			"stop outranks abandonment", pending, ended,
+			RunEnding{Stopped: true, Abandoned: true},
+			settled(RunOutcomeStopped),
+		},
+		{"abandoned while running", pending, inFlight(ObservedStatusRunning), RunEnding{Abandoned: true}, pending},
+		{"abandoned while pending", pending, inFlight(ObservedStatusPending), RunEnding{Abandoned: true}, pending},
+		// No stage attempt owns a review invocation, and nothing records its
+		// row once the episode closes, so its last running row holds nothing.
+		{
+			"abandoned while a review row runs", pending, reviewing,
+			RunEnding{Abandoned: true},
+			settled(RunOutcomeAbandoned),
+		},
+		{
+			"stopped while running", pending, inFlight(ObservedStatusRunning),
+			RunEnding{Stopped: true},
+			settled(RunOutcomeStopped),
+		},
+		{
+			"handed off while running", pending, inFlight(ObservedStatusRunning),
+			RunEnding{HandedOff: true},
+			settled(RunOutcomeHandedOff),
+		},
+		{"completed kept", settled(RunOutcomeCompleted), ended, all, settled(RunOutcomeCompleted)},
+		{"published kept", settled(RunOutcomePublished), ended, all, settled(RunOutcomePublished)},
+		{
+			"blocked kept",
+			RunConclusion{Outcome: RunOutcomeBlocked, Reason: &reason, Final: true},
+			ended, all,
+			RunConclusion{Outcome: RunOutcomeBlocked, Reason: &reason, Final: true},
+		},
+		{
+			"failed kept",
+			RunConclusion{Outcome: RunOutcomeFailed, Terminal: &terminal, Final: true},
+			ended, all,
+			RunConclusion{Outcome: RunOutcomeFailed, Terminal: &terminal, Final: true},
+		},
+	} {
+		got := SettleRunConclusion(run, tc.conclusion, tc.observation, tc.ending)
+		if got.Outcome != tc.want.Outcome || got.Final != tc.want.Final ||
+			got.Reason != tc.want.Reason || got.Terminal != tc.want.Terminal {
+			t.Errorf("%s: SettleRunConclusion() = %+v, want %+v", tc.name, got, tc.want)
+		}
+		if err := got.Validate(); err != nil {
+			t.Errorf("%s: settled conclusion Validate() = %v", tc.name, err)
+		}
+	}
+}
+
+// TestConcludeRunNeverSettles pins that the milestone conclusion, which the
+// engine and the Tier A gates read, never returns a settled outcome: every
+// milestone kind alone, and a terminal of every observed status, still
+// concludes with a milestone outcome (#3043).
+func TestConcludeRunNeverSettles(t *testing.T) {
+	settled := map[RunOutcome]bool{
+		RunOutcomeHandedOff: true, RunOutcomeStopped: true, RunOutcomeAbandoned: true,
+	}
+	observations := []RunObservation{{RunID: "run-1"}}
+	for _, kind := range AllRunMilestoneKinds {
+		observations = append(observations, RunObservation{
+			RunID: "run-1", Milestones: []RunMilestone{validMilestone(kind)},
+		})
+	}
+	for _, status := range AllObservedInvocationStatuses {
+		milestone := validMilestone(MilestoneTerminalRecorded)
+		milestone.Terminal = &status
+		observations = append(observations,
+			RunObservation{RunID: "run-1", Milestones: []RunMilestone{milestone}},
+			RunObservation{RunID: "run-1", Invocations: []InvocationObservation{{
+				InvocationID: "inv-1", RunID: "run-1", Status: status,
+				ObservedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+			}}},
+		)
+	}
+	for _, observation := range observations {
+		if got := ConcludeRun(observation); settled[got.Outcome] {
+			t.Errorf("ConcludeRun(%+v) = %s, a settled outcome", observation, got.Outcome)
+		}
+	}
+}
+
 // TestLifecycleOf pins the active-or-finished split over every outcome, with
 // and without a superseding attempt (#1134).
 func TestLifecycleOf(t *testing.T) {
@@ -169,6 +324,9 @@ func TestLifecycleOf(t *testing.T) {
 		RunOutcomeFailed:     RunLifecycleFinished,
 		RunOutcomeLost:       RunLifecycleFinished,
 		RunOutcomeCompleted:  RunLifecycleFinished,
+		RunOutcomeHandedOff:  RunLifecycleFinished,
+		RunOutcomeStopped:    RunLifecycleFinished,
+		RunOutcomeAbandoned:  RunLifecycleFinished,
 	}
 	if len(wantAlone) != len(AllRunOutcomes) {
 		t.Fatalf("lifecycle table covers %d outcomes, registry has %d", len(wantAlone), len(AllRunOutcomes))
