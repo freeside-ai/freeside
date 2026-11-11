@@ -127,11 +127,26 @@ func taskHistoryEvents(
 		return nil, err
 	}
 	// Equal timestamps do not establish causality. Break ties by stable source
-	// identifiers so store enumeration order cannot reorder the display.
+	// identifiers so store enumeration order cannot reorder the display. The
+	// router sets every line in one instant, so tied lines first fall back to
+	// workflow role order (newest first, so the specifier reads oldest); a
+	// line ID carries no meaning to the reader.
 	slices.SortStableFunc(events, func(a, b domain.TaskEvent) int {
-		return cmp.Or(b.RecordedAt.Compare(a.RecordedAt), cmp.Compare(a.Kind, b.Kind), cmp.Compare(historyEventSource(a), historyEventSource(b)))
+		return cmp.Or(b.RecordedAt.Compare(a.RecordedAt), cmp.Compare(a.Kind, b.Kind),
+			compareTiedLines(b, a), cmp.Compare(historyEventSource(a), historyEventSource(b)))
 	})
 	return events, nil
+}
+
+// compareTiedLines orders two line events by role position in
+// domain.AllRoleNames, then by version. Any other pair compares equal.
+func compareTiedLines(a, b domain.TaskEvent) int {
+	if a.Line == nil || b.Line == nil {
+		return 0
+	}
+	return cmp.Or(
+		cmp.Compare(slices.Index(domain.AllRoleNames, a.Line.Role), slices.Index(domain.AllRoleNames, b.Line.Role)),
+		cmp.Compare(a.Line.Version, b.Line.Version))
 }
 
 func historyEventSource(event domain.TaskEvent) string {

@@ -3,6 +3,7 @@ package signet
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,5 +103,72 @@ func TestTaskHistoryLifecycleAndQueuedStopping(t *testing.T) {
 	}
 	if len(events) != 5 || events[0].Kind != domain.TaskEventAbandoned || *events[0].RunID != "new" || events[2].Kind != domain.TaskEventCompleted || *events[2].RunID != "old" {
 		t.Fatalf("episode history: %+v", events)
+	}
+}
+
+// TestTaskHistoryOrdersTaskStartBelowItsSubmission: a submission records the
+// task start at its own instant (#3039), and the same-instant tie-break puts
+// the start below it, so the history reads created, started, submitted.
+func TestTaskHistoryOrdersTaskStartBelowItsSubmission(t *testing.T) {
+	t.Parallel()
+	task, inputs := taskTimelineFixtureInputs()
+	specification := inputs[0]
+	submittedAt := specification.observation.Milestones[0].RecordedAt
+	task.LifecycleFacts = []domain.TaskLifecycleFact{{Kind: domain.TaskLifecycleStarted, RunID: specification.run.ID, RecordedAt: submittedAt}}
+	events, err := taskHistoryEvents(task, nil, nil, []taskTimelineInput{specification}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]domain.TaskEventKind, 0, len(events))
+	for _, e := range events {
+		got = append(got, e.Kind)
+	}
+	if want := []domain.TaskEventKind{domain.TaskEventRunMilestone, domain.TaskEventStarted, domain.TaskEventCreated}; !slices.Equal(got, want) {
+		t.Fatalf("newest first = %v, want %v", got, want)
+	}
+}
+
+// TestTaskHistoryOrdersTiedRouterLinesByRole: the router sets every line at
+// one instant, so tied lines read in workflow role order, never by line ID,
+// whatever order the store returns them in.
+func TestTaskHistoryOrdersTiedRouterLinesByRole(t *testing.T) {
+	t.Parallel()
+	task, _ := taskTimelineFixtureInputs()
+	routed := taskTimelineFixtureLines(t, task)[0]
+	// Each ID sorts in a different place than its role, so a line-ID
+	// tie-break would read implementer, specifier, remediator.
+	var lines []domain.TaskLine
+	for _, line := range []struct {
+		role domain.RoleName
+		id   string
+	}{
+		{domain.RoleSpecifier, "b"},
+		{domain.RoleImplementer, "a"},
+		{domain.RoleRemediator, "c"},
+	} {
+		next := routed
+		next.Role = line.role
+		next.ID = domain.Digest("sha256:" + strings.Repeat(line.id, 64))
+		lines = append(lines, next)
+	}
+	want := []domain.RoleName{domain.RoleRemediator, domain.RoleImplementer, domain.RoleSpecifier}
+	for _, order := range []string{"store", "reversed"} {
+		input := slices.Clone(lines)
+		if order == "reversed" {
+			slices.Reverse(input)
+		}
+		events, err := taskHistoryEvents(task, input, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []domain.RoleName
+		for _, e := range events {
+			if e.Line != nil {
+				got = append(got, e.Line.Role)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s order: newest first = %v, want %v", order, got, want)
+		}
 	}
 }

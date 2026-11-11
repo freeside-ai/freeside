@@ -879,16 +879,19 @@ func submitSpecificationRunTx(
 	if err := tx.MarkOutboxDispatched(ctx, claim.IdempotencyKey); err != nil {
 		return domain.Run{}, err
 	}
+	// The submission and the task start it records share one instant, so the
+	// timeline's same-instant tie-break orders the start below the submission.
+	submittedAt := time.Now().UTC()
 	observedInvocation := invocationID
 	if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
 		RunID: spec.SpecificationRunID, Kind: domain.MilestoneRunSubmitted,
-		InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
+		InvocationID: &observedInvocation, RecordedAt: submittedAt,
 	}); err != nil {
 		return domain.Run{}, err
 	}
 	// An admitted spec-run submission is a task start unless the task already
 	// holds its WIP slot (issue #1318 D3).
-	if err := tx.RecordTaskStart(ctx, spec.SpecificationRunID, time.Now().UTC()); err != nil {
+	if err := tx.RecordTaskStart(ctx, spec.SpecificationRunID, submittedAt); err != nil {
 		return domain.Run{}, err
 	}
 	return want, nil
@@ -1066,10 +1069,13 @@ func submitIssueSubjectSpecificationRun(
 		if err := tx.MarkOutboxDispatched(ctx, claim.IdempotencyKey); err != nil {
 			return err
 		}
+		// One instant for the submission and any start it records, as in the
+		// spec-artifact arm.
+		submittedAt := time.Now().UTC()
 		observedInvocation := invocationID
 		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: spec.SpecificationRunID, Kind: domain.MilestoneRunSubmitted,
-			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
+			InvocationID: &observedInvocation, RecordedAt: submittedAt,
 		}); err != nil {
 			return err
 		}
@@ -1080,9 +1086,9 @@ func submitIssueSubjectSpecificationRun(
 		if released, err := issueSubjectStartReleased(ctx, tx, existing); err != nil {
 			return err
 		} else if released {
-			return tx.RecordTaskStartAfterRelease(ctx, spec.SpecificationRunID, time.Now().UTC())
+			return tx.RecordTaskStartAfterRelease(ctx, spec.SpecificationRunID, submittedAt)
 		}
-		return tx.RecordTaskStart(ctx, spec.SpecificationRunID, time.Now().UTC())
+		return tx.RecordTaskStart(ctx, spec.SpecificationRunID, submittedAt)
 	})
 	if err != nil {
 		return SpecificationRun{}, err
