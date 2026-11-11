@@ -4055,19 +4055,6 @@ struct DecisionDetailView: View {
         // Position, because a repeated action fills only its first button.
         let filled = filledAction.flatMap(ranking.principal.firstIndex(of:))
         VStack(alignment: .leading, spacing: controlGap) {
-            if showsValidationProgress && model.validation == .pending {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.waterText)
-                    // The label reads as the disabled state it describes;
-                    // the spinner keeps its water tint because the work is
-                    // still in progress. A fixed face, because the platform
-                    // mono caption draws under the 11.5pt floor on macOS.
-                    Text("Validating current state…")
-                        .font(FreesideFont.trailingSummary)
-                        .foregroundStyle(Color.inkFaint)
-                }
-            }
-
             // The recommendation's sentence states what accepting covers. An
             // item whose recommendation did not revalidate has no block, and
             // offers the same action here, so the sentence comes with it.
@@ -4111,6 +4098,21 @@ struct DecisionDetailView: View {
                     "This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it; the item stays open until answered."
                 )
                 .onAppear { model.emitNotDecidableHereShown() }
+            }
+
+            // Last in the stack, so the row's coming and going when
+            // validation ends moves no button under the pointer (#1460).
+            if showsValidationProgress && model.validation == .pending {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).tint(.waterText)
+                    // The label reads as the disabled state it describes;
+                    // the spinner keeps its water tint because the work is
+                    // still in progress. A fixed face, because the platform
+                    // mono caption draws under the 11.5pt floor on macOS.
+                    Text("Validating current state…")
+                        .font(FreesideFont.trailingSummary)
+                        .foregroundStyle(Color.inkFaint)
+                }
             }
         }
     }
