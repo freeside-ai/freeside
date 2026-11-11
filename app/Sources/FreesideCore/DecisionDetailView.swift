@@ -651,7 +651,11 @@ struct DecisionDetailView: View {
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
                     now: now,
-                    rendersInteractiveControls: rendersInteractiveControls)
+                    rendersInteractiveControls: rendersInteractiveControls
+                )
+                // Seated in a task page, the thread is where the
+                // outline's Conversation chip lands.
+                .background(alignment: .top) { TaskPageConversationAnchor() }
             }
 
             if let replacement = model.revisedSpecification {
@@ -1734,7 +1738,9 @@ struct DecisionDetailView: View {
                 attachments: attachments,
                 loadsAttachments: loadsAttachments,
                 now: now,
-                rendersInteractiveControls: rendersInteractiveControls)
+                rendersInteractiveControls: rendersInteractiveControls
+            )
+            .background(alignment: .top) { TaskPageConversationAnchor() }
         }
     }
 

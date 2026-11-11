@@ -4784,6 +4784,47 @@
                     }
                 }
             }
+            // Earlier Conversations (#3041): a finished task with no open
+            // item and two closed items' threads, folded under the
+            // Timeline newest first, the newer open and the older closed.
+            var approved = approval
+            approved.item.status = .resolved
+            var answered = TaskStageFixtures.item(.agent_question, id: "page-answered", hoursOld: 1)
+            answered.item.status = .superseded
+            answered.item.conversation_id = "conv-page-answered"
+            var answeredThread = try #require(AttentionFixtures.defaultConversations().first)
+            answeredThread.conversation.id = "conv-page-answered"
+            answeredThread.conversation.messages = zip(
+                answeredThread.conversation.messages,
+                [
+                    "Should the migration pause between projects?",
+                    "Yes. Each project finishes and verifies before the next one starts.",
+                ]
+            ).map { message, body in
+                var message = message
+                message.id = "answered-" + message.id
+                message.conversation_id = "conv-page-answered"
+                message.body = body
+                return message
+            }
+            var earlier = finished
+            earlier.items = [answered, approved]
+            let (earlierCoordinator, earlierTask) = try TaskStageFixtures.coordinator(
+                earlier, conversations: AttentionFixtures.defaultConversations() + [answeredThread])
+            let earlierTimeline = try #require(earlier.history)
+            let earlierFolds = TaskTimelineDisclosurePreferences(defaults: nil)
+            earlierFolds.setExpanded(true, .conversation("conv-page-answered"), taskID: earlierTimeline.task_id)
+            let earlierView = TaskPageView(coordinator: earlierCoordinator, snapshot: earlierTask, onOpenRun: { _ in })
+            for scheme in [ColorScheme.light, .dark] {
+                let suffix = scheme == .dark ? "-dark" : ""
+                for (width, tail) in [(CGFloat?.none, ""), (390, "-390")] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-page-earlier-conversations" + tail + suffix, width: width,
+                            colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(earlierView.screenshotContent(earlierTimeline, disclosures: earlierFolds))))
+                }
+            }
             return surfaces
         }
 

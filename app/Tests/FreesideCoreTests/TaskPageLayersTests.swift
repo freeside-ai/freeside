@@ -277,6 +277,27 @@ import Testing
         #expect(!TaskTimelineDisclosurePreferences(defaults: defaults).isExpanded(.attachments, taskID: "task-a"))
     }
 
+    /// Each earlier thread's fold persists under its conversation id,
+    /// starts closed, opens and closes per task, and shares no state with
+    /// another thread's fold.
+    @Test func eachEarlierThreadKeepsItsOwnFold() throws {
+        let suite = "TaskPageLayersTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskTimelineDisclosurePreferences(defaults: defaults)
+        #expect(!store.isExpanded(.conversation("conv-a"), taskID: "task-a"))
+        store.setExpanded(true, .conversation("conv-a"), taskID: "task-a")
+        let reloaded = TaskTimelineDisclosurePreferences(defaults: defaults)
+        #expect(reloaded.isExpanded(.conversation("conv-a"), taskID: "task-a"))
+        #expect(!reloaded.isExpanded(.conversation("conv-b"), taskID: "task-a"))
+        #expect(!reloaded.isExpanded(.conversation("conv-a"), taskID: "task-b"))
+        #expect(!reloaded.isExpanded(.attachments, taskID: "task-a"))
+        reloaded.setExpanded(false, .conversation("conv-a"), taskID: "task-a")
+        #expect(
+            !TaskTimelineDisclosurePreferences(defaults: defaults).isExpanded(.conversation("conv-a"), taskID: "task-a")
+        )
+    }
+
     @Test func aMemoryOnlyStoreWritesNothing() {
         let store = TaskTimelineDisclosurePreferences(defaults: nil)
         store.setExpanded(true, .campaign("campaign-1"), taskID: "task-a")

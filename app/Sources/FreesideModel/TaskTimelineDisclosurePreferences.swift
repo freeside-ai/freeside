@@ -7,11 +7,11 @@ import Observation
 /// with something open keeps an entry, so the store does not grow with the
 /// task list. Current Run and the Timeline never fold, so no section names
 /// them. The page head's Attachments fold keeps its state here too, as
-/// the one fold above the body. A stored id for the retired Task fold
-/// (`task`) is kept as written and never read. A stored id for the current
-/// campaign is not read while it stays current; once a newer campaign
-/// takes its place it is an earlier campaign's fold, and opens as it was
-/// left.
+/// the one fold above the body, and so does each earlier thread's fold
+/// under the Timeline. A stored id for the retired Task fold (`task`) is
+/// kept as written and never read. A stored id for the current campaign
+/// is not read while it stays current; once a newer campaign takes its
+/// place it is an earlier campaign's fold, and opens as it was left.
 @MainActor
 @Observable
 package final class TaskTimelineDisclosurePreferences {
@@ -35,6 +35,8 @@ package final class TaskTimelineDisclosurePreferences {
         /// The page head's one Attachments fold, the files the task was
         /// submitted with.
         case attachments
+        /// An earlier thread's fold under the Timeline, by conversation id.
+        case conversation(String)
 
         var id: String {
             switch self {
@@ -45,6 +47,7 @@ package final class TaskTimelineDisclosurePreferences {
             case .priorRounds(let runID): "rounds:\(runID)"
             case .identifiers: "identifiers"
             case .attachments: "attachments"
+            case .conversation(let conversationID): "conversation:\(conversationID)"
             }
         }
     }

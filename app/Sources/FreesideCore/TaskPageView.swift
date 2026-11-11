@@ -3,10 +3,11 @@ import SwiftUI
 
 /// One page per task, in every state: the header, the pinned outline, the
 /// leading card and the other open items, then the body, split by tense
-/// (◆C): Current Run, what is happening, then the Stop states, Conversation,
-/// and the Timeline, what happened. The body's history is as the daemon
-/// computes it (`GET /tasks/{id}/timeline`): the task's events as one open
-/// rail that marks where each stage began, then every earlier campaign folds
+/// (◆C): Current Run, what is happening, then the Stop states, the
+/// Timeline, and Earlier Conversations, what happened. The current thread
+/// draws in its card only. The body's history is as the daemon computes
+/// it (`GET /tasks/{id}/timeline`): the task's events as one open rail
+/// that marks where each stage began, then every earlier campaign folds
 /// its runs. Every list keeps the daemon's newest-first order; unlike the run
 /// rail, nothing here is reversed or sorted by timestamp.
 ///
@@ -140,6 +141,14 @@ struct TaskPageView: View {
     /// `TaskPageAnchor`: the footer is no section the outline row offers.
     private enum IdentifiersFooter: Hashable { case top }
 
+    /// The leading card's thread, where the Conversation chip lands while
+    /// the card has one. Not a `TaskPageAnchor`: the thread is part of
+    /// the card, so a reader in it keeps the Decisions place. Otherwise
+    /// deciding on a card from below its thread's top would return the
+    /// reader to Earlier Conversations at the page's end, where the
+    /// closed thread goes, instead of the top.
+    private enum CardThread: Hashable { case top }
+
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
@@ -193,12 +202,30 @@ struct TaskPageView: View {
         return coordinator.store.orderedSnapshots.filter { list.taskID(ofItem: $0.item.id) == snapshot.task.id }
     }
 
-    private var conversations: [Components.Schemas.ConversationSnapshot] {
-        TaskTimelinePresentation.conversations(taskItems.map(\.item)) { coordinator.store.conversationsByID[$0] }
+    /// The threads of items no longer open, which fold under the Timeline.
+    private var earlierConversations: [TaskTimelinePresentation.EarlierConversation] {
+        TaskTimelinePresentation.earlierConversations(taskItems.map(\.item), leadingItemID: leadingItemID) {
+            coordinator.store.conversationsByID[$0]
+        }
     }
 
-    private static func messageCount(_ conversations: [Components.Schemas.ConversationSnapshot]) -> Int {
-        conversations.reduce(0) { $0 + $1.conversation.messages.count }
+    /// The messages in the thread the leading card draws; zero without a
+    /// card or a thread.
+    private var cardThreadMessages: Int {
+        guard leadingCard != nil,
+            let id = taskItems.first(where: { $0.item.id == leadingItemID })?.item.conversation_id
+        else { return 0 }
+        return coordinator.store.conversationsByID[id]?.conversation.messages.count ?? 0
+    }
+
+    /// Where the Conversation chip goes: the card's thread when it has
+    /// one, else Earlier Conversations, else nowhere.
+    static func conversationChip(
+        cardThreadMessages: Int, earlier: [TaskTimelinePresentation.EarlierConversation]
+    ) -> OutlineConversation? {
+        if cardThreadMessages > 0 { return .inCard(messages: cardThreadMessages) }
+        let messages = earlier.reduce(0) { $0 + $1.conversation.conversation.messages.count }
+        return messages > 0 ? .earlier(messages: messages) : nil
     }
 
     /// The gap between the page's parts: header, outline row, card, one-line
@@ -269,9 +296,16 @@ struct TaskPageView: View {
     /// holds every jump target as soon as the page draws.
     private func sections(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         VStack(alignment: .leading, spacing: Self.contentGap) {
+            let earlier = earlierConversations
+            let chip = Self.conversationChip(cardThreadMessages: cardThreadMessages, earlier: earlier)
             if let leadingCard {
                 leadingCard
                     .background(alignment: .top) { jumpTarget(.section(.decisions)) }
+                    // The card draws the chip's target on its own thread,
+                    // which only it can place.
+                    .environment(
+                        \.taskPageCardThreadTarget,
+                        chip?.isInCard == true ? AnyView(cardThreadTarget) : nil)
             }
             let others = openItems.filter { $0.item.id != leadingItemID }
             if !others.isEmpty {
@@ -286,18 +320,17 @@ struct TaskPageView: View {
                     }
                 }
             }
-            let conversations = conversations
             VStack(alignment: .leading, spacing: 22) {
                 stopStates
                 lineChangeStates
-                // Absent at zero, as Decisions is: the outline drops its
-                // chip then too.
-                if Self.messageCount(conversations) > 0 {
-                    conversationSection(conversations)
-                        .background(alignment: .top) { jumpTarget(.section(.conversation)) }
-                }
                 timelineSection(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.timeline)) }
+                // Absent when it lists none. It is a place the reader
+                // keeps even while the chip goes to the card's thread.
+                if !earlier.isEmpty {
+                    earlierConversationsSection(earlier)
+                        .background(alignment: .top) { jumpTarget(.section(.conversation)) }
+                }
                 // Outside the timeline, so a seated card's identifiers,
                 // which have no other place on the page, stay reachable
                 // while the history loads or is unavailable.
@@ -339,6 +372,17 @@ struct TaskPageView: View {
             }
             .onDisappear { place.targetTops[target] = nil }
             .id(target)
+            .padding(.top, -outlineHeight)
+            .accessibilityHidden(true)
+    }
+
+    /// The Conversation chip's target on the leading card's thread. It
+    /// lands clear of the pinned row as a jump target does, and reports
+    /// no top: the page's place there is the card's (`CardThread`).
+    private var cardThreadTarget: some View {
+        Color.clear
+            .frame(height: outlineHeight)
+            .id(CardThread.top)
             .padding(.top, -outlineHeight)
             .accessibilityHidden(true)
     }
@@ -658,10 +702,12 @@ struct TaskPageView: View {
 
     private func outlineRow(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let open = openItems
+        let conversation = Self.conversationChip(
+            cardThreadMessages: cardThreadMessages, earlier: earlierConversations)
         return OutlineRow(
             decisions: open.map { .init(id: $0.item.id, title: AttentionDisplay.ask($0.item)) },
             leadingItemID: leadingItemID,
-            conversationMessages: Self.messageCount(conversations),
+            conversation: conversation,
             runs: (timeline?.sections.flatMap(\.runs) ?? []).map {
                 .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
             },
@@ -680,7 +726,13 @@ struct TaskPageView: View {
                 // named. The head is no place the reader keeps.
                 case .task: withAnimation { scrollProxy?.scrollTo(PageTop.top, anchor: .top) }
                 case .runs: jump(to: .section(.timeline))
-                case .decisions, .conversation, .timeline: jump(to: .section(section))
+                case .conversation:
+                    if conversation?.isInCard == true {
+                        withAnimation { scrollProxy?.scrollTo(CardThread.top, anchor: .top) }
+                    } else {
+                        jump(to: .section(.conversation))
+                    }
+                case .decisions, .timeline: jump(to: .section(section))
                 }
             },
             onChooseDecision: { onOpenItem?($0) },
@@ -791,17 +843,35 @@ struct TaskPageView: View {
         if !change.isQuiet { change }
     }
 
-    /// Every conversation the task's items name, read-only: a reply goes
-    /// through the leading card, which is what the thread's item asks.
-    private func conversationSection(_ conversations: [Components.Schemas.ConversationSnapshot]) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            ForEach(conversations, id: \.conversation.id) { conversation in
-                ConversationView(
-                    snapshot: conversation,
-                    attachments: coordinator.store.attachments,
-                    loadsAttachments: screenshotTimeline == nil,
-                    now: now,
-                    rendersInteractiveControls: screenshotTimeline == nil)
+    /// The threads of items no longer open, newest first, one closed fold
+    /// each, labelled by the item's title and summarised by its status, its
+    /// message count, and its last message's time. Each opens read-only:
+    /// the item is closed, so nothing takes a reply, and the fold's label
+    /// already names the thread, so it draws no Conversation keyword.
+    private func earlierConversationsSection(
+        _ earlier: [TaskTimelinePresentation.EarlierConversation]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            KeywordLabel(text: "Earlier Conversations")
+                .accessibilityAddTraits(.isHeader)
+            ForEach(earlier, id: \.conversation.conversation.id) { thread in
+                let title = AttentionDisplay.title(thread.item)
+                let summary = TaskTimelinePresentation.earlierConversationSummary(
+                    thread, now: now, locale: locale, timeZone: timeZone)
+                SentenceDisclosure(
+                    label: title,
+                    summary: summary,
+                    spokenLabel: "Conversation, \(title), \(summary)",
+                    isExpanded: fold(.conversation(thread.conversation.conversation.id))
+                ) {
+                    ConversationView(
+                        snapshot: thread.conversation,
+                        showsKeyword: false,
+                        attachments: coordinator.store.attachments,
+                        loadsAttachments: screenshotTimeline == nil,
+                        now: now,
+                        rendersInteractiveControls: screenshotTimeline == nil)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1301,6 +1371,24 @@ enum TaskPageAnchor: Hashable {
         // A jump lands its target on the row's top, give or take rounding.
         let tolerance: CGFloat = 1
         return offsets.filter { $0.value <= tolerance }.max { $0.value < $1.value }?.key
+    }
+}
+
+extension EnvironmentValues {
+    /// The task page's scroll target for the leading card's thread, set
+    /// on the card while its thread is where the outline's Conversation
+    /// chip goes. Nil everywhere else, so an unseated card draws nothing
+    /// for it.
+    @Entry var taskPageCardThreadTarget: AnyView? = nil
+}
+
+/// Draws the task page's Conversation chip target on a seated card's
+/// thread, and nothing anywhere else.
+struct TaskPageConversationAnchor: View {
+    @Environment(\.taskPageCardThreadTarget) private var target
+
+    var body: some View {
+        if let target { target }
     }
 }
 
@@ -1970,19 +2058,49 @@ enum TaskTimelinePresentation {
         return "\(TaskDisplay.finishedRow(task, position: position).keyword) · \(finished)"
     }
 
-    /// The conversations `items` name, each once, by its newest-first item.
-    static func conversations(
-        _ items: [Components.Schemas.AttentionItem],
+    /// A thread the page folds under the Timeline, with the item it
+    /// belongs to.
+    struct EarlierConversation {
+        let item: Components.Schemas.AttentionItem
+        let conversation: Components.Schemas.ConversationSnapshot
+    }
+
+    /// The threads of items no longer open, newest first, each once. A
+    /// conversation belongs to the newest item that names it, and is left
+    /// out when that item is open (its card draws it), when the leading
+    /// item names it too (the leading card draws it), when the store
+    /// doesn't hold it, or when it holds no message.
+    static func earlierConversations(
+        _ items: [Components.Schemas.AttentionItem], leadingItemID: String?,
         lookup: (String) -> Components.Schemas.ConversationSnapshot?
-    ) -> [Components.Schemas.ConversationSnapshot] {
+    ) -> [EarlierConversation] {
+        let leading = items.first { $0.id == leadingItemID }?.conversation_id
         var seen: Set<String> = []
         return
             items
             .sorted { ($0.created_at ?? .distantPast) > ($1.created_at ?? .distantPast) }
             .compactMap { item in
-                guard let id = item.conversation_id, seen.insert(id).inserted else { return nil }
-                return lookup(id)
+                guard let id = item.conversation_id, seen.insert(id).inserted,
+                    item.status != .open, id != leading,
+                    let conversation = lookup(id), !conversation.conversation.messages.isEmpty
+                else { return nil }
+                return EarlierConversation(item: item, conversation: conversation)
             }
+    }
+
+    /// An earlier thread's fold summary: the item's status word, the
+    /// message count, and the last message's time, as in
+    /// `Resolved · 6 messages · Nov 3, 2:02 PM`.
+    static func earlierConversationSummary(
+        _ thread: EarlierConversation, now: Date, locale: Locale, timeZone: TimeZone
+    ) -> String {
+        let messages = thread.conversation.conversation.messages
+        let count = messages.count == 1 ? "1 message" : "\(messages.count.formatted()) messages"
+        let last = messages.max { $0.sequence < $1.sequence }
+        return
+            ([AttentionDisplay.label(thread.item.status), count]
+            + [last.map { FreesideFormat.shortTime($0.created_at, now: now, locale: locale, timeZone: timeZone) }]
+            .compactMap { $0 }).joined(separator: " · ")
     }
 
     /// The stage the rail's newest start point names, which the header's

@@ -31,18 +31,43 @@ enum TaskPageSection: Hashable {
     case timeline
     case runs
 
-    /// The outline row's chips, in page order. Decisions and Conversation
-    /// draw only when their sections hold something, as the body does.
-    static func outline(decisions: Int, conversationMessages: Int) -> [TaskPageSection] {
+    /// The outline row's chips, in page order. Decisions draws only with
+    /// an open item. Conversation sits where its thread is: before the
+    /// Timeline for the leading card's, after Runs for Earlier
+    /// Conversations, and nowhere with neither.
+    static func outline(decisions: Int, conversation: OutlineConversation?) -> [TaskPageSection] {
         (decisions > 0 ? [.decisions] : []) + [.task]
-            + (conversationMessages > 0 ? [.conversation] : []) + [.timeline, .runs]
+            + (conversation?.isInCard == true ? [.conversation] : []) + [.timeline, .runs]
+            + (conversation?.isInCard == false ? [.conversation] : [])
+    }
+}
+
+/// Where the outline's Conversation chip jumps, with the messages it
+/// counts there.
+enum OutlineConversation: Equatable {
+    /// The leading card's thread.
+    case inCard(messages: Int)
+    /// The Earlier Conversations section under the Timeline.
+    case earlier(messages: Int)
+
+    var isInCard: Bool {
+        switch self {
+        case .inCard: true
+        case .earlier: false
+        }
+    }
+
+    var messages: Int {
+        switch self {
+        case .inCard(let messages), .earlier(let messages): messages
+        }
     }
 }
 
 /// The page's one pinned element: a row of keyword chips over a hairline.
 /// Selection records the last chip chosen and doesn't follow scrolling.
-/// Decisions draws at one open item or more, Conversation at one message or
-/// more, and Decisions and Runs are native popups when they hold several.
+/// Decisions draws at one open item or more, Conversation where a thread
+/// is, and Decisions and Runs are native popups when they hold several.
 /// One line at every text size: the chips scroll sideways where the column
 /// can't hold them, and the trailing slot (the task's menu) stays put.
 struct OutlineRow<Trailing: View>: View {
@@ -54,7 +79,8 @@ struct OutlineRow<Trailing: View>: View {
     let decisions: [Entry]
     /// The decision whose card leads, which its popup checks.
     let leadingItemID: String?
-    let conversationMessages: Int
+    /// Where the Conversation chip goes and what it counts; nil draws none.
+    let conversation: OutlineConversation?
     let runs: [Entry]
     let selected: TaskPageSection
     var rendersInteractiveControls = true
@@ -103,7 +129,7 @@ struct OutlineRow<Trailing: View>: View {
     private var chips: some View {
         HStack(spacing: 4) {
             ForEach(
-                TaskPageSection.outline(decisions: decisions.count, conversationMessages: conversationMessages),
+                TaskPageSection.outline(decisions: decisions.count, conversation: conversation),
                 id: \.self
             ) { section in
                 switch section {
@@ -112,7 +138,7 @@ struct OutlineRow<Trailing: View>: View {
                         "Decisions", section: .decisions, entries: decisions, checked: leadingItemID,
                         choose: onChooseDecision)
                 case .task: chip("Task", section: .task)
-                case .conversation: chip("Conversation", count: conversationMessages, section: .conversation)
+                case .conversation: chip("Conversation", count: conversation?.messages, section: .conversation)
                 case .timeline: chip("Timeline", section: .timeline)
                 case .runs: menuChip("Runs", section: .runs, entries: runs, checked: nil, choose: onChooseRun)
                 }
