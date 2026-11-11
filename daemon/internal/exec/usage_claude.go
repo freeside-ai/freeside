@@ -233,6 +233,19 @@ func decodeClaudeRateLimitEvent(line []byte) (ClaudeRateLimitEvent, bool) {
 	return event, true
 }
 
+// ClaudeFableWindow is the window the pinned CLI names the Fable weekly
+// bucket: the seed it builds from a turn's anthropic-ratelimit-unified-7d_oi
+// headers and the rateLimitType of a rate_limit_event that bucket binds. Its
+// get_usage answer carries the same bucket as rate_limits.model_scoped, which
+// decodeClaudeUsageAnswer reads under this name so the answer, the events, and
+// a refusal all describe one window
+// (devlog/2026-11-10-1830-claude-fable-window.md).
+const ClaudeFableWindow = "seven_day_overage_included"
+
+// claudeModelScopedKey is the rate_limits key the pinned CLI (2.1.319) puts
+// per-model weekly buckets under, as an array rather than a named window.
+const claudeModelScopedKey = "model_scoped"
+
 // decodeClaudeUsageAnswer reads one get_usage control response. ok is false
 // only for a malformed answer; a refused or empty answer is ok with no
 // windows.
@@ -241,11 +254,8 @@ func decodeClaudeUsageAnswer(line []byte) ([]ClaudeUsageWindow, bool) {
 		Response struct {
 			Subtype  string `json:"subtype"`
 			Response *struct {
-				RateLimitsAvailable *bool `json:"rate_limits_available"`
-				RateLimits          map[string]*struct {
-					Utilization *float64 `json:"utilization"`
-					ResetsAt    *string  `json:"resets_at"`
-				} `json:"rate_limits"`
+				RateLimitsAvailable *bool                      `json:"rate_limits_available"`
+				RateLimits          map[string]json.RawMessage `json:"rate_limits"`
 			} `json:"response"`
 		} `json:"response"`
 	}
@@ -269,24 +279,90 @@ func decodeClaudeUsageAnswer(line []byte) ([]ClaudeUsageWindow, bool) {
 		return []ClaudeUsageWindow{}, true
 	}
 	windows := make([]ClaudeUsageWindow, 0, len(answer.RateLimits))
-	for name, limit := range answer.RateLimits {
-		if limit == nil || limit.Utilization == nil {
-			return nil, false
-		}
-		share := math.Round(*limit.Utilization)
-		if share < 0 || share > 100 {
-			return nil, false
-		}
-		window := ClaudeUsageWindow{Window: name, UsedPercent: int(share)}
-		if limit.ResetsAt != nil {
-			resets, err := time.Parse(time.RFC3339Nano, *limit.ResetsAt)
-			if err != nil {
+	for name, raw := range answer.RateLimits {
+		if name == claudeModelScopedKey {
+			window, found, ok := decodeClaudeFableWindow(raw)
+			if !ok {
 				return nil, false
 			}
-			window.ResetsAt = new(resets.UTC())
+			if found {
+				windows = append(windows, window)
+			}
+			continue
+		}
+		var limit *claudeUsageLimit
+		if err := strictjson.DecodeAllowingUnknownFields(
+			raw, &limit, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
+		); err != nil || limit == nil || limit.Utilization == nil {
+			return nil, false
+		}
+		window, ok := claudeUsageWindow(name, *limit.Utilization, limit.ResetsAt)
+		if !ok {
+			return nil, false
 		}
 		windows = append(windows, window)
 	}
 	slices.SortFunc(windows, func(a, b ClaudeUsageWindow) int { return strings.Compare(a.Window, b.Window) })
 	return windows, true
+}
+
+// claudeUsageLimit is one named window of a get_usage answer.
+type claudeUsageLimit struct {
+	Utilization *float64 `json:"utilization"`
+	ResetsAt    *string  `json:"resets_at"`
+}
+
+// decodeClaudeFableWindow reads rate_limits.model_scoped. On the setup-token
+// path the CLI builds it from the turn's 7d_oi headers alone, so it holds at
+// most one entry, named by the CLI's overage-included-models allowlist
+// ("Fable" by default). That one entry, when it names Fable and carries a
+// share, is the ClaudeFableWindow reading; found is false for anything else
+// the CLI may report there (no entry, no share, another model, or several
+// buckets from an account read), which this reader can't name, so it is left
+// out rather than sinking the answer's other windows. ok is false only when
+// the value is not an array of entries, or the Fable entry's share or reset is
+// malformed.
+func decodeClaudeFableWindow(raw json.RawMessage) (window ClaudeUsageWindow, found, ok bool) {
+	var entries []struct {
+		DisplayName string   `json:"display_name"`
+		Utilization *float64 `json:"utilization"`
+		ResetsAt    *string  `json:"resets_at"`
+	}
+	if err := strictjson.DecodeAllowingUnknownFields(
+		raw, &entries, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return ClaudeUsageWindow{}, false, false
+	}
+	if len(entries) != 1 || !namesFable(entries[0].DisplayName) || entries[0].Utilization == nil {
+		return ClaudeUsageWindow{}, false, true
+	}
+	window, ok = claudeUsageWindow(ClaudeFableWindow, *entries[0].Utilization, entries[0].ResetsAt)
+	return window, ok, ok
+}
+
+// namesFable reports whether a model_scoped display name is Fable: "Fable"
+// or a versioned "Fable 5.1", in any case. The CLI takes the name from its
+// allowlist, whose entries include both.
+func namesFable(displayName string) bool {
+	name := strings.ToLower(displayName)
+	return name == "fable" || strings.HasPrefix(name, "fable ")
+}
+
+// claudeUsageWindow builds one window from a share in percent and an
+// optional RFC 3339 reset. ok is false for a share that rounds outside 0 to
+// 100 or a reset that does not parse.
+func claudeUsageWindow(name string, utilization float64, resetsAt *string) (ClaudeUsageWindow, bool) {
+	share := math.Round(utilization)
+	if share < 0 || share > 100 {
+		return ClaudeUsageWindow{}, false
+	}
+	window := ClaudeUsageWindow{Window: name, UsedPercent: int(share)}
+	if resetsAt != nil {
+		resets, err := time.Parse(time.RFC3339Nano, *resetsAt)
+		if err != nil {
+			return ClaudeUsageWindow{}, false
+		}
+		window.ResetsAt = new(resets.UTC())
+	}
+	return window, true
 }

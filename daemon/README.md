@@ -1964,7 +1964,13 @@ warning naming the invocation. A turn with rate-limit events and no answer,
 such as a specification turn, is not kept: a collection replaces the pool's
 window set, and events alone would drop the weekly reading. A collection maps `five_hour` (5 hours) and
 `seven_day` (7 days) to readings with their length, reset, and used share; a
-`rejected` rate-limit event reads exhausted. The answers live in memory only,
+`rejected` rate-limit event reads exhausted. A Fable turn's answer also
+carries the Fable weekly bucket, as a one-entry `rate_limits.model_scoped`
+array; the capture names it `seven_day_overage_included`, the CLI's name for
+it in its seed and rate-limit events, and the collection reads it as a 7-day
+window. Every collection maps that window to the Fable route model ids
+(`fable`, `claude-fable-5`, `claude-fable-5-1`, `claude-fable-5-2`), so an
+exhausted Fable bucket holds only Fable work. The answers live in memory only,
 so after a daemon restart every Claude pool's collection fails with "no
 writer turn has reported usage under enrollment ... since the daemon started"
 until a writer turn runs under its collector. That failure keeps the stored

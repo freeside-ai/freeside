@@ -39,9 +39,26 @@ type heldClaudeUsage struct {
 // (engine.weeklyWindowLength). A name outside this table is left out of the
 // answer, since its length is unknown.
 var claudeUsageWindowLengths = map[string]time.Duration{
-	"five_hour": 5 * time.Hour,
-	"seven_day": 7 * 24 * time.Hour,
+	"five_hour":       5 * time.Hour,
+	"seven_day":       7 * 24 * time.Hour,
+	claudeFableWindow: 7 * 24 * time.Hour,
 }
+
+// claudeFableWindow is exec.ClaudeFableWindow, the Fable weekly bucket. It is
+// spelled here because the collector names only the capture's types from
+// internal/exec (TestClaudeUsageCollectorMakesNoRequest); a test pins the two
+// equal.
+const claudeFableWindow = "seven_day_overage_included"
+
+// claudeFableRouteModelIDs are the route model ids the Fable window limits:
+// the CLI's alias and every Fable model id it accepts. Every collection maps
+// the window to each, whether or not this turn reported it, so its reading or
+// a refusal mark on it ranks and holds only Fable work. Unmapped, the record
+// would treat it as general (domain.ModelWindow) and an exhausted Fable bucket
+// would hold every model on the pool. An id missing
+// here is not held by the window; the provider's refusal still parks its
+// attempt (devlog/2026-11-10-1830-claude-fable-window.md).
+var claudeFableRouteModelIDs = []string{"claude-fable-5", "claude-fable-5-1", "claude-fable-5-2", "fable"}
 
 // NewClaudeUsageCollector returns a collector with no captures.
 func NewClaudeUsageCollector() *ClaudeUsageCollector {
@@ -95,7 +112,7 @@ func (c *ClaudeUsageCollector) CollectUsage(_ context.Context, request UsageColl
 
 // claudeUsageCollection maps a capture to a full report: one reading per
 // window in claudeUsageWindowLengths that the get_usage answer or a
-// rate-limit event names. An event's status sets the reading's status and its
+// rate-limit event names, and the Fable window's model scope. An event's status sets the reading's status and its
 // reset wins over the answer's; a window with no event reads allowed, and one
 // the answer leaves out but an event names carries no share. Unknown windows and event statuses
 // are left out and named in the detail. A capture that yields no reading
@@ -160,11 +177,17 @@ func claudeUsageCollection(
 	for _, window := range slices.Sorted(maps.Keys(readings)) {
 		windows = append(windows, *readings[window])
 	}
+	modelWindows := make([]domain.ModelWindow, 0, len(claudeFableRouteModelIDs))
+	for _, model := range claudeFableRouteModelIDs {
+		modelWindows = append(modelWindows, domain.ModelWindow{RouteModelID: model, Window: claudeFableWindow})
+	}
 	detail := "from the writer turn observed at " + capture.ObservedAt.Format(time.RFC3339)
 	if len(notes) > 0 {
 		detail += "; " + strings.Join(notes, "; ")
 	}
-	return UsageCollection{Availability: domain.AvailabilitySupported, Windows: windows, Detail: detail}, nil
+	return UsageCollection{
+		Availability: domain.AvailabilitySupported, Windows: windows, ModelWindows: modelWindows, Detail: detail,
+	}, nil
 }
 
 // claudeEventStatus maps the pinned CLI's rate_limit_event status to a window

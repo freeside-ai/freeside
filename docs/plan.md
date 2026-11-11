@@ -1978,11 +1978,14 @@ What a network probe can report remains a pinned-CLI empirical contract.
 Under Freeside's setup-token credential, the pinned Claude CLI offers a token
 digest plus an auth check, and the Claude usage spike settled what it shows
 about usage ([spike note](../devlog/2026-11-03-1457-claude-usage-share-spike.md)).
-The weekly window is the only one with a used share, and that share comes
+The weekly windows are the only ones with a used share, and that share comes
 only from the rate-limit headers of an inference turn, so a reading is as
 fresh as the last turn and there is no idle read. The five-hour window shows
 status and reset only when a turn's rate-limit event names it and is
-otherwise `unsupported`, and model-scoped windows are `unsupported`. Account
+otherwise `unsupported`. Model-scoped windows are `unsupported`, except the
+Fable weekly bucket: a Fable turn's headers carry it, it reads as a share like
+the weekly window, and it limits only Fable models
+([note](../devlog/2026-11-10-1830-claude-fable-window.md)). Account
 facts are a separate matter: the setup token lacks the `user:profile` scope,
 the provider refuses the profile and usage requests, and the Claude probe's
 proven floor for account facts such as plan type stays integrity plus
