@@ -1491,13 +1491,23 @@ func newLaunchRig(t *testing.T) launchRig {
 	return rig
 }
 
+// launchRigPrepare holds the prepare command's place while script relocates
+// the launch command. It starts with no relocated prefix.
+const launchRigPrepare = "/launch-rig/bin/prepare"
+
 // script is the real launch command, relocated under the rig's root. Every
 // absolute path the command names is single-quoted, so a path the relocation
 // missed is found here and not by a write outside the rig.
+//
+// The rig's own prepare path goes in through the relocating replacer, which
+// never rescans what it inserts. Built into the command first, it would be
+// relocated too wherever the rig sits under prepareHome, as it does when
+// check.sh roots TMPDIR under a HOME of /tmp/freeside-home (#3013).
 func (rig launchRig) script(t *testing.T) string {
 	t.Helper()
-	script := deferredCommand([]string{filepath.Join(rig.bin, "prepare")})
+	script := deferredCommand([]string{launchRigPrepare})
 	script = strings.NewReplacer(
+		shellQuote(launchRigPrepare), shellQuote(filepath.Join(rig.bin, "prepare")),
 		"'"+workspaceDir, "'"+rig.workspace,
 		"'/var/lib/freeside", "'"+filepath.Join(rig.root, "var/lib/freeside"),
 		"'"+prepareHome, "'"+filepath.Join(rig.root, prepareHome),
@@ -1519,6 +1529,22 @@ func (rig launchRig) script(t *testing.T) string {
 		rest = rest[2:]
 	}
 	return script
+}
+
+// TestLaunchRigScriptKeepsARigUnderPrepareHome builds the relocated command
+// for a rig under prepareHome, where the proof's container puts it (#3013).
+// The tests that run the command skip on macOS; this one needs no mv -T.
+func TestLaunchRigScriptKeepsARigUnderPrepareHome(t *testing.T) {
+	t.Parallel()
+	root := path.Join(prepareHome, ".cache/freeside/daemon-test/slots/1.tmp.noindex/rig")
+	rig := launchRig{root: root, workspace: path.Join(root, "workspace"), bin: path.Join(root, "bin")}
+	script := rig.script(t)
+	if want := shellQuote(path.Join(rig.bin, "prepare")); !strings.Contains(script, want) {
+		t.Fatalf("launch command does not run the rig's prepare %s", want)
+	}
+	if doubled := path.Join(root, rig.bin); strings.Contains(script, doubled) {
+		t.Fatalf("launch command relocates the rig's own path a second time: %s", doubled)
+	}
 }
 
 func (rig launchRig) run(t *testing.T, pathPrefix ...string) ([]byte, error) {
