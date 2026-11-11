@@ -3803,8 +3803,8 @@ onboard from a `main` that already carries `.freeside/verify.json`.
 - **Prerequisites:** the executor installed and proved on the daemon host
   (Install the macOS Verification Executor, Prove the Executor), and a Swift
   cache entry for the onboarded commit (`freesided swift-cache populate`).
-  `freesided deputy` configures no executor yet (#2978), so a deputy run
-  can't execute the `macos_host` commands until it does.
+  A deputy run names the executor in its `macos_verification` setting (Run
+  Real Work With The Deputy); without it the `macos_host` commands fail.
 - **Executor measurements:** `app format` passes as a slot. The other three
   `macos_host` commands are unproven as slots: the executor defects in #3009
   stop a slot after its first job. #3016 measures all four once #3009
@@ -3882,7 +3882,9 @@ freesided submit -db <state-root>/daemon/freeside.db --require-composition ...
 
 **Settings.** `<state-root>/daemon/settings.json` is required, mode `0600`
 and owned by the running user, version `freeside-deputy-settings-v1`. Every
-key but `agent_tree.review_harness` and `agent_tree.second_writer` is required (an unused one is `""`), an unknown or repeated key is
+key but `agent_tree.review_harness`, `agent_tree.second_writer`,
+`writers.specifier_escalated`, and `macos_verification` is required (an
+unused one is `""`), an unknown or repeated key is
 refused, and each refusal is one line naming the field. The SHA-256 of the
 file bytes is the settings revision, printed at start and recorded in the
 composition manifest.
@@ -3913,6 +3915,21 @@ match adoption's, but the scheduled usage collection still calls the provider
 under its credential. Name it in `agent_tree` again, or start on a fresh
 root.
 
+`macos_verification` may be absent too, with the same effect on the
+revision; absent configures no macOS verification executor, as an empty
+`-macverify-root` does, so every `macos_host` recipe command fails. When
+present it is an object whose four keys are all required and set: `root`,
+`slots`, `xcode_build`, and `swift`, the values of `-macverify-root`,
+`-macverify-slots`, `-macverify-xcode-build`, and `-macverify-swift` (Prove
+the Executor). `slots` has no default, unlike the flag: list every slot the
+install created. An empty value, an empty or repeated slot, or a `root`
+that is not an absolute clean path is refused before the lease; a malformed
+toolchain token is refused at daemon start, as for the flags. A configured
+executor runs its full conformance pass at every start whose self-check
+passes, after the ward's, because the deputy always runs conformance, and a
+failed pass fails the start. Install the executor first (Install the macOS Verification
+Executor).
+
 Configured filesystem paths must be absolute and clean: no `.` or `..`
 components, repeated separators, or trailing separator. `prompts.vendor_instructions` cannot be
 `/`. Optional judgment paths are checked when configured;
@@ -3931,6 +3948,7 @@ container volume, not a host path.
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
 | `build` | `proxy`, `base_build_ref`, `dns` |
+| `macos_verification` | Optional: `root`, `slots`, `xcode_build`, `swift`, all required when present |
 
 `repository.project` is the project ID that `submit -project` and the
 manual-submission file repeat. Use the managed repository's name (`gh-imgup`
@@ -4828,7 +4846,8 @@ stop startup: the daemon logs that the executor declares nothing. Under
 `unattended`, each `macos_host` job is then refused by name until a pass
 under `-run-conformance`; under `attended_dev`, jobs are still admitted.
 Since the digest names the daemon binary, a rebuilt `freesided` needs a fresh
-pass. `freesided deputy` configures no executor yet (#2978).
+pass. `freesided deputy` takes the same four values from its
+`macos_verification` setting (Run Real Work With The Deputy).
 
 **The pass.** Full refuses off macOS and records nothing there. Otherwise it
 first withdraws the declaration and records a `superseded` marker, so a pass
