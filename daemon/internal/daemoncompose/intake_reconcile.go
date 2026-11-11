@@ -1078,7 +1078,7 @@ func intakeWorkItemDocument(occurrence domain.IntakeOccurrence) []byte {
 // before this title change keeps its frozen record.
 func intakePublication(init IntakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	publication := intakeLiteralPublication(init, occurrence)
-	publication.Recipe = engine.IntakePublicationRecipe
+	publication.Recipe = engine.IntakePublicationRecipeV2
 	return publication
 }
 

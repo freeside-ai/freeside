@@ -102,7 +102,7 @@ func TestSubmitTaskEgressPolicyBeforePersistence(t *testing.T) {
 			init.PolicyKeys = submittedEgressKeys(values)
 			holder.set("project-1", init)
 			const source = "Check the egress declaration."
-			publication, err := json.Marshal(engine.ProductionPublication{Recipe: "freeside.client-publication/v2", CommitAuthor: init.CommitAuthor})
+			publication, err := json.Marshal(engine.ProductionPublication{Recipe: "freeside.client-publication/v3", CommitAuthor: init.CommitAuthor})
 			if err != nil {
 				t.Fatal(err)
 			}

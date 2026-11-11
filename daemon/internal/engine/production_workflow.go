@@ -207,12 +207,13 @@ func (p ProductionPublication) validateRetained() error {
 	}
 	// The intake recipe carries literal title and body as its fallback, so it
 	// takes the literal checks below, including the ban on a source issue.
-	if p.Recipe != "" && p.Recipe != IntakePublicationRecipe {
+	if p.Recipe != "" && !intakePublicationRecipe(p.Recipe) {
 		// Both refusals name keys, never values: preflight prints this text
 		// into the composition manifest.
-		if p.Recipe != clientPublicationRecipeV1 && p.Recipe != clientPublicationRecipeV2 {
+		if p.Recipe != clientPublicationRecipeV1 && p.Recipe != clientPublicationRecipeV2 &&
+			p.Recipe != clientPublicationRecipeV3 {
 			return errors.New(`publication "recipe" is not an accepted recipe: ` +
-				`a recipe publication sets "recipe" to "` + clientPublicationRecipeV2 + `" ` +
+				`a recipe publication sets "recipe" to "` + clientPublicationRecipeV3 + `" ` +
 				`(and "source_issue" when the task is one GitHub issue URL) with no "title" or "body"; ` +
 				`a literal publication sets "title" and "body" with no "recipe"`)
 		}

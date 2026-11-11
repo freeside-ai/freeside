@@ -683,6 +683,14 @@ func assertClosureOrigin(t *testing.T, p *productionPublicationHarness, origin d
 // artifact (recipe v2), not the v1 claim fallback, and returns the PR body.
 func assertAuthoredMetadata(t *testing.T, p *productionPublicationHarness) string {
 	t.Helper()
+	return assertAuthoredMetadataFor(t, p, "freeside.client-publication/v2")
+}
+
+// assertAuthoredMetadataFor checks the authored PR under a frozen recipe:
+// client v2 and intake v1 end the prose with the producer footer, and client v3
+// and intake v2 end it with the author's last section.
+func assertAuthoredMetadataFor(t *testing.T, p *productionPublicationHarness, recipe string) string {
+	t.Helper()
 	if refs, count := p.forge.Counts(); refs != 1 || count != 1 {
 		t.Fatalf("effects: refs=%d PRs=%d", refs, count)
 	}
@@ -693,11 +701,15 @@ func assertAuthoredMetadata(t *testing.T, p *productionPublicationHarness) strin
 	body := prs[0].Body
 	for _, want := range []string{
 		"Authored body prose from the recipe v2 author.",
-		"Produced by the", "## Verification", "<!-- freeside:publication-identity=",
+		"## Verification", "<!-- freeside:publication-identity=",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q", want)
 		}
+	}
+	footer := recipe == "freeside.client-publication/v2" || recipe == "freeside.intake-publication/v1"
+	if strings.Contains(body, "Produced by the") != footer {
+		t.Fatalf("recipe %s: producer footer present = %t, want %t", recipe, !footer, footer)
 	}
 	if strings.Contains(body, "## Agent-reported implementation (claim)") {
 		t.Fatal("recipe v2 render fell back to the v1 claim")

@@ -15,10 +15,10 @@ const (
 	intakeLiteralBody  = "Automated resolution of issue #82 in freeside-ai/evidence-repo, initiated by the \"freeside\" label. The implementation is derived from the specified specification, not the issue text."
 )
 
-func intakeRecipeMetadata() engine.ProductionPublication {
+func intakeRecipeMetadata(recipe string) engine.ProductionPublication {
 	metadata := productionPublicationMetadata()
 	metadata.Title, metadata.Body = intakeLiteralTitle, intakeLiteralBody
-	metadata.Recipe = engine.IntakePublicationRecipe
+	metadata.Recipe = recipe
 	return metadata
 }
 
@@ -28,8 +28,18 @@ func intakeRecipeMetadata() engine.ProductionPublication {
 // publication claim.
 func TestIntakeRecipeAuthorsWithLiteralFallback(t *testing.T) {
 	t.Parallel()
+	for _, recipe := range []string{engine.IntakePublicationRecipeV1, engine.IntakePublicationRecipeV2} {
+		t.Run(recipe, func(t *testing.T) {
+			t.Parallel()
+			assertIntakeRecipeAuthorsWithLiteralFallback(t, recipe)
+		})
+	}
+}
+
+func assertIntakeRecipeAuthorsWithLiteralFallback(t *testing.T, recipe string) {
+	t.Helper()
 	t.Run("authored", func(t *testing.T) {
-		p := newAuthoredMetadataHarness(t, intakeRecipeMetadata(), nil)
+		p := newAuthoredMetadataHarness(t, intakeRecipeMetadata(recipe), nil)
 		driver := scriptPublicationAuthor(t, p, inferencefake.Script{Response: inference.Response{
 			Output: []byte(authoredExplainOutput), ComputeUnits: 5,
 		}})
@@ -38,7 +48,7 @@ func TestIntakeRecipeAuthorsWithLiteralFallback(t *testing.T) {
 		if _, err := p.reconcileLanes(); err != nil {
 			t.Fatal(err)
 		}
-		body := assertAuthoredMetadata(t, p)
+		body := assertAuthoredMetadataFor(t, p, recipe)
 		if strings.Contains(body, intakeLiteralBody) {
 			t.Fatal("authored intake body still carries the literal fallback")
 		}
@@ -47,7 +57,7 @@ func TestIntakeRecipeAuthorsWithLiteralFallback(t *testing.T) {
 		}
 	})
 	t.Run("fallback", func(t *testing.T) {
-		p := newAuthoredMetadataHarness(t, intakeRecipeMetadata(), nil)
+		p := newAuthoredMetadataHarness(t, intakeRecipeMetadata(recipe), nil)
 		driver := scriptPublicationAuthor(t, p, inferencefake.Script{Err: errors.New("provider unavailable")})
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 		p.startAndRecordExport(t)

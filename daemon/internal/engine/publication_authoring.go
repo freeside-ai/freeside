@@ -402,7 +402,7 @@ func (w *productionPublicationWorkflow) renderStoredAuthoring(
 		// the deterministic v1 rendering (issue #1419, settled item 9).
 		return "", "", false
 	}
-	title, body := renderAuthoredPublication(artifact)
+	title, body := renderAuthoredPublication(task.Publication.Recipe, artifact)
 	if err := publish.ValidateCandidateBody(body); err != nil {
 		return "", "", false
 	}

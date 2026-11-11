@@ -1,0 +1,12 @@
+## Why
+
+Shipped the fix for `@octocat` in `#123` (`owner/repo#5`, `GH-7`).
+
+## What
+
+- Escaped &lt;b&gt;tag&lt;/b&gt; &amp; entity.
+- A link dropped its target.
+
+```
+verbatim @notmention #999
+```

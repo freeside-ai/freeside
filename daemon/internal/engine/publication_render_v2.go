@@ -10,24 +10,51 @@ import (
 )
 
 // clientPublicationRecipeV2 is the recipe that renders the publication-author
-// role's prose as live, screened GitHub-Flavored Markdown. Records freeze their
+// role's prose as live, screened GitHub-Flavored Markdown, followed by the
+// evidence references and a producer and digest footer. Records freeze their
 // recipe, so a stored v2 record renders through renderAuthoredPublication while
-// a v1 record keeps the frozen v1 rendering (plan §5.15, §5.12). New client
-// submissions freeze it (TaskSubmitter.SubmitTask).
+// a v1 record keeps the frozen v1 rendering (plan §5.15, §5.12).
 const clientPublicationRecipeV2 = "freeside.client-publication/v2"
 
-// IntakePublicationRecipe is label intake's publication-author contract (plan
-// §5.15): a new label-initiated run freezes it beside the literal title and body
-// the intake path writes, runs the same author role as client v2, and renders
-// the literal text as its fallback. A label record with no recipe keeps its
-// literal text and replay bytes.
-const IntakePublicationRecipe = "freeside.intake-publication/v1"
+// clientPublicationRecipeV3 renders the same screened prose as v2 with nothing
+// after it: no evidence list, producer line, or artifact digest (plan §5.15,
+// revision 115). The digest stays on the stored authoring artifact, and the
+// publisher's Verification section labels the prose as its author's account.
+// New client submissions freeze it (TaskSubmitter.SubmitTask).
+const clientPublicationRecipeV3 = "freeside.client-publication/v3"
+
+// IntakePublicationRecipeV1 is label intake's first publication-author
+// contract (plan §5.15): the run freezes it beside the literal title and body
+// the intake path writes, runs the same author role as client v2, renders like
+// client v2, and renders the literal text as its fallback. A label record with
+// no recipe keeps its literal text and replay bytes.
+const IntakePublicationRecipeV1 = "freeside.intake-publication/v1"
+
+// IntakePublicationRecipeV2 is IntakePublicationRecipeV1 with client v3's
+// rendering. A new label-initiated run freezes it (daemoncompose's
+// intakePublication); a run frozen under v1 keeps v1.
+const IntakePublicationRecipeV2 = "freeside.intake-publication/v2"
 
 // authoredPublicationRecipe reports whether a frozen recipe runs the
 // publication-author role, the source-issue closure, and the publisher-owned
 // source-reference section. v1 and literal records do none of these.
 func authoredPublicationRecipe(recipe string) bool {
-	return recipe == clientPublicationRecipeV2 || recipe == IntakePublicationRecipe
+	return recipe == clientPublicationRecipeV2 || recipe == clientPublicationRecipeV3 ||
+		intakePublicationRecipe(recipe)
+}
+
+// intakePublicationRecipe reports whether a frozen recipe is label intake's,
+// which carries literal title and body as its fallback and so takes the literal
+// checks and the literal fallback rendering.
+func intakePublicationRecipe(recipe string) bool {
+	return recipe == IntakePublicationRecipeV1 || recipe == IntakePublicationRecipeV2
+}
+
+// bareAuthoredProse reports whether a recipe renders the authored prose with
+// nothing after it (client v3, intake v2). The older authored recipes keep
+// their evidence list and producer footer byte for byte.
+func bareAuthoredProse(recipe string) bool {
+	return recipe == clientPublicationRecipeV3 || recipe == IntakePublicationRecipeV2
 }
 
 // screenAuthoredText refuses an authored artifact whose free-text fields would
@@ -135,14 +162,22 @@ func isThematicBreak(line string) bool {
 // could reach outside the prose inert: raw HTML is escaped, autolink-triggering
 // tokens are wrapped in code, links and images are reduced to their text, and
 // any code fence the author left open is closed so the prose cannot swallow the
-// publisher's own sections appended after it. The evidence references and the
-// producer provenance are rendered as inert, code-wrapped identifiers.
+// publisher's own sections appended after it. Where the recipe keeps them, the
+// evidence references and the producer provenance are rendered as inert,
+// code-wrapped identifiers.
 //
 // The caller must run screenAuthoredText first and fall back to v1 on failure;
 // this function assumes screened input and never itself rejects. It does not
 // enforce the candidate-body byte budget: escaping can expand the body, so the
 // authoritative fit check belongs to the caller that composes the final PR body.
-func renderAuthoredPublication(a domain.PublicationAuthoring) (title, body string) {
+//
+// recipe is the record's frozen recipe. Under client v3 and intake v2 the body
+// is the rendered prose alone; under client v2 and intake v1 it keeps the
+// evidence references and the producer footer, whose bytes are frozen.
+func renderAuthoredPublication(recipe string, a domain.PublicationAuthoring) (title, body string) {
+	if bareAuthoredProse(recipe) {
+		return a.Title, renderAuthoredBodyProse(a.Body)
+	}
 	var b strings.Builder
 	b.WriteString(renderAuthoredBodyProse(a.Body))
 	if len(a.EvidenceRefs) > 0 {
