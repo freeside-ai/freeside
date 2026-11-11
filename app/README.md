@@ -690,6 +690,22 @@ A view opts out only with a reason in a comment beside its
   for the menu button's spoken label (#2993). Their labels name a control
   and carry nothing to copy.
 
+A spoken label on displayed text needs its own accessibility element.
+Selectable text is backed by an AppKit text view. An `.accessibilityLabel`
+that reaches a `Text` through a wrapper (a layout or style modifier such as
+`.padding` or `.lineLimit`, a `Group`, a `Label`) makes that text view
+answer for the label. When such a view is inserted while an assistive
+client is reading, SwiftUI's label lookup calls itself until the stack
+overflows, and the app crashes (#2993). So a text view that takes a spoken
+label writes `.accessibilityElement(children: .ignore)` and
+`.accessibilityAddTraits(.isStaticText)` before its `.accessibilityLabel`;
+the trait keeps it a static text to assistive clients. A labelled control
+(a button, a menu, a text field) does not recurse and needs neither.
+`AccessibilityLabelRecursionTests` and the screenshot suite's insertion
+pass catch a view that skips the element on the decision cards and on the
+light screenshot surfaces; most of those surfaces draw their controls as
+static stand-ins, so a new view outside them needs its own case.
+
 ## Task Cancellation Contract
 
 `stop_task` on `/commands` accepts a paired device's task ID, project ID,

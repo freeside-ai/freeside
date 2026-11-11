@@ -117,6 +117,8 @@ struct DecisionReviewGuideView: View {
                     .foregroundStyle(Color.inkDim)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityAddTraits(.isStaticText)
                     .accessibilityLabel(Text(verbatim: AttentionDisplay.excerptSpokenRange(excerpt)))
             }
             if let text = excerpt.text {

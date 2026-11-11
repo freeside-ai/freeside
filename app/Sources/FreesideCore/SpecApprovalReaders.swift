@@ -490,6 +490,8 @@ struct UnifiedDiffView: View {
             Text("\(counts.text) lines")
                 .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isStaticText)
                 .accessibilityLabel("\(counts.spoken) lines")
 
             if truncated {

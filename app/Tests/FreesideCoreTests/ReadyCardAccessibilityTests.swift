@@ -12,10 +12,10 @@
     /// selectable-text default, and reads what a client asks each element
     /// for.
     ///
-    /// This walk does not reproduce the crash #2993 reports: a test process
-    /// has no assistive client attached, so SwiftUI installs none of the
-    /// attribute handlers the recursion ran through. It guards the tree's
-    /// shape (bounded, and labelled) on every ready fixture.
+    /// This walk does not reproduce the crash #2993 reports: the card is
+    /// built before the first read, and only a view inserted after it
+    /// recurses (`AccessibilityLabelRecursionTests` covers that). It guards
+    /// the tree's shape (bounded, and labelled) on every ready fixture.
     @Suite(.serialized) @MainActor struct ReadyCardAccessibilityTests {
         nonisolated private static let readyFixtures: [Components.Schemas.AttentionItemSnapshot] = [
             AttentionFixtures.fixture(type: .ready_for_final_review),

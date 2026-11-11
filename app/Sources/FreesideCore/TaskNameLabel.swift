@@ -33,6 +33,8 @@ struct TaskNameLabel: View {
             text
             .lineLimit(lineLimit)
             .truncationMode(.middle)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isStaticText)
             .accessibilityLabel(name.source == .agent ? name.text + Self.agentMark : name.text)
     }
 

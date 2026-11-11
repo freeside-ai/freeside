@@ -2023,6 +2023,8 @@ struct DecisionComparisonModuleView: View {
                             .foregroundStyle(Color.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityAddTraits(.isStaticText)
                     .accessibilityLabel(Text("\(position.title): \(position.text)"))
                 }
             }

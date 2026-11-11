@@ -105,12 +105,16 @@ struct TaskSubmissionRecoverySheet: View {
                         Label(name, systemImage: "paperclip")
                             .font(FreesideFont.cardBody)
                             .foregroundStyle(Color.inkDim)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityAddTraits(.isStaticText)
                             .accessibilityLabel("Attachment \(name)")
                     case .folder(let name, let files):
                         let count = "\(files.count.formatted()) \(files.count == 1 ? "file" : "files")"
                         Label("\(name) · \(count)", systemImage: "folder")
                             .font(FreesideFont.cardBody)
                             .foregroundStyle(Color.inkDim)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityAddTraits(.isStaticText)
                             .accessibilityLabel("Folder \(name), \(count)")
                     }
                 }
