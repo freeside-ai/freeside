@@ -1108,10 +1108,18 @@ func validateProductionReplayOptions(
 			if binding.declaration != nil {
 				boundIssue = binding.declaration.BoundIssue
 			}
-			want.CommitMessage = FallbackCommitMessage(FallbackCommitMessageInput{
+			derivation := FallbackCommitMessageInput{
 				Spec: binding.spec, BoundIssue: boundIssue, RunID: binding.run.ID,
 				SpecDigest: binding.run.SpecDigest, Policy: policy,
-			})
+			}
+			// A run imported before the v2 recipe stored the v1 message, so
+			// either derivation is the daemon's own; anything else falls to
+			// the v2 derivation and the comparison below refuses it.
+			want.CommitMessage = FallbackCommitMessage(derivation)
+			recorded := binding.replay.ImportOptions.CommitMessage
+			if FallbackCommitMessageMatches(derivation, recorded) {
+				want.CommitMessage = recorded
+			}
 		}
 	}
 	if binding.replay.ImportOptions.CommitDate.IsZero() ||

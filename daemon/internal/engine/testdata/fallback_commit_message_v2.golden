@@ -1,0 +1,10 @@
+Retry Stalled Webhook Deliveries (#214)
+
+Webhook deliveries that time out are never retried, so a short provider
+outage silently drops events. Retrying with backoff recovers them
+without operator action.
+
+Work item: #214.
+Run ID: run-webhook-retry.
+Specification digest:
+sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.

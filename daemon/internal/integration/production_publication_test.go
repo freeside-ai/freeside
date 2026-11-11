@@ -1252,6 +1252,13 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 		!strings.Contains(message, "Specification digest:") {
 		t.Fatalf("fallback commit message lacks trace facts:\n%s", message)
 	}
+	// The body opens with the specification's reason paragraph, and the
+	// trace lines follow it.
+	paragraphs := strings.Split(message, "\n\n")
+	if len(paragraphs) != 3 || paragraphs[1] != "Exercise the production workflow." ||
+		!strings.HasPrefix(paragraphs[2], "Run ID: run-production-publication.\nSpecification digest:") {
+		t.Fatalf("fallback commit body does not open with the reason:\n%s", message)
+	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
 		if err != nil {

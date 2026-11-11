@@ -596,7 +596,9 @@ directory named before it in the same bullet. All under `daemon/`:
   candidate and writes a refused rebuild's failed verification),
   `internal/engine/publication_closure*.go` (the
   source-issue closure gate), `internal/engine/publication_render_v2.go`
-  (screens agent prose before it reaches GitHub), and
+  (screens agent prose before it reaches GitHub),
+  `internal/engine/commit_message.go` (derives and screens the fallback
+  commit message published to GitHub, and the recipes replay accepts), and
   `internal/engine/verification_report.go` (reads the verifier's bytes),
   `internal/engine/publication_core.go` (the git publish transport, the
   publication lock, and candidate identity),
