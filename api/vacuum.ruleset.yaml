@@ -14,3 +14,29 @@ extends: [[spectral:oas, recommended]]
 rules:
   camel-case-properties: false
   oas3-missing-example: false
+  # The skew policy (api/README.md, Response Tolerance), checked by
+  # api/functions/responseTolerance.js. Both rules run once on the whole
+  # document because a schema's direction comes from where paths use it,
+  # and unresolved (resolved: false) because the function follows each
+  # $ref itself; a resolved document has inlined them.
+  # The lint command loads the function with `-f api/functions`.
+  response-schemas-tolerate-added-fields:
+    description: A schema a response reaches must not set additionalProperties to false.
+    severity: error
+    recommended: true
+    given: $
+    resolved: false
+    then:
+      function: responseTolerance
+      functionOptions:
+        check: responseOpen
+  request-schemas-reject-unknown-fields:
+    description: An object schema only requests use must set additionalProperties to false.
+    severity: error
+    recommended: true
+    given: $
+    resolved: false
+    then:
+      function: responseTolerance
+      functionOptions:
+        check: requestClosed

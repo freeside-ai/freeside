@@ -100,16 +100,40 @@ fi
 
 begin_case "api lint runs the pinned vacuum invocation through VACUUM"
 stub=$(make_stub vacuum 0)
-VACUUM=$stub run_check api
+VACUUM=$stub run_check api lint
 assert_rc 0
 assert_contains 'PASS: api lint'
-expected=$'lint\n-r\napi/vacuum.ruleset.yaml\n--details\n--fail-severity\nwarn\napi/openapi.yaml'
+expected=$'lint\n-r\napi/vacuum.ruleset.yaml\n-f\napi/functions\n--details\n--fail-severity\nwarn\napi/openapi.yaml'
 if [ "$(cat "$stub.args")" = "$expected" ]; then
   pass=$((pass + 1))
 else
   OUT=$(cat "$stub.args")
   report_failure "vacuum received unexpected arguments"
 fi
+
+begin_case "api policy fails when a fixture passes the lint"
+stub=$(make_stub vacuum-clean 0)
+VACUUM=$stub run_check api policy
+assert_rc 1
+assert_contains 'passed the lint; it must fail rule'
+
+begin_case "api policy fails when a fixture fails without reporting its rule"
+stub=$(make_stub vacuum-silent 1)
+VACUUM=$stub run_check api policy
+assert_rc 1
+assert_contains 'failed without reporting rule'
+
+begin_case "api policy passes when each fixture fails and reports its rule"
+stub=$TMP/vacuum-rules
+cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+sed -n "1s/^# expects-rule: //p" "${!#}"
+exit 1
+STUB
+chmod +x "$stub"
+VACUUM=$stub run_check api policy
+assert_rc 0
+assert_contains 'PASS: api policy'
 
 begin_case "a failing step fails the run"
 stub=$(make_stub vacuum-fail 3)
