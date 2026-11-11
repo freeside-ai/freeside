@@ -3194,7 +3194,7 @@ otherwise a root `go.mod` selects Go at the root, and otherwise a root
 root `package.json` beside a declared module, package, or both is refused:
 no image bakes npm beside another toolchain.
 
-A Go image bakes Go 1.27.3 and golangci-lint 2.15.0 from pinned archives,
+A Go image bakes Go 1.27.4 and golangci-lint 2.15.0 from pinned archives,
 and a module cache warmed from the commit's `go.mod` and `go.sum` at
 `/opt/freeside/go-mod-cache`. It bakes no build cache, so every room compiles
 from scratch. For Freeside's `api/` and `scripts/` checks it also bakes:
@@ -3233,7 +3233,7 @@ rebuild gate report, the Go inputs no image serves:
   above it, up to the root.
 - A `replace` in `go.mod` whose target is a local path, inside the module or
   not: the seed holds only `go.mod` and `go.sum`, so no image can warm it.
-- A `go` directive above 1.27.3, or a `toolchain` directive naming any other
+- A `go` directive above 1.27.4, or a `toolchain` directive naming any other
   toolchain.
 
 A `go.mod` or `go.sum` that is missing or not a regular file is refused too.

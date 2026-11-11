@@ -13,7 +13,7 @@ installation and real execution paths below are Mac-only today.
 - **Xcode 27.2**, the toolchain this repository's Swift tests use. Install
   full Xcode and complete its first-launch setup; Command Line Tools alone
   can't build the app.
-- **Go 1.27.3**, as [daemon/go.mod](../daemon/go.mod) declares, to build the
+- **Go 1.27.4**, as [daemon/go.mod](../daemon/go.mod) declares, to build the
   daemon.
 
 ```sh
