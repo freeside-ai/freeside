@@ -207,7 +207,7 @@
         /// still pastes as text. On a drag the image wins, since a browser's
         /// image drag carries its address as text too.
         static func attachment(
-            from pasteboard: NSPasteboard, textWins: Bool = true
+            from pasteboard: some PasteboardContents, textWins: Bool = true
         ) -> ComposerAttachmentIntake.Pasted? {
             let urls =
                 pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
@@ -221,7 +221,7 @@
         }
 
         override func paste(_ sender: Any?) {
-            if let onAttach, isEditable, let pasted = Self.attachment(from: .general) {
+            if let onAttach, isEditable, let pasted = Self.attachment(from: NSPasteboard.general) {
                 onAttach(pasted)
             } else {
                 super.paste(sender)
@@ -270,4 +270,17 @@
             return NSLocationInRange(glyph, first)
         }
     }
+
+    /// The pasteboard reads `PromptTextView.attachment(from:textWins:)`
+    /// makes, with `NSPasteboard`'s signatures. A test checks the paste
+    /// policy against an in-memory pasteboard, because an `NSPasteboard`
+    /// needs a window-server session, which the macOS verification room
+    /// withholds.
+    protocol PasteboardContents {
+        func readObjects(forClasses: [AnyClass], options: [NSPasteboard.ReadingOptionKey: Any]?) -> [Any]?
+        func string(forType: NSPasteboard.PasteboardType) -> String?
+        func data(forType: NSPasteboard.PasteboardType) -> Data?
+    }
+
+    extension NSPasteboard: PasteboardContents {}
 #endif

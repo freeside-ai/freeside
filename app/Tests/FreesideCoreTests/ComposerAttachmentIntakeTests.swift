@@ -167,6 +167,41 @@ import UniformTypeIdentifiers
     }
 
     #if os(macOS)
+        /// A pasteboard in memory, so the paste policy is checked without a
+        /// window-server session (the real-pasteboard tests below need one).
+        private struct MemoryPasteboard: PasteboardContents {
+            var urls: [URL] = []
+            var text: String?
+            var data: [NSPasteboard.PasteboardType: Data] = [:]
+
+            /// Honors `.urlReadingFileURLsOnly` as `NSPasteboard` does, so a
+            /// caller that drops it reads a web address as a file.
+            func readObjects(forClasses: [AnyClass], options: [NSPasteboard.ReadingOptionKey: Any]?) -> [Any]? {
+                options?[.urlReadingFileURLsOnly] as? Bool == true ? urls.filter(\.isFileURL) : urls
+            }
+            func string(forType type: NSPasteboard.PasteboardType) -> String? { type == .string ? text : nil }
+            func data(forType type: NSPasteboard.PasteboardType) -> Data? { data[type] }
+        }
+
+        @Test @MainActor func thePastePolicyHoldsWithoutAWindowServer() throws {
+            let png = try image(.png)
+            #expect(PromptTextView.attachment(from: MemoryPasteboard(text: "plain words")) == nil)
+
+            // Text beside an image is text on a paste and the image on a drag.
+            let textAndImage = MemoryPasteboard(text: "plain words", data: [.png: png])
+            #expect(PromptTextView.attachment(from: textAndImage) == nil)
+            #expect(PromptTextView.attachment(from: textAndImage, textWins: false) == .image(png))
+
+            #expect(PromptTextView.attachment(from: MemoryPasteboard(data: [.png: png])) == .image(png))
+
+            let file = URL(fileURLWithPath: "/tmp/crash.log")
+            #expect(PromptTextView.attachment(from: MemoryPasteboard(urls: [file])) == .files([file]))
+
+            // A web address is no file to attach.
+            let page = try #require(URL(string: "https://example.com/crash.log"))
+            #expect(PromptTextView.attachment(from: MemoryPasteboard(urls: [page])) == nil)
+        }
+
         @Test @MainActor func textOnThePasteboardStillPastesAsText() throws {
             let pasteboard = NSPasteboard(name: .init(UUID().uuidString))
             defer { pasteboard.releaseGlobally() }
