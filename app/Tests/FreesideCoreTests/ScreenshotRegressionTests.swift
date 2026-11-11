@@ -1709,16 +1709,27 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
-                    // A quota failure whose card offers another agent (#869):
-                    // the Other Agents fact and the retry action.
-                    let quota = AttentionFixtures.quotaFailure().item
+                    // A quota failure whose card offers other agents (#869):
+                    // the Other Agents fact and the retry action. The offers'
+                    // readings are current, stale, and unsupported (#3030).
+                    var quota = AttentionFixtures.quotaFailure().item
+                    quota.alternate_agents = UsageFixtures.alternateAgentOffers()
+                    let quotaDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow,
+                        usagePools: UsageFixtures.alternatesUsagePools(now: screenshotNow)
+                    )
                     for (suffix, width) in [("", canvasWidth), ("-phone", CGFloat(390))] {
                         surfaces.append(
                             Surface(
                                 name: "decision-execution_failure-quota\(suffix)",
                                 width: width,
                                 view: AnyView(
-                                    detail.screenshotCard(
+                                    quotaDetail.screenshotCard(
                                         quota, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
                     }
                 }

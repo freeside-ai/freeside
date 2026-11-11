@@ -43,6 +43,16 @@ package enum AttentionDisplay {
             /// stacks under its label in the body face, since prose is not
             /// a mono value.
             case prose
+            /// Offered agents, each its enrollment and its usage reading:
+            /// one block per offer, so a reading that wraps on a narrow
+            /// card never runs into the next offer (#3030).
+            case offers([Offer])
+        }
+
+        /// One offered agent and the reading the chooser prints for it.
+        package struct Offer: Equatable {
+            package let enrollment: String
+            package let reading: String
         }
 
         package let label: String
@@ -111,6 +121,14 @@ package enum AttentionDisplay {
             self.value = DiffCounts.plain(diffs)
             self.monospaced = true
             self.form = .diffs(diffs)
+        }
+
+        /// `value` reads one offer per line, `enrollment · reading`.
+        init(_ label: String, offers: [Offer]) {
+            self.label = label
+            self.value = offers.map { "\($0.enrollment) · \($0.reading)" }.joined(separator: "\n")
+            self.monospaced = false
+            self.form = .offers(offers)
         }
     }
 
@@ -387,10 +405,15 @@ package enum AttentionDisplay {
     /// item's typed fact fields. Every value is a daemon-produced card fact;
     /// nothing here is derived from prose, logs, or event names, and a type
     /// whose lead is a claim, an artifact, or its own module contributes no
-    /// row.
+    /// row. The one exception is the Other Agents row, which prints each
+    /// offer's usage reading from `pools`; `locale` and `timeZone` come
+    /// from the view, so a pinned screenshot prints the same times.
     package static func cardFacts(
         _ item: Components.Schemas.AttentionItem,
-        now: Date
+        now: Date,
+        pools: [Components.Schemas.UsagePoolSnapshot] = [],
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
     ) -> [FactRow] {
         switch item._type {
         case .execution_failure:
@@ -401,11 +424,19 @@ package enum AttentionDisplay {
                 .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ].compactMap { $0 }
-            // The enrollments Retry With Another Agent offers, so the card
-            // names them before the picker does.
-            let offers = (item.alternate_agents ?? []).map(\.enrollment)
-            let alternates: [FactRow] =
-                offers.isEmpty ? [] : [.init("Other Agents", offers.joined(separator: ", "), monospaced: true)]
+            // The enrollments Retry With Another Agent offers, in the
+            // daemon's order, each with the reading the chooser prints for
+            // it, so the card shows the decision's main input before the
+            // chooser opens. One row, not a row per offer: a row's id is its
+            // label. A reading is shown, never weighed (#1722).
+            let offers = (item.alternate_agents ?? []).map { offer in
+                FactRow.Offer(
+                    enrollment: offer.enrollment,
+                    reading: AgentChoiceDisplay.reading(
+                        for: offer.enrollment, pools: pools, now: now, locale: locale, timeZone: timeZone)
+                        ?? "no usage reading")
+            }
+            let alternates: [FactRow] = offers.isEmpty ? [] : [.init("Other Agents", offers: offers)]
             // What ran the failed attempt, as its admission recorded it; an
             // item raised before the daemon recorded it carries none (#979).
             return rows + admittedFailureRows(failure.admitted?.value1) + alternates

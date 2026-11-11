@@ -363,7 +363,8 @@ import Testing
         let item = AttentionFixtures.fixture(type: type).item
         let now = Date(timeIntervalSince1970: 0)
         let facts = AttentionDisplay.cardFacts(item, now: now)
-        let placement = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: false, now: now, pools: [], locale: .current, timeZone: .current)
         let folds: [Components.Schemas.AttentionType] = [.agent_question, .review_dispute]
 
         #expect(DecisionCardComposition.foldsRoutineFacts(type) == folds.contains(type))
@@ -371,12 +372,34 @@ import Testing
         #expect(placement.folded == (folds.contains(type) ? facts : []))
     }
 
+    /// Placement hands the pools to the facts, so the quota failure's Other
+    /// Agents row shows each offer's reading beside the decision (#3030).
+    @Test func quotaFailureShowsTheOffersReadings() throws {
+        let now = Date(timeIntervalSince1970: 1_767_400_000)
+        let locale = Locale(identifier: "en_US_POSIX")
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        let pools = UsageFixtures.alternatesUsagePools(now: now)
+        var item = AttentionFixtures.quotaFailure().item
+        item.alternate_agents = UsageFixtures.alternateAgentOffers()
+
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: false, now: now, pools: pools, locale: locale, timeZone: utc)
+        let row = try #require(placement.visible.first { $0.label == "Other Agents" })
+        let reading = try #require(
+            AgentChoiceDisplay.reading(
+                for: UsageFixtures.readingSecondEnrollmentID, pools: pools, now: now, locale: locale,
+                timeZone: utc))
+        #expect(row.value.hasPrefix("\(UsageFixtures.readingSecondEnrollmentID) · \(reading)\n"))
+        #expect(placement.folded.isEmpty)
+    }
+
     /// The ready card keeps an elapsed deadline (#2752) visible under Facts
     /// after the Change row, above the checklist and View PR.
     @Test func elapsedDeadlineIsAVisibleReadyFact() {
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         let placement = DecisionFactPlacement(
-            AttentionFixtures.readyWithElapsedChecksDeadline().item, includesCommitPlan: false, now: now)
+            AttentionFixtures.readyWithElapsedChecksDeadline().item, includesCommitPlan: false, now: now, pools: [],
+            locale: .current, timeZone: .current)
         #expect(placement.visible.map(\.label) == ["Diff", "Checks"])
         #expect(placement.folded.isEmpty)
     }
@@ -385,10 +408,10 @@ import Testing
         let now = Date(timeIntervalSince1970: 0)
         let question = DecisionFactPlacement(
             AttentionFixtures.fixture(type: .agent_question).item,
-            includesCommitPlan: true, now: now)
+            includesCommitPlan: true, now: now, pools: [], locale: .current, timeZone: .current)
         let dispute = DecisionFactPlacement(
             AttentionFixtures.fixture(type: .review_dispute).item,
-            includesCommitPlan: true, now: now)
+            includesCommitPlan: true, now: now, pools: [], locale: .current, timeZone: .current)
 
         #expect(question.visible.isEmpty)
         #expect(question.folded.map(\.label) == ["Stage", "Blocked on"])
@@ -408,11 +431,13 @@ import Testing
         let notice = AttentionDisplay.FactRow(
             "Commit plan", AttentionDisplay.label(.present_but_not_honored))
 
-        let shown = DecisionFactPlacement(item, includesCommitPlan: true, now: now)
+        let shown = DecisionFactPlacement(
+            item, includesCommitPlan: true, now: now, pools: [], locale: .current, timeZone: .current)
         #expect(shown.visible == [notice])
         #expect(shown.folded == AttentionDisplay.cardFacts(item, now: now))
 
-        let withChecklist = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+        let withChecklist = DecisionFactPlacement(
+            item, includesCommitPlan: false, now: now, pools: [], locale: .current, timeZone: .current)
         #expect(withChecklist.visible.isEmpty)
     }
 
@@ -421,7 +446,8 @@ import Testing
     @Test func finalReviewKeepsItsDiffVisible() {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let placement = DecisionFactPlacement(
-            item, includesCommitPlan: false, now: Date(timeIntervalSince1970: 0))
+            item, includesCommitPlan: false, now: Date(timeIntervalSince1970: 0), pools: [], locale: .current,
+            timeZone: .current)
 
         #expect(placement.visible.map(\.label) == ["Diff"])
         #expect(placement.folded.isEmpty)
