@@ -202,7 +202,7 @@ import UniformTypeIdentifiers
             #expect(PromptTextView.attachment(from: MemoryPasteboard(urls: [page])) == nil)
         }
 
-        @Test @MainActor func textOnThePasteboardStillPastesAsText() throws {
+        @Test(.needsWindowServerSession) @MainActor func textOnThePasteboardStillPastesAsText() throws {
             let pasteboard = NSPasteboard(name: .init(UUID().uuidString))
             defer { pasteboard.releaseGlobally() }
             pasteboard.clearContents()
@@ -219,7 +219,7 @@ import UniformTypeIdentifiers
             #expect(PromptTextView.attachment(from: pasteboard, textWins: false) == .image(png))
         }
 
-        @Test @MainActor func anImageOrFileOnThePasteboardAttaches() throws {
+        @Test(.needsWindowServerSession) @MainActor func anImageOrFileOnThePasteboardAttaches() throws {
             let pasteboard = NSPasteboard(name: .init(UUID().uuidString))
             defer { pasteboard.releaseGlobally() }
             pasteboard.clearContents()
