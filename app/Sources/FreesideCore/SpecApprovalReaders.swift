@@ -102,8 +102,10 @@ extension TaskDocumentRequest.Document {
 /// agent-written text a task source (`signet.TaskSubmissionInput` is built
 /// only from a device's submit_task), so there is no unverified prompt.
 struct ReaderFraming: Equatable {
-    /// The statement that says why this is the text to read.
-    let lead: String
+    /// The statement that says why this is the text to read, or nil when
+    /// the reader needs none: a specification's binding to its approval
+    /// already shows in the card and the reader's Identifiers digest.
+    let lead: String?
     /// The keyword over the text.
     let keyword: String
     /// The document's noun in the not-text notice.
@@ -113,7 +115,7 @@ struct ReaderFraming: Equatable {
     let digestLabel: String
 
     static let specification = ReaderFraming(
-        lead: "Bound by the daemon to this approval", keyword: "Specification (unverified)",
+        lead: nil, keyword: "Specification (unverified)",
         noun: "specification", dashedFrame: true, digestLabel: "Daemon-Bound Digest")
 
     static let prompt = ReaderFraming(
@@ -278,13 +280,12 @@ struct SpecificationReaderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            // What makes this text the one to read: for a specification,
-            // the daemon bound its digest to the approval (the Identifiers
-            // row).
-            Text(framing.lead)
-                .font(FreesideFont.statement)
-                .foregroundStyle(Color.ink)
-                .fixedSize(horizontal: false, vertical: true)
+            if let lead = framing.lead {
+                Text(lead)
+                    .font(FreesideFont.statement)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if preview.isTruncated {
                 Notice(

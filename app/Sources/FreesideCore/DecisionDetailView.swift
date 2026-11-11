@@ -1813,15 +1813,9 @@ struct DecisionDetailView: View {
     }
 
     private func specificationItemTitle(_ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(FreesideFont.factLabel)
-                .foregroundStyle(Color.ink)
-            Text("Bound by the daemon to this approval")
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Text(title)
+            .font(FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
     }
 
     private func specificationLinks(
