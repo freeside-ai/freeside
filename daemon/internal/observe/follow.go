@@ -500,6 +500,8 @@ const (
 	SupervisionFailed                 SupervisionState = "failed"
 	SupervisionLost                   SupervisionState = "lost"
 	SupervisionCompleted              SupervisionState = "completed"
+	SupervisionStopped                SupervisionState = "stopped"
+	SupervisionAbandoned              SupervisionState = "abandoned"
 )
 
 // AllSupervisionStates is the single registration point for the snapshot
@@ -516,6 +518,8 @@ var AllSupervisionStates = []SupervisionState{
 	SupervisionFailed,
 	SupervisionLost,
 	SupervisionCompleted,
+	SupervisionStopped,
+	SupervisionAbandoned,
 }
 
 func (s SupervisionState) valid() bool {
@@ -530,7 +534,9 @@ func (s SupervisionState) valid() bool {
 		SupervisionBlocked,
 		SupervisionFailed,
 		SupervisionLost,
-		SupervisionCompleted:
+		SupervisionCompleted,
+		SupervisionStopped,
+		SupervisionAbandoned:
 		return true
 	default:
 		return false
@@ -544,6 +550,9 @@ const (
 	OutcomeFailed    = domain.RunOutcomeFailed
 	OutcomeLost      = domain.RunOutcomeLost
 	OutcomeCompleted = domain.RunOutcomeCompleted
+	OutcomeHandedOff = domain.RunOutcomeHandedOff
+	OutcomeStopped   = domain.RunOutcomeStopped
+	OutcomeAbandoned = domain.RunOutcomeAbandoned
 )
 
 var AllOutcomes = domain.AllRunOutcomes
@@ -557,10 +566,16 @@ func Conclude(observation domain.RunObservation) Conclusion {
 	return domain.ConcludeRun(observation)
 }
 
+// deriveSupervisionState names a final conclusion by its outcome, except
+// that a handed-off specification run keeps the implementation_bound state
+// the supervisor read before that outcome was final (#3043).
 func deriveSupervisionState(snapshot observedb.Snapshot, conclusion Conclusion) SupervisionState {
 	if conclusion.Final {
-		if conclusion.Outcome == OutcomePublished && !publicationAccepted(snapshot) {
+		switch {
+		case conclusion.Outcome == OutcomePublished && !publicationAccepted(snapshot):
 			return SupervisionPublicationReady
+		case conclusion.Outcome == OutcomeHandedOff:
+			return SupervisionImplementationBound
 		}
 		return SupervisionState(conclusion.Outcome)
 	}

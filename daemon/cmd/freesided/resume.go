@@ -121,10 +121,29 @@ func latestTaskRun(ctx context.Context, st *store.Store, taskID domain.TaskID) (
 	return latest, err
 }
 
+// terminalResumeError refuses a final run. Its hint names the next step for
+// the outcome: a handed-off specification run's work continues in its
+// implementation run, and a stopped task's cancellation fence refuses a
+// reattempt, so only the other outcomes point to reattempt.
 func terminalResumeError(runID domain.RunID, conclusion domain.RunConclusion) error {
 	if !conclusion.Final {
 		return nil
 	}
-	return fmt.Errorf("run %q is terminal in state %q; use freesided reattempt to create a new attempt",
-		runID, conclusion.Outcome)
+	return fmt.Errorf("run %q is terminal in state %q; %s",
+		runID, conclusion.Outcome, terminalResumeHint(conclusion.Outcome))
+}
+
+func terminalResumeHint(outcome domain.RunOutcome) string {
+	const reattempt = "use freesided reattempt to create a new attempt"
+	switch outcome {
+	case domain.RunOutcomeHandedOff:
+		return "its implementation run took over; resume that run, or the task with -task"
+	case domain.RunOutcomeStopped:
+		return "the task was stopped, so it takes no new attempt"
+	case domain.RunOutcomeUnobserved, domain.RunOutcomePending, domain.RunOutcomePublished,
+		domain.RunOutcomeBlocked, domain.RunOutcomeFailed, domain.RunOutcomeLost,
+		domain.RunOutcomeCompleted, domain.RunOutcomeAbandoned:
+		return reattempt
+	}
+	return reattempt
 }

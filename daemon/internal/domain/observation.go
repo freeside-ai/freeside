@@ -1151,6 +1151,15 @@ const (
 	// terminal outcome rather than "published plus a milestone" so every
 	// consumer keeps switching on one field instead of re-deriving it.
 	RunOutcomeCompleted RunOutcome = "completed"
+	// RunOutcomeHandedOff, RunOutcomeStopped, and RunOutcomeAbandoned mark a
+	// run that no milestone concludes but nothing will run again: a
+	// specification run whose implementation run took over, a run its task's
+	// confirmed cancellation stopped, and a run of an abandoned workflow
+	// episode. ConcludeRun never returns them; only SettleRunConclusion does,
+	// for the read surfaces (#3043).
+	RunOutcomeHandedOff RunOutcome = "handed_off"
+	RunOutcomeStopped   RunOutcome = "stopped"
+	RunOutcomeAbandoned RunOutcome = "abandoned"
 )
 
 // AllRunOutcomes is the single registration point for run outcomes.
@@ -1162,12 +1171,16 @@ var AllRunOutcomes = []RunOutcome{
 	RunOutcomeFailed,
 	RunOutcomeLost,
 	RunOutcomeCompleted,
+	RunOutcomeHandedOff,
+	RunOutcomeStopped,
+	RunOutcomeAbandoned,
 }
 
 func (o RunOutcome) valid() bool {
 	switch o {
 	case RunOutcomeUnobserved, RunOutcomePending, RunOutcomePublished,
-		RunOutcomeBlocked, RunOutcomeFailed, RunOutcomeLost, RunOutcomeCompleted:
+		RunOutcomeBlocked, RunOutcomeFailed, RunOutcomeLost, RunOutcomeCompleted,
+		RunOutcomeHandedOff, RunOutcomeStopped, RunOutcomeAbandoned:
 		return true
 	default:
 		return false
@@ -1212,7 +1225,8 @@ func (c RunConclusion) Validate() error {
 	switch c.Outcome {
 	case RunOutcomeUnobserved, RunOutcomePending:
 		return check(false, false, false)
-	case RunOutcomePublished, RunOutcomeCompleted:
+	case RunOutcomePublished, RunOutcomeCompleted,
+		RunOutcomeHandedOff, RunOutcomeStopped, RunOutcomeAbandoned:
 		return check(false, false, true)
 	case RunOutcomeBlocked:
 		return check(true, false, true)
@@ -1301,6 +1315,70 @@ func hasNonterminalInvocation(observations []InvocationObservation) bool {
 	return false
 }
 
+// RunEnding holds the facts outside the milestone timeline that end a run
+// no milestone concludes. A reader gathers them from the store; this package
+// only decides what they mean.
+type RunEnding struct {
+	// HandedOff: the run's production attempt names it as the specification
+	// run and carries an approved specification digest, so an implementation
+	// run took over its work.
+	HandedOff bool
+	// Stopped: the run is in the target of its task's confirmed
+	// cancellation, which asserts every owned execution is quiescent and
+	// launches are fenced.
+	Stopped bool
+	// Abandoned: the run's workflow episode is closed.
+	Abandoned bool
+}
+
+// SettleRunConclusion gives a final outcome to a run that the milestones
+// leave non-final but that nothing will run again. A conclusion that is
+// already final keeps its outcome and detail. Otherwise a hand-off outranks
+// a confirmed stop, which outranks abandonment, matching
+// Task.DisplayLifecycle, where confirmed cancellation wins over abandonment.
+// Abandonment neither stops a provider execution nor certifies quiescence,
+// so an abandoned run with a stage attempt whose invocation observation is
+// still pending or running stays as it is until that execution ends.
+//
+// It serves the read surfaces only. The engine and the Tier A gates keep
+// reading ConcludeRun's milestone conclusion and never call this.
+func SettleRunConclusion(
+	run Run, conclusion RunConclusion, observation RunObservation, ending RunEnding,
+) RunConclusion {
+	switch {
+	case conclusion.Final:
+		return conclusion
+	case ending.HandedOff:
+		return RunConclusion{Outcome: RunOutcomeHandedOff, Final: true}
+	case ending.Stopped:
+		return RunConclusion{Outcome: RunOutcomeStopped, Final: true}
+	case ending.Abandoned && !attemptInFlight(run, observation.Invocations):
+		return RunConclusion{Outcome: RunOutcomeAbandoned, Final: true}
+	}
+	return conclusion
+}
+
+// attemptInFlight reports whether an invocation of one of the run's stage
+// attempts still reads pending or running. The engine keeps observing those
+// after the episode closes. A review invocation is no stage attempt: once
+// the episode closes nothing records its row again, and the closed workflow
+// never acts on its result, so its last row holds nothing open (#3043).
+func attemptInFlight(run Run, observations []InvocationObservation) bool {
+	attempts := make(map[InvocationID]bool)
+	for _, stage := range run.Stages {
+		for _, attempt := range stage.Attempts {
+			attempts[attempt.InvocationID] = true
+		}
+	}
+	var owned []InvocationObservation
+	for _, obs := range observations {
+		if attempts[obs.InvocationID] {
+			owned = append(owned, obs)
+		}
+	}
+	return hasNonterminalInvocation(owned)
+}
+
 func concludeTerminalOutcome(terminal ObservedInvocationStatus) (RunOutcome, bool) {
 	switch terminal {
 	case ObservedStatusCompleted, ObservedStatusBlocked:
@@ -1372,7 +1450,8 @@ func (l RunLifecycle) valid() bool {
 // the work. Otherwise completed, failed, lost, and unobserved are finished
 // (unobserved is a pre-0024 legacy run, chosen in #733 so it is never shown
 // in flight; a legacy run still running gains a liveness observation and
-// becomes pending). Pending, published with no completion yet, and blocked
+// becomes pending). Handed off, stopped, and abandoned are finished: nothing
+// will run them again. Pending, published with no completion yet, and blocked
 // with no successor are active: something is still pending for the daemon or
 // the operator. Dispatch switch without default so the exhaustive linter
 // forces a new outcome to be classified; the trailing return covers the
@@ -1382,7 +1461,8 @@ func LifecycleOf(conclusion RunConclusion, superseded bool) RunLifecycle {
 		return RunLifecycleFinished
 	}
 	switch conclusion.Outcome {
-	case RunOutcomeCompleted, RunOutcomeFailed, RunOutcomeLost, RunOutcomeUnobserved:
+	case RunOutcomeCompleted, RunOutcomeFailed, RunOutcomeLost, RunOutcomeUnobserved,
+		RunOutcomeHandedOff, RunOutcomeStopped, RunOutcomeAbandoned:
 		return RunLifecycleFinished
 	case RunOutcomePending, RunOutcomePublished, RunOutcomeBlocked:
 		return RunLifecycleActive
