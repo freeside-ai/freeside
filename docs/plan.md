@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 113
+revision: 114
 status: active
-updated: 2026-11-08
+updated: 2026-11-10
 ---
 
 # Freeside
@@ -3898,8 +3898,11 @@ Additional rules:
   client-supplied source URL is not daemon-verified: the client chooses the
   issue number, and `canonicalSourceIssue` accepts any repository's issue
   without asserting issue-closing authority. So a same-repository client-supplied
-  source URL yields a policy-approved `Closes` when its closure proposal resolves
-  (a valid `resolves=false` result yields `Refs`), marked as a recommendation,
+  source URL yields a policy-approved `Closes` under the default policy, which
+  sets the closure flag itself (revision 114), or, when policy keeps the human
+  gate on, a `Closes` only when its closure proposal resolves and a person
+  approves it (a valid `resolves=false` result yields `Refs`), marked as a
+  recommendation,
   and a cross-repository source URL renders the descriptive Source issue link and a
   `Refs` reference at most. In every case the publisher, not any agent prose,
   writes the reference; the `Closes` reference is a closure proposal whose
@@ -4215,7 +4218,9 @@ The role comprises two sites, keeping the one-authority-per-site rule: an
 request does, reviewer notes, references to publishable evidence artifacts that
 already exist, and a verification-and-review summary; and a **propose** site emitting the
 source-issue closure recommendation as a bounded `resolves` flag into the effect
-registry below. Both belong to the one role and share its refinable prompt and
+registry below. The propose site is asked only when project policy keeps the
+closure human gate on; under the default policy the daemon sets the flag itself
+(revision 114). Both belong to the one role and share its refinable prompt and
 lineup entry; how each site is told which output shape to produce (for example a
 short fixed per-site instruction beside its validator) is a detail for the
 building unit. The prose is advisory, like the task namer's claim: schema-validated,
@@ -4344,7 +4349,10 @@ constructor sets the flag with its provenance (Section
 [5.12](#512-workflow-definition-initiators-and-artifacts)): **verified** for a
 daemon-bound `issue_subject` source, or **recommended** and unverified for a
 same-repository client-supplied source URL whose issue number the client chose; a
-cross-repository source yields no proposal. At publication, under the default
+cross-repository source yields no proposal. Under the default policy the daemon
+sets `resolves=true` itself and never asks the propose site, so no model
+judgment decides whether a closable source closes (revision 114); under the
+human gate the propose site supplies the flag. At publication, under the default
 policy, a **verified** proposal and a **recommended** proposal both get a
 recorded approval from the project's policy actor, binding the same fields a
 human approval binds today: the
@@ -4352,7 +4360,8 @@ proposal artifact digest, the publication identity, the candidate head, the base
 ref, and the base SHA; admission alone never authorizes a close, and the policy
 approval is a recorded approval, not admission. The approval authorizes a
 `Closes` only for a `resolves=true` proposal, so a valid `resolves=false` result
-records an approval but finalizes `Refs` with no close (the flag rule below).
+(which only the propose site under the human gate, or a proposal stored before
+revision 114, can carry) finalizes `Refs` with no close (the flag rule below).
 The human `effect_proposal`
 decision (Section [4](#4-the-attention-model)) applies only when project policy
 keeps the human gate on (the card exists only then or for a fallback); the card
@@ -4706,14 +4715,17 @@ suppresses a close already approved. On approval the publisher writes the `Close
 line and merging then closes the issue; admission alone never writes a close.
 
 Publication (opening the PR) stays ungated, and under the default policy the PR
-opens mergeable on both the policy-approved and fallback paths. A
-policy-approved `resolves=true` proposal, verified or recommended, has the
-publisher write `Closes` (a valid `resolves=false` result finalizes `Refs`); a
-`daemon_fallback` proposal (the durable resolve-false proposal the
-engine records when the closure site or its admission fails) has the publisher
-write `Refs` or the descriptive link and may raise a non-blocking attention item
-that surfaces the missed close for a person to close manually after the fact;
-the item never writes `Closes` itself. Neither path holds the merge. The draft-or-required-check hold survives only for a project
+opens mergeable with `Closes`: the daemon sets a resolving flag without asking
+the propose site, and the policy actor approves it, verified or recommended
+(revision 114). The propose site supplies the flag only under the human gate,
+where a valid `resolves=false` result finalizes `Refs`, and a
+`daemon_fallback` proposal (the durable resolve-false proposal the engine
+records when the closure site or its admission fails) has the publisher write
+`Refs` or the descriptive link. A proposal stored before revision 114 keeps its
+behavior: a default-policy site answer publishes by its stored flag, and a
+default-policy `daemon_fallback` may raise a non-blocking attention item that
+surfaces the missed close for a person to close manually after the fact; the
+item never writes `Closes` itself. No default-policy path holds the merge. The draft-or-required-check hold survives only for a project
 whose policy keeps the human gate on: because reviewing and merging happen on
 GitHub (Section [2](#2-goals-and-non-goals)), an internal readiness signal alone
 would not stop a direct merge, so that project opens the PR as a draft or gates
@@ -7224,40 +7236,28 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 113 ("Freeside Manages Its Whole Repository"):
+Revision 114 ("The Default Policy Closes the Source Issue"):
 
-1. **Freeside is onboarded for every path but `images/`, `app/` included.**
-   The project image verifies the Linux-clean checks and the macOS
-   verification executor the Apple-only ones, both networkless; `images/`
-   stays out because the agent bases stay operator-built, and control-plane
-   paths stay operator-authored as before (Sections [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) and [11](#11-roadmap-build-order-and-coordination)). This
-   overturns revision 92 item 2 (`daemon/` first, then `api/`, `scripts/`,
-   and `docs/`, with `app/` out until a macOS execution class exists) and
-   revision 99 item 6 (Freeside's `daemon/` onboarding as wave 9's exit
-   proof). The assumption that changed: that a task's edit set stays inside
-   one directory. The seams cut through ordinary units: a Tier A daemon
-   change edits `AGENTS.md`, a daemon change with a client-visible effect
-   edits `app/`, and any API schema change needs the generated client in
-   `app/`. Partial onboarding therefore made the owner judge each task's edit
-   set before handing it over, which is the interruption Freeside exists to
-   remove. Rejected: keeping partial onboarding as the steady state.
-2. **The work runs on the ad hoc tracker #2873, starts by fiat, and does
-   not gate the 1B.1 exit.** Wave 9's exit proof runs on a managed
-   repository's issue, gh-imgup until Freeside is onboarded, and Freeside's
-   own run moves to #2873. Rejected: adding the units to wave 9, which would
-   hold the 1B.1 exit evaluation for a long serial chain of mostly Tier A
-   units; and a new wave 10 reusing the folded row, a numbered wave for one
-   feature.
-3. **Recipe commands name their room, and one image may carry more than one
-   toolchain.** One trusted recipe verifies a repository whose checks span
-   the project image and the executor, and Freeside's image carries Go and
-   Swift. Revision 96's executor design stands: the four confinements,
-   pooled slots, and in-process placement on the daemon host, which needs
-   nothing from the execution-hosts tracker (#2161). Its order of work is
-   replaced by #2873's units, and its module-split step is done (#2182).
+1. **Under the default policy, a closable source issue closes without model
+   judgment.** With `gates.source_issue_closure` absent or false, the daemon
+   sets the closure proposal's `resolves` flag itself and never asks the
+   publication-author propose site; the policy actor approves it, and the
+   publisher writes `Closes` for a verified or a recommended source alike
+   (Sections [5.12](#512-workflow-definition-initiators-and-artifacts), [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry), and [5.15](#515-evidence-and-images)). The key set to
+   true keeps the human gate unchanged: the site proposes the flag, the
+   `effect_proposal` card opens, and the pull request stays a draft with
+   `Refs` until a person decides. This overturns revision 68's default, under
+   which the site's flag decided between `Closes` and `Refs`. The assumption
+   that changed: that the model's judgment was worth the friction. A site that
+   answered no, or failed and fell back, left a resolved issue open after the
+   merge with nothing on the ready card saying so (#3023). Accepted: a pull
+   request that only partly addresses its issue closes it on merge, with the
+   `Closes` line in the body for the merging person to see. Rejected: storing
+   and showing the model's reason, which explains the friction instead of
+   removing it.
 
-(Owner decision of 2026-11-08, in chat, on #2874;
-[decision note](../devlog/2026-11-08-1223-whole-repository-self-management.md).)
+(Owner decision of 2026-11-10 on #3023;
+[decision note](../devlog/2026-11-10-1818-default-policy-closes-source-issue.md).)
 
 ## 14. Risks
 

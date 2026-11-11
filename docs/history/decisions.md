@@ -3577,3 +3577,38 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-07 on #2738;
 [decision note](../../devlog/2026-11-07-1021-review-guide-on-ready-card.md).)
+
+## Revision 113 ("Freeside Manages Its Whole Repository"):
+
+1. **Freeside is onboarded for every path but `images/`, `app/` included.**
+   The project image verifies the Linux-clean checks and the macOS
+   verification executor the Apple-only ones, both networkless; `images/`
+   stays out because the agent bases stay operator-built, and control-plane
+   paths stay operator-authored as before (Sections [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes) and [11](../plan.md#11-roadmap-build-order-and-coordination)). This
+   overturns revision 92 item 2 (`daemon/` first, then `api/`, `scripts/`,
+   and `docs/`, with `app/` out until a macOS execution class exists) and
+   revision 99 item 6 (Freeside's `daemon/` onboarding as wave 9's exit
+   proof). The assumption that changed: that a task's edit set stays inside
+   one directory. The seams cut through ordinary units: a Tier A daemon
+   change edits `AGENTS.md`, a daemon change with a client-visible effect
+   edits `app/`, and any API schema change needs the generated client in
+   `app/`. Partial onboarding therefore made the owner judge each task's edit
+   set before handing it over, which is the interruption Freeside exists to
+   remove. Rejected: keeping partial onboarding as the steady state.
+2. **The work runs on the ad hoc tracker #2873, starts by fiat, and does
+   not gate the 1B.1 exit.** Wave 9's exit proof runs on a managed
+   repository's issue, gh-imgup until Freeside is onboarded, and Freeside's
+   own run moves to #2873. Rejected: adding the units to wave 9, which would
+   hold the 1B.1 exit evaluation for a long serial chain of mostly Tier A
+   units; and a new wave 10 reusing the folded row, a numbered wave for one
+   feature.
+3. **Recipe commands name their room, and one image may carry more than one
+   toolchain.** One trusted recipe verifies a repository whose checks span
+   the project image and the executor, and Freeside's image carries Go and
+   Swift. Revision 96's executor design stands: the four confinements,
+   pooled slots, and in-process placement on the daemon host, which needs
+   nothing from the execution-hosts tracker (#2161). Its order of work is
+   replaced by #2873's units, and its module-split step is done (#2182).
+
+(Owner decision of 2026-11-08, in chat, on #2874;
+[decision note](../../devlog/2026-11-08-1223-whole-repository-self-management.md).)
