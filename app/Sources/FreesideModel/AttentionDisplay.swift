@@ -31,6 +31,9 @@ package enum AttentionDisplay {
             case posture(Components.Schemas.HealthPosture)
             /// Another attention item, which the value links to (R3).
             case item(id: String)
+            /// A task, which the value links to when the client holds its
+            /// page (R3).
+            case task(id: String)
             /// A page outside the app, which the value links to (R3).
             case link(URL)
             /// A recorded instant in the short time grammar (R8), with the
@@ -75,6 +78,13 @@ package enum AttentionDisplay {
             self.value = value
             self.monospaced = false
             self.form = .item(id: id)
+        }
+
+        init(_ label: String, _ value: String, linkingTask id: String) {
+            self.label = label
+            self.value = value
+            self.monospaced = false
+            self.form = .task(id: id)
         }
 
         /// A value that names something with a page of its own. Without a
@@ -357,10 +367,17 @@ package enum AttentionDisplay {
             guard let diagnostic = item.health_diagnostic?.value1 else {
                 return "A system-health condition needs attention."
             }
+            let lead = diagnosticLabel(diagnostic.code)
             guard diagnostic.impairs != Components.Schemas.ImpairedCapability.none else {
-                return "Diagnostic \(diagnostic.code) is open; no capability is impaired."
+                return "\(lead). No capability is impaired."
             }
-            return "\(label(diagnostic.impairs)) is impaired by diagnostic \(diagnostic.code)."
+            // An advisory finding names the capability it warns about but
+            // leaves admission open, so the row must not read as a closed
+            // gate beside the Admission row's "Open" (#3026).
+            guard SystemHealthFindings.isBlocking(item) else {
+                return "\(lead). Warns about \(label(diagnostic.impairs).lowercased()); admission stays open."
+            }
+            return "\(lead). \(label(diagnostic.impairs)) is impaired."
         case .blocked:
             return blockedWaitSentence(item) ?? "A run is waiting on a blocker."
         }
@@ -438,13 +455,22 @@ package enum AttentionDisplay {
         case .system_health:
             var rows: [FactRow] = []
             if let diagnostic = item.health_diagnostic?.value1 {
-                rows.append(.init("Diagnostic", diagnostic.code, monospaced: true))
+                // The label reads; the raw code stays copyable in Identifiers.
+                rows.append(.init("Diagnostic", diagnosticLabel(diagnostic.code)))
                 rows.append(.init("Impairs", label(diagnostic.impairs)))
             }
             // Whether the finding gates unattended admission is a fact about
             // it, so it reads with the diagnostic in either posture.
             if let posture = item.posture?.value1 {
                 rows.append(.init("Posture", posture: posture))
+            }
+            // The task a finding is about, such as held work's, by its
+            // display name; the card opens it when the client holds it. The
+            // fallback is the task's id, never a run's, since the row is
+            // labeled Task.
+            if let taskID = subjectTaskID(item) {
+                let name = nonempty(item.display_names?.value1.task.text) ?? taskID
+                rows.append(.init("Task", name, linkingTask: taskID))
             }
             return rows
         case .blocked:
@@ -1100,6 +1126,15 @@ package enum AttentionDisplay {
         RunDisplay.label(reason)
     }
 
+    /// A diagnostic code in words: its `_`, `.`, and `-` parts joined by
+    /// spaces, in sentence case, so `backup_age.stale` reads "Backup age
+    /// stale". Codes are free-form and some are built at runtime, so a rule
+    /// covers every one where a table of names could not.
+    package static func diagnosticLabel(_ code: String) -> String {
+        let words = code.split(whereSeparator: { "_.-".contains($0) }).joined(separator: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
     static func label(_ capability: Components.Schemas.ImpairedCapability) -> String {
         switch capability {
         case .unattended_admission: return "Unattended admission"
@@ -1190,6 +1225,16 @@ package enum AttentionDisplay {
                 isAgentClaim: names?.task.source == .agent)
         }
         return .init(project: project, workUnit: workUnit)
+    }
+
+    /// The task an item's subject names: a task subject's own, or a run's
+    /// stored task. Project, system, and unscoped batch subjects name none.
+    static func subjectTaskID(_ item: Components.Schemas.AttentionItem) -> String? {
+        switch item.subject {
+        case .task(let task): task.task_id
+        case .run(let run), .proposal_batch(let run): run.task_id
+        case .project, .system: nil
+        }
     }
 
     package static func copyableSubjectReference(
@@ -1340,6 +1385,9 @@ package enum AttentionDisplay {
         }
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
             rows.append(.init(label: "Hold Code", value: hold.rawValue))
+        }
+        if let diagnostic = item.health_diagnostic?.value1 {
+            rows.append(.init(label: "Diagnostic Code", value: diagnostic.code))
         }
         for elapsed in item.elapsed_deadlines ?? [] {
             guard let label = elapsedDeadlineIdentifierLabel(elapsed.kind) else { continue }

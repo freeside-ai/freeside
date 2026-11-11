@@ -171,11 +171,13 @@ struct SystemHealthPane: View {
     }
 }
 
-/// One finding on the three-line scanning row (R31): its posture, or its
-/// outcome once closed, on the keyword line, where the list puts the type,
-/// since every row here is the same type; the sentence the card states;
-/// the diagnostic code with the time it opened or closed.
-private struct FindingRow: View {
+/// One finding on the scanning row (R31): its posture, or its outcome once
+/// closed, on the keyword line, where the list puts the type, since every
+/// row here is the same type; the sentence its typed fields make, with the
+/// daemon's reason in full under it, since the reason is what names the
+/// held run and the refused check (#3026); and what it is about, its task
+/// or else its project, with the time it opened or closed.
+struct FindingRow: View {
     let item: Components.Schemas.AttentionItem
     let now: Date
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -184,16 +186,31 @@ private struct FindingRow: View {
         SidebarRow(keyword: .init(text: SystemHealthFindings.keyword(item)), time: time, grouped: true) {
             EmptyView()
         } title: {
-            Text(AttentionDisplay.rowSummary(item))
-                .font(FreesideFont.rowTitle)
-                .foregroundStyle(Color.ink)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(AttentionDisplay.rowSummary(item))
+                    .font(FreesideFont.rowTitle)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                if !item.reason.isEmpty {
+                    Text(item.reason)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         } context: {
-            SidebarRowContext(text: item.health_diagnostic?.value1.code ?? "No diagnostic code")
+            SidebarRowContext(text: Self.context(item))
         } closing: {
             EmptyView()
         }
         .contentShape(Rectangle())
+    }
+
+    /// The task a finding is about by the name the Unified List gives it,
+    /// or its project's.
+    static func context(_ item: Components.Schemas.AttentionItem) -> String {
+        let context = AttentionDisplay.rowContext(item)
+        return (context.workUnit ?? context.project).value
     }
 
     private var time: SidebarRowTime? {
@@ -223,6 +240,9 @@ struct SystemHealthCardSeat: View {
     let onBack: () -> Void
     /// A superseded finding's `Replaced by` link: its successor's card.
     var onSelectItem: (String) -> Void = { _ in }
+    /// The tasks the card's Task link resolves against, and what opens one.
+    var tasks: [Components.Schemas.TaskSnapshot] = []
+    var onSelectTask: (String) -> Void = { _ in }
     var rendersInteractiveControls = true
     @Environment(\.pinnedNow) private var pinnedNow
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -248,13 +268,14 @@ struct SystemHealthCardSeat: View {
             // The card scrolls itself; the pane's own scroll view stays out.
             DecisionDetailView(
                 store: store, itemID: itemID, findingReasonPreferences: .shared,
-                topMargin: Self.cardTopMargin, onSelectItem: onSelectItem
+                topMargin: Self.cardTopMargin, onSelectItem: onSelectItem, tasks: tasks,
+                onSelectTask: onSelectTask
             )
             .id(itemID)
         } else if let item = store.snapshotsByID[itemID]?.item {
             DecisionDetailView(
                 store: store, itemID: itemID, loadsAttachments: false, showsValidationProgress: false,
-                now: pinnedNow ?? .now
+                now: pinnedNow ?? .now, tasks: tasks
             )
             .screenshotCard(item, at: dynamicTypeSize, topMargin: Self.cardTopMargin)
         }

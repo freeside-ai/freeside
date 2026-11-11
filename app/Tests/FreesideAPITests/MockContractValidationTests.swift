@@ -79,6 +79,14 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == "invalid task subject")
     }
 
+    /// The held-work finding (#3026) is a task-subject health notice the
+    /// daemon could raise, so the screenshots draw a valid item.
+    @Test func heldWorkFixtureIsAValidItem() {
+        let item = AttentionFixtures.heldWorkSystemHealth().item
+        #expect(MockContractValidation.itemValidityBreach(item) == nil)
+        #expect(MockContractValidation.itemPolicyBreach(item) == nil)
+    }
+
     @Test func taskTimelineMilestonesMatchDaemonValidation() throws {
         for source in RunFixtures.defaultTimelines() {
             #expect(MockContractValidation.taskTimelineObservationsBreach(source) == nil)

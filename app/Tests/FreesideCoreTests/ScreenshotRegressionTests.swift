@@ -1036,6 +1036,14 @@
                         since: blockingFinding.created_at)
                 ])
             let noFindings = InboxStore(client: client)
+            // The pane's findings add held work (#3026), a task finding whose
+            // row names its task and reason, beside the default inbox's.
+            let heldFinding = AttentionFixtures.heldWorkSystemHealth()
+            let healthStore = InboxStore(client: client)
+            healthStore.replaceAll(with: inbox + [heldFinding])
+            for snapshot in inbox + [heldFinding] {
+                await preloadReferences(snapshot.item, into: healthStore)
+            }
             func settingsSync(
                 _ devices: DevicesModel, routing: RoutingPolicyModel = routing, usage: AccountUsageModel = usage,
                 store: InboxStore = store,
@@ -1054,7 +1062,7 @@
             ListSectionPreferences(defaults: historyDefaults).systemHealthHistoryExpanded = true
             func settingsWindow(
                 _ page: NavigationModel.SettingsPage, sync: SettingsSync, listDefaults: UserDefaults = settingsDefaults,
-                finding: String? = nil
+                finding: String? = nil, tasks: [Components.Schemas.TaskSnapshot] = []
             ) -> AnyView {
                 let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
                 navigation.selectSettingsPane(page)
@@ -1062,7 +1070,7 @@
                 return AnyView(
                     SettingsWindowContent(
                         navigation: navigation, sync: sync, flowPreferences: flowPreferences,
-                        host: "studio.local", daemon: settingsDaemon, listDefaults: listDefaults,
+                        host: "studio.local", daemon: settingsDaemon, tasks: tasks, listDefaults: listDefaults,
                         rendersInteractiveControls: false))
             }
             func phonePane(
@@ -1110,8 +1118,8 @@
                         name: "notifications-phone" + suffix, width: 390, colorScheme: scheme,
                         view: phonePane(.notifications, sync: settingsSync(phoneNotificationsModel))))
                 // Inside the staleness threshold, so the gate reads current.
-                let healthSync = settingsSync(devicesModel, age: 30)
-                let phoneHealthSync = settingsSync(phoneDevicesModel, age: 30)
+                let healthSync = settingsSync(devicesModel, store: healthStore, age: 30)
+                let phoneHealthSync = settingsSync(phoneDevicesModel, store: healthStore, age: 30)
                 let emptySync = settingsSync(
                     devicesModel, store: noFindings, unattendedOperation: .init(admission: .open, stops: []),
                     age: 30)
@@ -1128,6 +1136,12 @@
                     Surface(
                         name: "system-health-seat" + suffix, width: 760, colorScheme: scheme,
                         view: settingsWindow(.systemHealth, sync: healthSync, finding: blockingFinding.id)),
+                    // Held work's card names its task as a link to the page.
+                    Surface(
+                        name: "system-health-held-seat" + suffix, width: 760, colorScheme: scheme,
+                        view: settingsWindow(
+                            .systemHealth, sync: healthSync, finding: heldFinding.item.id,
+                            tasks: TaskFixtures.defaultTasks())),
                     Surface(
                         name: "system-health-phone" + suffix, width: 390, colorScheme: scheme,
                         view: phonePane(.systemHealth, sync: phoneHealthSync)),

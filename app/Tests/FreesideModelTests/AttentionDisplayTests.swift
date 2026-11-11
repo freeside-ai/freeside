@@ -215,13 +215,22 @@ import Testing
         systemHealth.reason = "any prose at all"
         #expect(
             AttentionDisplay.rowSummary(systemHealth)
-                == "Run visibility is impaired by diagnostic run_projection.unavailable.")
+                == "Run projection unavailable. Warns about run visibility; admission stays open.")
+
+        systemHealth.posture = .init(value1: .blocking)
+        #expect(
+            AttentionDisplay.rowSummary(systemHealth)
+                == "Run projection unavailable. Run visibility is impaired.")
 
         systemHealth.health_diagnostic = .init(
             value1: .init(code: "backup_age.stale", impairs: .none))
         #expect(
             AttentionDisplay.rowSummary(systemHealth)
-                == "Diagnostic backup_age.stale is open; no capability is impaired.")
+                == "Backup age stale. No capability is impaired.")
+        systemHealth.posture = .init(value1: .advisory)
+        #expect(
+            AttentionDisplay.rowSummary(systemHealth)
+                == "Backup age stale. No capability is impaired.")
 
         systemHealth.health_diagnostic = nil
         #expect(
@@ -232,6 +241,31 @@ import Testing
         // instead of naming a wait nothing is on any more.
         let blocked = AttentionFixtures.fixture(type: .blocked).item
         #expect(AttentionDisplay.rowSummary(blocked) == "This blocked item is superseded.")
+    }
+
+    /// Held work (#3026): an advisory finding reads as a warning that
+    /// leaves admission open, beside the Admission row's "Open", and a
+    /// finding with no posture reads as advisory, as the pane orders it.
+    @Test func anAdvisoryFindingSaysAdmissionStaysOpen() {
+        var held = AttentionFixtures.heldWorkSystemHealth().item
+        #expect(
+            AttentionDisplay.rowSummary(held)
+                == "Work held. Warns about unattended admission; admission stays open.")
+        held.posture = nil
+        #expect(
+            AttentionDisplay.rowSummary(held)
+                == "Work held. Warns about unattended admission; admission stays open.")
+    }
+
+    /// Codes are free-form, so one rule names every one, including those
+    /// the daemon builds at runtime.
+    @Test func diagnosticLabelsSplitTheCodeIntoASentenceCaseLabel() {
+        #expect(AttentionDisplay.diagnosticLabel("work_held") == "Work held")
+        #expect(AttentionDisplay.diagnosticLabel("invocation_stalled") == "Invocation stalled")
+        #expect(AttentionDisplay.diagnosticLabel("backup_age.stale") == "Backup age stale")
+        #expect(AttentionDisplay.diagnosticLabel("doctor-check.git_auth") == "Doctor check git auth")
+        #expect(AttentionDisplay.diagnosticLabel("_leading__double.") == "Leading double")
+        #expect(AttentionDisplay.diagnosticLabel("") == "")
     }
 
     @Test func concludedRowSummariesAreNeutralAcrossEveryTypeAndStatus() {
@@ -448,7 +482,7 @@ import Testing
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .system_health).item, now: now
-            ).map(\.value) == ["run_projection.unavailable", "Run visibility", "Advisory"])
+            ).map(\.value) == ["Run projection unavailable", "Run visibility", "Advisory"])
 
         var blocked = AttentionFixtures.fixture(type: .blocked).item
         blocked.blocked_on = .init(
@@ -508,6 +542,47 @@ import Testing
 
         item.health_diagnostic = nil
         #expect(AttentionDisplay.cardFacts(item, now: now).map(\.label) == ["Posture"])
+    }
+
+    /// Held work (#3026): the card names the held task and links to it,
+    /// shows the diagnostic as words, and keeps the raw code copyable in
+    /// Identifiers. A system-scoped finding names no task.
+    @Test func aTaskFindingsCardNamesItsTaskAndKeepsTheCodeInIdentifiers() {
+        let now = AttentionFixtures.createdInstant
+        var held = AttentionFixtures.heldWorkSystemHealth().item
+        #expect(
+            AttentionDisplay.cardFacts(held, now: now)
+                == [
+                    .init("Diagnostic", "Work held"),
+                    .init("Impairs", "Unattended admission"),
+                    .init("Posture", posture: .advisory),
+                    .init(
+                        "Task", "Time grammar for inbox rows",
+                        linkingTask: "task-run-freeside-specification"),
+                ])
+        #expect(
+            AttentionDisplay.detailIdentifierRows(held)
+                .contains(.init(label: "Diagnostic Code", value: "work_held")))
+
+        // A run subject names its stored task.
+        held.subject = .run(
+            .init(subject_type: .run, subject_id: "run-1", run_id: "run-1", task_id: "task-1"))
+        #expect(
+            AttentionDisplay.cardFacts(held, now: now).last
+                == .init("Task", "Time grammar for inbox rows", linkingTask: "task-1"))
+
+        // A legacy item without names falls back to the task's id, not
+        // the run's.
+        held.display_names = nil
+        #expect(
+            AttentionDisplay.cardFacts(held, now: now).last
+                == .init("Task", "task-1", linkingTask: "task-1"))
+
+        // A run with no stored task, and a system finding, name no task.
+        held.subject = .run(.init(subject_type: .run, subject_id: "run-1", run_id: "run-1", task_id: nil))
+        #expect(!AttentionDisplay.cardFacts(held, now: now).contains { $0.label == "Task" })
+        let system = AttentionFixtures.fixture(type: .system_health).item
+        #expect(!AttentionDisplay.cardFacts(system, now: now).contains { $0.label == "Task" })
     }
 
     @Test func rowContextRendersTheDaemonsDisplayNamesAndMarksIdentifiers() {

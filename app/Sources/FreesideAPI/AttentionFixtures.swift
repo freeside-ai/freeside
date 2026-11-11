@@ -139,6 +139,36 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// Held work (#3026): the advisory notice the daemon raises when a run
+    /// has waited 15 minutes on a task line admission refused. Its subject
+    /// is the run's task, here the demo specification task, and its reason
+    /// is `HeldWorkNoticeItem`'s wording with an unserved-model refusal.
+    public static func heldWorkSystemHealth() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .system_health)
+        let taskID = "task-run-freeside-specification"
+        snapshot.item.id = "held-work-run-freeside-specification-1767321245"
+        snapshot.item.project_id = "freeside"
+        snapshot.item.subject = .task(
+            .init(subject_type: .task, subject_id: taskID, run_id: nil, task_id: taskID))
+        snapshot.item.display_names = .init(
+            value1: .init(
+                project: .init(text: "freeside", source: .name), task: RunFixtures.specificationTaskName))
+        snapshot.item.reason =
+            "Run run-freeside-specification has been held since 2026-01-02T02:34:05Z "
+            + "with hold reason admission_policy_refused. "
+            + "When this notice was raised, admission check agent_resolution refused agent claude-a/claude_code "
+            + "because enrollment claude-a/claude_code does not serve its model. "
+            + "Freeside keeps retrying it. "
+            + "This notice resolves itself when the hold clears, its cause changes, or the task is stopped."
+        snapshot.item.requested_decision = [.acknowledge]
+        snapshot.item.health_diagnostic = .init(
+            value1: .init(code: "work_held", impairs: .unattended_admission))
+        snapshot.item.posture = .init(value1: .advisory)
+        snapshot.item.codex_reenrollment_recovery_binding = nil
+        snapshot.item.created_at = createdInstant.addingTimeInterval(-900)
+        return snapshot
+    }
+
     /// One closed card per way an item concludes (#2097): an operator's
     /// decision with routes, an expiry, a supersession with its successor,
     /// and the daemon's own resolution.

@@ -593,11 +593,15 @@ public struct FreesideRootView: View {
                             case .settings(.finding(let itemID)):
                                 // The card over the System Health pane, with
                                 // no conclusion advance: that would route to
-                                // the next item and pop Settings under it.
+                                // the next item and pop Settings under it. Its
+                                // Task link routes to the task page, which
+                                // leaves Settings.
                                 DecisionDetailView(
                                     store: coordinator.store, itemID: itemID,
                                     findingReasonPreferences: .shared,
-                                    onSelectItem: navigation.openFinding)
+                                    onSelectItem: navigation.openFinding,
+                                    tasks: coordinator.tasks,
+                                    onSelectTask: { navigation.route(to: .task($0)) })
                             }
                         }
                 }
