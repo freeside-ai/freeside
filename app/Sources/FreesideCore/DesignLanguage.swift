@@ -1108,6 +1108,9 @@ struct ChoiceList<Value: Hashable>: View {
         /// agent proposed).
         var mark: String? = nil
         let register: Register
+        /// False draws the option faint and takes no tap or arrow key: a
+        /// choice that is shown but can't be picked now.
+        var isEnabled = true
         var id: Value { value }
     }
 
@@ -1164,7 +1167,7 @@ struct ChoiceList<Value: Hashable>: View {
             if let consequence = option.consequence {
                 Text(consequence)
                     .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
+                    .foregroundStyle(option.isEnabled ? Color.inkDim : Color.inkFaint)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1187,8 +1190,9 @@ struct ChoiceList<Value: Hashable>: View {
         )
         // Not a Tab stop of its own: the list is the single stop.
         .focusable(false)
+        .disabled(!option.isEnabled)
         .onHover { hovering in
-            if hovering {
+            if hovering, option.isEnabled {
                 hoveredOption = option.value
             } else if hoveredOption == option.value {
                 hoveredOption = nil
@@ -1203,7 +1207,7 @@ struct ChoiceList<Value: Hashable>: View {
     private func optionLabel(_ option: Option) -> some View {
         let label = Text(option.label)
             .font(FreesideFont.optionLabel)
-            .foregroundStyle(Color.ink)
+            .foregroundStyle(option.isEnabled ? Color.ink : Color.inkFaint)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
         if let mark = option.mark {
@@ -1223,23 +1227,38 @@ struct ChoiceList<Value: Hashable>: View {
         }
     }
 
+    /// Moves among the options that can be picked; a disabled one is
+    /// stepped over, and a disabled selection moves from where it sits.
     private func move(by offset: Int) -> KeyPress.Result {
         let selectedIndex = options.firstIndex(where: { $0.value == selection })
         guard
             let nextIndex = Self.indexAfterMoving(
-                optionCount: options.count, selectedIndex: selectedIndex, offset: offset)
+                isEnabled: options.map(\.isEnabled), selectedIndex: selectedIndex, offset: offset)
         else {
             return .ignored
         }
-        selection = options[nextIndex].value
+        // At an end the selection stays, unset: setting it again would pick
+        // it again.
+        if nextIndex != selectedIndex { selection = options[nextIndex].value }
         return .handled
     }
 
-    static func indexAfterMoving(optionCount: Int, selectedIndex: Int?, offset: Int) -> Int? {
-        guard optionCount > 0 else { return nil }
-        guard let selectedIndex else { return offset > 0 ? 0 : optionCount - 1 }
-        let nextIndex = selectedIndex + offset
-        return (0..<optionCount).contains(nextIndex) ? nextIndex : selectedIndex
+    /// The nearest option that can be picked past the selection, in the
+    /// direction of `offset`, or the selection at an end. With nothing
+    /// selected it is the first or last that can be picked; nil when none
+    /// can.
+    static func indexAfterMoving(isEnabled: [Bool], selectedIndex: Int?, offset: Int) -> Int? {
+        guard isEnabled.contains(true) else { return nil }
+        let step = offset > 0 ? 1 : -1
+        guard let selectedIndex else {
+            return step > 0 ? isEnabled.firstIndex(of: true) : isEnabled.lastIndex(of: true)
+        }
+        var index = selectedIndex + step
+        while isEnabled.indices.contains(index) {
+            if isEnabled[index] { return index }
+            index += step
+        }
+        return selectedIndex
     }
 }
 
