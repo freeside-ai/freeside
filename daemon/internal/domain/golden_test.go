@@ -2592,6 +2592,12 @@ func TestGolden(t *testing.T) {
 		{"review_yield_history_diff_metrics", yieldHistoryDiffMetrics},
 		{"review_yield_history_drift_verdict", yieldHistoryDriftVerdict},
 		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
+		{"update_drain_transition", domain.UpdateDrainTransition{
+			State:      domain.UpdateDrainDraining,
+			Build:      "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Forced:     true,
+			OccurredAt: ts,
+		}},
 		{"classification", classification},
 		{"command_discuss", discussCommand},
 		{"client_capability_contract", clientCapabilityContract},

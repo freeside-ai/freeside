@@ -547,6 +547,8 @@ var (
 	ErrBlockingSystemHealth                = errors.New("an open system_health item blocks unattended admission")
 	ErrTransitionUnbacked                  = errors.New("operating transition names no accepted command")
 	ErrTransitionCommandMismatch           = errors.New("operating transition disagrees with its accepted command")
+	ErrInvalidUpdateDrainState             = errors.New("unknown update drain state")
+	ErrUpdateDrainLiftForced               = errors.New("only a draining update drain transition can be forced")
 	ErrReviewRecoveryBindingMissing        = errors.New("review contradiction item lacks its recovery binding")
 	ErrReviewRecoveryBindingOutsideItem    = errors.New("review recovery binding is a review_contradiction semantic")
 	ErrReviewRecoveryBindingMismatch       = errors.New("review recovery binding disagrees with its persisted failure")
