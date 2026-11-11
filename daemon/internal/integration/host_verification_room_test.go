@@ -372,3 +372,157 @@ func TestHandoffStopsWhenTheHostExecutorRefuses(t *testing.T) {
 		t.Fatalf("executor ran %d commands, want only the candidate's", host.room.runs)
 	}
 }
+
+// hostSlotsNotices returns every attention item on p's run that reports its
+// executor's slots quarantined, open or concluded.
+func hostSlotsNotices(t *testing.T, p *productionPublicationHarness) []domain.AttentionItem {
+	t.Helper()
+	var notices []domain.AttentionItem
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(p.ctx)
+		for _, item := range items {
+			if item.Value.Subject.ID == domain.SubjectID(p.runID) &&
+				strings.HasPrefix(string(item.Value.ID), "host-slots-quarantined-") {
+				notices = append(notices, item.Value)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return notices
+}
+
+// assertHostSlotsRetrying checks that a pass refused a slot left the task
+// pending under the generic environmental hold, ready for a later pass.
+func assertHostSlotsRetrying(t *testing.T, p *productionPublicationHarness) {
+	t.Helper()
+	assertRunHoldReason(t, p, domain.HoldPublicationEnvironment)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		pending, err := tx.ListPendingOutbox(p.ctx, engine.KindProductionPublicationRequested)
+		if err == nil && len(pending) != 1 {
+			t.Errorf("pending publication tasks = %d, want the one retrying", len(pending))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestQuarantinedHostExecutorRaisesANotice: a job whose executor has every
+// slot quarantined keeps retrying under the publication_environment hold and
+// raises one execution_failure notice naming the executor and the count; a
+// second pass converges on it. Once the executor serves the job again (after
+// a restart, in practice), the job verifies and the notice is superseded.
+func TestQuarantinedHostExecutorRaisesANotice(t *testing.T) {
+	t.Parallel()
+	p := newMixedRecipeHarness(t)
+	host := newHostExecutor(t, p)
+	host.room.runErr = &macverify.NoFreeSlotError{
+		ExecutorRoot: "/var/freeside/executor", Slots: 2, Quarantined: []string{"slot1", "slot2"},
+	}
+	p.startAndRecordExport(t)
+	for pass := range 2 {
+		if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+			t.Fatalf("pass %d = %#v, %v; want the job retrying", pass, result, err)
+		}
+		assertHostSlotsRetrying(t, p)
+		notices := hostSlotsNotices(t, p)
+		if len(notices) != 1 {
+			t.Fatalf("pass %d left %d notices, want one", pass, len(notices))
+		}
+		notice := notices[0]
+		if notice.Status != domain.StatusOpen || notice.Type != domain.AttentionExecutionFailure ||
+			!slices.Equal(notice.RequestedDecision, []domain.Action{domain.ActionStop}) ||
+			!strings.Contains(notice.Reason, "/var/freeside/executor") ||
+			!strings.Contains(notice.Reason, "all 2 of its 2 slots are quarantined") {
+			t.Fatalf("pass %d notice = %#v", pass, notice)
+		}
+		p.now = p.now.Add(time.Minute)
+	}
+	if host.room.runs != 2 {
+		t.Fatalf("executor ran %d commands, want one per pass", host.room.runs)
+	}
+
+	host.room.runErr = nil
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("pass after the executor recovered = %#v, %v", result, err)
+	}
+	if rooms := readyReportRooms(t, p); !slices.Contains(rooms, verify.ClassMacOSHost) {
+		t.Fatalf("report rooms = %v, want macos_host", rooms)
+	}
+	notices := hostSlotsNotices(t, p)
+	if len(notices) != 1 || notices[0].Status == domain.StatusOpen || notices[0].Conclusion == nil ||
+		notices[0].Conclusion.Cause != domain.ConcludedBySupersession {
+		t.Fatalf("notices after the job verified = %#v, want the one superseded", notices)
+	}
+}
+
+// TestBusyHostExecutorRetriesQuietly: a job refused because a slot is leased,
+// with the rest quarantined, retries with no notice and verifies once the
+// slot frees.
+func TestBusyHostExecutorRetriesQuietly(t *testing.T) {
+	t.Parallel()
+	p := newMixedRecipeHarness(t)
+	host := newHostExecutor(t, p)
+	host.room.runErr = &macverify.NoFreeSlotError{
+		ExecutorRoot: "/var/freeside/executor", Slots: 2, Quarantined: []string{"slot1"},
+	}
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("busy pass = %#v, %v; want the job retrying", result, err)
+	}
+	assertHostSlotsRetrying(t, p)
+	if notices := hostSlotsNotices(t, p); len(notices) != 0 {
+		t.Fatalf("a busy executor raised %#v", notices)
+	}
+
+	host.room.runErr = nil
+	p.now = p.now.Add(time.Minute)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("pass after the slot freed = %#v, %v", result, err)
+	}
+	if notices := hostSlotsNotices(t, p); len(notices) != 0 {
+		t.Fatalf("a busy executor raised %#v", notices)
+	}
+}
+
+// TestReentryRaisesAndRetiresTheHostSlotsNotice: a readiness re-entry, which
+// verifies through the path the handoff merge check shares, raises the
+// notice while every slot is quarantined and retires it once the executor
+// serves the job again.
+func TestReentryRaisesAndRetiresTheHostSlotsNotice(t *testing.T) {
+	t.Parallel()
+	p := newMixedRecipeHarness(t)
+	host := newHostExecutor(t, p)
+	p.publishReady(t)
+	head := p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
+	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationHeadChanged, Bound: p.replay.HeadSHA, Observed: head,
+	})
+	if !started {
+		t.Fatal("a head change started no re-entry")
+	}
+	host.room.runErr = &macverify.NoFreeSlotError{
+		ExecutorRoot: "/var/freeside/executor", Slots: 1, Quarantined: []string{"slot1"},
+	}
+	p.scriptCleanReview(2, p.baseSHA, head)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("quarantined re-entry = %#v, %v; want it retrying", result, err)
+	}
+	assertRunHoldReason(t, p, domain.HoldPublicationEnvironment)
+	if notices := hostSlotsNotices(t, p); len(notices) != 1 || notices[0].Status != domain.StatusOpen ||
+		!strings.Contains(notices[0].Reason, "all 1 of its 1 slots are quarantined") {
+		t.Fatalf("notices after the quarantined re-entry = %#v, want one open", notices)
+	}
+
+	host.room.runErr = nil
+	p.now = p.now.Add(time.Minute)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("re-entry after the executor recovered = %#v, %v", result, err)
+	}
+	p.assertReentered(t, superseded, 2, p.baseSHA, head)
+	if notices := hostSlotsNotices(t, p); len(notices) != 1 || notices[0].Status == domain.StatusOpen {
+		t.Fatalf("notices after the re-entry verified = %#v, want the one superseded", notices)
+	}
+}

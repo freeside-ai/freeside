@@ -33,6 +33,8 @@
 //     under
 //   - host_verification_admission.go the gate that admits a run's
 //     verification job onto the credential-free macOS executor (§5.7)
+//   - host_verification_slots.go the notice on a run whose macOS executor
+//     has every slot quarantined, and its retirement
 //   - router.go, routing_policy.go, task_line_change.go
 //     agent routing, routing policy revisions, and an operator's task line
 //     change (§5.4)

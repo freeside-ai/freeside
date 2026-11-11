@@ -124,7 +124,11 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 // memory budget refused, under the invocation that reserved;
 // image_upkeep_pending for a task waiting on an image (a re-entry whose base
 // waits on upkeep, or a rebuild the busy builder could not start), and
-// publication_environment for any other environmental back-off.
+// publication_environment for any other environmental back-off. A
+// verification job whose macOS executor has every slot quarantined keeps
+// publication_environment and also raises a notice on the run naming the
+// executor, because no retry gets a slot until the daemon restarts
+// (retireHostSlotsNotice retires it).
 func (w *productionPublicationWorkflow) recordRetryableHold(
 	ctx context.Context, task productionPublicationTask, err error,
 ) error {
@@ -149,7 +153,12 @@ func (w *productionPublicationWorkflow) recordRetryableHold(
 	var pending *ImageUpkeepPendingError
 	upkeep := errors.As(err, &pending)
 	if !upkeep && !errors.Is(err, errProjectImageBuilderBusy) {
-		return w.recordPublicationEnvironmentHold(ctx, task)
+		var noticeErr error
+		if refused, quarantined := hostSlotsQuarantined(err); quarantined && ctx.Err() == nil {
+			noticeErr = recordProductionQuarantine(ctx, w.store, w.attention, hostSlotsQuarantinedPrefix,
+				task.RunID, task.ProjectID, hostSlotsQuarantinedReason(refused))
+		}
+		return errors.Join(noticeErr, w.recordPublicationEnvironmentHold(ctx, task))
 	}
 	if ctx.Err() != nil {
 		return nil

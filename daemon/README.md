@@ -3253,9 +3253,15 @@ a pass whose slot returns `macverify.ErrAbsenceUnproven` keeps the
 reservation even when ward proves every container gone, and the verification
 retries. That hold covers the pass alone: the executor never re-inspects a
 quarantined slot, so a later pass whose own proofs pass releases while the
-slot's processes may still run (#3000). A busy executor
-(`macverify.ErrNoFreeSlot`) also retries. Decision record:
-`devlog/2026-11-09-2207-verification-room-selection.md`.
+slot's processes may still run (#3000). An executor with no free slot
+(`macverify.ErrNoFreeSlot`) also retries. A busy one, whose leased slot
+frees, retries quietly. One whose every slot is quarantined serves nothing
+until `freesided` restarts, so the job also raises an `execution_failure`
+notice on the run that names the executor root and the quarantined count and
+offers stop. A later verification of that run whose host command the
+executor does not refuse for quarantined slots supersedes it. Decision records:
+`devlog/2026-11-09-2207-verification-room-selection.md` and
+`devlog/2026-11-11-1218-host-slots-quarantined-notice.md`.
 
 **`-protected-path <class>=<pattern>` widens a protected-path class.** Repeat
 it once per pattern. The class is the trust profile's

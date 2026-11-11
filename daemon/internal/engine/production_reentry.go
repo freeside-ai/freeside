@@ -881,6 +881,9 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
 		return productionReentryCheckpoint{}, errors.Join(err, releaseErr)
 	}
+	if retireErr := w.retireHostSlotsNotice(ctx, task, rooms, err); retireErr != nil {
+		return productionReentryCheckpoint{}, errors.Join(err, retireErr)
+	}
 	if err != nil {
 		if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
 			err = productionPublicationRetryableError(err)
