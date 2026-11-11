@@ -28,8 +28,8 @@ import Testing
 
     private let specificationPhase = [
         "Specification approved",
-        "Attempt 1 completed",
-        "> Specification started · Attempt 1",
+        "Specification run completed",
+        "> Specification started",
         "Task started",
         "Task created",
     ]
@@ -66,7 +66,7 @@ import Testing
                 "> Review started · Round 1 requested",
                 "> Implementation started · Attempt 1",
                 "Specification approved",
-                "> Specification started · Attempt 1",
+                "> Specification started",
                 "Task started",
                 "Task created",
             ])
@@ -140,7 +140,7 @@ import Testing
         #expect(
             lines(TaskStageFixtures.history(.secondCampaign))
                 == [
-                    "> Specification started · Attempt 1 *",
+                    "> Specification started *",
                     "> Implementation started · Attempt 1",
                 ] + specificationPhase)
         // A campaign that never left Specification is still followed by a
@@ -153,8 +153,19 @@ import Testing
         script.submit("spec-2", role: .specification, attempt: 1, campaign: "second")
         #expect(
             lines(script.timeline) == [
-                "> Specification started · Attempt 1 *", "> Specification started · Attempt 1",
+                "> Specification started *", "> Specification started",
             ])
+    }
+
+    /// A specification run is named by its phase, never as `Attempt 1`,
+    /// which its implementation run also is (#1462).
+    @Test func aSpecificationRunIsNamedByItsPhase() {
+        var script = TaskStageFixtures.Script()
+        script.campaign("first", specification: "spec-1")
+        script.submit("spec-1", role: .specification, attempt: 1, campaign: "first")
+        script.wait()
+        script.milestone("spec-1", .terminal_recorded, invocation: "inv-spec-1", terminal: .failed)
+        #expect(lines(script.timeline) == ["! Specification run failed *", "> Specification started"])
     }
 
     private let firstReview = [
@@ -320,7 +331,7 @@ import Testing
             "> Review started · Round 1 requested",
             "> Implementation started · Attempt 1",
             "Specification approved",
-            "> Specification started · Attempt 1",
+            "> Specification started",
         ]
         #expect(
             lines(script)
@@ -490,17 +501,23 @@ import Testing
                 "Implementation started · Remediation · Round 1",
                 "Review started · Round 1 requested",
                 "Implementation started · Attempt 1",
-                "Specification started · Attempt 1",
+                "Specification started",
             ])
         #expect(
             starts.map(\.kind) == [
                 .stageStart(.verification), .stageStart(.review), .stageStart(.implementation),
                 .stageStart(.review), .stageStart(.implementation), .stageStart(.specification),
             ])
-        // No row states a start on its own, and no event row repeats one.
-        let bare = ["Specification", "Implementation", "Review", "Verification"].map { "\($0) started" }
+        // No row states a start on its own, apart from Specification's,
+        // whose run its stage start already names, and no event row
+        // repeats one.
+        let bare = ["Implementation", "Review", "Verification"].map { "\($0) started" }
         #expect(!rows.contains { bare.contains($0.label) })
-        #expect(!rows.contains { ["Round 1 requested", "Round 2 requested", "Attempt 1 started"].contains($0.label) })
+        #expect(
+            !rows.contains {
+                ["Round 1 requested", "Round 2 requested", "Attempt 1 started", "Specification run started"]
+                    .contains($0.label)
+            })
         // Each start carries its event's time and its event's link.
         let events = script.timeline.events
         let verification = try #require(events.first { $0.kind == .verification_recorded })

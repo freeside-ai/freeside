@@ -647,7 +647,8 @@ import Testing
         #expect(timeline.name == RunFixtures.retryTaskName)
         #expect(timeline.sections.map(\.campaign_id) == [RunFixtures.retryCampaignID])
         #expect(runs.map(\.run_id) == [RunFixtures.activeRunID, "run-freeside-656"])
-        #expect(runs.map(TaskTimelinePresentation.runTitle) == ["Attempt 2", "Attempt 1"])
+        #expect(
+            runs.map(TaskTimelinePresentation.runTitle) == ["Implementation · Attempt 2", "Implementation · Attempt 1"])
         #expect(runs.map { $0.role?.value1 } == [.implementation, .implementation])
         #expect(runs[0].hold?.value1.reason == .verification_findings)
         #expect(runs[1].superseded_by == RunFixtures.activeRunID)
@@ -737,7 +738,29 @@ import Testing
         #expect(TaskTimelinePresentation.runReference("run-spec", in: timeline) == "specification run")
     }
 
-    @Test func runCardAccessibilityLabelNamesRoleWithoutTheId() {
+    @Test func runCardsNameThePhaseSoASpecificationAndItsImplementationDiffer() {
+        // A campaign's specification run and its first implementation run
+        // both carry attempt 1 (#1462).
+        let specification = Components.Schemas.TaskTimelineRun(
+            run_id: "run-spec", role: .init(value1: .specification), attempt_number: 1,
+            superseded_by: "run-impl", milestones: [], events: [])
+        let implementation = Components.Schemas.TaskTimelineRun(
+            run_id: "run-impl", role: .init(value1: .implementation), attempt_number: 1, milestones: [], events: [])
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: Self.instants[0], task_id: "t", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [.init(campaign_id: "campaign-a", events: [], runs: [specification, implementation])])
+        #expect(TaskTimelinePresentation.runTitle(specification) == "Specification")
+        #expect(TaskTimelinePresentation.runTitle(implementation) == "Implementation · Attempt 1")
+        #expect(
+            TaskTimelinePresentation.runCardAccessibilityLabel(specification, in: timeline)
+                == "Open detailed run history for Specification")
+        #expect(
+            TaskTimelinePresentation.runCardAccessibilityLabel(implementation, in: timeline)
+                == "Open detailed run history for Implementation · Attempt 1")
+    }
+
+    @Test func runCardAccessibilityLabelNamesThePhaseWithoutTheId() {
         let impl = Components.Schemas.TaskTimelineRun(
             run_id: "run-\(String(repeating: "a", count: 64))", role: .init(value1: .implementation),
             attempt_number: 2, milestones: [], events: [])
@@ -748,15 +771,15 @@ import Testing
             sections: [.init(campaign_id: "campaign-a", events: [], runs: [impl, legacy])])
         #expect(
             TaskTimelinePresentation.runCardAccessibilityLabel(impl, in: single)
-                == "Open detailed run history for Attempt 2, Implementation run")
+                == "Open detailed run history for Implementation · Attempt 2")
         #expect(
             TaskTimelinePresentation.runCardAccessibilityLabel(legacy, in: single)
                 == "Open detailed run history for Run run-legacy")
     }
 
     @Test func runCardAccessibilityLabelNamesTheCampaignWhenAttemptsRestart() {
-        // Two campaigns, each with an Attempt 1 specification run: the title
-        // and role are identical, so the control names its campaign.
+        // Two campaigns, each with a specification run: the title and role
+        // are identical, so the control names its campaign.
         func specRun() -> Components.Schemas.TaskTimelineRun {
             .init(
                 run_id: "run-spec", role: .init(value1: .specification), attempt_number: 1, milestones: [], events: [])
@@ -773,10 +796,10 @@ import Testing
             ])
         #expect(
             TaskTimelinePresentation.runCardAccessibilityLabel(a, in: timeline)
-                == "Open detailed run history for Attempt 1, Specification run, campaign campaign-a")
+                == "Open detailed run history for Specification, campaign campaign-a")
         #expect(
             TaskTimelinePresentation.runCardAccessibilityLabel(b, in: timeline)
-                == "Open detailed run history for Attempt 1, Specification run, campaign campaign-b")
+                == "Open detailed run history for Specification, campaign campaign-b")
     }
 
     @Test func runTitleShortensAnOpaqueIdInTheFallback() {

@@ -1114,8 +1114,9 @@ struct TaskPageView: View {
         .accessibilityHint("Shows this run's recorded milestones and invocation observations.")
     }
 
-    /// `Attempt N` with its chip beside it: the title is fixed vocabulary
-    /// that cannot wrap, which is the one case a chip sits beside a title.
+    /// The run's title (`Specification`, `Implementation · Attempt N`) with
+    /// its chip beside it: the title is fixed vocabulary that cannot wrap,
+    /// which is the one case a chip sits beside a title.
     private func runTitle(
         _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline, dimmed: Bool
     ) -> some View {
@@ -1602,7 +1603,9 @@ enum TaskTimelinePresentation {
             oldestFirst.append(
                 TimelineRail.Row(
                     kind: start.map { .stageStart($0) } ?? (recordsFailure(event) ? .failure : .event),
-                    label: start.map { "\(AttentionDisplay.label($0)) started · \(words)" } ?? words,
+                    label: start.map { stage in
+                        ["\(AttentionDisplay.label(stage)) started", words].compactMap { $0 }.joined(separator: " · ")
+                    } ?? words ?? "",
                     recordedAt: event.recorded_at, context: event.triage?.value1.reason,
                     itemID: linkedItemID(event, items: items)))
         }
@@ -2029,19 +2032,28 @@ enum TaskTimelinePresentation {
             .replacingOccurrences(of: "_", with: " ")
     }
 
-    /// An event's words on the rail. A run is named by its attempt and a
-    /// review round by its number, never by an id; a run with no role or
-    /// no attempt number keeps the label it had, since there is nothing to
-    /// name it by. `pass` counts the run's work results, oldest first: a
-    /// fix-up pass records a second one for the same attempt.
+    /// An event's words on the rail. A specification run is named by its
+    /// phase, an implementation run by its attempt, and a review round by
+    /// its number, never by an id; a run with no role or no attempt number
+    /// keeps the label it had, since there is nothing to name it by.
+    /// `pass` counts the run's work results, oldest first: a fix-up pass
+    /// records a second one for the same attempt.
     ///
     /// `startsStage` drops the submission's own `started`, which the merged
-    /// stage start already says: `Implementation started · Attempt 1`.
+    /// stage start already says: `Implementation started · Attempt 1`. A
+    /// specification run's submission then has no words of its own, since
+    /// the stage start names the run: `Specification started`.
     private static func rowLabel(
         _ event: Components.Schemas.TaskEvent, run: Components.Schemas.TaskTimelineRun?, pass: Int,
         startsStage: Bool = false
-    ) -> String {
+    ) -> String? {
         let attempt = run?.role == nil ? nil : run?.attempt_number
+        if let milestone = event.milestone?.value1, run?.role?.value1 == .specification {
+            if milestone.kind == .run_submitted { return startsStage ? nil : "Specification run started" }
+            if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
+                return "Specification run" + (pass > 1 ? ", pass \(pass)" : "") + " \(word)"
+            }
+        }
         if let milestone = event.milestone?.value1, let attempt {
             if milestone.kind == .run_submitted { return "Attempt \(attempt)" + (startsStage ? "" : " started") }
             if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
@@ -2083,24 +2095,34 @@ enum TaskTimelinePresentation {
         timeline?.name ?? snapshot.task.display_names.task
     }
 
-    /// A run inside a campaign is titled by its attempt; a run outside one,
-    /// or missing its attempt number, by its short id, as the run timeline
-    /// does. The exact id is in the page's Identifiers footer.
+    /// A run is titled by its phase, since a campaign's specification run
+    /// and its first implementation run both carry attempt 1 (#1462). A
+    /// campaign holds one specification run, so it needs no number; an
+    /// implementation run adds its attempt. A run with no role is titled
+    /// by its attempt, or, missing that, by its short id, as the run
+    /// timeline does. The exact id is in the page's Identifiers footer.
     static func runTitle(_ run: Components.Schemas.TaskTimelineRun) -> String {
-        run.attempt_number.map { "Attempt \($0)" } ?? "Run \(ShortIdentifier.short(run.run_id))"
+        let attempt = run.attempt_number.map { "Attempt \($0)" }
+        switch run.role?.value1 {
+        case .specification:
+            return label(.specification)
+        case .implementation:
+            return [label(.implementation), attempt].compactMap { $0 }.joined(separator: " · ")
+        case nil:
+            return attempt ?? "Run \(ShortIdentifier.short(run.run_id))"
+        }
     }
 
-    /// The run card's accessibility label: the title and the run's role,
-    /// without the opaque id VoiceOver would otherwise read character by
-    /// character. Attempt numbers restart per campaign, so when another run
-    /// shares this title and role the label names the campaign; the label
-    /// stands in for the button's content, and two controls must not read
-    /// alike.
+    /// The run card's accessibility label: the title, which names the
+    /// run's phase, without the opaque id VoiceOver would otherwise read
+    /// character by character. Attempt numbers restart per campaign, so
+    /// when another run shares this title and role the label names the
+    /// campaign; the label stands in for the button's content, and two
+    /// controls must not read alike.
     static func runCardAccessibilityLabel(
         _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> String {
         var label = "Open detailed run history for \(runTitle(run))"
-        if let role = run.role?.value1 { label += ", \(self.label(role)) run" }
         if !isUniqueRunControl(run, in: timeline),
             let campaign = campaignID(forRun: run.run_id, in: timeline)
         {
@@ -2432,6 +2454,13 @@ enum TaskTimelinePresentation {
     /// task's own status and cut. Every other run is history, so faint: its
     /// synced outcome in the run vocabulary, marked superseded when the
     /// timeline says so, and no chip when neither is known.
+    ///
+    /// A specification run that a successor superseded handed off to
+    /// implementation, so it reads `Handed Off`. A run that never reached a
+    /// final outcome (`pending` or `unobserved`) shows none once something
+    /// ended it, a successor or the task leaving its active lifecycle: the
+    /// daemon leaves such runs unconcluded, and `In Progress` would claim
+    /// they still run (#1462).
     static func runChip(
         _ run: Components.Schemas.TaskTimelineRun, task: Components.Schemas.Task,
         position: TaskDisplay.Position?, synced: Components.Schemas.Run?
@@ -2442,7 +2471,11 @@ enum TaskTimelinePresentation {
                 TaskDisplay.statusCut(task, position: position)
             )
         }
-        let outcome = synced.map { RunDisplay.label($0.outcome) }
+        if run.role?.value1 == .specification, run.superseded_by != nil { return ("Handed Off", .faint) }
+        let ended = run.superseded_by != nil || !TaskDisplay.isActive(task)
+        let outcome = synced.flatMap { synced in
+            ended && [.pending, .unobserved].contains(synced.outcome) ? nil : RunDisplay.label(synced.outcome)
+        }
         let parts = [outcome, run.superseded_by == nil ? nil : "Superseded"].compactMap { $0 }
         return parts.isEmpty ? nil : (parts.joined(separator: " · "), .faint)
     }

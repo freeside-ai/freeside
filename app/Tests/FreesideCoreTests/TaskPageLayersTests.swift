@@ -96,6 +96,58 @@ import Testing
         #expect(known.cut == .faint)
     }
 
+    /// A run something ended never reads as in progress: the daemon leaves
+    /// a handed-off specification run and an abandoned task's runs
+    /// unconcluded, so the chip drops their pending outcome (#1462).
+    @Test func runChipNeverCallsAnEndedRunInProgress() throws {
+        var fixture = TaskProgressFixtures.make("Verification")
+        let currentID = try #require(fixture.task.current_position?.value1.run_id)
+        var pending = try #require(fixture.runs.first).run
+        pending.outcome = .pending
+        func chip(_ run: Components.Schemas.TaskTimelineRun, synced: Components.Schemas.Run? = pending) -> String? {
+            TaskTimelinePresentation.runChip(run, task: fixture.task, position: fixture.position, synced: synced)?
+                .label
+        }
+
+        // A specification run its implementation run superseded handed off.
+        var specification = Components.Schemas.TaskTimelineRun(
+            run_id: "run-spec", role: .init(value1: .specification), attempt_number: 1,
+            superseded_by: currentID, milestones: [], events: [])
+        let handedOff = try #require(
+            TaskTimelinePresentation.runChip(
+                specification, task: fixture.task, position: fixture.position, synced: pending))
+        #expect(handedOff.label == "Handed Off")
+        #expect(handedOff.cut == .faint)
+
+        // A superseded implementation run with no final outcome.
+        var implementation = Components.Schemas.TaskTimelineRun(
+            run_id: "run-impl-1", role: .init(value1: .implementation), attempt_number: 1,
+            superseded_by: currentID, milestones: [], events: [])
+        #expect(chip(implementation) == "Superseded")
+        var unobserved = pending
+        unobserved.outcome = .unobserved
+        #expect(chip(implementation, synced: unobserved) == "Superseded")
+
+        // With no successor, a live task's earlier run keeps its outcome; an
+        // ended task's shows none.
+        implementation.superseded_by = nil
+        specification.superseded_by = nil
+        #expect(chip(implementation) == RunDisplay.label(Components.Schemas.RunOutcome.pending))
+        for lifecycle in [Components.Schemas.Task.lifecyclePayload.abandoned, .stopped, .finished] {
+            fixture.task.lifecycle = lifecycle
+            #expect(chip(implementation) == nil)
+            #expect(chip(specification) == nil)
+        }
+
+        // A final outcome stays.
+        var failed = pending
+        failed.outcome = .failed
+        implementation.superseded_by = currentID
+        #expect(
+            chip(implementation, synced: failed)
+                == "\(RunDisplay.label(Components.Schemas.RunOutcome.failed)) · Superseded")
+    }
+
     @Test func headerMetaLineIsProjectIssueLifecycleSource() throws {
         let retry = try #require(
             TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.retryTaskID }
