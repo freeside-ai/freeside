@@ -3635,3 +3635,36 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-10 on #3023;
 [decision note](../../devlog/2026-11-10-1818-default-policy-closes-source-issue.md).)
+
+## Revision 115 ("Pull Request Bodies a Reviewer Can Read"):
+
+1. **The PR body no longer carries the disposition history.** The owner
+   directed on 2026-11-10, after the Wave 9 exit run's gh-imgup#147, that a
+   published body read like Freeside's own pull requests. This revises the
+   Section [7](../plan.md#7-review-policy) condition that the PR carry the disposition
+   history so the merged PR explains itself forensically on the forge (#525).
+   The condition that changed: forensic reconstruction from the forge. The
+   store, the run timeline, and the clients' structured dispositions already
+   hold that record, the publication intent still binds the history's
+   canonical rendering by digest, and a target repository's reviewer doesn't
+   use its digests and invocation ids. Rejected: keeping the history in a
+   collapsed section, which keeps the noise in the body source and the
+   budget.
+2. **Verification says what Freeside ran and what review concluded.** One
+   bullet per command Freeside ran at the head, one for the independent
+   review's outcome, each declined or deferred finding with its recorded
+   reason as a labeled claim, and one line saying Freeside ran only those
+   checks and the rest is the author's account. The section changes in place
+   for every record, since publisher sections were never frozen by recipe
+   (Section [5.15](../plan.md#515-evidence-and-images)). Rejected: a `Not run:` bullet
+   per claimed check, which the daemon can't write because it keeps no
+   structured record of what an agent claimed.
+3. **Authored prose ends with its author's last section.** Recipes
+   `freeside.client-publication/v3` and `freeside.intake-publication/v2` drop
+   the producer line, evidence list and artifact digest; the digest stays on
+   the stored authoring artifact, and the Verification line keeps the prose
+   labeled as a claim. Stored v1, v2 and intake v1 records keep their frozen
+   rendering.
+
+(Owner decision of 2026-11-10 on #3022;
+[decision note](../../devlog/2026-11-10-1757-readable-pr-bodies.md).)

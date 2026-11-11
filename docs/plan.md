@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 115
+revision: 116
 status: active
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # Freeside
@@ -829,7 +829,37 @@ classes; every durable-stop condition is consumed before it reaches the channel.
 **Restart policy.** Restart always, under the platform throttle. This is safe
 only because every deliberate stop is in-process and durable: a restart can
 resume only work the contract says is safe to resume, and Section [4](#4-the-attention-model)'s rule
-stands (a restart never reopens unattended admission).
+stands for the operator stop and for every system stop (a restart never
+reopens unattended admission). The update drain below is the one state a
+start may lift, and among starts only that of a different build lifts it.
+
+**Update drain** (revision 116;
+[decision note](../devlog/2026-11-11-1630-graceful-updates-and-version-skew.md);
+not built yet, tracker #3113). An update drains the daemon before it replaces
+the build: the daemon keeps accepting submissions, starts no new launch, and
+lets running launches finish. A drain is not the durable operator stop. It
+exists only so an update can swap builds, so the new build's start ends it:
+the drain lifts by itself when a different build starts, as the last step of
+startup and before any launch or publication. A restart of the same build
+keeps the drain, so a crash in the middle of a drain can't resume launches in
+the middle of a swap. An update that is abandoned or undone (Section
+[10](#10-operations-and-onboarding), Environments) ends its own drain. Lifting
+a drain never lifts an operator stop or a system stop.
+
+**Forced update** (revision 116; not built yet, tracker #3113). The operator
+may cancel the running launches instead of waiting for them. A canceled launch
+re-runs under the next paragraph.
+
+**Re-run after a restart** (revision 116; not built yet, tracker #3113). An
+invocation the daemon loses to its own restart or cancels for a forced update
+is attempted again without the operator, within the limit and in the order
+Section [5.9](#59-durability-effectively-once) sets. Repeated restarts hold
+every launch and raise one item, so a daemon that keeps crashing doesn't spend
+each invocation's limit and raise a card for each. That hold is a system stop,
+so no restart lifts it. A launch lost on a runner
+host keeps its own rule (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+Hosts). The implementing units set the limit and what counts as repeated.
 
 **Stop.** Supervisor stop is SIGTERM with an effectively unlimited exit timeout,
 because credential-lease teardown is unbounded by design (decider: user; the
@@ -2893,10 +2923,11 @@ under that section's prohibitions. The first increment depends on no relay; the
 tailnet connection is the first reachability implementation and the relay would
 be the second, so no abstraction over them enters the daemon before the second
 exists (Section [5.2](#52-the-daemon-and-its-supervisor)). The wire protocol is
-daemon-internal and versioned with the build: the host record carries the
-runner's build, a runner whose build the control plane's protocol version does
-not accept is treated as an unreachable host until it is upgraded, and the first
-increment requires the same build on every host.
+daemon-internal and carries its own version: the host record carries the
+runner's build, but a host needs the control plane's runner protocol version,
+not its build, so an update that leaves the protocol alone asks nothing of the
+other hosts (revision 116; not built yet, #3112 on tracker #2161). A host on
+another protocol version is awaiting update (An unreachable host, below).
 
 **The daemon host.** The daemon host runs no separate runner process. The daemon
 composes the ward package in-process behind the same runner-backend interface,
@@ -2910,7 +2941,11 @@ runner role, never a separate agent or product. The same `freesided` binary is
 installed by the path the daemon takes on that host's tier (Section
 [5.2](#52-the-daemon-and-its-supervisor): the operator app's per-user
 LaunchAgent on the Mac-first path, the elevation helper's unit on the hardened
-path), supervised with `KeepAlive`, and upgraded the same way. In the runner
+path) and supervised with `KeepAlive`. After that first installation a runner
+host will install the control plane's build by itself when it is idle, never
+picking a version for itself, and an update drain (Section
+[5.2](#52-the-daemon-and-its-supervisor)) will cover every host (revision 116;
+not built yet, #3112 on tracker #2161). In the runner
 role the unit gets its own root: the host key in
 platform-protected storage, the host enrollment record (the control plane's
 address and key, the registry it names), the credential volumes, and the image
@@ -2995,9 +3030,18 @@ object bearing the control plane's ownership labels. Declaring a host lost is
 the operator's accepted exception to the single-writer rule: a writer may still
 be running on that host, so the declaration names the identities it held for
 rotation at the vendor. No other path starts a second writer under an identity
-whose first writer may still be alive, so automatic failover of a running launch
-is rejected. A sleeping machine is an unreachable host; a runner keeps its host
-awake while it holds a launch.
+whose first writer may still be alive. That is what stays rejected about
+automatic failover of a running launch: starting a second writer while the
+first may still be alive. The re-run of an invocation the control plane lost to
+its own restart or a forced update starts only after that loss is proven, so
+it is a new attempt, not failover (Section
+[5.9](#59-durability-effectively-once); revision 116; not built yet, tracker
+#3113). A sleeping machine is an unreachable host; a runner keeps its host
+awake while it holds a launch. A host that holds no launch and is on another
+runner protocol version than the control plane's is awaiting update, not
+unreachable: it raises no alarm and holds no lease (revision 116; not built
+yet, #3112 on tracker #2161). A host that holds a launch stays under the rule
+above.
 
 **Start triggers.** The units are filed fenced (tracker #2161). The first
 increment, the M1 Max MacBook on the same runtime and backend class, starts when
@@ -3345,6 +3389,15 @@ So after takeover, the successor does not start a replacement while the prior
 invocation may still be running. It first cancels that invocation or proves it
 ended. Then it records its adoption disposition.
 
+A re-run after a restart or a forced update (Section
+[5.2](#52-the-daemon-and-its-supervisor); revision 116; not built yet, tracker
+#3113) keeps the same order on one host: it starts only after the lost
+invocation is proven ended, so the single-writer rule holds. Re-runs count
+against a durable limit that survives restarts, and past it the ordinary
+`execution_failure` card appears (Section [4](#4-the-attention-model)). A
+cancellation for a forced update doesn't count toward the limit, because
+routine updates would otherwise exhaust it for healthy work.
+
 Epoch fencing and credential fencing solve different problems. Ordinary
 failover uses the active epoch and does not rotate GitHub credentials. Deleting
 a lost or compromised host's App key stops new App authentication with that
@@ -3360,6 +3413,14 @@ monotonically increasing `durable_intent_revision`. The active host serializes
 changes in its local transaction. It publishes the resulting intent to the
 portable frontier before it redirects or produces any external effect. It
 rejects an envelope from another epoch or a superseded revision.
+
+**Every build reads what earlier builds stored** (revision 116; it doesn't
+hold yet, tracker #3113). A build reads everything an earlier build stored, to
+resume work and to show history. The reverse isn't promised: an older build
+need not read what a newer one wrote. A stored format that must change is
+migrated, and the reader for the old format isn't dropped. This answers #854's
+gating question: yes. #854 is the first known gap, and tracker #3113 carries
+the proof.
 
 Kill-before and kill-after tests are permanent.
 
@@ -4516,6 +4577,17 @@ outside `ClientCommand`:
   one artifact by digest (test 10).
 
 Phase 1 has no offline approvals.
+
+**Version skew** (revision 116; not built yet, tracker #3113). An app and a
+daemon need not be the same build. An app tolerates additions to the daemon's
+responses. The daemon advertises the features it serves, and it states a
+compatibility floor that moves only when a change breaks older apps. An app
+below the floor refuses to work and prompts for an update; every other app
+keeps working. The daemon never refuses a client on version: strict command
+decoding and digest-bound decisions stay as they are, and they, not matching
+versions, keep a stale app from doing harm. Until this is built the contract is
+strict on both sides, so a difference can fail every sync read, and Section
+[5.2](#52-the-daemon-and-its-supervisor)'s contract digest diagnoses it.
 
 Client caches are part of the threat model:
 
@@ -6521,12 +6593,26 @@ stay with that run.
   an owner-only copy for offline `sqlite3` use.
 - **Production lifecycle control has two sanctioned paths.** The installer
   remains the first: `prod` adopts a merged daemon change when the operator
-  re-runs `app/scripts/install-mac-app.sh --daemon-path ...` (no self-updater
-  exists). The installed app's `daemon start|stop|status` command is the
+  re-runs `app/scripts/install-mac-app.sh --daemon-path ...`. The control
+  plane's daemon has no self-updater: the operator starts every update of it.
+  A runner host will install the control plane's build by itself (Section
+  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts; not built yet, #3112 on tracker #2161).
+  The installer drains through the daemon before it swaps the bundle (Section
+  [5.2](#52-the-daemon-and-its-supervisor), Update drain; revision 116). That drain is not built yet (tracker
+  #3113): today the installer's re-run restarts the daemon with no drain.
+  The installed app's `daemon start|stop|status` command is the
   second, and it is the operator's. No procedure names it for a script or
   agent any longer: since #2080 a real-work run leaves `prod` running. Tests,
   scripts, and agents never stop, unload, or re-register
   `ai.freeside.daemon`.
+- **An update is provisional until the new build reopens** (revision 116; not
+  built yet, tracker #3113). A new build is checked against a copy of the
+  database before the drain, so a build that can't read the data is refused
+  while the old one still runs. If the updated daemon fails to start, the
+  previous bundle and database come back and the update's drain ends. This is
+  not a downgrade path: it
+  undoes only an update that never reopened, and nothing is restored once the
+  new build has lifted the drain.
 
 `dev` ships with the first installer change, alongside `prod`: the installer's
 identity constants become parameters of the environment either way, so a
@@ -7254,38 +7340,71 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 115 ("Pull Request Bodies a Reviewer Can Read"):
+Revision 116 ("Graceful Updates, Restart Re-Runs, and Version Skew"):
 
-1. **The PR body no longer carries the disposition history.** The owner
-   directed on 2026-11-10, after the Wave 9 exit run's gh-imgup#147, that a
-   published body read like Freeside's own pull requests. This revises the
-   Section [7](#7-review-policy) condition that the PR carry the disposition
-   history so the merged PR explains itself forensically on the forge (#525).
-   The condition that changed: forensic reconstruction from the forge. The
-   store, the run timeline, and the clients' structured dispositions already
-   hold that record, the publication intent still binds the history's
-   canonical rendering by digest, and a target repository's reviewer doesn't
-   use its digests and invocation ids. Rejected: keeping the history in a
-   collapsed section, which keeps the noise in the body source and the
-   budget.
-2. **Verification says what Freeside ran and what review concluded.** One
-   bullet per command Freeside ran at the head, one for the independent
-   review's outcome, each declined or deferred finding with its recorded
-   reason as a labeled claim, and one line saying Freeside ran only those
-   checks and the rest is the author's account. The section changes in place
-   for every record, since publisher sections were never frozen by recipe
-   (Section [5.15](#515-evidence-and-images)). Rejected: a `Not run:` bullet
-   per claimed check, which the daemon can't write because it keeps no
-   structured record of what an agent claimed.
-3. **Authored prose ends with its author's last section.** Recipes
-   `freeside.client-publication/v3` and `freeside.intake-publication/v2` drop
-   the producer line, evidence list and artifact digest; the digest stays on
-   the stored authoring artifact, and the Verification line keeps the prose
-   labeled as a claim. Stored v1, v2 and intake v1 records keep their frozen
-   rendering.
+1. **An update drains first, and the drain is the one state a start lifts.**
+   The daemon keeps accepting submissions, starts no new launch, and lets
+   running launches finish; the operator may force the update, which cancels
+   them (Section [5.2](#52-the-daemon-and-its-supervisor)). The drain lifts
+   by itself when a different build starts, a restart of the same build keeps
+   it, and an abandoned or undone update ends its own. This adds one exception to revision 20's rule that a restart
+   never reopens unattended admission; the rule stands for the operator stop
+   and for every system stop. The condition that changed: Freeside is about
+   to develop Freeside (tracker #2873), so the daemon is updated many times a
+   day while runs are in flight.
+2. **An invocation lost to a restart or a forced update re-runs without the
+   operator.** Re-runs count against a durable limit across restarts,
+   forced-update cancellations don't count, and repeated restarts hold every
+   launch behind one item, a system stop no restart lifts (Sections [5.2](#52-the-daemon-and-its-supervisor)
+   and [5.9](#59-durability-effectively-once)). This amends revision 94 item
+   4's rejection of automatic failover to say what stays rejected: a second
+   writer started while the first may still be alive. A re-run starts only
+   after the loss is proven. A launch lost on a runner host keeps revision
+   94's rule. Rejected: salvaging a lost invocation's partial workspace or
+   resuming its agent session.
+3. **An update is provisional until the new build reopens.** A new build is
+   checked against a copy of the database before the drain, and the previous
+   bundle and database come back if the updated daemon fails to start
+   (Section [10](#10-operations-and-onboarding), Environments). No downgrade
+   exists, as before: this undoes only an update that never reopened.
+   Rejected: soaking builds on the `dev` install, which never holds
+   production publication credentials.
+4. **App and daemon no longer need the same build.** Responses tolerate
+   additions, the daemon advertises the features it serves, and an app
+   refuses only below a compatibility floor that moves when a change breaks
+   older apps; the daemon never refuses on version (Section
+   [5.14](#514-client-synchronization-and-conversations)). This replaces
+   strict response decoding, under which any contract difference could fail
+   every sync read, so that app and daemon had to match in practice. It
+   overturns revision 57's non-goals of version tolerance and per-feature
+   gating; revision 57's digest stays as the diagnosis, and command decoding
+   stays strict.
+5. **Every build reads what earlier builds stored.** The reverse isn't
+   promised, and a format that must change is migrated without dropping the
+   old reader (Section [5.9](#59-durability-effectively-once)). This answers
+   #854's gating question: yes.
+6. **Runner hosts need the control plane's runner protocol version, not its
+   build.** A drain covers every host, a host on another version is awaiting
+   update, and a runner host installs the control plane's build when idle
+   (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Execution Hosts). This overturns two rules revision 94 set there: the same
+   build on every host, and a runner whose build the control plane's protocol
+   version does not accept treated as unreachable until upgraded. Rejected: updating runners before the control plane with
+   two-version protocol tolerance.
+7. **The installer drains through the daemon before it swaps.** Revision 69's
+   installer path and revision 85's lifecycle command stay the two sanctioned
+   paths, and scripts and agents still never stop, unload, or re-register
+   `ai.freeside.daemon`. Deferred: automatic updates of the primary daemon,
+   and a separate process for the ward runtime and proxy on the daemon host,
+   which revision 94 rejected weighing isolation and not independent
+   lifetimes; it is revisited when the live proof (#3111) reports drain waits
+   and re-runs per update.
 
-(Owner decision of 2026-11-10 on #3022;
-[decision note](../devlog/2026-11-10-1757-readable-pr-bodies.md).)
+Nothing in this revision is built yet: tracker #3113 carries the work, and
+#3112 on tracker #2161 carries the runner hosts.
+
+(Owner decisions of 2026-11-11, in chat, on #3102;
+[decision note](../devlog/2026-11-11-1630-graceful-updates-and-version-skew.md).)
 ## 14. Risks
 
 | Risk | Current response |
