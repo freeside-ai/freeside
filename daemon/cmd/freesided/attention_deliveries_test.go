@@ -37,7 +37,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 		}
 	}()
 	sink := newNtfySink(t, http.StatusOK)
-	service := signet.NewService(h.store, signet.WithNtfy(signet.NtfyConfig{
+	service := signet.NewService(h.Store, signet.WithNtfy(signet.NtfyConfig{
 		BaseURL: sink.URL, Client: sink.Client(), TopicKey: []byte("fixture-notification-topic-key-32"),
 	}))
 	for _, device := range []domain.DeviceID{"phone", "tablet"} {
@@ -56,7 +56,7 @@ func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
 		}
 	}
 	var items []domain.AttentionItem
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		all, err := tx.ListOpenAttentionItems(t.Context(), domain.AttentionSystemHealth)
 		for _, item := range all {
 			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {
@@ -161,7 +161,7 @@ func pairDevice(t *testing.T, h *daemon, id domain.DeviceID) {
 	t.Helper()
 	ctx := t.Context()
 	paired := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutDevice(ctx, domain.Device{
 			ID: id, DisplayName: string(id), Status: domain.DeviceActive, PairedAt: paired,
 		}); err != nil {
@@ -177,7 +177,7 @@ func pairDevice(t *testing.T, h *daemon, id domain.DeviceID) {
 func deliveriesFor(t *testing.T, h *daemon, itemID domain.ItemID, deviceID domain.DeviceID) []domain.AttentionDelivery {
 	t.Helper()
 	var rows []domain.AttentionDelivery
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		listed, err := tx.ListAttentionDeliveries(t.Context())
 		for _, row := range listed {
 			if row.Value.ItemID == itemID && row.Value.DeviceID == deviceID {
@@ -229,7 +229,7 @@ func TestDaemonNotifiesAPhoneOncePerItem(t *testing.T) {
 	}
 
 	h := startNotifyingDaemon(t, root, sink.URL, nil)
-	waitForItem(t, h.attention, approval)
+	waitForItem(t, h.Attention, approval)
 	pairDevice(t, h, "phone")
 	eventually(t, "the phone's accepted notification", accepted(h, "phone"))
 	// Only the phone is paired, so the one publish of the item's link names
@@ -301,7 +301,7 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 			return
 		}
 		once.Do(func() {
-			attention := (<-started).attention
+			attention := (<-started).Attention
 			feedback, err := attention.GetAttentionItem(ctx, feedbackID)
 			if err == nil {
 				_, err = attention.Submit(ctx, signet.ClientCommand{
@@ -327,7 +327,7 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 			t.Errorf("Close: %v", err)
 		}
 	})
-	waitForItem(t, h.attention, approvalID)
+	waitForItem(t, h.Attention, approvalID)
 	pairDevice(t, h, "phone")
 	// The approval's own notification moves its entity_version, so read it
 	// for the command only once that delivery has settled.
@@ -335,11 +335,11 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 		rows := deliveriesFor(t, h, approvalID, "phone")
 		return len(rows) == 1 && rows[0].Status == domain.DeliveryChannelAccepted
 	})
-	approval, err := h.attention.GetAttentionItem(ctx, approvalID)
+	approval, err := h.Attention.GetAttentionItem(ctx, approvalID)
 	if err != nil {
 		t.Fatalf("get approval: %v", err)
 	}
-	if _, err := h.attention.Submit(ctx, signet.ClientCommand{
+	if _, err := h.Attention.Submit(ctx, signet.ClientCommand{
 		CommandID: "approve-in-flight", DeviceID: "phone", ExpectedEntityVersion: approval.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: approvalID, Action: domain.ActionApprove, ItemVersion: approval.Item.ItemVersion,
@@ -366,21 +366,21 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 		if stops := durableStops(t, h); len(stops) > 0 {
 			t.Fatalf("daemon recorded a durable stop before the discuss's reply: %+v", stops)
 		}
-		item, err := h.attention.GetAttentionItem(ctx, feedbackID)
+		item, err := h.Attention.GetAttentionItem(ctx, feedbackID)
 		if err != nil {
 			t.Fatalf("get feedback: %v", err)
 		}
 		if item.Item.ConversationID == nil || item.Item.Timing.FirstAcceptedAt == nil {
 			return false
 		}
-		conversation, err := h.attention.GetConversation(ctx, *item.Item.ConversationID)
+		conversation, err := h.Attention.GetConversation(ctx, *item.Item.ConversationID)
 		if err != nil {
 			t.Fatalf("get conversation: %v", err)
 		}
 		return len(conversation.Conversation.Messages) == 2 &&
 			conversation.Conversation.Status == domain.ConversationIdle
 	})
-	after, err := h.attention.GetAttentionItem(ctx, feedbackID)
+	after, err := h.Attention.GetAttentionItem(ctx, feedbackID)
 	if err != nil {
 		t.Fatalf("get feedback after the reply: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 		var logs lockedBuffer
 		h := startNotifyingDaemon(t, t.TempDir(), sink.URL, &logs)
 		t.Cleanup(func() { _ = h.Close() })
-		waitForItem(t, h.attention, approval)
+		waitForItem(t, h.Attention, approval)
 		pairDevice(t, h, "phone")
 
 		eventually(t, "the logged rejection", func() bool {
@@ -440,7 +440,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 		var logs lockedBuffer
 		h := startNotifyingDaemon(t, t.TempDir(), goneURL, &logs)
 		t.Cleanup(func() { _ = h.Close() })
-		waitForItem(t, h.attention, approval)
+		waitForItem(t, h.Attention, approval)
 		pairDevice(t, h, "phone")
 
 		eventually(t, "the logged transport failure", func() bool {
@@ -483,7 +483,7 @@ func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = h.Close() })
 	approval := "approval-" + domain.ItemID(daemoncompose.DefaultFakeRunID)
-	waitForItem(t, h.attention, approval)
+	waitForItem(t, h.Attention, approval)
 	pairDevice(t, h, "phone")
 
 	time.Sleep(100 * time.Millisecond)
@@ -515,7 +515,7 @@ func assertDaemonHealthy(t *testing.T, h *daemon) {
 func durableStops(t *testing.T, h *daemon) []domain.AttentionItem {
 	t.Helper()
 	var stops []domain.AttentionItem
-	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(context.Background(), func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		for _, item := range items {
 			if strings.HasPrefix(string(item.ID), daemonshell.DurableStopItemPrefix) {

@@ -92,14 +92,14 @@ func startDaemon(t *testing.T, cfg config) *daemon {
 func assertFixtureServed(t *testing.T, h *daemon) {
 	t.Helper()
 	ctx := t.Context()
-	runs, err := h.attention.ListRuns(ctx)
+	runs, err := h.Attention.ListRuns(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(runs) != 8 {
 		t.Errorf("runs = %d, want 8", len(runs))
 	}
-	items, err := h.attention.ListAttentionItems(ctx)
+	items, err := h.Attention.ListAttentionItems(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

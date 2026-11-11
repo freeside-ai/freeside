@@ -189,9 +189,9 @@ func TestInspectReadsStoppedRootWithRecipeEvidence(t *testing.T) {
 	})
 	ctx := t.Context()
 	const own, foreign = domain.ItemID("execution-failure-evidence-own"), domain.ItemID("execution-failure-evidence-foreign")
-	putRecipeEvidenceItem(t, h.store, recipe, fixtureActiveRunID, own)
-	putRecipeEvidenceItem(t, h.store, recipe, "run-evidence-foreign", foreign)
-	id := taskOfRun(t, h.store, fixtureActiveRunID)
+	putRecipeEvidenceItem(t, h.Store, recipe, fixtureActiveRunID, own)
+	putRecipeEvidenceItem(t, h.Store, recipe, "run-evidence-foreign", foreign)
+	id := taskOfRun(t, h.Store, fixtureActiveRunID)
 	args := []string{"task", "-db", dbPath, "-task", string(id)}
 	served := inspect[taskRecord](t, ctx, args...)
 	if item := recordItem(served, own); item == nil || item.Error != nil || recordItem(served, foreign) != nil {

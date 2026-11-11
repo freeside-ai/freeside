@@ -42,25 +42,25 @@ func TestRenewCodexRecoveryWithExecutionDisabled(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if h.workflow != nil || h.driver != nil {
+	if h.Workflow != nil || h.Driver != nil {
 		t.Fatal("recovery started execution")
 	}
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutDevice(ctx, domain.Device{ID: "recovery-device", DisplayName: "Recovery", Status: domain.DeviceActive, PairedAt: time.Now().UTC()})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	item, err := h.attention.GetAttentionItem(ctx, enrolled.AttentionItemID)
+	item, err := h.Attention.GetAttentionItem(ctx, enrolled.AttentionItemID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.attention.Submit(ctx, signet.ClientCommand{
+	if _, err := h.Attention.Submit(ctx, signet.ClientCommand{
 		CommandID: "recover-codex", DeviceID: "recovery-device", ExpectedEntityVersion: item.EntityVersion,
 		Payload: signet.DecisionPayload{ItemID: item.Item.ID, ItemVersion: item.Item.ItemVersion, Action: domain.ActionResolveReenrollment},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		transition, found, err := tx.LatestCodexReenrollmentRecoveryTransition(ctx, enrolled.AuthIdentityID)
 		if err != nil {
 			return err

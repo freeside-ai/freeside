@@ -143,14 +143,14 @@ func TestInspectHealthServedEqualsDirect(t *testing.T) {
 	t.Parallel()
 	h, dbPath := startSeededDaemon(t)
 	ctx := t.Context()
-	putSystemHealthItem(t, h.store, "system-health-advisory", domain.HealthPostureAdvisory, nil)
-	decided := putSystemHealthItem(t, h.store, "system-health-decided", domain.HealthPostureBlocking, nil)
+	putSystemHealthItem(t, h.Store, "system-health-advisory", domain.HealthPostureAdvisory, nil)
+	decided := putSystemHealthItem(t, h.Store, "system-health-decided", domain.HealthPostureBlocking, nil)
 	closed, err := decided.ConcludeByDaemon(domain.ConcludedByDaemon, time.Now().UTC(), "Cleared.", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	closed.ItemVersion++
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, closed) }); err != nil {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, closed) }); err != nil {
 		t.Fatal(err)
 	}
 	served := inspect[systemHealth](t, ctx, "health", "-db", dbPath)
@@ -195,7 +195,7 @@ func TestInspectHealthReadsStoppedRootWithRecipeEvidence(t *testing.T) {
 		Environment: environmentEphemeral, ApprovedRecipes: map[domain.Digest]bool{recipe: true},
 	})
 	const evidence = domain.ItemID("execution-failure-evidence")
-	putRecipeEvidenceItem(t, h.store, recipe, fixtureActiveRunID, evidence)
+	putRecipeEvidenceItem(t, h.Store, recipe, fixtureActiveRunID, evidence)
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}

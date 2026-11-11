@@ -203,8 +203,8 @@ func TestAuthUsageCommandsUseTheRunningDaemon(t *testing.T) {
 	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0",
-		seams: startSeams{
-			usageCollectors: map[domain.HarnessClientKind]ward.UsageCollector{domain.HarnessClientCodexCLI: collector},
+		seams: StartSeams{
+			UsageCollectors: map[domain.HarnessClientKind]ward.UsageCollector{domain.HarnessClientCodexCLI: collector},
 		},
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func TestAuthUsageCommandsUseTheRunningDaemon(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	seedUsagePools(t, h.store)
+	seedUsagePools(t, h.Store)
 	ctx := context.WithValue(t.Context(), directStoreOpenerKey{}, directStoreOpener(
 		func(context.Context, string, store.Options, storeOpenMode) (*store.Store, error) {
 			return nil, errors.New("unexpected direct store open")
@@ -223,7 +223,7 @@ func TestAuthUsageCommandsUseTheRunningDaemon(t *testing.T) {
 
 	// A refresh while a collection is in flight joins it: the collector
 	// stays blocked, so a second collection would show as a second call.
-	h.usage.RateLimitEvent("pool-a")
+	h.Usage.RateLimitEvent("pool-a")
 	<-collector.called
 	joining, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	_, err = runAuthUsage(t, joining, "refresh-usage", "-db", dbPath, "-pool", "pool-a")
@@ -268,7 +268,7 @@ func TestAuthUsageCommandsUseTheRunningDaemon(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "not on the usage pool") {
 		t.Fatalf("forwarded refusal = %v", err)
 	}
-	if got := readPoolCollector(t, h.store, "pool-a"); got != "enroll-second" {
+	if got := readPoolCollector(t, h.Store, "pool-a"); got != "enroll-second" {
 		t.Fatalf("collector = %s", got)
 	}
 }

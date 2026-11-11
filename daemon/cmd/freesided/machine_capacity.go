@@ -51,7 +51,7 @@ func resolveMemoryBudget(
 // flag, or prod's half of physical memory), and the start logs both when they
 // differ. The start's checks run against the budget that wins, and a refusal
 // names what sets it.
-func (cfg startOptions) startupLaunchBound(
+func (cfg StartOptions) startupLaunchBound(
 	ctx context.Context, st *store.Store, manualProjects map[domain.ProjectID]engine.ManualInitiator,
 ) (ward.LaunchBound, error) {
 	var (
@@ -77,7 +77,7 @@ func (cfg startOptions) startupLaunchBound(
 	}
 	bound, err := cfg.launchBound(ctx)
 	if err == nil {
-		err = requireManualProjectsFit(manualProjects, bound)
+		err = RequireManualProjectsFit(manualProjects, bound)
 	}
 	if errors.Is(err, domain.ErrLaunchNeverFits) {
 		return ward.LaunchBound{}, fmt.Errorf("%s %d MiB: %w", source, cfg.MemoryBudgetMiB, err)
@@ -93,7 +93,7 @@ func (cfg startOptions) startupLaunchBound(
 // start runs no container command. A budget too small for a launch at its
 // class's default size could run nothing of that class, so it refuses the
 // start.
-func (cfg startOptions) launchBound(ctx context.Context) (ward.LaunchBound, error) {
+func (cfg StartOptions) launchBound(ctx context.Context) (ward.LaunchBound, error) {
 	if cfg.MemoryBudgetMiB <= 0 {
 		// An unbudgeted Claude composition cannot start (resolveMemoryBudget);
 		// its zero runtime would refuse any launch rather than guess none.

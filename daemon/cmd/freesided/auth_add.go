@@ -24,8 +24,8 @@ import (
 type authAddDeps struct {
 	codexRefresher      ward.CodexAuthRefresher
 	runtime             func(containerBin string) ward.Runtime
-	modelDiscovery      func(runtime ward.Runtime) claudeModelDiscoverer
-	codexModelDiscovery func(runtime ward.Runtime) codexModelDiscoverer
+	modelDiscovery      func(runtime ward.Runtime) ClaudeModelDiscoverer
+	codexModelDiscovery func(runtime ward.Runtime) CodexModelDiscoverer
 }
 
 func productionAuthAddDeps() authAddDeps {
@@ -33,11 +33,11 @@ func productionAuthAddDeps() authAddDeps {
 		codexRefresher: ward.NewCodexAuthHTTPRefresher(),
 		runtime:        func(bin string) ward.Runtime { return ward.NewCLIRuntime(bin) },
 		// auth add authorizes no rig resources, as its enrollment probe doesn't.
-		modelDiscovery: func(runtime ward.Runtime) claudeModelDiscoverer {
-			return productionClaudeModelDiscoverer(runtime, nil)
+		modelDiscovery: func(runtime ward.Runtime) ClaudeModelDiscoverer {
+			return ProductionClaudeModelDiscoverer(runtime, nil)
 		},
-		codexModelDiscovery: func(runtime ward.Runtime) codexModelDiscoverer {
-			return productionCodexModelDiscoverer(runtime, nil)
+		codexModelDiscovery: func(runtime ward.Runtime) CodexModelDiscoverer {
+			return ProductionCodexModelDiscoverer(runtime, nil)
 		},
 	}
 }
@@ -246,10 +246,10 @@ func readSetupToken(stdin io.Reader, stderr io.Writer) (ward.SetupToken, error) 
 // fails the enrollment: a failed discovery prints one warning and the next
 // daemon start tries again.
 func discoverAfterEnrollment(
-	ctx context.Context, st *store.Store, discover claudeModelDiscoverer, image string, token ward.SetupToken,
+	ctx context.Context, st *store.Store, discover ClaudeModelDiscoverer, image string, token ward.SetupToken,
 	enrollment domain.ClientEnrollmentID, stderr io.Writer,
 ) {
-	if _, err := recordClaudeModelCatalog(ctx, st, discover, image, token, enrollment,
+	if _, err := RecordClaudeModelCatalog(ctx, st, discover, image, token, enrollment,
 		func() time.Time { return time.Now().UTC() }); err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: model discovery for %s failed; the next daemon start retries it: %v\n",
 			enrollment, err)
@@ -264,7 +264,7 @@ func discoverAfterEnrollment(
 // mutation runs beside the read and no read hold is taken.
 func discoverCodexAfterAuthChange(
 	ctx context.Context, st *store.Store, runtime func(string) ward.Runtime,
-	discovery func(ward.Runtime) codexModelDiscoverer, containerBin, image, storeRoot, storePath string,
+	discovery func(ward.Runtime) CodexModelDiscoverer, containerBin, image, storeRoot, storePath string,
 	enrollments []domain.ClientEnrollmentID, stderr io.Writer,
 ) {
 	if len(enrollments) == 0 {
@@ -287,7 +287,7 @@ func discoverCodexAfterAuthChange(
 			return err
 		}
 		for _, enrollment := range enrollments {
-			if _, err := recordModelCatalog(ctx, st, report, enrollment, now); err != nil {
+			if _, err := RecordModelCatalog(ctx, st, report, enrollment, now); err != nil {
 				return err
 			}
 		}

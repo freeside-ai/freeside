@@ -13,13 +13,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
-// credentialIntegrityProbe is one live probe pass, as the doctor consumes it.
-type credentialIntegrityProbe func(context.Context) ([]operations.CredentialIntegrityOutcome, error)
+// CredentialIntegrityProbe is one live probe pass, as the doctor consumes it.
+type CredentialIntegrityProbe func(context.Context) ([]operations.CredentialIntegrityOutcome, error)
 
 // runOnce runs the probe now and returns a probe that replays that one
 // result, so a caller can observe outside a lock and let the doctor consume
 // the result inside it. A nil probe stays nil: no pass, recorded marks only.
-func (p credentialIntegrityProbe) runOnce(ctx context.Context) credentialIntegrityProbe {
+func (p CredentialIntegrityProbe) runOnce(ctx context.Context) CredentialIntegrityProbe {
 	if p == nil {
 		return nil
 	}
@@ -31,21 +31,21 @@ func (p credentialIntegrityProbe) runOnce(ctx context.Context) credentialIntegri
 
 // credentialIntegrityObservers are the two store reads a probe pass makes.
 type credentialIntegrityObservers struct {
-	setupToken func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error)
+	SetupToken func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error)
 	codexStore func(path string) (ward.CodexStoreIntegrity, error)
 }
 
-// productionCredentialIntegrityObservers reads setup-token volumes through
+// ProductionCredentialIntegrityObservers reads setup-token volumes through
 // the daemon's pinned exporter image and Codex stores under the root the
 // review lifecycle reads them from. A Codex store outside that root, or any
 // Codex store when no review root is configured, fails its observation and
 // is reported as not checked.
-func productionCredentialIntegrityObservers(
+func ProductionCredentialIntegrityObservers(
 	cfg daemoncompose.ClaudeDriverConfig, runtime ward.Runtime,
 ) credentialIntegrityObservers {
 	authorize := daemoncompose.ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
 	return credentialIntegrityObservers{
-		setupToken: func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error) {
+		SetupToken: func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error) {
 			return ward.ObserveSetupTokenIntegrity(ctx, runtime, cfg.ExporterImage, volume, authorize)
 		},
 		codexStore: func(path string) (ward.CodexStoreIntegrity, error) {
@@ -54,15 +54,15 @@ func productionCredentialIntegrityObservers(
 	}
 }
 
-// newCredentialIntegrityProbe composes the probe and narrows its results to
+// NewCredentialIntegrityProbe composes the probe and narrows its results to
 // what the doctor reports: enrollment ids and fixed codes. A skipped store's
 // cause goes to the log here and nowhere else.
-func newCredentialIntegrityProbe(
+func NewCredentialIntegrityProbe(
 	st *store.Store, observers credentialIntegrityObservers, now func() time.Time, logger *slog.Logger,
-) credentialIntegrityProbe {
+) CredentialIntegrityProbe {
 	probe := wardstore.IntegrityProbe{
 		Store:             st,
-		ObserveSetupToken: observers.setupToken,
+		ObserveSetupToken: observers.SetupToken,
 		ObserveCodexStore: observers.codexStore,
 		Now:               func() time.Time { return now().UTC() },
 	}

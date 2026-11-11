@@ -61,36 +61,36 @@ func validateRunConfig(cfg config) error {
 // Approval wakes the filer immediately; this tick bounds recovery delay.
 const defaultFollowUpFilingInterval = time.Minute
 
-// startSeams are the test seams a start reads. Production leaves each one
+// StartSeams are the test seams a start reads. Production leaves each one
 // unset.
-type startSeams struct {
-	// afterBackgroundStart is a test seam for startup failures after the base
+type StartSeams struct {
+	// AfterBackgroundStart is a test seam for startup failures after the base
 	// background workers have launched. Production leaves it nil.
-	afterBackgroundStart func() error
-	// beforeStoreClose is a test seam for observing failed-start cleanup at
+	AfterBackgroundStart func() error
+	// BeforeStoreClose is a test seam for observing failed-start cleanup at
 	// the store-close boundary. Production leaves it nil.
-	beforeStoreClose func()
-	// usageCollectors are the usage collectors by harness client. Production
+	BeforeStoreClose func()
+	// UsageCollectors are the usage collectors by harness client. Production
 	// leaves it nil and gets Claude's, which answers from writer turns'
 	// usage captures; tests set a fake, and then no capture is recorded.
-	usageCollectors map[domain.HarnessClientKind]ward.UsageCollector
-	// claudeModelDiscoverer runs the startup model discovery. Production
+	UsageCollectors map[domain.HarnessClientKind]ward.UsageCollector
+	// ClaudeModelDiscoverer runs the startup model discovery. Production
 	// leaves it nil and launches the initialize probe; tests set a fake.
-	claudeModelDiscoverer claudeModelDiscoverer
-	// codexModelDiscoverer runs the startup Codex model discovery. Production
+	ClaudeModelDiscoverer ClaudeModelDiscoverer
+	// CodexModelDiscoverer runs the startup Codex model discovery. Production
 	// leaves it nil and launches the model/list probe; tests set a fake.
-	codexModelDiscoverer codexModelDiscoverer
-	// now is the attention service clock. Production leaves it nil for the
+	CodexModelDiscoverer CodexModelDiscoverer
+	// Now is the attention service clock. Production leaves it nil for the
 	// wall clock (run defaults it); tests can advance startup across
 	// pairing-code expiry.
-	now func() time.Time
+	Now func() time.Time
 }
 
-// startOptions is what a start reads: main's configuration after run has
+// StartOptions is what a start reads: main's configuration after run has
 // validated and defaulted it, the files its flags name, and what only main
 // supplies. Each field that shares a name with main's configuration means
 // what that field means there.
-type startOptions struct {
+type StartOptions struct {
 	DBPath                    string
 	StateDir                  string
 	ListenAddr                string
@@ -127,28 +127,28 @@ type startOptions struct {
 	WrapFakeDriver func(*fake.StageDriver) exec.StageDriver
 	// OpenControl opens the control socket. The start calls it after taking
 	// the database lock and closes what it returns if the start fails.
-	OpenControl func(dbPath, stateDir string) (controlSocket, error)
-	startSeams
+	OpenControl func(dbPath, stateDir string) (ControlSocket, error)
+	StartSeams
 }
 
-// controlSocket is the daemon's local control socket. The start configures
+// ControlSocket is the daemon's local control socket. The start configures
 // it once the shell knows its API address, registers its routes over the
 // composed parts, and publishes its address last.
-type controlSocket interface {
+type ControlSocket interface {
 	daemonshell.PairingControl
 	Configure(apiURL string, mint func(context.Context) (string, domain.PairingCode, error))
-	RegisterRoutes(controlRouteInputs)
+	RegisterRoutes(ControlRouteInputs)
 	Publish() error
 }
 
-// controlRouteInputs are the composed parts the control routes serve over.
-type controlRouteInputs struct {
+// ControlRouteInputs are the composed parts the control routes serve over.
+type ControlRouteInputs struct {
 	Store            *store.Store
 	Blobs            *signet.BlobStore
 	LocalBackupFiles *store.LocalBackupFiles
 	// ApprovedRecipes is the store's recipe set.
 	ApprovedRecipes map[domain.Digest]bool
-	IntegrityProbe  credentialIntegrityProbe
+	IntegrityProbe  CredentialIntegrityProbe
 	Usage           *usagecollect.Coordinator
 	Attention       *signet.Service
 	// CommitWorkflowClosure commits a task's workflow closure through the
@@ -156,20 +156,20 @@ type controlRouteInputs struct {
 	CommitWorkflowClosure func(context.Context, domain.TaskID, func() error) error
 }
 
-// startedDaemon is what start composes: the shell that runs the process,
+// Daemon is what start composes: the shell that runs the process,
 // and the composition results that startup and the tests reach.
-type startedDaemon struct {
+type Daemon struct {
 	*daemonshell.Shell
-	store     *store.Store
-	attention *signet.Service
-	workflow  *engine.Engine
-	driver    *fake.StageDriver
-	usage     *usagecollect.Coordinator
+	Store     *store.Store
+	Attention *signet.Service
+	Workflow  *engine.Engine
+	Driver    *fake.StageDriver
+	Usage     *usagecollect.Coordinator
 }
 
-// start acquires and composes everything a daemon runs, and starts it. A
+// Start acquires and composes everything a daemon runs, and starts it. A
 // start that fails releases everything it acquired, in reverse order.
-func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDaemon, err error) {
+func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, err error) {
 	startedAt := time.Now().UTC()
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
@@ -267,8 +267,8 @@ func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDae
 	}
 	defer func() {
 		if !success {
-			if cfg.beforeStoreClose != nil {
-				cfg.beforeStoreClose()
+			if cfg.BeforeStoreClose != nil {
+				cfg.BeforeStoreClose()
 			}
 			_ = st.Close()
 		}
@@ -361,11 +361,11 @@ func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDae
 	}
 	// The live credential-integrity probe exists only in Claude mode, where
 	// the daemon has a runtime and a pinned exporter image to observe with.
-	var integrityProbe credentialIntegrityProbe
+	var integrityProbe CredentialIntegrityProbe
 	if cfg.Claude != nil {
-		integrityProbe = newCredentialIntegrityProbe(st,
-			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin)),
-			cfg.now, cfg.Logger)
+		integrityProbe = NewCredentialIntegrityProbe(st,
+			ProductionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin)),
+			cfg.Now, cfg.Logger)
 	}
 	// The startup pass reports recorded marks only, so starting the daemon
 	// starts no observer container. Scheduled passes run the live probe.
@@ -378,7 +378,7 @@ func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDae
 			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 		}
 	}
-	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.now); err != nil {
+	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.Now); err != nil {
 		return nil, fmt.Errorf("report execution configuration: %w", err)
 	}
 	if err := concludeInvocationStallNotices(parent, st); err != nil {
@@ -412,17 +412,17 @@ func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDae
 	if claudeWiring != nil {
 		sessions = claudeWiring.Closer
 	}
-	d := &startedDaemon{
+	d := &Daemon{
 		Shell: daemonshell.New(daemonshell.Parts{
 			Lock: lock, Store: st, Listener: listener, LoopbackTwin: loopbackTwin, Server: server,
-			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.now,
+			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.Now,
 		}),
-		store: st, attention: attention, workflow: workflow, driver: driver, usage: usage,
+		Store: st, Attention: attention, Workflow: workflow, Driver: driver, Usage: usage,
 	}
 	pairing.Configure(d.Readiness().APIURL, attention.MintPairingCode)
-	pairing.RegisterRoutes(controlRouteInputs{
+	pairing.RegisterRoutes(ControlRouteInputs{
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
-		IntegrityProbe: integrityProbe, Usage: d.usage, Attention: attention,
+		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -442,7 +442,7 @@ func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDae
 		fakeSched.SetLogger(cfg.Logger)
 	} else if claudeWiring != nil {
 		loops, err = daemoncompose.ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
-			runDoctor, d.usage.CollectAll, late)
+			runDoctor, d.Usage.CollectAll, late)
 		if err != nil {
 			return nil, err
 		}
@@ -462,8 +462,8 @@ func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDae
 			d.AbortStart()
 		}
 	}()
-	if cfg.afterBackgroundStart != nil {
-		if err := cfg.afterBackgroundStart(); err != nil {
+	if cfg.AfterBackgroundStart != nil {
+		if err := cfg.AfterBackgroundStart(); err != nil {
 			return nil, err
 		}
 	}
@@ -512,11 +512,11 @@ func closeStartupSessions(success bool, closer daemoncompose.SessionCloser, stop
 }
 
 // claudeStartup is the configuration the Claude composition reads.
-func (cfg startOptions) claudeStartup() daemoncompose.ClaudeStartupConfig {
+func (cfg StartOptions) claudeStartup() daemoncompose.ClaudeStartupConfig {
 	return daemoncompose.ClaudeStartupConfig{
 		Claude: cfg.Claude, Logger: cfg.Logger, StateDir: cfg.StateDir, DBPath: cfg.DBPath,
 		ApprovedRecipes: cfg.ApprovedRecipes, IntakeInitiators: cfg.IntakeInitiators,
-		DoctorInterval: cfg.DoctorInterval, Now: cfg.now,
+		DoctorInterval: cfg.DoctorInterval, Now: cfg.Now,
 	}
 }
 
@@ -544,13 +544,13 @@ func reportAttentionDelivery(logger *slog.Logger, err error) {
 // interface without the Claude collector. Collection starts in
 // startServing.
 func newUsageCollection(
-	st *store.Store, cfg startOptions,
+	st *store.Store, cfg StartOptions,
 ) (time.Duration, *usagecollect.Coordinator, engine.ClaudeUsageSink) {
 	// A reading is stale once one scheduled doctor pass, the collection's
 	// cadence, has been missed. Collection and the bootstrap's stale_at share
 	// the age, so a client sees a reading stale exactly when collection does.
 	usageRefreshAge := 2 * cfg.DoctorInterval
-	usageCollectors, claudeUsage := usageCollectorsFor(cfg.usageCollectors)
+	usageCollectors, claudeUsage := usageCollectorsFor(cfg.UsageCollectors)
 	usage := usagecollect.New(st, usageCollectors, usagecollect.Config{
 		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
 	})
@@ -568,7 +568,7 @@ func newUsageCollection(
 // exists. Options that answer from a later composition read it through
 // late at call time.
 func newAttentionService(
-	st *store.Store, blobs *signet.BlobStore, cfg startOptions, pairingKey []byte, hostName string,
+	st *store.Store, blobs *signet.BlobStore, cfg StartOptions, pairingKey []byte, hostName string,
 	connectionMode domain.ConnectionMode, topicKey []byte,
 	manualInitiator func(domain.ProjectID) (engine.ManualInitiator, bool),
 	usage *usagecollect.Coordinator, usageRefreshAge time.Duration, doctorAvailable *atomic.Bool,
@@ -592,7 +592,7 @@ func newAttentionService(
 		}),
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
-		signet.WithClock(cfg.now),
+		signet.WithClock(cfg.Now),
 		signet.WithLogger(cfg.Logger),
 		signet.WithDoctorSchedule(daemoncompose.DoctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
@@ -689,7 +689,7 @@ func newAttentionService(
 // is the Claude composition's own constant.
 func newScenarioParts(
 	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg startOptions,
+	lock *daemonlock.Lock, bound ward.LaunchBound, cfg StartOptions,
 ) (daemoncompose.ScenarioParts, error) {
 	materializer, err := daemoncompose.ProductionMaterializer(blobs)
 	if err != nil {
@@ -713,8 +713,8 @@ func newScenarioParts(
 // credential-integrity marks only and starting the daemon starts no
 // observer container; scheduled passes take the live probe.
 func newDoctorPass(
-	cfg startOptions, st *store.Store, attention *signet.Service, claudeWiring *daemoncompose.ClaudeComposition,
-	doctorConvergenceLock *sync.Mutex, probe credentialIntegrityProbe,
+	cfg StartOptions, st *store.Store, attention *signet.Service, claudeWiring *daemoncompose.ClaudeComposition,
+	doctorConvergenceLock *sync.Mutex, probe CredentialIntegrityProbe,
 ) func(context.Context) error {
 	return func(runCtx context.Context) error {
 		if cfg.Claude == nil {
@@ -733,7 +733,7 @@ func newDoctorPass(
 			ConfigurationDigest:       claudeWiring.Backend.ConfigurationDigest(),
 			ReviewConfigurationDigest: claudeWiring.ReviewConfigurationDigest,
 			Mode:                      cfg.Claude.OperatingMode,
-			Now:                       cfg.now,
+			Now:                       cfg.Now,
 			CredentialIntegrityProbe:  replay,
 			IdentityLabel:             cfg.IdentityLabel,
 		}).Run(runCtx)
@@ -746,8 +746,8 @@ func newDoctorPass(
 // deliveries. It cannot fail: start registers the cleanup that stops
 // these goroutines as soon as it returns, and a component that exits
 // later reports through ComponentExited.
-func (d *startedDaemon) startServing(
-	parent, ctx context.Context, cfg startOptions, st *store.Store, attention *signet.Service,
+func (d *Daemon) startServing(
+	parent, ctx context.Context, cfg StartOptions, st *store.Store, attention *signet.Service,
 	workflow *engine.Engine, claudeWiring *daemoncompose.ClaudeComposition, localBackups *store.LocalBackupProducer,
 	logger *slog.Logger,
 ) {
@@ -755,16 +755,16 @@ func (d *startedDaemon) startServing(
 	// scheduler runs, either of which can trigger it. It only observes and
 	// ends only at shutdown, so it is not a supervised component: nothing it
 	// meets stops the daemon.
-	d.usage.Start(ctx)
+	d.Usage.Start(ctx)
 	d.Go(func() {
-		d.usage.Wait()
+		d.Usage.Wait()
 	})
 	// Model discovery observes like usage collection: it runs once in the
 	// background, one container at a time, and nothing it meets stops the
 	// daemon.
 	if claudeWiring != nil {
 		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.ContainerBin,
-			cfg.claudeModelDiscoverer, cfg.codexModelDiscoverer, logger)
+			cfg.ClaudeModelDiscoverer, cfg.CodexModelDiscoverer, logger)
 		d.Go(func() {
 			refresh.run(ctx)
 		})
@@ -803,8 +803,8 @@ func (d *startedDaemon) startServing(
 // startClaudeLoops starts the Claude loops after start has registered the
 // cleanup that stops them, and marks the doctor available before its
 // scheduler starts.
-func (d *startedDaemon) startClaudeLoops(
-	parent, ctx context.Context, cfg startOptions, claudeWiring *daemoncompose.ClaudeComposition, workflow *engine.Engine,
+func (d *Daemon) startClaudeLoops(
+	parent, ctx context.Context, cfg StartOptions, claudeWiring *daemoncompose.ClaudeComposition, workflow *engine.Engine,
 	imageUpkeep *engine.ImageUpkeep, loops *daemoncompose.ClaudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
 ) {
 	claudeSched := loops.ClaudeSched
@@ -860,8 +860,8 @@ func (d *startedDaemon) startClaudeLoops(
 
 // startScenarioLoops starts the scenario's forge, publication lane, and
 // scheduler, at the point where the Claude loops would start.
-func (d *startedDaemon) startScenarioLoops(
-	parent, ctx context.Context, cfg startOptions, scenarioWiring *daemoncompose.ScenarioComposition, workflow *engine.Engine,
+func (d *Daemon) startScenarioLoops(
+	parent, ctx context.Context, cfg StartOptions, scenarioWiring *daemoncompose.ScenarioComposition, workflow *engine.Engine,
 ) {
 	// The scenario's own loops: the in-process forge publication talks
 	// to, the publication lane, and the durable scheduler's publication

@@ -169,12 +169,12 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	codexCutOff := enrollIntegrityFixture(t, adapters, "codex-cut-off", domain.HarnessClientCodexCLI, cutOff, recorded)
 	codexExposed := enrollIntegrityFixture(t, adapters, "codex-exposed", domain.HarnessClientCodexCLI, exposed, recorded)
 
-	observers := productionCredentialIntegrityObservers(daemoncompose.ClaudeDriverConfig{
+	observers := ProductionCredentialIntegrityObservers(daemoncompose.ClaudeDriverConfig{
 		ExporterImage:   "registry.test/exporter@sha256:" + strings.Repeat("0", 64),
 		ReviewInputRoot: root,
 	}, absentVolumeRuntime{})
-	production := observers.setupToken
-	observers.setupToken = func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error) {
+	production := observers.SetupToken
+	observers.SetupToken = func(ctx context.Context, volume string) (ward.SetupTokenIntegrity, error) {
 		if volume != "claude-damaged-auth" {
 			return production(ctx, volume)
 		}
@@ -189,7 +189,7 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	now := func() time.Time { return integrityEnrolledAt.Add(time.Hour) }
-	probe := newCredentialIntegrityProbe(st, observers, now, slog.New(slog.NewTextHandler(&logs, nil)))
+	probe := NewCredentialIntegrityProbe(st, observers, now, slog.New(slog.NewTextHandler(&logs, nil)))
 
 	canonical, err := canonicalDatabasePath(dbPath)
 	if err != nil {
@@ -349,12 +349,12 @@ func integrityFinding(t *testing.T, report []byte) operations.DoctorFinding {
 // observation, and no probe stays no probe.
 func TestCredentialIntegrityProbeRunOnce(t *testing.T) {
 	t.Parallel()
-	if replay := credentialIntegrityProbe(nil).runOnce(t.Context()); replay != nil {
+	if replay := CredentialIntegrityProbe(nil).runOnce(t.Context()); replay != nil {
 		t.Error("a nil probe produced a replay, so a pass with no probe would claim it probed")
 	}
 	calls := 0
 	failure := errors.New("probe failed")
-	probe := credentialIntegrityProbe(func(context.Context) ([]operations.CredentialIntegrityOutcome, error) {
+	probe := CredentialIntegrityProbe(func(context.Context) ([]operations.CredentialIntegrityOutcome, error) {
 		calls++
 		if calls == 2 {
 			return nil, failure

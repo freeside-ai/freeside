@@ -94,7 +94,7 @@ func runDoctorCommand(
 	var backupHealth store.BackupHealthSource
 	// Only a running daemon can observe a credential store. With no daemon
 	// the report carries the marks earlier passes recorded.
-	var integrityProbe credentialIntegrityProbe
+	var integrityProbe CredentialIntegrityProbe
 	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
 		integrityProbe = daemon.credentialIntegrityProbe
 		if err := daemon.requireApproved(ctx, approvedRecipes); err != nil {

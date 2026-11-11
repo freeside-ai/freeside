@@ -32,7 +32,7 @@ func TestDefaultExecutionDisabled(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if h.driver != nil || h.workflow != nil {
+	if h.Driver != nil || h.Workflow != nil {
 		t.Fatal("default daemon composed an execution engine")
 	}
 	if _, err := os.Stat(filepath.Join(root, "freeside.db.fake-stage-driver")); !errors.Is(err, os.ErrNotExist) {
@@ -49,7 +49,7 @@ func TestDefaultExecutionDisabled(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d", response.StatusCode)
 	}
-	items, err := h.attention.ListAttentionItems(ctx)
+	items, err := h.Attention.ListAttentionItems(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

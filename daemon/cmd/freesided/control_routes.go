@@ -149,7 +149,7 @@ func (s pairingControlSocket) Configure(
 	s.pairing.configure(apiURL, mint)
 }
 
-func (s pairingControlSocket) RegisterRoutes(in controlRouteInputs) {
+func (s pairingControlSocket) RegisterRoutes(in ControlRouteInputs) {
 	s.pairing.registerControlRoutes(
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
 		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure)
@@ -159,7 +159,7 @@ func (s pairingControlSocket) Publish() error { return s.pairing.publish() }
 
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
-	approved map[domain.Digest]bool, repositoryID int64, integrityProbe credentialIntegrityProbe,
+	approved map[domain.Digest]bool, repositoryID int64, integrityProbe CredentialIntegrityProbe,
 	usage *usagecollect.Coordinator, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,

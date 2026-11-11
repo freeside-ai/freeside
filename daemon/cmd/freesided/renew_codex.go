@@ -54,7 +54,7 @@ func runRenewCodexCommandWithDeps(
 	stdout, stderr io.Writer,
 	refresher ward.CodexAuthRefresher,
 	runtime func(containerBin string) ward.Runtime,
-	discovery func(ward.Runtime) codexModelDiscoverer,
+	discovery func(ward.Runtime) CodexModelDiscoverer,
 ) (err error) {
 	flags := flag.NewFlagSet("freesided renew-codex", flag.ContinueOnError)
 	flags.SetOutput(stderr)

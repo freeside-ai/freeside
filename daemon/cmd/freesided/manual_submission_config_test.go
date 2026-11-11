@@ -295,7 +295,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	}
 	var originalAttempt domain.ProductionAttempt
 	var originalRun domain.Run
-	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(context.Background(), func(tx *store.ReadTx) error {
 		task, err := tx.GetTask(context.Background(), first.TaskID)
 		if err != nil {
 			return err
@@ -334,7 +334,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	counts(3, 3, 3)
 	fresh := submit("fresh", "project-client", "# Different source", "New name", http.StatusOK)
 	counts(4, 4, 4)
-	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(context.Background(), func(tx *store.ReadTx) error {
 		old, err := tx.GetProductionAttempt(context.Background(), originalAttempt.CampaignID, 1)
 		if err != nil {
 			return err
@@ -411,10 +411,10 @@ func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if err := requireManualProjectsFit(projects, ward.LaunchBound{}); err != nil {
+	if err := RequireManualProjectsFit(projects, ward.LaunchBound{}); err != nil {
 		t.Fatalf("unbudgeted fit: %v", err)
 	}
-	err = requireManualProjectsFit(projects, bound)
+	err = RequireManualProjectsFit(projects, bound)
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "16384 MiB declared plus 256 MiB") {
 		t.Fatalf("budgeted fit = %v, want a never-fits refusal naming the numbers", err)
 	}

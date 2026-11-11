@@ -186,7 +186,7 @@ type fakeCodexDiscovery struct {
 	err    error
 }
 
-func (f *fakeCodexDiscovery) discoverer(ward.Runtime) codexModelDiscoverer {
+func (f *fakeCodexDiscovery) discoverer(ward.Runtime) CodexModelDiscoverer {
 	return func(_ context.Context, image string, _ ward.LineupProbeCredential) (ward.ModelReport, error) {
 		f.calls++
 		if image != codexModelDiscoveryTestImage {

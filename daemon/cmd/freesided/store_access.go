@@ -114,7 +114,7 @@ type (
 		// credentialIntegrityProbe is the running daemon's live probe, nil
 		// when the daemon has no runtime to observe with. A command that
 		// opens the store itself never has one.
-		credentialIntegrityProbe credentialIntegrityProbe
+		credentialIntegrityProbe CredentialIntegrityProbe
 		commitWorkflowClosure    func(context.Context, domain.TaskID, func() error) error
 		// usageCollection is the running daemon's usage collection. A
 		// command that opens the store itself never has one.

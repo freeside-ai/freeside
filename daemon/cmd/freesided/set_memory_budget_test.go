@@ -138,7 +138,7 @@ func TestSetMemoryBudgetUsesRunningDaemonStore(t *testing.T) {
 	if result != (setMemoryBudgetResult{MemoryBudgetMiB: 6144, Recorded: true}) {
 		t.Fatalf("result = %#v", result)
 	}
-	if got, recorded := recordedMemoryBudget(t, h.store); !recorded || got != 6144 {
+	if got, recorded := recordedMemoryBudget(t, h.Store); !recorded || got != 6144 {
 		t.Fatalf("running daemon store budget = %d, %t; want 6144", got, recorded)
 	}
 }
