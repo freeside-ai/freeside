@@ -395,13 +395,88 @@ func TestPrelaunchFreshRootSkipsTheStateChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, body, _, _ := f.run(t, f.args())
-	for _, name := range []string{"state_database", "system_health", "identities"} {
+	for _, name := range []string{"state_database", "system_health", "routing_policy", "identities"} {
 		if got := findPrelaunchCheck(record, prelaunchGroupState, name).Status; got != compositionNotRun {
 			t.Fatalf("state %s = %q, want not_run\n%s", name, got, body)
 		}
 	}
+	if record.RoutingPolicy != nil {
+		t.Fatalf("routing_policy = %+v on a fresh root, want null", record.RoutingPolicy)
+	}
 	if _, err := os.Stat(f.paths.DB); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("prelaunch created the database: %v", err)
+	}
+}
+
+// TestPrelaunchRecordsTheRoutingPolicy pins that the routing_policy check
+// reports the revision `routing set` recorded, or the lineup when none is
+// set, and passes either way.
+func TestPrelaunchRecordsTheRoutingPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	f := newRoutingFixture(t)
+	check := func() prelaunchRecord {
+		t.Helper()
+		st, err := store.OpenReadOnly(ctx, f.dbPath, store.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = st.Close() }()
+		record := prelaunchRecord{Checks: []prelaunchCheck{}}
+		checkPrelaunchRouting(ctx, &record, st)
+		return record
+	}
+
+	unset := check()
+	if got := findPrelaunchCheck(unset, prelaunchGroupState, "routing_policy"); got.Status != compositionPassed ||
+		got.Evidence != "no routing policy is set; the router uses the lineup" || unset.RoutingPolicy != nil {
+		t.Fatalf("before any set: check %+v, routing_policy %+v", got, unset.RoutingPolicy)
+	}
+
+	enrollment := string(f.lineup(t, domain.RoleImplementer).EnrollmentID)
+	if _, err := f.set(ctx, "-order", "implementer="+enrollment); err != nil {
+		t.Fatal(err)
+	}
+	set := check()
+	got := findPrelaunchCheck(set, prelaunchGroupState, "routing_policy")
+	if got.Status != compositionPassed || got.Evidence != "revision 1: implementer="+enrollment {
+		t.Fatalf("after set: check %+v", got)
+	}
+	if set.RoutingPolicy == nil || set.RoutingPolicy.Revision != 1 || len(set.RoutingPolicy.Roles) != 1 ||
+		!slices.Equal(set.RoutingPolicy.Roles[0].Enrollments, []domain.ClientEnrollmentID{domain.ClientEnrollmentID(enrollment)}) {
+		t.Fatalf("after set: routing_policy %+v", set.RoutingPolicy)
+	}
+	shown, err := runRouting(ctx, "show", "-db", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := json.Marshal(set.RoutingPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(shown) != string(recorded) {
+		t.Fatalf("routing_policy %s, routing show %s", recorded, shown)
+	}
+}
+
+// TestRoutingPolicyEvidenceNamesALegacyRole pins that a revision in the
+// pre-enrollment agents form, which no command can write any more, reads as
+// unrouted rather than as an order.
+func TestRoutingPolicyEvidenceNamesALegacyRole(t *testing.T) {
+	t.Parallel()
+	pool := domain.UsagePoolID("identity:a")
+	got := routingPolicyEvidence(domain.RoutingPolicy{
+		Revision: 3,
+		Roles: []domain.RoutingPolicyRole{
+			{Role: domain.RoleSpecifier, Agents: []string{"claude-a", "claude-b"}},
+			{Role: domain.RoleImplementer, Enrollments: []domain.ClientEnrollmentID{"a/claude_code", "b/claude_code"}},
+		},
+		DrainFirstAccount: &pool,
+	})
+	want := "revision 3: specifier=agents claude-a,claude-b (orders nothing: the router uses the lineup); " +
+		"implementer=a/claude_code,b/claude_code; drain-first account identity:a"
+	if got != want {
+		t.Fatalf("evidence\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -835,6 +910,9 @@ func TestPrelaunchUnreadableSettingsStopEverything(t *testing.T) {
 		if check.Status != compositionNotRun {
 			t.Fatalf("%s %s ran without settings", check.Group, check.Name)
 		}
+	}
+	if got := findPrelaunchCheck(record, prelaunchGroupState, "routing_policy").Status; got != compositionNotRun {
+		t.Fatalf("state routing_policy = %q, want not_run\n%s", got, body)
 	}
 }
 

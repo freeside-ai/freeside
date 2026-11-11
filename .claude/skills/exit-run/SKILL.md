@@ -57,7 +57,9 @@ without a trigger, and the real run's lineup: each writer role's model and
 effort (specifier, the escalated specifier when set, implementer,
 remediator), judgment's, and review's, and whether it came from the
 tracker or the walkthrough's default (docs/production-walkthrough.md,
-Choose The Real Run's Writers). Then wait for the user's go-ahead, which
+Choose The Real Run's Writers). When the contract names a routing gate,
+also state the routing orders the run will set, each role's enrollment ids
+in order, and any drain-first account. Then wait for the user's go-ahead, which
 approves the lineup with the spend, before preflight: a run costs real
 money, opens a real PR on someone's
 repository, and takes the operator's afternoon, so a wrong reading should
@@ -248,6 +250,13 @@ with a partial run.
   the Deputy, step 2) or record why it stays open. With no daemon running
   the record can't waive a superseded item; the served read at the
   checkpoint decides it (daemon/README.md, Read A Task's Record).
+- **The routing policy is known:** record the record's `routing_policy`.
+  With a routing gate, on a retained root compare a non-null revision's
+  orders and drain-first account with the contract; on a fresh root
+  `null` is expected and isn't a failure, because the policy can only be
+  set once the deputy's start has adopted the enrollments (Run the
+  Deputy, step 1). With no routing gate, still record a non-null
+  revision on a retained root: it will route the real task.
 - **Nothing else holds the rig** or an execution slot: no stranded
   dispatched invocation, no orphaned cleanup reservation (#1181, #1465).
   The record's `rig_lease` check passed; a live holder fails it, and a
@@ -442,7 +451,18 @@ the operator.
    background task (docs/production-walkthrough.md, Start And Verify).
    Record the root, the build, the settings digest, and the
    composition-preflight result it prints; a failed self-check leaves
-   execution disabled and stops the run. Then submit from a second shell:
+   execution disabled and stops the run. When the contract names a routing
+   gate, set the policy next, before any submit
+   (docs/production-walkthrough.md, Start And Verify): run `freesided
+   routing set` with the contract's orders unless the current revision
+   already holds them, then `freesided routing show`. Compare its orders
+   and drain-first account with the contract and record its `revision`;
+   a mismatch, or `null`, stops the run before the submit. The router
+   reads the policy at a task's first admission, so a task submitted
+   first runs on the lineup (#2386). In client-target mode this comes
+   before the visibility seed, and so before the pairing checkpoint that
+   asks for the composer's task; the seed's runs then follow the same
+   orders and drain-first account. Then submit from a second shell:
    the target in CLI mode, or the visibility seed on a fresh root in
    client-target mode (docs/production-walkthrough.md, The Visibility
    Seed). Record the submission id and task id. In CLI mode, check the
