@@ -15,7 +15,7 @@ import (
 )
 
 func TestSpecificationTitle(t *testing.T) {
-	out, err := specify.DecodeOutput([]byte(`{"specification":{"title":"  Bound requests  ","summary":"Summary","body":"# Bound requests","addressals":[]}}`))
+	out, err := specify.DecodeOutput([]byte(`{"specification":{"title":"  Bound requests  ","summary":"Summary","body":"# Bound requests\n\nCap each request.","addressals":[]}}`))
 	if err != nil || out.Specification == nil || out.Specification.Title == nil || *out.Specification.Title != "Bound requests" {
 		t.Fatalf("title decode = %+v, %v", out, err)
 	}
@@ -54,6 +54,47 @@ func TestOutputGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden.Assert(t, "output", append(indented, '\n'))
+}
+
+// A specifier stuck on the output schema can send a body of headings alone,
+// which validates on shape but hands the implementer an empty contract
+// (#3017). One line of any content passes; this is not a quality check.
+func TestSpecificationBodyNeedsContentBelowHeadings(t *testing.T) {
+	refused := []string{
+		`{"specification":{"summary":"s","body":"# T","addressals":[]}}`,
+		`{"specification":{"summary":"s","body":"## Change\n\n## Acceptance","addressals":[]}}`,
+		`{"specification":{"summary":"s","body":"#\n######  Deep","addressals":[]}}`,
+	}
+	for _, payload := range refused {
+		_, err := specify.DecodeOutput([]byte(payload))
+		if !errors.Is(err, specify.ErrInvalidOutput) || !strings.Contains(err.Error(), "no content below its headings") {
+			t.Fatalf("DecodeOutput(%s) error = %v, want heading-only refusal", payload, err)
+		}
+	}
+	accepted := []string{
+		"#hashtag",
+		"####### Seven hashes is not a heading",
+		"# Bound request bodies\n\n" +
+			"## Behavior\n\nThe handler refuses a body over 1 MiB with 413.\n\n" +
+			"## Acceptance Criteria\n\n- A 1 MiB body is accepted.\n- A larger body gets 413.\n\n" +
+			"## Replan Triggers\n\n- The limit must vary per route.",
+	}
+	for _, body := range accepted {
+		quoted, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := `{"specification":{"summary":"s","body":` + string(quoted) + `,"addressals":[]}}`
+		if _, err := specify.DecodeOutput([]byte(payload)); err != nil {
+			t.Fatalf("DecodeOutput(%s) = %v, want accepted", payload, err)
+		}
+	}
+	placeholder := specify.Output{Specification: &specify.Specification{
+		Summary: "s", Body: "# T", Addressals: []specify.Addressal{},
+	}}
+	if _, err := specify.EncodeOutput(placeholder); !errors.Is(err, specify.ErrInvalidOutput) {
+		t.Fatalf("EncodeOutput(placeholder) error = %v, want ErrInvalidOutput", err)
+	}
 }
 
 // The launch inlines the schema as one shell argument, and the model fills
@@ -293,7 +334,7 @@ func TestBacktickEscapePreservesInputLimitAndValidIdentifiers(t *testing.T) {
 }
 
 func TestDecodeLegacyAddressalOutputBindsAuthenticatedFeedback(t *testing.T) {
-	body := []byte(`{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification","addressals":[{"comment":"Bound the request.","response":"Added a 1 MiB limit."}]},"reply":null}`)
+	body := []byte(`{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification\n\nBound the request body.","addressals":[{"comment":"Bound the request.","response":"Added a 1 MiB limit."}]},"reply":null}`)
 	out, err := specify.DecodeLegacyAddressalOutput(body, map[string]string{
 		"Bound the request.": "revise-spec",
 	})

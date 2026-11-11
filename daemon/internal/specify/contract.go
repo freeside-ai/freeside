@@ -370,6 +370,31 @@ func (r FetchRequest) validate() error {
 	return nil
 }
 
+// hasContentBelowHeadings reports whether body has a non-blank line that is
+// not a Markdown ATX heading. A body of headings alone is the placeholder a
+// specifier sends to satisfy the schema after its real answer was refused
+// (#3017); it would reach the implementer as an empty contract. This is not a
+// quality check: one line of any content passes.
+func hasContentBelowHeadings(body string) bool {
+	for line := range strings.Lines(body) {
+		line = strings.TrimSpace(line)
+		if line != "" && !isATXHeading(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// isATXHeading reports whether a trimmed line is a Markdown ATX heading: one
+// to six '#' followed by a space, a tab, or the line's end. "#hashtag" is not.
+func isATXHeading(line string) bool {
+	level := len(line) - len(strings.TrimLeft(line, "#"))
+	if level < 1 || level > 6 {
+		return false
+	}
+	return level == len(line) || line[level] == ' ' || line[level] == '\t'
+}
+
 func (s Specification) validate() error {
 	if s.Title != nil && (*s.Title == "" || *s.Title != strings.TrimSpace(*s.Title) ||
 		strings.ContainsAny(*s.Title, "\r\n") || !utf8.ValidString(*s.Title) || len(*s.Title) > 4<<10) {
@@ -382,6 +407,9 @@ func (s Specification) validate() error {
 	}
 	if len(s.Body) > domain.MaxClaimTextBytes {
 		return fmt.Errorf("%w: specification body exceeds %d bytes", ErrInvalidOutput, domain.MaxClaimTextBytes)
+	}
+	if !hasContentBelowHeadings(s.Body) {
+		return fmt.Errorf("%w: specification body has no content below its headings", ErrInvalidOutput)
 	}
 	if s.Addressals == nil {
 		return fmt.Errorf("%w: specification addressals must be an array", ErrInvalidOutput)

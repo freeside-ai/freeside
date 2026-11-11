@@ -227,7 +227,7 @@ func TestTaskNamingAfterSpecificationDispatch(t *testing.T) {
 				}
 				stageDriver := f.newDriver(t)
 				if err := specifyfake.Script(stageDriver, specificationInvocationID(spec.SpecificationRunID, 1), 0, 0, specify.Output{Specification: &specify.Specification{
-					Summary: "Ready for approval.", Body: "# Approved specification", Addressals: []specify.Addressal{},
+					Summary: "Ready for approval.", Body: "# Approved specification\n\nImplement the change.", Addressals: []specify.Addressal{},
 				}}); err != nil {
 					t.Fatal(err)
 				}
@@ -307,7 +307,7 @@ func TestSlowTaskNameDoesNotBlockReconcileOrReplacePermanentName(t *testing.T) {
 				f.submit(t)
 				driver := f.newDriver(t)
 				if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0, specify.Output{Specification: &specify.Specification{
-					Summary: "Ready for approval.", Body: "# Permanent name", Addressals: []specify.Addressal{},
+					Summary: "Ready for approval.", Body: "# Permanent name\n\nImplement the change.", Addressals: []specify.Addressal{},
 				}}); err != nil {
 					t.Fatal(err)
 				}
@@ -398,7 +398,7 @@ func TestEngineRunCancelsTaskNameWorker(t *testing.T) {
 		f.submit(t)
 		driver := f.newDriver(t)
 		if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0, specify.Output{Specification: &specify.Specification{
-			Summary: "Ready for approval.", Body: "# Waiting for approval", Addressals: []specify.Addressal{},
+			Summary: "Ready for approval.", Body: "# Waiting for approval\n\nImplement the change.", Addressals: []specify.Addressal{},
 		}}); err != nil {
 			t.Fatal(err)
 		}

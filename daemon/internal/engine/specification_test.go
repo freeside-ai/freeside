@@ -1924,7 +1924,7 @@ func TestAcceptedSpecificationDoesNotReReadDriver(t *testing.T) {
 	invocationID := specificationInvocationID("specification-run", 1)
 	if err := specifyfake.Script(base, invocationID, 0, 0, specify.Output{
 		Specification: &specify.Specification{
-			Summary: "Complete specification.", Body: "# Complete specification",
+			Summary: "Complete specification.", Body: "# Complete specification\n\nImplement the change.",
 			Addressals: []specify.Addressal{},
 		},
 	}); err != nil {
@@ -1992,7 +1992,7 @@ func TestMalformedSpecificationMarkerIsQuarantinedWithoutBlockingHealthyRun(t *t
 	healthyID := specificationInvocationID("specification-run", 1)
 	if err := specifyfake.Script(driver, healthyID, 0, 0, specify.Output{
 		Specification: &specify.Specification{
-			Summary: "Healthy specification.", Body: "# Healthy specification",
+			Summary: "Healthy specification.", Body: "# Healthy specification\n\nImplement the change.",
 			Addressals: []specify.Addressal{},
 		},
 	}); err != nil {
@@ -2869,7 +2869,7 @@ func TestSpecificationClocksCancelActiveWorkAndConsolidateWaiting(t *testing.T) 
 		driver := f.newDriver(t)
 		id := specificationInvocationID("specification-run", 1)
 		if err := specifyfake.Script(driver, id, 0, 10, specify.Output{Specification: &specify.Specification{
-			Summary: "late", Body: "# Late specification", Addressals: []specify.Addressal{},
+			Summary: "late", Body: "# Late specification\n\nImplement the change.", Addressals: []specify.Addressal{},
 		}}); err != nil {
 			t.Fatal(err)
 		}
@@ -3089,6 +3089,36 @@ func TestSpecificationFailureAndGatePolicies(t *testing.T) {
 			t.Fatalf("malformed-output failure = %+v", item)
 		}
 		requireInterpretationFailure(t, item, domain.InterpretationFailureInvalidOutput, id)
+	})
+
+	// The Wave 9 exit run's placeholder (#3017): the policy gate would approve
+	// it without a person, so the decode must refuse it and raise the card.
+	t.Run("placeholder specification", func(t *testing.T) {
+		f := newSpecificationFixture(t, false, 2)
+		driver := f.newDriver(t)
+		id := specificationInvocationID("specification-run", 1)
+		// specifyfake.Script encodes through EncodeOutput, which now refuses
+		// the placeholder, so the transcript is scripted raw.
+		driver.Script(id, execfake.StageScript{
+			Outcome: execfake.OutcomeComplete,
+			Result:  exec.StageResult{Artifacts: []domain.Digest{}, Summary: "Specifier returned structured output."},
+			Transcript: []byte(
+				`{"type":"result","subtype":"success","is_error":false,` +
+					`"structured_output":{"specification":{"summary":"s","body":"# T","addressals":[]}}}` + "\n",
+			),
+		})
+		f.submit(t)
+		engine := f.newEngine(t, driver)
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		item, _ := f.item(t, domain.ItemID("execution-failure-"+string(id)))
+		if !strings.Contains(item.Reason, "no content below its headings") {
+			t.Fatalf("placeholder failure = %+v", item)
+		}
+		requireInterpretationFailure(t, item, domain.InterpretationFailureInvalidOutput, id)
+		assertSpecificationFailedWithoutImplementation(t, f, id)
+		f.assertArtifactAbsent(t, "spec-implementation-run-1")
 	})
 
 	t.Run("lost invocation", func(t *testing.T) {
@@ -3561,7 +3591,7 @@ func TestProductionAttemptReconstructionReauthenticatesApprovedDigest(t *testing
 	invocationID := specificationInvocationID(spec.SpecificationRunID, 1)
 	if err := specifyfake.Script(driver, invocationID, 0, 0, specify.Output{
 		Specification: &specify.Specification{
-			Summary: "Ready for approval.", Body: "# Approved specification",
+			Summary: "Ready for approval.", Body: "# Approved specification\n\nImplement the change.",
 			Addressals: []specify.Addressal{},
 		},
 	}); err != nil {
