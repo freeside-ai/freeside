@@ -171,16 +171,33 @@ package enum TaskDisplay {
         }
     }
 
-    /// The ids of tasks whose displayed name text equals another visible
-    /// task's, so the row can append a short id only where two rows would
-    /// otherwise read alike. An identifier-fallback name is the task id, which
-    /// is unique, so those rows never collide.
+    /// The ids of look-alike tasks (#1922): a task whose displayed name text
+    /// equals another visible task's, or whose source issue (repository and
+    /// issue number) is another's, whatever their names. The row appends a
+    /// short id only for these, so it appears only where two tasks would
+    /// otherwise read alike. An identifier-fallback name is the task id,
+    /// which is unique, so those rows never collide by name.
     package static func ambiguousTaskIDs(_ tasks: [Components.Schemas.TaskSnapshot]) -> Set<String> {
         var idsByName: [String: [String]] = [:]
+        var idsByIssue: [SourceIssue: [String]] = [:]
         for snapshot in tasks {
-            idsByName[snapshot.task.display_names.task.text, default: []].append(snapshot.task.id)
+            let task = snapshot.task
+            idsByName[task.display_names.task.text, default: []].append(task.id)
+            if case .issue_subject(let source)? = task.source?.value1 {
+                let issue = source.issue_subject
+                idsByIssue[.init(repositoryID: issue.repository_id, number: issue.issue_number), default: []]
+                    .append(task.id)
+            }
         }
-        return Set(idsByName.values.filter { $0.count > 1 }.flatMap { $0 })
+        let groups = Array(idsByName.values) + Array(idsByIssue.values)
+        return Set(groups.filter { $0.count > 1 }.flatMap { $0 })
+    }
+
+    /// The daemon's key for an issue-sourced task: the repository's id,
+    /// which survives a rename, and the issue number.
+    private struct SourceIssue: Hashable {
+        let repositoryID: Int64
+        let number: Int
     }
 
     /// A task with no lifecycle yet (no run) is work that exists and has

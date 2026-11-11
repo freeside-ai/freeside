@@ -144,12 +144,25 @@ import Testing
         #expect(names.allSatisfy { $0.source != .name }, "a task name source is never `name`")
     }
 
-    @Test func ambiguousTaskIDsFlagsOnlyRowsThatShareAName() throws {
+    /// Acceptance (#1922): a task is a look-alike when another shares its
+    /// displayed name or its source issue, and only then.
+    @Test func ambiguousTaskIDsFlagsRowsThatShareANameOrASourceIssue() throws {
         let base = try #require(TaskFixtures.defaultTasks().first)
-        func snapshot(_ id: String, _ name: Components.Schemas.DisplayName) -> Components.Schemas.TaskSnapshot {
+        func snapshot(
+            _ id: String, _ name: Components.Schemas.DisplayName, issue: (repositoryID: Int64, number: Int)? = nil
+        ) -> Components.Schemas.TaskSnapshot {
             var snapshot = base
             snapshot.task.id = id
             snapshot.task.display_names.task = name
+            snapshot.task.source = issue.map {
+                .init(
+                    value1: .issue_subject(
+                        .init(
+                            kind: .issue_subject,
+                            issue_subject: .init(
+                                repo: "freeside-ai/freeside", repository_id: $0.repositoryID, issue_number: $0.number)
+                        )))
+            }
             return snapshot
         }
         let tasks = [
@@ -158,8 +171,14 @@ import Testing
             snapshot("task-c", .init(text: "Unrelated work", source: ._operator)),
             // An identifier-fallback name is the task id, so it never collides.
             snapshot("task-id-only", .init(text: "task-id-only", source: .identifier)),
+            // One issue behind two differently named tasks.
+            snapshot("task-d", .init(text: "Repair the rig", source: ._operator), issue: (1, 724)),
+            snapshot("task-e", .init(text: "Repair the acceptance rig", source: .agent), issue: (1, 724)),
+            // The same number in another repository is another issue.
+            snapshot("task-f", .init(text: "Other repository", source: ._operator), issue: (2, 724)),
+            snapshot("task-g", .init(text: "Other issue", source: ._operator), issue: (1, 725)),
         ]
-        #expect(TaskDisplay.ambiguousTaskIDs(tasks) == ["task-a", "task-b"])
+        #expect(TaskDisplay.ambiguousTaskIDs(tasks) == ["task-a", "task-b", "task-d", "task-e"])
     }
 
     @Test func theRetryCampaignIsOneRowHoldingBothAttempts() throws {
