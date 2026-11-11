@@ -619,11 +619,15 @@ enum RunHistoryPresentation {
     ///
     /// A review round reads `Review · Round <n>` and takes precedence, then
     /// a remediator reads `Remediation for Review <n>`. A specification
-    /// invocation reads `Specification · Invocation <n>`: it may be a
-    /// research continuation, a Discuss reply, a revision, or a retry, and
-    /// the API records no fact that tells them apart, so it is not called a
-    /// round (#1462). Every other invocation reads `<Stage> · Round <n>` with
-    /// the daemon's per-stage `Attempt.number`. That number restarts at 1
+    /// invocation names the purpose the daemon recorded when it started it
+    /// (#3044), such as `Specification · Research Continuation`; when the
+    /// stage holds more than one attempt with that purpose, each adds its
+    /// position among them in attempt order (`Research Continuation 2`). An
+    /// attempt recorded before the purpose existed keeps
+    /// `Specification · Invocation <n>`, since nothing says which it was, and
+    /// it is never called a round (#1462). Every other invocation reads
+    /// `<Stage> · Round <n>` with the daemon's per-stage `Attempt.number`.
+    /// That number restarts at 1
     /// for each stage, and the daemon appends a fresh `implement` stage for
     /// each remediation and operator-feedback pass, so a run that recorded
     /// the same stage more than once would show several rows all labelled
@@ -655,7 +659,7 @@ enum RunHistoryPresentation {
             let label = RunDisplay.stageLabel(stage.name)
             let canonical = RunDisplay.canonicalStageName(stage.name)
             if canonical == Components.Schemas.StageName.specification.rawValue {
-                return "\(label) · Invocation \(attempt.number)"
+                return "\(label) · \(specificationAttemptLabel(attempt, in: stage))"
             }
             let sameName = stages.enumerated().filter {
                 RunDisplay.canonicalStageName($0.element.name) == canonical
@@ -668,6 +672,32 @@ enum RunHistoryPresentation {
             return "\(label) · Round \(attempt.number)"
         }
         return nil
+    }
+
+    /// The specification attempt's purpose label, numbered among the stage's
+    /// attempts with the same purpose when there is more than one, or
+    /// `Invocation <n>` when the attempt records no purpose.
+    private static func specificationAttemptLabel(
+        _ attempt: Components.Schemas.Attempt, in stage: Components.Schemas.Stage
+    ) -> String {
+        guard let purpose = attempt.purpose?.value1 else { return "Invocation \(attempt.number)" }
+        let samePurpose = stage.attempts.filter { $0.purpose?.value1 == purpose }
+        let name = purposeLabel(purpose)
+        guard samePurpose.count > 1,
+            let position = samePurpose.firstIndex(where: { $0.id == attempt.id })
+        else { return name }
+        return "\(name) \(position + 1)"
+    }
+
+    private static func purposeLabel(_ purpose: Components.Schemas.AttemptPurpose) -> String {
+        switch purpose {
+        case .first_draft: "First Draft"
+        case .research_continuation: "Research Continuation"
+        case .question_answer: "Answer to Question"
+        case .discussion_reply: "Discuss Reply"
+        case .revision: "Revision"
+        case .retry: "Retry"
+        }
     }
 }
 

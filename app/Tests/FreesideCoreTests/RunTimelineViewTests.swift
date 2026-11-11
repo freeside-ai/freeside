@@ -730,16 +730,61 @@ import Testing
                 == "Implementation · Round 2")
     }
 
-    /// A specification invocation may be a research continuation or a
-    /// Discuss reply, so it is no round (#1462).
-    @Test func specificationInvocationsAreNotRounds() {
-        let stages = [stage("specification", id: "s1", attempts: [(1, "inv-1"), (2, "inv-2")])]
+    private func specificationStage(
+        _ purposes: [Components.Schemas.AttemptPurpose?]
+    ) -> Components.Schemas.Stage {
+        .init(
+            id: "s1", run_id: "run", name: "specification",
+            attempts: purposes.enumerated().map { index, purpose in
+                .init(
+                    id: "s1-\(index + 1)", stage_id: "s1", number: index + 1, invocation_id: "inv-\(index + 1)",
+                    purpose: purpose.map { .init(value1: $0) })
+            })
+    }
+
+    /// Each specification invocation names why it ran (#3044).
+    @Test func specificationInvocationsNameTheirPurpose() {
+        let stages = [
+            specificationStage([
+                .first_draft, .research_continuation, .question_answer, .discussion_reply, .revision, .retry,
+            ])
+        ]
+        let labels = (1...6).map {
+            RunHistoryPresentation.attemptContext(invocationID: "inv-\($0)", stages: stages, reviewRounds: [])
+        }
         #expect(
-            RunHistoryPresentation.attemptContext(invocationID: "inv-1", stages: stages, reviewRounds: [])
-                == "Specification · Invocation 1")
+            labels == [
+                "Specification · First Draft", "Specification · Research Continuation",
+                "Specification · Answer to Question", "Specification · Discuss Reply",
+                "Specification · Revision", "Specification · Retry",
+            ])
+    }
+
+    /// Repeated purposes number among themselves in attempt order; a purpose
+    /// that occurs once stays unnumbered.
+    @Test func repeatedSpecificationPurposesAreNumbered() {
+        let stages = [specificationStage([.first_draft, .research_continuation, .research_continuation, .revision])]
+        let labels = (1...4).map {
+            RunHistoryPresentation.attemptContext(invocationID: "inv-\($0)", stages: stages, reviewRounds: [])
+        }
         #expect(
-            RunHistoryPresentation.attemptContext(invocationID: "inv-2", stages: stages, reviewRounds: [])
-                == "Specification · Invocation 2")
+            labels == [
+                "Specification · First Draft", "Specification · Research Continuation 1",
+                "Specification · Research Continuation 2", "Specification · Revision",
+            ])
+    }
+
+    /// An attempt recorded before the purpose existed says nothing about why
+    /// it ran, so it keeps its invocation number and is no round (#1462).
+    @Test func specificationAttemptWithoutPurposeKeepsTheInvocationLabel() {
+        let stages = [specificationStage([nil, nil, .retry])]
+        let labels = (1...3).map {
+            RunHistoryPresentation.attemptContext(invocationID: "inv-\($0)", stages: stages, reviewRounds: [])
+        }
+        #expect(
+            labels == [
+                "Specification · Invocation 1", "Specification · Invocation 2", "Specification · Retry",
+            ])
     }
 
     @Test func repeatedStagesQualifyEachLabelWithItsPass() {
