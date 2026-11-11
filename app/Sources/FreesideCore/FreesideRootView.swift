@@ -178,7 +178,7 @@ public struct FreesideRootView: View {
 
     /// The stopped notice's action: System Health, over it the card of the
     /// item the stop names when one is open. The Mac opens the Settings
-    /// window on it, as the toolbar gear does; the iPhone pushes it.
+    /// window on it, as the sidebar gear does; the iPhone pushes it.
     private func openSystemHealth(_ itemID: String?) {
         navigation.openSystemHealth(finding: itemID)
         #if os(macOS)
@@ -346,6 +346,12 @@ public struct FreesideRootView: View {
         #else
             NavigationSplitView(columnVisibility: $splitVisibility) {
                 unifiedList(coordinator)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        SidebarFooter(
+                            freshness: coordinator.store.freshness,
+                            lastUpdatedAt: coordinator.lastUpdatedAt,
+                            onOpenSettings: { openSettings() })
+                    }
                     .background(Color.sidebarGround)
                     .navigationSplitViewColumnWidth(min: 280, ideal: 320)
             } detail: {
@@ -374,15 +380,8 @@ public struct FreesideRootView: View {
             .toolbar {
                 ToolbarItemGroup {
                     submissionRecoveryButton(coordinator)
-                    Button {
-                        Task { await coordinator.refresh() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .help("Refresh")
-                    LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
-                    settingsButton
                 }
+                RefreshToolbarItem { Task { await coordinator.refresh() } }
             }
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
                 NewTaskSheet(
@@ -458,19 +457,6 @@ public struct FreesideRootView: View {
             onRefresh: coordinator.refresh,
             onRevealTechnicalDetails: revealTechnicalDetails)
     }
-
-    #if os(macOS)
-        /// The Mac toolbar's gear: the Settings window, on the pane it last
-        /// showed. The iPhone's is `phoneSettingsButton`.
-        private var settingsButton: some View {
-            Button {
-                openSettings()
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .help("Settings")
-        }
-    #endif
 
     /// The gear's badge: the open-findings count, the number System Health
     /// lists as open. Nil, so no badge, before the inbox loads or with
@@ -940,3 +926,43 @@ struct SettingsGearBadge: View {
             .accessibilityHidden(true)
     }
 }
+
+#if os(macOS)
+    /// The Mac toolbar's Refresh. Alone in the toolbar, the shared glass
+    /// draws it as large as the sidebar toggle; it is a secondary control
+    /// (⌘R and the heartbeat refresh too), so on macOS 26 it leaves the
+    /// shared glass for a glass circle of its own, a size down.
+    struct RefreshToolbarItem: ToolbarContent {
+        let action: () -> Void
+
+        var body: some ToolbarContent {
+            if #available(macOS 26, *) {
+                ToolbarItem {
+                    // The window's accent tint would fill the glass, making a
+                    // secondary control read as the primary one; cleared, the
+                    // glyph needs its own ink, which the glass style reads
+                    // only from the label.
+                    button(ink: Color.ink)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .tint(.clear)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem { button(ink: nil) }
+            }
+        }
+
+        private func button(ink: Color?) -> some View {
+            Button(action: action) {
+                let label = Label("Refresh", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                if let ink {
+                    label.foregroundStyle(ink)
+                } else {
+                    label
+                }
+            }
+            .help("Refresh")
+        }
+    }
+#endif

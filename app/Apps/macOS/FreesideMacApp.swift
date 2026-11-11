@@ -286,7 +286,7 @@ private struct DaemonMenu: View {
         showMainWindow(openWindow)
     }
 
-    /// The Settings window on System Health, the way the toolbar gear
+    /// The Settings window on System Health, the way the sidebar gear
     /// opens it. The app activates first: from the menu bar panel it is
     /// not active, so Settings would otherwise open behind the frontmost
     /// app.
