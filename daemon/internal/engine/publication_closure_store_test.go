@@ -51,8 +51,18 @@ func seedClosureChainWithSource(
 	t *testing.T, runID domain.RunID, source *domain.SpecificationSource, keys ...domain.PolicyKey,
 ) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
 	t.Helper()
-	ctx := context.Background()
 	s := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	policy, taskID := seedClosureRows(t, s, runID, source, keys...)
+	return s, policy, taskID
+}
+
+// seedClosureRows writes seedClosureChainWithSource's rows into a store the
+// caller opened, so a test can choose the store's options.
+func seedClosureRows(
+	t *testing.T, s *store.Store, runID domain.RunID, source *domain.SpecificationSource, keys ...domain.PolicyKey,
+) (domain.ResolvedPolicy, domain.TaskID) {
+	t.Helper()
+	ctx := context.Background()
 	at := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
 	policy, err := domain.NewResolvedPolicy(runID, append([]domain.PolicyKey{{
 		Key: "paths", Value: "daemon/",
@@ -100,7 +110,7 @@ func seedClosureChainWithSource(
 	}); err != nil {
 		t.Fatalf("seed closure chain: %v", err)
 	}
-	return s, policy, taskID
+	return policy, taskID
 }
 
 func closureStoreBinding(policy domain.ResolvedPolicy, taskID domain.TaskID) productionBinding {
