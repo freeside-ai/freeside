@@ -380,13 +380,8 @@ public struct FreesideRootView: View {
             .toolbar {
                 ToolbarItemGroup {
                     submissionRecoveryButton(coordinator)
-                    Button {
-                        Task { await coordinator.refresh() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .help("Refresh")
                 }
+                RefreshToolbarItem { Task { await coordinator.refresh() } }
             }
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
                 NewTaskSheet(
@@ -931,3 +926,43 @@ struct SettingsGearBadge: View {
             .accessibilityHidden(true)
     }
 }
+
+#if os(macOS)
+    /// The Mac toolbar's Refresh. Alone in the toolbar, the shared glass
+    /// draws it as large as the sidebar toggle; it is a secondary control
+    /// (⌘R and the heartbeat refresh too), so on macOS 26 it leaves the
+    /// shared glass for a glass circle of its own, a size down.
+    struct RefreshToolbarItem: ToolbarContent {
+        let action: () -> Void
+
+        var body: some ToolbarContent {
+            if #available(macOS 26, *) {
+                ToolbarItem {
+                    // The window's accent tint would fill the glass, making a
+                    // secondary control read as the primary one; cleared, the
+                    // glyph needs its own ink, which the glass style reads
+                    // only from the label.
+                    button(ink: Color.ink)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .tint(.clear)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem { button(ink: nil) }
+            }
+        }
+
+        private func button(ink: Color?) -> some View {
+            Button(action: action) {
+                let label = Label("Refresh", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                if let ink {
+                    label.foregroundStyle(ink)
+                } else {
+                    label
+                }
+            }
+            .help("Refresh")
+        }
+    }
+#endif
