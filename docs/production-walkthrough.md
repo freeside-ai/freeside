@@ -29,9 +29,13 @@ section it links.
    with the writer lineup chosen under
    [Choose The Real Run's Writers](#choose-the-real-runs-writers), then run
    the pre-spend checks on its root ([Start And Verify](#start-and-verify)).
-2. Run the fixture pass on the build the real run will use, then any
-   seeded pass the exit contract names that needs no device
+   `bash scripts/exit-root.sh --template <dir>` can stand the root up from
+   a pass directory of the operator's own
    ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
+2. Stand up a fresh root for the fixture pass with `bash
+   scripts/exit-root.sh --pass fixture` on the build the real run will use
+   and run the pass, then any seeded pass the exit contract names that needs
+   no device ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
 3. Prepare the operator's devices
    ([Prepare The Operator's Devices](#prepare-the-operators-devices)),
    then run any seeded pass the operator checks on a device.
@@ -473,7 +477,10 @@ discards each pass's merge, the fixture's `AGENTS.md` lets the pass merge its
 pull request.
 
 **Settings.** The fixture has settings of its own, fixed here and never
-derived from a real run's:
+derived from a real run's. Their source is
+`scripts/exit-root/passes/fixture/settings.json`, which `scripts/exit-root.sh`
+renders onto each fixture root; the table gives each value's reason, and a
+change to one changes both:
 
 | Key | Fixture value |
 | --- | --- |
@@ -500,60 +507,71 @@ step 6 below checks that the pinned CLIs serve them. `gpt-6-luna` is the
 affordable listed model in the pinned Codex CLI's bundled catalog
 (`codex debug models --bundled` in the review image). A role that is
 refused, or can't complete the fixture's issue at these values, is a pass
-finding: move it up one tier and change this table with the pass. Every
-other key is machine-bound (paths, identities, cost owners, dated inputs,
-`prod.*`, the build's `images.exporter` and `images.review`) and comes from
-[Start And Verify](#start-and-verify), as for any root. Keep
+finding: move it up one tier and change this table and the settings file
+with the pass. Every other key is machine-bound (paths, identities, cost
+owners, dated inputs, `prod.*`, the build's `images.exporter` and
+`images.review`) and comes from [Start And Verify](#start-and-verify), as for
+any root; the command reads them from the operator's machine file
+(`scripts/exit-root/machine.example.json` shows its shape) and refuses a key
+that file and the pass both set. Keep
 `review.instructions`, `judgment.publication_author_prompt`, and
 `timeouts.*` the same from pass to pass: a pass that changes one isn't
 comparable with the last.
 
-The fixture's models and efforts make a tree of its own. Adopt it once
-through [The First Start](#the-first-start) and keep it on its own branch of
-the agent-tree checkout; later passes reuse its commit until an adoption
-input changes, such as a build whose prompt packages changed, which the
-deputy's self-check refuses. Then adopt it again.
+The fixture's models and efforts make a tree of its own. The command adopts
+it through [The First Start](#the-first-start) and commits it on branch
+`exit-root/fixture` of the agent-tree checkout, leaving the checkout's own
+branch and working tree alone; later passes reuse that commit until an
+adoption input changes, such as a build whose prompt packages changed, which
+the deputy's self-check refuses. Then the command adopts it again.
 
 **Onboard the fixture.** The fresh root starts with an empty database, so
 every pass onboards the fixture, and the onboarding takes the fixture's own
-review configuration digest. On the fresh root, in this order:
+review configuration digest. Reset the fixture first (above), then, from a
+checkout of the repository:
 
-1. Write the settings with every value above. Until onboarding replaces
-   them, set `images.agent` and `approved_recipe` to any digest-pinned image
-   and recipe digest, such as an earlier pass's.
-2. Adopt the fixture tree through [The First Start](#the-first-start), or
-   set `agent_tree.commit` to the one an earlier pass adopted.
-3. On the start whose tree matches, the self-check fails `trust_profile` and
-   the checks that need the project image, since this root holds neither
-   yet. Those failures are expected here. It still writes
-   `<root>/daemon/composition-manifest.json`. Read its
-   `review_configuration_digest`; `freesided preflight` with the same inputs
-   reports the same digest. End the deputy with Ctrl-C: onboarding refuses a
-   database the daemon holds.
-4. Onboard the fixture on this root, as daemon/README.md describes under
-   Renew A Codex Subscription Credential (the `freesided onboard
-   <owner/name>` paragraphs):
+```sh
+bash scripts/exit-root.sh --pass fixture --build <sha> <name>
+```
 
-   ```sh
-   freesided onboard freeasinbird/freeside-review-challenge \
-     -db <root>/daemon/freeside.db -repository-id 1363494422 \
-     -commit <fixture-baseline-sha> -base-ref main -source <fixture-clone> \
-     -review-config-digest <digest> ...
-   ```
+It makes `<roots_dir>/<name>`, builds a stamped `freesided` from a clean
+tree of `<sha>`, writes the settings at mode 0600, adopts the fixture tree,
+and runs the onboarding review, stopping with exit 3 and an `approval=` line
+at each step only the operator can take. Rerun the same command after each
+one; it resumes where it stopped. In order:
 
-   The App and base-image flags (`-state-dir`, `-registration-id`,
-   `-base-image`, `-base-build-ref`) are the machine's. Run it once without
-   `-approve` and read the review, then again with `-approve
-   <approval_digest>`. Until the fixture is trusted in `prod`'s App
-   authority, the first call opens an installation intent and every later
-   call, the `-approve` one included, passes `-resume`; the daemon guide's
-   `freesided onboard` steps give the intent's expiry and `-replace-intent`.
-5. Set `images.agent` to the approving run's `project_image.image_ref` and
-   `approved_recipe` to its `project_image.recipe_digest`.
-6. Run `freesided probe-lineup -root <root>`
+1. **Installation, until the fixture is trusted in `prod`'s App authority.**
+   The review opens an installation intent and prints its URL; complete the
+   installation and rerun. The script passes `-resume` on every later
+   onboarding call. An intent expires (the daemon guide's `freesided
+   onboard` steps, under Renew A Codex Subscription Credential in
+   daemon/README.md); after that, run the onboarding with `-replace-intent`
+   by hand as that guide says, then rerun. The intent belongs to the App, so
+   finish one root's installation before another root's onboarding starts:
+   a new root's first call doesn't pass `-resume`.
+2. **The onboarding approval.** The `approval=` line is the full `freesided
+   onboard ... -approve <approval_digest>` command. Read the review in
+   `<root>/daemon/onboard-review.json`, then run that command yourself; it
+   writes `<root>/daemon/onboard-approved.json`. The approval stays the
+   operator's: the script never passes `-approve`.
+3. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
+   the approving run, applies the pass's routing and pool limits, runs
+   `freesided probe-lineup -root <root>`
    ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
-   before the deputy starts again. A model the pinned CLIs refuse fails here
-   for the cost of one short call per role, not partway through the pass.
+   so a model the pinned CLIs refuse fails for the cost of one short call
+   per role, not partway through the pass, and requires `freesided
+   prelaunch -no-live` to pass. It exits 0 and prints `root=` and `api_url=`.
+
+The first start writes `<root>/daemon/composition-manifest.json`, whose
+`review_configuration_digest` the onboarding takes; until onboarding
+completes, settings carry the machine file's placeholder image and recipe.
+A rerun with a new `--build` rebuilds and re-adopts on the same root,
+database, and port, which suits iterating on a build, but a pass counts only
+on a fresh root: give each counted pass a new `<name>`. Exit 2 is a refusal
+(a supervised path, a root another pass made, a setting both files set) and
+exit 1 any other failure; the script's header lists every step and refusal.
+A setup start that exits nonzero says so with the `freesided rig recover`
+command for its lease.
 
 **Inputs.** The task file holds the canonical issue's bare URL, and the
 publication file names that URL in `source_issue`
@@ -608,18 +626,24 @@ or can't be produced on demand, is proved on a pass that seeds or injects
 the condition. It proves what the daemon does once the condition holds, not
 that the provider produces it. Two kinds of mechanism exist:
 
-- **An exhausted window.** On a fixture root onboarded as above, with the
-  second pool's writer agent enrolled and the routing order set, run
-  `freesided auth seed-exhausted` on the first-ranked enrollment's pool
-  ([Seed An Exhausted Window For An Exit Run](../daemon/README.md#seed-an-exhausted-window-for-an-exit-run)),
-  then submit promptly: the pool's next collection replaces the seeded
-  reading. The proof is the task line's `passed_over` in `freesided inspect
+- **An exhausted window.** `bash scripts/exit-root.sh --pass
+  seeded-routing --build <sha> <name>` stands up a fixture root onboarded
+  as above with the machine file's second writer enrolled, the routing order
+  set, and one execution per pool (`scripts/exit-root/passes/seeded-routing/pass.json`,
+  which lists every difference from the fixture pass). Its `next=` line is
+  the `freesided auth seed-exhausted` command for the first-ranked
+  enrollment's pool
+  ([Seed An Exhausted Window For An Exit Run](../daemon/README.md#seed-an-exhausted-window-for-an-exit-run));
+  fill in a future reset, run it, then submit promptly: the pool's next
+  collection replaces the seeded reading. The proof is the task line's `passed_over` in `freesided inspect
   task`.
 - **A scripted refusal.** No command injects a refusal into a deputy pass; a
   scenario plays one on the production engine composition with no model,
   container, or GitHub ([Run A Scenario](../daemon/README.md#run-a-scenario)
-  lists each scenario and what it plays). For the park, run `quota-park` as
-  a live instance on the run's build; its specification waits for an
+  lists each scenario and what it plays). For the park, run `bash
+  scripts/exit-root.sh --pass scenario:quota-park --build <sha> <name>`,
+  which starts a live `quota-park` instance on the run's build; its
+  specification waits for an
   approval before the implementation attempt the provider refuses. The
   proof is the first run's failed terminal with cause `quota` and the
   second run's `quota_window_exhausted` hold, read while the task is
@@ -630,11 +654,11 @@ that the provider produces it. Two kinds of mechanism exist:
 A seeded pass that the operator checks on a device runs after
 [Prepare The Operator's Devices](#prepare-the-operators-devices) and stays
 up until they have. Pair the clients to its daemon as in
-[Start And Verify](#start-and-verify), on a `-listen` address the iPhone
-can reach. `bash scripts/dev-instance.sh --scenario quota-park` listens on
-loopback and attaches only the Mac app, and no run has yet put an iPhone on
-a scenario instance, so settle how that instance is started before the
-go-ahead. The exit-run skill (A Seeded Pass) says when a seed may ride the
+[Start And Verify](#start-and-verify), at the `api_url` the command prints:
+it listens on the machine file's `listen_host`, such as the Mac's Tailscale
+address, on a port no other root claims, so the iPhone can reach it. A
+scenario pass runs the build's own `scripts/dev-instance.sh` with `--root`
+and `--listen`, so its build must include both flags. The exit-run skill (A Seeded Pass) says when a seed may ride the
 fixture pass, when it needs a pass of its own, and who approves the
 scenario's specification.
 

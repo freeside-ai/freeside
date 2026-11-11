@@ -1,0 +1,66 @@
+[
+  {
+    "key": "paths",
+    "value": "src/**,test/**,README.md",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:f0c2ffa3bf01b7e18fdcb176cf0d03a1e230de90a7b53c31d1a8c64fe4803b6e"
+    }
+  },
+  {
+    "key": "review.hard_round_limit",
+    "value": "25",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:b7a56873cd771f2c446d369b649430b65a756ba278ff97ec81bb6f55b2e73569"
+    }
+  },
+  {
+    "key": "gates.spec_approval",
+    "value": "false",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "key": "specification.max_iterations",
+    "value": "4",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+    }
+  },
+  {
+    "key": "budgets.stage_active_time",
+    "value": "1h",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:894816281e236420190e5e2e5ec39503d42d599c90d15fcc29e38de82ebb33b7"
+    }
+  },
+  {
+    "key": "research.allowlist",
+    "value": "https://api.github.com,https://github.com,https://raw.githubusercontent.com,https://docs.github.com",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:a560194ccbbc0001fc9313a1dfb0a29160664a02269f2ae136edbf4fb8d88403"
+    }
+  },
+  {
+    "key": "research.max_response_bytes",
+    "value": "2097152",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:107f41ed92e01eb58d3a28ed9f2bb1c4094d3cbd74ff828bb4c85186079d6d79"
+    }
+  },
+  {
+    "key": "gates.source_issue_closure",
+    "value": "false",
+    "provenance": {
+      "source": "override",
+      "digest": "sha256:fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  }
+]

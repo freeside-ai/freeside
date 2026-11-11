@@ -290,7 +290,11 @@ bold; this section says what makes a pass count. Decision record:
 
 1. **Same runtime, fresh root** (**Root and build**). The build is from a
    clean checkout of the SHA the real run will use, stamped as Start And
-   Verify says, on a fresh root. When `main` advances before the real run
+   Verify says, on a fresh root. `bash scripts/exit-root.sh --pass fixture
+   --build <sha> <name>` makes the root and the build, with a `<name>` no
+   earlier pass used: a rerun on a new SHA reuses its root, which suits
+   iterating but doesn't count. Record its `root=` and `api_url=` lines, and
+   each `approval=` line it stopped at, in the run record. When `main` advances before the real run
    launches, the run may start from the newer tip only when `runtime-diff`
    carries the pass to it; the run record then names both SHAs and the
    script's verdict line. Any other result means a new pass on the new tip.
@@ -300,10 +304,14 @@ bold; this section says what makes a pass count. Decision record:
    doesn't count.
 3. **The fixture's settings, exactly** (**Settings**): every key the table
    lists takes the value it lists, and nothing comes from the real run's
-   settings. The tree, onboarding, image, recipe, and lineup probe follow
-   **Onboard the fixture** in its order. A role that is refused, or can't
+   settings. `scripts/exit-root/passes/fixture/settings.json` is the
+   table's source, and the script renders it with only the machine file's
+   machine-bound keys, refusing a key both set. The tree, onboarding,
+   image, recipe, and lineup probe follow **Onboard the fixture** in its
+   order: the script runs each, and the onboarding approval stays yours to
+   run from its `approval=` line. A role that is refused, or can't
    complete the canonical issue at the table's model, is a pass finding:
-   the table moves up one tier with the fix.
+   the table and the settings file move up one tier with the fix.
 4. **Unattended inputs** (**Inputs**): neither a specification nor a
    closure card waits for a person, and the submit carries no
    `--task-line`. Start the deputy as a tracked background task, submit
@@ -354,8 +362,13 @@ pass**) holds the procedure; this says what makes one count.
 2. **It changes only what the seed needs.** A pass on the deputy starts
    from the fixture's settings on a fresh root, and its record names each
    difference from the rehearsal (a second writer agent on a second pool,
-   for one). A scenario instance has no fixture settings; record its
-   scenario name and build.
+   for one). `bash scripts/exit-root.sh --pass <overlay>` makes that root
+   from an overlay under `scripts/exit-root/passes/` (`seeded-routing` for
+   the routing seed), whose `pass.json` is that list of differences. A
+   scenario instance has no fixture settings; `--pass scenario:<name>`
+   starts it on the build at a reachable `api_url`, and its record names
+   the scenario and build. Record the script's stdout lines, including a
+   `next=` seed command as run, in the pass's row.
 3. **The record shows the response, not the seed.** Read the fields the
    gate names from the task record: a line's `passed_over` provenance for
    routing, a run's hold and its reset for a park. The seeding command's

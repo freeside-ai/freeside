@@ -1,0 +1,77 @@
+{
+  "exit_root": {
+    "roots_dir": "/Users/<you>/.freeside",
+    "listen_host": "<this Mac's Tailscale IPv4, such as 100.64.0.1>",
+    "port_base": 8771,
+    "placeholder": {
+      "image": "<any digest-pinned agent image, such as an earlier pass's images.agent>",
+      "recipe": "<any sha256 recipe digest, such as an earlier pass's approved_recipe>"
+    },
+    "onboard_args": [
+      "-state-dir", "/Users/<you>/Library/Application Support/Freeside/daemon",
+      "-credentials-dir", "/Users/<you>/Library/Application Support/Freeside/credentials",
+      "-registration-id", "<prod App registration id>",
+      "-base-image", "<digest-pinned agent base image>",
+      "-base-build-ref", "<local tag matching -base-image>",
+      "-local-registry-port", "<managed loopback registry port>",
+      "-dns", "<build DNS server>"
+    ],
+    "commit_author": {"app_slug": "<prod App slug>", "bot_user_id": 0},
+    "repositories": {
+      "freeasinbird/freeside-review-challenge": {
+        "checkout": "/Users/<you>/.freeside/fixture-clone",
+        "onboard_args": [
+          "-account", "freeasinbird",
+          "-account-id", "84958515",
+          "-installation-id", "<prod App installation id on the fixture>",
+          "-image-name", "freeside-project-review-challenge"
+        ]
+      }
+    },
+    "second_writer": {
+      "auth_identity": "<second writer identity>",
+      "auth_volume": "<second writer credential volume>",
+      "claude_account": "<second writer's attested account>",
+      "cost_owner": "<second writer's cost owner>"
+    }
+  },
+  "settings": {
+    "images": {
+      "exporter": "<this build's digest-pinned exporter image>",
+      "review": "<this build's digest-pinned review image>"
+    },
+    "prompts": {
+      "vendor_instructions": "/Users/<you>/.freeside/inputs/execution-host.md"
+    },
+    "agent_tree": {
+      "checkout": "/Users/<you>/.freeside/agent-tree",
+      "auth_identity": "<writer identity>",
+      "review_auth_identity": "<review identity>",
+      "cost_owner": "<writer cost owner>",
+      "review_cost_owner": "<review cost owner>",
+      "claude_account": "<writer's attested account>",
+      "terms_basis_date": "<YYYY-MM-DD the tree was adopted with>",
+      "pricing_revision": "<pricing revision>",
+      "offer_not_after": "<YYYY-MM-DD>",
+      "auth_volume": "<writer credential volume>"
+    },
+    "review": {
+      "input_root": "/Users/<you>/.freeside/review-input",
+      "auth_snapshot": "/Users/<you>/.freeside/review-input/auth.json",
+      "instructions": "/Users/<you>/.freeside/inputs/review-instructions.md"
+    },
+    "judgment": {
+      "claude_bin": "/Users/<you>/.freeside/bin/claude",
+      "claude_sha256": "<sha256 of claude_bin>",
+      "publication_author_prompt": "/Users/<you>/.freeside/inputs/publication-author.md"
+    },
+    "prod": {
+      "app_state_dir": "/Users/<you>/Library/Application Support/Freeside/daemon",
+      "app_credentials_dir": "/Users/<you>/Library/Application Support/Freeside/credentials",
+      "installed_daemon": "/Users/<you>/Applications/Freeside.app/Contents/Resources/freesided"
+    },
+    "timeouts": {"writer_stop": "45m", "writer_stall": "0s"},
+    "memory_budget_mib": 16384,
+    "build": {"proxy": "", "base_build_ref": "", "dns": []}
+  }
+}
