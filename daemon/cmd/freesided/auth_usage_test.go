@@ -203,7 +203,9 @@ func TestAuthUsageCommandsUseTheRunningDaemon(t *testing.T) {
 	seedTemplateStore(t, dbPath)
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0",
-		usageCollectors: map[domain.HarnessClientKind]ward.UsageCollector{domain.HarnessClientCodexCLI: collector},
+		seams: startSeams{
+			usageCollectors: map[domain.HarnessClientKind]ward.UsageCollector{domain.HarnessClientCodexCLI: collector},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

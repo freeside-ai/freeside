@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,10 +19,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
+	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
+	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 	"github.com/freeside-ai/freeside/daemon/internal/usagecollect"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -50,12 +58,493 @@ func validateRunConfig(cfg config) error {
 	return nil
 }
 
+// Approval wakes the filer immediately; this tick bounds recovery delay.
+const defaultFollowUpFilingInterval = time.Minute
+
+// startSeams are the test seams a start reads. Production leaves each one
+// unset.
+type startSeams struct {
+	// afterBackgroundStart is a test seam for startup failures after the base
+	// background workers have launched. Production leaves it nil.
+	afterBackgroundStart func() error
+	// beforeStoreClose is a test seam for observing failed-start cleanup at
+	// the store-close boundary. Production leaves it nil.
+	beforeStoreClose func()
+	// usageCollectors are the usage collectors by harness client. Production
+	// leaves it nil and gets Claude's, which answers from writer turns'
+	// usage captures; tests set a fake, and then no capture is recorded.
+	usageCollectors map[domain.HarnessClientKind]ward.UsageCollector
+	// claudeModelDiscoverer runs the startup model discovery. Production
+	// leaves it nil and launches the initialize probe; tests set a fake.
+	claudeModelDiscoverer claudeModelDiscoverer
+	// codexModelDiscoverer runs the startup Codex model discovery. Production
+	// leaves it nil and launches the model/list probe; tests set a fake.
+	codexModelDiscoverer codexModelDiscoverer
+	// now is the attention service clock. Production leaves it nil for the
+	// wall clock (run defaults it); tests can advance startup across
+	// pairing-code expiry.
+	now func() time.Time
+}
+
+// startOptions is what a start reads: main's configuration after run has
+// validated and defaulted it, the files its flags name, and what only main
+// supplies. Each field that shares a name with main's configuration means
+// what that field means there.
+type startOptions struct {
+	DBPath                    string
+	StateDir                  string
+	ListenAddr                string
+	FakeDriverEnabled         bool
+	FakeDriverDir             string
+	NtfyURL                   string
+	ReconcileInterval         time.Duration
+	DoctorInterval            time.Duration
+	SchedulerInterval         time.Duration
+	AttentionDeliveryInterval time.Duration
+	ApprovedRecipes           map[domain.Digest]bool
+	SeedWalkingSkeleton       bool
+	// SeedFixture is the parsed fixture to seed, or empty for none.
+	SeedFixture      seedfixture.Name
+	IntakeInitiators []daemoncompose.IntakeInitiator
+	MemoryBudgetMiB  int
+	Logger           *slog.Logger
+	Claude           *daemoncompose.ClaudeDriverConfig
+	Scenario         *daemoncompose.Scenario
+	// ManualProjects are the projects the manual-submission file configures,
+	// and ManualInitiator resolves a client submission's policy from them.
+	ManualProjects  map[domain.ProjectID]engine.ManualInitiator
+	ManualInitiator func(domain.ProjectID) (engine.ManualInitiator, bool)
+	// StoreOptions are the store's options before the start adds its backup
+	// health source.
+	StoreOptions store.Options
+	// ReadinessEnvironment is the environment tier the readiness file names.
+	ReadinessEnvironment string
+	// Version is the build version the health response reports.
+	Version string
+	// IdentityLabel is the label the doctor shows for an auth identity.
+	IdentityLabel func(domain.AuthIdentity) string
+	// WrapFakeDriver wraps the fake stage driver the fake lane runs.
+	WrapFakeDriver func(*fake.StageDriver) exec.StageDriver
+	// OpenControl opens the control socket. The start calls it after taking
+	// the database lock and closes what it returns if the start fails.
+	OpenControl func(dbPath, stateDir string) (controlSocket, error)
+	startSeams
+}
+
+// controlSocket is the daemon's local control socket. The start configures
+// it once the shell knows its API address, registers its routes over the
+// composed parts, and publishes its address last.
+type controlSocket interface {
+	daemonshell.PairingControl
+	Configure(apiURL string, mint func(context.Context) (string, domain.PairingCode, error))
+	RegisterRoutes(controlRouteInputs)
+	Publish() error
+}
+
+// controlRouteInputs are the composed parts the control routes serve over.
+type controlRouteInputs struct {
+	Store            *store.Store
+	Blobs            *signet.BlobStore
+	LocalBackupFiles *store.LocalBackupFiles
+	// ApprovedRecipes is the store's recipe set.
+	ApprovedRecipes map[domain.Digest]bool
+	IntegrityProbe  credentialIntegrityProbe
+	Usage           *usagecollect.Coordinator
+	Attention       *signet.Service
+	// CommitWorkflowClosure commits a task's workflow closure through the
+	// engine, or directly when no engine runs.
+	CommitWorkflowClosure func(context.Context, domain.TaskID, func() error) error
+}
+
+// startedDaemon is what start composes: the shell that runs the process,
+// and the composition results that startup and the tests reach.
+type startedDaemon struct {
+	*daemonshell.Shell
+	store     *store.Store
+	attention *signet.Service
+	workflow  *engine.Engine
+	driver    *fake.StageDriver
+	usage     *usagecollect.Coordinator
+}
+
+// start acquires and composes everything a daemon runs, and starts it. A
+// start that fails releases everything it acquired, in reverse order.
+func start(parent context.Context, stop func(), cfg startOptions) (_ *startedDaemon, err error) {
+	startedAt := time.Now().UTC()
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
+	}
+	lockTransferred := false
+	defer func() {
+		if !lockTransferred {
+			_ = lock.Close()
+		}
+	}()
+	pairing, err := cfg.OpenControl(cfg.DBPath, cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !lockTransferred {
+			_ = pairing.Close()
+		}
+	}()
+	storeOptions := cfg.StoreOptions
+	listener, err := daemonshell.ListenPrivileged(cfg.ListenAddr)
+	if err != nil {
+		return nil, err
+	}
+	// A Tailscale-bound daemon also serves the identical API on 127.0.0.1 at the
+	// same port, so a same-host client always has a path a host VPN cannot drop
+	// (#1449; devlog 2026-09-20-1257-same-host-loopback-listener.md). A loopback
+	// primary needs no twin. A twin bind failure is fatal: the daemon must never
+	// run reachable only over the filterable Tailscale address.
+	var loopbackTwin net.Listener
+	success := false
+	defer func() {
+		if !success {
+			_ = listener.Close()
+			if loopbackTwin != nil {
+				_ = loopbackTwin.Close()
+			}
+		}
+	}()
+	loopbackTwin, err = daemonshell.ListenLoopbackTwin(
+		listener,
+		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
+			return net.ListenTCP(network, resolved)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	// The pairing surface's process-fixed facts (plan §5.14): the connection
+	// mode the bound listener implies and the host's name as a display label.
+	// Both are read once here; a host that cannot name itself must not pair
+	// devices under an empty name, so that failure is fatal at startup.
+	connectionMode, err := daemonshell.ConnectionModeOf(listener.Addr())
+	if err != nil {
+		return nil, err
+	}
+	hostName, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("read host name for pairing facts: %w", err)
+	}
+	if hostName == "" {
+		return nil, errors.New("read host name for pairing facts: empty host name")
+	}
+	ctx, cancel := context.WithCancel(parent)
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
+
+	pairingKey := make([]byte, 32)
+	if _, err := rand.Read(pairingKey); err != nil {
+		return nil, fmt.Errorf("generate pairing key: %w", err)
+	}
+
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		return nil, fmt.Errorf("open attachment store: %w", err)
+	}
+	localBackupFiles, err := store.NewDefaultLocalBackupFiles(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
+		blobs, storeOptions.ApprovedRecipes,
+		engine.BackupPayloadExtractors())
+	if err != nil {
+		return nil, err
+	}
+	storeOptions.BackupHealthSource = backupHealth
+	st, topicKey, err := topicstore.Open(parent, cfg.DBPath, storeOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !success {
+			if cfg.beforeStoreClose != nil {
+				cfg.beforeStoreClose()
+			}
+			_ = st.Close()
+		}
+	}()
+	// The budget's checks wait for the store, because a budget recorded there
+	// wins over the declared one.
+	bound, err := cfg.startupLaunchBound(parent, st, cfg.ManualProjects)
+	if err != nil {
+		return nil, err
+	}
+	logLaunchBound(cfg.Logger, bound)
+	var startupSessionCloser daemoncompose.SessionCloser
+	defer func() {
+		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
+	}()
+	if cfg.SeedFixture != "" {
+		if err := daemoncompose.SeedStartupFixture(parent, st, cfg.SeedFixture, cfg.DBPath, cfg.Logger); err != nil {
+			return nil, err
+		}
+	}
+	localBackups, err := daemoncompose.MaintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
+	if err != nil {
+		return nil, err
+	}
+	// The fake driver's state directory is only claimed in fake mode: the
+	// production composition must not require walking-skeleton state on a
+	// fresh operator machine.
+	var driver *fake.StageDriver
+	if cfg.FakeDriverEnabled {
+		driver, err = fake.NewStageDriverAt(cfg.FakeDriverDir)
+		if err != nil {
+			return nil, fmt.Errorf("open fake stage driver: %w", err)
+		}
+	}
+	var (
+		workflow              *engine.Engine
+		claudeWiring          *daemoncompose.ClaudeComposition
+		imageUpkeep           *engine.ImageUpkeep
+		scenarioWiring        *daemoncompose.ScenarioComposition
+		doctorConvergenceLock sync.Mutex
+		doctorAvailable       atomic.Bool
+		late                  = &daemoncompose.StartupBindings{}
+		claudeStartup         = cfg.claudeStartup()
+	)
+	usageRefreshAge, usage, claudeUsageCaptures := newUsageCollection(st, cfg)
+	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
+		cfg.ManualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
+	if cfg.FakeDriverEnabled {
+		workflow, err = daemoncompose.ComposeFakeWorkflow(
+			st, attention, cfg.WrapFakeDriver(driver), lock, bound, cfg.Logger)
+		if err != nil {
+			return nil, err
+		}
+		// Published before the seed, so an attention option the seed's
+		// writes reach reads this engine, not nil.
+		late.Workflow = workflow
+		if cfg.SeedWalkingSkeleton {
+			if err := daemoncompose.SeedWalkingSkeleton(parent, workflow); err != nil {
+				return nil, err
+			}
+		}
+	} else if cfg.Claude != nil {
+		var claude *daemoncompose.ClaudeWorkflow
+		claude, err = daemoncompose.ComposeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, claudeStartup, cfg.ManualProjects,
+			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late)
+		if err != nil {
+			return nil, err
+		}
+		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
+	} else if cfg.Scenario != nil {
+		var parts daemoncompose.ScenarioParts
+		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
+		}
+		scenarioWiring, err = daemoncompose.ComposeScenario(ctx, parts)
+		if err != nil {
+			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
+		}
+		late.ScenarioWiring, late.AgentCatalog = scenarioWiring, &scenarioWiring.Catalog
+		// The forge serves only once its loop starts; a start that fails
+		// before then still owns the listener.
+		defer func() {
+			if err != nil {
+				_ = scenarioWiring.Listener.Close()
+			}
+		}()
+		workflow = scenarioWiring.Workflow
+		late.Workflow = workflow
+	}
+	// The live credential-integrity probe exists only in Claude mode, where
+	// the daemon has a runtime and a pinned exporter image to observe with.
+	var integrityProbe credentialIntegrityProbe
+	if cfg.Claude != nil {
+		integrityProbe = newCredentialIntegrityProbe(st,
+			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin)),
+			cfg.now, cfg.Logger)
+	}
+	// The startup pass reports recorded marks only, so starting the daemon
+	// starts no observer container. Scheduled passes run the live probe.
+	if err := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, nil)(parent); err != nil {
+		return nil, fmt.Errorf("initial doctor pass: %w", err)
+	}
+	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, integrityProbe)
+	if workflow != nil {
+		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
+			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
+		}
+	}
+	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.now); err != nil {
+		return nil, fmt.Errorf("report execution configuration: %w", err)
+	}
+	if err := concludeInvocationStallNotices(parent, st); err != nil {
+		return nil, fmt.Errorf("conclude stale invocation stall notices: %w", err)
+	}
+
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	if loopbackTwin != nil {
+		logger.Info("serving same-host loopback twin listener",
+			"primary", listener.Addr().String(), "loopback", loopbackTwin.Addr().String())
+	}
+	// A completion recorded before migration 0066 gains its
+	// work_unit_completed milestone once (#1134); a store already carrying
+	// the milestones is a no-op.
+	if err := reconcileWorkUnitCompletionMilestones(parent, st, logger); err != nil {
+		return nil, err
+	}
+	server := &http.Server{
+		Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
+			Status: "ok", Version: cfg.Version, StartedAt: startedAt,
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	// Shutdown releases open revision long-polls, so draining the server
+	// stays inside ServerShutdownBudget instead of waiting out their bound.
+	server.RegisterOnShutdown(attention.Shutdown)
+	var sessions daemonshell.SessionCloser
+	if claudeWiring != nil {
+		sessions = claudeWiring.Closer
+	}
+	d := &startedDaemon{
+		Shell: daemonshell.New(daemonshell.Parts{
+			Lock: lock, Store: st, Listener: listener, LoopbackTwin: loopbackTwin, Server: server,
+			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.now,
+		}),
+		store: st, attention: attention, workflow: workflow, driver: driver, usage: usage,
+	}
+	pairing.Configure(d.Readiness().APIURL, attention.MintPairingCode)
+	pairing.RegisterRoutes(controlRouteInputs{
+		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
+		IntegrityProbe: integrityProbe, Usage: d.usage, Attention: attention,
+		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
+			if workflow == nil {
+				return commit()
+			}
+			return workflow.CommitTaskWorkflowClosure(ctx, id, commit)
+		},
+	})
+	var fakeSched *scheduler.Scheduler
+	var loops *daemoncompose.ClaudeLoops
+	if cfg.FakeDriverEnabled {
+		// Construct every loop before making restart-gated recovery available.
+		// None is running yet, so no operator can resume into a partial start.
+		fakeSched, err = daemoncompose.NewFakeScheduler(st)
+		if err != nil {
+			return nil, err
+		}
+		fakeSched.SetLogger(cfg.Logger)
+	} else if claudeWiring != nil {
+		loops, err = daemoncompose.ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
+			runDoctor, d.usage.CollectAll, late)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if workflow != nil {
+		if err := d.EnableDurableStopRecovery(parent); err != nil {
+			return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
+		}
+	}
+
+	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, localBackups, logger)
+	defer func() {
+		if !success {
+			if stop != nil {
+				stop()
+			}
+			d.AbortStart()
+		}
+	}()
+	if cfg.afterBackgroundStart != nil {
+		if err := cfg.afterBackgroundStart(); err != nil {
+			return nil, err
+		}
+	}
+	if fakeSched != nil {
+		d.Go(func() {
+			d.ComponentExited(parent, ctx, daemonshell.ComponentScheduler,
+				fakeSched.Run(ctx, cfg.SchedulerInterval))
+		})
+	}
+	if loops != nil {
+		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
+	}
+	if scenarioWiring != nil {
+		d.startScenarioLoops(parent, ctx, cfg, scenarioWiring, workflow)
+	}
+	pairingCode, _, err := attention.MintPairingCode(parent)
+	if err != nil {
+		return nil, fmt.Errorf("mint startup pairing code: %w", err)
+	}
+	if err := d.PublishReadiness(cfg.StateDir, pairingCode, cfg.ReadinessEnvironment); err != nil {
+		return nil, err
+	}
+	if pairing != nil {
+		if err := pairing.Publish(); err != nil {
+			return nil, err
+		}
+	}
+	success = true
+	lockTransferred = true
+	return d, nil
+}
+
+func closeStartupSessions(success bool, closer daemoncompose.SessionCloser, stop func()) error {
+	if success || closer == nil {
+		return nil
+	}
+	// Restore signal disposition before this teardown, for the reason serve
+	// documents: startupSessionCloser can block on credential-bearing lease
+	// cleanup, and until stop runs signal.NotifyContext keeps absorbing the
+	// operator's SIGTERM, leaving SIGKILL as the only way out. stop is nil
+	// only in tests that never register signal handling.
+	if stop != nil {
+		stop()
+	}
+	return closer.Close(context.Background())
+}
+
+// claudeStartup is the configuration the Claude composition reads.
+func (cfg startOptions) claudeStartup() daemoncompose.ClaudeStartupConfig {
+	return daemoncompose.ClaudeStartupConfig{
+		Claude: cfg.Claude, Logger: cfg.Logger, StateDir: cfg.StateDir, DBPath: cfg.DBPath,
+		ApprovedRecipes: cfg.ApprovedRecipes, IntakeInitiators: cfg.IntakeInitiators,
+		DoctorInterval: cfg.DoctorInterval, Now: cfg.now,
+	}
+}
+
+// reportAttentionDelivery logs one thing the notification sender could not
+// do. A send that failed is a warning with its item, device, and attempt; the
+// provider being down is ordinary, and the sender retries on its own
+// schedule. The error names a status code or a failure class and never the
+// device's topic (signet.ChannelTransportError).
+func reportAttentionDelivery(logger *slog.Logger, err error) {
+	if logger == nil {
+		return
+	}
+	var failure *signet.DeliveryFailure
+	if errors.As(err, &failure) {
+		logger.Warn("phone notification not sent",
+			"item_id", failure.ItemID, "device_id", failure.DeviceID,
+			"attempt", failure.Attempt, "last_attempt", failure.Final, "error", failure.Err)
+		return
+	}
+	logger.Warn("phone notification pass failed", "error", err)
+}
+
 // newUsageCollection builds the usage coordinator, the age at which a
 // reading goes stale, and the Claude capture sink, which stays a nil
 // interface without the Claude collector. Collection starts in
 // startServing.
 func newUsageCollection(
-	st *store.Store, cfg config,
+	st *store.Store, cfg startOptions,
 ) (time.Duration, *usagecollect.Coordinator, engine.ClaudeUsageSink) {
 	// A reading is stale once one scheduled doctor pass, the collection's
 	// cadence, has been missed. Collection and the bootstrap's stale_at share
@@ -79,7 +568,7 @@ func newUsageCollection(
 // exists. Options that answer from a later composition read it through
 // late at call time.
 func newAttentionService(
-	st *store.Store, blobs *signet.BlobStore, cfg config, pairingKey []byte, hostName string,
+	st *store.Store, blobs *signet.BlobStore, cfg startOptions, pairingKey []byte, hostName string,
 	connectionMode domain.ConnectionMode, topicKey []byte,
 	manualInitiator func(domain.ProjectID) (engine.ManualInitiator, bool),
 	usage *usagecollect.Coordinator, usageRefreshAge time.Duration, doctorAvailable *atomic.Bool,
@@ -200,7 +689,7 @@ func newAttentionService(
 // is the Claude composition's own constant.
 func newScenarioParts(
 	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg config,
+	lock *daemonlock.Lock, bound ward.LaunchBound, cfg startOptions,
 ) (daemoncompose.ScenarioParts, error) {
 	materializer, err := daemoncompose.ProductionMaterializer(blobs)
 	if err != nil {
@@ -224,7 +713,7 @@ func newScenarioParts(
 // credential-integrity marks only and starting the daemon starts no
 // observer container; scheduled passes take the live probe.
 func newDoctorPass(
-	cfg config, st *store.Store, attention *signet.Service, claudeWiring *daemoncompose.ClaudeComposition,
+	cfg startOptions, st *store.Store, attention *signet.Service, claudeWiring *daemoncompose.ClaudeComposition,
 	doctorConvergenceLock *sync.Mutex, probe credentialIntegrityProbe,
 ) func(context.Context) error {
 	return func(runCtx context.Context) error {
@@ -246,7 +735,7 @@ func newDoctorPass(
 			Mode:                      cfg.Claude.OperatingMode,
 			Now:                       cfg.now,
 			CredentialIntegrityProbe:  replay,
-			IdentityLabel:             credentialIdentityLabel,
+			IdentityLabel:             cfg.IdentityLabel,
 		}).Run(runCtx)
 		return err
 	}
@@ -254,11 +743,11 @@ func newDoctorPass(
 
 // startServing starts usage collection, model discovery, the API and
 // control servers, the workflow loops, local backups, and attention
-// deliveries. It cannot fail: run() registers the cleanup that stops
+// deliveries. It cannot fail: start registers the cleanup that stops
 // these goroutines as soon as it returns, and a component that exits
 // later reports through ComponentExited.
-func (d *daemon) startServing(
-	parent, ctx context.Context, cfg config, st *store.Store, attention *signet.Service,
+func (d *startedDaemon) startServing(
+	parent, ctx context.Context, cfg startOptions, st *store.Store, attention *signet.Service,
 	workflow *engine.Engine, claudeWiring *daemoncompose.ClaudeComposition, localBackups *store.LocalBackupProducer,
 	logger *slog.Logger,
 ) {
@@ -311,11 +800,11 @@ func (d *daemon) startServing(
 	}
 }
 
-// startClaudeLoops starts the Claude loops after run() has registered the
+// startClaudeLoops starts the Claude loops after start has registered the
 // cleanup that stops them, and marks the doctor available before its
 // scheduler starts.
-func (d *daemon) startClaudeLoops(
-	parent, ctx context.Context, cfg config, claudeWiring *daemoncompose.ClaudeComposition, workflow *engine.Engine,
+func (d *startedDaemon) startClaudeLoops(
+	parent, ctx context.Context, cfg startOptions, claudeWiring *daemoncompose.ClaudeComposition, workflow *engine.Engine,
 	imageUpkeep *engine.ImageUpkeep, loops *daemoncompose.ClaudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
 ) {
 	claudeSched := loops.ClaudeSched
@@ -371,8 +860,8 @@ func (d *daemon) startClaudeLoops(
 
 // startScenarioLoops starts the scenario's forge, publication lane, and
 // scheduler, at the point where the Claude loops would start.
-func (d *daemon) startScenarioLoops(
-	parent, ctx context.Context, cfg config, scenarioWiring *daemoncompose.ScenarioComposition, workflow *engine.Engine,
+func (d *startedDaemon) startScenarioLoops(
+	parent, ctx context.Context, cfg startOptions, scenarioWiring *daemoncompose.ScenarioComposition, workflow *engine.Engine,
 ) {
 	// The scenario's own loops: the in-process forge publication talks
 	// to, the publication lane, and the durable scheduler's publication

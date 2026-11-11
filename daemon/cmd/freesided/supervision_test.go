@@ -97,16 +97,18 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 		StateDir:          stateDir,
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: 10 * time.Millisecond,
-		now: func() time.Time {
-			clockMu.Lock()
-			defer clockMu.Unlock()
-			return clockNow
-		},
-		afterBackgroundStart: func() error {
-			clockMu.Lock()
-			clockNow = clockNow.Add(11 * time.Minute)
-			clockMu.Unlock()
-			return nil
+		seams: startSeams{
+			now: func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return clockNow
+			},
+			afterBackgroundStart: func() error {
+				clockMu.Lock()
+				clockNow = clockNow.Add(11 * time.Minute)
+				clockMu.Unlock()
+				return nil
+			},
 		},
 	})
 	if err != nil {

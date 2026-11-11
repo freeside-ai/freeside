@@ -78,24 +78,26 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: time.Millisecond,
 		Logger:            logger,
-		afterBackgroundStart: func() error {
-			deadline := time.NewTimer(30 * time.Second)
-			defer deadline.Stop()
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-			for {
-				if strings.Contains(logs.String(), "reconcile loop started") {
-					return startupErr
+		seams: startSeams{
+			afterBackgroundStart: func() error {
+				deadline := time.NewTimer(30 * time.Second)
+				defer deadline.Stop()
+				ticker := time.NewTicker(time.Millisecond)
+				defer ticker.Stop()
+				for {
+					if strings.Contains(logs.String(), "reconcile loop started") {
+						return startupErr
+					}
+					select {
+					case <-deadline.C:
+						return errors.New("reconcile loop did not start")
+					case <-ticker.C:
+					}
 				}
-				select {
-				case <-deadline.C:
-					return errors.New("reconcile loop did not start")
-				case <-ticker.C:
-				}
-			}
-		},
-		beforeStoreClose: func() {
-			logsAtStoreClose = logs.String()
+			},
+			beforeStoreClose: func() {
+				logsAtStoreClose = logs.String()
+			},
 		},
 	}
 
@@ -153,12 +155,12 @@ func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 	}, 1)
 	go func() {
 		h, err := run(t.Context(), nil, config{
-			Environment:          environmentEphemeral,
-			DBPath:               filepath.Join(root, "freeside.db"),
-			FakeDriverDir:        filepath.Join(root, "driver"),
-			ListenAddr:           "127.0.0.1:0",
-			ReconcileInterval:    time.Millisecond,
-			afterBackgroundStart: func() error { return startupErr },
+			Environment:       environmentEphemeral,
+			DBPath:            filepath.Join(root, "freeside.db"),
+			FakeDriverDir:     filepath.Join(root, "driver"),
+			ListenAddr:        "127.0.0.1:0",
+			ReconcileInterval: time.Millisecond,
+			seams:             startSeams{afterBackgroundStart: func() error { return startupErr }},
 		})
 		result <- struct {
 			h   *daemon

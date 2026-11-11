@@ -71,23 +71,23 @@ func TestResolveMemoryBudgetFailsWhenProdCannotReadPhysicalMemory(t *testing.T) 
 // with no overhead, and an unbudgeted one reads no runtime at all.
 func TestLaunchBoundOfAComposition(t *testing.T) {
 	t.Parallel()
-	bound, err := config{MemoryBudgetMiB: 4096}.launchBound(t.Context())
+	bound, err := startOptions{MemoryBudgetMiB: 4096}.launchBound(t.Context())
 	if err != nil || bound != (ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: ward.RuntimeNone}) {
 		t.Fatalf("scenario bound = %+v, %v", bound, err)
 	}
 	// A budget no default writer launch fits could run no writer at all.
-	if _, err := (config{MemoryBudgetMiB: 1024}).launchBound(t.Context()); !errors.Is(err, domain.ErrLaunchNeverFits) {
+	if _, err := (startOptions{MemoryBudgetMiB: 1024}).launchBound(t.Context()); !errors.Is(err, domain.ErrLaunchNeverFits) {
 		t.Fatalf("1024 MiB bound = %v, want a never-fits refusal", err)
 	}
 	// An unbudgeted composition that starts no VM still names its runtime,
 	// so a budget recorded while it runs reserves with no overhead.
-	bound, err = config{}.launchBound(t.Context())
+	bound, err = startOptions{}.launchBound(t.Context())
 	if err != nil || bound != (ward.LaunchBound{RuntimeVersion: ward.RuntimeNone}) {
 		t.Fatalf("unbudgeted scenario bound = %+v, %v", bound, err)
 	}
 	// A Claude composition with no budget never runs the container binary,
 	// which does not exist here.
-	bound, err = config{Claude: &daemoncompose.ClaudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
+	bound, err = startOptions{Claude: &daemoncompose.ClaudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
 	if err != nil || bound.Budgeted() {
 		t.Fatalf("unbudgeted bound = %+v, %v", bound, err)
 	}
@@ -113,7 +113,7 @@ func TestPolicySizeBoundSkipsAnUnrecordedRuntime(t *testing.T) {
 func TestStartupLaunchBoundPrefersTheRecordedBudget(t *testing.T) {
 	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	declared := config{MemoryBudgetMiB: 4096}
+	declared := startOptions{MemoryBudgetMiB: 4096}
 	bound, err := declared.startupLaunchBound(t.Context(), st, nil)
 	if err != nil || bound.BudgetMiB != 4096 {
 		t.Fatalf("bound with none recorded = %+v, %v; want the declared 4096", bound, err)
@@ -138,7 +138,7 @@ func TestStartupLaunchBoundPrefersTheRecordedBudget(t *testing.T) {
 		t.Fatalf("start log = %q, want both budgets", line)
 	}
 	// An unbudgeted composition takes a recorded budget too.
-	if bound, err := (config{}).startupLaunchBound(t.Context(), st, nil); err != nil || bound.BudgetMiB != 8192 {
+	if bound, err := (startOptions{}).startupLaunchBound(t.Context(), st, nil); err != nil || bound.BudgetMiB != 8192 {
 		t.Fatalf("unbudgeted start bound = %+v, %v; want the recorded 8192", bound, err)
 	}
 
@@ -154,7 +154,7 @@ func TestStartupLaunchBoundPrefersTheRecordedBudget(t *testing.T) {
 	projects := map[domain.ProjectID]engine.ManualInitiator{
 		"project-big": {PolicyKeys: []domain.PolicyKey{{Key: ward.PolicyWriterMemoryMiB, Value: "8192"}}},
 	}
-	_, err = (config{MemoryBudgetMiB: 16384}).startupLaunchBound(t.Context(), st, projects)
+	_, err = (startOptions{MemoryBudgetMiB: 16384}).startupLaunchBound(t.Context(), st, projects)
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "freesided set-memory-budget") ||
 		!strings.Contains(err.Error(), "project-big") {
 		t.Fatalf("recorded 4096 MiB start with an 8192 MiB project = %v", err)

@@ -67,13 +67,13 @@ const (
 	// raisedMarker labels every value the command invents, so a raised item
 	// names itself as synthetic wherever that value is shown.
 	raisedMarker = "synthetic-raise-item"
-
-	// raisedHeldWorkItemPrefix must not parse as the engine's own held-work
-	// notice ID (work-held-<run>-<unix>): the engine resolves every open
-	// notice of that form whose run has no matching hold, and a raised item
-	// has none. The daemon resolves these itself at its next start.
-	raisedHeldWorkItemPrefix = "raised-work-held-"
 )
+
+// raisedHeldWorkItemPrefix must not parse as the engine's own held-work
+// notice ID (work-held-<run>-<unix>): the engine resolves every open notice
+// of that form whose run has no matching hold, and a raised item has none.
+// The daemon resolves these itself at its next start.
+const raisedHeldWorkItemPrefix = "raised-work-held-"
 
 var errRaiseItemNoDaemon = errors.New(
 	"raise-item needs a running daemon started with -environment " + string(environmentEphemeral) +

@@ -44,10 +44,12 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		DBPath:      filepath.Join(root, "freeside.db"), StateDir: stateDir,
 		ListenAddr: "127.0.0.1:0", Logger: logger,
 		FakeDriverEnabled: true, SeedWalkingSkeleton: true,
-		now: func() time.Time {
-			clockMu.Lock()
-			defer clockMu.Unlock()
-			return now
+		seams: startSeams{
+			now: func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return now
+			},
 		},
 	})
 	if err != nil {
