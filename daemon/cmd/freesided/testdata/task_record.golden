@@ -451,10 +451,10 @@
     {
       "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
       "conclusion": {
-        "outcome": "pending",
+        "outcome": "handed_off",
         "hold_reason": null,
         "terminal_status": null,
-        "final": false
+        "final": true
       },
       "hold": null,
       "invocations": [],

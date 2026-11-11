@@ -334,6 +334,7 @@ enum TaskProgressFixtures {
         case "Approval required":
             result.runs = [fixture.runs[1]]
             result.runs[0].run.lifecycle = .active
+            result.runs[0].run.outcome = .pending
             result.runs[0].run.superseded_by = nil
             result.task.current_position?.value1.run_id = result.runs[0].run.id
             result.task.current_position?.value1.stage = "specification"

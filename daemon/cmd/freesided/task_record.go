@@ -624,16 +624,27 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 	// recorded terminal indefinitely, so the record shows the authenticated
 	// terminal status the app's run views show (#785's authority rule). A
 	// terminal fact that fails authentication blanks this section only.
+	settleWith := observation
 	if overlaid, err := signet.ReadRunObservation(ctx, tx, run); err != nil {
 		fail(taskRecordRunObservation, err)
 	} else {
 		out.Hold = overlaid.Hold
 		out.Invocations = append([]domain.InvocationObservation{}, overlaid.Invocations...)
+		settleWith = overlaid
 	}
 	// The conclusion reads the store's observation, so a status failure
 	// above leaves it standing. It matches `freesided follow`'s, which
 	// reads the overlaid one: the overlay changes no milestone.
 	conclusion, err := authenticatedTaskRecordConclusion(ctx, tx, run, observation)
+	if err != nil {
+		fail(taskRecordRunConclusion, err)
+		return out
+	}
+	// Settlement reads invocation statuses, so it takes the overlaid ones
+	// follow settles with (#3043). The overlay only turns a lagging row
+	// terminal, so when it failed the stored rows can keep an abandoned run
+	// pending longer but never settle one early.
+	conclusion, err = signet.SettledRunConclusion(ctx, tx, run, settleWith, conclusion)
 	if err != nil {
 		fail(taskRecordRunConclusion, err)
 		return out

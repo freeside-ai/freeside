@@ -87,11 +87,12 @@ public enum RunFixtures {
     }
 
     /// An approved specification handed to implementation in the same attempt.
+    /// The daemon concludes it `handed_off` (#3043).
     /// Kept separate from the default mock scenarios for focused presentation tests.
     public static func handedOffSpecificationRun() -> Components.Schemas.RunSnapshot {
         snapshot(
             id: "run-freeside-specification-bound", projectID: "freeside", stage: "specification",
-            attempt: 1, milestone: .run_submitted, outcome: .pending,
+            attempt: 1, milestone: .run_submitted, outcome: .handed_off,
             lifecycle: .finished, campaignID: "campaign-freeside-ready", campaignAttempt: 1,
             supersededBy: readyRunID, taskName: readyTaskName)
     }
