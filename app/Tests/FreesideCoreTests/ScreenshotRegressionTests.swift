@@ -3152,6 +3152,23 @@
                             .screenshotContent(RunFixtures.refreshedHistoryTimeline())
                     )))
 
+            // A specification run's invocations named by why each ran
+            // (#3044), with a repeated research continuation.
+            let specificationHistory = RunFixtures.specificationHistoryRun()
+            let specificationWidths: [(String, CGFloat?)] = [
+                ("run-timeline-specification", nil),
+                ("run-timeline-specification-390", 390),
+            ]
+            for (name, width) in specificationWidths {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width,
+                        view: AnyView(
+                            RunTimelineView(coordinator: coordinator, snapshot: specificationHistory)
+                                .screenshotContent(RunFixtures.specificationHistoryTimeline())
+                        )))
+            }
+
             // What each round reviewed (#1552): the implementation's findings
             // sent to remediation, the adjudication on the rail just before
             // the remediator's milestones, and the re-review of its head.
