@@ -2,12 +2,6 @@ import Foundation
 import FreesideAPI
 import SwiftUI
 
-#if os(macOS)
-    import AppKit
-#elseif os(iOS)
-    import UIKit
-#endif
-
 /// The one list both clients draw: Needs You, then Working and Finished
 /// behind their disclosures, under a tools row. The list is a projection of
 /// what the client already holds (`UnifiedList`). An unsent New Task draft
@@ -349,7 +343,7 @@ struct UnifiedListView: View {
     }
 
     /// Working and Finished, each drawn only while it has rows; an expanded
-    /// Finished draws a page of its newest rows and a Show More
+    /// Finished draws a page of its newest rows, compact, and a Show More
     /// line while older ones remain.
     @ViewBuilder
     private func sectionLines(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
@@ -370,7 +364,7 @@ struct UnifiedListView: View {
             .unifiedListLine()
             if preferences.finishedExpanded {
                 let page = finishedPage(list)
-                listRows(Array(page.rows), ambiguousTaskIDs: ambiguousTaskIDs)
+                listRows(Array(page.rows), ambiguousTaskIDs: ambiguousTaskIDs, compact: true)
                 if page.hiddenCount > 0 {
                     ShowMoreLine(count: page.nextStep) { finishedLimit += FinishedPage.step }
                         .unifiedListLine()
@@ -383,22 +377,27 @@ struct UnifiedListView: View {
     /// the Mac, rows of the column that select on a click. A tap rather
     /// than a Button there, which would merge the row's VoiceOver elements
     /// into one label; the container says which row is selected, as a
-    /// list's cells do, and takes VoiceOver's activate.
-    private func listRows(_ rows: [UnifiedRow], ambiguousTaskIDs: Set<String>) -> some View {
+    /// list's cells do, and takes VoiceOver's activate. A compact row loads
+    /// no timeline: it draws no stage.
+    private func listRows(
+        _ rows: [UnifiedRow], ambiguousTaskIDs: Set<String>, compact: Bool = false
+    ) -> some View {
         ForEach(rows) { row in
-            let drawn = rowView(row, ambiguousTaskIDs: ambiguousTaskIDs)
+            let drawn = rowView(row, ambiguousTaskIDs: ambiguousTaskIDs, compact: compact)
             #if os(iOS)
                 loadingTimeline(
-                    of: row,
+                    of: compact ? nil : row,
                     NavigationLink(value: NavigationModel.PhoneRoute.destination(row.destination)) { drawn }
                         .tag(row.id)
                 )
-                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                .listRowInsets(
+                    EdgeInsets(top: compact ? 1 : 4, leading: 12, bottom: compact ? 1 : 4, trailing: 12)
+                )
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
             #else
                 loadingTimeline(
-                    of: row,
+                    of: compact ? nil : row,
                     drawn
                         .contentShape(Rectangle())
                         .onTapGesture { select(row) }
@@ -408,15 +407,16 @@ struct UnifiedListView: View {
                 )
                 .id(row.id)
                 .padding(.horizontal, 12 + UnifiedListView.sideMargin)
-                .padding(.vertical, 4)
+                .padding(.vertical, compact ? 1 : 4)
             #endif
         }
     }
 
-    /// Loads a task row's timeline, which its stage line reads.
-    private func loadingTimeline(of row: UnifiedRow, _ content: some View) -> some View {
-        content.task(id: timelineKey(row)) {
-            if let taskID = row.taskSnapshot?.task.id {
+    /// Loads a task row's timeline, which its stage line reads; nil loads
+    /// nothing.
+    private func loadingTimeline(of row: UnifiedRow?, _ content: some View) -> some View {
+        content.task(id: row.flatMap(timelineKey)) {
+            if let taskID = row?.taskSnapshot?.task.id {
                 await onLoadTimeline(taskID)
             }
         }
@@ -431,9 +431,33 @@ struct UnifiedListView: View {
 
     @ViewBuilder
     private func rowView(
-        _ row: UnifiedRow, ambiguousTaskIDs: Set<String>, now: Date? = nil
+        _ row: UnifiedRow, ambiguousTaskIDs: Set<String>, compact: Bool = false, now: Date? = nil
     ) -> some View {
         let isSelected = selection == row.id
+        if compact {
+            switch row.content {
+            case .item(let snapshot):
+                FinishedRowView(
+                    subject: .item(snapshot.item), isSelected: isSelected, now: now,
+                    onRevealTechnicalDetails: { onRevealTechnicalDetails(snapshot.item.id) })
+            case .task(let snapshot, _):
+                FinishedRowView(
+                    subject: .task(
+                        snapshot.task,
+                        status: TaskDisplay.finishedRow(snapshot.task, position: taskPosition(snapshot).position)
+                            .keyword,
+                        showsIdentifier: ambiguousTaskIDs.contains(snapshot.task.id)),
+                    isSelected: isSelected, now: now)
+            }
+        } else {
+            fullRowView(row, ambiguousTaskIDs: ambiguousTaskIDs, isSelected: isSelected, now: now)
+        }
+    }
+
+    @ViewBuilder
+    private func fullRowView(
+        _ row: UnifiedRow, ambiguousTaskIDs: Set<String>, isSelected: Bool, now: Date?
+    ) -> some View {
         switch row.content {
         case .item(let snapshot):
             itemRow(snapshot.item, task: nil, isSelected: isSelected, now: now)
@@ -491,9 +515,9 @@ struct UnifiedListView: View {
     ) -> some View {
         let list = list
         let names = TaskDisplay.ambiguousTaskIDs(list.rows.compactMap(\.taskSnapshot))
-        let screenshotRows = { (rows: [UnifiedRow]) in
+        let screenshotRows = { (rows: [UnifiedRow], compact: Bool) in
             ForEach(Array(rows.prefix(rowLimit))) { row in
-                rowView(row, ambiguousTaskIDs: names, now: now)
+                rowView(row, ambiguousTaskIDs: names, compact: compact, now: now)
             }
         }
         let page = FinishedPage(list.finished, limit: finishedLimit)
@@ -504,7 +528,7 @@ struct UnifiedListView: View {
                 DraftRowView(row: row)
                     .padding(.bottom, DraftRowView.gapBelow)
             }
-            screenshotRows(list.needsYou)
+            screenshotRows(list.needsYou, false)
             if sidebarHeight != nil {
                 Spacer(minLength: 0)
             }
@@ -513,7 +537,7 @@ struct UnifiedListView: View {
                     title: "Working", count: list.working.count,
                     isExpanded: .constant(preferences.workingExpanded))
                 if preferences.workingExpanded {
-                    screenshotRows(list.working)
+                    screenshotRows(list.working, false)
                 }
             }
             if !list.finished.isEmpty {
@@ -521,7 +545,7 @@ struct UnifiedListView: View {
                     title: "Finished", count: list.finished.count,
                     isExpanded: .constant(preferences.finishedExpanded))
                 if preferences.finishedExpanded {
-                    screenshotRows(Array(page.rows))
+                    screenshotRows(Array(page.rows), true)
                     if page.hiddenCount > 0 {
                         ShowMoreLine(count: page.nextStep) {}
                     }
@@ -1095,37 +1119,41 @@ struct InboxRowView: View {
         #endif
     }
 
-    @ViewBuilder
     private var contextMenu: some View {
+        AttentionItemMenu(
+            item: item, taskName: task?.task.display_names.task.text,
+            onRevealTechnicalDetails: onRevealTechnicalDetails)
+    }
+}
+
+/// An item row's context menu, the same for a full row and a compact
+/// Finished row: what it can copy, then Reveal in Identifiers.
+struct AttentionItemMenu: View {
+    let item: Components.Schemas.AttentionItem
+    var taskName: String?
+    var onRevealTechnicalDetails: () -> Void
+
+    var body: some View {
         let evidenceDigests = AttentionDisplay.uniqueEvidenceDigests(item)
-        if let task {
-            Button("Copy task name") { copy(task.task.display_names.task.text) }
+        if let taskName {
+            Button("Copy task name") { Clipboard.copy(taskName) }
         }
-        Button("Copy summary") { copy(AttentionDisplay.rowSummary(item)) }
-        Button("Copy item ID") { copy(item.id) }
+        Button("Copy summary") { Clipboard.copy(AttentionDisplay.rowSummary(item)) }
+        Button("Copy item ID") { Clipboard.copy(item.id) }
         if let subject = AttentionDisplay.copyableSubjectReference(item) {
-            Button(subject.label) { copy(subject.value) }
+            Button(subject.label) { Clipboard.copy(subject.value) }
         }
         if evidenceDigests.count == 1, let digest = evidenceDigests.first {
-            Button("Copy evidence digest") { copy(digest) }
+            Button("Copy evidence digest") { Clipboard.copy(digest) }
         } else if evidenceDigests.count > 1 {
             Menu("Copy evidence digest") {
                 ForEach(evidenceDigests, id: \.self) { digest in
-                    Button(digest) { copy(digest) }
+                    Button(digest) { Clipboard.copy(digest) }
                 }
             }
         }
         Divider()
         Button("Reveal in Identifiers") { onRevealTechnicalDetails() }
-    }
-
-    private func copy(_ value: String) {
-        #if os(macOS)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(value, forType: .string)
-        #elseif os(iOS)
-            UIPasteboard.general.string = value
-        #endif
     }
 }
 

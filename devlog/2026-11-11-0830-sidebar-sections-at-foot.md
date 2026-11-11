@@ -46,7 +46,7 @@ On iPhone the sections follow Needs You in the one scrolling list, as T3's
 phone does: a phone screen has no room to hold them above its bottom bar,
 and the single list keeps pull to refresh and the draft's swipe.
 
-## Finished Pages Its Newest Rows
+## Finished Pages Its Newest Rows, Compact
 
 An expanded Finished draws its 10 newest rows and a `Show N More` line that
 adds up to 25 more, on both clients, so years of finished work can't bury
@@ -56,5 +56,12 @@ state, because a long page is a one-off look back, not a setting. A route
 to an older finished row grows the page to hold it, so the row it opens is
 drawn and the arrow keys step on from there.
 
-Revisit when: operators page back through Finished often enough to want
-the page's depth kept per device.
+Its rows are compact, as T3's settled rows are: one dim line with the name
+and a short relative time, no card. Finished work is a log to look back
+through, so it gives up the keyword and context lines that rows still
+asking something of the operator need. The status those lines drew, such as
+`Failed`, is spoken but no longer drawn; the task page opened from the row
+still leads with it.
+
+Revisit when: operators miss a finished task's failure at a glance, or page
+back through Finished often enough to want the page's depth kept per device.
