@@ -42,7 +42,9 @@ section it links.
 4. Start the deputy on the real root, pair both clients, set up and test
    the iPhone's notifications when a gate names one, and resolve a retained
    root's health items
-   ([Start And Verify](#start-and-verify)).
+   ([Start And Verify](#start-and-verify)). When the exit contract routes,
+   set the routing policy and read it back once the deputy's self-check
+   has passed, before the submit (same section).
 5. Submit the target from the CLI ([Start And Verify](#start-and-verify)),
    or, in client-target mode, the visibility seed and then the composer's
    task ([Submit A New Task From A Client](#submit-a-new-task-from-a-client)).
@@ -166,6 +168,29 @@ or the failed checks and their remediation with execution left disabled. Once
 the daemon serves, its readiness line on stdout gives the `api_url` and a
 pairing code. Everything under `<root>/daemon` is private: the database, the
 adoption report and log, and the agent-tree patch. Do not upload it.
+
+When the exit contract routes the real task, set the routing policy now,
+from a second terminal, and read it back before the submit. The router
+reads the current revision at a task's first admission, so a task
+submitted first runs on the lineup and keeps no routing proof (#2386). On
+a fresh root this is the earliest the policy can be set: `routing set`
+refuses an enrollment the store lacks, and the deputy's start adopts the
+enrollments. On a retained root `prelaunch.json`'s `routing_policy`
+already shows what is set; setting the same orders again records nothing.
+With the deputy running, both commands go through it
+([Set The Routing Policy](../daemon/README.md#set-the-routing-policy)):
+
+```sh
+freesided routing set -db <root>/daemon/freeside.db \
+  -agent-tree <agent_tree.checkout> -agent-tree-commit <agent_tree.commit> \
+  -order <role>=<enrollment>,<enrollment> [-drain-first <pool>]
+freesided routing show -db <root>/daemon/freeside.db
+```
+
+Pass `-drain-first` only when the contract names an account; a `set`
+without it clears one. Compare `show`'s orders, and its
+`drain_first_account`, with the exit contract and record its `revision`. A mismatch, or `null`, stops the run
+before the submit.
 
 Submit the task from a second terminal. `--require-composition` binds it to
 this launch's passing manifest, `<root>/daemon/composition-manifest.json`:

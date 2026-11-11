@@ -48,6 +48,13 @@ Look for each of these before and during the run; most have bitten twice.
   `low` and the go-ahead never named it (#3024). Choose the lineup under
   docs/production-walkthrough.md, Choose The Real Run's Writers, and name
   it in the go-ahead.
+- **A routing policy set after the real submit.** The router reads the
+  policy at a task's first admission. Wave 9's real task for gh-imgup#134
+  was submitted at 19:45:53Z and the policy set at 19:54:46Z, so the task
+  ran on the lineup with no task lines, and the routing gate needed a
+  composite proof from other tasks (#2386). With a routing gate, set the
+  policy and read it back after the deputy's self-check and before the
+  real submit (SKILL.md, Run the Deputy, step 1).
 - **Credentials that expire between runs.** Check the Codex token and the
   provider identity before onboarding; preflight rejects them after the
   expensive steps.

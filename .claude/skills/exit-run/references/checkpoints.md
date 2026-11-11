@@ -27,6 +27,7 @@ exit-proof unit that no Exit bullet covers. The trigger names come from
 | Gate | Trigger | Expected on Mac | Expected on iPhone | When |
 | --- | --- | --- | --- | --- |
 | <gate as the Exit section words it> | Real: <the condition the run produces> | <the card and where it shows, or the state> | <same> | Before the merge |
+| <routing gate> | Real: the real task's first admission under routing revision <n> (<role>=<enrollment ids in order>[; drain-first <pool>]), set and read back before the real submit; the record's task lines carry `provenance.policy_revision` <n> | <what the gate says the client shows of the routed agent, or "record only"> | <same> | Policy before the real submit; lines at first admission |
 | <gate> | Synthetic: `freesided raise-item -db <db> -alert <name> [-run <run>]` (synthetic-trigger proof) | <the card and where it shows> | <same> | After the merge and the completion fact |
 | <gate> | Seeded: <the mechanism the gate names and its command> (seeded-condition proof) | <the card and where it shows, the state, or "record only"> | <same> | On its seeded pass, or the rehearsal when the seed rides it |
 | <gate> | None: <why no condition or alert reaches it; what would give it a trigger> | Not measurable | Not measurable | Recorded before launch |
