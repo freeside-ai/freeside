@@ -183,6 +183,19 @@ func TestExtractUsageCapture(t *testing.T) {
 			},
 			Events: []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed"}},
 		}},
+		// The 2.1.319 CLI under the driver with a fake setup token, against
+		// a mock that sent 5h, 7d, and 7d_oi headers, as a Fable turn's
+		// response carries them: the answer reports the Fable bucket as a
+		// one-entry model_scoped array, read as seven_day_overage_included.
+		{"claude_usage_loopback_fable_2_1_319.jsonl", &exec.ClaudeUsageCapture{
+			ObservedAt: observedAt.UTC(),
+			Windows: []exec.ClaudeUsageWindow{
+				{Window: "five_hour", UsedPercent: 23, ResetsAt: new(time.Date(2026, 11, 11, 12, 26, 40, 0, time.UTC))},
+				{Window: "seven_day", UsedPercent: 10, ResetsAt: new(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC))},
+				{Window: "seven_day_overage_included", UsedPercent: 11, ResetsAt: new(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC))},
+			},
+			Events: []exec.ClaudeRateLimitEvent{{Window: "five_hour", Status: "allowed", ResetsAt: new(time.Unix(1794400000, 0).UTC())}},
+		}},
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
@@ -268,6 +281,67 @@ func TestExtractUsageCaptureNilOnDoubt(t *testing.T) {
 			}
 			if got == nil || len(got.Windows) != 0 || len(got.Events) != 1 {
 				t.Fatalf("ExtractUsageCapture() = %#v, want the event and no window", got)
+			}
+		})
+	}
+}
+
+// TestExtractUsageCaptureModelScoped pins how the answer's model_scoped
+// array is read: the one Fable entry with a share is the Fable window; an
+// entry this reader can't name is left out and the answer's other windows
+// stay; a value that is not an array of entries, or a Fable entry with a bad
+// share or reset, is doubt.
+func TestExtractUsageCaptureModelScoped(t *testing.T) {
+	t.Parallel()
+	fable := string(usageFixture(t, "claude_usage_loopback_fable_2_1_319.jsonl"))
+	scoped := `"model_scoped":[{"display_name":"Fable","utilization":11,"resets_at":"2026-11-15T00:00:00.000Z"}]`
+	if !strings.Contains(fable, scoped) {
+		t.Fatal("fixture model_scoped moved")
+	}
+	observedAt := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	general := []string{"five_hour", "seven_day"}
+	withFable := []string{"five_hour", "seven_day", exec.ClaudeFableWindow}
+	for _, tc := range []struct {
+		name, new string
+		want      []string // nil means no capture
+	}{
+		{"one Fable entry", scoped, withFable},
+		{"display name in another case", strings.Replace(scoped, `"Fable"`, `"fable"`, 1), withFable},
+		{"versioned display name", strings.Replace(scoped, `"Fable"`, `"Fable 5.1"`, 1), withFable},
+		{"a name that only starts with Fable", strings.Replace(scoped, `"Fable"`, `"Fablesque"`, 1), general},
+		{"no entries", `"model_scoped":[]`, general},
+		{"null", `"model_scoped":null`, general},
+		{"null share", strings.Replace(scoped, `"utilization":11`, `"utilization":null`, 1), general},
+		{"another model", strings.Replace(scoped, `"Fable"`, `"Opus"`, 1), general},
+		{"two entries", strings.Replace(scoped, `}]`, `},{"display_name":"Fable 5","utilization":3,"resets_at":null}]`, 1), general},
+		{"null reset", strings.Replace(scoped, `"resets_at":"2026-11-15T00:00:00.000Z"`, `"resets_at":null`, 1), withFable},
+		{"an object", `"model_scoped":{"display_name":"Fable","utilization":11}`, nil},
+		{"entry not an object", `"model_scoped":["Fable"]`, nil},
+		{"share above 100", strings.Replace(scoped, `"utilization":11`, `"utilization":140`, 1), nil},
+		{"string share", strings.Replace(scoped, `"utilization":11`, `"utilization":"11"`, 1), nil},
+		{"unparsable reset", strings.Replace(scoped, `"2026-11-15T00:00:00.000Z"`, `"next week"`, 1), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := claude.ExtractUsageCapture([]byte(strings.Replace(fable, scoped, tc.new, 1)), observedAt)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("ExtractUsageCapture() = %#v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("ExtractUsageCapture() = nil, want a capture")
+			}
+			var windows []string
+			for _, window := range got.Windows {
+				windows = append(windows, window.Window)
+			}
+			if !reflect.DeepEqual(windows, tc.want) {
+				t.Fatalf("windows = %v, want %v", windows, tc.want)
+			}
+			if err := got.Validate(); err != nil {
+				t.Fatalf("capture is invalid: %v", err)
 			}
 		})
 	}

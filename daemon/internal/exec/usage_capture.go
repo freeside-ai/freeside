@@ -9,12 +9,15 @@ import (
 // windows after its own turn: the CLI's get_usage answer and the turn's
 // rate_limit_event records. It keeps the CLI's own window names and status
 // tokens; mapping them to the usage record's windows is the collector's job.
+// The one name it gives is the Fable bucket's: the answer reports that bucket
+// as a model_scoped entry, which the capture names ClaudeFableWindow, the
+// name the CLI's seed and events use for it.
 type ClaudeUsageCapture struct {
 	// ObservedAt is the export stamp the transcript was read under, the
 	// same instant Usage carries.
 	ObservedAt time.Time `json:"observed_at"`
-	// Windows is the get_usage answer, one entry per window the CLI named,
-	// sorted by window. Empty when the answer was absent, null, or an error.
+	// Windows is the get_usage answer, one entry per window the CLI named
+	// and the Fable bucket, sorted by window. Empty when the answer was absent, null, or an error.
 	Windows []ClaudeUsageWindow `json:"windows"`
 	// Events are the turn's rate_limit_event records, the last one for each
 	// window, sorted by window.
