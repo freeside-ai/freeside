@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v14"
+const taskRecordVersion = "freeside-task-record-v15"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -40,7 +40,30 @@ type taskRecord struct {
 	Runs          []taskRecordRun      `json:"runs"`
 	Items         []taskRecordItem     `json:"items"`
 	ItemsError    *taskRecordError     `json:"items_error"`
-	Counts        taskRecordCounts     `json:"counts"`
+	// TaskLines is every line version of the task, ordered by role and then
+	// version, so which agent each role ran on, and who chose it, reads
+	// here.
+	TaskLines      []taskRecordTaskLine `json:"task_lines"`
+	TaskLinesError *taskRecordError     `json:"task_lines_error"`
+	Counts         taskRecordCounts     `json:"counts"`
+}
+
+// taskRecordTaskLine lists a task line's fields instead of embedding
+// domain.TaskLine, whose JSON form follows its encoding. Agent is a v1
+// line's agent name and Selection a v2 line's choice; a cleared line has
+// neither.
+type taskRecordTaskLine struct {
+	ID            domain.Digest              `json:"id"`
+	Role          domain.RoleName            `json:"role"`
+	Version       int                        `json:"version"`
+	PredecessorID *domain.Digest             `json:"predecessor_id"`
+	Agent         *string                    `json:"agent"`
+	Selection     *domain.TaskLineSelection  `json:"selection"`
+	Source        domain.TaskLineSource      `json:"source"`
+	SetBy         string                     `json:"set_by"`
+	SetAt         time.Time                  `json:"set_at"`
+	Provenance    *domain.TaskLineProvenance `json:"provenance"`
+	Cleared       bool                       `json:"cleared"`
 }
 
 // taskRecordTask lists the task's fields instead of embedding domain.Task,
@@ -88,7 +111,21 @@ type taskRecordRun struct {
 	// SpecificationRetries are the operator's retries of the run's failed
 	// specification invocations, oldest first; empty for a run with none.
 	SpecificationRetries []taskRecordSpecificationRetry `json:"specification_retries"`
-	Errors               []taskRecordRunError           `json:"errors"`
+	// ReviewAdmissions are the run's routed and shadow review admissions, in
+	// admission order, so the agent, model, and effort each review ran on
+	// read here.
+	ReviewAdmissions []taskRecordReviewAdmission `json:"review_admissions"`
+	Errors           []taskRecordRunError        `json:"errors"`
+}
+
+// taskRecordReviewAdmission is one review invocation's admission. It leaves
+// out the auth identity, as taskRecordAdmission does.
+type taskRecordReviewAdmission struct {
+	InvocationID domain.InvocationID `json:"invocation_id"`
+	Role         domain.RoleName     `json:"role"`
+	LineageGroup *string             `json:"lineage_group"`
+	AdmittedAt   time.Time           `json:"admitted_at"`
+	Agent        taskRecordAgent     `json:"agent"`
 }
 
 // taskRecordSpecificationRetry is one retry: the iteration it added, the
@@ -177,13 +214,14 @@ const (
 	// taskRecordRunSpecificationRetries reads the retries after
 	// authenticating the run's specification chain.
 	taskRecordRunSpecificationRetries taskRecordRunSection = "specification_retries"
+	taskRecordRunReviewAdmissions     taskRecordRunSection = "review_admissions"
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
 	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 	taskRecordRunObservation, taskRecordRunConclusion,
 	taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
-	taskRecordRunClosure, taskRecordRunSpecificationRetries,
+	taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions,
 }
 
 func (s taskRecordRunSection) valid() bool {
@@ -191,7 +229,7 @@ func (s taskRecordRunSection) valid() bool {
 	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 		taskRecordRunObservation, taskRecordRunConclusion,
 		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
-		taskRecordRunClosure, taskRecordRunSpecificationRetries:
+		taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions:
 		return true
 	default:
 		return false
@@ -212,8 +250,7 @@ type taskRecordConclusion struct {
 }
 
 // taskRecordAdmission is the governing identity of one recorded admission.
-// It leaves out the workspace, the auth identity, and the binding's
-// enrollment and store-manifest fields.
+// It leaves out the workspace and the auth identity.
 type taskRecordAdmission struct {
 	ID                 domain.Digest         `json:"id"`
 	InvocationID       domain.InvocationID   `json:"invocation_id"`
@@ -232,12 +269,26 @@ type taskRecordAdmission struct {
 	Agent              *taskRecordAgent      `json:"agent"`
 }
 
+// taskRecordAgent is an admission's agent binding: which enrollment, model,
+// and effort it ran on, and what chose them. An empty value renders null. It
+// leaves out the binding's store manifest, egress, pricing, and cost owner.
 type taskRecordAgent struct {
-	AgentDigest     domain.Digest `json:"agent_digest"`
-	LaunchDigest    domain.Digest `json:"launch_digest"`
-	TreatmentDigest domain.Digest `json:"treatment_digest"`
-	LineupRevision  domain.Digest `json:"lineup_revision"`
-	RouteModelID    *string       `json:"route_model_id"`
+	AgentDigest          domain.Digest                `json:"agent_digest"`
+	LaunchDigest         domain.Digest                `json:"launch_digest"`
+	TreatmentDigest      domain.Digest                `json:"treatment_digest"`
+	LineupRevision       domain.Digest                `json:"lineup_revision"`
+	RouteModelID         *string                      `json:"route_model_id"`
+	EnrollmentID         *domain.ClientEnrollmentID   `json:"enrollment_id"`
+	EnrollmentGeneration int                          `json:"enrollment_generation"`
+	RequestedEffort      *domain.EffortLevel          `json:"requested_effort"`
+	NativeEffort         *string                      `json:"native_effort"`
+	SelectionSource      *domain.AgentSelectionSource `json:"selection_source"`
+	SelectionRecordID    *domain.Digest               `json:"selection_record_id"`
+	SelectionDigest      *domain.Digest               `json:"selection_digest"`
+	SelectionModelID     *string                      `json:"selection_model_id"`
+	SelectionEffort      *string                      `json:"selection_effort"`
+	HarnessClient        *domain.HarnessClientKind    `json:"harness_client"`
+	LineageGroup         *string                      `json:"lineage_group"`
 }
 
 // taskRecordItem leaves out the item's evidence and claims, and its reason:
@@ -264,8 +315,14 @@ type taskRecordItem struct {
 	InterpretationFailure *domain.InterpretationFailureFacts `json:"interpretation_failure"`
 	PublishBlock          *domain.PublishBlockFacts          `json:"publish_block"`
 	BlockedOn             *domain.BlockedWait                `json:"blocked_on"`
-	Commands              []taskRecordCommand                `json:"commands"`
-	Deliveries            []taskRecordDelivery               `json:"deliveries"`
+	// ConversationID is the item's conversation; its messages read through
+	// `freesided inspect conversations`, never here.
+	ConversationID *domain.ConversationID `json:"conversation_id"`
+	// AlternateAgents are the agents the card offers to retry its failed
+	// role on, empty when it offers none.
+	AlternateAgents []domain.AlternateAgentOffer `json:"alternate_agents"`
+	Commands        []taskRecordCommand          `json:"commands"`
+	Deliveries      []taskRecordDelivery         `json:"deliveries"`
 }
 
 // taskRecordCommand leaves out the command's message and attachments, which
@@ -365,7 +422,7 @@ func newTaskRecordError(err error) *taskRecordError {
 // hasErrorKind reports whether any section of the record, or any item or
 // run in it, was left unread by an error of the given kind.
 func (r taskRecord) hasErrorKind(kind taskRecordErrorKind) bool {
-	for _, e := range []*taskRecordError{r.TaskError, r.TimelineError, r.ItemsError} {
+	for _, e := range []*taskRecordError{r.TaskError, r.TimelineError, r.ItemsError, r.TaskLinesError} {
 		if e != nil && e.Kind == kind {
 			return true
 		}
@@ -425,6 +482,11 @@ func readTaskRecord(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asO
 			record.Counts.RunsHeld++
 		}
 		record.Runs = append(record.Runs, run)
+	}
+	if lines, err := tx.TaskLines(ctx, id); err != nil {
+		record.TaskLinesError = newTaskRecordError(err)
+	} else {
+		record.TaskLines = projectTaskRecordTaskLines(lines)
 	}
 	var unattributed int
 	if record.Items, unattributed, err = readTaskRecordItems(ctx, tx, id, record.Runs); err != nil {
@@ -528,6 +590,18 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 			out.SpecificationRetries = append(out.SpecificationRetries, taskRecordSpecificationRetry{
 				InvocationID: retry.InvocationID, RetriedInvocationID: retry.RetriedInvocationID,
 				Reason: retry.Reason,
+			})
+		}
+	}
+	if admissions, err := tx.ListRunReviewAdmissions(ctx, runID); err != nil {
+		fail(taskRecordRunReviewAdmissions, err)
+	} else {
+		out.ReviewAdmissions = make([]taskRecordReviewAdmission, 0, len(admissions))
+		for _, admission := range admissions {
+			out.ReviewAdmissions = append(out.ReviewAdmissions, taskRecordReviewAdmission{
+				InvocationID: admission.InvocationID, Role: admission.Role,
+				LineageGroup: optionalString(admission.LineageGroup), AdmittedAt: admission.AdmittedAt,
+				Agent: projectTaskRecordAgent(admission.AgentBinding),
 			})
 		}
 	}
@@ -742,15 +816,49 @@ func projectTaskRecordAdmission(admission domain.ExecutionAdmission) taskRecordA
 		TrustProfileDigest: admission.TrustProfileDigest,
 	}
 	if binding := admission.AgentBinding; binding != nil {
-		out.Agent = &taskRecordAgent{
-			AgentDigest: binding.AgentDigest, LaunchDigest: binding.LaunchDigest,
-			TreatmentDigest: binding.TreatmentDigest, LineupRevision: binding.LineupRevision,
-		}
-		if binding.RouteModelID != "" {
-			out.Agent.RouteModelID = &binding.RouteModelID
-		}
+		agent := projectTaskRecordAgent(*binding)
+		out.Agent = &agent
 	}
 	return out
+}
+
+func projectTaskRecordAgent(binding domain.AdmissionAgentBinding) taskRecordAgent {
+	return taskRecordAgent{
+		AgentDigest: binding.AgentDigest, LaunchDigest: binding.LaunchDigest,
+		TreatmentDigest: binding.TreatmentDigest, LineupRevision: binding.LineupRevision,
+		RouteModelID:         optionalString(binding.RouteModelID),
+		EnrollmentID:         optionalString(binding.EnrollmentID),
+		EnrollmentGeneration: binding.EnrollmentGeneration,
+		RequestedEffort:      optionalString(binding.RequestedEffort),
+		NativeEffort:         optionalString(binding.NativeEffort),
+		SelectionSource:      optionalString(binding.SelectionSource),
+		SelectionRecordID:    optionalString(binding.SelectionRecordID),
+		SelectionDigest:      optionalString(binding.SelectionDigest),
+		SelectionModelID:     optionalString(binding.SelectionModelID),
+		SelectionEffort:      optionalString(binding.SelectionEffort),
+		HarnessClient:        optionalString(binding.HarnessClient),
+		LineageGroup:         optionalString(binding.LineageGroup),
+	}
+}
+
+func projectTaskRecordTaskLines(lines []domain.TaskLine) []taskRecordTaskLine {
+	out := make([]taskRecordTaskLine, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, taskRecordTaskLine{
+			ID: line.ID, Role: line.Role, Version: line.Version, PredecessorID: line.PredecessorID,
+			Agent: optionalString(line.Agent), Selection: line.Selection, Source: line.Source,
+			SetBy: line.SetBy, SetAt: line.SetAt, Provenance: line.Provenance, Cleared: line.Cleared,
+		})
+	}
+	return out
+}
+
+// optionalString renders an empty value as null.
+func optionalString[T ~string](value T) *T {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // readTaskRecordItems returns every attention item that belongs to the task,
@@ -810,9 +918,11 @@ func readTaskRecordItems(
 			CreatedAt: item.CreatedAt, DecidedAt: item.DecidedAt, Conclusion: item.Conclusion,
 			HealthDiagnostic: item.HealthDiagnostic, ExecutionFailure: item.ExecutionFailure,
 			InterpretationFailure: item.InterpretationFailure, PublishBlock: item.PublishBlock,
-			BlockedOn:  item.BlockedOn,
-			Commands:   make([]taskRecordCommand, 0, len(commands)),
-			Deliveries: append([]taskRecordDelivery{}, deliveriesByItem[item.ID]...),
+			BlockedOn:       item.BlockedOn,
+			ConversationID:  item.ConversationID,
+			AlternateAgents: append([]domain.AlternateAgentOffer{}, item.AlternateAgents...),
+			Commands:        make([]taskRecordCommand, 0, len(commands)),
+			Deliveries:      append([]taskRecordDelivery{}, deliveriesByItem[item.ID]...),
 		}
 		for _, command := range commands {
 			out.Commands = append(out.Commands, taskRecordCommand{

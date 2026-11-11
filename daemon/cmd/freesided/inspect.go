@@ -51,11 +51,16 @@ type inspectTask struct {
 // read is registered here, or the index does not know it exists.
 func inspectReads() []inspectRead {
 	index, record, health, proposals := inspectIndexVersion, taskRecordVersion, systemHealthVersion, proposalCardsVersion
+	conversations := taskConversationsVersion
 	return []inspectRead{
 		{Name: "inspect", Command: "freesided inspect -db PATH", IDs: []string{}, Version: &index},
 		{
 			Name: "inspect task", Command: "freesided inspect task -db PATH -task TASK_ID",
 			IDs: []string{"task_id"}, Version: &record,
+		},
+		{
+			Name: "inspect conversations", Command: "freesided inspect conversations -db PATH -task TASK_ID",
+			IDs: []string{"task_id"}, Version: &conversations,
 		},
 		{Name: "inspect health", Command: "freesided inspect health -db PATH", IDs: []string{}, Version: &health},
 		{Name: "inspect proposals", Command: "freesided inspect proposals -db PATH", IDs: []string{}, Version: &proposals},
@@ -84,17 +89,21 @@ func runInspectMain(args []string) {
 }
 
 // runInspectCommand prints the index, with the `task` verb one task's
-// record, with the `health` verb the root's open system-health items, or with
+// record, with the `conversations` verb its items' conversations, with the
+// `health` verb the root's open system-health items, or with
 // the `proposals` verb its open proposal cards, as one JSON line. All are
 // reads: they write nothing and open an unheld database without migrating it.
 func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	verb := "freesided inspect"
 	wantTask := len(args) > 0 && args[0] == "task"
+	wantConversations := len(args) > 0 && args[0] == "conversations"
 	wantHealth := len(args) > 0 && args[0] == "health"
 	wantProposals := len(args) > 0 && args[0] == "proposals"
 	switch {
 	case wantTask:
 		verb, args = "freesided inspect task", args[1:]
+	case wantConversations:
+		verb, args = "freesided inspect conversations", args[1:]
 	case wantHealth:
 		verb, args = "freesided inspect health", args[1:]
 	case wantProposals:
@@ -107,7 +116,7 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest, used only when no daemon holds the database (repeatable)")
 	taskID := new(string)
-	if wantTask {
+	if wantTask || wantConversations {
 		taskID = flags.String("task", "", "task id (required)")
 	}
 	if err := flags.Parse(args); err != nil {
@@ -118,7 +127,7 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 		return fmt.Errorf("%w: unexpected positional arguments: %v", observe.ErrUsage, flags.Args())
 	case *dbPath == "":
 		return fmt.Errorf("%w: -db is required", observe.ErrUsage)
-	case wantTask && *taskID == "":
+	case (wantTask || wantConversations) && *taskID == "":
 		return fmt.Errorf("%w: -task is required", observe.ErrUsage)
 	}
 	route, read := "/inspect", func(ctx context.Context, st *store.Store) (any, error) {
@@ -127,6 +136,11 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 	if wantTask {
 		route, read = "/tasks/"+url.PathEscape(*taskID)+"/record", func(ctx context.Context, st *store.Store) (any, error) {
 			return readTaskRecordFrom(ctx, st, domain.TaskID(*taskID))
+		}
+	}
+	if wantConversations {
+		route, read = "/tasks/"+url.PathEscape(*taskID)+"/conversations", func(ctx context.Context, st *store.Store) (any, error) {
+			return readTaskConversationsFrom(ctx, st, domain.TaskID(*taskID))
 		}
 	}
 	if wantHealth {
@@ -172,7 +186,8 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 }
 
 // errorKindReporter is a read that reports the errors that left part of it
-// unread: the task record, the system-health read, and the proposal cards.
+// unread: the task record, the conversations read, the system-health read,
+// and the proposal cards.
 type errorKindReporter interface {
 	hasErrorKind(kind taskRecordErrorKind) bool
 }

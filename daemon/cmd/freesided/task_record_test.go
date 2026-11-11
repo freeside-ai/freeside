@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -133,10 +134,13 @@ func TestTaskRecordGolden(t *testing.T) {
 		if err := tx.PutAttentionItem(ctx, notice); err != nil {
 			return err
 		}
-		return tx.PutAttentionDelivery(ctx, domain.AttentionDelivery{
+		if err := tx.PutAttentionDelivery(ctx, domain.AttentionDelivery{
 			ItemID: "execution-failure-" + fixtureActiveRunID, DeviceID: "device-golden", Channel: "ntfy",
 			Attempt: 1, SubmittedAt: taskRecordAsOf, Status: domain.DeliverySubmitted,
-		})
+		}); err != nil {
+			return err
+		}
+		return addRecordV15Facts(ctx, tx, id)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +158,11 @@ func TestTaskRecordGolden(t *testing.T) {
 	}
 	got = bytes.ReplaceAll(got, []byte(id), []byte("task-GOLDEN"))
 	got = bytes.ReplaceAll(got, created, []byte(`"2026-09-01T00:00:00Z"`))
+	// A task line's id addresses its task id, so it moves with it.
+	for _, line := range record.TaskLines {
+		got = bytes.ReplaceAll(got, []byte(line.ID),
+			[]byte(fmt.Sprintf("sha256:task-line-GOLDEN-%s-%d", line.Role, line.Version)))
+	}
 	golden.Assert(t, "task_record", append(got, '\n'))
 }
 
@@ -325,6 +334,58 @@ func TestTaskRecordKeepsRunFactsPastAFailedRead(t *testing.T) {
 	}
 	if record.Counts.RunsHeld != before.Counts.RunsHeld {
 		t.Fatalf("runs_held = %d, want %d", record.Counts.RunsHeld, before.Counts.RunsHeld)
+	}
+}
+
+// TestTaskRecordReportsUnreadableReviewAdmissions breaks the review
+// admission row: its run names the section, and every other run fact stays.
+func TestTaskRecordReportsUnreadableReviewAdmissions(t *testing.T) {
+	t.Parallel()
+	st, dbPath := openSeededStore(t)
+	id := taskOfRun(t, st, fixtureActiveRunID)
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		return addRecordV15Facts(t.Context(), tx, id)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	execStoreSQL(t, dbPath, `UPDATE review_admissions SET body = '{}'`)
+	record := readRecord(t, st, id)
+	for _, run := range record.Runs {
+		if run.RunID != fixtureActiveRunID {
+			if len(run.Errors) != 0 {
+				t.Errorf("run %s errors = %+v", run.RunID, run.Errors)
+			}
+			continue
+		}
+		if !slices.Equal(runErrorSections(run), []taskRecordRunSection{taskRecordRunReviewAdmissions}) ||
+			run.ReviewAdmissions != nil || run.Conclusion == nil || run.Admissions == nil {
+			t.Fatalf("run errors = %+v, review admissions = %v", run.Errors, run.ReviewAdmissions)
+		}
+	}
+}
+
+// TestTaskRecordReportsUnreadableTaskLines fails the lines read: the lines
+// are null with their error, and the rest of the record reads.
+func TestTaskRecordReportsUnreadableTaskLines(t *testing.T) {
+	t.Parallel()
+	st, dbPath := openSeededStore(t)
+	id := taskOfRun(t, st, fixtureActiveRunID)
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, err := tx.AppendTaskLine(t.Context(), domain.TaskLineInput{
+			TaskID: id, Role: domain.RoleImplementer, Agent: "implementer-golden",
+			Source: domain.TaskLineSourceCLISubmit, SetBy: "submission-golden",
+		}, taskRecordAsOf)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if lines := readRecord(t, st, id).TaskLines; len(lines) != 1 {
+		t.Fatalf("task lines = %+v, want one", lines)
+	}
+	execStoreSQL(t, dbPath, `DROP TABLE task_lines`)
+	record := readRecord(t, st, id)
+	if record.TaskLines != nil || record.TaskLinesError == nil || record.Items == nil || record.Task == nil {
+		t.Fatalf("task lines = %+v, error = %+v", record.TaskLines, record.TaskLinesError)
 	}
 }
 

@@ -173,8 +173,14 @@ Look for each of these before and during the run; most have bitten twice.
   unfiltered `tail -50` of that log (#1559).
 - **Reading the store after the daemon stops.** `freesided inspect` reads a
   stopped root itself, under the daemon lock (daemon/README.md, Read A
-  Task's Record), so use it first. For a query it can't answer, a
-  `?mode=ro` open fails once the daemon is gone. Copy `freeside.db` with
+  Task's Record), so use it first. Since #3064 it covers what the Wave 9
+  run read with SQL: a card's offers (`items[].alternate_agents`), an
+  admission's enrollment, model, and effort (`runs[].admissions[].agent`,
+  and `runs[].review_admissions` for a review), the task's lines
+  (`task_lines`), and conversation text (`freesided inspect
+  conversations`). Query the database only for a fact no read prints, and
+  name that fact in the run record as a gap. A `?mode=ro` open fails once
+  the daemon is gone. Copy `freeside.db` with
   its `-wal` and `-shm` files, if present (never the neighboring key
   files), to scratch and open the copy normally. Copying the database alone, or opening it with
   `?immutable=1`, skips commits still in the WAL after an unclean exit.
@@ -193,9 +199,15 @@ Look for each of these before and during the run; most have bitten twice.
   the run's base before every resume. Run 117 lost its publication to a
   merge (gh-imgup#128) made the day before its resume.
 - **Watch the items, not the log.** A `review_dispute` card after a re-review
-  leaves no daemon log line. A watch armed on new log lines can miss it;
-  read the task's attention items with `freesided inspect task` after every
-  wake, comparing `as_of_revision`, so a card never sits unattended.
+  leaves no daemon log line, so a watch armed on new log lines can miss it.
+  Wait on the run with `freesided follow -until card=review_dispute
+  -timeout <duration> -approved-recipe <digest>` (daemon/README.md,
+  `freesided follow`; without the recipe, an item carrying verification
+  evidence fails the read), which exits
+  0 when the card opens and 1 at the timeout, instead of a watcher loop
+  over `inspect`. It sees only the run's own items: read the closure card
+  in `closure_cards` and system-health items in `freesided inspect health`,
+  comparing `as_of_revision`, so no card sits unattended.
 - **A retained root holds admission on old health items.** Open blocking
   system-health notices from earlier runs (a durable stop, for one) hold the
   next run at admission with `blocking_system_health` until an operator

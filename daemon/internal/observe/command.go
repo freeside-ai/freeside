@@ -36,8 +36,8 @@ type Source interface {
 type Opener func(context.Context, string, ...domain.Digest) (Source, error)
 
 // Run parses the follow verb's flags, opens the selected observation source, and follows
-// the selected run to a final outcome, an interrupt, or (with -once) a single
-// snapshot. Observing a run whose own outcome is blocked or failed succeeds:
+// the selected run to a final outcome, an interrupt, (with -once) a single
+// snapshot, or (with -until) a checkpoint or a timeout. Observing a run whose own outcome is blocked or failed succeeds:
 // the command reports what the daemon saw, and the printed outcome line
 // carries the run's verdict.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Opener) (err error) {
@@ -51,9 +51,13 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Open
 	once := flags.Bool("once", false, "print one snapshot instead of following")
 	snapshot := flags.Bool("snapshot", false, "print one machine-readable supervision snapshot")
 	approvedRecipe := flags.String("approved-recipe", "", "recipe digest approved for snapshot evidence")
+	untilText := flags.String("until", "",
+		"wait until COND holds: card=TYPE, stage-started=STAGE, stage-finished=STAGE, or park-ended (requires -timeout)")
+	timeout := flags.Duration("timeout", 0, "how long -until waits before exiting 1")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", ErrUsage, err)
 	}
+	waiting := *untilText != ""
 	switch {
 	case flags.NArg() != 0:
 		return fmt.Errorf("%w: unexpected positional arguments: %v", ErrUsage, flags.Args())
@@ -67,8 +71,22 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Open
 		return fmt.Errorf("%w: -freshness-window must be positive, got %s", ErrUsage, *window)
 	case *once && *snapshot:
 		return fmt.Errorf("%w: -once and -snapshot are mutually exclusive", ErrUsage)
-	case *approvedRecipe != "" && !*snapshot:
-		return fmt.Errorf("%w: -approved-recipe requires -snapshot", ErrUsage)
+	case waiting && (*once || *snapshot):
+		return fmt.Errorf("%w: -until cannot be combined with -once or -snapshot", ErrUsage)
+	case waiting && *timeout <= 0:
+		return fmt.Errorf("%w: -until requires a positive -timeout, got %s", ErrUsage, *timeout)
+	case !waiting && *timeout != 0:
+		return fmt.Errorf("%w: -timeout requires -until", ErrUsage)
+	case *approvedRecipe != "" && !*snapshot && !waiting:
+		return fmt.Errorf("%w: -approved-recipe requires -snapshot or -until", ErrUsage)
+	}
+	var until Until
+	if waiting {
+		parsed, err := ParseUntil(*untilText)
+		if err != nil {
+			return err
+		}
+		until = parsed
 	}
 	// Source is the only database access this package has: no write,
 	// checkpoint, restore, or backup-file capability reaches the follow path.
@@ -87,6 +105,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Open
 			return err
 		}
 		return writeSnapshot(stdout, current)
+	}
+	if waiting {
+		return Wait(ctx, db, stdout, WaitConfig{
+			RunID: domain.RunID(*runID), Until: until, Timeout: *timeout,
+			Interval: *interval, Window: *window,
+		})
 	}
 	return Follow(ctx, db, stdout, Config{
 		RunID: domain.RunID(*runID), Interval: *interval, Window: *window, Once: *once,
@@ -147,7 +171,8 @@ func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
 
 // ExitCode maps a Run result onto the command's exit contract: 0 observed
 // (including an interrupted follow, and including a run whose own outcome is
-// blocked or failed), 1 could not observe, 2 invocation mistake.
+// blocked or failed) or an -until condition met, 1 could not observe or an
+// -until wait that timed out or was interrupted, 2 invocation mistake.
 func ExitCode(err error) int {
 	switch {
 	case err == nil:
