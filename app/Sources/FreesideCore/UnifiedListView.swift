@@ -79,6 +79,9 @@ struct UnifiedListView: View {
     var onRefresh: @MainActor () async -> Void = {}
     var onRevealTechnicalDetails: (String) -> Void = { _ in }
     @State private var projectFilterPresented = false
+    /// How many Finished rows an expanded Finished draws (`FinishedPage`);
+    /// collapsing it starts the page over.
+    @State private var finishedLimit = FinishedPage.initialLimit
     #if os(macOS)
         /// The column's keyboard focus, which a click on a row takes, so the
         /// arrow keys, j/k, and Return act on the list.
@@ -127,8 +130,15 @@ struct UnifiedListView: View {
             if let launchProjectID { store.applyLaunchProjectFilter(launchProjectID) }
         }
         .onAppear { revealSelection() }
-        .onChange(of: navigation.path) { revealSelection() }
+        .onChange(of: navigation.path) {
+            revealSelection()
+            // Keep a page grown to a routed row once the selection moves on.
+            finishedLimit = max(finishedLimit, finishedPage(list).rows.count)
+        }
         .onChange(of: store.projectID) { repairSelection() }
+        .onChange(of: preferences.finishedExpanded) { _, expanded in
+            if !expanded { finishedLimit = FinishedPage.initialLimit }
+        }
         .onChange(of: store.projects) {
             if store.freshness == .fresh {
                 store.finishLaunchProjectRepair()
@@ -158,6 +168,12 @@ struct UnifiedListView: View {
     private func repairSelection(previouslyOpen: Set<String> = []) {
         guard store.loadState == .loaded else { return }
         navigation.repairSelection(in: list, previouslyOpen: previouslyOpen)
+    }
+
+    /// The Finished rows an expanded Finished draws: the page, grown to hold
+    /// the selected row.
+    private func finishedPage(_ list: UnifiedList) -> FinishedPage {
+        FinishedPage(list.finished, limit: finishedLimit, holding: selection)
     }
 
     /// A route to a row the filter hides drops the filter, so the operator
@@ -313,7 +329,8 @@ struct UnifiedListView: View {
         /// walk: Needs You, then each expanded section's rows.
         private func drawnRows(_ list: UnifiedList) -> [UnifiedRow] {
             list.needsYou + (preferences.workingExpanded ? list.working : [])
-                + (preferences.finishedExpanded ? list.finished : [])
+                + (preferences.finishedExpanded
+                    ? Array(finishedPage(list).rows) : [])
         }
 
         private func select(_ row: UnifiedRow) {
@@ -331,7 +348,9 @@ struct UnifiedListView: View {
         listRows(list.needsYou, ambiguousTaskIDs: ambiguousTaskIDs)
     }
 
-    /// Working and Finished, each drawn only while it has rows.
+    /// Working and Finished, each drawn only while it has rows; an expanded
+    /// Finished draws a page of its newest rows and a Show More
+    /// line while older ones remain.
     @ViewBuilder
     private func sectionLines(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
         @Bindable var preferences = preferences
@@ -350,7 +369,12 @@ struct UnifiedListView: View {
             )
             .unifiedListLine()
             if preferences.finishedExpanded {
-                listRows(list.finished, ambiguousTaskIDs: ambiguousTaskIDs)
+                let page = finishedPage(list)
+                listRows(Array(page.rows), ambiguousTaskIDs: ambiguousTaskIDs)
+                if page.hiddenCount > 0 {
+                    ShowMoreLine(count: page.nextStep) { finishedLimit += FinishedPage.step }
+                        .unifiedListLine()
+                }
             }
         }
     }
@@ -461,7 +485,10 @@ struct UnifiedListView: View {
     /// cannot draw off-screen: the sidebar as the operator sees it, each
     /// section capped at `rowLimit` rows. A `sidebarHeight` frames the Mac
     /// sidebar at that height, with Working and Finished at its foot.
-    func screenshotContent(now: Date, rowLimit: Int = 4, sidebarHeight: CGFloat? = nil) -> some View {
+    func screenshotContent(
+        now: Date, rowLimit: Int = 4, sidebarHeight: CGFloat? = nil,
+        finishedLimit: Int = FinishedPage.initialLimit
+    ) -> some View {
         let list = list
         let names = TaskDisplay.ambiguousTaskIDs(list.rows.compactMap(\.taskSnapshot))
         let screenshotRows = { (rows: [UnifiedRow]) in
@@ -469,6 +496,7 @@ struct UnifiedListView: View {
                 rowView(row, ambiguousTaskIDs: names, now: now)
             }
         }
+        let page = FinishedPage(list.finished, limit: finishedLimit)
         return VStack(alignment: .leading, spacing: 8) {
             tools(list)
                 .padding(.horizontal, -16)
@@ -493,13 +521,36 @@ struct UnifiedListView: View {
                     title: "Finished", count: list.finished.count,
                     isExpanded: .constant(preferences.finishedExpanded))
                 if preferences.finishedExpanded {
-                    screenshotRows(list.finished)
+                    screenshotRows(Array(page.rows))
+                    if page.hiddenCount > 0 {
+                        ShowMoreLine(count: page.nextStep) {}
+                    }
                 }
             }
         }
         .padding()
         .frame(height: sidebarHeight, alignment: .top)
         .background(Color.sidebarGround)
+    }
+}
+
+/// The line under an expanded Finished's page that draws its next older
+/// rows (`FinishedPage`), in the dim mono of the section counts.
+struct ShowMoreLine: View {
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("Show \(count) More")
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .freesideFocusRing(cornerRadius: 4)
+        .accessibilityLabel("Show \(count) more finished")
     }
 }
 

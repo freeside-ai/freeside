@@ -20,10 +20,10 @@ state.
 ## One Column on the Mac, Held at the Foot
 
 The owner's rule: Needs You always pushes the other sections down, even
-below the fold, and neither Needs You nor Working is ever capped. So the
-Mac draws one scrolling column, Needs You, a gap, then the sections, at
-least the sidebar's height: while everything fits the gap holds the
-sections at the foot, and past that it is gone.
+below the fold, and neither Needs You nor Working is ever capped; only
+Finished is. So the Mac draws one scrolling column, Needs You, a gap, then
+the sections, at least the sidebar's height: while everything fits the gap
+holds the sections at the foot, and past that it is gone.
 
 Rejected, in order:
 
@@ -46,4 +46,15 @@ On iPhone the sections follow Needs You in the one scrolling list, as T3's
 phone does: a phone screen has no room to hold them above its bottom bar,
 and the single list keeps pull to refresh and the draft's swipe.
 
-Revisit when: an operator needs the sections in view over a long Needs You.
+## Finished Pages Its Newest Rows
+
+An expanded Finished draws its 10 newest rows and a `Show N More` line that
+adds up to 25 more, on both clients, so years of finished work can't bury
+the sections above it. The page lives in the view and starts over when
+Finished collapses; it isn't a per-device preference like the disclosure
+state, because a long page is a one-off look back, not a setting. A route
+to an older finished row grows the page to hold it, so the row it opens is
+drawn and the arrow keys step on from there.
+
+Revisit when: operators page back through Finished often enough to want
+the page's depth kept per device.

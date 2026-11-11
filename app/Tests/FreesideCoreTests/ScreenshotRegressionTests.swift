@@ -659,6 +659,20 @@
             filtered.selectProjectFilter("freeside")
             try surfaces.append(
                 Surface(name: "unified-list-project-filter", width: 320, view: list(filtered, expanded: true)))
+            // Finished opened on a short page in the Mac sidebar, its Show
+            // More line under the rows.
+            let clear = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            clear.replaceAll(with: [])
+            let finishedOnly = try screenshotListPreferences()
+            finishedOnly.finishedExpanded = true
+            surfaces.append(
+                Surface(
+                    name: "unified-list-finished-page", width: 320,
+                    view: AnyView(
+                        UnifiedListView(
+                            store: clear, tasks: tasks, runs: runs,
+                            navigation: screenshotNavigation(selecting: nil), preferences: finishedOnly
+                        ).screenshotContent(now: screenshotNow, sidebarHeight: 640, finishedLimit: 2))))
             return surfaces
         }
 
