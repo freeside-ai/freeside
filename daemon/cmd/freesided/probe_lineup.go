@@ -248,16 +248,19 @@ func failedLineupCalls(record lineupProbeRecord) []string {
 	return failed
 }
 
-// lineupCalls lists the distinct launches the settings name: the writers on
-// the agent image, the reviewer on the review image, and, when judgments
-// are on, every judgment role on the pinned host binary. Roles that launch
-// the same surface, model, and effort share one call.
+// lineupCalls lists the distinct launches the settings name: the writers,
+// including the escalated specifier when the settings set one, on the agent
+// image, the reviewer on the review image, and, when judgments are on, every
+// judgment role on the pinned host binary. Roles that launch the same
+// surface, model, and effort share one call.
 func lineupCalls(settings *loadedDeputySettings) ([]lineupCall, error) {
 	var calls []lineupCall
-	add := func(role domain.RoleName, call lineupCall) error {
+	// addAs names the settings field in a translation error, so an escalated
+	// specifier's bad effort isn't blamed on writers.specifier.
+	addAs := func(field string, role domain.RoleName, call lineupCall) error {
 		translation, err := domain.TranslateEffort(call.Harness, call.RequestedEffort)
 		if err != nil {
-			return fmt.Errorf("%s effort: %w", role, err)
+			return fmt.Errorf("%s effort: %w", field, err)
 		}
 		call.NativeEffort = translation.Native
 		for i := range calls {
@@ -273,12 +276,24 @@ func lineupCalls(settings *loadedDeputySettings) ([]lineupCall, error) {
 		calls = append(calls, call)
 		return nil
 	}
-	for _, writer := range settings.writerSelections() {
-		if err := add(writer.role, lineupCall{
+	add := func(role domain.RoleName, call lineupCall) error { return addAs(string(role), role, call) }
+	writerCall := func(selection deputyWriterSelection) lineupCall {
+		return lineupCall{
 			Surface: lineupSurfaceAgentImage, Harness: domain.HarnessClientClaudeCode, Image: settings.Images.Agent,
-			Model:           domain.ClaudeCodeLaunchModel(writer.selection.Model),
-			RequestedEffort: writer.selection.Effort, PinnedBuild: agentbaseline.ClaudeCodeHarnessBuild,
-		}); err != nil {
+			Model:           domain.ClaudeCodeLaunchModel(selection.Model),
+			RequestedEffort: selection.Effort, PinnedBuild: agentbaseline.ClaudeCodeHarnessBuild,
+		}
+	}
+	for _, writer := range settings.writerSelections() {
+		if err := add(writer.role, writerCall(writer.selection)); err != nil {
+			return nil, err
+		}
+	}
+	// The escalated specifier launches as the specifier role; settings
+	// validation refuses a pair equal to writers.specifier, so its call is
+	// told apart from the specifier's by model and effort.
+	if escalated := settings.Writers.SpecifierEscalated; escalated != nil {
+		if err := addAs("specifier_escalated", domain.RoleSpecifier, writerCall(*escalated)); err != nil {
 			return nil, err
 		}
 	}

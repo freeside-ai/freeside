@@ -3947,9 +3947,13 @@ freesided probe-lineup -root <state-root> [-rig-token-file <state-root>/daemon/r
 minimal call per distinct launch: one turn on a fixed one-line prompt that
 asks for a one-word answer, with Claude's tools off and Codex read-only:
 
-- **Writers** (specifier, implementer, remediator) run Claude Code on
+- **Writers** (specifier, implementer, remediator, and the escalated
+  specifier when `writers.specifier_escalated` is set) run Claude Code on
   `images.agent`, with the setup token read once from
-  `agent_tree.auth_volume` through `images.exporter`.
+  `agent_tree.auth_volume` through `images.exporter`. The escalated
+  specifier's call records the role `specifier`, like the plain
+  specifier's; its model and effort tell the two apart, so check them
+  before editing `writers.specifier` for a failed call.
 - **The reviewer** runs its harness on `images.review`, with the credential
   derived from `review.auth_snapshot` as review launch derives it. A Codex
   access token that expires within ten minutes is refused rather than
