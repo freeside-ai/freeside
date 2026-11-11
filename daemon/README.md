@@ -5080,6 +5080,26 @@ publication-author sites return their
 fail-safe (empty prose and "no close") and nothing blocks. The prompt file must
 be non-empty and at most 32 KiB.
 
+**Re-adopt the prompt after an upgrade that changes it.** A release can ship a
+new `prompts/publication-author.md`; #3022 did, telling the author to leave
+verification and review out of the body. Until the publication author's line
+names the new file's digest, the role is unbound and every body falls back to
+the unauthored one. Run `freesided auth adopt` again with the original
+adoption's flags and the new prompt file, copy the publication author's line
+from the printed patch into `policy/lineup`, commit, and pass that commit to
+preflight, as in steps 2 to 4 of the upgrade for judgment lines that name no
+model ([Select Agents Through The Lineup](#select-agents-through-the-lineup)).
+
+A body the author writes is published under the recipe its record froze. New
+client records freeze `freeside.client-publication/v3` and new intake records
+`freeside.intake-publication/v2`, which publish the authored prose as written,
+with no evidence list, "Produced by" line, or artifact digest. Records frozen
+under `freeside.client-publication/v2` or `freeside.intake-publication/v1` keep
+those. Every record gets the publisher's current Verification section: a
+bullet per recipe command Freeside ran at the head, the independent review's
+outcome with each declined or deferred finding and its recorded reason, and a
+closing line that labels the rest of the description as its author's account.
+
 The adapter pins and privately copies the native CLI, supplies allowlisted
 fields through stdin, and launches with safe mode, no tools or MCP, no saved
 session, and an empty temporary home/configuration directory. It does not give
