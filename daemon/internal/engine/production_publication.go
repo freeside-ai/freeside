@@ -142,6 +142,12 @@ type ProductionPublicationConfig struct {
 	// verification reservation is released only on its proof. Required
 	// whenever NewBoundRoom is set.
 	ProveVerificationAbsent func(context.Context, domain.Run, domain.InvocationID) error
+	// ProveVerificationContainersAbsent is ProveVerificationAbsent without
+	// the joined-command condition. Only the operator-confirmed release
+	// (Engine.ReleaseVerificationMemory with commandGone) calls it; every
+	// automatic release keeps the strict proof. Required whenever
+	// NewBoundRoom is set.
+	ProveVerificationContainersAbsent func(context.Context, domain.Run, domain.InvocationID) error
 	// RebuildProjectImage lets the lane rebuild the project image for a
 	// candidate whose dependency change stays within policy (plan §5.7). Nil
 	// leaves every such candidate refused as rebuild_not_configured.
@@ -293,7 +299,15 @@ type productionPublicationWorkflow struct {
 	newRoom                 func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
 	newBoundRoom            func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
 	proveVerificationAbsent func(context.Context, domain.Run, domain.InvocationID) error
-	rebuild                 *ProjectImageRebuild
+	// proveVerificationContainersAbsent is the operator-confirmed release's
+	// proof (ProductionPublicationConfig.ProveVerificationContainersAbsent).
+	proveVerificationContainersAbsent func(context.Context, domain.Run, domain.InvocationID) error
+	// verificationReproved and verificationHeldAlerts are the end-of-task
+	// proof's process state (verification_memory_held.go), read and written
+	// under reconcileMu.
+	verificationReproved   map[domain.InvocationID]bool
+	verificationHeldAlerts map[domain.InvocationID]bool
+	rebuild                *ProjectImageRebuild
 	// hostVerificationRoom admits a verification job onto the host executor
 	// and builds its room (Engine.admitHostVerificationRoom). engine.New sets
 	// it; nil admits nothing.
@@ -393,9 +407,9 @@ func newProductionPublicationWorkflow(
 		cfg.ShadowReviewDefaultRate != 0 || cfg.ShadowReviewFailure != nil {
 		return nil, errors.New("partial shadow review configuration")
 	}
-	if cfg.NewBoundRoom != nil && cfg.ProveVerificationAbsent == nil {
+	if cfg.NewBoundRoom != nil && (cfg.ProveVerificationAbsent == nil || cfg.ProveVerificationContainersAbsent == nil) {
 		// A bound room's containers outlive its pass, so only the
-		// cross-pass proof may release the reservation.
+		// cross-pass proofs may release the reservation.
 		return nil, errors.New("bound verification rooms need an absence proof")
 	}
 	if strings.TrimSpace(cfg.WorkDir) == "" {
@@ -442,14 +456,15 @@ func newProductionPublicationWorkflow(
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		operatorRecipes: mapsClone(cfg.ApprovedRecipes), repositoryID: cfg.RepositoryID,
 		newRoom: cfg.NewRoom, reviewSource: cfg.ReviewSource,
-		reviewAdmitter:           cfg.ReviewAdmission,
-		newBoundRoom:             cfg.NewBoundRoom,
-		proveVerificationAbsent:  cfg.ProveVerificationAbsent,
-		rebuild:                  cfg.RebuildProjectImage,
-		imageUpkeepPending:       cfg.ImageUpkeepPending,
-		remediationPromptPackage: cfg.RemediationPromptPackageDigest,
-		shadowReviewSource:       cfg.ShadowReviewSource,
-		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
+		reviewAdmitter:                    cfg.ReviewAdmission,
+		newBoundRoom:                      cfg.NewBoundRoom,
+		proveVerificationAbsent:           cfg.ProveVerificationAbsent,
+		proveVerificationContainersAbsent: cfg.ProveVerificationContainersAbsent,
+		rebuild:                           cfg.RebuildProjectImage,
+		imageUpkeepPending:                cfg.ImageUpkeepPending,
+		remediationPromptPackage:          cfg.RemediationPromptPackageDigest,
+		shadowReviewSource:                cfg.ShadowReviewSource,
+		reviewRecovery:                    cfg.ReviewRecovery, reviewRecoveryPending: true,
 		reviewConfigurationDigest:       cfg.ReviewConfigurationDigest,
 		shadowReviewConfigurationDigest: cfg.ShadowReviewConfigurationDigest,
 		shadowReviewDefaultRate:         cfg.ShadowReviewDefaultRate,
@@ -549,55 +564,23 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	if err != nil {
 		joined = errors.Join(joined, fmt.Errorf("reconcile returned operator feedback: %w", err))
 	}
-	var pending []store.QueueEntry
-	var releasedWaits, concludedWaits []string
-	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		pending, err = tx.ListPendingOutbox(ctx, KindProductionPublicationRequested)
-		if err != nil {
-			return err
-		}
-		reevaluations, err := tx.ListPendingOutbox(ctx, signet.PublicationReevaluationRequestedKind)
-		if err != nil {
-			return err
-		}
-		pending = append(pending, reevaluations...)
-		continuations, err := tx.ListPendingOutbox(ctx, domain.PublicationContinuationRequestedKind)
-		if err != nil {
-			return err
-		}
-		pending = append(pending, continuations...)
-		// A published task whose human-gate closure decision has landed
-		// re-enters beside the pending rows (publication_closure_wait.go).
-		released, concluded, err := releasedClosureWaitTasks(ctx, tx, pending)
-		if err != nil {
-			return err
-		}
-		for _, entry := range released {
-			releasedWaits = append(releasedWaits, entry.IdempotencyKey)
-		}
-		concludedWaits = concluded
-		pending = append(pending, released...)
-		return nil
-	}); err != nil {
+	pending, releasedWaits, concludedWaits, err := w.readPendingTasks(ctx)
+	if err != nil {
 		return result, errors.Join(joined, err)
 	}
 	if err := w.retireClosureWaits(ctx, concludedWaits); err != nil {
 		joined = errors.Join(joined, fmt.Errorf("retire concluded closure waits: %w", err))
 	}
 	w.pruneHeldTaskRetries(pending)
+	// The end-of-task proof after the loop treats a verification reservation
+	// as ended only when no pending task this pass read belongs to its run,
+	// and none at all when a pending task could not be read.
+	pendingRuns := make(map[domain.RunID]bool, len(pending))
+	pendingUnread := false
 	for _, entry := range pending {
-		var task productionPublicationTask
-		var err error
-		switch entry.Kind {
-		case domain.PublicationContinuationRequestedKind:
-			task, err = w.reconstructPublicationContinuationTask(ctx, entry)
-		case signet.PublicationReevaluationRequestedKind:
-			task, err = w.reconstructProductionReevaluationTask(ctx, entry)
-		default:
-			task, err = decodeProductionPublicationTask(entry)
-		}
+		task, err := w.decodePendingTask(ctx, entry)
 		if err != nil {
+			pendingUnread = true
 			// A reevaluation intent is returned authority, not an engine-owned
 			// task row. The authoritative issue contract requires a mismatch to
 			// fail closed without turning the untrusted coordinates into a store
@@ -633,6 +616,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			))
 			continue
 		}
+		pendingRuns[task.RunID] = true
 		if err := w.requireWorkflowOpen(ctx, task.RunID); err != nil {
 			if workflowAdvancementFenced(err) {
 				continue
@@ -758,7 +742,63 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			result.lastPR = outcome.prNumber
 		}
 	}
+	if err := w.reproveEndedVerificationReservations(ctx, pendingRuns, !pendingUnread); err != nil {
+		joined = errors.Join(joined, fmt.Errorf("re-prove ended verification reservations: %w", err))
+	}
 	return result, joined
+}
+
+// readPendingTasks reads every task the lane's pass works: the pending
+// publication, reevaluation, and continuation rows, and the published tasks
+// whose closure wait the human gate has released. It also returns the keys of
+// those released tasks and the closure waits the pass retires.
+func (w *productionPublicationWorkflow) readPendingTasks(
+	ctx context.Context,
+) (pending []store.QueueEntry, releasedWaits, concludedWaits []string, err error) {
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(ctx, KindProductionPublicationRequested)
+		if err != nil {
+			return err
+		}
+		reevaluations, err := tx.ListPendingOutbox(ctx, signet.PublicationReevaluationRequestedKind)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, reevaluations...)
+		continuations, err := tx.ListPendingOutbox(ctx, domain.PublicationContinuationRequestedKind)
+		if err != nil {
+			return err
+		}
+		pending = append(pending, continuations...)
+		// A published task whose human-gate closure decision has landed
+		// re-enters beside the pending rows (publication_closure_wait.go).
+		released, concluded, err := releasedClosureWaitTasks(ctx, tx, pending)
+		if err != nil {
+			return err
+		}
+		for _, entry := range released {
+			releasedWaits = append(releasedWaits, entry.IdempotencyKey)
+		}
+		concludedWaits = concluded
+		pending = append(pending, released...)
+		return nil
+	})
+	return pending, releasedWaits, concludedWaits, err
+}
+
+// decodePendingTask reconstructs one entry readPendingTasks returned.
+func (w *productionPublicationWorkflow) decodePendingTask(
+	ctx context.Context, entry store.QueueEntry,
+) (productionPublicationTask, error) {
+	switch entry.Kind {
+	case domain.PublicationContinuationRequestedKind:
+		return w.reconstructPublicationContinuationTask(ctx, entry)
+	case signet.PublicationReevaluationRequestedKind:
+		return w.reconstructProductionReevaluationTask(ctx, entry)
+	default:
+		return decodeProductionPublicationTask(entry)
+	}
 }
 
 // productionPublicationStateContradiction is the durable-state error class
