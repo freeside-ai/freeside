@@ -10,7 +10,8 @@
 # The fake freesided also answers `submit`, recording its arguments and
 # printing a task id. The cases cover the daemon and app arguments, the
 # printed root and URL, --no-seed, --daemon-only, --scenario and its
-# submission, cleanup of both processes and the root on SIGTERM
+# submission, --root (kept on exit) and --listen, cleanup of both processes
+# and the root on SIGTERM
 # (also when a second one arrives mid-cleanup), on an early daemon exit, and
 # when the app quits, and the refusals that
 # create nothing. SIGINT is not driven: a background job in a non-interactive
@@ -388,6 +389,73 @@ assert_rc 2
 assert_contains "the app needs macOS"
 assert_not_exists "$CASE_DIR/go.log"
 assert_no_roots "$REPO"
+
+begin_case "--root creates and keeps the named root, and --listen sets the address"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+KEPT=$CASE_DIR/kept
+start_instance "$REPO" --daemon-only --root "$KEPT" --listen 100.64.0.7:8772
+if wait_for "$CASE_DIR/stdout" '^api_url='; then ok; else report_failure "never became ready"; fi
+kept_physical=$(cd -P "$KEPT" && pwd -P)
+assert_line "$CASE_DIR/stdout" "root=$kept_physical"
+assert_line "$CASE_DIR/daemon.args" '-state-dir'
+assert_line "$CASE_DIR/daemon.args" "$kept_physical/daemon"
+assert_line "$CASE_DIR/daemon.args" '-listen'
+assert_line "$CASE_DIR/daemon.args" '100.64.0.7:8772'
+assert_no_line "$CASE_DIR/daemon.args" '127.0.0.1:0'
+# A root outside the worktree has nothing for git to ignore.
+assert_not_exists "$KEPT/.gitignore"
+kill -TERM "$INSTANCE_PID"
+finish_instance
+assert_rc 143
+assert_stopped "$CASE_DIR/daemon.pid"
+if [[ -f "$KEPT/daemon/readiness.json" ]]; then ok; else report_failure "--root was not kept on exit"; fi
+assert_no_roots "$REPO"
+
+begin_case "--root under the worktree is kept even with the mktemp prefix, and ignores itself"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+KEPT=$REPO/.dev-instance.kept
+start_instance "$REPO" --daemon-only --root "$KEPT"
+if wait_for "$CASE_DIR/stdout" '^api_url='; then ok; else report_failure "never became ready"; fi
+assert_line "$CASE_DIR/daemon.args" '127.0.0.1:0'
+if [[ "$(cat "$KEPT/.gitignore" 2>/dev/null)" == '*' ]]; then ok; else report_failure "root under the worktree does not ignore itself"; fi
+kill -TERM "$INSTANCE_PID"
+finish_instance
+assert_rc 143
+if [[ -d "$KEPT/daemon" ]]; then ok; else report_failure "--root under the worktree was removed"; fi
+
+begin_case "an existing --root is refused and nothing is built"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+mkdir -p "$CASE_DIR/existing"
+run_instance "$REPO" --daemon-only --root "$CASE_DIR/existing"
+assert_rc 2
+assert_contains "already exists"
+assert_not_exists "$CASE_DIR/go.log"
+assert_not_exists "$CASE_DIR/existing/daemon"
+
+begin_case "a --root under a supervised root is refused and nothing is created"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+FAKE_HOME=$CASE_DIR/home
+mkdir -p "$FAKE_HOME"
+HOME=$FAKE_HOME run_instance "$REPO" --daemon-only --root "$FAKE_HOME/Library/Application Support/Freeside/inst"
+assert_rc 2
+assert_contains "refusing dev-instance root"
+assert_contains "resolves under the prod state root"
+assert_not_exists "$CASE_DIR/go.log"
+assert_not_exists "$FAKE_HOME/Library/Application Support/Freeside/inst"
+
+begin_case "--root and --listen without a value are usage errors"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+run_instance "$REPO" --daemon-only --root
+assert_rc 2
+assert_contains "usage: dev-instance.sh"
+run_instance "$REPO" --daemon-only --listen
+assert_rc 2
+assert_not_exists "$CASE_DIR/go.log"
 
 begin_case "an unknown option is a usage error"
 REPO=$CASE_DIR/repo

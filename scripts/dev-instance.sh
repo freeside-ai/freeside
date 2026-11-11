@@ -2,6 +2,7 @@
 # dev-instance.sh — one command for an ephemeral daemon, seeded, with an app.
 #
 # Usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME]
+#                        [--root DIR] [--listen ADDR]
 #
 # Builds freesided from daemon/ and the Debug FreesideMac app, then starts
 # freesided as an `ephemeral` daemon in a fresh root,
@@ -16,8 +17,8 @@
 #
 # Progress goes to stderr. The script stays in the foreground until Ctrl-C,
 # the daemon exits, or the app quits; then it stops both processes and removes
-# the root. The daemon's and app's logs live in the root and go with it; an
-# early daemon exit prints the log's tail first.
+# the root, unless --root named it. The daemon's and app's logs live in the
+# root and go with it; an early daemon exit prints the log's tail first.
 #
 #   --daemon-only    skip the app build and launch (for scripts; any platform)
 #   --no-seed        start with an empty store
@@ -26,18 +27,24 @@
 #                    ready, printing a third line, `task=<task-id>`
 #                    (`freesided -list-scenarios` names them; daemon/README.md,
 #                    Run A Scenario)
+#   --root DIR       create the root at DIR, which must not exist yet, and keep
+#                    it on exit; scripts/exit-root.sh uses this for a scenario
+#                    pass the operator's devices reach
+#   --listen ADDR    listen on ADDR instead of 127.0.0.1:0; freesided accepts a
+#                    loopback or Tailscale address (its -listen flag)
 #
 # The app needs macOS and Xcode. Its derived data stays in the ignored
 # app/DerivedData/dev-instance so rebuilds are incremental. ntfy points at a
 # dead loopback address, so a dev instance never posts notifications.
 #
-# Safety: the worktree is refused, before anything is created, when it
-# resolves under a supervised state root (supervised-paths.sh); freesided's
+# Safety: the worktree, and a --root, are refused, before anything is
+# created, when either resolves under a supervised state root
+# (supervised-paths.sh); freesided's
 # own environment guard (#1501) stays the authority. The script never touches
 # a launchd service or another FreesideMac process: the installed app runs
 # the same executable name, so it holds its own child's PID instead. A SIGKILL
-# skips cleanup and leaves the root behind; the root ignores itself in git,
-# so remove it by hand.
+# skips cleanup and leaves the root behind; a root under the worktree ignores
+# itself in git, so remove it by hand.
 #
 # Exit codes: 0 when the app quits normally, 130 after Ctrl-C, 143 after
 # SIGTERM, 1 on a build or daemon failure or an abnormal app exit, 2 on a
@@ -45,13 +52,15 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME]' >&2
+  echo 'usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME] [--root DIR] [--listen ADDR]' >&2
   exit 2
 }
 
 daemon_only=false
 seed=true
 scenario=''
+root_arg=''
+listen=127.0.0.1:0
 while [[ $# -gt 0 ]]; do
   case $1 in
   --daemon-only) daemon_only=true ;;
@@ -59,6 +68,17 @@ while [[ $# -gt 0 ]]; do
   --scenario)
     [[ $# -ge 2 && -n "$2" ]] || usage
     scenario=$2
+    shift
+    ;;
+  --root)
+    [[ $# -ge 2 && -n "$2" ]] || usage
+    root_arg=$2
+    [[ "$root_arg" == /* ]] || root_arg="$PWD/$root_arg"
+    shift
+    ;;
+  --listen)
+    [[ $# -ge 2 && -n "$2" ]] || usage
+    listen=$2
     shift
     ;;
   *) usage ;;
@@ -70,12 +90,21 @@ repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=scripts/supervised-paths.sh
 source "$repo_root/scripts/supervised-paths.sh"
 refuse_supervised_path "dev-instance worktree" "$repo_root" || exit 2
+if [[ -n "$root_arg" ]]; then
+  refuse_supervised_path "dev-instance root" "$root_arg" || exit 2
+  if [[ -e "$root_arg" || -L "$root_arg" ]]; then
+    echo "dev-instance: --root $root_arg already exists; name a new directory" >&2
+    exit 2
+  fi
+fi
 if [[ "$daemon_only" == false && "$(uname)" != Darwin ]]; then
   echo 'dev-instance: the app needs macOS; use --daemon-only elsewhere' >&2
   exit 2
 fi
 
 root=''
+# Only a root this run's mktemp created is removed; a --root is kept.
+remove_root=false
 daemon_pid=''
 app_pid=''
 
@@ -100,7 +129,7 @@ cleanup() {
   stop_child "$app_pid"
   stop_child "$daemon_pid"
   # Remove only the directory this run's mktemp created under the worktree.
-  if [[ -n "$root" && -d "$root" && "$root" == "$repo_root"/.dev-instance.* ]]; then
+  if [[ "$remove_root" == true && -n "$root" && -d "$root" && "$root" == "$repo_root"/.dev-instance.* ]]; then
     rm -rf -- "$root"
     echo "dev-instance: removed $root" >&2
   fi
@@ -109,8 +138,16 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-root="$(mktemp -d "$repo_root/.dev-instance.XXXXXX")"
-printf '*\n' >"$root/.gitignore"
+if [[ -n "$root_arg" ]]; then
+  mkdir "$root_arg"
+  root="$(cd -P "$root_arg" && pwd -P)"
+else
+  root="$(mktemp -d "$repo_root/.dev-instance.XXXXXX")"
+  remove_root=true
+fi
+if [[ "$root" == "$repo_root"/* ]]; then
+  printf '*\n' >"$root/.gitignore"
+fi
 mkdir -m 0700 "$root/daemon"
 daemon_log="$root/daemon/freesided.log"
 
@@ -134,7 +171,7 @@ daemon_args=(
   -environment ephemeral
   -db "$root/daemon/freeside.db"
   -state-dir "$root/daemon"
-  -listen 127.0.0.1:0
+  -listen "$listen"
   -ntfy-url http://127.0.0.1:1
 )
 if [[ -n "$scenario" ]]; then
@@ -191,7 +228,11 @@ if [[ -n "$app_exec" ]]; then
     >"$root/app.log" 2>&1 &
   app_pid=$!
 fi
-echo "dev-instance: ready; Ctrl-C stops everything and removes the root" >&2
+if [[ "$remove_root" == true ]]; then
+  echo "dev-instance: ready; Ctrl-C stops everything and removes the root" >&2
+else
+  echo "dev-instance: ready; Ctrl-C stops everything and keeps $root" >&2
+fi
 
 # Bash 3.2 has no `wait -n`, so poll both children.
 while :; do
