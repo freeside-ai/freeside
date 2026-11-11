@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v14",
+  "version": "freeside-task-record-v15",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -39,6 +39,68 @@
         "triage": null,
         "kind": "task_created",
         "recorded_at": "2026-09-01T00:00:00Z",
+        "campaign_id": null,
+        "run_id": null,
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": null,
+        "review": null,
+        "verification": null,
+        "external_review": null,
+        "line": {
+          "line_id": "sha256:task-line-GOLDEN-reviewer-2",
+          "role": "reviewer",
+          "agent": null,
+          "selection": {
+            "enrollment_id": "anthropic-a/claude_code",
+            "model_id": "claude-opus-5-5",
+            "effort": "max"
+          },
+          "version": 2,
+          "source": "router",
+          "superseded_agent": "reviewer-golden",
+          "superseded_selection": null,
+          "provenance": {
+            "policy_revision": 1,
+            "tier": "policy_order",
+            "pool": "identity:anthropic-a",
+            "ranked_by": [],
+            "passed_over": null
+          }
+        },
+        "triage": null,
+        "kind": "task_line_set",
+        "recorded_at": "2026-10-01T09:01:00Z",
+        "campaign_id": null,
+        "run_id": null,
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": null,
+        "review": null,
+        "verification": null,
+        "external_review": null,
+        "line": {
+          "line_id": "sha256:task-line-GOLDEN-reviewer-1",
+          "role": "reviewer",
+          "agent": "reviewer-golden",
+          "selection": null,
+          "version": 1,
+          "source": "cli_submit",
+          "superseded_agent": null,
+          "superseded_selection": null,
+          "provenance": null
+        },
+        "triage": null,
+        "kind": "task_line_set",
+        "recorded_at": "2026-10-01T09:00:00Z",
         "campaign_id": null,
         "run_id": null,
         "approved_spec_digest": null,
@@ -426,6 +488,7 @@
       "closure_cards": [],
       "closure": null,
       "specification_retries": [],
+      "review_admissions": [],
       "errors": []
     },
     {
@@ -476,6 +539,32 @@
       "closure_cards": [],
       "closure": null,
       "specification_retries": [],
+      "review_admissions": [
+        {
+          "invocation_id": "review-golden",
+          "role": "reviewer",
+          "lineage_group": "anthropic",
+          "admitted_at": "2026-10-01T09:02:00Z",
+          "agent": {
+            "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launch_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "route_model_id": "claude-opus-5-5",
+            "enrollment_id": "anthropic-a/claude_code",
+            "enrollment_generation": 2,
+            "requested_effort": "max",
+            "native_effort": "max",
+            "selection_source": "task_line",
+            "selection_record_id": "sha256:task-line-GOLDEN-reviewer-2",
+            "selection_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "selection_model_id": "claude-opus-5-5",
+            "selection_effort": "max",
+            "harness_client": "claude_code",
+            "lineage_group": "anthropic"
+          }
+        }
+      ],
       "errors": []
     },
     {
@@ -537,10 +626,66 @@
       "closure_cards": [],
       "closure": null,
       "specification_retries": [],
+      "review_admissions": [],
       "errors": []
     }
   ],
   "items": [
+    {
+      "id": "execution-failure-golden-offers",
+      "error": null,
+      "type": "execution_failure",
+      "status": "open",
+      "run_id": "run-freeside-656",
+      "created_at": "2026-10-01T09:00:00Z",
+      "decided_at": null,
+      "conclusion": null,
+      "health_diagnostic": null,
+      "execution_failure": {
+        "outcome": "failed",
+        "cause": "unknown",
+        "stage": "implementation",
+        "invocation_id": "inv-run-freeside-656",
+        "admitted": {
+          "invocation_id": "inv-run-freeside-656",
+          "kind": "execution",
+          "role": "implementer",
+          "admitted_at": "2026-09-01T13:32:00Z",
+          "agent_digest": null,
+          "selection_source": null,
+          "harness": null,
+          "model": null,
+          "requested_effort": null,
+          "native_effort": null,
+          "enrollment_id": null,
+          "selection_model_id": null,
+          "selection_effort": null,
+          "selection_digest": null,
+          "cost_owner": null,
+          "lineage_group": null,
+          "credential_mode": "local_trusted",
+          "egress_profile": "clean_verification",
+          "operating_mode": "attended_dev",
+          "isolation_class": "fresh_vm_read_only_volume_handoff",
+          "independence": null
+        }
+      },
+      "interpretation_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "conversation_id": "conversation-golden",
+      "alternate_agents": [
+        {
+          "enrollment": "anthropic-b/claude_code",
+          "pool": "identity:anthropic-b",
+          "harness": "claude_code",
+          "model": "claude-opus-5-5",
+          "qualification": "different_pool"
+        }
+      ],
+      "commands": [],
+      "deliveries": []
+    },
     {
       "id": "execution-failure-inv-specify-run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b-1",
       "error": null,
@@ -572,6 +717,8 @@
       },
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [
         {
           "command_id": "stop-execution-failure-inv-specify-run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b-1",
@@ -623,6 +770,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": [
         {
@@ -650,6 +799,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": []
     },
@@ -670,6 +821,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": []
     },
@@ -687,6 +840,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": []
     },
@@ -704,6 +859,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": []
     },
@@ -721,6 +878,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": []
     },
@@ -738,6 +897,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [],
       "deliveries": []
     },
@@ -768,6 +929,8 @@
       "interpretation_failure": null,
       "publish_block": null,
       "blocked_on": null,
+      "conversation_id": null,
+      "alternate_agents": [],
       "commands": [
         {
           "command_id": "approve-spec-approval-run-freeside-656-1",
@@ -779,6 +942,45 @@
     }
   ],
   "items_error": null,
+  "task_lines": [
+    {
+      "id": "sha256:task-line-GOLDEN-reviewer-1",
+      "role": "reviewer",
+      "version": 1,
+      "predecessor_id": null,
+      "agent": "reviewer-golden",
+      "selection": null,
+      "source": "cli_submit",
+      "set_by": "submission-golden",
+      "set_at": "2026-10-01T09:00:00Z",
+      "provenance": null,
+      "cleared": false
+    },
+    {
+      "id": "sha256:task-line-GOLDEN-reviewer-2",
+      "role": "reviewer",
+      "version": 2,
+      "predecessor_id": "sha256:task-line-GOLDEN-reviewer-1",
+      "agent": null,
+      "selection": {
+        "enrollment_id": "anthropic-a/claude_code",
+        "model_id": "claude-opus-5-5",
+        "effort": "max"
+      },
+      "source": "router",
+      "set_by": "router-golden",
+      "set_at": "2026-10-01T09:01:00Z",
+      "provenance": {
+        "policy_revision": 1,
+        "tier": "policy_order",
+        "pool": "identity:anthropic-a",
+        "ranked_by": [],
+        "passed_over": null
+      },
+      "cleared": false
+    }
+  ],
+  "task_lines_error": null,
   "counts": {
     "items_by_type": [
       {
@@ -787,7 +989,7 @@
       },
       {
         "type": "execution_failure",
-        "count": 2
+        "count": 3
       },
       {
         "type": "agent_question",

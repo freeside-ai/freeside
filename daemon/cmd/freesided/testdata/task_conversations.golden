@@ -1,0 +1,34 @@
+{
+  "version": "freeside-task-conversations-v1",
+  "as_of_revision": 22,
+  "task_id": "task-GOLDEN",
+  "conversations": [
+    {
+      "item_id": "execution-failure-golden-offers",
+      "conversation_id": "conversation-golden",
+      "status": "idle",
+      "messages": [
+        {
+          "sequence": 1,
+          "author": "user",
+          "body": "why did the implementer stop?",
+          "attachments": [
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          ],
+          "created_at": "2026-10-01T09:03:00Z"
+        },
+        {
+          "sequence": 2,
+          "author": "agent",
+          "body": "agent reply text that only the conversations read prints",
+          "attachments": [
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          ],
+          "created_at": "2026-10-01T09:04:00Z"
+        }
+      ],
+      "error": null
+    }
+  ],
+  "items_error": null
+}

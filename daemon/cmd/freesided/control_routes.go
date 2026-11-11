@@ -272,6 +272,9 @@ func (p *pairingControl) registerControlRoutes(
 	p.handleGet(mux, "/tasks/{task_id}/record", func(ctx context.Context, r *http.Request) (any, error) {
 		return readTaskRecordFrom(ctx, st, domain.TaskID(r.PathValue("task_id")))
 	})
+	p.handleGet(mux, "/tasks/{task_id}/conversations", func(ctx context.Context, r *http.Request) (any, error) {
+		return readTaskConversationsFrom(ctx, st, domain.TaskID(r.PathValue("task_id")))
+	})
 	p.handleGet(mux, "/inspect", func(ctx context.Context, _ *http.Request) (any, error) {
 		return readInspectIndexFrom(ctx, st)
 	})

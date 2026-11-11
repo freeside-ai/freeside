@@ -116,6 +116,11 @@ func TestInspectReadsThroughRunningDaemon(t *testing.T) {
 			t.Errorf("task %s: timeline error %+v, items error %+v, %d runs, latest run %v",
 				task.TaskID, record.TimelineError, record.ItemsError, len(record.Runs), task.LatestRunID)
 		}
+		conversations := inspect[taskConversations](t, ctx, "conversations", "-db", dbPath, "-task", string(task.TaskID))
+		if conversations.Version != taskConversationsVersion || conversations.TaskID != task.TaskID ||
+			conversations.AsOfRevision < index.AsOfRevision || conversations.Conversations == nil {
+			t.Errorf("task %s: conversations = %+v", task.TaskID, conversations)
+		}
 	}
 	health := inspect[systemHealth](t, ctx, "health", "-db", dbPath)
 	if health.Version != systemHealthVersion || health.AsOfRevision < index.AsOfRevision || len(health.Items) == 0 {
@@ -126,9 +131,11 @@ func TestInspectReadsThroughRunningDaemon(t *testing.T) {
 		proposals.Cards == nil || proposals.RefusedRows == nil {
 		t.Errorf("proposals = %+v", proposals)
 	}
-	err := runInspectCommand(ctx, []string{"task", "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
-	if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
-		t.Fatalf("unknown task over the socket: %v", err)
+	for _, verb := range []string{"task", "conversations"} {
+		err := runInspectCommand(ctx, []string{verb, "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
+		if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
+			t.Fatalf("%s of an unknown task over the socket: %v", verb, err)
+		}
 	}
 }
 
@@ -144,8 +151,11 @@ func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
 	ctx := t.Context()
 	index := inspect[inspectIndex](t, ctx, "-db", dbPath)
 	served := map[domain.TaskID]taskRecord{}
+	servedConversations := map[domain.TaskID]taskConversations{}
 	for _, task := range index.Tasks {
 		served[task.TaskID] = inspect[taskRecord](t, ctx, "task", "-db", dbPath, "-task", string(task.TaskID))
+		servedConversations[task.TaskID] = inspect[taskConversations](t, ctx,
+			"conversations", "-db", dbPath, "-task", string(task.TaskID))
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
@@ -162,10 +172,20 @@ func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
 			t.Errorf("task %s: direct record differs from the served one\ndirect: %s\nserved: %s",
 				id, comparableRecord(t, got), comparableRecord(t, want))
 		}
+		// The revision moves when the daemon stops; the conversations must not.
+		gotConversations := inspect[taskConversations](t, ctx, "conversations", "-db", dbPath, "-task", string(id))
+		wantConversations := servedConversations[id]
+		gotConversations.AsOfRevision, wantConversations.AsOfRevision = 0, 0
+		if !bytes.Equal(mustJSON(t, gotConversations), mustJSON(t, wantConversations)) {
+			t.Errorf("task %s: direct conversations differ from the served ones\ndirect: %s\nserved: %s",
+				id, mustJSON(t, gotConversations), mustJSON(t, wantConversations))
+		}
 	}
-	err := runInspectCommand(ctx, []string{"task", "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
-	if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
-		t.Fatalf("unknown task with no daemon: %v", err)
+	for _, verb := range []string{"task", "conversations"} {
+		err := runInspectCommand(ctx, []string{verb, "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
+		if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
+			t.Fatalf("%s of an unknown task with no daemon: %v", verb, err)
+		}
 	}
 	// The reads above moved nothing.
 	if after := inspect[inspectIndex](t, ctx, "-db", dbPath); after.AsOfRevision != direct.AsOfRevision {
@@ -324,18 +344,20 @@ func TestInspectUsageErrors(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	for name, args := range map[string][]string{
-		"no database":            {},
-		"task with no id":        {"task", "-db", dbPath},
-		"task flag on index":     {"-db", dbPath, "-task", "task-1"},
-		"unknown verb":           {"run", "-db", dbPath},
-		"positional":             {"-db", dbPath, "task"},
-		"unknown flag":           {"-db", dbPath, "-follow"},
-		"health with no db":      {"health"},
-		"health positional":      {"health", "-db", dbPath, "extra"},
-		"task flag on health":    {"health", "-db", dbPath, "-task", "task-1"},
-		"proposals with no db":   {"proposals"},
-		"proposals positional":   {"proposals", "-db", dbPath, "extra"},
-		"task flag on proposals": {"proposals", "-db", dbPath, "-task", "task-1"},
+		"no database":              {},
+		"task with no id":          {"task", "-db", dbPath},
+		"conversations with no id": {"conversations", "-db", dbPath},
+		"conversations positional": {"conversations", "-db", dbPath, "-task", "task-1", "extra"},
+		"task flag on index":       {"-db", dbPath, "-task", "task-1"},
+		"unknown verb":             {"run", "-db", dbPath},
+		"positional":               {"-db", dbPath, "task"},
+		"unknown flag":             {"-db", dbPath, "-follow"},
+		"health with no db":        {"health"},
+		"health positional":        {"health", "-db", dbPath, "extra"},
+		"task flag on health":      {"health", "-db", dbPath, "-task", "task-1"},
+		"proposals with no db":     {"proposals"},
+		"proposals positional":     {"proposals", "-db", dbPath, "extra"},
+		"task flag on proposals":   {"proposals", "-db", dbPath, "-task", "task-1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer

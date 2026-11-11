@@ -14,7 +14,15 @@
       "ids": [
         "task_id"
       ],
-      "version": "freeside-task-record-v14"
+      "version": "freeside-task-record-v15"
+    },
+    {
+      "name": "inspect conversations",
+      "command": "freesided inspect conversations -db PATH -task TASK_ID",
+      "ids": [
+        "task_id"
+      ],
+      "version": "freeside-task-conversations-v1"
     },
     {
       "name": "inspect health",
