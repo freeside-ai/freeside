@@ -63,6 +63,12 @@
     },
     {
       "group": "state",
+      "name": "routing_policy",
+      "status": "passed",
+      "evidence": "no routing policy is set; the router uses the lineup"
+    },
+    {
+      "group": "state",
       "name": "identities",
       "status": "passed",
       "evidence": "recorded identities carry the settings' fixed bindings"
@@ -317,5 +323,6 @@
     "url": "https://github.com/acme/widgets/issues/7",
     "readable": true,
     "state": "open"
-  }
+  },
+  "routing_policy": null
 }

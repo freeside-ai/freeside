@@ -127,7 +127,9 @@ func (p prelaunchPrerequisite) valid() bool {
 
 // prelaunchRecord is prelaunch.json. ManifestDigest is null when the
 // composition did not run; LineupProbe is null when the probe did not run;
-// Issue is null when the target-issue read did not run.
+// Issue is null when the target-issue read did not run. RoutingPolicy is the
+// current routing revision as `freesided routing show` prints it, null when
+// none is set or the database was not read.
 type prelaunchRecord struct {
 	Version        string                `json:"version"`
 	SettingsDigest *domain.Digest        `json:"settings_digest"`
@@ -140,6 +142,7 @@ type prelaunchRecord struct {
 	HealthItems    []prelaunchHealthItem `json:"health_items"`
 	LineupProbe    *lineupProbeRecord    `json:"lineup_probe"`
 	Issue          *prelaunchIssue       `json:"issue"`
+	RoutingPolicy  *domain.RoutingPolicy `json:"routing_policy"`
 }
 
 // prelaunchIssue is what the target-issue read saw of the run's issue. State
@@ -373,7 +376,7 @@ func evaluatePrelaunch(ctx context.Context, cfg prelaunchConfig, paths deputyPat
 		for _, name := range []string{"submission", "task_lines", "duplicate_source"} {
 			record.skip(prelaunchGroupInputs, name, "the settings must load first")
 		}
-		for _, name := range []string{"state_database", "system_health", "identities"} {
+		for _, name := range []string{"state_database", "system_health", "routing_policy", "identities"} {
 			record.skip(prelaunchGroupState, name, "the settings must load first")
 		}
 		skipLeaseBound(&record, "the settings must load first", cfg.NoLive)
@@ -647,6 +650,7 @@ func checkPrelaunchState(
 ) prelaunchState {
 	skipState := func(why string) {
 		record.skip(prelaunchGroupState, "system_health", why)
+		record.skip(prelaunchGroupState, "routing_policy", why)
 		record.skip(prelaunchGroupState, "identities", why)
 		if inputs == nil {
 			why = "the inputs must pass first"
@@ -701,6 +705,7 @@ func checkPrelaunchState(
 	state.read = true
 	checkPrelaunchTaskLines(ctx, record, st, taskLines)
 	checkPrelaunchHealth(ctx, record, st)
+	checkPrelaunchRouting(ctx, record, st)
 	checkPrelaunchIdentities(ctx, record, st, settings, &state)
 	checkPrelaunchDuplicateSource(ctx, record, st, settings.Repository.Project, inputs)
 	return state
@@ -768,6 +773,58 @@ func checkPrelaunchHealth(ctx context.Context, record *prelaunchRecord, st *stor
 		record.pass(prelaunchGroupState, "system_health", fmt.Sprintf(
 			"no open item holds unattended admission at revision %d", health.AsOfRevision))
 	}
+}
+
+// checkPrelaunchRouting records the routing revision the router would read
+// at the real task's first admission. It reports and never judges: prelaunch
+// holds no exit contract to compare the orders with, and most runs don't
+// route, so a set revision and none both pass. On a fresh root the policy
+// can't be set yet, because `routing set` refuses an enrollment the store
+// lacks and the deputy's start adopts them; the run sets it after that start.
+func checkPrelaunchRouting(ctx context.Context, record *prelaunchRecord, st *store.Store) {
+	const name = "routing_policy"
+	var policy *domain.RoutingPolicy
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		policy, err = currentRoutingPolicyOrNil(ctx, tx)
+		return err
+	}); err != nil {
+		record.fail(prelaunchGroupState, name, "the routing-policy read failed: "+err.Error(),
+			"restore the database, or use a fresh root")
+		return
+	}
+	if policy == nil {
+		record.pass(prelaunchGroupState, name, "no routing policy is set; the router uses the lineup")
+		return
+	}
+	record.RoutingPolicy = policy
+	record.pass(prelaunchGroupState, name, routingPolicyEvidence(*policy))
+}
+
+// routingPolicyEvidence names a revision's orders, for example
+// "revision 2: implementer=a,b; drain-first account p". A role in the
+// stored agents form orders nothing since the tree dropped agents, so the
+// router uses the lineup for it; the evidence says so rather than reading
+// as routed.
+func routingPolicyEvidence(policy domain.RoutingPolicy) string {
+	roles := make([]string, 0, len(policy.Roles))
+	for _, role := range policy.Roles {
+		if role.AgentsForm() {
+			roles = append(roles, string(role.Role)+"=agents "+strings.Join(role.Agents, ",")+
+				" (orders nothing: the router uses the lineup)")
+			continue
+		}
+		order := make([]string, 0, len(role.Enrollments))
+		for _, id := range role.Enrollments {
+			order = append(order, string(id))
+		}
+		roles = append(roles, string(role.Role)+"="+strings.Join(order, ","))
+	}
+	evidence := fmt.Sprintf("revision %d: %s", policy.Revision, strings.Join(roles, "; "))
+	if policy.DrainFirstAccount != nil {
+		evidence += "; drain-first account " + string(*policy.DrainFirstAccount)
+	}
+	return evidence
 }
 
 // checkPrelaunchIdentities compares the recorded identities with the

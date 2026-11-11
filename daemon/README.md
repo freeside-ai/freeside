@@ -4104,7 +4104,16 @@ is `not_run`, and the rest still run.
   recovery text. `system_health` fails on every open item whose admission
   `holds`, listed in `health_items`. `identities` compares the recorded
   identities with the settings' fixed bindings, and is `not_run` before
-  the first start records them.
+  the first start records them. `routing_policy` copies the current
+  routing revision into the record's `routing_policy`, exactly as
+  `freesided routing show` prints it, or null when none is set; its
+  evidence names each role's order, and marks a role still in the
+  pre-#2736 agents form as ordering nothing. It passes
+  whether or not a revision is set, since prelaunch has no exit contract
+  to compare the orders with, and fails only when the read fails. It is
+  `not_run` on a fresh root, where the policy can't be set yet: `routing
+  set` refuses an enrollment the store lacks, and the deputy's start
+  adopts them (Set The Routing Policy).
 - **`rig`**: the rig lease is acquirable and the rig idle, and `prod`'s App
   authority is usable under it (`installed_daemon`). A live holder fails,
   naming it; a stale lease fails, naming the `rig recover` command for its
