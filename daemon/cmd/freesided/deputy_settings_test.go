@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -201,6 +203,36 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 			second["claude_account"] = ""
 			s["agent_tree"].(map[string]any)["second_writer"] = second
 		}, "agent_tree.second_writer.claude_account is required"},
+		"null macos_verification": {func(s map[string]any) {
+			s["macos_verification"] = nil
+		}, "macos_verification is required"},
+		"empty macos_verification": {func(s map[string]any) {
+			s["macos_verification"] = map[string]any{}
+		}, "macos_verification.root is required"},
+		"macos_verification with a relative root": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("root", "Library/Freeside/macverify")
+		}, "macos_verification.root must be an absolute path"},
+		"macos_verification with an empty root": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("root", "")
+		}, "macos_verification.root must be an absolute path"},
+		"macos_verification with an unclean root": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("root", "/Library/Freeside/macverify/")
+		}, "macos_verification.root must be a clean path"},
+		"macos_verification with no slots": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("slots", []string{})
+		}, "macos_verification.slots is empty"},
+		"macos_verification with an empty slot": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("slots", []string{"fvslot1", ""})
+		}, "macos_verification.slots holds an empty name"},
+		"macos_verification with a repeated slot": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("slots", []string{"fvslot1", "fvslot2", "fvslot1"})
+		}, `macos_verification.slots names "fvslot1" twice`},
+		"macos_verification with an empty xcode_build": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("xcode_build", "")
+		}, "macos_verification.xcode_build is required"},
+		"macos_verification with an empty swift": {func(s map[string]any) {
+			s["macos_verification"] = macosVerificationWith("swift", "")
+		}, "macos_verification.swift is required"},
 		"null second writer": {func(s map[string]any) {
 			s["agent_tree"].(map[string]any)["second_writer"] = nil
 		}, "agent_tree.second_writer is required"},
@@ -224,6 +256,29 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 			second["claude_account"] = "me@example.test"
 			s["agent_tree"].(map[string]any)["second_writer"] = second
 		}, "agent_tree.second_writer.claude_account must differ from agent_tree.claude_account"},
+	}
+	for _, key := range []string{"root", "slots", "xcode_build", "swift"} {
+		for _, value := range []any{"missing", nil} {
+			label := "macos_verification without " + key
+			if value == nil {
+				label = "macos_verification with a null " + key
+			}
+			cases[label] = struct {
+				edit func(map[string]any)
+				want string
+			}{
+				edit: func(s map[string]any) {
+					section := macosVerificationFixture()
+					if value == nil {
+						section[key] = nil
+					} else {
+						delete(section, key)
+					}
+					s["macos_verification"] = section
+				},
+				want: "macos_verification." + key + " is required",
+			}
+		}
 	}
 	for _, field := range []string{
 		"seed_root", "repository.checkout",
@@ -358,6 +413,74 @@ func TestLoadDeputySettingsReviewHarness(t *testing.T) {
 				t.Fatalf("auth adopt refuses the deputy's args: %v", err)
 			}
 		})
+	}
+}
+
+// macosVerificationFixture is a valid macos_verification object. The slots
+// are out of order, as an operator may write them.
+func macosVerificationFixture() map[string]any {
+	return map[string]any{
+		"root": "/Library/Freeside/macverify", "slots": []string{"fvslot2", "fvslot1"},
+		"xcode_build": "17F42", "swift": "swiftlang-6.1.2.1.2",
+	}
+}
+
+// macosVerificationWith is the fixture with one key replaced.
+func macosVerificationWith(key string, value any) map[string]any {
+	section := macosVerificationFixture()
+	section[key] = value
+	return section
+}
+
+// macos_verification is optional under the same settings revision: a file
+// without it loads with none and maps to no executor, and a file with it
+// loads the four values and maps them to the executor configuration.
+func TestLoadDeputySettingsMapsTheMacOSVerificationExecutor(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		section map[string]any
+		want    daemoncompose.MacverifyExecutorConfig
+	}{
+		"absent": {nil, daemoncompose.MacverifyExecutorConfig{}},
+		"present": {macosVerificationFixture(), daemoncompose.MacverifyExecutorConfig{
+			Root: "/Library/Freeside/macverify", Slots: []string{"fvslot2", "fvslot1"},
+			XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			settings := deputySettingsFixture(t)
+			if tc.section != nil {
+				settings["macos_verification"] = tc.section
+			}
+			path, body := writeDeputySettings(t, settings, 0o600)
+			if tc.section == nil && strings.Contains(string(body), "macos_verification") {
+				t.Fatal("the absent case's file names the key")
+			}
+			loaded, err := loadDeputySettings(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (loaded.MacosVerification == nil) != (tc.section == nil) {
+				t.Fatalf("macos_verification = %+v", loaded.MacosVerification)
+			}
+			got := deputyClaudeDriverConfig(loaded, newDeputyPaths(t.TempDir()), "").HostVerification
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("HostVerification = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The mapping copies the slots, so the driver configuration does not alias
+// the decoded settings.
+func TestDeputyMacverifyExecutorConfigCopiesTheSlots(t *testing.T) {
+	t.Parallel()
+	section := &deputyMacverify{Root: "/r", Slots: []string{"fvslot1"}, XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"}
+	cfg := deputyMacverifyExecutorConfig(section)
+	section.Slots[0] = "changed"
+	if cfg.Slots[0] != "fvslot1" {
+		t.Fatalf("slots alias the settings: %v", cfg.Slots)
 	}
 }
 

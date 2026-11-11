@@ -598,7 +598,8 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 	enabled := passing.Claude
 	if enabled == nil || enabled.RigTokenFile != paths.Acquisition || !enabled.RunConformance ||
 		enabled.OperatingMode != domain.ModeUnattended || enabled.StateRoot != "/prod/daemon" ||
-		enabled.WriterStopTimeout != 20*time.Minute || enabled.Judgments != (daemoncompose.JudgmentConfig{}) {
+		enabled.WriterStopTimeout != 20*time.Minute || enabled.Judgments != (daemoncompose.JudgmentConfig{}) ||
+		!reflect.DeepEqual(enabled.HostVerification, daemoncompose.MacverifyExecutorConfig{}) {
 		t.Fatalf("passing check: %+v", enabled)
 	}
 	// Exercise the configured judgment fields too: only the launch's digest
@@ -608,7 +609,15 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 	settings.Judgment.Model = "claude-opus"
 	settings.Judgment.Effort = domain.EffortMedium
 	settings.Judgment.PublicationAuthorPrompt = "/prompts/author.md"
+	// And a configured executor, so the comparison covers HostVerification.
+	settings.MacosVerification = &deputyMacverify{
+		Root: "/Library/Freeside/macverify", Slots: []string{"fvslot1", "fvslot2"},
+		XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2",
+	}
 	prospective := deputyClaudeDriverConfig(settings, paths, "")
+	if prospective.HostVerification.Root != "/Library/Freeside/macverify" {
+		t.Fatalf("prospective driver lost the executor: %+v", prospective.HostVerification)
+	}
 	passing = deputyDaemonConfig(settings, paths, deputyLaunch{
 		ManifestDigest: "sha256:m", Manifest: compositionManifest{JudgmentConfigurationDigest: "sha256:j"},
 	}, nil)
