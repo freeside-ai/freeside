@@ -441,6 +441,12 @@ public actor MockServer {
         backupHealthy = healthy
     }
 
+    /// Replaces the history `getTaskTimeline` serves for its task, as the
+    /// daemon's projection moves when an event is recorded.
+    public func setTaskTimeline(_ timeline: Components.Schemas.TaskTimeline) {
+        taskHistoryFixtures[timeline.task_id] = timeline
+    }
+
     /// Replaces the agent catalog without a synchronized write, as a daemon
     /// restarted on a changed agent tree serves a new catalog and lineup
     /// revision at the same sync revision.

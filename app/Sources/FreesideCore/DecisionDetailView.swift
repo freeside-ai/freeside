@@ -95,6 +95,7 @@ struct DecisionDetailView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
+    @Environment(\.taskPageHoldMarker) private var pageHoldMarker
     /// The system italic's size for emphasis in a finding's title, which runs
     /// in at the card body's size (`DecisionSummaryText.inline`).
     @ScaledMetric(relativeTo: .body) private var findingEmphasisSize = FreesideLadder.current.body
@@ -654,8 +655,10 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls
                 )
                 // Seated in a task page, the thread is where the
-                // outline's Conversation chip lands.
+                // outline's Conversation chip lands, and a message arriving
+                // in it moves the controls under it.
                 .background(alignment: .top) { TaskPageConversationAnchor() }
+                .background(alignment: .bottom) { pageHoldMarker?("thread") }
             }
 
             if let replacement = model.revisedSpecification {
@@ -799,6 +802,9 @@ struct DecisionDetailView: View {
                         includesReviewing: !hasReviewingAction || !reviewingLeads)
                 #endif
             }
+            // Under the validation row, which every sync round draws and
+            // takes away again, so a page reader below it holds still.
+            .background(alignment: .bottom) { pageHoldMarker?("controls") }
         } else if hasReviewingAction {
             // What the group holds between its controls is content, such as
             // a change summary, and outlives the controls on a closed card.
@@ -1745,6 +1751,7 @@ struct DecisionDetailView: View {
                 rendersInteractiveControls: rendersInteractiveControls
             )
             .background(alignment: .top) { TaskPageConversationAnchor() }
+            .background(alignment: .bottom) { pageHoldMarker?("thread") }
         }
     }
 
