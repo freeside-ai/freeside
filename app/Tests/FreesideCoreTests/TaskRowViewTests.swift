@@ -181,6 +181,28 @@ import Testing
         #expect(TaskDisplay.ambiguousTaskIDs(tasks) == ["task-a", "task-b", "task-d", "task-e"])
     }
 
+    /// Acceptance (#1922): the marker is the creation time in the short
+    /// time format, then the short task id; the year shows only when it
+    /// isn't `now`'s.
+    @Test func theLookAlikeMarkerNamesTheCreationTimeThenTheShortID() throws {
+        var task = try #require(TaskFixtures.defaultTasks().first).task
+        task.id = "task-01JC4XQ2ZB8M5N7P9R3T6V8W0Y"
+        let gmt = try #require(TimeZone(identifier: "GMT"))
+        let locale = Locale(identifier: "en_US")
+        // 2026-11-09T14:14:00Z.
+        task.created_at = Date(timeIntervalSince1970: 1_794_233_640)
+        // ICU's choice of space before the day period varies by release.
+        func marker(now: Date) -> String {
+            TaskDisplay.lookAlikeMarker(task, now: now, locale: locale, timeZone: gmt)
+                .replacing("\u{202F}", with: " ")
+        }
+        #expect(
+            marker(now: task.created_at.addingTimeInterval(2 * 86_400)) == "created Nov 9, 2:14 PM · task-01JC4XQ2…")
+        #expect(
+            marker(now: task.created_at.addingTimeInterval(90 * 86_400))
+                == "created Nov 9, 2026, 2:14 PM · task-01JC4XQ2…")
+    }
+
     @Test func theRetryCampaignIsOneRowHoldingBothAttempts() throws {
         let holders = TaskFixtures.defaultTasks().filter {
             $0.task.run_ids.contains("run-freeside-656") || $0.task.run_ids.contains(RunFixtures.activeRunID)

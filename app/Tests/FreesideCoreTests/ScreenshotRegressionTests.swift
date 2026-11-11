@@ -2386,32 +2386,37 @@
                             )))
                 }
             }
-            // Two tasks with the same name (#1379): the row appends a short
-            // task id so the rows do not read alike. Across the size matrix,
-            // the disambiguator must survive the accessibility sizes.
+            // Two tasks for one issue under one name (#1379, #1922), created
+            // a day apart: each row ends its context line with its creation
+            // time and short id so the rows do not read alike. At the Mac
+            // sidebar's width and the iPhone's, across the size matrix, the
+            // marker must survive the accessibility sizes.
             var secondEqualName = retryTask
             secondEqualName.task.id = "task-\(RunFixtures.readyRunID)"
+            secondEqualName.task.created_at = retryTask.task.created_at.addingTimeInterval(-26 * 3600)
             let equalNameTasks = [retryTask, secondEqualName]
             let equalNameAmbiguous = TaskDisplay.ambiguousTaskIDs(equalNameTasks)
             for colorScheme in [ColorScheme.light, .dark] {
-                surfaces.append(
-                    Surface(
-                        name: "tasks-equal-names" + (colorScheme == .dark ? "-dark" : ""),
-                        width: 640,
-                        colorScheme: colorScheme,
-                        view: AnyView(
-                            VStack(spacing: 12) {
-                                ForEach(equalNameTasks, id: \.task.id) { snapshot in
-                                    TaskRowView(
-                                        task: snapshot.task,
-                                        position: TaskDisplay.position(snapshot.task, runs: runs),
-                                        isSelected: false,
-                                        now: RunFixtures.screenshotInstant,
-                                        showsIdentifier: equalNameAmbiguous.contains(snapshot.task.id))
+                for (width, tail) in [(CGFloat(320), ""), (390, "-390")] {
+                    surfaces.append(
+                        Surface(
+                            name: "tasks-equal-names" + tail + (colorScheme == .dark ? "-dark" : ""),
+                            width: width,
+                            colorScheme: colorScheme,
+                            view: AnyView(
+                                VStack(spacing: 12) {
+                                    ForEach(equalNameTasks, id: \.task.id) { snapshot in
+                                        TaskRowView(
+                                            task: snapshot.task,
+                                            position: TaskDisplay.position(snapshot.task, runs: runs),
+                                            isSelected: false,
+                                            now: RunFixtures.screenshotInstant,
+                                            showsIdentifier: equalNameAmbiguous.contains(snapshot.task.id))
+                                    }
                                 }
-                            }
-                            .padding()
-                        )))
+                                .padding()
+                            )))
+                }
             }
             for colorScheme in [ColorScheme.light, .dark] {
                 surfaces.append(
@@ -4804,20 +4809,35 @@
                     pr_number: 2431, merge_commit_sha: "4be1d0a7",
                     recorded_at: Date(timeIntervalSince1970: 1_786_500_000)))
 
+            // The open page beside a second task for its issue, created a
+            // day earlier, as the Wave 8 exit run found (#1922). The page's
+            // task is created when its timeline says, since its header
+            // now prints that instant.
+            var lookAlike = open
+            lookAlike.task.created_at = try #require(
+                open.history?.events.first { $0.kind == .task_created }?.recorded_at)
+            var twin = TaskFixtures.approvedCampaign().task
+            twin.task = lookAlike.task
+            twin.task.id = "task-\(RunFixtures.readyRunID)"
+            twin.task.created_at = lookAlike.task.created_at.addingTimeInterval(-26 * 3600)
+
             var surfaces: [Surface] = []
             // `task-page-open-identifiers` opens the page's Identifiers
             // footer, which holds the seated card's identifiers as a
-            // Decision group after the task's (#2607).
-            for (name, page, leading, pinned, identifiersOpen) in [
-                ("task-page-open", open, Optional(question), false, false),
-                ("task-page-open-identifiers", open, Optional(question), false, true),
-                ("task-page-several", several, Optional(question), false, false),
-                ("task-page-working", working, nil, false, false),
-                ("task-page-finished", finished, nil, false, false),
-                ("task-page-pinned", several, Optional(question), true, false),
+            // Decision group after the task's (#2607). `task-page-look-alike`
+            // is the open page beside its twin, so the header draws the
+            // look-alike marker over the card.
+            for (name, page, leading, pinned, identifiersOpen, others) in [
+                ("task-page-open", open, Optional(question), false, false, []),
+                ("task-page-open-identifiers", open, Optional(question), false, true, []),
+                ("task-page-look-alike", lookAlike, Optional(question), false, false, [twin]),
+                ("task-page-several", several, Optional(question), false, false, []),
+                ("task-page-working", working, nil, false, false, []),
+                ("task-page-finished", finished, nil, false, false, []),
+                ("task-page-pinned", several, Optional(question), true, false, []),
             ] {
                 let (coordinator, task) = try TaskStageFixtures.coordinator(
-                    page, conversations: AttentionFixtures.defaultConversations())
+                    page, conversations: AttentionFixtures.defaultConversations(), otherTasks: others)
                 let timeline = try #require(page.history)
                 let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
                 disclosures.setExpanded(identifiersOpen, .identifiers, taskID: timeline.task_id)
