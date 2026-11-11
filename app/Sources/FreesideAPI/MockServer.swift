@@ -108,6 +108,10 @@ public actor MockServer {
     /// its accepting instant, cleared only by resume_unattended. It stands in
     /// for the daemon's durable transition log, whose latest row wins.
     private var operatorStop: (commandID: String, since: Date)?
+    /// The update drain in force: when it began and whether it was forced.
+    /// It stands in for the daemon's update drain log, which never shares a
+    /// row with the operator stop, so neither lifts the other.
+    private var updateDrain: (since: Date, forced: Bool)?
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
     private var revision: Int64 = 1 {
         didSet { if revision != oldValue { releaseRevisionWaiters() } }
@@ -441,6 +445,21 @@ public actor MockServer {
         backupHealthy = healthy
     }
 
+    /// Puts an update drain in force under the next revision, as a
+    /// client-visible write would. The daemon has no client command for it:
+    /// an update requests a drain over the control socket.
+    public func requestUpdateDrain(forced: Bool = false) {
+        revision += 1
+        updateDrain = (since: currentTime, forced: forced)
+    }
+
+    /// Lifts the update drain under the next revision, as the daemon does
+    /// when it restarts on a new build.
+    public func liftUpdateDrain() {
+        revision += 1
+        updateDrain = nil
+    }
+
     /// Replaces the history `getTaskTimeline` serves for its task, as the
     /// daemon's projection moves when an event is recorded.
     public func setTaskTimeline(_ timeline: Components.Schemas.TaskTimeline) {
@@ -587,9 +606,10 @@ public actor MockServer {
             uniqueKeysWithValues: conversations.map { ($0.conversation.id, $0) })
         commandsByID.removeAll()
         resultsByCommandID.removeAll()
-        // The restored store carries its own transition log; this restore
-        // models one with no stop in force.
+        // The restored store carries its own transition and drain logs;
+        // this restore models one with no stop or drain in force.
         operatorStop = nil
+        updateDrain = nil
         pendingSpecificationReplacements.removeAll()
         pendingSpecificationComments.removeAll()
         proposalFactsByItemID.removeAll()
@@ -1084,7 +1104,8 @@ public actor MockServer {
     /// The daemon's unattended-admission projection (signet
     /// unattendedOperationSnapshot over store.UnattendedOperationGate): the
     /// operator stop first, bound to its open resume notice, then every other
-    /// open blocking system_health item in id order. The notice is itself a
+    /// open blocking system_health item in id order, then an update drain. The
+    /// daemon starts sending the drain in #3104. The notice is itself a
     /// blocking item, so it is reported once, as the operator stop. The mock
     /// evaluates backup supersession against its live backup-health switch,
     /// which defaults to healthy and moves no revision.
@@ -1115,6 +1136,9 @@ public actor MockServer {
                 .init(
                     kind: .blocking_system_health, item_id: item.id,
                     command_id: nil, since: item.created_at))
+        }
+        if let updateDrain {
+            stops.append(.init(kind: .update_drain, item_id: nil, command_id: nil, since: updateDrain.since))
         }
         return .init(admission: stops.isEmpty ? .open : .stopped, stops: stops)
     }

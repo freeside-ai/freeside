@@ -47,7 +47,9 @@ struct UnattendedStoppedPresentation: Equatable {
         switch first?.kind {
         case .operator_stop: cause = .operatorStop
         case .blocking_system_health: cause = .blockingFinding
-        case nil: cause = .unspecified
+        // A drain reads as the generic stop until the app has its own
+        // wording for one (#3103).
+        case .update_drain, nil: cause = .unspecified
         }
         // The reason only says whether the item is open; its text stays on
         // the item, so a long one never grows the indicator (#2313).

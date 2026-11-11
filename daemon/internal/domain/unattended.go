@@ -160,17 +160,22 @@ const (
 	// UnattendedStopBlockingSystemHealth: an open blocking system_health
 	// item no validated configuration supersedes (plan §4).
 	UnattendedStopBlockingSystemHealth UnattendedStopKind = "blocking_system_health"
+	// UnattendedStopUpdateDrain: an update drain is in force; the daemon
+	// lifts it when it restarts on a new build (issue #3103). It names no
+	// item and no command.
+	UnattendedStopUpdateDrain UnattendedStopKind = "update_drain"
 )
 
 // AllUnattendedStopKinds is the single registration point for stop kinds.
 var AllUnattendedStopKinds = []UnattendedStopKind{
 	UnattendedStopOperator,
 	UnattendedStopBlockingSystemHealth,
+	UnattendedStopUpdateDrain,
 }
 
 func (k UnattendedStopKind) valid() bool {
 	switch k {
-	case UnattendedStopOperator, UnattendedStopBlockingSystemHealth:
+	case UnattendedStopOperator, UnattendedStopBlockingSystemHealth, UnattendedStopUpdateDrain:
 		return true
 	default:
 		return false

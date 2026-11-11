@@ -296,6 +296,17 @@ struct UnattendedStoppedPresentationTests {
         #expect(long.itemID == "finding")
     }
 
+    /// The app has no drain wording yet (#3103), so a drain reads as the
+    /// generic stop and never claims an operator or a finding stopped it.
+    @Test func anUpdateDrainReadsAsTheGenericStop() throws {
+        let presentation = try #require(
+            make([.init(kind: .update_drain, item_id: nil, command_id: nil, since: Self.now)]))
+        #expect(presentation.cause == .unspecified)
+        #expect(presentation.itemID == nil)
+        #expect(presentation.message == "Unattended operation is stopped.")
+        #expect(presentation.actionTitle == "Open System Health")
+    }
+
     @Test func aStopWhoseItemIsNotOpenHereOffersSystemHealth() throws {
         let presentation = try #require(
             make(

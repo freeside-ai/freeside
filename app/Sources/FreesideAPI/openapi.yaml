@@ -1244,11 +1244,13 @@ components:
         stop_unattended that only resume_unattended lifts;
         blocking_system_health is an open blocking system_health item, which
         includes the daemon's own durable stop and clears when the daemon
-        resolves the item or a validated configuration supersedes it.
-        Widening it is a contract change.
+        resolves the item or a validated configuration supersedes it;
+        update_drain is an update drain in force, which the daemon lifts when
+        it restarts on a new build. Widening it is a contract change.
       enum:
         - operator_stop
         - blocking_system_health
+        - update_drain
 
     UnattendedStop:
       type: object
@@ -1265,23 +1267,24 @@ components:
           description: >
             The open system_health item whose decision or resolution reopens
             admission: the blocking item itself, or for an operator stop the
-            notice that offers resume_unattended. Null only for an operator
-            stop with no such notice open.
+            notice that offers resume_unattended. Null for an operator stop
+            with no such notice open, and always null for an update drain.
         command_id:
           type: string
           minLength: 1
           nullable: true
           description: >
             The accepted stop_unattended command for an operator stop; null
-            for a blocking item.
+            for a blocking item and for an update drain.
         since:
           type: string
           format: date-time
           nullable: true
           description: >
             When the stop took effect: the accepting instant of the stop
-            command, or the blocking item's creation instant. Null only for
-            an item recorded without a creation instant.
+            command, the blocking item's creation instant, or when the update
+            drain began. Null only for an item recorded without a creation
+            instant.
 
     UsagePoolSnapshot:
       type: object
@@ -3780,6 +3783,7 @@ components:
         - verification_memory_limit
         - quota_window_exhausted
         - machine_capacity
+        - update_drain
 
     ImageUpkeepPending:
       type: string

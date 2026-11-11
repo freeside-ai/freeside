@@ -1201,13 +1201,14 @@ public enum Components {
             case open = "open"
             case stopped = "stopped"
         }
-        /// Why unattended admission is closed (mirrors domain.UnattendedStopKind). operator_stop is an accepted stop_unattended that only resume_unattended lifts; blocking_system_health is an open blocking system_health item, which includes the daemon's own durable stop and clears when the daemon resolves the item or a validated configuration supersedes it. Widening it is a contract change.
+        /// Why unattended admission is closed (mirrors domain.UnattendedStopKind). operator_stop is an accepted stop_unattended that only resume_unattended lifts; blocking_system_health is an open blocking system_health item, which includes the daemon's own durable stop and clears when the daemon resolves the item or a validated configuration supersedes it; update_drain is an update drain in force, which the daemon lifts when it restarts on a new build. Widening it is a contract change.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/UnattendedStopKind`.
         @frozen public enum UnattendedStopKind: String, Codable, Hashable, Sendable, CaseIterable {
             case operator_stop = "operator_stop"
             case blocking_system_health = "blocking_system_health"
+            case update_drain = "update_drain"
         }
         /// One stop that closes unattended admission.
         ///
@@ -1215,17 +1216,17 @@ public enum Components {
         public struct UnattendedStop: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/UnattendedStop/kind`.
             public var kind: Components.Schemas.UnattendedStopKind
-            /// The open system_health item whose decision or resolution reopens admission: the blocking item itself, or for an operator stop the notice that offers resume_unattended. Null only for an operator stop with no such notice open.
+            /// The open system_health item whose decision or resolution reopens admission: the blocking item itself, or for an operator stop the notice that offers resume_unattended. Null for an operator stop with no such notice open, and always null for an update drain.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/UnattendedStop/item_id`.
             public var item_id: Swift.String?
-            /// The accepted stop_unattended command for an operator stop; null for a blocking item.
+            /// The accepted stop_unattended command for an operator stop; null for a blocking item and for an update drain.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/UnattendedStop/command_id`.
             public var command_id: Swift.String?
-            /// When the stop took effect: the accepting instant of the stop command, or the blocking item's creation instant. Null only for an item recorded without a creation instant.
+            /// When the stop took effect: the accepting instant of the stop command, the blocking item's creation instant, or when the update drain began. Null only for an item recorded without a creation instant.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/UnattendedStop/since`.
@@ -1234,9 +1235,9 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - kind:
-            ///   - item_id: The open system_health item whose decision or resolution reopens admission: the blocking item itself, or for an operator stop the notice that offers resume_unattended. Null only for an operator stop with no such notice open.
-            ///   - command_id: The accepted stop_unattended command for an operator stop; null for a blocking item.
-            ///   - since: When the stop took effect: the accepting instant of the stop command, or the blocking item's creation instant. Null only for an item recorded without a creation instant.
+            ///   - item_id: The open system_health item whose decision or resolution reopens admission: the blocking item itself, or for an operator stop the notice that offers resume_unattended. Null for an operator stop with no such notice open, and always null for an update drain.
+            ///   - command_id: The accepted stop_unattended command for an operator stop; null for a blocking item and for an update drain.
+            ///   - since: When the stop took effect: the accepting instant of the stop command, the blocking item's creation instant, or when the update drain began. Null only for an item recorded without a creation instant.
             public init(
                 kind: Components.Schemas.UnattendedStopKind,
                 item_id: Swift.String? = nil,
@@ -8005,6 +8006,7 @@ public enum Components {
             case verification_memory_limit = "verification_memory_limit"
             case quota_window_exhausted = "quota_window_exhausted"
             case machine_capacity = "machine_capacity"
+            case update_drain = "update_drain"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
