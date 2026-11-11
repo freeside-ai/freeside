@@ -942,6 +942,10 @@ func composeClaudeDriver(
 		// digest-addressed store admission described them from; ward
 		// re-hashes every byte it stages.
 		InputBlobs: blobs,
+		// The handoff and review namespaces leave the rig once their
+		// journal records close, so one deputy hold serves any number of
+		// tasks.
+		ReleaseRuntimeResources: ProductionRigRuntimeReleaser(cfg.StateDir, cfg.RigTokenFile),
 	}
 	backend, backendErr := ward.New(runtime, wardConfig)
 	if backendErr != nil {
@@ -1126,7 +1130,11 @@ func composeClaudeDriver(
 			if err := bindRigInvocationResources(cfg.StateDir, cfg.RigTokenFile, id); err != nil {
 				return err
 			}
-			return backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id))
+			if err := backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id)); err != nil {
+				return err
+			}
+			releasePreJobContainer(ctx, runtime, wardConfig.ReleaseRuntimeResources, id, logger)
+			return nil
 		},
 		Stall: InvocationStallNotice(st, StallInterval(cfg.WriterStallInterval), time.Now),
 		AdoptedRegistryHosts: func(ctx context.Context, repositoryID int64) ([]string, error) {
@@ -1500,6 +1508,47 @@ func bindRigInvocationResources(
 		resources.Containers, ward.PreJobContainerNameForInvocation(invocationID),
 	)
 	return BindRigRuntimeResources(stateRoot, tokenFile, resources)
+}
+
+// releasePreJobContainer releases the invocation's pre-job container after
+// Backend.PreJob has reaped it. Only the pre-job container: the handoff
+// namespace bound beside it is released when the handoff's journal record
+// closes. A start retry runs this hook again, so it binds the name again
+// before the next probe. A failed release is logged and keeps the name.
+func releasePreJobContainer(
+	ctx context.Context, runtime ward.Runtime, release ward.RuntimeResourceReleaser,
+	id domain.InvocationID, logger *slog.Logger,
+) {
+	if err := ward.ReleaseAbsentRuntimeResources(ctx, runtime, release, ward.RuntimeResourceNames{
+		Containers: []string{ward.PreJobContainerNameForInvocation(id)},
+	}); err != nil && logger != nil {
+		logger.Warn("rig pre-job container name stays bound after a failed release",
+			"invocation", string(id), "error", err)
+	}
+}
+
+// ProductionRigRuntimeReleaser is the release half of
+// ProductionRigRuntimeAuthorizer: nil without a rig token file, otherwise it
+// unbinds names from the held rig. Callers reach it only through
+// ward.ReleaseAbsentRuntimeResources (ward.RuntimeResourceReleaser).
+func ProductionRigRuntimeReleaser(
+	stateRoot, tokenFile string,
+) ward.RuntimeResourceReleaser {
+	if tokenFile == "" {
+		return nil
+	}
+	return func(_ context.Context, resources ward.RuntimeResourceNames) error {
+		token, err := ReadRigToken(tokenFile)
+		if err != nil {
+			return fmt.Errorf("read production rig token: %w", err)
+		}
+		if _, err := daemonlock.UnbindRigRuntimeResources(
+			stateRoot, token, resources.Containers, resources.Volumes, resources.Networks,
+		); err != nil {
+			return fmt.Errorf("release production rig runtime resources: %w", err)
+		}
+		return nil
+	}
 }
 
 func ProductionRigRuntimeAuthorizer(
