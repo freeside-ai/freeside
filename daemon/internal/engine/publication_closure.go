@@ -503,9 +503,11 @@ func (w *productionPublicationWorkflow) publicationClosureMerge(
 
 // applyClosureReference sets the candidate's source-issue reference fields from
 // the stored closure answer, so every publication path (forward, recovery, drift
-// repair) hands the publisher the same reference. It is read-only and never
-// blocks: a missing or unreadable checkpoint leaves the fields empty, so the
-// publisher writes no source-reference section.
+// repair) hands the publisher the same reference. It is read-only. A missing
+// checkpoint leaves the fields empty, so the publisher writes no
+// source-reference section. A read error returns: the caller retries a
+// transient one, and holds a row that fails readClosureCheckpoint's re-check
+// (ErrParentKeyMismatch), since dropping the reference would break replay.
 func (w *productionPublicationWorkflow) applyClosureReference(
 	ctx context.Context,
 	task productionPublicationTask,

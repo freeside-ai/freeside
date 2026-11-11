@@ -2643,7 +2643,9 @@ func (w *productionPublicationWorkflow) supersedeBlockedHold(
 // composePublicationCandidate composes the candidate the forward and recovery
 // branches of reconcileTask publish or recover: its metadata, its handoff
 // tip, its successor binding, and its disposition history. A non-nil outcome
-// is a durable hold the caller returns.
+// is a durable hold the caller returns. A composition error the retry
+// classifier accepts, such as a busy store read of the closure checkpoint,
+// returns with no outcome, so the run loop backs off and retries (#3001).
 //
 // The handoff check is an input because the branches choose it differently.
 // Forward passes the check reconcileHandoff just returned. Recovery passes
@@ -2663,6 +2665,11 @@ func (w *productionPublicationWorkflow) composePublicationCandidate(
 ) (publish.Candidate, *productionTaskOutcome, error) {
 	candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
 	if err != nil {
+		// A store read that failed on the environment retries. A state
+		// contradiction (ErrParentKeyMismatch) or an untyped error holds.
+		if productionPublicationRetryableFailure(err) {
+			return publish.Candidate{}, nil, err
+		}
 		held, holdErr := w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
 		return publish.Candidate{}, &held, holdErr
 	}
@@ -2697,7 +2704,8 @@ func (w *productionPublicationWorkflow) composePublicationCandidate(
 // and the stored authored artifact for a v2 record (falling back to v1 on any
 // read or gate failure). Every publication path (forward publish, crash
 // recovery, and drift repair through the candidate this returns) runs through
-// here, so a given candidate replays byte-identical metadata.
+// here, so a given candidate replays byte-identical metadata. A closure
+// checkpoint read error from applyClosureReference returns unchanged.
 func (w *productionPublicationWorkflow) productionCandidate(
 	ctx context.Context,
 	task productionPublicationTask,
