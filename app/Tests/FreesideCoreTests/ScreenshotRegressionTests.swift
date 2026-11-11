@@ -1449,7 +1449,7 @@
                     "spec_approval-superseded",
                     AttentionFixtures.closedByDaemon(
                         specification, id: "item-spec_approval-superseded", cause: .superseded, after: 2400,
-                        reason: "Superseded by revision 2 of the specification.", successor: specification.item.id)
+                        reason: "Superseded by version 2 of the specification.", successor: specification.item.id)
                 ),
                 ("system_health-resolved", AttentionFixtures.resolvedSystemHealth()),
                 (
@@ -4881,12 +4881,12 @@
                 - The API keeps the old shape for one release.
                 """.utf8)
             var surfaces: [Surface] = []
-            for (name, revision, content) in [
+            for (name, version, content) in [
                 ("task-specification-reader", 2, TaskDocumentReaderSheet.Content.loaded(bytes)),
                 ("task-specification-reader-unavailable", nil, .unavailable),
             ] {
                 let sheet = TaskDocumentReaderSheet(
-                    request: .init(digest: digest, document: .specification(revision: revision)), attachments: loader,
+                    request: .init(digest: digest, document: .specification(version: version)), attachments: loader,
                     content: content)
                 for scheme in [ColorScheme.light, .dark] {
                     let suffix = scheme == .dark ? "-dark" : ""

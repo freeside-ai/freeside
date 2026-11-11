@@ -18,9 +18,9 @@ enum SpecApprovalReader: String, Identifiable {
 }
 
 extension SpecApprovalReader {
-    /// The revision a reader shows, as the chip its header carries.
-    static func revisionChip(_ revision: Int?) -> StateChip? {
-        revision.map { StateChip(label: "Revision \($0)", cut: .ink) }
+    /// The version a reader shows, as the chip its header carries.
+    static func versionChip(_ version: Int?) -> StateChip? {
+        version.map { StateChip(label: "Version \($0)", cut: .ink) }
     }
 }
 
@@ -29,9 +29,9 @@ extension SpecApprovalReader {
 /// document they are.
 struct TaskDocumentRequest: Identifiable, Equatable {
     enum Document: Equatable {
-        /// The current campaign's approved specification; the revision only
+        /// The current campaign's approved specification; the version only
         /// when a held approval names its digest.
-        case specification(revision: Int?)
+        case specification(version: Int?)
         /// The text an operator submitted the task with (#2612).
         case prompt
     }
@@ -58,10 +58,10 @@ extension TaskDocumentRequest.Document {
         }
     }
 
-    /// The header's revision chip; a prompt has no revision.
+    /// The header's version chip; a prompt has no version.
     var chip: StateChip? {
         switch self {
-        case .specification(let revision): SpecApprovalReader.revisionChip(revision)
+        case .specification(let version): SpecApprovalReader.versionChip(version)
         case .prompt: nil
         }
     }
@@ -102,8 +102,10 @@ extension TaskDocumentRequest.Document {
 /// agent-written text a task source (`signet.TaskSubmissionInput` is built
 /// only from a device's submit_task), so there is no unverified prompt.
 struct ReaderFraming: Equatable {
-    /// The statement that says why this is the text to read.
-    let lead: String
+    /// The statement that says why this is the text to read, or nil when
+    /// the reader needs none: a specification's binding to its approval
+    /// already shows in the card and the reader's Identifiers digest.
+    let lead: String?
     /// The keyword over the text.
     let keyword: String
     /// The document's noun in the not-text notice.
@@ -113,7 +115,7 @@ struct ReaderFraming: Equatable {
     let digestLabel: String
 
     static let specification = ReaderFraming(
-        lead: "Bound by the daemon to this approval", keyword: "Specification (unverified)",
+        lead: nil, keyword: "Specification (unverified)",
         noun: "specification", dashedFrame: true, digestLabel: "Daemon-Bound Digest")
 
     static let prompt = ReaderFraming(
@@ -278,13 +280,12 @@ struct SpecificationReaderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            // What makes this text the one to read: for a specification,
-            // the daemon bound its digest to the approval (the Identifiers
-            // row).
-            Text(framing.lead)
-                .font(FreesideFont.statement)
-                .foregroundStyle(Color.ink)
-                .fixedSize(horizontal: false, vertical: true)
+            if let lead = framing.lead {
+                Text(lead)
+                    .font(FreesideFont.statement)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if preview.isTruncated {
                 Notice(

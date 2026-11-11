@@ -2251,9 +2251,9 @@ enum TaskTimelinePresentation {
         /// artifact's digest.
         case prompt(digest: String)
         /// The current campaign's approved specification, by the digest
-        /// its approval recorded; the revision only when a held approval
+        /// its approval recorded; the version only when a held approval
         /// names that digest.
-        case specification(digest: String, revision: Int?)
+        case specification(digest: String, version: Int?)
         /// The task's PR, linked only when a held item names its repository.
         case pullRequest(number: Int, url: URL?)
         /// A loaded history that records no PR.
@@ -2264,7 +2264,7 @@ enum TaskTimelinePresentation {
             switch self {
             case .issue(let number, _): "Issue #\(number)"
             case .prompt: "Prompt"
-            case .specification(_, let revision): revision.map { "Specification rev \($0)" } ?? "Specification"
+            case .specification(_, let version): version.map { "Specification v\($0)" } ?? "Specification"
             case .pullRequest(let number, _): "Pull request #\(number)"
             case .noPullRequest: "No pull request yet"
             }
@@ -2275,8 +2275,8 @@ enum TaskTimelinePresentation {
             switch self {
             case .issue(let number, _): "Issue \(number)"
             case .prompt: title
-            case .specification(_, let revision):
-                revision.map { "Specification revision \($0)" } ?? "Specification"
+            case .specification(_, let version):
+                version.map { "Specification version \($0)" } ?? "Specification"
             case .pullRequest(let number, _): "Pull request \(number)"
             case .noPullRequest: title
             }
@@ -2297,8 +2297,8 @@ enum TaskTimelinePresentation {
         var readerRequest: TaskDocumentRequest? {
             switch self {
             case .prompt(let digest): .init(digest: digest, document: .prompt)
-            case .specification(let digest, let revision):
-                .init(digest: digest, document: .specification(revision: revision))
+            case .specification(let digest, let version):
+                .init(digest: digest, document: .specification(version: version))
             case .issue, .pullRequest, .noPullRequest: nil
             }
         }
@@ -2329,10 +2329,10 @@ enum TaskTimelinePresentation {
             break
         }
         if let digest = approvedSpecificationDigest(task, in: timeline) {
-            let revision = items.first { item in
+            let version = items.first { item in
                 item._type == .spec_approval && DecisionDetailView.specificationClaim(in: item)?.digest == digest
-            }.flatMap(DecisionDetailView.specificationRevisionIteration(in:))
-            links.append(.specification(digest: digest, revision: revision))
+            }.flatMap(DecisionDetailView.specificationVersion(in:))
+            links.append(.specification(digest: digest, version: version))
         }
         if let number = completion?.pr_number ?? timeline.flatMap(pullRequest) {
             let reference = items.lazy.compactMap { $0.pr_reference?.value1 }.first { $0.number == number }

@@ -109,3 +109,6 @@ f511bd6d3b0baa53d107517ee005dce0c730c23b
 
 # Move freesided's start to internal/daemoncompose (#2864)
 9c0605228b6e6d88f4fdbc78973ccaca18de5034
+
+# Rename the app's specification version helpers (#3065)
+500bd008171b125cdfa8a227ffa9219a4394c744

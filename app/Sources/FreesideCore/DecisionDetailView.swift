@@ -1697,9 +1697,9 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func specRevisionLead(_ item: Components.Schemas.AttentionItem) -> some View {
         if let revision = item.spec_revision?.value1,
-            let priorIteration = Self.priorSpecRevisionIteration(in: item)
+            let priorVersion = Self.priorSpecificationVersion(in: item)
         {
-            DecisionChangeRow(specification: revision.diff, sinceRevision: priorIteration)
+            DecisionChangeRow(specification: revision.diff, sinceVersion: priorVersion)
         }
     }
 
@@ -1756,7 +1756,7 @@ struct DecisionDetailView: View {
     }
 
     /// The specification as one bordered item under its keyword (frame
-    /// 5.1): which revision the daemon bound to this approval, and the
+    /// 5.1): which version the daemon bound to this approval, and the
     /// links that open it. A revision's diff is a second link on the same
     /// item, not a second item (frame 7.2).
     @ViewBuilder
@@ -1766,9 +1766,9 @@ struct DecisionDetailView: View {
     ) -> some View {
         if let specification = Self.specificationClaim(in: item) {
             let title =
-                Self.specificationRevisionIteration(in: item).map { "Revision \($0)" }
+                Self.specificationVersion(in: item).map { "Version \($0)" }
                 ?? "Specification"
-            let priorIteration = Self.priorSpecRevisionIteration(in: item)
+            let priorVersion = Self.priorSpecificationVersion(in: item)
             keywordSection("Specification") {
                 VStack(alignment: .leading, spacing: 11) {
                     if specification.text != nil {
@@ -1777,13 +1777,13 @@ struct DecisionDetailView: View {
                                 specificationItemTitle(title)
                                 Spacer(minLength: 8)
                                 specificationLinks(
-                                    priorIteration: priorIteration,
+                                    priorVersion: priorVersion,
                                     rendersInteractiveControls: rendersInteractiveControls)
                             }
                             VStack(alignment: .leading, spacing: 11) {
                                 specificationItemTitle(title)
                                 specificationLinks(
-                                    priorIteration: priorIteration,
+                                    priorVersion: priorVersion,
                                     rendersInteractiveControls: rendersInteractiveControls)
                             }
                         }
@@ -1795,10 +1795,10 @@ struct DecisionDetailView: View {
                             attachments: attachments,
                             loadsAttachments: loadsAttachments,
                             rendersInteractiveControls: rendersInteractiveControls)
-                        if let priorIteration {
+                        if let priorVersion {
                             readerLink(
                                 "Open Diff", reader: .diff,
-                                accessibilityLabel: "Open diff from revision \(priorIteration)",
+                                accessibilityLabel: "Open diff from version \(priorVersion)",
                                 rendersInteractiveControls: rendersInteractiveControls)
                         }
                     }
@@ -1813,19 +1813,13 @@ struct DecisionDetailView: View {
     }
 
     private func specificationItemTitle(_ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(FreesideFont.factLabel)
-                .foregroundStyle(Color.ink)
-            Text("Bound by the daemon to this approval")
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Text(title)
+            .font(FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
     }
 
     private func specificationLinks(
-        priorIteration: Int?,
+        priorVersion: Int?,
         rendersInteractiveControls: Bool
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
@@ -1833,16 +1827,16 @@ struct DecisionDetailView: View {
                 "Open Reader", reader: .specification,
                 accessibilityLabel: "Open specification reader",
                 rendersInteractiveControls: rendersInteractiveControls)
-            if let priorIteration {
+            if let priorVersion {
                 readerLink(
                     "Open Diff", reader: .diff,
-                    accessibilityLabel: "Open diff from revision \(priorIteration)",
+                    accessibilityLabel: "Open diff from version \(priorVersion)",
                     rendersInteractiveControls: rendersInteractiveControls)
             }
         }
     }
 
-    static func specificationRevisionIteration(
+    static func specificationVersion(
         in item: Components.Schemas.AttentionItem
     ) -> Int? {
         if let iteration = item.spec_revision?.value1.iteration {
@@ -1855,7 +1849,7 @@ struct DecisionDetailView: View {
         return iteration
     }
 
-    static func priorSpecRevisionIteration(
+    static func priorSpecificationVersion(
         in item: Components.Schemas.AttentionItem
     ) -> Int? {
         item.spec_revision?.value1.prior_comments.last?.iteration
@@ -1932,7 +1926,7 @@ struct DecisionDetailView: View {
             } else {
                 UnavailableStateView(
                     glyph: .inbox, title: "Diff unavailable",
-                    description: "This is the first specification revision.")
+                    description: "This is the first version of the specification.")
             }
         }
     }
@@ -1945,7 +1939,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         FreesideSheetHeader(
             eyebrow: reader.keyword,
-            chip: SpecApprovalReader.revisionChip(Self.specificationRevisionIteration(in: item)),
+            chip: SpecApprovalReader.versionChip(Self.specificationVersion(in: item)),
             ask: reader == .specification ? "Specification" : "Specification changes")
     }
 
@@ -2953,12 +2947,12 @@ struct DecisionDetailView: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         layout {
-            // A revised specification names its revision beside the type
-            // (frame 7.2); a first revision has nothing to tell apart.
-            if item._type == .spec_approval, Self.priorSpecRevisionIteration(in: item) != nil,
-                let iteration = Self.specificationRevisionIteration(in: item)
+            // A revised specification names its version beside the type
+            // (frame 7.2); a first version has nothing to tell apart.
+            if item._type == .spec_approval, Self.priorSpecificationVersion(in: item) != nil,
+                let version = Self.specificationVersion(in: item)
             {
-                StateChip(label: "Revision \(iteration)", color: .inkDim)
+                StateChip(label: "Version \(version)", color: .inkDim)
             }
             if AttentionDisplay.showsLifecycleBadge(item.status) {
                 StatusBadge(status: item.status)

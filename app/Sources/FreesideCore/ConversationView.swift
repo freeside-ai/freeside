@@ -88,11 +88,11 @@ struct ConversationView: View {
         /// The agent's addressal claim, absent when it claimed none.
         let response: String?
 
-        var marker: String { "on revision \(iteration)" }
+        var marker: String { "on version \(iteration)" }
 
         var accessibilityLabel: String {
             let answer = response.map { "Agent claims addressed: \($0)" } ?? "No addressal claimed"
-            return "You, on revision \(iteration): \(comment). \(answer)"
+            return "You, on version \(iteration): \(comment). \(answer)"
         }
     }
 
