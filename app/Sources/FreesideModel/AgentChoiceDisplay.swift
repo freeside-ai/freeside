@@ -444,14 +444,27 @@ public enum AgentChoiceDisplay {
         "Clear · " + lineupLabel(role: role, policy: policy, catalog: catalog)
     }
 
+    /// What an unchosen role runs on, as its chip names it: the lineup's
+    /// selection for `role` in the short form, then "or routing policy" when
+    /// the policy lists the role. Nil when the catalog has no lineup entry
+    /// for the role, so the caller says `Default`.
+    public static func defaultSettingsLabel(
+        role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Catalog?
+    ) -> String? {
+        catalog?.lineup.first { $0.role == role }.map {
+            shortLabel($0.selection, catalog: catalog) + policySuffix(role: role, policy: policy)
+        }
+    }
+
     private static func lineupLabel(
         role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Catalog?
     ) -> String {
-        let lineup =
-            catalog?.lineup.first { $0.role == role }.map { "lineup \(shortLabel($0.selection, catalog: catalog))" }
-            ?? "lineup"
-        let policyListsTheRole = policy?.roles.contains { $0.role == role } == true
-        return lineup + (policyListsTheRole ? " or routing policy" : "")
+        defaultSettingsLabel(role: role, policy: policy, catalog: catalog).map { "lineup \($0)" }
+            ?? "lineup" + policySuffix(role: role, policy: policy)
+    }
+
+    private static func policySuffix(role: Role, policy: Components.Schemas.RoutingPolicy?) -> String {
+        policy?.roles.contains { $0.role == role } == true ? " or routing policy" : ""
     }
 
     private static func unique<T: Hashable>(_ values: [T]) -> [T] {

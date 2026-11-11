@@ -68,15 +68,18 @@ struct TaskLineChangeMenu: View {
         if let blockedReason { Text(blockedReason) }
     }
 
-    /// A role's submenu names the role and what it runs on now.
+    /// A role's submenu names the role and what it runs on now: its line,
+    /// or, with none, the lineup's settings for it.
     private func roleTitle(_ role: Role) -> String {
         let line = task.task_lines.first { $0.role == role }
+        let lineup = AgentChoiceDisplay.defaultSettingsLabel(
+            role: role, policy: coordinator.routingPolicy?.policy, catalog: coordinator.agentCatalog)
         let current =
             line.flatMap { line in
                 line.selection.map {
                     AgentChoiceDisplay.choiceLabel($0.value1, roles: [role], catalog: coordinator.agentCatalog)
                 } ?? line.agent
-            } ?? "lineup"
+            } ?? lineup.map { "lineup \($0)" } ?? "lineup"
         return "\(AgentChoiceDisplay.title(for: role)) · \(current)"
     }
 }

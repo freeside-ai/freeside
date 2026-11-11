@@ -2081,14 +2081,18 @@ struct ComposerChip: View {
 }
 
 /// A role chip (R33): the task-line role as a keyword, then the chosen
-/// agent, or `Default` in dim with the keyword faint when none is chosen,
-/// and the chevron. The keyword draws at the ladder's keyword size, not the
+/// agent, or, in dim with the keyword faint when none is chosen, what the
+/// role runs on by default (`Default` when the client can't say), and the
+/// chevron. The keyword draws at the ladder's keyword size, not the
 /// canvas's 10pt, since nothing draws under the floor (R10). Active, it
 /// takes the accent wash and border. A label, not a control: the New Task
-/// composer puts each chip inside its role's menu.
+/// composer puts each chip inside the button that opens its role's picker.
 struct RoleChip: View {
     let role: String
     let value: String?
+    /// The default's settings, drawn in place of `Default` while `value`
+    /// is nil.
+    var defaultValue: String? = nil
     var isActive = false
 
     var body: some View {
@@ -2119,7 +2123,7 @@ struct RoleChip: View {
     }
 
     private var valueText: some View {
-        Text(value ?? "Default")
+        Text(value ?? defaultValue ?? "Default")
             .font(FreesideFont.trailingSummary)
             .foregroundStyle(value == nil ? Color.inkDim : Color.ink)
     }

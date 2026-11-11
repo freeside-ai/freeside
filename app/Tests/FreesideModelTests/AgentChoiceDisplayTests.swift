@@ -473,6 +473,33 @@ import Testing
         #expect(
             AgentChoiceDisplay.defaultLabel(
                 role: .reviewer, policy: nil, catalog: UsageFixtures.treelessAgentCatalog()) == "Default · lineup")
+        #expect(
+            AgentChoiceDisplay.defaultLabel(
+                role: .implementer, policy: policy, catalog: UsageFixtures.treelessAgentCatalog())
+                == "Default · lineup or routing policy")
+    }
+
+    /// #3027: an unchosen role chip names what the role runs on, not a bare
+    /// `Default`; the default entry's label is built on the same text.
+    @Test func defaultSettingsNameTheLineupSelectionOrNothing() throws {
+        let policy = UsageFixtures.defaultRoutingPolicy()
+        #expect(
+            AgentChoiceDisplay.defaultSettingsLabel(role: .implementer, policy: policy, catalog: catalog)
+                == "\(UsageFixtures.readingCollectorID) · Opus · high or routing policy")
+        #expect(
+            AgentChoiceDisplay.defaultSettingsLabel(role: .reviewer, policy: nil, catalog: catalog)
+                == "\(UsageFixtures.unsupportedCollectorID) · GPT Codex")
+        for role in AgentChoiceDisplay.roleOrder {
+            let settings = try #require(
+                AgentChoiceDisplay.defaultSettingsLabel(role: role, policy: policy, catalog: catalog))
+            #expect(
+                AgentChoiceDisplay.defaultLabel(role: role, policy: policy, catalog: catalog)
+                    == "Default · lineup \(settings)")
+        }
+        #expect(AgentChoiceDisplay.defaultSettingsLabel(role: .reviewer, policy: policy, catalog: nil) == nil)
+        #expect(
+            AgentChoiceDisplay.defaultSettingsLabel(
+                role: .reviewer, policy: policy, catalog: UsageFixtures.treelessAgentCatalog()) == nil)
     }
 
     /// The task page clears a line where New Task leaves a role unchosen, so

@@ -485,7 +485,10 @@ struct NewTaskSheet: View {
         let catalog = model.agentCatalog
         let chosen = choices[role]
         let chosenLabel = chosen.map { AgentChoiceDisplay.choiceLabel($0, roles: [role], catalog: catalog) }
-        let chip = RoleChip(role: title, value: chosenLabel)
+        let chip = RoleChip(
+            role: title, value: chosenLabel,
+            defaultValue: AgentChoiceDisplay.defaultSettingsLabel(
+                role: role, policy: model.routingPolicy, catalog: catalog))
         // Only the chip is Freeside's; the menu stays system chrome, which
         // `ImageRenderer` cannot draw, so the goldens show the chip.
         if rendersInteractiveControls {
