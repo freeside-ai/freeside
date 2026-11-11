@@ -435,6 +435,11 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 				}
 			}
 			jcancel()
+			// A closed record is never reopened or recovered, so nothing
+			// acts on this namespace again without a new bind.
+			if !st.journalOpen {
+				b.releaseHandoffNamespace(ctx, hs.RunID)
+			}
 		}
 		// Advisory writes must not delay writer teardown or journal closure.
 		st.stall.finish()
