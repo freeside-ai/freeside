@@ -146,6 +146,68 @@ func TestLineupCallsListEachDistinctLaunchOnce(t *testing.T) {
 	}
 }
 
+func TestLineupCallsProbeTheEscalatedSpecifier(t *testing.T) {
+	t.Parallel()
+	withEscalated := func(t *testing.T, model string, effort domain.EffortLevel) loadedDeputySettings {
+		t.Helper()
+		settings := probeLineupSettings(t, true)
+		settings.Writers.SpecifierEscalated = &deputyWriterSelection{Model: model, Effort: effort}
+		return settings
+	}
+
+	t.Run("distinct launch gets its own call", func(t *testing.T) {
+		t.Parallel()
+		settings := withEscalated(t, "claude-fable-5-1", domain.EffortMedium)
+		calls, err := lineupCalls(&settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != 5 {
+			t.Fatalf("calls = %+v; want the four plain calls plus the escalated specifier", calls)
+		}
+		want, err := domain.TranslateEffort(domain.HarnessClientClaudeCode, domain.EffortMedium)
+		if err != nil {
+			t.Fatal(err)
+		}
+		escalated := calls[2]
+		if !slices.Equal(escalated.Roles, []domain.RoleName{domain.RoleSpecifier}) ||
+			escalated.Surface != lineupSurfaceAgentImage || escalated.Image != settings.Images.Agent ||
+			escalated.Model != domain.ClaudeCodeLaunchModel("claude-fable-5-1") ||
+			escalated.RequestedEffort != domain.EffortMedium || escalated.NativeEffort != want.Native {
+			t.Fatalf("escalated call = %+v; want the specifier on the agent image at medium", escalated)
+		}
+		if calls[0].RequestedEffort != domain.EffortHigh || calls[3].Surface != lineupSurfaceReviewImage {
+			t.Fatalf("calls = %+v; want the escalated call after the writers and before the reviewer", calls)
+		}
+	})
+
+	t.Run("matching launch shares a call", func(t *testing.T) {
+		t.Parallel()
+		settings := withEscalated(t, "claude-opus-5-5", domain.EffortMax)
+		calls, err := lineupCalls(&settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != 4 {
+			t.Fatalf("calls = %+v; want the escalated specifier on the implementer's call", calls)
+		}
+		want := []domain.RoleName{domain.RoleImplementer, domain.RoleRemediator, domain.RoleSpecifier}
+		if !slices.Equal(calls[1].Roles, want) {
+			t.Fatalf("shared writer call roles = %v; want %v", calls[1].Roles, want)
+		}
+	})
+
+	t.Run("bad effort names the escalated field", func(t *testing.T) {
+		t.Parallel()
+		settings := withEscalated(t, "claude-fable-5-1", "turbo")
+		_, err := lineupCalls(&settings)
+		if err == nil || !errors.Is(err, domain.ErrEffortUntranslatable) ||
+			!strings.HasPrefix(err.Error(), "specifier_escalated effort:") {
+			t.Fatalf("err = %v; want an untranslatable effort naming specifier_escalated", err)
+		}
+	})
+}
+
 func TestProbeLineupRecordGolden(t *testing.T) {
 	t.Parallel()
 	settings := probeLineupSettings(t, true)
