@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -120,6 +121,9 @@ type (
 		// commitTaskStop orders a Stop against invocation launch, the guard
 		// a client's Stop runs under.
 		commitTaskStop func(context.Context, domain.TaskID, func() error) error
+		// releaseVerificationMemory is the running daemon's engine release
+		// (release-verification-memory), nil when no engine runs.
+		releaseVerificationMemory func(context.Context, domain.TaskID, bool) (engine.VerificationMemoryRelease, error)
 		// usageCollection is the running daemon's usage collection. A
 		// command that opens the store itself never has one.
 		usageCollection *usagecollect.Coordinator

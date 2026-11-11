@@ -185,6 +185,9 @@ func main() {
 		case "set-memory-budget":
 			runSetMemoryBudgetMain(os.Args[2:])
 			return
+		case "release-verification-memory":
+			runReleaseVerificationMemoryMain(os.Args[2:])
+			return
 		case "task-line":
 			runTaskLineMain(os.Args[2:])
 			return
