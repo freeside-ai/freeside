@@ -142,6 +142,26 @@ func appliedMigrations(ctx context.Context, db *sql.DB) ([]appliedMigration, err
 	return applied, nil
 }
 
+// MigrationError is a failure applying one migration file. Its text is the
+// one migrate has always returned, so logs keep their shape; Name lets a
+// caller report which file failed without printing Err, whose text can carry
+// stored values a data migration read.
+type MigrationError struct {
+	Name string
+	// data marks a failure in the file's Go data migration rather than its SQL.
+	data bool
+	Err  error
+}
+
+func (e *MigrationError) Error() string {
+	if e.data {
+		return fmt.Sprintf("migration %q data: %v", e.Name, e.Err)
+	}
+	return fmt.Sprintf("migration %q: %v", e.Name, e.Err)
+}
+
+func (e *MigrationError) Unwrap() error { return e.Err }
+
 // applyMigration runs one migration file and records its version in the same
 // transaction. Migration files must not contain BEGIN/COMMIT.
 func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, version int, name string) error {
@@ -152,23 +172,23 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, version int, na
 	digest := contentaddr.Sum(body)
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("migration %q: begin: %w", name, err)
+		return &MigrationError{Name: name, Err: fmt.Errorf("begin: %w", err)}
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, string(body)); err != nil {
-		return fmt.Errorf("migration %q: %w", name, err)
+		return &MigrationError{Name: name, Err: err}
 	}
 	if err := applyDataMigration(ctx, tx, name); err != nil {
-		return fmt.Errorf("migration %q data: %w", name, err)
+		return &MigrationError{Name: name, data: true, Err: err}
 	}
 	appliedAt := formatTime(time.Now())
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations (version, name, digest, applied_at) VALUES (?, ?, ?, ?)`,
 		version, name, digest, appliedAt); err != nil {
-		return fmt.Errorf("migration %q: record version: %w", name, err)
+		return &MigrationError{Name: name, Err: fmt.Errorf("record version: %w", err)}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("migration %q: commit: %w", name, err)
+		return &MigrationError{Name: name, Err: fmt.Errorf("commit: %w", err)}
 	}
 	return nil
 }
