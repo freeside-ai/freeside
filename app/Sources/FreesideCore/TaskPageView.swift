@@ -1020,7 +1020,9 @@ struct TaskPageView: View {
                 KeywordLabel(text: "Timeline")
                     .accessibilityAddTraits(.isHeader)
                 if let message = TaskTimelinePresentation.availabilityMessage(
-                    state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
+                    state: coordinator.taskTimelineLoadStates[snapshot.task.id],
+                    answered: coordinator.answeredTaskTimelineIDs.contains(snapshot.task.id),
+                    freshness: coordinator.store.freshness)
                 {
                     Text(message)
                         .font(FreesideFont.cardBody)
@@ -1514,9 +1516,15 @@ enum TaskTimelinePresentation {
 
     /// A cached partition remains useful after a failed refresh, but neither
     /// its contents nor an empty array establish current, complete history.
+    /// History the daemon has `answered` this session is current while
+    /// freshness holds, so a routine refetch of it shows no notice; only a
+    /// failed one does.
     static func availabilityMessage(
-        state: SyncCoordinator.TimelineLoadState?, freshness: InboxStore.Freshness
+        state: SyncCoordinator.TimelineLoadState?, answered: Bool, freshness: InboxStore.Freshness
     ) -> String? {
+        if answered, !freshness.isFailing {
+            return state == .unavailable ? "Task history refresh failed. Showing saved history." : nil
+        }
         if state == .loading { return "Showing saved task history while refreshing…" }
         if state == .unavailable { return "Task history refresh failed. Showing saved history." }
         if state != .loaded || freshness.isFailing { return "Saved task history. Freshness unconfirmed." }
