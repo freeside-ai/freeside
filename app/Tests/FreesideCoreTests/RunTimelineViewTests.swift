@@ -126,13 +126,19 @@ import Testing
         #expect(RunDisplay.stageHeading(run) == nil)
     }
 
-    @Test func timelineTitleIsTheAttemptNumberOrTheRunID() throws {
+    @Test func timelineTitleNamesThePhaseOrTheRunID() throws {
         var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
         #expect(try #require(run.campaign_id).count == 73)
-        #expect(RunDisplay.timelineTitle(run) == "Attempt 2")
+        #expect(RunDisplay.timelineTitle(run) == "Implementation · Attempt 2")
 
         run.campaign_id = "campaign-short"
+        #expect(RunDisplay.timelineTitle(run) == "Implementation · Attempt 2")
+
+        // `Run` carries no role: a run with no stage yet can't say its phase.
+        let stages = run.stages
+        run.stages = []
         #expect(RunDisplay.timelineTitle(run) == "Attempt 2")
+        run.stages = stages
 
         run.attempt_number = nil
         #expect(RunDisplay.timelineTitle(run) == "Run \(RunFixtures.activeRunID)")
@@ -140,6 +146,13 @@ import Testing
         run.attempt_number = 2
         run.campaign_id = nil
         #expect(RunDisplay.timelineTitle(run) == "Run \(RunFixtures.activeRunID)")
+    }
+
+    @Test func timelineTitleNamesASpecificationRunByItsPhase() {
+        // Its implementation run also carries attempt 1 (#1462).
+        let run = RunFixtures.handedOffSpecificationRun().run
+        #expect(run.attempt_number == 1)
+        #expect(RunDisplay.timelineTitle(run) == "Specification")
     }
 
     @Test func timelineTitleShortensAnOpaqueRunIdInTheFallback() throws {
@@ -687,6 +700,18 @@ import Testing
         #expect(
             RunHistoryPresentation.attemptContext(invocationID: "inv-2", stages: stages, reviewRounds: [])
                 == "Implementation · Round 2")
+    }
+
+    /// A specification invocation may be a research continuation or a
+    /// Discuss reply, so it is no round (#1462).
+    @Test func specificationInvocationsAreNotRounds() {
+        let stages = [stage("specification", id: "s1", attempts: [(1, "inv-1"), (2, "inv-2")])]
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-1", stages: stages, reviewRounds: [])
+                == "Specification · Invocation 1")
+        #expect(
+            RunHistoryPresentation.attemptContext(invocationID: "inv-2", stages: stages, reviewRounds: [])
+                == "Specification · Invocation 2")
     }
 
     @Test func repeatedStagesQualifyEachLabelWithItsPass() {

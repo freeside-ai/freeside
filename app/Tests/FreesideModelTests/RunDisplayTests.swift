@@ -299,13 +299,13 @@ import Testing
         let runs = RunFixtures.defaultRuns()
         #expect(
             RunDisplay.identityLine(run, runs: runs)
-                == "Attempt 1 · handed off to implementation (attempt 1)")
+                == "Specification · handed off to implementation (attempt 1)")
         #expect(
             RunDisplay.secondaryLine(run, runs: runs)
                 == .supersession("Handed off to implementation (attempt 1)"))
         #expect(
             RunDisplay.identityLine(run, runs: [])
-                == "Attempt 1 · handed off to implementation (run-freeside-654)")
+                == "Specification · handed off to implementation (run-freeside-654)")
         #expect(
             RunDisplay.secondaryLine(run)
                 == .supersession("Handed off to implementation (run-freeside-654)"))
