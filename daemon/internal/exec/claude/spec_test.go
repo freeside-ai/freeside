@@ -232,6 +232,10 @@ var handoffCommandCases = []handoffCommandCase{
 	{"file-v7-prepare", stage.PromptFileV7, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
 	{"file-v7-specification", stage.PromptFileV7, nil, deferredStderrRedirect, true},
 	{"file-v7-specification-prepare", stage.PromptFileV7, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
+	{"file-v8", stage.PromptFileV8, nil, deferredStderrRedirect, false},
+	{"file-v8-prepare", stage.PromptFileV8, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
+	{"file-v8-specification", stage.PromptFileV8, nil, deferredStderrRedirect, true},
+	{"file-v8-specification-prepare", stage.PromptFileV8, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
 }
 
 var (
@@ -312,8 +316,10 @@ func TestHandoffSpecFileV5DisablesBuiltinInstructions(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
 	// file_v6 keeps file_v5's plugin setting (TestHandoffSpecFileV6AddsOnlyTheUsageDriver),
-	// and file_v7 keeps file_v6's (TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource).
-	if provider.PromptDelivery() != stage.PromptFileV7 {
+	// file_v7 keeps file_v6's (TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource),
+	// and file_v8 keeps it beside the attribution setting
+	// (TestHandoffSpecFileV8TurnsOffAttribution).
+	if provider.PromptDelivery() != stage.PromptFileV8 {
 		t.Fatal("new launches do not select the severed protocol")
 	}
 	const settings = `--settings '{"enabledPlugins":{"agents-md@builtin":false}}' `
@@ -502,6 +508,61 @@ func TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource(t *testing.T) {
 	}
 }
 
+// TestHandoffSpecFileV8TurnsOffAttribution proves file_v8 differs from
+// file_v7 on every stage only in the --settings value, which keeps the
+// agents-md plugin disabled and empties the CLI's commit and PR attribution,
+// and that no older protocol carries the attribution setting.
+func TestHandoffSpecFileV8TurnsOffAttribution(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	command := func(t *testing.T, tc handoffCommandCase) string {
+		t.Helper()
+		hs, err := provider.HandoffSpec(context.Background(), tc.input())
+		if err != nil {
+			t.Fatalf("HandoffSpec: %v", err)
+		}
+		return hs.Agent.Command[2]
+	}
+	var settings struct {
+		Attribution    map[string]string `json:"attribution"`
+		EnabledPlugins map[string]bool   `json:"enabledPlugins"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(attributionOffSettings))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&settings); err != nil {
+		t.Fatalf("decode file_v8 settings: %v", err)
+	}
+	if len(settings.Attribution) != 2 || settings.Attribution["commit"] != "" || settings.Attribution["pr"] != "" {
+		t.Errorf("file_v8 attribution = %v, want empty commit and pr", settings.Attribution)
+	}
+	if disabled, ok := settings.EnabledPlugins["agents-md@builtin"]; !ok || disabled || len(settings.EnabledPlugins) != 1 {
+		t.Errorf("file_v8 enabledPlugins = %v, want only agents-md@builtin disabled", settings.EnabledPlugins)
+	}
+	v7Flag := "--settings " + shellQuote(pluginSettings) + " "
+	v8Flag := "--settings " + shellQuote(attributionOffSettings) + " "
+	for _, specification := range []bool{false, true} {
+		for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
+			v7 := command(t, handoffCommandCase{delivery: stage.PromptFileV7, prepare: prepare, specification: specification})
+			v8 := command(t, handoffCommandCase{delivery: stage.PromptFileV8, prepare: prepare, specification: specification})
+			if strings.Count(v7, v7Flag) != 1 || strings.Count(v8, v8Flag) != 1 {
+				t.Fatalf("settings flag missing or repeated:\nfile_v7 %s\nfile_v8 %s", v7, v8)
+			}
+			if got := strings.Replace(v8, v8Flag, v7Flag, 1); got != v7 {
+				t.Errorf("file_v8 differs from file_v7 beyond the settings value:\n got %s\nwant %s", got, v7)
+			}
+			for _, delivery := range []stage.PromptDelivery{
+				stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3,
+				stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7,
+			} {
+				got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: specification})
+				if strings.Contains(got, "attribution") {
+					t.Errorf("%s carries the attribution setting", delivery)
+				}
+			}
+		}
+	}
+}
+
 // The driver must ask under the request id the transcript reader matches, and
 // the driver path must stay out of the workspace and the root-only launchDir.
 func TestUsageDriverMatchesTheTranscriptReader(t *testing.T) {
@@ -531,15 +592,16 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
 			len(command), linuxMaxArgumentBytes)
 	}
-	// The file_v6 command inlines the driver; with every optional flag it
-	// must stay well under the limit, at a quarter of it.
+	// The file_v6 and later commands inline the driver; with every optional
+	// flag and file_v8's settings, the longest, they must stay well under the
+	// limit, at a quarter of it.
 	longest := agentCommandWithSettings(
 		"< "+shellQuote(ward.PromptFilePath), "00000000-0000-4000-8000-000000000000", "inv-headroom",
 		[]string{"/usr/local/bin/freeside-project-prepare"}, strings.Repeat("'", 256), strings.Repeat("'", 64),
-		specify.OutputJSONSchema, `{"enabledPlugins":{"agents-md@builtin":false}}`,
+		specify.OutputJSONSchema, attributionOffSettings,
 		launcherFilesDeferredStderr, true, true)[2]
 	if len(longest) >= linuxMaxArgumentBytes/4 {
-		t.Fatalf("file_v6 command is %d bytes, want under %d", len(longest), linuxMaxArgumentBytes/4)
+		t.Fatalf("longest command is %d bytes, want under %d", len(longest), linuxMaxArgumentBytes/4)
 	}
 }
 
