@@ -199,16 +199,20 @@ func TestRenderAuthoredBodyProseNeutralizesGFMExtensions(t *testing.T) {
 	}
 }
 
-func TestClientPublicationRecipeV2Identifier(t *testing.T) {
+func TestPublicationRecipeIdentifiers(t *testing.T) {
 	t.Parallel()
 	// The recipe identifiers are stored-record contract strings: a frozen record
 	// names its recipe and the engine dispatches on it. Pin them so a rename is a
 	// deliberate, reviewed change rather than a silent drift.
-	if clientPublicationRecipeV2 != "freeside.client-publication/v2" {
-		t.Errorf("recipe identifier drifted: %q", clientPublicationRecipeV2)
-	}
-	if IntakePublicationRecipe != "freeside.intake-publication/v1" {
-		t.Errorf("intake recipe identifier drifted: %q", IntakePublicationRecipe)
+	for got, want := range map[string]string{
+		clientPublicationRecipeV2: "freeside.client-publication/v2",
+		clientPublicationRecipeV3: "freeside.client-publication/v3",
+		IntakePublicationRecipeV1: "freeside.intake-publication/v1",
+		IntakePublicationRecipeV2: "freeside.intake-publication/v2",
+	} {
+		if got != want {
+			t.Errorf("recipe identifier drifted: %q, want %q", got, want)
+		}
 	}
 }
 
@@ -222,7 +226,7 @@ func TestRenderAuthoredPublicationNeutralizesActiveConstructs(t *testing.T) {
 	if err := screenAuthoredText(a); err != nil {
 		t.Fatalf("fixture failed the screen: %v", err)
 	}
-	_, rendered := renderAuthoredPublication(a)
+	_, rendered := renderAuthoredPublication(clientPublicationRecipeV2, a)
 
 	for _, wrapped := range []string{"`@octocat`", "`#123`", "`owner/repo#5`", "`GH-7`", "`deadbeefcafe`", "`https://example.test/x`"} {
 		if !strings.Contains(rendered, wrapped) {
@@ -265,7 +269,7 @@ func TestRenderAuthoredPublicationKeepsAllowedConstructsLive(t *testing.T) {
 	if err := screenAuthoredText(a); err != nil {
 		t.Fatalf("fixture failed the screen: %v", err)
 	}
-	_, rendered := renderAuthoredPublication(a)
+	_, rendered := renderAuthoredPublication(clientPublicationRecipeV2, a)
 	for _, live := range []string{"# Heading one", "*emphasis*", "_more_", "`inline code`", "- bullet a", "1. first"} {
 		if !strings.Contains(rendered, live) {
 			t.Errorf("allowed construct not kept live: %q\n%s", live, rendered)
@@ -317,7 +321,7 @@ func TestRenderAuthoredPublicationRendersEvidenceAndProvenanceInert(t *testing.T
 	t.Parallel()
 	ref := domain.PublicationEvidenceReference{ArtifactID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("b", 64))}
 	a := authoredFixture(t, "A short body.", ref)
-	title, rendered := renderAuthoredPublication(a)
+	title, rendered := renderAuthoredPublication(clientPublicationRecipeV2, a)
 	if title != "Outcome title" {
 		t.Errorf("title = %q", title)
 	}
@@ -346,12 +350,69 @@ func TestRenderAuthoredPublicationIsDeterministic(t *testing.T) {
 	if err := screenAuthoredText(a); err != nil {
 		t.Fatalf("fixture failed the screen: %v", err)
 	}
-	_, first := renderAuthoredPublication(a)
-	_, second := renderAuthoredPublication(a)
+	_, first := renderAuthoredPublication(clientPublicationRecipeV2, a)
+	_, second := renderAuthoredPublication(clientPublicationRecipeV2, a)
 	if first != second {
 		t.Fatal("renderer is not deterministic")
 	}
 	golden.Assert(t, "publication_render_v2_body", []byte(first))
+}
+
+// v3RenderFixture is the determinism fixture with an evidence reference, so the
+// v3 tests prove the reference is dropped rather than merely absent.
+func v3RenderFixture(t *testing.T) domain.PublicationAuthoring {
+	t.Helper()
+	ref := domain.PublicationEvidenceReference{ArtifactID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("c", 64))}
+	body := "## Why\n\n" +
+		"Shipped the fix for @octocat in #123 (owner/repo#5, GH-7).\n\n" +
+		"## What\n\n" +
+		"- Escaped <b>tag</b> & entity.\n- A [link](https://example.test/l) dropped its target.\n\n" +
+		"```\nverbatim @notmention #999\n```"
+	a := authoredFixture(t, body, ref)
+	if err := screenAuthoredText(a); err != nil {
+		t.Fatalf("fixture failed the screen: %v", err)
+	}
+	return a
+}
+
+// Under client v3 the body ends with the author's last section: no rule, no
+// producer line, no evidence list, and no digest (#3022 criterion 3).
+func TestRenderAuthoredPublicationV3EndsWithTheProse(t *testing.T) {
+	t.Parallel()
+	a := v3RenderFixture(t)
+	title, body := renderAuthoredPublication(clientPublicationRecipeV3, a)
+	if title != a.Title {
+		t.Errorf("title = %q, want %q", title, a.Title)
+	}
+	if body != renderAuthoredBodyProse(a.Body) {
+		t.Errorf("v3 body is not the rendered prose alone:\n%s", body)
+	}
+	for _, absent := range []string{"Produced by", "Evidence artifacts", "artifact-1", "sha256:", string(a.Digest), "\n---\n"} {
+		if strings.Contains(body, absent) {
+			t.Errorf("v3 body contains %q:\n%s", absent, body)
+		}
+	}
+	golden.Assert(t, "publication_render_v3_body", []byte(body))
+}
+
+// Each intake recipe renders exactly like the client recipe of its generation,
+// so intake v1 keeps v2's frozen footer and intake v2 drops it.
+func TestRenderAuthoredPublicationIntakeRecipesMatchClientGenerations(t *testing.T) {
+	t.Parallel()
+	a := v3RenderFixture(t)
+	for _, pair := range []struct{ intake, client string }{
+		{IntakePublicationRecipeV1, clientPublicationRecipeV2},
+		{IntakePublicationRecipeV2, clientPublicationRecipeV3},
+	} {
+		_, intake := renderAuthoredPublication(pair.intake, a)
+		_, client := renderAuthoredPublication(pair.client, a)
+		if intake != client {
+			t.Errorf("%s renders differently from %s:\n%s\n---\n%s", pair.intake, pair.client, intake, client)
+		}
+	}
+	if _, v2 := renderAuthoredPublication(clientPublicationRecipeV2, a); !strings.Contains(v2, "Produced by") {
+		t.Errorf("v2 lost its frozen producer footer:\n%s", v2)
+	}
 }
 
 // liveMarkdownCorpus is the rendered-body fixture the opt-in live check sends
@@ -426,7 +487,7 @@ func TestRenderAuthoredPublicationLiveMarkdownStaysInert(t *testing.T) {
 	if err := screenAuthoredText(a); err != nil {
 		t.Fatalf("fixture failed the screen: %v", err)
 	}
-	_, rendered := renderAuthoredPublication(a)
+	_, rendered := renderAuthoredPublication(clientPublicationRecipeV2, a)
 	htmlOut := renderMarkdownViaGitHub(t, rendered)
 	// The author prose must never produce an active link, an image, a mention
 	// hovercard, or an issue/commit reference in GitHub's own renderer.

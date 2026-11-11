@@ -46,10 +46,10 @@ func NewTaskSubmitter(blobs *signet.BlobStore, initiator func(domain.ProjectID) 
 // project with no configured initiator is reported as store.ErrNotFound so the
 // boundary answers 404 without enumerating projects. An operator name that
 // fails the canonical bound is refused as ErrInvalidSubmitTaskPayload before
-// any write. A new command freezes recipe v2; a command recorded under v1 is
-// replayed by the boundary and never recomposed here, so it keeps its v1 record.
+// any write. A new command freezes recipe v3; a command recorded under v1 or v2
+// is replayed by the boundary and never recomposed here, so it keeps its record.
 func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput) (signet.TaskSubmissionResult, error) {
-	return t.submit(ctx, tx, in, clientPublicationRecipeV2)
+	return t.submit(ctx, tx, in, clientPublicationRecipeV3)
 }
 
 func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput, recipe string) (signet.TaskSubmissionResult, error) {

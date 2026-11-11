@@ -349,7 +349,7 @@ func TestAuthorSourceIssueSelection(t *testing.T) {
 	w := &productionPublicationWorkflow{store: s}
 	task := productionPublicationTask{
 		RunID: policy.RunID, PublicationID: "pub-1", HeadSHA: closureStoreHead,
-		Publication: ProductionPublication{Recipe: IntakePublicationRecipe, Title: "Resolve owner/repo#7", Body: "literal"},
+		Publication: ProductionPublication{Recipe: IntakePublicationRecipeV2, Title: "Resolve owner/repo#7", Body: "literal"},
 	}
 	ref, number, sameRepo, err := w.authorSourceIssue(context.Background(), task, closureStoreBinding(policy, taskID))
 	if err != nil {

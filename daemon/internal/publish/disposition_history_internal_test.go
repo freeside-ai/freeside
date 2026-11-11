@@ -101,30 +101,31 @@ func TestDesiredPRContentFitsEveryReservedPublisherSection(t *testing.T) {
 	if len(body) > maxPullRequestBodyBytes {
 		t.Fatalf("composed body bytes = %d, want at most %d", len(body), maxPullRequestBodyBytes)
 	}
-	start := strings.Index(body, dispositionHistoryOpenMarker)
-	end := strings.Index(body, dispositionHistoryCloseMarker)
+	start := strings.Index(body, verificationOpenMarker)
+	end := strings.Index(body, verificationCloseMarker)
 	if start < 0 || end < start {
-		t.Fatal("composed body omitted the disposition-history marker pair")
+		t.Fatal("composed body omitted the verification marker pair")
 	}
-	section := body[start : end+len(dispositionHistoryCloseMarker)]
-	if len(section) < minRenderedDispositionHistoryBytes {
-		advisoriesBytes := len(renderAdvisories(advisories))
-		historyLimit := maxPullRequestBodyBytes - maxCandidateBodyBytes - advisoriesBytes -
-			len(identity.Marker()) - 3*len("\n\n")
-		t.Fatalf(
-			"fitted history bytes = %d under limit %d (advisories %d), want at least %d",
-			len(section), historyLimit, advisoriesBytes, minRenderedDispositionHistoryBytes,
-		)
+	section := body[start : end+len(verificationCloseMarker)]
+	if got := strings.Count(section, "  - Declined"); got != maxRenderedVerificationFindings {
+		t.Fatalf("rendered findings = %d, want the %d-finding cap", got, maxRenderedVerificationFindings)
 	}
-	if !strings.Contains(section, "Disposition history truncated; full rendered digest: <code>sha256:") {
-		t.Fatal("fitted history omitted the complete rendering digest")
+	if want := fmt.Sprintf("  - %d more declined or deferred findings are recorded in Freeside.",
+		300-maxRenderedVerificationFindings); !strings.Contains(section, want) {
+		t.Fatalf("section omitted the count of findings left out:\n%s", section)
+	}
+	if !strings.HasSuffix(section, verificationClosingLine+"\n\n"+verificationCloseMarker) {
+		t.Fatal("bounded section lost its closing line")
 	}
 	if err := ValidateCandidateBody(candidate.Body + "x"); err == nil {
 		t.Fatal("candidate body consumed a publisher-owned section reserve")
 	}
 }
 
-func TestDesiredPRContentUsesFullHistoryWhenSpaceAllows(t *testing.T) {
+// TestDesiredPRContentOmitsDispositionHistory pins #3022 criterion 5's body
+// half: no composed body carries the history section, while the canonical
+// rendering the intent binds is still produced unchanged.
+func TestDesiredPRContentOmitsDispositionHistory(t *testing.T) {
 	t.Parallel()
 	head := strings.Repeat("b", 40)
 	history := oversizedDispositionHistory(t, head)
@@ -139,25 +140,20 @@ func TestDesiredPRContentUsesFullHistoryWhenSpaceAllows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withinCeiling, err := renderDispositionHistoryWithin(history, maxRenderedDispositionHistoryBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if withinCeiling != canonical {
-		t.Fatal("ceiling-sized composition changed the canonical history rendering")
-	}
 	_, body, err := desiredPRContent(identity, Candidate{
-		Title: "Full history", Body: "Short operator prose.",
+		Title: "No history", Body: "Short operator prose.",
 		RunID: "run-aggregate-findings", HeadSHA: head, DispositionHistory: &history,
 	}, closureResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, "\n\n"+canonical+"\n\n"+identity.Marker()) {
-		t.Fatal("composition shortened history even though the full bounded section fit")
+	for _, absent := range []string{dispositionHistoryOpenMarker, dispositionHistoryCloseMarker, "Freeside Disposition History", canonical} {
+		if strings.Contains(body, absent) {
+			t.Fatalf("composed body still carries the disposition history (%q)", absent)
+		}
 	}
-	if _, err := renderDispositionHistoryWithin(history, minRenderedDispositionHistoryBytes-1); err == nil {
-		t.Fatal("composition accepted a history budget below the reserved floor")
+	if !strings.Contains(body, "- Passed: independent review, 2 rounds, 300 findings (0 fixed, 300 declined, 0 deferred)") {
+		t.Fatalf("composed body omitted the review outcome:\n%s", body)
 	}
 }
 
@@ -236,8 +232,8 @@ func TestDesiredPRContentBoundsOversizedFindingClaim(t *testing.T) {
 	if len(body) > maxPullRequestBodyBytes {
 		t.Fatalf("body bytes = %d, want at most %d", len(body), maxPullRequestBodyBytes)
 	}
-	if !strings.Contains(body, "truncated; content digest <code>sha256:") {
-		t.Fatal("bounded finding claim omitted its content digest")
+	if !strings.Contains(body, "</code> (truncated)") || strings.Contains(body, "content digest") {
+		t.Fatal("bounded finding claim is not marked truncated, or names a digest")
 	}
 }
 

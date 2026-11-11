@@ -18,7 +18,22 @@ const (
 	verificationHeading              = "## Verification"
 	maxRenderedVerificationSteps     = 24
 	maxRenderedVerificationArgvBytes = 512
-	maxRenderedVerificationBytes     = publicationtext.MaxRenderedVerificationBytes
+	// verificationHeadPrefixLen is how much of the head a command bullet
+	// names: enough to find the commit, short enough to read.
+	verificationHeadPrefixLen = 8
+	// maxRenderedVerificationClaimBytes bounds each recorded finding string,
+	// as advisories bound theirs.
+	maxRenderedVerificationClaimBytes = publicationtext.MaxRenderedAdvisoryClaimBytes
+	maxRenderedVerificationFindings   = 20
+	maxOmittedFindingsLineBytes       = 96
+	// The section may use the disposition history's reserved floor as well as
+	// its own: the body no longer carries the history (#3022), and
+	// MaxCandidateBodyBytes still reserves both, so prose accepted before this
+	// change still fits beside the declined and deferred findings.
+	maxRenderedVerificationSectionBytes = publicationtext.MaxRenderedVerificationBytes +
+		publicationtext.MinRenderedDispositionHistoryBytes
+	verificationClosingLine = "Freeside ran only the checks listed here. " +
+		"The rest of this description is its author's account."
 )
 
 // candidateVerificationReport binds the rendered bytes to an evidence artifact.
@@ -78,54 +93,140 @@ func validateVerificationCandidate(c Candidate, auth domain.CandidateAuthorizati
 	return rep, artifact.Digest, nil
 }
 
-func renderVerification(rep verify.Report, digest domain.Digest, invocation domain.InvocationID, claims []domain.AgentClaim) (string, error) {
+// renderVerification writes the publisher-owned Verification section for the
+// target repository's reviewer (#3022): one bullet per recipe command Freeside
+// ran at the head, one bullet for the independent review's outcome with each
+// declined or deferred finding under it, and a closing line that labels
+// everything else in the body as its author's account. rep is nil when the
+// candidate carries no bound report, and history is nil when it carries no
+// review records; the caller renders the section only when one is present.
+//
+// The section shows no digest, invocation id, base commit, or artifact list:
+// those stay in the store and the clients. Every recorded string is rendered
+// inert through dispositionCode, and every cap is a fixed byte or count bound,
+// so third-party volume shortens the section and never fails it.
+func renderVerification(rep *verify.Report, history *DispositionHistory) (string, error) {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%s\n\n%s\n\n", verificationOpenMarker, verificationHeading)
-	for _, fact := range []struct {
-		label, value string
-	}{
-		{"Outcome", string(rep.Outcome)},
-		{"Head", rep.HeadSHA},
-		{"Base", rep.BaseSHA},
-		{"Recipe digest", string(rep.RecipeDigest)},
-		{"Verification invocation", string(invocation)},
-		{"Report artifact digest", string(digest)},
-	} {
-		fmt.Fprintf(&out, "- %s: %s\n", fact.label, dispositionCode(fact.value))
-	}
-	out.WriteString("\nFreeside ran these recipe commands at the head above. Any other check claimed in operator prose or agent evidence was not run by Freeside. Publisher-owned review evidence is recorded separately.\n\n")
-	fmt.Fprintf(&out, "Executed steps: %d.\n\n", len(rep.Steps))
-	for i, step := range rep.Steps {
-		if i == maxRenderedVerificationSteps {
-			fmt.Fprintf(&out, "\nOmitted %d further steps; see the report artifact.\n", len(rep.Steps)-i)
-			break
+	if rep != nil {
+		at := rep.HeadSHA[:min(len(rep.HeadSHA), verificationHeadPrefixLen)]
+		for i, step := range rep.Steps {
+			if i == maxRenderedVerificationSteps {
+				fmt.Fprintf(&out, "- Omitted %d further commands Freeside ran.\n", len(rep.Steps)-i)
+				break
+			}
+			command := shortClaim(commandLine(step.Argv), maxRenderedVerificationArgvBytes)
+			if step.ExitCode == 0 {
+				fmt.Fprintf(&out, "- Passed: %s, run by Freeside at %s\n", command, dispositionCode(at))
+			} else {
+				fmt.Fprintf(&out, "- Attempted: %s, run by Freeside at %s, exit %d\n", command, dispositionCode(at), step.ExitCode)
+			}
 		}
-		// JSON preserves argument boundaries, including spaces and shell syntax.
-		argv, err := json.Marshal(step.Argv)
-		if err != nil {
-			return "", err
+	}
+	tail := "\n" + verificationClosingLine + "\n\n" + verificationCloseMarker
+	if history != nil {
+		if err := history.validate(); err != nil {
+			return "", fmt.Errorf("render verification review: %w", err)
 		}
-		fmt.Fprintf(&out, "%d. %s, exit %d", i+1, boundedClaim(string(argv), maxRenderedVerificationArgvBytes), step.ExitCode)
-		if step.OutputTruncated {
-			out.WriteString("; output truncated")
+		out.WriteString(reviewBullet(*history))
+		findings := unresolvedFindingLines(*history)
+		for i, line := range findings {
+			// Leave room for the omitted-findings line and the tail, so the
+			// section always ends with its closing line and marker.
+			if i == maxRenderedVerificationFindings ||
+				out.Len()+len(line)+maxOmittedFindingsLineBytes+len(tail) > maxRenderedVerificationSectionBytes {
+				fmt.Fprintf(&out, "  - %d more declined or deferred findings are recorded in Freeside.\n", len(findings)-i)
+				break
+			}
+			out.WriteString(line)
 		}
-		out.WriteByte('\n')
 	}
-	if rep.TranscriptTruncated {
-		out.WriteString("\nTranscript truncated.\n")
-	}
-	out.WriteString("\n### Agent-Reported Evidence (claims, not run by Freeside)\n\n")
-	if len(claims) == 0 {
-		out.WriteString("None.\n")
-	}
-	for _, claim := range claims {
-		fmt.Fprintf(&out, "- Label: %s; artifact: %s; digest: %s; media type: %s\n",
-			boundedClaim(claim.Label, 512), boundedClaim(string(claim.Artifact), 512),
-			boundedClaim(string(claim.Digest), 512), boundedClaim(string(claim.Metadata.MediaType), 512))
-	}
-	fmt.Fprintf(&out, "\n%s", verificationCloseMarker)
-	if out.Len() > maxRenderedVerificationBytes {
-		return "", fmt.Errorf("verification section exceeds %d bytes", maxRenderedVerificationBytes)
+	out.WriteString(tail)
+	if out.Len() > maxRenderedVerificationSectionBytes {
+		return "", fmt.Errorf("verification section exceeds %d bytes", maxRenderedVerificationSectionBytes)
 	}
 	return out.String(), nil
 }
+
+// reviewBullet summarizes the review lineage that authorized publication:
+// clean when no round raised a finding, otherwise its rounds and how each
+// finding was dispositioned. newDispositionHistory already refused a lineage
+// whose latest round is unfinished or whose readiness is blocked, so the
+// review passed by the time this renders.
+func reviewBullet(h DispositionHistory) string {
+	if len(h.dispositions) == 0 {
+		return "- Passed: independent review, no findings\n"
+	}
+	counts := map[domain.ReviewDisposition]int{}
+	for _, disposition := range h.dispositions {
+		counts[disposition.Disposition]++
+	}
+	return fmt.Sprintf("- Passed: independent review, %s, %s (%d fixed, %d declined, %d deferred)\n",
+		plural(len(h.reviews), "round"), plural(len(h.dispositions), "finding"),
+		counts[domain.ReviewDispositionFixed], counts[domain.ReviewDispositionDeclined],
+		counts[domain.ReviewDispositionDeferred])
+}
+
+// unresolvedFindingLines renders one sub-bullet per declined or deferred
+// finding, in the history's canonical round and finding order: its location,
+// the reviewer's message, and the recorded reason, each a labeled claim. A
+// fixed finding needs no line: the change already answers it.
+func unresolvedFindingLines(h DispositionHistory) []string {
+	findings := make(map[domain.FindingID]domain.Finding, len(h.findings))
+	for _, finding := range h.findings {
+		findings[finding.ID] = finding
+	}
+	var lines []string
+	for _, disposition := range h.dispositions {
+		var label string
+		switch disposition.Disposition {
+		case domain.ReviewDispositionDeclined:
+			label = "Declined"
+		case domain.ReviewDispositionDeferred:
+			label = "Deferred"
+		case domain.ReviewDispositionFixed:
+			continue
+		}
+		if label == "" {
+			continue
+		}
+		finding := findings[disposition.FindingID]
+		var line strings.Builder
+		line.WriteString("  - " + label)
+		if finding.Location != nil {
+			line.WriteString(" at " + shortClaim(finding.Location.String(), maxRenderedVerificationClaimBytes))
+		}
+		fmt.Fprintf(&line, ": reviewer said (claim) %s; recorded reason (claim) %s\n",
+			shortClaim(finding.Message, maxRenderedVerificationClaimBytes),
+			shortClaim(disposition.Reason, maxRenderedVerificationClaimBytes))
+		lines = append(lines, line.String())
+	}
+	return lines
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// commandLine joins a recipe command's argv into one shell-style line, quoting
+// an argument that is empty or holds anything beyond a conservative safe set,
+// so the reader sees the argument boundaries the verifier ran.
+func commandLine(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(arg string) string {
+	if arg != "" && strings.Trim(arg, shellSafeChars) == "" {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+const shellSafeChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./:=@%+,"

@@ -90,11 +90,13 @@ func TestPublicationAuthorSiteContracts(t *testing.T) {
 		t.Fatalf("propose contract = %+v", propose)
 	}
 	// The explain instruction names the publisher-owned parts, forbids
-	// mentioning their omission, and keeps the other template sections; the
+	// mentioning their omission, keeps the other template sections, and keeps
+	// verification and review out of the body (#3022); the
 	// digest golden alone would let a reword drop any of these and just be
 	// regenerated.
 	for _, part := range []string{
 		"source-issue reference", "Verification section", "never mention the omission", "keep every other template section",
+		"Don't describe how the change was verified or reviewed",
 	} {
 		if !strings.Contains(explain.Instruction, part) {
 			t.Errorf("explain instruction does not carry %q", part)

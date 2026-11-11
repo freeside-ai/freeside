@@ -87,8 +87,9 @@ The intended experience, end to end:
    pay off. Round counts are emergency brakes, not the normal stopping rule.
 8. The daemon publishes the verified, reviewed candidate as a pull request
    under an audited trust profile (a reviewed record of what the
-   repository's own automation may do). The PR carries the review's
-   disposition history: what happened to each finding, and why.
+   repository's own automation may do). The PR lists the checks Freeside
+   ran and the review's outcome, with each finding left declined or
+   deferred and why.
 9. A ready-for-review card reaches your phone. It carries mechanical evidence
    alongside an agent's assessment, each labeled for what it is.
 10. You review and merge on GitHub.

@@ -16,7 +16,11 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-func TestProductionVerificationListsAgentClaimsWithoutTheirText(t *testing.T) {
+// TestProductionVerificationLeavesAgentClaimsOut publishes a run whose agent
+// recorded a claim of a check Freeside never ran. Since #3022 the Verification
+// section lists only what Freeside ran; the claim is neither quoted nor listed,
+// and the closing line labels the rest of the body as its author's account.
+func TestProductionVerificationLeavesAgentClaimsOut(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	claimText := []byte("Passed: imaginary randomized fuzzing that Freeside never ran.\n")
@@ -46,10 +50,14 @@ func TestProductionVerificationListsAgentClaimsWithoutTheirText(t *testing.T) {
 	}
 	p.assertReady(t)
 	body := p.forge.PullRequests()[0].Body
-	claims := strings.Index(body, "### Agent-Reported Evidence")
-	label := strings.Index(body, "freeside.summary")
-	if claims < 0 || label < claims || !strings.Contains(body, string(digest)) || !strings.Contains(body, "text/markdown") || strings.Contains(body, "imaginary randomized fuzzing") {
-		t.Fatalf("agent claim was omitted or presented as executed evidence:\n%s", body)
+	for _, absent := range []string{"imaginary randomized fuzzing", "freeside.summary", string(digest), "Agent-Reported"} {
+		if strings.Contains(body, absent) {
+			t.Fatalf("published body carries the agent claim (%q):\n%s", absent, body)
+		}
+	}
+	if !strings.Contains(body, "- Passed: <code>/usr/bin/true</code>, run by Freeside at") ||
+		!strings.Contains(body, "Freeside ran only the checks listed here.") {
+		t.Fatalf("Verification section lost the executed command or its closing line:\n%s", body)
 	}
 }
 

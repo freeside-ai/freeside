@@ -52,7 +52,7 @@ func (f intakeFixture) admittedPublication(
 }
 
 // TestIntakeFreezesIntakeRecipeOnFirstAdmission proves a new label-initiated run
-// freezes freeside.intake-publication/v1 beside its literal title and body, and
+// freezes freeside.intake-publication/v2 beside its literal title and body, and
 // the started specification carries that record.
 func TestIntakeFreezesIntakeRecipeOnFirstAdmission(t *testing.T) {
 	t.Parallel()
@@ -65,7 +65,7 @@ func TestIntakeFreezesIntakeRecipeOnFirstAdmission(t *testing.T) {
 	}
 	_, frozen, started := f.admittedPublication(t, o)
 	literal := intakeLiteralPublication(init, o)
-	if frozen.Recipe != engine.IntakePublicationRecipe || frozen.Title != literal.Title ||
+	if frozen.Recipe != engine.IntakePublicationRecipeV2 || frozen.Title != literal.Title ||
 		frozen.Body != literal.Body || frozen.SourceIssue != "" {
 		t.Fatalf("frozen publication = %+v, want the intake recipe over the literal text", frozen)
 	}

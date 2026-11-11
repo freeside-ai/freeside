@@ -52,7 +52,7 @@ func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
 					return err
 				}
 				p := request.Publication
-				if p.Recipe != "freeside.client-publication/v2" || p.SourceIssue != source || p.Title != "" || p.Body != "" {
+				if p.Recipe != "freeside.client-publication/v3" || p.SourceIssue != source || p.Title != "" || p.Body != "" {
 					t.Fatal("client source/name replaced the immutable recipe")
 				}
 				return nil
@@ -120,7 +120,7 @@ func TestSubmitTaskPublicationSourceRequiresBareURL(t *testing.T) {
 
 // TestSubmitTaskReplaysRecordedV1Command pins the recipe switch's replay
 // contract: a command recorded while submissions froze v1 replays to its
-// unchanged v1 record under the current submitter, which freezes v2 only for a
+// unchanged v1 record under the current submitter, which freezes v3 only for a
 // new command.
 func TestSubmitTaskReplaysRecordedV1Command(t *testing.T) {
 	t.Parallel()
@@ -185,12 +185,12 @@ func TestSubmitTaskReplaysRecordedV1Command(t *testing.T) {
 			recipe, string(payload) != string(original))
 	}
 
-	fresh, err := after.Submit(ctx, submitCmd("cmd-v2", "project-1", source, ""))
+	fresh, err := after.Submit(ctx, submitCmd("cmd-v3", "project-1", source, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recipe, _ := recipeOf(fresh.Submission.SpecificationRunID); recipe != "freeside.client-publication/v2" {
-		t.Fatalf("new command recipe = %q, want v2", recipe)
+	if recipe, _ := recipeOf(fresh.Submission.SpecificationRunID); recipe != "freeside.client-publication/v3" {
+		t.Fatalf("new command recipe = %q, want v3", recipe)
 	}
 }
 

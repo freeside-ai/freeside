@@ -229,6 +229,23 @@ func TestPublicationRecipePreservesLiteralEncodingAndCanonicalRecovery(t *testin
 // TestPublicationRecipeRefusalNamesKeys pins the refusals an operator sees
 // from submit and preflight: they name the offending keys and the two accepted
 // forms, and never echo submitted values into the composition manifest.
+// TestClientPublicationRecipesStayAccepted proves a publication file may name
+// any client recipe a record can hold: v3 for new work, and v1 and v2 because
+// stored records and saved submissions keep the recipe they froze.
+func TestClientPublicationRecipesStayAccepted(t *testing.T) {
+	t.Parallel()
+	for _, recipe := range []string{clientPublicationRecipeV1, clientPublicationRecipeV2, clientPublicationRecipeV3} {
+		p := recipePublicationFixture()
+		p.Recipe, p.SourceIssue = recipe, "https://github.com/example/project/issues/82"
+		if err := p.Validate(); err != nil {
+			t.Errorf("%s refused: %v", recipe, err)
+		}
+		if err := p.validateRetained(); err != nil {
+			t.Errorf("%s refused for retention: %v", recipe, err)
+		}
+	}
+}
+
 func TestPublicationRecipeRefusalNamesKeys(t *testing.T) {
 	t.Parallel()
 	const (
@@ -250,7 +267,7 @@ func TestPublicationRecipeRefusalNamesKeys(t *testing.T) {
 		"body only":      {func(p *ProductionPublication) { p.Body = body }, mixed(`"body"`, "belongs")},
 		"unknown recipe": {
 			func(p *ProductionPublication) { p.Recipe, p.Title, p.Body = recipe, title, body },
-			`publication "recipe" is not an accepted recipe: a recipe publication sets "recipe" to "freeside.client-publication/v2" ` +
+			`publication "recipe" is not an accepted recipe: a recipe publication sets "recipe" to "freeside.client-publication/v3" ` +
 				`(and "source_issue" when the task is one GitHub issue URL) with no "title" or "body"; ` +
 				`a literal publication sets "title" and "body" with no "recipe"`,
 		},
@@ -278,9 +295,19 @@ func TestPublicationRecipeRefusalNamesKeys(t *testing.T) {
 // issue or empty literal text like a literal record.
 func TestIntakePublicationRecipeKeepsLiteralFallback(t *testing.T) {
 	t.Parallel()
+	for _, recipe := range []string{IntakePublicationRecipeV1, IntakePublicationRecipeV2} {
+		t.Run(recipe, func(t *testing.T) {
+			t.Parallel()
+			assertIntakeRecipeKeepsLiteralFallback(t, recipe)
+		})
+	}
+}
+
+func assertIntakeRecipeKeepsLiteralFallback(t *testing.T, recipe string) {
+	t.Helper()
 	p := ProductionPublication{
 		Title: "Resolve owner/repo#7", Body: "Automated resolution of issue #7.",
-		CommitAuthor: recipePublicationFixture().CommitAuthor, Recipe: IntakePublicationRecipe,
+		CommitAuthor: recipePublicationFixture().CommitAuthor, Recipe: recipe,
 	}
 	if err := p.Validate(); err != nil {
 		t.Fatalf("intake record refused: %v", err)

@@ -618,6 +618,10 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Batch object reads:** `internal/gitrun/objects.go` (carries untrusted
   object bytes into agent-tree admission and the import and verification
   gates).
+- **Fenced-code rules:** `internal/publicationtext/fence.go` (decides
+  where GitHub renders code, so the prose renderer keeps the publisher's
+  sections out of an author's fence and the publisher keeps its close
+  keyword out of one).
 - **Strict JSON decoding:** `internal/strictjson/` (the decoder for
   importer, export, stage, publish, and ward input, so what it accepts
   decides what reaches those gates).

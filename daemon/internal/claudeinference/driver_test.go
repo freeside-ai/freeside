@@ -399,6 +399,7 @@ func TestShippedPublicationAuthorPromptOmitsPublisherParts(t *testing.T) {
 	for _, want := range []string{
 		"source-issue reference", "leave out every template section", "Never mention the omission",
 		"Keep every other template section", "If any other template requirement conflicts",
+		"Don't describe how the change was verified or reviewed",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("role prompt does not carry %q", want)
@@ -406,6 +407,11 @@ func TestShippedPublicationAuthorPromptOmitsPublisherParts(t *testing.T) {
 	}
 	if strings.Contains(prompt, "supplied separately") {
 		t.Error("role prompt still tells the author to say evidence is supplied separately")
+	}
+	// The body no longer restates verification as reported claims (#3022):
+	// the publisher's Verification section reports what Freeside ran.
+	if strings.Contains(prompt, "reported claims") || strings.Contains(prompt, "disposition history below") {
+		t.Error("role prompt still asks for a verification account in the body or names the dropped history")
 	}
 }
 

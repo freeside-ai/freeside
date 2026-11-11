@@ -339,7 +339,7 @@ func submittedSourceReference(task []byte, publication engine.ProductionPublicat
 			"publication source_issue is not the task source: the task file must hold that issue URL and nothing else")
 	case issue != "" && publication.SourceIssue == "":
 		return sourceReference{}, sourceReferenceError(
-			`the task source is one GitHub issue URL, so the publication file must name it: set "source_issue" to that URL under "recipe": "freeside.client-publication/v2" and remove "title" and "body"`)
+			`the task source is one GitHub issue URL, so the publication file must name it: set "source_issue" to that URL under "recipe": "freeside.client-publication/v3" and remove "title" and "body"`)
 	case issue == "":
 		return sourceReference{omitted: sourceOmittedNotAnIssue}, nil
 	}

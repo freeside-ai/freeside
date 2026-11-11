@@ -61,7 +61,7 @@ func publicationMetadata(p ProductionPublication, producer domain.InvocationID, 
 	}
 	// A literal record and the intake recipe's fallback both render the stored
 	// literal text; neither reads the agent's publication claim.
-	if p.Recipe == "" || p.Recipe == IntakePublicationRecipe {
+	if p.Recipe == "" || intakePublicationRecipe(p.Recipe) {
 		return p.Title, p.Body, nil
 	}
 	var selected *domain.AgentClaim

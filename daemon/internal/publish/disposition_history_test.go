@@ -135,9 +135,9 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 }
 
 // TestPublicationTextOmitsReviewCostOwner covers every text the publisher
-// renders for the forge: the disposition history at full size and at its
-// truncation floor, and the composed pull request title and body (the
-// package posts no comments). It searches for the recorded value, not the
+// renders from review records: the canonical disposition history the intent
+// binds, and the composed pull request title and body (the package posts no
+// comments). It searches for the recorded value, not the
 // label, so a later field cannot republish the cost owner under another name.
 func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 	t.Parallel()
@@ -152,10 +152,6 @@ func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 		}
 	}
 	section, err := RenderDispositionHistory(history)
-	if err != nil {
-		t.Fatal(err)
-	}
-	truncated, err := renderDispositionHistoryWithin(history, minRenderedDispositionHistoryBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,15 +170,41 @@ func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, dispositionHistoryOpenMarker) {
-		t.Fatal("composed body omitted the disposition history")
+	if !strings.Contains(body, "independent review") {
+		t.Fatal("composed body omitted the review outcome")
 	}
 	for name, text := range map[string]string{
-		"disposition history": section, "truncated disposition history": truncated,
-		"pull request title": title, "pull request body": body,
+		"disposition history": section, "pull request title": title, "pull request body": body,
 	} {
 		if strings.Contains(text, dispositionCostOwnerSentinel) || strings.Contains(text, dispositionIdentitySentinel) {
 			t.Errorf("%s publishes who paid for a review:\n%s", name, text)
+		}
+	}
+}
+
+// preChangeDispositionHistoryDigest is the digest an intent bound for
+// dispositionHistoryFixture before #3022 took the history out of the body,
+// computed from the golden as it stood then. It is a literal, not today's
+// renderer output, so a change to RenderDispositionHistory's bytes fails here
+// even if the golden is regenerated.
+const preChangeDispositionHistoryDigest = domain.Digest("sha256:1c21cb74a963e0578451a3545120ed75f2181868aa534ee63fda58f2ffa399c6")
+
+// TestPreChangeIntentStillValidatesOnRecovery pins #3022 criterion 5's binding
+// half: the body no longer shows the history, but a durable intent written
+// before that change bound the digest of its canonical rendering, and recovery
+// must still accept it while refusing any other digest.
+func TestPreChangeIntentStillValidatesOnRecovery(t *testing.T) {
+	t.Parallel()
+	history := dispositionHistoryFixture(t)
+	candidate := Candidate{RunID: history.runID, HeadSHA: history.headSHA, DispositionHistory: &history}
+	for _, version := range []int{IntentFormatHistory, IntentFormatCurrent} {
+		intent := Intent{FormatVersion: version, DispositionHistoryDigest: preChangeDispositionHistoryDigest}
+		if err := ValidateIntentDispositionHistory(intent, candidate); err != nil {
+			t.Fatalf("format %d: pre-change intent refused on recovery: %v", version, err)
+		}
+		intent.DispositionHistoryDigest = dispositionDigestA
+		if err := ValidateIntentDispositionHistory(intent, candidate); !errors.Is(err, ErrPublicationConflict) {
+			t.Fatalf("format %d: changed history digest = %v, want a publication conflict", version, err)
 		}
 	}
 }

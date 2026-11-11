@@ -1085,23 +1085,13 @@ func (p *productionPublicationHarness) assertReadyWithEvidence(t *testing.T, wan
 		t.Fatalf("published PR metadata = %#v, want operator-authored title/body", pullRequests)
 	}
 	body := pullRequests[0].Body
-	for _, want := range []string{
-		"<!-- freeside:disposition-history version=freeside-disposition-history/v1 -->",
-		"## Freeside Disposition History",
-		"- Readiness: **ready clean**",
-		"### Review Round ",
-		// The admitted reviewer's lineage group, as the fake admitter names it.
-		"- Provider: <code>fake</code>",
-		"- Findings: none",
-		"<!-- /freeside:disposition-history -->",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("published PR body lacks %q:\n%s", want, body)
-		}
-	}
-	if strings.Count(body, "<!-- freeside:disposition-history ") != 1 ||
-		strings.Count(body, "<!-- /freeside:disposition-history -->") != 1 {
-		t.Fatalf("published PR body duplicated disposition history:\n%s", body)
+	// The review reaches the body as one Verification bullet; the disposition
+	// history stays in the store (#3022).
+	if !strings.Contains(body, "- Passed: independent review, ") ||
+		strings.Count(body, "<!-- freeside:verification -->") != 1 ||
+		strings.Count(body, "<!-- /freeside:verification -->") != 1 ||
+		strings.Contains(body, "freeside:disposition-history") || strings.Contains(body, "Disposition History") {
+		t.Fatalf("published PR body lacks one Verification section with the review:\n%s", body)
 	}
 	var terminal store.QueueEntry
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -1224,14 +1214,24 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	}
 	p.assertReady(t)
 	body := p.forge.PullRequests()[0].Body
-	for _, want := range []string{"## Verification", "[&#34;/usr/bin/true&#34;]</code>, exit 0", p.replay.HeadSHA, p.baseSHA, string(p.recipeD), "Report artifact digest", "not run by Freeside"} {
+	for _, want := range []string{
+		"## Verification",
+		"- Passed: <code>/usr/bin/true</code>, run by Freeside at <code>" + p.replay.HeadSHA[:8] + "</code>\n",
+		"Freeside ran only the checks listed here. The rest of this description is its author's account.",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("published body lacks %q", want)
 		}
 	}
-	if !strings.HasPrefix(body, productionPublicationMetadata().Body) ||
-		strings.Index(body, "freeside:verification") >= strings.Index(body, "freeside:disposition-history") ||
-		strings.Index(body, "freeside:disposition-history") >= strings.Index(body, "freeside:publication-identity") {
+	// The reviewer reading the body uses no digest or base; the store keeps them.
+	for _, absent := range []string{p.baseSHA, string(p.recipeD), "Report artifact digest"} {
+		if strings.Contains(body, absent) {
+			t.Errorf("published body carries %q", absent)
+		}
+	}
+	verification := strings.Index(body, "freeside:verification")
+	if !strings.HasPrefix(body, productionPublicationMetadata().Body) || verification < 0 ||
+		verification >= strings.Index(body, "freeside:publication-identity") {
 		t.Fatal("publisher changed operator prose or section ordering")
 	}
 	if p.room.runs != 1 {

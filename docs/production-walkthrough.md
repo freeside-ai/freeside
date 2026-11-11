@@ -1012,7 +1012,7 @@ A CLI submission whose task file is exactly one GitHub issue URL names the
 issue in its publication file, with the record a client-composed task saves:
 
 ```json
-{"recipe": "freeside.client-publication/v2",
+{"recipe": "freeside.client-publication/v3",
  "source_issue": "https://github.com/<owner>/<repo>/issues/<number>",
  "commit_author": {"app_slug": "canonical-app-slug", "bot_user_id": 123}}
 ```
@@ -1039,6 +1039,13 @@ carries depends on where the issue lives:
 A publication file with a literal `title` and `body` is still accepted for any
 other task file. Its text is published as written, with no publisher-written
 issue reference. `freesided submit -h` describes both forms.
+
+Under either form, the pull request ends with the publisher's Verification
+section: the recipe commands Freeside ran at the head, the independent
+review's outcome with any declined or deferred finding and its recorded
+reason, and a closing line saying the rest of the description is its author's
+account. The section holds no digest: the store keeps the full review record,
+and the clients show its dispositions.
 
 The work-unit declaration is required for every new submission. It says when
 the task is finished, and the smallest one finishes the task when its pull

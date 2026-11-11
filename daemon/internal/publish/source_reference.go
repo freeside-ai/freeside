@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
@@ -180,9 +181,9 @@ func reduceClosureApproval(
 
 // renderSourceReference renders the publisher-owned source-issue section from a
 // resolved closure, or "" when there is no reference to write (a descriptive
-// link with no source URL). The section has no heading (#1553): it heads the
-// body, so its single reference paragraph reads as the description's lead
-// line. A close renders the same line whatever its provenance (#2349): the
+// link with no source URL). The section has no heading (#1553): it closes the
+// body's opening Why section or heads the body (placeSourceReference), so its
+// single reference paragraph reads as part of the description. A close renders the same line whatever its provenance (#2349): the
 // pull request's readers are the target repository's maintainers, and the
 // provenance stays on the proposal record.
 // The switch dispatches on the reference kind and omits default; the trailing
@@ -213,4 +214,89 @@ func renderSourceReference(res closureResolution) (string, error) {
 		return "", fmt.Errorf("source reference section exceeds %d bytes", maxRenderedSourceReferenceBytes)
 	}
 	return section, nil
+}
+
+// whyHeading is the line an opening Why section must start with exactly for
+// the source reference to be placed inside it.
+const whyHeading = "## Why"
+
+// placeSourceReference joins the source-reference section and the prose. When
+// the prose opens with a Why section and placing the section at its end is
+// provably safe, the reference closes that section, where a reviewer reading
+// why the change exists looks for the issue it answers (#3022). Otherwise the
+// reference heads the body, as it always did.
+//
+// A close keyword works only where GitHub renders it as prose, so the rule
+// refuses every placement it can't show safe and falls back to the head:
+//   - the prose does not open with exactly "## Why";
+//   - a fenced code block is still open where the section would go, where
+//     the keyword would render as code and close nothing;
+//   - a line in the Why section starts with "<" after optional indentation,
+//     because a raw HTML block can run past a blank line and swallow the
+//     section;
+//   - a fence opener in the section is indented. A list item's fence is
+//     indented, and GitHub ends it with the list, while this line scan would
+//     read a later top-level fence opener as its closer. A fence opener at
+//     column 0 is always top-level: no container continues past it;
+//   - the prose holds a carriage return, which ends a line for GitHub but
+//     would keep a fence closer from matching here.
+//
+// Fallback can only leave the reference at the head; it never writes a close
+// the head placement would not. The section ends at the next line starting
+// with "## " outside a fence, or at the end of the prose.
+func placeSourceReference(reference, prose string) string {
+	if reference == "" {
+		return prose
+	}
+	if prose == "" {
+		return reference
+	}
+	end, ok := whySectionEnd(prose)
+	if !ok {
+		return reference + "\n\n" + prose
+	}
+	before := strings.TrimRight(prose[:end], "\n")
+	after := prose[end:]
+	if after == "" {
+		return before + "\n\n" + reference
+	}
+	return before + "\n\n" + reference + "\n\n" + after
+}
+
+// whySectionEnd returns the byte offset where prose's opening Why section
+// ends, and false when placeSourceReference must fall back to the head.
+func whySectionEnd(prose string) (int, bool) {
+	first, rest, _ := strings.Cut(prose, "\n")
+	if first != whyHeading {
+		return 0, false
+	}
+	offset := len(first) + 1
+	if strings.Contains(prose, "\r") {
+		return 0, false
+	}
+	var fence string
+	for rest != "" {
+		line, next, _ := strings.Cut(rest, "\n")
+		switch {
+		case fence != "":
+			if publicationtext.ClosesFence(line, fence) {
+				fence = ""
+			}
+		case publicationtext.FenceOpener(line) != "":
+			if line[0] != '`' && line[0] != '~' {
+				return 0, false
+			}
+			fence = publicationtext.FenceOpener(line)
+		case strings.HasPrefix(line, "## "):
+			return offset, true
+		case strings.HasPrefix(strings.TrimLeft(line, " \t"), "<"):
+			return 0, false
+		}
+		offset += len(line) + 1
+		rest = next
+	}
+	if fence != "" {
+		return 0, false
+	}
+	return len(prose), true
 }

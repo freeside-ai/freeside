@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 114
+revision: 115
 status: active
 updated: 2026-11-10
 ---
@@ -3877,7 +3877,7 @@ Additional rules:
   (revision 98).
 - **Client PR metadata describes the implemented outcome.** New client
   submissions freeze the current publication recipe
-  (`freeside.client-publication/v2`, Section [5.15](#515-evidence-and-images)),
+  (`freeside.client-publication/v3`, Section [5.15](#515-evidence-and-images)),
   commit attribution, and an optional source-issue reference in the publication
   digest before identity reservation. The frozen version is per-submission and
   never rewritten; records that froze v1 keep it and its recovery and replay
@@ -4667,8 +4667,8 @@ publisher headings/markers. Refusals never echo the rejected text. Escape prose
 as inert text under **Agent-reported implementation (claim)**, with producer
 and digest provenance. Preserve the original private artifact without
 truncation or upload authority. The composed body must fit the publisher's
-existing budget and retain daemon-owned Verification, review history,
-advisories, scope decisions and the final identity marker. Reported checks
+existing budget and retain daemon-owned Verification, advisories, scope
+decisions and the final identity marker. Reported checks
 remain claims; only authenticated daemon report bytes establish verified
 results. No new inference call, evidence-snapshot entry or trust bit is added.
 
@@ -4695,6 +4695,15 @@ contract, with that path's deterministic text as its fallback rather than the
 client claim. That contract is recipe `freeside.intake-publication/v1`: a new
 label-initiated run freezes it beside that literal text, and a label record
 frozen before it keeps its literal text.
+
+Recipes `freeside.client-publication/v3` and `freeside.intake-publication/v2`
+(revision 115) render the same screened prose with no producer line, evidence
+list or artifact digest after it; the digest stays on the stored authoring
+artifact. New client commands freeze v3 and new label-initiated runs freeze
+intake v2, while every record keeps the recipe it froze. With the footer gone,
+the publisher's Verification section labels the prose: it says Freeside ran
+only the checks listed there and the rest of the description is its author's
+account.
 
 The publisher, not the author, writes the issue reference. It writes `Closes`
 only from an approved closure proposal (Section
@@ -4760,9 +4769,13 @@ inert or rejected. If the implementing unit cannot specify a screen that holds
 links, images, mentions, raw HTML and directives inert, v2 keeps the authored
 prose inert exactly as v1 does and records that.
 
-The publisher still owns Verification, review history, advisories, scope
-decisions and the final identity marker (`publish.ValidateCandidateBody`), and
-reported checks remain claims. The implementer continues to write the v1 claim
+The publisher still owns Verification, advisories, scope decisions and the
+final identity marker (`publish.ValidateCandidateBody`), and reported checks
+remain claims. Verification is written for the target repository's reviewer:
+each command Freeside ran at the head, the independent review's outcome, and
+each declined or deferred finding with its recorded reason, labeled as claims.
+These publisher sections are not frozen by recipe, so a change to them applies
+to every record the publisher next converges. The implementer continues to write the v1 claim
 as the deterministic fallback; v2 layers the authoring role over it and adds no
 client-supplied trust bit.
 
@@ -5322,17 +5335,22 @@ and forge disagree, and disposition reconstruction) are served by computed
 readiness, the run timeline, and structured dispositions, not by comment
 threads.
 
-The owner's condition on this resolution pins the EvidencePublisher's first
-slice (Section [5.15](#515-evidence-and-images); #525, wave 5 per Section [11](#11-roadmap-build-order-and-coordination)). At publication, the PR
-carries the disposition history, including review rounds, final dispositions
-with reasons for declined and deferred findings, and the readiness derivation.
-So the merged PR explains itself forensically on the forge.
+The owner's condition on this resolution pinned the EvidencePublisher's first
+slice (Section [5.15](#515-evidence-and-images); #525, wave 5 per Section [11](#11-roadmap-build-order-and-coordination)): at publication, the PR
+carried the disposition history, including review rounds, final dispositions
+with reasons for declined and deferred findings, and the readiness derivation,
+so the merged PR explained itself forensically on the forge. #525 persisted
+per-finding dispositions with reasons and the readiness derivation, and
+publication carried them to the forge.
 
-The condition was not an immediate publication precondition. Before #525
-landed, the forge carried no disposition history and the store held only
-ReviewRecords (round outcomes, finding identity), raw findings, and
-classifications. #525 persisted per-finding dispositions with reasons and the
-readiness derivation, and publication now carries them to the forge.
+The owner revised that condition on 2026-11-10 (revision 115). The PR body no
+longer carries the disposition history: its digests and invocation ids served
+Freeside, not the target repository's reviewer. The forensic record stays in
+the store, the run timeline, and the clients' structured dispositions, and the
+publication intent still binds the history's canonical rendering by digest.
+The body keeps what a reviewer uses: the review's outcome, its rounds and
+disposition counts, and each declined or deferred finding with its recorded
+reason, labeled as claims in the Verification section.
 
 The trigger falsification forced neither anchor; a Freeside-invoked reviewer can
 review either surface. The PR-anchored shape stays the recorded,
@@ -6885,7 +6903,7 @@ sources) → specification → spec approval →
 implementation → gauntlet → Freeside-invoked review (Section [7](#7-review-policy),
 pre-publication) → finding adjudication → yield-driven remediation and
 pattern sweeps → diminishing-returns or dispute item → clean: PR under a
-trust profile, carrying the Section [7](#7-review-policy) disposition history (#525) → checks →
+trust profile, carrying the Section [7](#7-review-policy) review outcome and its declined and deferred findings → checks →
 ready-for-final-review with yield history → human GitHub merge`
 
 External review activity on the published PR re-enters the workflow
@@ -7236,29 +7254,38 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 114 ("The Default Policy Closes the Source Issue"):
+Revision 115 ("Pull Request Bodies a Reviewer Can Read"):
 
-1. **Under the default policy, a closable source issue closes without model
-   judgment.** With `gates.source_issue_closure` absent or false, the daemon
-   sets the closure proposal's `resolves` flag itself and never asks the
-   publication-author propose site; the policy actor approves it, and the
-   publisher writes `Closes` for a verified or a recommended source alike
-   (Sections [5.12](#512-workflow-definition-initiators-and-artifacts), [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry), and [5.15](#515-evidence-and-images)). The key set to
-   true keeps the human gate unchanged: the site proposes the flag, the
-   `effect_proposal` card opens, and the pull request stays a draft with
-   `Refs` until a person decides. This overturns revision 68's default, under
-   which the site's flag decided between `Closes` and `Refs`. The assumption
-   that changed: that the model's judgment was worth the friction. A site that
-   answered no, or failed and fell back, left a resolved issue open after the
-   merge with nothing on the ready card saying so (#3023). Accepted: a pull
-   request that only partly addresses its issue closes it on merge, with the
-   `Closes` line in the body for the merging person to see. Rejected: storing
-   and showing the model's reason, which explains the friction instead of
-   removing it.
+1. **The PR body no longer carries the disposition history.** The owner
+   directed on 2026-11-10, after the Wave 9 exit run's gh-imgup#147, that a
+   published body read like Freeside's own pull requests. This revises the
+   Section [7](#7-review-policy) condition that the PR carry the disposition
+   history so the merged PR explains itself forensically on the forge (#525).
+   The condition that changed: forensic reconstruction from the forge. The
+   store, the run timeline, and the clients' structured dispositions already
+   hold that record, the publication intent still binds the history's
+   canonical rendering by digest, and a target repository's reviewer doesn't
+   use its digests and invocation ids. Rejected: keeping the history in a
+   collapsed section, which keeps the noise in the body source and the
+   budget.
+2. **Verification says what Freeside ran and what review concluded.** One
+   bullet per command Freeside ran at the head, one for the independent
+   review's outcome, each declined or deferred finding with its recorded
+   reason as a labeled claim, and one line saying Freeside ran only those
+   checks and the rest is the author's account. The section changes in place
+   for every record, since publisher sections were never frozen by recipe
+   (Section [5.15](#515-evidence-and-images)). Rejected: a `Not run:` bullet
+   per claimed check, which the daemon can't write because it keeps no
+   structured record of what an agent claimed.
+3. **Authored prose ends with its author's last section.** Recipes
+   `freeside.client-publication/v3` and `freeside.intake-publication/v2` drop
+   the producer line, evidence list and artifact digest; the digest stays on
+   the stored authoring artifact, and the Verification line keeps the prose
+   labeled as a claim. Stored v1, v2 and intake v1 records keep their frozen
+   rendering.
 
-(Owner decision of 2026-11-10 on #3023;
-[decision note](../devlog/2026-11-10-1818-default-policy-closes-source-issue.md).)
-
+(Owner decision of 2026-11-10 on #3022;
+[decision note](../devlog/2026-11-10-1757-readable-pr-bodies.md).)
 ## 14. Risks
 
 | Risk | Current response |
@@ -7268,7 +7295,7 @@ Revision 114 ("The Default Policy Closes the Source Issue"):
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable; no wider escape is offered while `api_key_isolated` is held (revision 103). Under the held `subscription_injected` design the registry tunnel would be unchanged, but the writer would hold no provider token for such a publish to carry. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
-| **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
+| **Rendered agent Markdown in a public PR** | Recipes v2 and v3 (Section [5.15](#515-evidence-and-images)) render authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
 | **Maintenance tasks Freeside opens for itself** | Project-image upkeep submits a task only for a refusal that needs a repository repair, through the ordinary submission primitive with a daemon origin and the refusal record as its source (Section [5.12](#512-workflow-definition-initiators-and-artifacts)). It passes the ordinary specification approval and the full publication gate like any operator-submitted task, never files an issue, and opens at most one task per refusal record. Residual: operator attention on a task nobody asked for, bounded by the refusal classes that may open one (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose enrollment shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
