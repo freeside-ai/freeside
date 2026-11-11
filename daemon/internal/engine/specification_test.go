@@ -873,6 +873,38 @@ func TestSpecificationClassifiesLegacyResearchMetadataLimitUndeliverable(t *test
 	}
 }
 
+// attemptPurposes lists the purpose recorded on each of run's attempts, in
+// stage and attempt order, with "" for an attempt that carries none.
+func attemptPurposes(run domain.Run) []domain.AttemptPurpose {
+	purposes := []domain.AttemptPurpose{}
+	for _, stage := range run.Stages {
+		for _, attempt := range stage.Attempts {
+			if attempt.Purpose == nil {
+				purposes = append(purposes, "")
+				continue
+			}
+			purposes = append(purposes, *attempt.Purpose)
+		}
+	}
+	return purposes
+}
+
+// requireAttemptPurposes fails unless runID's attempts carry want, in order.
+func requireAttemptPurposes(t *testing.T, s *store.Store, runID domain.RunID, want ...domain.AttemptPurpose) {
+	t.Helper()
+	var run domain.Run
+	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(t.Context(), runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := attemptPurposes(run); !slices.Equal(got, want) {
+		t.Fatalf("run %s attempt purposes = %q, want %q", runID, got, want)
+	}
+}
+
 func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing.T) {
 	t.Parallel()
 	f := newSpecificationFixture(t, true, 4)
@@ -1042,6 +1074,8 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 		t.Fatalf("third provider inputs = %v/%q, want research, prior spec, and feedback envelopes",
 			thirdPrompt.digests, thirdPrompt.bodies)
 	}
+	requireAttemptPurposes(t, f.store, "specification-run", domain.AttemptPurposeFirstDraft,
+		domain.AttemptPurposeResearchContinuation, domain.AttemptPurposeRevision)
 	item, snapshot = f.item(t, "spec-approval-implementation-run-3")
 	if item.SpecRevision == nil || item.SpecRevision.PriorItemID != itemID ||
 		len(item.SpecRevision.PriorComments) != 1 ||
@@ -1334,6 +1368,10 @@ func TestSpecificationDiscussionRepliesAndPreservesApproval(t *testing.T) {
 			break
 		}
 	}
+	// The Discuss reply records on the specification stage between the two
+	// iterations it sits between.
+	requireAttemptPurposes(t, f.store, "specification-run", domain.AttemptPurposeFirstDraft,
+		domain.AttemptPurposeDiscussionReply, domain.AttemptPurposeRevision)
 	revised, revisedSnapshot := f.item(t, "spec-approval-implementation-run-2")
 	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
 		CommandID: "approve-revision-after-discussion", DeviceID: "device-1",

@@ -172,7 +172,7 @@ func newBlockedImplementationFixtureCore(
 		t.Fatalf("admit implementation = admitted %t, %v", admitted, err)
 	}
 	_, effective, bound, err := engine.recordAttempt(
-		t.Context(), binding.run.ID, stage.ID, implementationID, entry.Status, &admission,
+		t.Context(), binding.run.ID, stage.ID, implementationID, binding.purpose, entry.Status, &admission,
 	)
 	if err != nil || !bound {
 		t.Fatalf("record implementation attempt = bound %t, %v", bound, err)
@@ -677,4 +677,10 @@ func TestBlockedImplementationAnswerRevisesSpecification(t *testing.T) {
 	if _, ok := findProductionStage(newImplRun); !ok {
 		t.Fatalf("new implementation run has no production stage: %+v", newImplRun.Stages)
 	}
+	// A revision campaign's first iteration revises the approved
+	// specification, so it records as a revision, not a first draft.
+	requireAttemptPurposes(t, f.store, newSpec, domain.AttemptPurposeRevision)
+	// The blocked implementation's attempt, recorded under the production
+	// lane's binding, carries no purpose: only specification attempts do.
+	requireAttemptPurposes(t, f.store, blockedRunID, "")
 }

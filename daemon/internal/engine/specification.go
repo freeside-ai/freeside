@@ -2126,12 +2126,17 @@ func verifySpecificationChain(
 	// authorized is refused.
 	var retryReason string
 	var currentInvocation domain.AgentInvocation
+	// purpose records which transition below authorized the current
+	// iteration (#3044). It reports the branch the walk already takes and
+	// decides nothing.
+	purpose := domain.AttemptPurposeFirstDraft
 	// A revision run's root already carries the prior specification and feedback,
 	// authorized by verifyRevisionRoot in authenticateSpecificationRoot; seed the
 	// reconstruction state with them so the walk's first iteration matches.
 	if firstIteration > 1 {
 		priorSpec = root.PriorSpecArtifactID
 		feedback = slices.Clone(root.FeedbackArtifactIDs)
+		purpose = domain.AttemptPurposeRevision
 	}
 	for iteration := firstIteration; iteration <= current.Iteration; iteration++ {
 		invocationID := specificationInvocationID(run.ID, iteration)
@@ -2194,6 +2199,7 @@ func verifySpecificationChain(
 			}
 			answers = append(answers, answerID)
 			legacyPostRevisionResearch = nil
+			purpose = domain.AttemptPurposeQuestionAnswer
 			continue
 		}
 
@@ -2213,6 +2219,7 @@ func verifySpecificationChain(
 				return verifiedSpecificationBinding{}, err
 			}
 			retryReason = nextRequest.RetryReason
+			purpose = domain.AttemptPurposeRetry
 			continue
 		}
 		if terminal.InvocationID != invocationID || terminal.Iteration != iteration ||
@@ -2241,6 +2248,7 @@ func verifySpecificationChain(
 				slices.Clone(request.InputArtifactIDs), terminal.ResearchArtifactIDs...,
 			)
 			research = append(research, terminal.ResearchArtifactIDs...)
+			purpose = domain.AttemptPurposeResearchContinuation
 			continue
 		}
 		legacyPostRevisionResearch = nil
@@ -2292,10 +2300,11 @@ func verifySpecificationChain(
 		priorSpecID := specification.ID
 		priorSpec = &priorSpecID
 		feedback = append(feedback, feedbackID)
+		purpose = domain.AttemptPurposeRevision
 	}
 	return verifiedSpecificationBinding{
 		request: current,
-		binding: invocationBinding{run: run, invocation: currentInvocation},
+		binding: invocationBinding{run: run, invocation: currentInvocation, purpose: &purpose},
 		policy:  policy, settings: settings,
 	}, nil
 }

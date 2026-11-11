@@ -138,6 +138,14 @@ func TestSpecificationRetryDispatchesToApproval(t *testing.T) {
 	if approval.Status != domain.StatusOpen {
 		t.Fatalf("approval after retry = %+v", approval)
 	}
+	requireAttemptPurposes(t, f.store, "specification-run", domain.AttemptPurposeFirstDraft, domain.AttemptPurposeRetry)
+	// A replayed dispatch of a recorded invocation leaves its attempt, purpose
+	// included, as it was.
+	if _, _, _, err := e.recordAttempt(t.Context(), "specification-run", specificationStageID("specification-run"),
+		second, new(domain.AttemptPurposeDiscussionReply), "dispatched", nil); err != nil {
+		t.Fatalf("replayed recordAttempt: %v", err)
+	}
+	requireAttemptPurposes(t, f.store, "specification-run", domain.AttemptPurposeFirstDraft, domain.AttemptPurposeRetry)
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		facts, err := SpecificationRetries(t.Context(), tx, "specification-run")
 		if err != nil {

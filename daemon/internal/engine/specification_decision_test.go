@@ -241,6 +241,8 @@ func TestSpecificationNeedsDecisionAnswerReinvokesSpecifierWithHumanFeedback(t *
 	assertSpecificationPriorArtifacts(t, prompt, []expectedSpecificationPriorArtifact{{
 		role: "human_feedback", digest: answerArtifact.Digest, body: string(answerBody),
 	}})
+	requireAttemptPurposes(t, f.store, "specification-run",
+		domain.AttemptPurposeFirstDraft, domain.AttemptPurposeQuestionAnswer)
 	if _, err := f.run("implementation-run"); err != nil {
 		t.Fatalf("auto-approved implementation after the answered specification = %v", err)
 	}
