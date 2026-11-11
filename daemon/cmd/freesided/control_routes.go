@@ -153,7 +153,7 @@ func (s pairingControlSocket) Configure(
 func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs) {
 	s.pairing.registerControlRoutes(
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
-		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure)
+		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop)
 }
 
 func (s pairingControlSocket) Publish() error { return s.pairing.publish() }
@@ -163,7 +163,7 @@ func (p *pairingControl) registerControlRoutes(
 	approved map[domain.Digest]bool, repositoryID int64, integrityProbe daemoncompose.CredentialIntegrityProbe,
 	usage *usagecollect.Coordinator, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
-	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,
+	commitWorkflowClosure, commitTaskStop func(context.Context, domain.TaskID, func() error) error,
 ) {
 	p.registerNotifyTest(mux, st, attention)
 	p.handleGet(mux, "/execution", func(context.Context, *http.Request) (any, error) {
@@ -172,7 +172,7 @@ func (p *pairingControl) registerControlRoutes(
 	daemon := daemonStoreContext{
 		store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
 		repositoryID: repositoryID, credentialIntegrityProbe: integrityProbe,
-		commitWorkflowClosure: commitWorkflowClosure, usageCollection: usage,
+		commitWorkflowClosure: commitWorkflowClosure, commitTaskStop: commitTaskStop, usageCollection: usage,
 	}
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
@@ -251,6 +251,14 @@ func (p *pairingControl) registerControlRoutes(
 			result.Error = err.Error()
 		}
 		return result, nil
+	})
+	p.handle(mux, "/tasks/stop", func(ctx context.Context, body json.RawMessage) (any, error) {
+		// The envelope's database path is already bound to this daemon.
+		cfg, err := decodeControlPayload[stopCommandConfig](body)
+		if err != nil {
+			return nil, err
+		}
+		return stopTaskInDaemon(ctx, daemon, cfg.TaskID)
 	})
 	p.handle(mux, "/tasks/reattempt", func(ctx context.Context, body json.RawMessage) (any, error) {
 		cfg, err := decodeControlPayload[reattemptCommandConfig](body)

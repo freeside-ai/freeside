@@ -1722,6 +1722,31 @@ by `item_id` and `error` alone; in this read that item is a refused row.
   reason line, evidence, claims, or the proposal's parameters: no task
   proposal's scope or cost and no filing's text.
 
+### Stop A Task
+
+`freesided stop -db <database> -task <task-id>` stops a task from the
+command line with the same effect and record as a client's Stop, so an
+unattended session can stop work no one is at a client to stop (#3063). It
+forwards to the running daemon over the control socket, and the daemon
+records the Stop under the same launch guard a client's `stop_task` uses
+(Task Cancellation Contract). The cancellation loop then tears the work down
+and concludes the Stop, as it does for a client's.
+
+- **It prints the stop receipt** as one JSON object on stdout. The receipt's
+  `device_id` is `cli:<account>`, the daemon's account; the control socket
+  admits only that account, so it is the caller's. Read the outcome with
+  `freesided inspect task -db <database> -task <task-id>`: the timeline shows
+  `stop_requested`, and `task.cancellation` moves from `requested` to
+  `confirmed` or `failed_to_stop`.
+- **Stopping again while the Stop is pending** returns a new receipt naming
+  the same cancellation.
+- **It refuses a task that is already final** (finished, stopped, or
+  abandoned), naming the state, and records nothing.
+- **It needs a running daemon.** On a database no daemon holds it refuses
+  without opening the store: nothing would tear the work down until the next
+  start. To give a task up offline, use `freesided abandon`, which closes the
+  task's workflow but doesn't stop an execution in flight.
+
 ### Inspect A Live Database
 
 A `prod` or `dev` daemon holds its database in SQLite exclusive locking mode
@@ -5452,6 +5477,8 @@ isn't asked again. A stop whose acknowledgement the store refuses because the
 task's episode, runs, or epoch changed gets one attempt per daemon process.
 Specification question and approval cards route Stop through the same fence;
 #1369 owns task-level client controls.
+`freesided stop` records the same Stop for an operator through the control
+socket (Stop A Task).
 
 The native Claude judgment adapter reports quiescence only after joining its
 CLI and observing the exact owned process group absent, or proving no launch.
