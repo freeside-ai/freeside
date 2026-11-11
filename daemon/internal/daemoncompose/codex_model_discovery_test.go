@@ -3,6 +3,7 @@ package daemoncompose
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -91,6 +92,54 @@ func TestModelCatalogRefreshDiscoversCodexEnrollmentsForACodexReviewer(t *testin
 	}
 	if !strings.Contains(logs.String(), "model discovery failed") || !strings.Contains(logs.String(), "mutation lease is live") {
 		t.Fatalf("logs = %s", logs.String())
+	}
+}
+
+// TestModelCatalogRefreshSkipsCodexEnrollmentsNotOnOAuth: Codex discovery
+// targets only Codex CLI enrollments on OAuth. The store accepts a Codex CLI
+// enrollment on a setup token, so the refresh's own auth-method filter is
+// all that keeps discovery from reading that enrollment's credential; the
+// OAuth enrollment beside it is still discovered.
+func TestModelCatalogRefreshSkipsCodexEnrollmentsNotOnOAuth(t *testing.T) {
+	t.Parallel()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	at := time.Now().UTC().Add(-time.Hour)
+	seedUsageEnrollment(t, st, "auth-codex", "enroll-codex", "pool-codex", domain.HarnessClientCodexCLI, at)
+	seedUsageEnrollmentWithMethod(t, st, "auth-codex-token", "enroll-codex-token", "pool-codex-token",
+		domain.HarnessClientCodexCLI, domain.AuthMethodSetupToken, at)
+	var read []string
+	discovered := 0
+	refresh := modelCatalogRefresh{
+		store: st,
+		readToken: func(_ context.Context, id domain.ClientEnrollmentID, _ int) (ward.SetupToken, error) {
+			t.Errorf("read setup token for %s; no enrollment is a Claude target", id)
+			return ward.SetupToken{}, errors.New("unexpected setup-token read")
+		},
+		discover: func(context.Context, string, ward.SetupToken) (ward.ModelReport, error) {
+			t.Error("Claude discovery ran; no enrollment is a Claude target")
+			return ward.ModelReport{}, errors.New("unexpected Claude discovery")
+		},
+		image:      modelDiscoveryTestImage,
+		codexImage: codexModelDiscoveryTestImage,
+		readCodex: func(_ context.Context, id domain.ClientEnrollmentID) (ward.LineupProbeCredential, error) {
+			read = append(read, string(id))
+			return ward.LineupProbeCredential{}, nil
+		},
+		discoverCodex: func(context.Context, string, ward.LineupProbeCredential) (ward.ModelReport, error) {
+			discovered++
+			return codexDiscoveredReport("gpt-6.1-sol"), nil
+		},
+		now: time.Now, logger: slog.New(slog.DiscardHandler),
+	}
+	refresh.run(t.Context())
+	if !slices.Equal(read, []string{"enroll-codex"}) || discovered != 1 {
+		t.Fatalf("Codex credential reads = %v with %d discoveries, want only enroll-codex, once", read, discovered)
+	}
+	if _, err := readModelCatalog(t, st, "enroll-codex"); err != nil {
+		t.Fatalf("OAuth enrollment catalog: %v", err)
+	}
+	if catalog, err := readModelCatalog(t, st, "enroll-codex-token"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("setup-token enrollment catalog = %+v, %v; want none", catalog, err)
 	}
 }
 
