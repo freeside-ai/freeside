@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -516,6 +517,43 @@ func TestMachineCapacityReviewReservationFollowsItsSlot(t *testing.T) {
 				t.Fatalf("probe = %v, want the review's memory held %t", err, tc.held)
 			}
 		})
+	}
+}
+
+// TestListOpenVerificationReservations: the list holds every verification
+// reservation not yet released, in invocation order, and no other kind.
+func TestListOpenVerificationReservations(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, admission := reviewSlotFixture(t)
+	if err := reserve(t, st, domain.LaunchReservation{
+		InvocationID: admission.InvocationID, RunID: admission.RunID,
+		Kind: domain.ReservationReview, MemoryMiB: 2048, OverheadMiB: 256,
+	}); err != nil {
+		t.Fatalf("reserve the review: %v", err)
+	}
+	launch := func(id domain.InvocationID) domain.LaunchReservation {
+		return domain.LaunchReservation{
+			InvocationID: id, RunID: admission.RunID,
+			Kind: domain.ReservationVerification, MemoryMiB: 256, OverheadMiB: 256,
+		}
+	}
+	for _, id := range []domain.InvocationID{"verify-b", "verify-a", "verify-c"} {
+		if err := reserve(t, st, launch(id)); err != nil {
+			t.Fatalf("reserve %s: %v", id, err)
+		}
+	}
+	releaseVerification(t, st, launch("verify-c"))
+	var got []domain.LaunchReservation
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		got, err = tx.ListOpenVerificationReservations(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []domain.LaunchReservation{launch("verify-a"), launch("verify-b")}; !slices.Equal(got, want) {
+		t.Fatalf("open verification reservations = %+v, want %+v", got, want)
 	}
 }
 
