@@ -91,6 +91,7 @@ struct FreesideMacApp: App {
                         environment: environment)
                 #endif
             }
+            .background(MainWindowReader())
             .task { daemon?.startMonitoring() }
             .onChange(of: daemon?.readiness, initial: true) { _, readiness in
                 session.applyReadiness(readiness)
@@ -127,7 +128,7 @@ struct FreesideMacApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsWindow(
+            FreesideSettings(
                 session: session, navigation: navigation, daemon: daemon, flowPreferences: flowPreferences,
                 launchInputs: launchInputs)
         }
@@ -191,6 +192,61 @@ struct FreesideMacApp: App {
     }
 }
 
+/// The main window as AppKit holds it, recorded by the main scene's
+/// content. Each screen's `.navigationTitle` renames the window, so its
+/// title can't find it: a task page's window isn't titled "Freeside".
+@MainActor
+private enum MainWindow {
+    static weak var current: NSWindow?
+}
+
+private struct MainWindowReader: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Recorder() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class Recorder: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { MainWindow.current = window }
+        }
+    }
+}
+
+/// The main window brought forward, or opened when it was closed, with the
+/// app activated: from the menu bar panel or the Settings window, another
+/// window or app is in front.
+@MainActor
+private func showMainWindow(_ openWindow: OpenWindowAction) {
+    if let window = MainWindow.current, window.isVisible || window.isMiniaturized {
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+    } else {
+        openWindow(id: "main")
+    }
+    NSApplication.shared.activate()
+}
+
+/// The Settings window, with a seated finding card's Task link showing the
+/// task page in the main window.
+private struct FreesideSettings: View {
+    let session: AppSession
+    let navigation: NavigationModel
+    let daemon: DaemonMenuModel?
+    let flowPreferences: DecisionFlowPreferences
+    let launchInputs: LaunchInputs
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        SettingsWindow(
+            session: session, navigation: navigation, daemon: daemon, flowPreferences: flowPreferences,
+            launchInputs: launchInputs,
+            openTask: { taskID in
+                navigation.route(to: .task(taskID))
+                showMainWindow(openWindow)
+            })
+    }
+}
+
 /// The menu-bar panel bound to the live daemon model and session. The
 /// panel itself is `DaemonMenuPanel` in FreesideCore, so the screenshot
 /// suite renders every daemon state; this wrapper supplies the counts and
@@ -227,12 +283,7 @@ private struct DaemonMenu: View {
     }
 
     private func showApp() {
-        if let window = NSApplication.shared.windows.first(where: { $0.title == "Freeside" }) {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            openWindow(id: "main")
-        }
-        NSApplication.shared.activate()
+        showMainWindow(openWindow)
     }
 
     /// The Settings window on System Health, the way the toolbar gear

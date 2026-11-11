@@ -240,6 +240,9 @@ struct SystemHealthCardSeat: View {
     let onBack: () -> Void
     /// A superseded finding's `Replaced by` link: its successor's card.
     var onSelectItem: (String) -> Void = { _ in }
+    /// The tasks the card's Task link resolves against, and what opens one.
+    var tasks: [Components.Schemas.TaskSnapshot] = []
+    var onSelectTask: (String) -> Void = { _ in }
     var rendersInteractiveControls = true
     @Environment(\.pinnedNow) private var pinnedNow
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -265,13 +268,14 @@ struct SystemHealthCardSeat: View {
             // The card scrolls itself; the pane's own scroll view stays out.
             DecisionDetailView(
                 store: store, itemID: itemID, findingReasonPreferences: .shared,
-                topMargin: Self.cardTopMargin, onSelectItem: onSelectItem
+                topMargin: Self.cardTopMargin, onSelectItem: onSelectItem, tasks: tasks,
+                onSelectTask: onSelectTask
             )
             .id(itemID)
         } else if let item = store.snapshotsByID[itemID]?.item {
             DecisionDetailView(
                 store: store, itemID: itemID, loadsAttachments: false, showsValidationProgress: false,
-                now: pinnedNow ?? .now
+                now: pinnedNow ?? .now, tasks: tasks
             )
             .screenshotCard(item, at: dynamicTypeSize, topMargin: Self.cardTopMargin)
         }

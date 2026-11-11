@@ -1062,7 +1062,7 @@
             ListSectionPreferences(defaults: historyDefaults).systemHealthHistoryExpanded = true
             func settingsWindow(
                 _ page: NavigationModel.SettingsPage, sync: SettingsSync, listDefaults: UserDefaults = settingsDefaults,
-                finding: String? = nil
+                finding: String? = nil, tasks: [Components.Schemas.TaskSnapshot] = []
             ) -> AnyView {
                 let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
                 navigation.selectSettingsPane(page)
@@ -1070,7 +1070,7 @@
                 return AnyView(
                     SettingsWindowContent(
                         navigation: navigation, sync: sync, flowPreferences: flowPreferences,
-                        host: "studio.local", daemon: settingsDaemon, listDefaults: listDefaults,
+                        host: "studio.local", daemon: settingsDaemon, tasks: tasks, listDefaults: listDefaults,
                         rendersInteractiveControls: false))
             }
             func phonePane(
@@ -1136,6 +1136,12 @@
                     Surface(
                         name: "system-health-seat" + suffix, width: 760, colorScheme: scheme,
                         view: settingsWindow(.systemHealth, sync: healthSync, finding: blockingFinding.id)),
+                    // Held work's card names its task as a link to the page.
+                    Surface(
+                        name: "system-health-held-seat" + suffix, width: 760, colorScheme: scheme,
+                        view: settingsWindow(
+                            .systemHealth, sync: healthSync, finding: heldFinding.item.id,
+                            tasks: TaskFixtures.defaultTasks())),
                     Surface(
                         name: "system-health-phone" + suffix, width: 390, colorScheme: scheme,
                         view: phonePane(.systemHealth, sync: phoneHealthSync)),

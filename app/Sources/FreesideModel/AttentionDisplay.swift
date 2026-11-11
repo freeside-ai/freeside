@@ -31,6 +31,9 @@ package enum AttentionDisplay {
             case posture(Components.Schemas.HealthPosture)
             /// Another attention item, which the value links to (R3).
             case item(id: String)
+            /// A task, which the value links to when the client holds its
+            /// page (R3).
+            case task(id: String)
             /// A page outside the app, which the value links to (R3).
             case link(URL)
             /// A recorded instant in the short time grammar (R8), with the
@@ -75,6 +78,13 @@ package enum AttentionDisplay {
             self.value = value
             self.monospaced = false
             self.form = .item(id: id)
+        }
+
+        init(_ label: String, _ value: String, linkingTask id: String) {
+            self.label = label
+            self.value = value
+            self.monospaced = false
+            self.form = .task(id: id)
         }
 
         /// A value that names something with a page of its own. Without a
@@ -453,6 +463,14 @@ package enum AttentionDisplay {
             // it, so it reads with the diagnostic in either posture.
             if let posture = item.posture?.value1 {
                 rows.append(.init("Posture", posture: posture))
+            }
+            // The task a finding is about, such as held work's, by its
+            // display name; the card opens it when the client holds it. The
+            // fallback is the task's id, never a run's, since the row is
+            // labeled Task.
+            if let taskID = subjectTaskID(item) {
+                let name = nonempty(item.display_names?.value1.task.text) ?? taskID
+                rows.append(.init("Task", name, linkingTask: taskID))
             }
             return rows
         case .blocked:
@@ -1207,6 +1225,16 @@ package enum AttentionDisplay {
                 isAgentClaim: names?.task.source == .agent)
         }
         return .init(project: project, workUnit: workUnit)
+    }
+
+    /// The task an item's subject names: a task subject's own, or a run's
+    /// stored task. Project, system, and unscoped batch subjects name none.
+    static func subjectTaskID(_ item: Components.Schemas.AttentionItem) -> String? {
+        switch item.subject {
+        case .task(let task): task.task_id
+        case .run(let run), .proposal_batch(let run): run.task_id
+        case .project, .system: nil
+        }
     }
 
     package static func copyableSubjectReference(

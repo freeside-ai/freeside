@@ -1,4 +1,5 @@
 #if os(macOS)
+    import FreesideAPI
     import SwiftUI
 
     /// The Mac's Settings window (`⌘,`, the App's `Settings` scene): a source
@@ -14,17 +15,23 @@
         private let flowPreferences: DecisionFlowPreferences
         private let launchColorScheme: ColorScheme?
         private let launchDynamicTypeSize: DynamicTypeSize?
+        private let openTask: (String) -> Void
         @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
 
+        /// `openTask` shows a task's page in the main window, for a seated
+        /// finding card's Task link: this window has no page of its own to
+        /// show it in.
         public init(
             session: AppSession, navigation: NavigationModel, daemon: DaemonMenuModel?,
-            flowPreferences: DecisionFlowPreferences, launchInputs: LaunchInputs
+            flowPreferences: DecisionFlowPreferences, launchInputs: LaunchInputs,
+            openTask: @escaping (String) -> Void
         ) {
             FreesideFont.registration
             self.session = session
             self.navigation = navigation
             self.daemon = daemon
             self.flowPreferences = flowPreferences
+            self.openTask = openTask
             launchColorScheme = launchInputs.colorScheme
             launchDynamicTypeSize = launchInputs.dynamicTypeSize
         }
@@ -36,7 +43,7 @@
                     // models afresh.
                     SyncedSettingsWindow(
                         session: session, coordinator: coordinator, navigation: navigation,
-                        flowPreferences: flowPreferences, daemon: macDaemon
+                        flowPreferences: flowPreferences, daemon: macDaemon, openTask: openTask
                     )
                     .id(ObjectIdentifier(coordinator))
                 } else {
@@ -76,19 +83,22 @@
         let navigation: NavigationModel
         let flowPreferences: DecisionFlowPreferences
         let daemon: DaemonPane.MacDaemon?
+        let openTask: (String) -> Void
         @State private var devices: DevicesModel
         @State private var routing: RoutingPolicyModel
         @State private var usage: AccountUsageModel
 
         init(
             session: AppSession, coordinator: SyncCoordinator, navigation: NavigationModel,
-            flowPreferences: DecisionFlowPreferences, daemon: DaemonPane.MacDaemon?
+            flowPreferences: DecisionFlowPreferences, daemon: DaemonPane.MacDaemon?,
+            openTask: @escaping (String) -> Void
         ) {
             self.session = session
             self.coordinator = coordinator
             self.navigation = navigation
             self.flowPreferences = flowPreferences
             self.daemon = daemon
+            self.openTask = openTask
             // The Mac takes no notification link, so it holds no
             // subscription; revoking this device signs out to pairing.
             _devices = State(
@@ -115,7 +125,9 @@
                     store: coordinator.store, unattendedOperation: coordinator.unattendedOperation),
                 flowPreferences: flowPreferences,
                 host: SettingsHost.line(session.serverURL),
-                daemon: daemon
+                daemon: daemon,
+                tasks: coordinator.tasks,
+                openTask: openTask
             )
             // The Agents pane names devices and the Devices pane lists them:
             // on open, and again when the heartbeat observes a newer revision.
@@ -139,6 +151,10 @@
         let flowPreferences: DecisionFlowPreferences
         let host: String?
         let daemon: DaemonPane.MacDaemon?
+        /// The synced tasks a seated finding card's Task link opens, and
+        /// what opens one.
+        var tasks: [Components.Schemas.TaskSnapshot] = []
+        var openTask: (String) -> Void = { _ in }
         /// Where the System Health pane keeps its History fold's state.
         var listDefaults: UserDefaults = .standard
         var rendersInteractiveControls = true
@@ -152,7 +168,7 @@
                     {
                         SystemHealthCardSeat(
                             itemID: itemID, store: sync.store, onBack: navigation.closeFinding,
-                            onSelectItem: navigation.openFinding,
+                            onSelectItem: navigation.openFinding, tasks: tasks, onSelectTask: openTask,
                             rendersInteractiveControls: rendersInteractiveControls)
                     } else if rendersInteractiveControls {
                         // The pane scrolls, never the source list: Usage with

@@ -124,13 +124,9 @@ package enum ConclusionDisplay {
     package static func timelineTaskID(
         for item: Components.Schemas.AttentionItem, in tasks: [Components.Schemas.TaskSnapshot]
     ) -> String? {
-        let taskID: String?
-        switch item.subject {
-        case .task(let task): taskID = task.task_id
-        case .run(let run), .proposal_batch(let run): taskID = run.task_id
-        case .project, .system: taskID = nil
+        guard let taskID = AttentionDisplay.subjectTaskID(item), tasks.contains(where: { $0.task.id == taskID }) else {
+            return nil
         }
-        guard let taskID, tasks.contains(where: { $0.task.id == taskID }) else { return nil }
         return taskID
     }
 

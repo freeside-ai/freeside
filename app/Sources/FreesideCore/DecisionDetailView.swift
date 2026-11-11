@@ -144,7 +144,8 @@ struct DecisionDetailView: View {
     /// Seats the card in the task page. Nil is the card alone in the pane.
     private let seat: PageSeat?
     private let onSelectItem: (String) -> Void
-    /// The tasks a closed card's timeline link resolves its item against.
+    /// The tasks a closed card's timeline link, and a fact's task link,
+    /// resolve against.
     private let tasks: [Components.Schemas.TaskSnapshot]
     private let onSelectTask: (String) -> Void
     /// The synced usage pools the Choose Another Agent dialog reads each
@@ -3384,6 +3385,14 @@ struct DecisionDetailView: View {
             FactRow(label: fact.label, chip: StateChip(posture: posture))
         case .item(let id):
             FactLinkRow(label: fact.label, value: fact.value) { onSelectItem(id) }
+        case .task(let id):
+            // A task this client doesn't hold has no page to open, so its
+            // name draws as plain text.
+            if tasks.contains(where: { $0.task.id == id }) {
+                FactLinkRow(label: fact.label, value: fact.value) { onSelectTask(id) }
+            } else {
+                factRow(fact.label, value: fact.value)
+            }
         case .link(let url):
             FactLinkRow(label: fact.label, value: fact.value) { openURL(url) }
         case .instant(let instant):
