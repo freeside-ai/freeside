@@ -14,24 +14,40 @@ import (
 const usageManifest = domain.Digest("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 // seedUsageEnrollment records an identity on pool and one enrollment of
-// harness on it at generation one.
+// harness on it at generation one, under the harness's usual auth method:
+// setup token for Claude Code, OAuth otherwise.
 func seedUsageEnrollment(
 	t *testing.T, st *store.Store, identity domain.AuthIdentityID, enrollment domain.ClientEnrollmentID,
 	pool domain.UsagePoolID, harness domain.HarnessClientKind, at time.Time,
+) {
+	t.Helper()
+	method := domain.AuthMethodOAuth
+	if harness == domain.HarnessClientClaudeCode {
+		method = domain.AuthMethodSetupToken
+	}
+	seedUsageEnrollmentWithMethod(t, st, identity, enrollment, pool, harness, method, at)
+}
+
+// seedUsageEnrollmentWithMethod is seedUsageEnrollment under an explicit
+// auth method, for a test that needs a harness on a method it doesn't
+// usually use. Provider, route, and refresh strategy follow the harness.
+func seedUsageEnrollmentWithMethod(
+	t *testing.T, st *store.Store, identity domain.AuthIdentityID, enrollment domain.ClientEnrollmentID,
+	pool domain.UsagePoolID, harness domain.HarnessClientKind, method domain.AuthMethod, at time.Time,
 ) {
 	t.Helper()
 	ctx := t.Context()
 	account := "acct-" + string(identity)
 	record := domain.ClientEnrollment{
 		ID: enrollment, AuthIdentityID: identity, HarnessClient: harness,
-		Route: "openai_chatgpt_codex", AuthMethod: domain.AuthMethodOAuth,
+		Route: "openai_chatgpt_codex", AuthMethod: method,
 		CredentialMode:  domain.CredentialSubscriptionContained,
 		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true, AccountBinding: account,
 	}
 	provider := domain.AuthProviderOpenAI
 	if harness == domain.HarnessClientClaudeCode {
 		provider = domain.AuthProviderClaude
-		record.Route, record.AuthMethod, record.RefreshStrategy = "anthropic-subscription", domain.AuthMethodSetupToken, domain.RefreshExternal
+		record.Route, record.RefreshStrategy = "anthropic-subscription", domain.RefreshExternal
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
