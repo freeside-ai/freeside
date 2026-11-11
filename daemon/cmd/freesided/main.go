@@ -215,6 +215,9 @@ func main() {
 		case "snapshot":
 			runSnapshotMain(os.Args[2:])
 			return
+		case "check-database":
+			runCheckDatabaseMain(os.Args[2:])
+			return
 		case "publication-formats":
 			runPublicationFormatsMain(os.Args[2:])
 			return
