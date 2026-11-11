@@ -82,12 +82,6 @@
                             glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.",
                             seat: seat)) < 200)
             }
-            #expect(
-                minimumHeight(
-                    SidebarEmptyState(
-                        glyph: .inbox, title: "No resolved items",
-                        description: "Attention items in this scope will appear here."))
-                    < 200)
         }
 
         /// The text mounted in a Mac window holding a root paired with

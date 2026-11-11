@@ -719,8 +719,8 @@ public struct FreesideRootView: View {
                 taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator, topMargin: topMargin)
                     .id(taskID)
             } else if showsInboxClearResult {
-                // The same two lines the empty Needs you draws in the
-                // sidebar, so the two panes agree.
+                // The inbox-clear result: the sidebar's empty Needs you
+                // draws nothing, so this pane says it.
                 let empty = UnifiedListView.emptyNeedsYou(projectID: coordinator.store.projectID)
                 UnavailableStateView(
                     glyph: .inbox, title: empty.title, description: empty.description,
