@@ -259,7 +259,23 @@ import Testing
         #expect(RunDisplay.stageRail(run).entries.map(\.state) == [.pending, .pending, .pending, .pending, .current])
         let specification = RunFixtures.handedOffSpecificationRun().run
         #expect(RunDisplay.workflowPhase(specification) == nil)
-        #expect(RunDisplay.title(specification) == "Specification · Round 1")
+        #expect(RunDisplay.title(specification) == "Specification")
+    }
+
+    /// A specification invocation may be a research continuation or a
+    /// Discuss reply, so more of them is no new round (#1462).
+    @Test func specificationHeadingCountsNoInvocationRound() throws {
+        var run = RunFixtures.handedOffSpecificationRun().run
+        let attempt = try #require(run.stages[0].attempts.first)
+        run.stages[0].attempts = (1...3).map { number in
+            var next = attempt
+            next.number = number
+            next.invocation_id = "inv-spec-\(number)"
+            return next
+        }
+        #expect(RunDisplay.stageHeading(run)?.label == "Specification")
+        #expect(RunDisplay.stageHeading(run)?.round == nil)
+        #expect(RunDisplay.title(run) == "Specification")
     }
 
     @Test func attemptIdentityResolvesSuccessorAndSuppressesStaleHold() throws {

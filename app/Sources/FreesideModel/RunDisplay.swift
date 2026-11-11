@@ -34,8 +34,12 @@ package enum RunDisplay {
         }
     }
 
+    /// The stage's round: its attempt count. Specification has none, since
+    /// its attempts are invocations (a research continuation, a Discuss
+    /// reply, a revision, a retry) and the client can't tell them apart, so
+    /// a count would read a reply as a new round (#1462).
     static func round(_ stage: Components.Schemas.Stage) -> String? {
-        guard !stage.attempts.isEmpty else { return nil }
+        guard !stage.attempts.isEmpty, canonicalStageName(stage.name) != "specification" else { return nil }
         return "Round \(stage.attempts.count)"
     }
 
