@@ -97,6 +97,16 @@ type UsageExtractor interface {
 	) ([]exec.UsageMeasurement, *exec.ClaudeUsageCapture, error)
 }
 
+// QuotaRefusalClassifier is the optional provider hook that reads a failed
+// writer's diagnostic transcript for a provider quota refusal. The transcript
+// is untrusted agent output, and the refusal only feeds scheduling: it parks
+// the task and marks a window exhausted, and grants nothing. Nil means the
+// transcript is not a readable quota refusal, so the failure keeps no cause.
+// A provider that doesn't implement it fails as before.
+type QuotaRefusalClassifier interface {
+	ClassifyQuotaRefusal(transcript []byte) *domain.QuotaRefusal
+}
+
 // ProviderHandoffInput is the durable input needed to render one provider's
 // ward handoff request.
 type ProviderHandoffInput struct {
