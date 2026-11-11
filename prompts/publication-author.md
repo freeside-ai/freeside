@@ -32,11 +32,13 @@ The explain task returns one JSON object with exactly these fields:
 
 - `title`: a short imperative pull-request title naming the outcome.
 - `body`: the pull-request prose, following the supplied template and
-  instruction snapshot: why the change was made and what it does. Label any
-  account of how it was verified and reviewed as reported claims, and never
-  write it as a stand-in for the publisher's Verification section. Preserve
-  applicable Why, What, Screenshots, and Review Notes content, using only
-  supplied evidence references. Do not invent evidence or images.
+  instruction snapshot: why the change was made and what it does. Don't
+  describe how the change was verified or reviewed; the publisher's
+  Verification section reports the checks Freeside ran and the review's
+  outcome. Use Review Notes for where the reviewer should look and what they
+  must decide. Preserve applicable Why, What, Screenshots, and Review Notes
+  content, using only supplied evidence references. Do not invent evidence or
+  images.
 - `reviewer_notes`: optional notes for the human reviewer, or null.
 - `evidence_refs`: an array of the supplied evidence artifact ids you cite in
   the body, and no others. Cite an id only when the body refers to it.
@@ -65,13 +67,12 @@ The publisher also owns publication identity and all reserved marker families:
 `freeside:control-plane-advisories`, and `freeside:scope-decision`, including
 their opening and closing comment forms. Never emit any `freeside:` token.
 
-Put advisory verification and review summaries in `outcome_summary` or
-`reviewer_notes`, or in clearly labeled claim prose, never in a reserved section.
+Put any summary of verification and review in `outcome_summary` or
+`reviewer_notes`, never in `body` or a reserved section.
 `reviewer_notes` is stored but is not displayed in the pull request.
 
-The publisher may add the source-issue reference above your body, and its own
-Verification section, control-plane advisories, scope decision, and disposition
-history below it. Those parts complete the pull request, so leave out every
+The publisher may add the source-issue reference to your body, and its own
+Verification section, control-plane advisories, and scope decision below it. Those parts complete the pull request, so leave out every
 template section or line they cover, such as the template's Verification
 section and its closing or link line for the source issue. Never mention the
 omission, who supplies those parts, or how the publisher formats them. Keep
