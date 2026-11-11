@@ -7,7 +7,7 @@
     /// and the selected pane beside it, as the 4 Nov 2026 handoff draws it
     /// (`docs/design/handoff-2026-11-04-settings-usage-new-task/`, canvas
     /// band 1). The selection is `NavigationModel.settingsPane`, so the
-    /// toolbar's gear and a launch argument open the window on it.
+    /// sidebar's gear and a launch argument open the window on it.
     public struct SettingsWindow: View {
         private let session: AppSession
         private let navigation: NavigationModel

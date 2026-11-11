@@ -178,7 +178,7 @@ public struct FreesideRootView: View {
 
     /// The stopped notice's action: System Health, over it the card of the
     /// item the stop names when one is open. The Mac opens the Settings
-    /// window on it, as the toolbar gear does; the iPhone pushes it.
+    /// window on it, as the sidebar gear does; the iPhone pushes it.
     private func openSystemHealth(_ itemID: String?) {
         navigation.openSystemHealth(finding: itemID)
         #if os(macOS)
@@ -346,6 +346,12 @@ public struct FreesideRootView: View {
         #else
             NavigationSplitView(columnVisibility: $splitVisibility) {
                 unifiedList(coordinator)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        SidebarFooter(
+                            freshness: coordinator.store.freshness,
+                            lastUpdatedAt: coordinator.lastUpdatedAt,
+                            onOpenSettings: { openSettings() })
+                    }
                     .background(Color.sidebarGround)
                     .navigationSplitViewColumnWidth(min: 280, ideal: 320)
             } detail: {
@@ -380,8 +386,6 @@ public struct FreesideRootView: View {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
                     .help("Refresh")
-                    LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
-                    settingsButton
                 }
             }
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
@@ -458,19 +462,6 @@ public struct FreesideRootView: View {
             onRefresh: coordinator.refresh,
             onRevealTechnicalDetails: revealTechnicalDetails)
     }
-
-    #if os(macOS)
-        /// The Mac toolbar's gear: the Settings window, on the pane it last
-        /// showed. The iPhone's is `phoneSettingsButton`.
-        private var settingsButton: some View {
-            Button {
-                openSettings()
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .help("Settings")
-        }
-    #endif
 
     /// The gear's badge: the open-findings count, the number System Health
     /// lists as open. Nil, so no badge, before the inbox loads or with
