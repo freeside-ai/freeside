@@ -83,6 +83,7 @@ func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
 		{http.MethodPost, "/devices/device-1/revoke"},
 		{http.MethodGet, "/sync/bootstrap"},
 		{http.MethodGet, "/sync/revision"},
+		{http.MethodGet, "/restart-readiness"},
 		{http.MethodGet, "/attention/items"},
 		{http.MethodGet, "/attention/items/item-1"},
 		{http.MethodGet, "/attention/items/item-1/effect-proposal"},

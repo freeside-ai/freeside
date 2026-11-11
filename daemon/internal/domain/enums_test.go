@@ -322,6 +322,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["UpdateDrainState"] = append(valids["UpdateDrainState"], v.valid)
 	}
 	invalids["UpdateDrainState"] = UpdateDrainState("").valid
+	for _, v := range AllRestartBlockerKinds {
+		valids["RestartBlockerKind"] = append(valids["RestartBlockerKind"], v.valid)
+	}
+	invalids["RestartBlockerKind"] = RestartBlockerKind("").valid
 	for _, v := range AllSupersessionKinds {
 		valids["SupersessionKind"] = append(valids["SupersessionKind"], v.valid)
 	}

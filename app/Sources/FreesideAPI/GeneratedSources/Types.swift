@@ -79,6 +79,14 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /sync/revision`.
     /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)`.
     func getSyncRevision(_ input: Operations.getSyncRevision.Input) async throws -> Operations.getSyncRevision.Output
+    /// Whether it is safe to restart the daemon now
+    ///
+    /// Answers whether the daemon can restart now and what a restart is waiting on: the update drain in force, or null, and a count of each kind of running work a restart would cut short. `ready` is true only when a drain is in force and nothing blocks; without a drain a launch can start the moment after the read, so an empty blocker list alone is not ready. The read changes no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /restart-readiness`.
+    /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
+    func getRestartReadiness(_ input: Operations.getRestartReadiness.Input) async throws -> Operations.getRestartReadiness.Output
     /// List attention items
     ///
     /// Lists attention items as individual resource snapshots. A partial fetch: the result updates only the entities it carries and never marks the whole cache current (plan §5.14).
@@ -494,6 +502,16 @@ extension APIProtocol {
             query: query,
             headers: headers
         ))
+    }
+    /// Whether it is safe to restart the daemon now
+    ///
+    /// Answers whether the daemon can restart now and what a restart is waiting on: the update drain in force, or null, and a count of each kind of running work a restart would cut short. `ready` is true only when a drain is in force and nothing blocks; without a drain a launch can start the moment after the read, so an empty blocker list alone is not ready. The read changes no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /restart-readiness`.
+    /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
+    public func getRestartReadiness(headers: Operations.getRestartReadiness.Input.Headers = .init()) async throws -> Operations.getRestartReadiness.Output {
+        try await getRestartReadiness(Operations.getRestartReadiness.Input(headers: headers))
     }
     /// List attention items
     ///
@@ -9366,6 +9384,194 @@ public enum Components {
                 case status
                 case resolution
             }
+        }
+        /// Whether it is safe to restart the daemon now (mirrors domain.RestartReadiness). ready is true exactly when drain is non-null and blockers is empty.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RestartReadiness`.
+        public struct RestartReadiness: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RestartReadiness/ready`.
+            public var ready: Swift.Bool
+            /// The update drain in force; null when there is none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RestartReadiness/drain`.
+            public struct drainPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RestartReadiness/drain/value1`.
+                public var value1: Components.Schemas.UpdateDrain
+                /// Creates a new `drainPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.UpdateDrain) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The update drain in force; null when there is none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RestartReadiness/drain`.
+            public var drain: Components.Schemas.RestartReadiness.drainPayload?
+            /// Each kind of running work a restart would cut short, in the order RestartBlockerKind lists them. A kind with nothing running is left out.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RestartReadiness/blockers`.
+            public var blockers: [Components.Schemas.RestartBlocker]
+            /// When the daemon read the verdict.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RestartReadiness/as_of`.
+            public var as_of: Foundation.Date
+            /// Creates a new `RestartReadiness`.
+            ///
+            /// - Parameters:
+            ///   - ready:
+            ///   - drain: The update drain in force; null when there is none.
+            ///   - blockers: Each kind of running work a restart would cut short, in the order RestartBlockerKind lists them. A kind with nothing running is left out.
+            ///   - as_of: When the daemon read the verdict.
+            public init(
+                ready: Swift.Bool,
+                drain: Components.Schemas.RestartReadiness.drainPayload? = nil,
+                blockers: [Components.Schemas.RestartBlocker],
+                as_of: Foundation.Date
+            ) {
+                self.ready = ready
+                self.drain = drain
+                self.blockers = blockers
+                self.as_of = as_of
+            }
+            public enum CodingKeys: String, CodingKey {
+                case ready
+                case drain
+                case blockers
+                case as_of
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.ready = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .ready
+                )
+                self.drain = try container.decodeIfPresent(
+                    Components.Schemas.RestartReadiness.drainPayload.self,
+                    forKey: .drain
+                )
+                self.blockers = try container.decode(
+                    [Components.Schemas.RestartBlocker].self,
+                    forKey: .blockers
+                )
+                self.as_of = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .as_of
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "ready",
+                    "drain",
+                    "blockers",
+                    "as_of"
+                ])
+            }
+        }
+        /// An update drain in force: new launches wait for the daemon to restart on a new build instead of starting work the update would cancel.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UpdateDrain`.
+        public struct UpdateDrain: Codable, Hashable, Sendable {
+            /// When the drain began.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateDrain/since`.
+            public var since: Foundation.Date
+            /// Whether the drain was requested with forced cancellation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateDrain/forced`.
+            public var forced: Swift.Bool
+            /// Creates a new `UpdateDrain`.
+            ///
+            /// - Parameters:
+            ///   - since: When the drain began.
+            ///   - forced: Whether the drain was requested with forced cancellation.
+            public init(
+                since: Foundation.Date,
+                forced: Swift.Bool
+            ) {
+                self.since = since
+                self.forced = forced
+            }
+            public enum CodingKeys: String, CodingKey {
+                case since
+                case forced
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.since = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .since
+                )
+                self.forced = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .forced
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "since",
+                    "forced"
+                ])
+            }
+        }
+        /// How many of one kind of running work a restart would cut short.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RestartBlocker`.
+        public struct RestartBlocker: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RestartBlocker/kind`.
+            public var kind: Components.Schemas.RestartBlockerKind
+            /// - Remark: Generated from `#/components/schemas/RestartBlocker/count`.
+            public var count: Swift.Int
+            /// Creates a new `RestartBlocker`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - count:
+            public init(
+                kind: Components.Schemas.RestartBlockerKind,
+                count: Swift.Int
+            ) {
+                self.kind = kind
+                self.count = count
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case count
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.RestartBlockerKind.self,
+                    forKey: .kind
+                )
+                self.count = try container.decode(
+                    Swift.Int.self,
+                    forKey: .count
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "count"
+                ])
+            }
+        }
+        /// A kind of running work a daemon restart would cut short (mirrors domain.RestartBlockerKind). execution_launch and review_launch are admissions that still hold their slot; verification_job, image_build, probe, and publication are work in progress in the running daemon; credential_lease is a held auth-store mutation lease, such as an enrollment or a token refresh, that no counted launch holds. Widening it is a contract change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RestartBlockerKind`.
+        @frozen public enum RestartBlockerKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case execution_launch = "execution_launch"
+            case review_launch = "review_launch"
+            case verification_job = "verification_job"
+            case image_build = "image_build"
+            case probe = "probe"
+            case publication = "publication"
+            case credential_lease = "credential_lease"
         }
         /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState and unattended-admission verdict from one read transaction, and the committed agent tree's revision. A revision gap, a changed verdict, or a changed lineup_revision tells the client to bootstrap, never to adopt state from this payload.
         ///
@@ -21381,6 +21587,119 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Whether it is safe to restart the daemon now
+    ///
+    /// Answers whether the daemon can restart now and what a restart is waiting on: the update drain in force, or null, and a count of each kind of running work a restart would cut short. `ready` is true only when a drain is in force and nothing blocks; without a drain a launch can start the moment after the read, so an empty blocker list alone is not ready. The read changes no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /restart-readiness`.
+    /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
+    public enum getRestartReadiness {
+        public static let id: Swift.String = "getRestartReadiness"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/restart-readiness/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getRestartReadiness.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getRestartReadiness.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.getRestartReadiness.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            public init(headers: Operations.getRestartReadiness.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/restart-readiness/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/restart-readiness/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.RestartReadiness)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.RestartReadiness {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getRestartReadiness.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getRestartReadiness.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The restart readiness verdict.
+            ///
+            /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.getRestartReadiness.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.getRestartReadiness.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
                             response: self
                         )
                     }

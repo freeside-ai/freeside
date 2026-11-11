@@ -549,6 +549,8 @@ var (
 	ErrTransitionCommandMismatch           = errors.New("operating transition disagrees with its accepted command")
 	ErrInvalidUpdateDrainState             = errors.New("unknown update drain state")
 	ErrUpdateDrainLiftForced               = errors.New("only a draining update drain transition can be forced")
+	ErrInvalidRestartBlockerKind           = errors.New("unknown restart blocker kind")
+	ErrRestartReadinessInconsistent        = errors.New("restart readiness disagrees with its drain or blockers")
 	ErrReviewRecoveryBindingMissing        = errors.New("review contradiction item lacks its recovery binding")
 	ErrReviewRecoveryBindingOutsideItem    = errors.New("review recovery binding is a review_contradiction semantic")
 	ErrReviewRecoveryBindingMismatch       = errors.New("review recovery binding disagrees with its persisted failure")

@@ -1004,6 +1004,16 @@ public actor MockServer {
         try await afterRespond?(operationID)
     }
 
+    /// The daemon's restart readiness read (store.RestartReadiness). The mock
+    /// runs no work, so nothing blocks and it is ready exactly while a drain
+    /// is in force.
+    func restartReadiness() -> Components.Schemas.RestartReadiness {
+        .init(
+            ready: updateDrain != nil,
+            drain: updateDrain.map { .init(value1: .init(since: $0.since, forced: $0.forced)) },
+            blockers: [], as_of: currentTime)
+    }
+
     func serverRevision() -> Components.Schemas.ServerRevision {
         return .init(
             sync_epoch: syncEpoch, revision: revision,

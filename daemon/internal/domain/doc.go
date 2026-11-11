@@ -65,6 +65,7 @@
 //   - routing_policy.go routing policy revisions and their source (§5.4)
 //   - unattended.go   the unattended-operation state an operator moves
 //   - update_drain.go the update drain that holds new launches for a restart
+//   - restart_readiness.go what a restart waits on, by blocker kind
 //   - workflow.go     resolved workflow-definition initiators (§5.12)
 //   - run.go          run/stage/attempt and invocation identities (§5.3)
 //   - observation.go  run observations: milestones, holds, invocation

@@ -136,6 +136,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"TaskProposalIntent":          enumStrings(domain.AllTaskProposalIntents),
 		"UnattendedAdmission":         enumStrings(domain.AllUnattendedAdmissions),
 		"UnattendedStopKind":          enumStrings(domain.AllUnattendedStopKinds),
+		"RestartBlockerKind":          enumStrings(domain.AllRestartBlockerKinds),
 		"WorkUnitCompatibility":       enumStrings(domain.AllWorkUnitCompatibilities),
 	}
 	// A schema with an enum key decodes to a non-nil slice; enum: [null]

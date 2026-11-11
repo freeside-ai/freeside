@@ -55,6 +55,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("PUT /devices/{device_id}/notifications", h.authenticated(h.setDeviceNotifications))
 	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
+	mux.Handle("GET /restart-readiness", h.authenticated(h.getRestartReadiness))
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
 	mux.Handle("GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem))
 	mux.Handle("GET /attention/items/{item_id}/task-proposal", h.authenticated(h.getTaskProposalFacts))

@@ -69,6 +69,25 @@ import Testing
         #expect(lifted.unattended_operation.stops.map(\.kind) == [.operator_stop])
     }
 
+    /// The mock runs no work, so restart readiness follows the drain alone.
+    @Test func restartReadinessFollowsTheUpdateDrain() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let undrained = try await client.getRestartReadiness().ok.body.json
+        #expect(!undrained.ready)
+        #expect(undrained.drain == nil)
+        #expect(undrained.blockers.isEmpty)
+
+        await server.requestUpdateDrain(forced: true)
+        let drained = try await client.getRestartReadiness().ok.body.json
+        #expect(drained.ready)
+        #expect(drained.drain?.value1.forced == true)
+        #expect(drained.blockers.isEmpty)
+
+        await server.liftUpdateDrain()
+        #expect(try await !client.getRestartReadiness().ok.body.json.ready)
+    }
+
     @Test func bootstrapCarriesEveryUsagePoolAndTheRoutingPolicy() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)

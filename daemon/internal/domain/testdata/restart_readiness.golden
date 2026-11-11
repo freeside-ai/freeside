@@ -1,0 +1,20 @@
+{
+  "ready": false,
+  "drain": {
+    "state": "draining",
+    "build": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "forced": false,
+    "occurred_at": "2026-01-02T03:04:05Z"
+  },
+  "blockers": [
+    {
+      "kind": "execution_launch",
+      "count": 2
+    },
+    {
+      "kind": "credential_lease",
+      "count": 1
+    }
+  ],
+  "as_of": "2026-01-02T03:05:05Z"
+}

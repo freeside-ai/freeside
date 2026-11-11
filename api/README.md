@@ -118,3 +118,23 @@ revision. A `command_id` names one command of any kind.
   the move set: the implementer on that selection, and each other role the
   routing policy orders an agent on that pool for, unless an operator set
   its line (`daemon/README.md`, Retry Or Move A Task To Another Agent).
+
+## Restart Readiness Contract
+
+`GET /restart-readiness` tells an update whether it can restart the daemon
+now without cutting short running work. It returns the update drain in force
+(or null), each kind of running work as a kind and a count, and `ready`.
+`ready` needs a drain: without one, a launch can start the moment after the
+read, so an empty blocker list alone proves nothing. The read changes no
+state.
+
+The daemon reports `execution_launch`, `review_launch`, and
+`credential_lease` today, the kinds its store records. The other four kinds
+(`verification_job`, `image_build`, `probe`, `publication`) exist only in the
+running daemon, and #3104 adds them when it lets an update request a drain.
+Until then no drain can be in force, so `ready` is never true.
+
+A drain in force also shows on the sync surface as an `update_drain` entry in
+`unattended_operation.stops`, with null `item_id` and `command_id` and `since`
+set to when the drain began. The daemon starts sending it in #3104, in the
+same change that makes it hold launches.
