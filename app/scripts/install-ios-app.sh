@@ -57,7 +57,7 @@
 # Environment:
 #   FREESIDE_IOS_BUILD_DIR  derived data (default: app/DerivedData/ios-install)
 #
-# Requires: macOS, Xcode, a physical iPhone (iOS 17+) with Developer Mode
+# Requires: macOS, Xcode, a physical iPhone (iOS 18+) with Developer Mode
 # enabled, connected and trusted.
 set -euo pipefail
 

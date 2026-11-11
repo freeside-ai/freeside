@@ -20,11 +20,18 @@ struct RunReviewSection: View {
         }
     }
 
+    /// Details the daemon has `answered` this session are current while
+    /// freshness holds, so a routine refetch shows no notice; only a failed
+    /// one does.
     static func availabilityMessage(
-        hasTimeline: Bool, state: SyncCoordinator.TimelineLoadState?, freshness: InboxStore.Freshness
+        hasTimeline: Bool, state: SyncCoordinator.TimelineLoadState?, answered: Bool,
+        freshness: InboxStore.Freshness
     ) -> String? {
         if !hasTimeline {
             return state == .loading ? "Loading review…" : "Review details unavailable"
+        }
+        if answered, !freshness.isFailing {
+            return state == .unavailable ? "Review refresh failed. Showing saved details." : nil
         }
         if state == .loading { return "Showing saved review details while refreshing…" }
         if state == .unavailable { return "Review refresh failed. Showing saved details." }
@@ -94,7 +101,9 @@ struct RunReviewSection: View {
             KeywordLabel(text: "Review")
             let state = coordinator.timelineLoadStates[runID]
             let availability = Self.availabilityMessage(
-                hasTimeline: hasTimeline, state: state, freshness: coordinator.store.freshness)
+                hasTimeline: hasTimeline, state: state,
+                answered: coordinator.answeredRunTimelineIDs.contains(runID),
+                freshness: coordinator.store.freshness)
             if let availability {
                 Text(availability).font(FreesideFont.cardBody).foregroundStyle(Color.inkDim)
             }

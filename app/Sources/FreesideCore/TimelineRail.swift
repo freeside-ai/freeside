@@ -60,6 +60,9 @@ struct TimelineRail: View {
     /// Opens a row's item. Nil (a run's page, a screenshot of one) draws
     /// every row as plain text, never as a link that goes nowhere.
     var onOpenItem: ((String) -> Void)? = nil
+    /// Drawn behind each row's top, by the row's `holdKeys` key: the task
+    /// page's mark for holding the reader's place. Nil draws nothing.
+    var rowMarker: ((String) -> AnyView)? = nil
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
     @Environment(\.pinnedNow) private var pinnedNow
@@ -72,7 +75,25 @@ struct TimelineRail: View {
     /// off: longer than any row at any text size.
     private static let connectorReach: CGFloat = 2000
 
+    /// A key per row that survives rows arriving above it: the row's
+    /// content, and for rows alike in every field, which of them it is
+    /// counted from the oldest. An index would move with every new row,
+    /// since the rail runs newest first.
+    nonisolated static func holdKeys(_ rows: [Row]) -> [String] {
+        var seen: [String: Int] = [:]
+        return rows.reversed().map { row in
+            let content = [
+                "\(row.kind)", row.label, row.recordedAt.map { "\($0.timeIntervalSince1970)" } ?? "-",
+                row.context ?? "-",
+            ].joined(separator: "|")
+            let count = seen[content, default: 0]
+            seen[content] = count + 1
+            return "\(content)#\(count)"
+        }.reversed()
+    }
+
     var body: some View {
+        let keys = rowMarker == nil ? [] : Self.holdKeys(rows)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 let isLast = index == rows.count - 1
@@ -96,6 +117,9 @@ struct TimelineRail: View {
                 // Cuts the connector off at the row's edges, where the next
                 // row's connector takes over.
                 .clipped()
+                .background(alignment: .top) {
+                    if let rowMarker, index < keys.count { rowMarker(keys[index]) }
+                }
                 .accessibilityElement(children: .combine)
             }
         }

@@ -103,8 +103,8 @@ var targets: [Target] = [
 let package = Package(
     name: "FreesideApp",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v17),
+        .macOS(.v15),
+        .iOS(.v18),
     ],
     products: products,
     dependencies: [

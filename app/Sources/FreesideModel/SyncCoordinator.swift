@@ -104,6 +104,13 @@ public final class SyncCoordinator {
     public private(set) var tasks: [Components.Schemas.TaskSnapshot] = []
     public private(set) var taskTimelinesByTaskID: [String: Components.Schemas.TaskTimeline] = [:]
     public private(set) var taskTimelineLoadStates: [String: TimelineLoadState] = [:]
+    /// The run and task timelines the daemon has answered since the cache
+    /// was last discarded. A refetch moves the load state back to loading,
+    /// so the state alone can't tell a routine refresh of history the
+    /// daemon already served from history read off disk (#1460). Not
+    /// persisted: a relaunch reads from disk, and nothing is answered yet.
+    public private(set) var answeredRunTimelineIDs: Set<String> = []
+    public private(set) var answeredTaskTimelineIDs: Set<String> = []
     public private(set) var lastUpdatedAt: Date?
 
     private let cache: CacheStore
@@ -811,6 +818,7 @@ public final class SyncCoordinator {
             id: runID,
             generations: \.timelineGenerations,
             loadStates: \.timelineLoadStates,
+            answered: \.answeredRunTimelineIDs,
             read: {
                 switch try await store.client.getRunTimeline(path: .init(run_id: runID)) {
                 case .ok(let ok): .ok(try ok.body.json)
@@ -854,6 +862,7 @@ public final class SyncCoordinator {
             id: taskID,
             generations: \.taskTimelineGenerations,
             loadStates: \.taskTimelineLoadStates,
+            answered: \.answeredTaskTimelineIDs,
             read: {
                 switch try await store.client.getTaskTimeline(path: .init(task_id: taskID)) {
                 case .ok(let ok): .ok(try ok.body.json)
@@ -893,6 +902,7 @@ public final class SyncCoordinator {
         id: String,
         generations: ReferenceWritableKeyPath<SyncCoordinator, [String: Int]>,
         loadStates: ReferenceWritableKeyPath<SyncCoordinator, [String: TimelineLoadState]>,
+        answered: ReferenceWritableKeyPath<SyncCoordinator, Set<String>>,
         read: () async throws -> TimelineRead<Timeline>,
         binds: (Timeline) -> Bool,
         adopt: (Timeline) -> Void,
@@ -902,6 +912,12 @@ public final class SyncCoordinator {
         self[keyPath: generations][id] = requestGeneration
         let requestCacheGeneration = cacheGeneration
         self[keyPath: loadStates][id] = .loading
+        // A failed read no longer vouches for the history, so its retry
+        // reads as refreshing again rather than current.
+        func fail() {
+            self[keyPath: loadStates][id] = .unavailable
+            self[keyPath: answered].remove(id)
+        }
         do {
             let output = try await read()
             try Task.checkCancellation()
@@ -913,7 +929,7 @@ public final class SyncCoordinator {
             switch output {
             case .ok(let timeline):
                 guard binds(timeline) else {
-                    self[keyPath: loadStates][id] = .unavailable
+                    fail()
                     let diagnosed = await diagnoseSyncFailure()
                     guard self[keyPath: generations][id] == requestGeneration,
                         requestCacheGeneration == cacheGeneration
@@ -923,12 +939,13 @@ public final class SyncCoordinator {
                 }
                 adopt(timeline)
                 self[keyPath: loadStates][id] = .loaded
+                self[keyPath: answered].insert(id)
                 observe(revision: timeline[keyPath: revision])
                 persist()
             case .notFound:
-                self[keyPath: loadStates][id] = .unavailable
+                fail()
             case .undocumented(let statusCode):
-                self[keyPath: loadStates][id] = .unavailable
+                fail()
                 let diagnosed = await failureFreshness(status: statusCode)
                 guard self[keyPath: generations][id] == requestGeneration,
                     requestCacheGeneration == cacheGeneration
@@ -945,7 +962,7 @@ public final class SyncCoordinator {
                 self[keyPath: loadStates][id] = .idle
                 return
             }
-            self[keyPath: loadStates][id] = .unavailable
+            fail()
             let diagnosed = await diagnosedReadFreshness(error)
             guard self[keyPath: generations][id] == requestGeneration,
                 requestCacheGeneration == cacheGeneration
@@ -998,9 +1015,11 @@ public final class SyncCoordinator {
         let listedRunIDs = Set(snapshot.runs.map(\.run.id))
         timelinesByRunID = timelinesByRunID.filter { listedRunIDs.contains($0.key) }
         timelineLoadStates = timelineLoadStates.filter { listedRunIDs.contains($0.key) }
+        answeredRunTimelineIDs.formIntersection(listedRunIDs)
         let listedTaskIDs = Set(snapshot.tasks.map(\.task.id))
         taskTimelinesByTaskID = taskTimelinesByTaskID.filter { listedTaskIDs.contains($0.key) }
         taskTimelineLoadStates = taskTimelineLoadStates.filter { listedTaskIDs.contains($0.key) }
+        answeredTaskTimelineIDs.formIntersection(listedTaskIDs)
         taskHistoryRequests = taskHistoryRequests.filter { listedTaskIDs.contains($0.key) }
         cursors = SyncCursors(
             syncEpoch: snapshot.sync_epoch,
@@ -1106,9 +1125,11 @@ public final class SyncCoordinator {
         usagePools = []
         timelinesByRunID = [:]
         timelineLoadStates = [:]
+        answeredRunTimelineIDs = []
         tasks = []
         taskTimelinesByTaskID = [:]
         taskTimelineLoadStates = [:]
+        answeredTaskTimelineIDs = []
         taskHistoryRequests = [:]
         cursors = nil
         persist()

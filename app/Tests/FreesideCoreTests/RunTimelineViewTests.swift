@@ -8,22 +8,50 @@ import Testing
 @Suite struct RunTimelineViewTests {
     @Test @MainActor func missingAndCachedReviewReadsNeverClaimAnEmptyHistory() {
         for state in [SyncCoordinator.TimelineLoadState.idle, .loading, .unavailable] {
-            #expect(RunReviewSection.availabilityMessage(hasTimeline: false, state: state, freshness: .fresh) != nil)
-            #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: state, freshness: .fresh) != nil)
+            #expect(
+                RunReviewSection.availabilityMessage(
+                    hasTimeline: false, state: state, answered: false, freshness: .fresh) != nil)
+            #expect(
+                RunReviewSection.availabilityMessage(
+                    hasTimeline: true, state: state, answered: false, freshness: .fresh) != nil)
         }
-        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: nil, freshness: .unvalidated) != nil)
-        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .unreachable) != nil)
-        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .fresh) == nil)
+        #expect(
+            RunReviewSection.availabilityMessage(
+                hasTimeline: true, state: nil, answered: false, freshness: .unvalidated) != nil)
+        #expect(
+            RunReviewSection.availabilityMessage(
+                hasTimeline: true, state: .loaded, answered: false, freshness: .unreachable) != nil)
+        #expect(
+            RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, answered: false, freshness: .fresh)
+                == nil)
         // A read that ran ahead of the snapshot leaves loaded review details
         // current; failing sync does not.
-        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .unvalidated) == nil)
+        #expect(
+            RunReviewSection.availabilityMessage(
+                hasTimeline: true, state: .loaded, answered: false, freshness: .unvalidated) == nil)
         let failing: [InboxStore.Freshness] = [
             .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
         ]
         for freshness in failing {
             #expect(
-                RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: freshness) != nil)
+                RunReviewSection.availabilityMessage(
+                    hasTimeline: true, state: .loaded, answered: false, freshness: freshness) != nil)
         }
+        // Details the daemon has answered stay quiet through a refetch and
+        // note only a failed one, while freshness holds (#1460).
+        for state: SyncCoordinator.TimelineLoadState? in [nil, .idle, .loading, .loaded] {
+            #expect(
+                RunReviewSection.availabilityMessage(hasTimeline: true, state: state, answered: true, freshness: .fresh)
+                    == nil)
+        }
+        #expect(
+            RunReviewSection.availabilityMessage(
+                hasTimeline: true, state: .unavailable, answered: true, freshness: .fresh)
+                == "Review refresh failed. Showing saved details.")
+        #expect(
+            RunReviewSection.availabilityMessage(
+                hasTimeline: true, state: .loading, answered: true, freshness: .unreachable)
+                == "Showing saved review details while refreshing…")
         // Retry answers a failed load and nothing else.
         #expect(RunReviewSection.showsRetry(state: .unavailable))
         for state: SyncCoordinator.TimelineLoadState? in [nil, .idle, .loading, .loaded] {

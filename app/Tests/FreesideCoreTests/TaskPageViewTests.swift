@@ -162,7 +162,9 @@ import Testing
         #expect(relaunched.timelineLoadStates[RunFixtures.activeRunID] == .unavailable)
         #expect(
             RunReviewSection.availabilityMessage(
-                hasTimeline: preload, state: .unavailable, freshness: relaunched.store.freshness) != nil)
+                hasTimeline: preload, state: .unavailable,
+                answered: relaunched.answeredRunTimelineIDs.contains(RunFixtures.activeRunID),
+                freshness: relaunched.store.freshness) != nil)
         await server.setBeforeRespond(nil)
         await relaunched.refreshTaskReviews(for: TaskFixtures.retryTaskID, revision: 12)
         #expect(relaunched.timelineLoadStates[RunFixtures.activeRunID] == .loaded)
@@ -171,6 +173,9 @@ import Testing
         await relaunched.heartbeat()
         #expect(relaunched.timelinesByRunID.isEmpty)
         #expect(relaunched.taskTimelinesByTaskID.isEmpty)
+        // A new epoch forgets that the daemon answered.
+        #expect(relaunched.answeredRunTimelineIDs.isEmpty)
+        #expect(relaunched.answeredTaskTimelineIDs.isEmpty)
     }
 
     /// While a daemon keeps writing, the detail's own reads run ahead of the
@@ -187,12 +192,14 @@ import Testing
         await coordinator.refreshTaskReviews(for: taskID, revision: 12)
         func history() -> String? {
             TaskTimelinePresentation.availabilityMessage(
-                state: coordinator.taskTimelineLoadStates[taskID], freshness: coordinator.store.freshness)
+                state: coordinator.taskTimelineLoadStates[taskID],
+                answered: coordinator.answeredTaskTimelineIDs.contains(taskID), freshness: coordinator.store.freshness)
         }
         func review() -> String? {
             RunReviewSection.availabilityMessage(
                 hasTimeline: coordinator.timelinesByRunID[runID] != nil,
-                state: coordinator.timelineLoadStates[runID], freshness: coordinator.store.freshness)
+                state: coordinator.timelineLoadStates[runID],
+                answered: coordinator.answeredRunTimelineIDs.contains(runID), freshness: coordinator.store.freshness)
         }
         func banner() -> Bool {
             FreshnessBanner.isShowing(
@@ -215,8 +222,125 @@ import Testing
         #expect(coordinator.store.freshness == .unreachable)
         #expect(history() == "Saved task history. Freshness unconfirmed.")
         #expect(review() == "Saved review details. Freshness unconfirmed.")
+        // A failed read forgets the daemon's answer, so the retry that
+        // follows reads as refreshing, not as current history. Task and run
+        // reads share that bookkeeping; the task's read is skipped here,
+        // since its history already loaded for this cache generation.
+        #expect(coordinator.answeredRunTimelineIDs.contains(runID))
+        await coordinator.refreshTimeline(for: runID)
+        #expect(coordinator.timelineLoadStates[runID] == .unavailable)
+        #expect(!coordinator.answeredRunTimelineIDs.contains(runID))
         #expect(coordinator.taskStop.unavailableReason == "Offline. Connect to the daemon before sending Stop.")
         #expect(banner())
+    }
+
+    /// What the Timeline and a run's Review section say, sampled while a
+    /// read is in flight.
+    @MainActor private final class Notices {
+        var states: [SyncCoordinator.TimelineLoadState?] = []
+        var messages: [String?] = []
+    }
+
+    private static func notices(
+        _ coordinator: SyncCoordinator, taskID: String, runID: String
+    ) -> (history: String?, review: String?) {
+        (
+            TaskTimelinePresentation.availabilityMessage(
+                state: coordinator.taskTimelineLoadStates[taskID],
+                answered: coordinator.answeredTaskTimelineIDs.contains(taskID), freshness: coordinator.store.freshness),
+            RunReviewSection.availabilityMessage(
+                hasTimeline: coordinator.timelinesByRunID[runID] != nil, state: coordinator.timelineLoadStates[runID],
+                answered: coordinator.answeredRunTimelineIDs.contains(runID), freshness: coordinator.store.freshness)
+        )
+    }
+
+    /// Samples both notices whenever the daemon is about to answer a
+    /// timeline read, which is while the read's state is loading.
+    private func sampleNotices(
+        _ server: MockServer, _ coordinator: SyncCoordinator, taskID: String, runID: String
+    ) async -> Notices {
+        let notices = Notices()
+        await server.setBeforeRespond { operation in
+            guard operation == "getTaskTimeline" || operation == "getRunTimeline" else { return }
+            await MainActor.run {
+                let now = Self.notices(coordinator, taskID: taskID, runID: runID)
+                notices.states += [coordinator.taskTimelineLoadStates[taskID], coordinator.timelineLoadStates[runID]]
+                notices.messages += [now.history, now.review]
+            }
+        }
+        return notices
+    }
+
+    /// Once the daemon has answered a task's history and a run's review,
+    /// a bootstrap and the refetch it triggers are routine: neither section
+    /// shows a notice at any step while freshness holds (#1460).
+    @Test func aRoutineRefetchOfAnsweredHistoryShowsNoNotice() async throws {
+        let server = server()
+        let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+        let taskID = TaskFixtures.retryTaskID
+        let runID = RunFixtures.activeRunID
+        await loadTask(coordinator)
+        await coordinator.refreshTaskReviews(for: taskID, revision: 12)
+        #expect(coordinator.answeredTaskTimelineIDs.contains(taskID))
+        #expect(coordinator.answeredRunTimelineIDs.contains(runID))
+        let notices = await sampleNotices(server, coordinator, taskID: taskID, runID: runID)
+
+        await coordinator.bootstrap()
+        #expect(!coordinator.store.freshness.isFailing)
+        var now = Self.notices(coordinator, taskID: taskID, runID: runID)
+        #expect(now.history == nil)
+        #expect(now.review == nil)
+        await coordinator.refreshTaskTimeline(for: taskID)
+        await coordinator.refreshTimeline(for: runID)
+        now = Self.notices(coordinator, taskID: taskID, runID: runID)
+        #expect(now.history == nil)
+        #expect(now.review == nil)
+
+        // The samples cover both reads mid-flight.
+        #expect(notices.states.contains(.loading))
+        #expect(!notices.messages.isEmpty)
+        #expect(notices.messages.allSatisfy { $0 == nil })
+
+        // A refetch that fails still says so. The next bootstrap is what
+        // lets the task's read go out again.
+        await server.setBeforeRespond { operation in
+            if operation == "getTaskTimeline" || operation == "getRunTimeline" { throw InjectedFailure() }
+        }
+        await coordinator.bootstrap()
+        await coordinator.refreshTaskTimeline(for: taskID)
+        await coordinator.refreshTimeline(for: runID)
+        now = Self.notices(coordinator, taskID: taskID, runID: runID)
+        #expect(now.history?.contains("failed") == true)
+        #expect(now.review?.contains("failed") == true)
+    }
+
+    /// History read from disk is no answer from the daemon: until one
+    /// arrives, each section reads as saved, then as refreshing while the
+    /// read is in flight.
+    @Test func historyFromDiskReadsAsSavedUntilTheDaemonAnswers() async throws {
+        let server = server()
+        let cache = InMemoryCacheStore()
+        let client = APIClientFactory.mock(server: server)
+        let taskID = TaskFixtures.retryTaskID
+        let runID = RunFixtures.activeRunID
+        let first = SyncCoordinator(client: client, cache: cache)
+        await loadTask(first)
+        await first.refreshTaskReviews(for: taskID, revision: 12)
+
+        let relaunched = SyncCoordinator(client: client, cache: cache)
+        #expect(relaunched.taskTimelinesByTaskID[taskID] != nil)
+        #expect(relaunched.timelinesByRunID[runID] != nil)
+        #expect(relaunched.answeredTaskTimelineIDs.isEmpty)
+        #expect(relaunched.answeredRunTimelineIDs.isEmpty)
+        let saved = Self.notices(relaunched, taskID: taskID, runID: runID)
+        #expect(saved.history == "Saved task history. Freshness unconfirmed.")
+        #expect(saved.review == "Saved review details. Freshness unconfirmed.")
+
+        let notices = await sampleNotices(server, relaunched, taskID: taskID, runID: runID)
+        await relaunched.refreshTaskTimeline(for: taskID)
+        #expect(notices.messages.first == "Showing saved task history while refreshing…")
+        await relaunched.refreshTimeline(for: runID)
+        #expect(notices.messages.last == "Showing saved review details while refreshing…")
     }
 
     /// A review read that succeeds while sync keeps failing proves that one
@@ -231,12 +355,14 @@ import Testing
         await coordinator.refreshTaskReviews(for: taskID, revision: 12)
         func history() -> String? {
             TaskTimelinePresentation.availabilityMessage(
-                state: coordinator.taskTimelineLoadStates[taskID], freshness: coordinator.store.freshness)
+                state: coordinator.taskTimelineLoadStates[taskID],
+                answered: coordinator.answeredTaskTimelineIDs.contains(taskID), freshness: coordinator.store.freshness)
         }
         func review() -> String? {
             RunReviewSection.availabilityMessage(
                 hasTimeline: coordinator.timelinesByRunID[runID] != nil,
-                state: coordinator.timelineLoadStates[runID], freshness: coordinator.store.freshness)
+                state: coordinator.timelineLoadStates[runID],
+                answered: coordinator.answeredRunTimelineIDs.contains(runID), freshness: coordinator.store.freshness)
         }
         func banner() -> Bool {
             FreshnessBanner.isShowing(
@@ -476,28 +602,38 @@ import Testing
     }
 
     @Test func savedHistoryNeverReadsAsAnEmptyOrCurrentResult() {
-        #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, freshness: .fresh) == nil)
+        #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, answered: false, freshness: .fresh) == nil)
+        // A refetch reads as refreshing only until the daemon has answered;
+        // after that it is routine, and says nothing (#1460).
         #expect(
-            TaskTimelinePresentation.availabilityMessage(state: .loading, freshness: .fresh)?.contains("refreshing")
-                == true)
+            TaskTimelinePresentation.availabilityMessage(state: .loading, answered: false, freshness: .fresh)?
+                .contains("refreshing") == true)
+        #expect(TaskTimelinePresentation.availabilityMessage(state: .loading, answered: true, freshness: .fresh) == nil)
         #expect(
-            TaskTimelinePresentation.availabilityMessage(state: .unavailable, freshness: .fresh)?.contains("failed")
+            TaskTimelinePresentation.availabilityMessage(state: .unavailable, answered: false, freshness: .fresh)?
+                .contains("failed")
                 == true)
         for state: SyncCoordinator.TimelineLoadState? in [nil, .idle, .loaded] {
             #expect(
-                TaskTimelinePresentation.availabilityMessage(state: state, freshness: .unreachable)?.contains("Saved")
+                TaskTimelinePresentation.availabilityMessage(state: state, answered: false, freshness: .unreachable)?
+                    .contains("Saved")
                     == true)
         }
-        #expect(TaskTimelinePresentation.availabilityMessage(state: nil, freshness: .fresh) != nil)
+        #expect(TaskTimelinePresentation.availabilityMessage(state: nil, answered: false, freshness: .fresh) != nil)
         // A read that ran ahead of the snapshot leaves a loaded history
         // current, and vouches for nothing that has not loaded.
-        #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, freshness: .unvalidated) == nil)
-        #expect(TaskTimelinePresentation.availabilityMessage(state: nil, freshness: .unvalidated) != nil)
+        #expect(
+            TaskTimelinePresentation.availabilityMessage(state: .loaded, answered: false, freshness: .unvalidated)
+                == nil)
+        #expect(
+            TaskTimelinePresentation.availabilityMessage(state: nil, answered: false, freshness: .unvalidated) != nil)
         let failing: [InboxStore.Freshness] = [
             .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
         ]
         for freshness in failing {
-            #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, freshness: freshness) != nil)
+            #expect(
+                TaskTimelinePresentation.availabilityMessage(state: .loaded, answered: false, freshness: freshness)
+                    != nil)
         }
     }
 

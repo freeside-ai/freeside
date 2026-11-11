@@ -60,6 +60,14 @@ struct TaskPageView: View {
     @State private var identifiersOpenAtLaunch: Bool
     /// The scroll view the outline row jumps through. Nil in a screenshot.
     private let scrollProxy: ScrollViewProxy?
+    /// Moves the page's offset by a distance, without animation, to hold
+    /// the reader's place. Nil in a screenshot, which holds nothing.
+    private let scrollBy: ((CGFloat) -> Void)?
+    /// Drops the corrections the host still has on their way, because an
+    /// operator's move lands somewhere they didn't build on.
+    private let forgetCorrections: () -> Void
+    /// What a hosted test reads of the page. Nil outside tests.
+    private let probe: TaskPagePlaceProbe?
     /// Supplies the existing screenshot composition without loading tasks or
     /// a scroll viewport. Rendering through body installs environment values
     /// before the content helpers read locale, time zone, and text size.
@@ -114,20 +122,58 @@ struct TaskPageView: View {
         /// A page that reappears from under a run keeps its own offset, so
         /// it restores once.
         var restored = false
-        /// The open items the recorded layout drew.
-        var itemIDs: Set<String> = []
-        /// Whether a card leads the page as last drawn, for a move that
-        /// runs after the view it was scheduled from has been replaced.
-        var leadsWithCard = false
         /// A move waiting for a change to lay out. The page records nothing
-        /// meanwhile, so the layout the change first draws, with the
-        /// reader's section pushed down or pulled up, isn't their place.
+        /// meanwhile, and holds nothing, so the layout the change first
+        /// draws isn't taken for the reader's place.
         var pendingMove: PendingMove?
+        /// Each hold point's top in the page's own space, which layout moves
+        /// and scrolling never does, and the marker that last reported it.
+        /// A point that stops drawing leaves.
+        var holdTops: [HoldPoint: CGFloat] = [:]
+        var holdReporters: [HoldPoint: UUID] = [:]
+        /// The page's top in the scroll view, which scrolling moves and
+        /// layout inside the page doesn't.
+        var pageTop: CGFloat = 0
+        /// The point the reader's place is held by, and its top when the
+        /// page last matched it.
+        var held: HoldPoint?
+        var heldTop: CGFloat = 0
+        /// Each point's top once the layout pass that last moved the held
+        /// point had reported every top, so a held point that goes hands
+        /// its hold to one above it with the top it had then.
+        var settledTops: [HoldPoint: CGFloat] = [:]
+        var settleScheduled = false
+        var reselectScheduled = false
+        /// Counts the operator's moves, so a move's completion ends only
+        /// that move and not one the operator started after it.
+        var moveCount = 0
+        /// Where the page's top goes as each correction sent is applied, in
+        /// order. The scroll a correction makes keeps the held point, so
+        /// arriving there picks none anew; picking during the layout that
+        /// caused it would read tops the pass hasn't finished reporting.
+        var correctedPageTops: [CGFloat] = []
+    }
+
+    /// What the page holds the reader's place by: a jump target, or a
+    /// marker at the top of a part the outline row offers no jump to (a row
+    /// of the Timeline's rail, keyed by `TimelineRail.holdKeys`, a body
+    /// section, a conversation, or a part of the seated card).
+    fileprivate enum HoldPoint: Hashable {
+        case anchor(TaskPageAnchor)
+        case marker(String)
+
+        /// The name a test reads the point's top by.
+        var probeKey: String {
+            switch self {
+            case .anchor(let target): "\(target)"
+            case .marker(let key): key
+            }
+        }
     }
 
     private enum PendingMove {
-        /// Back to the reader's place, after an open item arrived or left.
-        case toPlace
+        /// To a section or run the operator chose.
+        case jump
         /// To the leading card, which the operator opened.
         case toCard
         /// To the Identifiers footer, which the leading card revealed.
@@ -136,6 +182,9 @@ struct TaskPageView: View {
 
     /// The page's top, where a Decisions place with no card left returns.
     private enum PageTop: Hashable { case top }
+
+    /// The page's own coordinate space, which its hold points report in.
+    fileprivate static let pageSpace = "TaskPageView.page"
 
     /// The Identifiers footer, where a card's reveal lands. Not a
     /// `TaskPageAnchor`: the footer is no section the outline row offers.
@@ -153,6 +202,8 @@ struct TaskPageView: View {
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil, scrollProxy: ScrollViewProxy? = nil,
+        scrollBy: ((CGFloat) -> Void)? = nil, forgetCorrections: @escaping () -> Void = {},
+        probe: TaskPagePlaceProbe? = nil,
         decisionIdentifiers: [AttentionDisplay.BindingRow] = [], identifiersReveals: Int = 0,
         identifiersOpenAtLaunch: Bool = false,
         topMargin: CGFloat? = nil, memory: TaskPageMemory? = nil,
@@ -171,6 +222,9 @@ struct TaskPageView: View {
         self.identifiersReveals = identifiersReveals
         _identifiersOpenAtLaunch = State(initialValue: identifiersOpenAtLaunch)
         self.scrollProxy = scrollProxy
+        self.scrollBy = scrollBy
+        self.forgetCorrections = forgetCorrections
+        self.probe = probe
         self.topMargin = topMargin
         self.screenshotTimeline = screenshotTimeline
         self.screenshotPinned = screenshotPinned
@@ -245,36 +299,85 @@ struct TaskPageView: View {
             }
             .pageColumn(compact: compact, topMargin: topMargin)
         } else {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            // A plain stack, with the outline row pinned by drawing it lower
+            // as the page scrolls past it. A lazy stack's pinned header
+            // would cost the page its body whenever a shrinking document
+            // leaves the offset past its end for a moment, and the tops it
+            // estimates meanwhile would move the reader (#1460). The scroll
+            // view's space starts below its top content inset (the Mac
+            // toolbar, the iOS navigation bar), so the row pins at zero.
+            VStack(alignment: .leading, spacing: 0) {
                 header(timeline)
                     .padding(.bottom, Self.contentGap - 6)
-                Section {
-                    sections(timeline)
-                        .padding(.top, Self.contentGap)
-                } header: {
-                    outlineRow(timeline)
-                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { outlineHeight = $0 }
-                        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).minY }) { top in
-                            place.rowTop = top
-                            recordPlace()
-                        }
+                outlineRow(timeline)
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { outlineHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self, of: { max(0, $0.frame(in: .scrollView).minY) }) {
+                        top in
+                        place.rowTop = top
+                        probe?.rowTop = top
+                        recordPlace()
+                    }
+                    .visualEffect { content, geometry in
+                        content.offset(y: max(0, -geometry.frame(in: .scrollView).minY))
+                    }
+                    .zIndex(1)
+                sections(timeline)
+                    .padding(.top, Self.contentGap)
+            }
+            // Named outside the column's margin, which a standing notice in
+            // the detail column changes, so a new margin moves the hold
+            // points as any other layout above the reader does.
+            .pageColumn(compact: compact, topMargin: topMargin)
+            .coordinateSpace(.named(Self.pageSpace))
+            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).minY }) { top in
+                place.pageTop = top
+                probe?.pageTop = top
+                if let landed = place.correctedPageTops.firstIndex(where: { abs(top - $0) < 0.5 }) {
+                    place.correctedPageTops.removeFirst(landed + 1)
+                } else {
+                    place.correctedPageTops = []
+                    scheduleReselect()
                 }
             }
-            .pageColumn(compact: compact, topMargin: topMargin)
             .id(PageTop.top)
             .task { await restorePlace() }
             .onChange(of: chosenSection) { held?.chosenSection = chosenSection }
             .onChange(of: memory?.cardOpenings) { moveToOpenedCard() }
             // `repairSelection` moves the lead only off a card that closed,
-            // so a move off one still open is the operator choosing another.
-            .onChange(of: leadingItemID) { previous, _ in
+            // and never seats one, so a lead arriving where none was, or
+            // moving off a card still open, is the operator choosing it.
+            .onChange(of: leadingItemID) { previous, current in
+                let chosen = previous.map(openItemIDs.contains) ?? (current != nil)
                 // An open the memory counted has already started the move.
-                if let previous, openItemIDs.contains(previous), place.pendingMove != .toCard {
+                if chosen, place.pendingMove != .toCard {
                     moveToOpenedCard()
                 }
             }
-            .onChange(of: leadingCard != nil, initial: true) { place.leadsWithCard = leadingCard != nil }
+            // A reader at Decisions whose last card left has nothing there
+            // to hold, so the page goes to its top.
+            .onChange(of: leadingCard != nil) { _, leads in
+                guard !leads, place.anchor == .section(.decisions) else { return }
+                forgetCorrections()
+                place.correctedPageTops = []
+                scrollProxy?.scrollTo(PageTop.top, anchor: .top)
+                place.anchor = nil
+                held?.anchor = nil
+                chosenSection = nil
+            }
             .onChange(of: identifiersReveals) { revealIdentifiers() }
+            .onChange(of: selectedSection, initial: true) { probe?.selectedSection = selectedSection }
+            .onChange(of: openAttachmentFolders, initial: true) { reportStateFolds() }
+            .onChange(of: showsStopExplanation, initial: true) { reportStateFolds() }
+            .onAppear {
+                probe?.openStateFold = { fold in
+                    if fold == TaskPagePlaceProbe.whatHappened {
+                        showsStopExplanation = true
+                    } else {
+                        openAttachmentFolders.insert(fold)
+                    }
+                }
+                probe?.select = { onSelectSection($0, timeline: timeline) }
+            }
             .taskStopConfirmation(
                 $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize
             )
@@ -292,14 +395,16 @@ struct TaskPageView: View {
         }
     }
 
-    /// Everything under the outline row. One container, so a lazy stack
-    /// holds every jump target as soon as the page draws.
+    /// Everything under the outline row. Each part a refresh can change
+    /// carries a hold point, so a reader below it holds their place as it
+    /// changes above them.
     private func sections(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         VStack(alignment: .leading, spacing: Self.contentGap) {
             let earlier = earlierConversations
             let chip = Self.conversationChip(cardThreadMessages: cardThreadMessages, earlier: earlier)
             if let leadingCard {
                 leadingCard
+                    .environment(\.taskPageHoldMarker, cardHoldMarker)
                     .background(alignment: .top) { jumpTarget(.section(.decisions)) }
                     // The card draws the chip's target on its own thread,
                     // which only it can place.
@@ -317,12 +422,17 @@ struct TaskPageView: View {
                         ) {
                             onOpenItem?(other.item.id)
                         }
+                        .onAppear { probe?.oneLineItemIDs.insert(other.item.id) }
+                        .onDisappear { probe?.oneLineItemIDs.remove(other.item.id) }
                     }
                 }
+                .background(alignment: .top) { bodyMarker("one-line-rows") }
             }
             VStack(alignment: .leading, spacing: 22) {
                 stopStates
+                    .background(alignment: .top) { bodyMarker("stop") }
                 lineChangeStates
+                    .background(alignment: .top) { bodyMarker("line-change") }
                 timelineSection(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.timeline)) }
                 // Absent when it lists none. It is a place the reader
@@ -336,6 +446,7 @@ struct TaskPageView: View {
                 // while the history loads or is unavailable.
                 if hasIdentifiersFooter(timeline) {
                     identifiers(timeline)
+                        .background(alignment: .top) { bodyMarker("identifiers") }
                 }
             }
             .foregroundStyle(Color.ink)
@@ -370,6 +481,7 @@ struct TaskPageView: View {
                 place.targetTops[target] = top
                 recordPlace()
             }
+            .holdsPlace(scrollBy == nil ? nil : .anchor(target), report: reportHoldTop)
             .onDisappear { place.targetTops[target] = nil }
             .id(target)
             .padding(.top, -outlineHeight)
@@ -387,8 +499,54 @@ struct TaskPageView: View {
             .accessibilityHidden(true)
     }
 
+    /// A hold point keyed by `key`, set the outline row's height above
+    /// where it is placed, as a jump target is, so it reads as reached
+    /// where a target would. Draws nothing where the page holds nothing.
+    private func holdMarker(_ key: String) -> AnyView {
+        guard scrollBy != nil else { return AnyView(EmptyView()) }
+        return AnyView(
+            Color.clear
+                .frame(height: outlineHeight)
+                .holdsPlace(.marker(key), report: reportHoldTop)
+                // A rail row arriving above moves each key to the next
+                // marker down; a marker that takes a new key is a new view,
+                // so the key reports from where it now draws.
+                .id(key)
+                .padding(.top, -outlineHeight)
+                .accessibilityHidden(true))
+    }
+
+    /// A body part's hold point, in a namespace apart from the rail's keys.
+    private func bodyMarker(_ key: String) -> AnyView { holdMarker("page:" + key) }
+
+    /// The seated card's hold points, in a namespace of their own.
+    private var cardHoldMarker: (@MainActor (String) -> AnyView)? {
+        guard scrollBy != nil else { return nil }
+        return { key in holdMarker("card:" + key) }
+    }
+
     private func jump(to target: TaskPageAnchor) {
-        withAnimation { scrollProxy?.scrollTo(target, anchor: .top) }
+        land(.jump) { scrollProxy?.scrollTo(target, anchor: .top) }
+    }
+
+    /// Runs an operator's animated move. The page holds nothing until it
+    /// lands, so a correction from a refresh meanwhile can't stop it
+    /// partway, and where it lands is the new baseline; the corrections
+    /// still on their way built on the place it left.
+    private func land(_ move: PendingMove, _ scroll: () -> Void) {
+        place.pendingMove = move
+        place.moveCount += 1
+        let count = place.moveCount
+        place.correctedPageTops = []
+        forgetCorrections()
+        withAnimation(.default, completionCriteria: .logicallyComplete) {
+            scroll()
+        } completion: { [place] in
+            guard place.moveCount == count else { return }
+            place.pendingMove = nil
+            recordPlace()
+            scheduleReselect()
+        }
     }
 
     // MARK: Place
@@ -402,45 +560,95 @@ struct TaskPageView: View {
     private var openItemIDs: Set<String> { Set(openItems.map(\.item.id)) }
 
     /// Records the reader's place when it changes, and writes it through to
-    /// the memory for a later mount. When the open items change, it moves
-    /// back to the place instead.
+    /// the memory for a later mount.
     private func recordPlace() {
         guard place.restored, place.pendingMove == nil else { return }
-        if openItemIDs != place.itemIDs {
-            returnToPlace()
-            return
-        }
         let anchor = TaskPageAnchor.reading(offsets: place.targetTops.mapValues { $0 - place.rowTop })
         guard anchor != place.anchor else { return }
         place.anchor = anchor
         held?.anchor = anchor
     }
 
-    /// Returns the page to the reader's place after an open item arrives or
-    /// leaves. A card arriving above the reader's section pushes it down
-    /// and one leaving pulls it up; the page itself stays mounted. The
-    /// route's repair, which seats or drops the card, follows the store
-    /// change in a later transaction, so the move waits the beat a restore
-    /// does. A Decisions place with no card left goes to the top.
-    private func returnToPlace() {
-        place.pendingMove = .toPlace
-        Task { @MainActor [place, scrollProxy] in
-            try? await Task.sleep(for: .milliseconds(120))
-            // An opened card wins: the operator chose where to go.
-            guard place.pendingMove == .toPlace else { return }
-            if let anchor = place.anchor {
-                if anchor == .section(.decisions), !place.leadsWithCard {
-                    scrollProxy?.scrollTo(PageTop.top, anchor: .top)
-                    place.anchor = nil
-                    held?.anchor = nil
-                    chosenSection = nil
-                } else {
-                    await drawTarget(anchor)
-                    scrollProxy?.scrollTo(anchor, anchor: .top)
-                }
+    /// Holds the reader's place when layout above it changes: a card
+    /// seated or leaving, a rail row or message arriving, the header
+    /// growing. When the held point's top in the page moves by `d`, the
+    /// offset moves by `d` with it, so what the reader sees stays still.
+    /// Anything that changes inside the viewport is below the held point,
+    /// so it never scrolls the page; nor does an operator's move, which
+    /// takes a fresh baseline instead (#1460).
+    ///
+    /// A marker that leaves after another took its point, as a rail row's
+    /// does when a row arrives above it, leaves the newer report in place.
+    private func reportHoldTop(_ point: HoldPoint, reporter: UUID, _ top: CGFloat?) {
+        guard let top else {
+            guard place.holdReporters[point] == reporter else { return }
+            place.holdTops[point] = nil
+            place.holdReporters[point] = nil
+            probe?.holdTops[point.probeKey] = nil
+            // A held point that goes, as a rail row does when its label
+            // changes, possibly in the refresh that adds a row above it,
+            // hands its hold on once the pass has reported every top.
+            if point == place.held { scheduleReselect() }
+            return
+        }
+        place.holdTops[point] = top
+        place.holdReporters[point] = reporter
+        probe?.holdTops[point.probeKey] = top
+        guard point == place.held else { return }
+        let moved = top - place.heldTop
+        place.heldTop = top
+        scheduleSettle()
+        correct(by: moved)
+    }
+
+    /// Scrolls by the distance the reader's content moved, unless the page
+    /// is still returning to its place or the operator is moving it.
+    private func correct(by moved: CGFloat) {
+        guard place.restored, place.pendingMove == nil, abs(moved) >= 0.5, let scrollBy else { return }
+        place.correctedPageTops.append((place.correctedPageTops.last ?? place.pageTop) - moved)
+        scrollBy(moved)
+    }
+
+    private func scheduleSettle() {
+        guard !place.settleScheduled else { return }
+        place.settleScheduled = true
+        Task { @MainActor [place] in
+            place.settleScheduled = false
+            place.settledTops = place.holdTops
+        }
+    }
+
+    /// Picks the point that holds the reader's place after a scroll: the
+    /// lowest at or above the outline row's top, as `TaskPageAnchor.reading`
+    /// picks the section. Waits for the layout pass to end, so a scroll the
+    /// pass caused, as a shrinking document clamps the offset, isn't read
+    /// against tops it hasn't reported yet.
+    private func scheduleReselect() {
+        guard scrollBy != nil, !place.reselectScheduled else { return }
+        place.reselectScheduled = true
+        Task { @MainActor [place] in
+            place.reselectScheduled = false
+            // With the page's body not drawn, nothing is to be read; the
+            // held point stays until it draws again.
+            guard !place.holdTops.isEmpty else { return }
+            // A held point that went is followed by the nearest point above
+            // it still drawn, which moved as far as the reader's content.
+            if let gone = place.held, place.holdTops[gone] == nil, let goneTop = place.settledTops[gone],
+                let heir = place.settledTops
+                    .filter({ $0.value <= goneTop && place.holdTops[$0.key] != nil })
+                    .max(by: { $0.value < $1.value }),
+                let heirTop = place.holdTops[heir.key]
+            {
+                correct(by: heirTop - heir.value)
             }
-            place.itemIDs = openItemIDs
-            place.pendingMove = nil
+            // Read where the page lands once its corrections apply.
+            let pageTop = place.correctedPageTops.last ?? place.pageTop
+            let reading = place.holdTops
+                .filter { pageTop + $0.value - place.rowTop <= 1 }
+                .max { $0.value < $1.value }
+            place.held = reading?.key
+            place.heldTop = reading?.value ?? 0
+            place.settledTops = place.holdTops
         }
     }
 
@@ -456,13 +664,10 @@ struct TaskPageView: View {
             try? await Task.sleep(for: .milliseconds(120))
             guard place.pendingMove == .toCard else { return }
             chosenSection = nil
-            await drawTarget(.section(.decisions))
-            jump(to: .section(.decisions))
-            place.itemIDs = openItemIDs
-            // Opening forgot the memory's place; the next record after the
-            // jump writes the new one through.
+            // Opening forgot the memory's place; the record after the move
+            // lands writes the new one through.
             place.anchor = nil
-            place.pendingMove = nil
+            land(.toCard) { scrollProxy?.scrollTo(TaskPageAnchor.section(.decisions), anchor: .top) }
         }
     }
 
@@ -474,26 +679,13 @@ struct TaskPageView: View {
     private func revealIdentifiers() {
         identifiersFold.wrappedValue = true
         place.pendingMove = .toIdentifiers
-        Task { @MainActor [place, scrollProxy] in
+        Task { @MainActor [place] in
             try? await Task.sleep(for: .milliseconds(120))
             guard place.pendingMove == .toIdentifiers else { return }
             chosenSection = nil
-            await drawTarget(.section(.timeline))
-            withAnimation { scrollProxy?.scrollTo(IdentifiersFooter.top, anchor: .top) }
-            place.itemIDs = openItemIDs
             place.anchor = nil
-            place.pendingMove = nil
+            land(.toIdentifiers) { scrollProxy?.scrollTo(IdentifiersFooter.top, anchor: .top) }
         }
-    }
-
-    /// Brings back the page's body when `target` isn't drawn, so a jump to
-    /// it lands. A card leaving or a shorter one taking the lead shrinks the
-    /// document under a reader near its end, past which the lazy stack drops
-    /// the body and every jump target in it; the top draws it again.
-    private func drawTarget(_ target: TaskPageAnchor) async {
-        guard place.targetTops[target] == nil else { return }
-        scrollProxy?.scrollTo(PageTop.top, anchor: .top)
-        try? await Task.sleep(for: .milliseconds(50))
     }
 
     /// Returns a fresh mount to the place the memory holds for this task,
@@ -502,7 +694,6 @@ struct TaskPageView: View {
     private func restorePlace() async {
         guard !place.restored else { return }
         defer { place.restored = true }
-        place.itemIDs = openItemIDs
         guard let memory else { return }
         let target = memory.restore(taskID: snapshot.task.id, leadsWithCard: leadingCard != nil)
         chosenSection = memory.chosenSection
@@ -711,36 +902,58 @@ struct TaskPageView: View {
             runs: (timeline?.sections.flatMap(\.runs) ?? []).map {
                 .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
             },
-            selected: chosenSection ?? (open.isEmpty ? .task : .decisions),
+            selected: selectedSection,
             rendersInteractiveControls: screenshotTimeline == nil,
-            onSelect: { section in
-                // A one-run page's Runs chip goes where choosing that run
-                // from the popup would; with none it lands on the Timeline.
-                if section == .runs, let run = timeline?.sections.flatMap(\.runs).first {
-                    jump(toRun: run.run_id, in: timeline)
-                    return
-                }
-                chosenSection = section
-                switch section {
-                // The Task chip goes to the page head, where the task is
-                // named. The head is no place the reader keeps.
-                case .task: withAnimation { scrollProxy?.scrollTo(PageTop.top, anchor: .top) }
-                case .runs: jump(to: .section(.timeline))
-                case .conversation:
-                    if conversation?.isInCard == true {
-                        withAnimation { scrollProxy?.scrollTo(CardThread.top, anchor: .top) }
-                    } else {
-                        jump(to: .section(.conversation))
-                    }
-                case .decisions, .timeline: jump(to: .section(section))
-                }
-            },
+            onSelect: { onSelectSection($0, timeline: timeline) },
             onChooseDecision: { onOpenItem?($0) },
             onChooseRun: { jump(toRun: $0, in: timeline) },
             trailing: {
                 if TaskActionsSlot(compact: compact) == .outlineRow { taskActionsMenu(timeline) }
             }
         )
+    }
+
+    /// The chip the outline row selects. It follows the seated card, not
+    /// the open items, so an item opening under a reader leaves it where
+    /// it was.
+    private var selectedSection: TaskPageSection {
+        chosenSection ?? (leadingItemID == nil ? .task : .decisions)
+    }
+
+    private func onSelectSection(_ section: TaskPageSection, timeline: Components.Schemas.TaskTimeline?) {
+        // With no card seated the Decisions target isn't drawn, so
+        // the chip opens the item, as its one-line row does.
+        if section == .decisions, leadingItemID == nil, let newest = openItems.first {
+            onOpenItem?(newest.item.id)
+            return
+        }
+        // A one-run page's Runs chip goes where choosing that run
+        // from the popup would; with none it lands on the Timeline.
+        if section == .runs, let run = timeline?.sections.flatMap(\.runs).first {
+            jump(toRun: run.run_id, in: timeline)
+            return
+        }
+        chosenSection = section
+        switch section {
+        // The Task chip goes to the page head, where the task is
+        // named. The head is no place the reader keeps.
+        case .task: land(.jump) { scrollProxy?.scrollTo(PageTop.top, anchor: .top) }
+        case .runs: jump(to: .section(.timeline))
+        case .conversation:
+            if Self.conversationChip(cardThreadMessages: cardThreadMessages, earlier: earlierConversations)?
+                .isInCard == true
+            {
+                land(.jump) { scrollProxy?.scrollTo(CardThread.top, anchor: .top) }
+            } else {
+                jump(to: .section(.conversation))
+            }
+        case .decisions, .timeline: jump(to: .section(section))
+        }
+    }
+
+    private func reportStateFolds() {
+        probe?.openStateFolds =
+            openAttachmentFolders.union(showsStopExplanation ? [TaskPagePlaceProbe.whatHappened] : [])
     }
 
     /// Where the task's menu draws. Both are pinned, so Stop stays in reach
@@ -871,6 +1084,11 @@ struct TaskPageView: View {
                         loadsAttachments: screenshotTimeline == nil,
                         now: now,
                         rendersInteractiveControls: screenshotTimeline == nil)
+                }
+                // Threads are newest first, so a thread closing moves every
+                // fold under it.
+                .background(alignment: .top) {
+                    bodyMarker("conversation:" + thread.conversation.conversation.id)
                 }
             }
         }
@@ -1007,12 +1225,15 @@ struct TaskPageView: View {
             reviewRounds: TaskTimelinePresentation.reviewRounds(timeline, runTimelines: coordinator.timelinesByRunID),
             items: taskItems.map(\.item))
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
+        let rowMarker: ((String) -> AnyView)? = scrollBy == nil ? nil : { holdMarker($0) }
         return VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 11) {
                 KeywordLabel(text: "Timeline")
                     .accessibilityAddTraits(.isHeader)
                 if let message = TaskTimelinePresentation.availabilityMessage(
-                    state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
+                    state: coordinator.taskTimelineLoadStates[snapshot.task.id],
+                    answered: coordinator.answeredTaskTimelineIDs.contains(snapshot.task.id),
+                    freshness: coordinator.store.freshness)
                 {
                     Text(message)
                         .font(FreesideFont.cardBody)
@@ -1023,7 +1244,7 @@ struct TaskPageView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    TimelineRail(rows: rows, onOpenItem: onOpenItem)
+                    TimelineRail(rows: rows, onOpenItem: onOpenItem, rowMarker: rowMarker)
                 }
             }
             if let current = currentRun(timeline) {
@@ -1296,6 +1517,8 @@ struct TaskPageView: View {
                 runDetails(run, in: timeline, schedules: schedules)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Under the Review section, whose rounds a refresh adds.
+            .background(alignment: .top) { bodyMarker("run-details:" + run.run_id) }
         }
     }
 
@@ -1357,6 +1580,13 @@ struct TaskPageView: View {
 
 /// Where a jump lands, and the reader's place the page keeps: a section, or
 /// a run inside the Timeline.
+extension EnvironmentValues {
+    /// Draws a hold point of the task page a seated card sits in, keyed
+    /// within the card, so a reader inside the card holds their place as
+    /// the card changes above them (#1460). Nil outside a page.
+    @Entry var taskPageHoldMarker: (@MainActor (String) -> AnyView)? = nil
+}
+
 enum TaskPageAnchor: Hashable {
     case section(TaskPageSection)
     case run(String)
@@ -1392,11 +1622,98 @@ struct TaskPageConversationAnchor: View {
     }
 }
 
+/// What a hosted test reads of a mounted task page, which builds no
+/// accessibility tree for a test host to find: where its hold points sit in
+/// the viewport, the chip it selects, the one-line rows it draws, and the
+/// folds it holds in view state rather than in preferences. Its closures
+/// act as the operator would. Nil outside tests.
+@MainActor final class TaskPagePlaceProbe {
+    /// The fold `openStateFolds` names What Happened by; attachment
+    /// folders go by their names.
+    static let whatHappened = "What Happened"
+
+    /// Each hold point's top in the page's own space, by jump target or
+    /// rail key, and the page's top in the scroll view.
+    var holdTops: [String: CGFloat] = [:]
+    var pageTop: CGFloat = 0
+    /// The outline row's top in the scroll view.
+    var rowTop: CGFloat = 0
+    /// Each hold point's top in the scroll view, where the reader sees it.
+    var viewTops: [String: CGFloat] { holdTops.mapValues { $0 + pageTop } }
+    var selectedSection: TaskPageSection?
+    var oneLineItemIDs: Set<String> = []
+    var openStateFolds: Set<String> = []
+    /// Chooses an outline chip.
+    var select: ((TaskPageSection) -> Void)?
+    /// Opens What Happened or an attachment folder.
+    var openStateFold: ((String) -> Void)?
+
+    /// The point the reader has under the outline row, by the rule the page
+    /// holds by, and its top.
+    var reading: (key: String, top: CGFloat)? {
+        viewTops.filter { $0.value - rowTop <= 1 }.max { $0.value < $1.value }.map { ($0.key, $0.value) }
+    }
+}
+
+extension View {
+    /// Reports `point`'s top in the task page's own space while the view
+    /// draws, and nil when it stops, for holding the reader's place. Nil
+    /// adds nothing.
+    @ViewBuilder
+    fileprivate func holdsPlace(
+        _ point: TaskPageView.HoldPoint?, report: @escaping (TaskPageView.HoldPoint, UUID, CGFloat?) -> Void
+    ) -> some View {
+        if let point {
+            modifier(HoldMarker(point: point, report: report))
+        } else {
+            self
+        }
+    }
+}
+
+/// A hold point's reports, signed by the marker that sends them, so a
+/// marker leaving after another took its point doesn't clear that point.
+private struct HoldMarker: ViewModifier {
+    let point: TaskPageView.HoldPoint
+    let report: (TaskPageView.HoldPoint, UUID, CGFloat?) -> Void
+    @State private var reporter = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(TaskPageView.pageSpace)).minY }) {
+                report(point, reporter, $0)
+            }
+            .onDisappear { report(point, reporter, nil) }
+    }
+}
+
 /// Hosts the page in its one scroll view and keeps its history fresh. The
 /// leading card is content in the page, seated without a scroll view of its
 /// own, so a card arriving, leaving, or handing the lead to another leaves
-/// the page mounted; only the card is replaced.
+/// the page mounted; only the card is replaced. It also holds the scroll
+/// position the page moves to keep the reader's place.
 struct TaskPageHost: View {
+    /// The scroll view's content offset and its range, kept off observed
+    /// state so scrolling doesn't redraw the host, and the offset a
+    /// correction asked for until the scroll view reaches it.
+    @MainActor private final class Offset {
+        var y: CGFloat = 0
+        var range: ClosedRange<CGFloat> = 0...0
+        var asked: CGFloat?
+
+        /// True when the offset is where `asked` lands, within the range,
+        /// to the point the page holds to: a fractional move lands rounded
+        /// to the display's pixels.
+        func reaches(_ asked: CGFloat) -> Bool {
+            abs(min(max(asked, range.lowerBound), range.upperBound) - y) <= 1
+        }
+    }
+
+    private struct ScrollReading: Equatable {
+        var y: CGFloat
+        var range: ClosedRange<CGFloat>
+    }
+
     let coordinator: SyncCoordinator
     let snapshot: Components.Schemas.TaskSnapshot
     let leadingItemID: String?
@@ -1410,6 +1727,7 @@ struct TaskPageHost: View {
     /// Which folds are open. Nil uses the device's shared preferences; a
     /// test passes its own.
     var disclosures: TaskTimelineDisclosurePreferences? = nil
+    var probe: TaskPagePlaceProbe? = nil
     /// Builds the leading item's card, seated in the page's scroll view.
     let card: (String, DecisionDetailView.PageSeat) -> DecisionDetailView
     /// The seated card's identifier rows, by item id. The card builds them
@@ -1417,6 +1735,8 @@ struct TaskPageHost: View {
     /// footer that lists them belongs to the page.
     @State private var seatedIdentifiers: [String: [AttentionDisplay.BindingRow]] = [:]
     @State private var identifiersReveals = 0
+    @State private var position = ScrollPosition()
+    @State private var offset = Offset()
     #if os(iOS)
         @State private var footerHeight: CGFloat = 0
     #endif
@@ -1431,12 +1751,30 @@ struct TaskPageHost: View {
                     leadingItemID: leadingItemID,
                     leadingCard: leadingItemID.map { AnyView(card($0, seat(proxy)).id($0)) },
                     scrollProxy: proxy,
+                    scrollBy: scroll(by:), forgetCorrections: { offset.asked = nil }, probe: probe,
                     decisionIdentifiers: leadingItemID.flatMap { seatedIdentifiers[$0] } ?? [],
                     identifiersReveals: identifiersReveals,
                     identifiersOpenAtLaunch: identifiersOpenAtLaunch && leadingItemID != nil,
                     topMargin: topMargin, memory: memory, disclosures: disclosures)
             }
             .coordinateSpace(name: DecisionDetailView.scrollSpace)
+            .scrollPosition($position)
+            .onScrollGeometryChange(
+                for: ScrollReading.self,
+                of: { geometry in
+                    let top = -geometry.contentInsets.top
+                    let bottom =
+                        geometry.contentSize.height + geometry.contentInsets.bottom
+                        - geometry.containerSize.height
+                    return ScrollReading(y: geometry.contentOffset.y, range: top...max(top, bottom))
+                }
+            ) { _, reading in
+                offset.y = reading.y
+                offset.range = reading.range
+                // An operator's scroll replaces any move still on its way.
+                if position.isPositionedByUser { offset.asked = nil }
+                if let asked = offset.asked, offset.reaches(asked) { offset.asked = nil }
+            }
             #if os(iOS)
                 // The seated card's sticky recommended action, drawn over
                 // room the scroll view leaves for it, as the card alone
@@ -1458,6 +1796,20 @@ struct TaskPageHost: View {
         .task(id: coordinator.taskReviewRequestKey(for: snapshot.task.id, revision: snapshot.as_of_revision)) {
             await coordinator.refreshTaskReviews(for: snapshot.task.id, revision: snapshot.as_of_revision)
         }
+    }
+
+    /// Moves the offset by `distance` with animation off. The next move
+    /// can come before the scroll view reaches this one, and the scroll
+    /// view can report the offset it had meanwhile, so a move builds on the
+    /// offset last asked for until the scroll view reaches it.
+    private func scroll(by distance: CGFloat) {
+        let asked = (offset.asked ?? offset.y) + distance
+        // A move back to where the scroll view already is draws no change
+        // for it to report.
+        offset.asked = offset.reaches(asked) ? nil : asked
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { position.scrollTo(y: asked) }
     }
 
     private func seat(_ proxy: ScrollViewProxy) -> DecisionDetailView.PageSeat {
@@ -1506,9 +1858,15 @@ enum TaskTimelinePresentation {
 
     /// A cached partition remains useful after a failed refresh, but neither
     /// its contents nor an empty array establish current, complete history.
+    /// History the daemon has `answered` this session is current while
+    /// freshness holds, so a routine refetch of it shows no notice; only a
+    /// failed one does.
     static func availabilityMessage(
-        state: SyncCoordinator.TimelineLoadState?, freshness: InboxStore.Freshness
+        state: SyncCoordinator.TimelineLoadState?, answered: Bool, freshness: InboxStore.Freshness
     ) -> String? {
+        if answered, !freshness.isFailing {
+            return state == .unavailable ? "Task history refresh failed. Showing saved history." : nil
+        }
         if state == .loading { return "Showing saved task history while refreshing…" }
         if state == .unavailable { return "Task history refresh failed. Showing saved history." }
         if state != .loaded || freshness.isFailing { return "Saved task history. Freshness unconfirmed." }

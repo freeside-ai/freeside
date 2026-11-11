@@ -2,9 +2,9 @@ import Observation
 import SwiftUI
 
 /// The task page's place, held above the views that draw the page, for a
-/// page that mounts again for the same task. The mounted page holds its own
-/// place across a card arriving or leaving (`TaskPageView`); a route change
-/// is what replaces it. In the Mac detail column a run opened from the page
+/// page that mounts again for the same task. The mounted page keeps the
+/// reader's place itself, holding what they see still as content changes
+/// above it (`TaskPageView`); a route change is what replaces it. In the Mac detail column a run opened from the page
 /// takes its place, so Back to Task mounts a fresh page, which returns here
 /// to the reader's section and chip. The memory also counts the cards the
 /// operator opens, which the mounted page moves to. It holds one entry, for
