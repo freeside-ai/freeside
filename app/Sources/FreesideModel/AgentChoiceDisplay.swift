@@ -216,17 +216,19 @@ public enum AgentChoiceDisplay {
     /// first stands in for one. An enrollment not discovered yet may offer
     /// no `harnessDefault`; the model's first carried effort stands in. Nil
     /// when the enrollment offers no model.
+    ///
+    /// The selection records the catalog entry's id, as a model pick does,
+    /// even when the lineup names the model by what an alias resolves to,
+    /// so one model never reaches a line under two spellings.
     public static func choosing(enrollment enrollmentID: String, role: Role, catalog: Catalog?) -> Selection? {
         let lineup = catalog?.lineup.first { $0.role == role }?.selection
-        let atLineupModel = lineup.flatMap { lineup -> (String, ModelOption)? in
-            let probe = Selection(enrollment_id: enrollmentID, model_id: lineup.model_id, effort: harnessDefault)
-            return modelOption(for: probe, catalog: catalog).map { (lineup.model_id, $0) }
+        let atLineupModel = lineup.flatMap { lineup in
+            modelOption(
+                for: Selection(enrollment_id: enrollmentID, model_id: lineup.model_id, effort: harnessDefault),
+                catalog: catalog)
         }
-        guard
-            let (modelID, model) = atLineupModel
-                ?? models(on: enrollmentID, catalog: catalog).first.map({ ($0.id, $0) })
-        else { return nil }
-        return Selection(enrollment_id: enrollmentID, model_id: modelID, effort: resetEffort(model))
+        guard let model = atLineupModel ?? models(on: enrollmentID, catalog: catalog).first else { return nil }
+        return Selection(enrollment_id: enrollmentID, model_id: model.id, effort: resetEffort(model))
     }
 
     /// The selection picking `modelID` makes of `current`: the same
@@ -405,10 +407,22 @@ public enum AgentChoiceDisplay {
             !roles.isEmpty
             && roles.allSatisfy { role in
                 catalog?.lineup.first { $0.role == role }.map {
-                    $0.selection.model_id == selection.model_id && $0.selection.effort == selection.effort
+                    sameModel($0.selection.model_id, as: selection, catalog: catalog)
+                        && $0.selection.effort == selection.effort
                 } == true
             }
         return matchesLineup ? selection.enrollment_id : shortLabel(selection, catalog: catalog)
+    }
+
+    /// Whether `modelID` names the model `selection` runs, on the
+    /// selection's enrollment: by string, or through the catalog entry both
+    /// resolve to, since the lineup may name a model by what an alias
+    /// resolves to while a pick records the entry's id.
+    static func sameModel(_ modelID: String, as selection: Selection, catalog: Catalog?) -> Bool {
+        if modelID == selection.model_id { return true }
+        let probe = Selection(enrollment_id: selection.enrollment_id, model_id: modelID, effort: selection.effort)
+        guard let named = modelOption(for: probe, catalog: catalog) else { return false }
+        return modelOption(for: selection, catalog: catalog)?.id == named.id
     }
 
     /// The default entry's label: what picks the agent when the operator
