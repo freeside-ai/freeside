@@ -47,8 +47,8 @@ import Testing
         #expect(picker.staged == .lineup)
     }
 
-    /// The task page's cases that `RoleSelectionMenu.choice` held, as
-    /// confirm outcomes: an enrollment pick applies New Task's reset rule,
+    /// The task page's change cases as confirm outcomes: an enrollment
+    /// pick applies New Task's reset rule,
     /// and staging what the line holds leaves the confirm off.
     @Test func aRunningTasksConfirmIsOffWhileTheStagedPickIsItsLine() {
         let line = UsageFixtures.agentSelection("codex-primary")

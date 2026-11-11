@@ -5038,7 +5038,8 @@
                                     // so each state shows its enablement.
                                     TaskActionsMenu(
                                         coordinator: coordinator, taskID: snapshot.task.id,
-                                        confirmation: .constant(nil), rendersInteractiveControls: false)
+                                        confirmation: .constant(nil), lineChange: .constant(nil),
+                                        rendersInteractiveControls: false)
                                     TaskStopView(coordinator: coordinator, taskID: snapshot.task.id)
                                 }.padding(24).foregroundStyle(Color.ink).background(Color.ground))))
                     if state == "queued", let confirmation = coordinator.taskStop.prepare(taskID: snapshot.task.id) {

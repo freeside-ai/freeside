@@ -543,14 +543,6 @@ struct NewTaskSheet: View {
         .draft(role: role, chosen: choices[role], catalog: model.agentCatalog)
     }
 
-    /// What a role chip's menu offers: the synced catalog and usage pools,
-    /// with the role's choice chosen.
-    static func roleMenuOffer(
-        _ role: Role, choices: [Role: AgentChoiceDisplay.Selection], model: TaskSubmissionModel
-    ) -> RoleSelectionMenu.Offer {
-        .init(role: role, catalog: model.agentCatalog, pools: model.usagePools, current: choices[role])
-    }
-
     /// Why a stale choice blocks Submit, one sentence per selection the
     /// catalog no longer offers, naming the part it dropped. It draws
     /// whether or not the role chips show, so Submit is never blocked

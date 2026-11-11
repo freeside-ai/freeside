@@ -2,9 +2,17 @@ import FreesideAPI
 import FreesideModel
 import SwiftUI
 
-/// The Task Actions menu's Change Agent submenu (#2651): one submenu per
-/// role, each the role chips' menu (`RoleSelectionMenu`) with the role's
-/// current line chosen and Clear in place of Default. Each pick sends one
+/// The role a task page's Change Agent opened the picker for.
+struct TaskLineChangeRequest: Identifiable, Equatable {
+    let taskID: String
+    let role: AgentChoiceDisplay.Role
+
+    var id: String { "\(taskID) \(role.rawValue)" }
+}
+
+/// The Task Actions menu's Change Agent submenu (#2651): one item per
+/// role, naming what it runs on now. An item only opens the role's picker
+/// (`taskLineChangePicker`, #3027), whose confirm sends one
 /// `change_task_line`; what follows speaks in `TaskLineChangeView`, on the
 /// page. The daemon decides whether a role can change, so nothing here
 /// predicts that a role runs.
@@ -13,6 +21,9 @@ struct TaskLineChangeMenu: View {
 
     let coordinator: SyncCoordinator
     let task: Components.Schemas.Task
+    /// Where an item puts the role it opens. The page presents the picker,
+    /// since the menu closes as the item is chosen.
+    let request: Binding<TaskLineChangeRequest?>
 
     private var model: TaskLineChangeModel { coordinator.taskLineChange }
 
@@ -22,25 +33,29 @@ struct TaskLineChangeMenu: View {
         task.map { TaskDisplay.isActive($0) && $0.cancellation == nil } ?? false
     }
 
-    /// What `role`'s submenu offers: the synced catalog and usage pools, the
-    /// ones New Task's role chips offer, with the role's line chosen.
-    static func offer(
+    /// `role`'s picker on `task`: New Task's picker over the same synced
+    /// catalog, holding the role's line, with Clear in place of Default.
+    static func picker(
         _ role: Role, task: Components.Schemas.Task, coordinator: SyncCoordinator
-    ) -> RoleSelectionMenu.Offer {
+    ) -> RolePicker {
         let line = task.task_lines.first { $0.role == role }
-        return .init(
-            role: role, catalog: coordinator.agentCatalog, pools: coordinator.usagePools,
-            current: line?.selection?.value1, byName: line?.selection == nil ? line?.agent : nil)
+        return .change(
+            role: role, current: line?.selection?.value1, byName: line?.selection == nil ? line?.agent : nil,
+            catalog: coordinator.agentCatalog)
     }
 
-    /// Why the submenu is disabled, or nil while a pick can send. A device
-    /// sends one change at a time, so a change waiting on another task
-    /// names it: only that task's page offers its Retry.
-    var blockedReason: String? {
+    /// Why the submenu is disabled, or nil while a change can send.
+    var blockedReason: String? { Self.blockedReason(taskID: task.id, coordinator: coordinator) }
+
+    /// Why no change on `taskID` can send now, or nil while one can. A
+    /// device sends one change at a time, so a change waiting on another
+    /// task names it: only that task's page offers its Retry.
+    static func blockedReason(taskID: String, coordinator: SyncCoordinator) -> String? {
+        let model = coordinator.taskLineChange
         if let reason = model.unavailableReason { return reason }
         if model.canChange { return nil }
         let waiting = model.pending.flatMap { pending in
-            pending.taskID == task.id ? nil : coordinator.tasks.first { $0.task.id == pending.taskID }
+            pending.taskID == taskID ? nil : coordinator.tasks.first { $0.task.id == pending.taskID }
         }
         guard let waiting else { return "An agent change is still waiting for the daemon." }
         return
@@ -51,15 +66,7 @@ struct TaskLineChangeMenu: View {
     var body: some View {
         Menu("Change Agent") {
             ForEach(AgentChoiceDisplay.roleOrder, id: \.self) { role in
-                Menu(roleTitle(role)) {
-                    RoleSelectionMenu(
-                        offer: Self.offer(role, task: task, coordinator: coordinator),
-                        lineupLabel: AgentChoiceDisplay.clearLabel(
-                            role: role, policy: coordinator.routingPolicy?.policy, catalog: coordinator.agentCatalog)
-                    ) { selection in
-                        Task { await model.change(taskID: task.id, role: role, to: selection) }
-                    }
-                }
+                Button(roleTitle(role)) { request.wrappedValue = .init(taskID: task.id, role: role) }
             }
         }
         .disabled(blockedReason != nil)
@@ -68,8 +75,8 @@ struct TaskLineChangeMenu: View {
         if let blockedReason { Text(blockedReason) }
     }
 
-    /// A role's submenu names the role and what it runs on now: its line,
-    /// or, with none, the lineup's settings for it.
+    /// A role's item names the role and what it runs on now: its line, or,
+    /// with none, the lineup's settings for it.
     private func roleTitle(_ role: Role) -> String {
         let line = task.task_lines.first { $0.role == role }
         let lineup = AgentChoiceDisplay.defaultSettingsLabel(
@@ -81,6 +88,78 @@ struct TaskLineChangeMenu: View {
                 } ?? line.agent
             } ?? lineup.map { "lineup \($0)" } ?? "lineup"
         return "\(AgentChoiceDisplay.title(for: role)) · \(current)"
+    }
+}
+
+/// The picker Change Agent opens for one role of a running task. It reads
+/// the task, the catalog, and whether a change can send on every draw, so
+/// a line, a Stop, or a sync that changes while it is open shows in its
+/// footer and its confirm.
+struct TaskLineChangePicker: View {
+    static let endedReason = "Stop was requested or the task ended, so its agent can't change."
+
+    let request: TaskLineChangeRequest
+    let coordinator: SyncCoordinator
+    /// Called once, by the confirm, with the selection to send.
+    let onConfirm: (AgentChoiceDisplay.Selection?) -> Void
+    let onCancel: () -> Void
+
+    private var task: Components.Schemas.Task? {
+        coordinator.tasks.first { $0.task.id == request.taskID }?.task
+    }
+
+    /// Why the confirm can't send: the task no longer takes a change (the
+    /// rule Task Actions offers Change Agent by), or no change can send.
+    var unavailableReason: String? {
+        let menu = TaskActionsMenu(
+            coordinator: coordinator, taskID: request.taskID, confirmation: .constant(nil), lineChange: .constant(nil))
+        guard menu.offersLineChange else { return Self.endedReason }
+        return TaskLineChangeMenu.blockedReason(taskID: request.taskID, coordinator: coordinator)
+    }
+
+    /// Sends a confirmed change: closes the picker `opened` is held in,
+    /// then sends one `change_task_line`. Closing first means a second
+    /// confirm while the first is on its way finds the picker closed and
+    /// sends nothing. Returns the send, or nil when nothing was sent.
+    @discardableResult
+    static func send(
+        _ selection: AgentChoiceDisplay.Selection?, for opened: TaskLineChangeRequest,
+        request: Binding<TaskLineChangeRequest?>, coordinator: SyncCoordinator
+    ) -> Task<Void, Never>? {
+        guard request.wrappedValue == opened else { return nil }
+        request.wrappedValue = nil
+        return Task {
+            await coordinator.taskLineChange.change(taskID: opened.taskID, role: opened.role, to: selection)
+        }
+    }
+
+    var body: some View {
+        RolePickerView(
+            picker: task.map { TaskLineChangeMenu.picker(request.role, task: $0, coordinator: coordinator) }
+                ?? .change(role: request.role, current: nil, byName: nil, catalog: coordinator.agentCatalog),
+            catalog: coordinator.agentCatalog, policy: coordinator.routingPolicy?.policy,
+            pools: coordinator.usagePools,
+            liveMode: task.map { TaskLineChangeMenu.picker(request.role, task: $0, coordinator: coordinator).mode },
+            unavailableReason: unavailableReason, onConfirm: onConfirm, onCancel: onCancel)
+    }
+}
+
+extension View {
+    /// Presents the picker the task page's Change Agent opened, held in
+    /// `request`: a popover anchored on the view this modifies on the Mac,
+    /// a sheet on the iPhone. Its confirm is the one place a line change
+    /// is sent (`TaskLineChangePicker.send`).
+    func taskLineChangePicker(
+        _ request: Binding<TaskLineChangeRequest?>, coordinator: SyncCoordinator, dynamicTypeSize: DynamicTypeSize
+    ) -> some View {
+        rolePickerPresentation(item: request) { opened in
+            TaskLineChangePicker(
+                request: opened, coordinator: coordinator,
+                onConfirm: { TaskLineChangePicker.send($0, for: opened, request: request, coordinator: coordinator) },
+                onCancel: { request.wrappedValue = nil }
+            )
+            .dynamicTypeSize(dynamicTypeSize)
+        }
     }
 }
 

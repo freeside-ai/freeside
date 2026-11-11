@@ -94,6 +94,9 @@ struct TaskPageView: View {
     /// the lazy stack can drop the Stop controls, and their state with them,
     /// while a card leaving shrinks the document under the reader.
     @State private var stopConfirmation: TaskStopModel.Confirmation?
+    /// The role whose picker Change Agent opened, held here for the same
+    /// reason.
+    @State private var lineChangeRequest: TaskLineChangeRequest?
     @State private var showsStopExplanation = false
     /// The specification the documents line opened, presented outside the
     /// lazy stack for the same reason.
@@ -381,6 +384,12 @@ struct TaskPageView: View {
             .taskStopConfirmation(
                 $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize
             )
+            #if os(iOS)
+                // A sheet on the phone, so it needs no anchor; the Mac's
+                // popover anchors on the menu in the outline row.
+                .taskLineChangePicker(
+                    $lineChangeRequest, coordinator: coordinator, dynamicTypeSize: dynamicTypeSize)
+            #endif
             .sheet(item: $documentRequest) { request in
                 TaskDocumentReaderSheet(request: request, attachments: coordinator.store.attachments)
                     .dynamicTypeSize(dynamicTypeSize)
@@ -928,7 +937,13 @@ struct TaskPageView: View {
             onChooseDecision: { onOpenItem?($0) },
             onChooseRun: { jump(toRun: $0, in: timeline) },
             trailing: {
-                if TaskActionsSlot(compact: compact) == .outlineRow { taskActionsMenu(timeline) }
+                if TaskActionsSlot(compact: compact) == .outlineRow {
+                    taskActionsMenu(timeline)
+                        #if os(macOS)
+                            .taskLineChangePicker(
+                                $lineChangeRequest, coordinator: coordinator, dynamicTypeSize: dynamicTypeSize)
+                        #endif
+                }
             }
         )
     }
@@ -1005,7 +1020,7 @@ struct TaskPageView: View {
         TaskActionsMenu(
             coordinator: coordinator, taskID: snapshot.task.id,
             actions: Self.taskActions(timeline, task: taskIdentifiers(timeline), decision: decisionIdentifiers),
-            confirmation: $stopConfirmation,
+            confirmation: $stopConfirmation, lineChange: $lineChangeRequest,
             rendersInteractiveControls: screenshotTimeline == nil)
     }
 

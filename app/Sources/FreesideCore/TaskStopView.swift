@@ -180,6 +180,9 @@ struct TaskActionsMenu: View {
     /// Where Stop Task… puts its prepared confirmation. The page presents it
     /// outside its lazy stack, which can drop the row this menu sits in.
     let confirmation: Binding<TaskStopModel.Confirmation?>
+    /// Where Change Agent puts the role whose picker it opens, which the
+    /// page presents for the same reason.
+    let lineChange: Binding<TaskLineChangeRequest?>
     /// False draws the label alone, for a renderer that can't draw a menu.
     var rendersInteractiveControls = true
 
@@ -225,7 +228,7 @@ struct TaskActionsMenu: View {
             if rendersInteractiveControls {
                 Menu {
                     if offersLineChange, let task = snapshot?.task {
-                        TaskLineChangeMenu(coordinator: coordinator, task: task)
+                        TaskLineChangeMenu(coordinator: coordinator, task: task, request: lineChange)
                         if !actions.isEmpty { Divider() }
                     }
                     ForEach(Array(actions.enumerated()), id: \.offset) { _, action in

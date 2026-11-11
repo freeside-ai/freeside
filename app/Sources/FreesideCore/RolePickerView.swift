@@ -269,15 +269,30 @@ extension View {
         isPresented: Binding<Bool>, @ViewBuilder picker: @escaping () -> some View
     ) -> some View {
         #if os(macOS)
-            popover(isPresented: isPresented, arrowEdge: .bottom) {
-                picker().frame(width: RolePickerLayout.popoverWidth).frame(maxHeight: 640)
-            }
+            popover(isPresented: isPresented, arrowEdge: .bottom) { picker().rolePickerContainer() }
         #else
-            sheet(isPresented: isPresented) {
-                picker()
-                    .presentationDetents([.large])
-                    .freesideSheetPresentation()
-            }
+            sheet(isPresented: isPresented) { picker().rolePickerContainer() }
+        #endif
+    }
+
+    /// The same, presented while `item` holds a value, which the picker
+    /// keeps while it closes: a picker whose content reads the value that
+    /// opened it uses this, so it doesn't draw empty on its way out.
+    func rolePickerPresentation<Item: Identifiable>(
+        item: Binding<Item?>, @ViewBuilder picker: @escaping (Item) -> some View
+    ) -> some View {
+        #if os(macOS)
+            popover(item: item, arrowEdge: .bottom) { picker($0).rolePickerContainer() }
+        #else
+            sheet(item: item) { picker($0).rolePickerContainer() }
+        #endif
+    }
+
+    private func rolePickerContainer() -> some View {
+        #if os(macOS)
+            frame(width: RolePickerLayout.popoverWidth).frame(maxHeight: 640)
+        #else
+            presentationDetents([.large]).freesideSheetPresentation()
         #endif
     }
 }
