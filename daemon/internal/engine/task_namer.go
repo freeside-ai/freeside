@@ -17,8 +17,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// A full advisory queue leaves the identifier fallback; dispatch never waits
-// for naming. The queue is process-local and deliberately not recovery state.
+// The queue holds distinct tasks: a task already queued or being named is not
+// queued again. A full advisory queue leaves the identifier fallback; dispatch
+// never waits for naming. The queue is process-local and deliberately not
+// recovery state.
 const taskNameQueueCapacity = 32
 
 // maxTaskNameRunes bounds every stored task display name by Unicode code point
@@ -56,14 +58,30 @@ func operatorTaskName(raw string) (string, error) {
 	return name, nil
 }
 
+// enqueueTaskName queues run's task for naming unless it is already queued or
+// in the worker. Every dispatch pass re-enqueues the runs it touched, including
+// ones it started earlier; that re-enqueue is what names a task after a
+// fallback or a restart, and the dedupe keeps it from filling the queue with
+// copies of one task. The send never blocks, so holding the mutex across it
+// cannot stall dispatch. A full queue warns once until an enqueue succeeds.
 func (e *Engine) enqueueTaskName(run domain.Run) {
 	if !e.inference.SupportsSite(inference.TaskNamerSiteID) {
 		return
 	}
+	e.taskNamesMu.Lock()
+	defer e.taskNamesMu.Unlock()
+	if _, active := e.taskNamesActive[run.TaskID]; active {
+		return
+	}
 	select {
 	case e.taskNames <- run:
+		e.taskNamesActive[run.TaskID] = struct{}{}
+		e.taskNamesFullWarned = false
 	default:
-		e.logger.Warn("task naming queue full", "task_id", run.TaskID)
+		if !e.taskNamesFullWarned {
+			e.logger.Warn("task naming queue full", "task_id", run.TaskID)
+			e.taskNamesFullWarned = true
+		}
 	}
 }
 
@@ -78,6 +96,12 @@ func (e *Engine) runTaskNames(ctx context.Context) {
 			if err := e.nameTaskIfUnnamed(ctx, run); err != nil {
 				e.logger.Warn("task naming unavailable", "task_id", run.TaskID, "error", err)
 			}
+			// Release after naming, not at dequeue, so a pass during the
+			// inference call does not queue a second copy. This loop is the
+			// queue's only reader, so every dequeued id is released.
+			e.taskNamesMu.Lock()
+			delete(e.taskNamesActive, run.TaskID)
+			e.taskNamesMu.Unlock()
 		}
 	}
 }

@@ -193,13 +193,25 @@ const deviceActivityGranularity = 5 * time.Minute
 // never moves the server revision or the device's entity version. It is
 // advisory: a failure is logged and the request proceeds, because losing a
 // last-seen instant must never lock a device out.
+//
+// The write runs under the request's context, and its begin can wait behind
+// other writes for the write lock. A client that ends its request first
+// cancels the write; that is logged at debug, because the client is gone and
+// the device's next request records the instant. Any other failure warns. A
+// write detached from the request was rejected: it would keep a goroutine
+// waiting on the lock for a client that is gone, to record that instant.
 func (s *Service) recordDeviceActivity(ctx context.Context, id domain.DeviceID) {
 	err := s.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.TouchDeviceActivity(ctx, id, s.now(), deviceActivityGranularity)
 	})
-	if err != nil {
-		s.logger.Warn("record device activity", "device_id", id, "error", err)
+	if err == nil {
+		return
 	}
+	if ended := ctx.Err(); ended != nil && errors.Is(err, ended) {
+		s.logger.Debug("record device activity", "device_id", id, "error", err)
+		return
+	}
+	s.logger.Warn("record device activity", "device_id", id, "error", err)
 }
 
 // ListDevices returns every paired device, active or revoked, with its sync
