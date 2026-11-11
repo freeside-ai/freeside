@@ -8,6 +8,7 @@ public enum RunFixtures {
     public static let legacyRunID = "run-freeside-540"
     public static let completedRunID = "run-freeside-640"
     public static let refreshedRunID = "run-freeside-refreshed"
+    public static let specificationHistoryRunID = "run-freeside-specification-history"
     public static let retryCampaignID =
         "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -175,6 +176,55 @@ public enum RunFixtures {
                     round.invocation_id, at: date(3_600),
                     implementer: .differed, remediator: .differed),
             ])
+    }
+
+    /// The purposes the specification-history run's attempts record, in
+    /// attempt order (#3044): research continued twice, so that purpose
+    /// repeats.
+    public static let specificationHistoryPurposes: [Components.Schemas.AttemptPurpose] = [
+        .first_draft, .research_continuation, .research_continuation, .discussion_reply, .revision,
+    ]
+
+    /// A specification run whose invocations each record why they ran
+    /// (#3044). Kept out of `defaultRuns()` and `defaultTimelines()`, as
+    /// `refreshedHistoryRun()` is, so existing screenshot digests do not
+    /// churn.
+    public static func specificationHistoryRun() -> Components.Schemas.RunSnapshot {
+        let id = specificationHistoryRunID
+        var snapshot = snapshot(
+            id: id, projectID: "freeside", stage: "specification",
+            attempt: specificationHistoryPurposes.count, milestone: .terminal_recorded, outcome: .pending,
+            lifecycle: .active, taskName: specificationTaskName)
+        for index in snapshot.run.stages[0].attempts.indices {
+            snapshot.run.stages[0].attempts[index].purpose = .init(value1: specificationHistoryPurposes[index])
+        }
+        return projectingObservationTimes(snapshot, from: specificationHistoryTimeline())
+    }
+
+    public static func specificationHistoryTimeline() -> Components.Schemas.RunTimeline {
+        let id = specificationHistoryRunID
+        let attempts = 1...specificationHistoryPurposes.count
+        return .init(
+            as_of_revision: 12, as_of: date(TimeInterval(specificationHistoryPurposes.count * 600 + 120)), run_id: id,
+            // The submission names no invocation, so it carries no attempt
+            // label.
+            milestones: [.init(run_id: id, kind: .run_submitted, invocation_id: nil, recorded_at: date(0))]
+                + attempts.flatMap { attempt in
+                    [
+                        milestone(.invocation_admitted, runID: id, attempt: attempt, minute: attempt * 10 - 9),
+                        milestone(.invocation_started, runID: id, attempt: attempt, minute: attempt * 10 - 8),
+                    ]
+                },
+            invocations: attempts.map { attempt in
+                .init(
+                    invocation_id: "inv-\(id)-\(attempt)", run_id: id,
+                    status: .completed, live: false, observed_at: date(TimeInterval(attempt * 600)))
+            },
+            billable_cost_so_far: nil,
+            admissions: attempts.map { attempt in
+                writerAdmission(
+                    "inv-\(id)-\(attempt)", role: .specifier, at: date(TimeInterval(attempt * 600 - 540)))
+            })
     }
 
     public static func completedTimeline() -> Components.Schemas.RunTimeline {

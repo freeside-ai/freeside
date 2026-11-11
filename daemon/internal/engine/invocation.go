@@ -30,6 +30,9 @@ type invocationBinding struct {
 	item         domain.AttentionItem
 	invocation   domain.AgentInvocation
 	conversation domain.Conversation
+	// purpose is why a specification invocation runs, decided by the chain
+	// check that authorized it (#3044). It is nil on every other lane.
+	purpose *domain.AttemptPurpose
 }
 
 func (e *Engine) reconcileInvocations(ctx context.Context) (int, int, error) {
@@ -736,7 +739,7 @@ func (e *Engine) dispatchAdmittedIntent(
 	// under a fresh id would hand the driver an admission no reader can
 	// reconstruct.
 	_, effective, bound, err := e.recordAttempt(
-		ctx, binding.run.ID, stage.ID, invocationID, entry.Status, fresh,
+		ctx, binding.run.ID, stage.ID, invocationID, binding.purpose, entry.Status, fresh,
 	)
 	if err != nil {
 		// The admitting transaction's operating-state refusal (a stop or a
@@ -1236,9 +1239,12 @@ func decodeInvocationRequest(payload []byte) (invocationRequest, error) {
 // in the same transaction. Splitting the two would leave either an attempt
 // with no audited class or an admission for an attempt that was never
 // appended, and a crash between them is exactly when the record matters.
+// purpose is written only on a new attempt; a replay leaves the recorded
+// attempt, purpose included, as it is.
 func (e *Engine) recordAttempt(
 	ctx context.Context, runID domain.RunID, stageID domain.StageID,
-	invocationID domain.InvocationID, outboxStatus string, fresh *domain.ExecutionAdmission,
+	invocationID domain.InvocationID, purpose *domain.AttemptPurpose,
+	outboxStatus string, fresh *domain.ExecutionAdmission,
 ) (bool, domain.ExecutionAdmission, bool, error) {
 	added := false
 	var effective domain.ExecutionAdmission
@@ -1344,6 +1350,7 @@ func (e *Engine) recordAttempt(
 			StageID:      stage.ID,
 			Number:       len(stage.Attempts) + 1,
 			InvocationID: invocationID,
+			Purpose:      purpose,
 		})
 		run.Stages[stageIndex] = stage
 		if err := tx.PutRun(ctx, run); err != nil {

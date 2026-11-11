@@ -201,6 +201,7 @@ func verifySpecificationDiscussionBinding(
 		binding: invocationBinding{
 			run: verified.binding.binding.run, item: *verified.approval,
 			invocation: invocation, conversation: conversation,
+			purpose: new(domain.AttemptPurposeDiscussionReply),
 		},
 		discussion: attentionDiscussion{
 			entry: discussEntry, request: discussRequest,

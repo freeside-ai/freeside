@@ -1,7 +1,9 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -60,6 +62,68 @@ func TestValidateRunTransition(t *testing.T) {
 			t.Fatalf("ValidateAttentionItemTransition() = %v, want ErrImmutableTransition", err)
 		}
 	})
+}
+
+// TestRunTransitionComparesAttemptPurposeByValue pins #3044: the purpose is a
+// pointer, so two decoded copies of one run must still compare equal, a body
+// stored before the field must accept an appended attempt, and a recorded
+// purpose may not change.
+func TestRunTransitionComparesAttemptPurposeByValue(t *testing.T) {
+	withPurpose := validRun()
+	withPurpose.Stages[0].Attempts[0].Purpose = new(domain.AttemptPurposeFirstDraft)
+	body, err := json.Marshal(withPurpose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first, second domain.Run
+	if err := json.Unmarshal(body, &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &second); err != nil {
+		t.Fatal(err)
+	}
+	if err := domain.ValidateRunTransition(first, second); err != nil {
+		t.Fatalf("two decoded copies of one run: %v", err)
+	}
+
+	changed := second
+	changed.Stages = []domain.Stage{second.Stages[0]}
+	changed.Stages[0].Attempts = []domain.Attempt{second.Stages[0].Attempts[0]}
+	changed.Stages[0].Attempts[0].Purpose = new(domain.AttemptPurposeRetry)
+	if err := domain.ValidateRunTransition(first, changed); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("changed purpose = %v, want ErrImmutableTransition", err)
+	}
+	cleared := second
+	cleared.Stages = []domain.Stage{second.Stages[0]}
+	cleared.Stages[0].Attempts = []domain.Attempt{second.Stages[0].Attempts[0]}
+	cleared.Stages[0].Attempts[0].Purpose = nil
+	if err := domain.ValidateRunTransition(first, cleared); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("cleared purpose = %v, want ErrImmutableTransition", err)
+	}
+
+	// A body written before #3044 has no purpose key on its attempts.
+	legacy := []byte(`{"task_id":"","id":"run-1","project_id":"proj-1","spec_digest":"sha256:spec",` +
+		`"policy_digest":"sha256:policy","stages":[{"id":"stage-1","run_id":"run-1","name":"implementation",` +
+		`"attempts":[{"id":"attempt-1","stage_id":"stage-1","number":1,"invocation_id":"inv-1"}]}]}`)
+	var old domain.Run
+	if err := json.Unmarshal(legacy, &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Stages[0].Attempts[0].Purpose != nil {
+		t.Fatalf("legacy attempt purpose = %v, want none", *old.Stages[0].Attempts[0].Purpose)
+	}
+	if err := old.Validate(); err != nil {
+		t.Fatalf("legacy run: %v", err)
+	}
+	appended := old
+	appended.Stages = []domain.Stage{old.Stages[0]}
+	appended.Stages[0].Attempts = append(slices.Clone(old.Stages[0].Attempts), domain.Attempt{
+		ID: "attempt-2", StageID: "stage-1", Number: 2, InvocationID: "inv-2",
+		Purpose: new(domain.AttemptPurposeRetry),
+	})
+	if err := domain.ValidateRunTransition(old, appended); err != nil {
+		t.Fatalf("appending to a legacy run: %v", err)
+	}
 }
 
 // appendedRun is validRun with one appended attempt on its stage: a legal

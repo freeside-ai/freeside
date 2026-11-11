@@ -75,6 +75,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"TaskEventKind":              enumStrings(domain.AllTaskEventKinds),
 		"TaskRunRole":                enumStrings(domain.AllTaskRunRoles),
 		"RunHoldReason":              enumStrings(domain.AllRunHoldReasons),
+		"AttemptPurpose":             enumStrings(domain.AllAttemptPurposes),
 		"AdmissionCheck":             enumStrings(domain.AllAdmissionChecks),
 		"AgentSelectionPart":         enumStrings(domain.AllAgentSelectionParts),
 		"ImageUpkeepPending":         enumStrings(domain.AllImageUpkeepPendings),

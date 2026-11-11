@@ -73,6 +73,7 @@ var (
 	ErrInvalidTaskEventKind             = errors.New("invalid task event kind")
 	ErrInvalidObservedStatus            = errors.New("invalid observed invocation status")
 	ErrInvalidRunHoldReason             = errors.New("invalid run hold reason")
+	ErrInvalidAttemptPurpose            = errors.New("invalid attempt purpose")
 	ErrInvalidAdmissionCheck            = errors.New("invalid admission check")
 	ErrInvalidAgentSelectionPart        = errors.New("invalid agent selection part")
 	ErrInvalidRunOutcome                = errors.New("invalid run outcome")

@@ -19085,6 +19085,30 @@ public enum Components {
             public var number: Swift.Int
             /// - Remark: Generated from `#/components/schemas/Attempt/invocation_id`.
             public var invocation_id: Swift.String
+            /// Why a specification invocation ran, recorded when the daemon started it. Null on attempts of other stages and on attempts recorded before the field existed; it is never filled in later.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Attempt/purpose`.
+            public struct purposePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/Attempt/purpose/value1`.
+                public var value1: Components.Schemas.AttemptPurpose
+                /// Creates a new `purposePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AttemptPurpose) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// Why a specification invocation ran, recorded when the daemon started it. Null on attempts of other stages and on attempts recorded before the field existed; it is never filled in later.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Attempt/purpose`.
+            public var purpose: Components.Schemas.Attempt.purposePayload?
             /// Creates a new `Attempt`.
             ///
             /// - Parameters:
@@ -19092,23 +19116,38 @@ public enum Components {
             ///   - stage_id:
             ///   - number: Retry ordinal, contiguous from 1 within the stage.
             ///   - invocation_id:
+            ///   - purpose: Why a specification invocation ran, recorded when the daemon started it. Null on attempts of other stages and on attempts recorded before the field existed; it is never filled in later.
             public init(
                 id: Swift.String,
                 stage_id: Swift.String,
                 number: Swift.Int,
-                invocation_id: Swift.String
+                invocation_id: Swift.String,
+                purpose: Components.Schemas.Attempt.purposePayload? = nil
             ) {
                 self.id = id
                 self.stage_id = stage_id
                 self.number = number
                 self.invocation_id = invocation_id
+                self.purpose = purpose
             }
             public enum CodingKeys: String, CodingKey {
                 case id
                 case stage_id
                 case number
                 case invocation_id
+                case purpose
             }
+        }
+        /// Why the daemon started one specification invocation; mirrors domain.AttemptPurpose. `first_draft`: the first iteration of an ordinary specification run. `research_continuation`: the previous invocation asked for research and the daemon fetched it. `question_answer`: the operator answered the specifier's question. `discussion_reply`: the operator sent a Discuss message on the approval card. `revision`: the operator asked for changes on the approval card, or the run revises an approved specification. `retry`: the operator retried after the previous invocation ended failed, canceled, or lost.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AttemptPurpose`.
+        @frozen public enum AttemptPurpose: String, Codable, Hashable, Sendable, CaseIterable {
+            case first_draft = "first_draft"
+            case research_continuation = "research_continuation"
+            case question_answer = "question_answer"
+            case discussion_reply = "discussion_reply"
+            case revision = "revision"
+            case retry = "retry"
         }
         /// The kind of decision an attention item asks for (plan §4). `blocked` is retired (plan revision 84): nothing raises it and no item of the type is ever open. The member stays so closed items stored before the retirement still decode.
         ///

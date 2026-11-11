@@ -699,6 +699,51 @@ func (n StageName) valid() bool {
 	}
 }
 
+// AttemptPurpose names why the daemon started one specification invocation
+// (#3044). The engine decides it at dispatch from the transition
+// verifySpecificationChain authenticated, so it reports an existing check and
+// grants nothing. Attempts of other stages, and attempts recorded before the
+// field existed, carry none.
+type AttemptPurpose string
+
+const (
+	// AttemptPurposeFirstDraft is an ordinary specification run's first
+	// iteration.
+	AttemptPurposeFirstDraft AttemptPurpose = "first_draft"
+	// AttemptPurposeResearchContinuation follows an invocation whose
+	// research request the daemon fetched.
+	AttemptPurposeResearchContinuation AttemptPurpose = "research_continuation"
+	// AttemptPurposeQuestionAnswer follows the operator's answer to the
+	// specifier's question.
+	AttemptPurposeQuestionAnswer AttemptPurpose = "question_answer"
+	// AttemptPurposeDiscussionReply answers a Discuss message on the
+	// approval card.
+	AttemptPurposeDiscussionReply AttemptPurpose = "discussion_reply"
+	// AttemptPurposeRevision follows a request for changes on the approval
+	// card, or opens a revision campaign that revises an approved
+	// specification.
+	AttemptPurposeRevision AttemptPurpose = "revision"
+	// AttemptPurposeRetry follows the operator's retry of an invocation that
+	// ended failed, canceled, or lost.
+	AttemptPurposeRetry AttemptPurpose = "retry"
+)
+
+// AllAttemptPurposes lists every valid AttemptPurpose.
+var AllAttemptPurposes = []AttemptPurpose{
+	AttemptPurposeFirstDraft, AttemptPurposeResearchContinuation, AttemptPurposeQuestionAnswer,
+	AttemptPurposeDiscussionReply, AttemptPurposeRevision, AttemptPurposeRetry,
+}
+
+func (p AttemptPurpose) valid() bool {
+	switch p {
+	case AttemptPurposeFirstDraft, AttemptPurposeResearchContinuation, AttemptPurposeQuestionAnswer,
+		AttemptPurposeDiscussionReply, AttemptPurposeRevision, AttemptPurposeRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 // RoleName is the closed role list of plan §5.13: one agent activity, finer
 // than a stage, owning one lineup line and one prompt (§5.4, Roles and Launch
 // Shapes). The list grows only by plan revision. Verification is an engine

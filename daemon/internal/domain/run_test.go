@@ -38,6 +38,12 @@ func TestRunValidate(t *testing.T) {
 		{"attempt missing stage_id", func(r *domain.Run) { r.Stages[0].Attempts[0].StageID = "" }, domain.ErrEmptyID},
 		{"attempt stage_id mismatch", func(r *domain.Run) { r.Stages[0].Attempts[0].StageID = "stage-other" }, domain.ErrParentKeyMismatch},
 		{"attempt non-positive number", func(r *domain.Run) { r.Stages[0].Attempts[0].Number = 0 }, domain.ErrNonPositive},
+		{"attempt unknown purpose", func(r *domain.Run) {
+			r.Stages[0].Attempts[0].Purpose = new(domain.AttemptPurpose("vibes"))
+		}, domain.ErrInvalidAttemptPurpose},
+		{"attempt empty purpose", func(r *domain.Run) {
+			r.Stages[0].Attempts[0].Purpose = new(domain.AttemptPurpose(""))
+		}, domain.ErrInvalidAttemptPurpose},
 		{"duplicate stage id", func(r *domain.Run) {
 			r.Stages = append(r.Stages, r.Stages[0])
 		}, domain.ErrDuplicate},

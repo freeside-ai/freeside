@@ -133,7 +133,7 @@ func newFailedImplementationFixtureCore(
 		t.Fatalf("admit implementation = admitted %t, %v", admitted, err)
 	}
 	_, effective, bound, err := engine.recordAttempt(
-		t.Context(), binding.run.ID, stage.ID, implementationID, entry.Status, &admission,
+		t.Context(), binding.run.ID, stage.ID, implementationID, binding.purpose, entry.Status, &admission,
 	)
 	if err != nil || !bound {
 		t.Fatalf("record implementation attempt = bound %t, %v", bound, err)
