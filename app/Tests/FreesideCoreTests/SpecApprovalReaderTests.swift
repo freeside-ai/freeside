@@ -39,10 +39,10 @@ import Testing
         revision.iteration = 3
         item.spec_revision = .init(value1: revision)
 
-        #expect(DecisionDetailView.priorSpecRevisionIteration(in: item) == 1)
+        #expect(DecisionDetailView.priorSpecificationVersion(in: item) == 1)
 
         let initial = AttentionFixtures.fixture(type: .spec_approval).item
-        #expect(DecisionDetailView.priorSpecRevisionIteration(in: initial) == nil)
+        #expect(DecisionDetailView.priorSpecificationVersion(in: initial) == nil)
     }
 
     @Test func initialSpecificationIterationUsesAuthenticatedArtifactCoordinate() throws {
@@ -51,10 +51,10 @@ import Testing
             item.agent_claims.firstIndex { $0.label == AgentClaimLabels.specification })
         item.agent_claims[specificationIndex].artifact_id = "spec-implementation-run-2"
 
-        #expect(DecisionDetailView.specificationRevisionIteration(in: item) == 2)
+        #expect(DecisionDetailView.specificationVersion(in: item) == 2)
 
         item.agent_claims[specificationIndex].artifact_id = "legacy-specification"
-        #expect(DecisionDetailView.specificationRevisionIteration(in: item) == nil)
+        #expect(DecisionDetailView.specificationVersion(in: item) == nil)
     }
 
     @Test func legacyAttachmentBackedSpecificationRemainsApprovalMaterial() throws {

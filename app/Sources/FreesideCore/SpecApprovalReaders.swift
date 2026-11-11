@@ -19,8 +19,8 @@ enum SpecApprovalReader: String, Identifiable {
 
 extension SpecApprovalReader {
     /// The version a reader shows, as the chip its header carries.
-    static func revisionChip(_ revision: Int?) -> StateChip? {
-        revision.map { StateChip(label: "Version \($0)", cut: .ink) }
+    static func versionChip(_ version: Int?) -> StateChip? {
+        version.map { StateChip(label: "Version \($0)", cut: .ink) }
     }
 }
 
@@ -29,9 +29,9 @@ extension SpecApprovalReader {
 /// document they are.
 struct TaskDocumentRequest: Identifiable, Equatable {
     enum Document: Equatable {
-        /// The current campaign's approved specification; the revision only
+        /// The current campaign's approved specification; the version only
         /// when a held approval names its digest.
-        case specification(revision: Int?)
+        case specification(version: Int?)
         /// The text an operator submitted the task with (#2612).
         case prompt
     }
@@ -58,10 +58,10 @@ extension TaskDocumentRequest.Document {
         }
     }
 
-    /// The header's revision chip; a prompt has no revision.
+    /// The header's version chip; a prompt has no version.
     var chip: StateChip? {
         switch self {
-        case .specification(let revision): SpecApprovalReader.revisionChip(revision)
+        case .specification(let version): SpecApprovalReader.versionChip(version)
         case .prompt: nil
         }
     }

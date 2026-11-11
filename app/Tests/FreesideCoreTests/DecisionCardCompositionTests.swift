@@ -1083,7 +1083,7 @@ import Testing
         let revision = try #require(
             AttentionFixtures.revisedSpecification().item
                 .spec_revision?.value1)
-        let row = DecisionChangeRow(specification: revision.diff, sinceRevision: 1)
+        let row = DecisionChangeRow(specification: revision.diff, sinceVersion: 1)
         #expect(row.keyword == "Change Since Version 1")
         #expect(row.counts.plain == "+2 \u{2212}1")
         #expect(row.spokenLabel == "Change Since Version 1: 2 lines added, 1 removed")

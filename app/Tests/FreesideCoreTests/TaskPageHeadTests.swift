@@ -55,7 +55,7 @@ import Testing
         #expect(
             links(page, history: page.history, completion: completion(pr: 2431)) == [
                 .issue(number: issue, url: issueURL(issue)),
-                .specification(digest: approvedDigest, revision: nil),
+                .specification(digest: approvedDigest, version: nil),
                 .pullRequest(number: 2431, url: URL(string: "https://github.com/\(repo)/pull/2431")),
             ])
     }
@@ -70,7 +70,7 @@ import Testing
         page.items = []
         #expect(
             links(page, history: page.history) == [
-                .prompt(digest: promptDigest), .specification(digest: approvedDigest, revision: nil), .noPullRequest,
+                .prompt(digest: promptDigest), .specification(digest: approvedDigest, version: nil), .noPullRequest,
             ])
     }
 
@@ -80,7 +80,7 @@ import Testing
         page.items = []
         #expect(
             links(page, history: page.history) == [
-                .specification(digest: approvedDigest, revision: nil), .noPullRequest,
+                .specification(digest: approvedDigest, version: nil), .noPullRequest,
             ])
     }
 
@@ -129,22 +129,22 @@ import Testing
                 == .pullRequest(number: 2431, url: URL(string: "https://github.com/\(repo)/pull/2431")))
     }
 
-    /// The revision word is the held approval's, and only when its
+    /// The version word is the held approval's, and only when its
     /// Specification claim binds the digest the campaign approved.
-    @Test func theRevisionComesOnlyFromAnApprovalBindingTheApprovedDigest() throws {
+    @Test func theVersionComesOnlyFromAnApprovalBindingTheApprovedDigest() throws {
         var page = TaskStageFixtures.page(.implementation)
         let matching = try approval(binding: approvedDigest)
-        let revision = try #require(DecisionDetailView.specificationRevisionIteration(in: matching.item))
+        let version = try #require(DecisionDetailView.specificationVersion(in: matching.item))
         page.items = [matching]
         #expect(
             links(page, history: page.history).contains(
-                .specification(digest: approvedDigest, revision: revision)))
+                .specification(digest: approvedDigest, version: version)))
 
         page.items = [try approval(binding: "sha256:" + String(repeating: "d", count: 64))]
         #expect(
-            links(page, history: page.history).contains(.specification(digest: approvedDigest, revision: nil)))
-        #expect(SpecApprovalReader.revisionChip(nil) == nil)
-        #expect(SpecApprovalReader.revisionChip(revision)?.label == "Version \(revision)")
+            links(page, history: page.history).contains(.specification(digest: approvedDigest, version: nil)))
+        #expect(SpecApprovalReader.versionChip(nil) == nil)
+        #expect(SpecApprovalReader.versionChip(version)?.label == "Version \(version)")
     }
 
     /// VoiceOver reads each part with somewhere to go as a link naming
@@ -155,11 +155,11 @@ import Testing
             (.issue(number: 712, url: url), "Issue #712", "Issue 712", "Opens on GitHub"),
             (.prompt(digest: promptDigest), "Prompt", "Prompt", "Opens the prompt reader"),
             (
-                .specification(digest: approvedDigest, revision: 2), "Specification v2", "Specification version 2",
+                .specification(digest: approvedDigest, version: 2), "Specification v2", "Specification version 2",
                 "Opens the specification reader"
             ),
             (
-                .specification(digest: approvedDigest, revision: nil), "Specification", "Specification",
+                .specification(digest: approvedDigest, version: nil), "Specification", "Specification",
                 "Opens the specification reader"
             ),
             (.pullRequest(number: 2431, url: url), "Pull request #2431", "Pull request 2431", "Opens on GitHub"),
@@ -180,8 +180,8 @@ import Testing
             TaskTimelinePresentation.DocumentLink.prompt(digest: promptDigest).readerRequest
                 == .init(digest: promptDigest, document: .prompt))
         #expect(
-            TaskTimelinePresentation.DocumentLink.specification(digest: approvedDigest, revision: 2).readerRequest
-                == .init(digest: approvedDigest, document: .specification(revision: 2)))
+            TaskTimelinePresentation.DocumentLink.specification(digest: approvedDigest, version: 2).readerRequest
+                == .init(digest: approvedDigest, document: .specification(version: 2)))
         let none: [TaskTimelinePresentation.DocumentLink] = [
             .issue(number: 712, url: nil), .pullRequest(number: 2431, url: nil), .noPullRequest,
         ]
@@ -292,7 +292,7 @@ import Testing
         #expect(!prompt.keyword.contains("unverified"))
         #expect(!prompt.dashedFrame)
 
-        let specification = TaskDocumentRequest.Document.specification(revision: 2)
+        let specification = TaskDocumentRequest.Document.specification(version: 2)
         #expect(specification.framing == .specification)
         #expect(specification.framing.keyword == "Specification (unverified)")
         #expect(specification.framing.dashedFrame)
