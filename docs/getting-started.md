@@ -184,7 +184,7 @@ reach it. For a real connection, both devices must be on the same Tailscale
 tailnet, the daemon must listen on the Mac's Tailscale address, and the
 client uses the documented numeric Tailscale IP as its endpoint.
 
-You need a connected, unlocked, trusted iPhone running iOS 17 or later with
+You need a connected, unlocked, trusted iPhone running iOS 18 or later with
 Developer Mode enabled. The source installer uses your free personal team.
 Follow [Installing on an iOS Device](../app/README.md#installing-on-an-ios-device)
 for signing, first-launch trust, installation commands, and pairing. A fresh
