@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -26,26 +27,37 @@ const (
 // seedClosureChain seeds the durable rows a source-issue-closure proposal needs
 // for runID: a project, an issue-subject task, a run, a resolved policy, and a
 // work-unit declaration. It returns the store, the resolved policy, and the
-// task id so a caller can build a productionBinding.
-func seedClosureChain(t *testing.T, runID domain.RunID) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
+// task id so a caller can build a productionBinding. keys join the policy's
+// paths key, so a caller can turn the closure human gate on.
+func seedClosureChain(t *testing.T, runID domain.RunID, keys ...domain.PolicyKey) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
 	source := &domain.SpecificationSource{
 		Kind: domain.SpecificationSourceIssueSubject,
 		IssueSubject: &domain.IssueSubjectRef{
 			Repo: closureStoreRepo, RepositoryID: closureStoreRepoID, IssueNumber: closureStoreIssue,
 		},
 	}
-	return seedClosureChainWithSource(t, runID, source)
+	return seedClosureChainWithSource(t, runID, source, keys...)
 }
 
-func seedClosureChainWithSource(t *testing.T, runID domain.RunID, source *domain.SpecificationSource) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
+// closureHumanGateKey is the policy key that turns the closure human gate on.
+func closureHumanGateKey() domain.PolicyKey {
+	return domain.PolicyKey{
+		Key: policySourceIssueClosureGate, Value: "true",
+		Provenance: domain.KeyProvenance{Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("b", 64))},
+	}
+}
+
+func seedClosureChainWithSource(
+	t *testing.T, runID domain.RunID, source *domain.SpecificationSource, keys ...domain.PolicyKey,
+) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
 	t.Helper()
 	ctx := context.Background()
 	s := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	at := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+	policy, err := domain.NewResolvedPolicy(runID, append([]domain.PolicyKey{{
 		Key: "paths", Value: "daemon/",
 		Provenance: domain.KeyProvenance{Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("a", 64))},
-	}})
+	}}, keys...))
 	if err != nil {
 		t.Fatalf("resolved policy: %v", err)
 	}
@@ -153,44 +165,81 @@ func TestDecideClosableSourceVerifiesIssueSubject(t *testing.T) {
 
 // TestReconcileClosureDefaultPolicyRecordsBindingApproval proves the engine
 // emission end to end under the default policy: it decides the verified source,
-// admits the proposal (the store re-gate confirms the engine's closable-source
-// determination matches its own), and records a policy approval that authorizes
-// closing for the bound merge.
+// admits a resolving policy_default proposal without asking the propose site
+// (the workflow has no inference client at all), and records a policy approval
+// that authorizes closing for the bound merge, with no attention item (#3023).
+// It runs for a daemon-bound issue subject (verified) and a same-repository
+// client source URL (recommended). A propose_site checkpoint stored before
+// #3023 under the default policy still binds its policy approval, so a run in
+// flight across the upgrade keeps its close.
 func TestReconcileClosureDefaultPolicyRecordsBindingApproval(t *testing.T) {
 	t.Parallel()
+	for _, origin := range []domain.ClosureFlagOrigin{
+		domain.ClosureFlagOriginPolicyDefault, domain.ClosureFlagOriginProposeSite,
+	} {
+		for _, provenance := range domain.AllClosureProvenances {
+			t.Run(string(origin)+"/"+string(provenance), func(t *testing.T) {
+				t.Parallel()
+				testReconcileClosureDefaultPolicy(t, origin, provenance)
+			})
+		}
+	}
+}
+
+func testReconcileClosureDefaultPolicy(t *testing.T, origin domain.ClosureFlagOrigin, provenance domain.ClosureProvenance) {
 	ctx := context.Background()
-	s, policy, taskID := seedClosureChain(t, "run-emit")
-	w := &productionPublicationWorkflow{store: s}
-	binding := closureStoreBinding(policy, taskID)
 	task := productionPublicationTask{
-		RunID: policy.RunID, PublicationID: "pub-1", HeadSHA: closureStoreHead,
+		PublicationID: "pub-1", HeadSHA: closureStoreHead,
 		Publication: ProductionPublication{Recipe: clientPublicationRecipeV2},
 	}
+	var s *store.Store
+	var policy domain.ResolvedPolicy
+	var taskID domain.TaskID
+	switch provenance {
+	case domain.ClosureProvenanceVerified:
+		s, policy, taskID = seedClosureChain(t, "run-emit")
+	case domain.ClosureProvenanceRecommended:
+		s, policy, taskID = seedClosureChainWithSource(t, "run-emit", nil)
+		task.Publication.SourceIssue = "https://github.com/" + closureStoreRepo + "/issues/9"
+	}
+	task.RunID = policy.RunID
+	w := &productionPublicationWorkflow{store: s}
+	binding := closureStoreBinding(policy, taskID)
 
-	source, target, ok, err := w.decideClosableSource(ctx, task, binding)
-	if err != nil || !ok {
-		t.Fatalf("decide closable source: ok=%t err=%v", ok, err)
+	var closure productionClosureCheckpoint
+	switch origin {
+	case domain.ClosureFlagOriginPolicyDefault:
+		decided, err := w.reconcileClosureDecision(
+			ctx, task, binding, productionVerificationCheckpoint{}, exec.ReviewInstructionBinding{}, "", nil)
+		if err != nil {
+			t.Fatalf("reconcile closure decision: %v", err)
+		}
+		closure = decided
+	case domain.ClosureFlagOriginProposeSite:
+		source, target, ok, err := w.decideClosableSource(ctx, task, binding)
+		if err != nil || !ok {
+			t.Fatalf("decide closable source: ok=%t err=%v", ok, err)
+		}
+		key := productionClosureCheckpointKey(task.RunID, task.PublicationID)
+		want := productionClosureCheckpoint{
+			Version: productionClosureCheckpointVersion, RunID: task.RunID, PublicationID: task.PublicationID,
+		}
+		decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, target, origin, true, "")
+		if err != nil || !admitted {
+			t.Fatalf("admit closure proposal: admitted=%t err=%v", admitted, err)
+		}
+		closure = decided
+	case domain.ClosureFlagOriginDaemonFallback:
+		t.Fatalf("origin %q records no policy approval", origin)
 	}
-	key := productionClosureCheckpointKey(task.RunID, task.PublicationID)
-	want := productionClosureCheckpoint{
-		Version: productionClosureCheckpointVersion, RunID: task.RunID, PublicationID: task.PublicationID,
+	if !closure.HasProposal || closure.InstanceID == "" || closure.Origin != origin || closure.Reason != "" {
+		t.Fatalf("closure checkpoint = %+v, want an admitted %q proposal with no cause", closure, origin)
 	}
-	decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, target, domain.ClosureFlagOriginProposeSite, true, "")
-	if err != nil {
-		t.Fatalf("admit closure proposal: %v", err)
-	}
-	if !admitted || decided.InstanceID == "" {
-		t.Fatalf("proposal not admitted (admitted=%t id=%q)", admitted, decided.InstanceID)
-	}
-	instanceID := decided.InstanceID
+	instanceID := closure.InstanceID
 
 	merge := domain.ProspectiveMerge{
 		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		CandidateHeadSHA:    closureStoreHead, BaseRef: closureStoreBaseRef, BaseSHA: closureStoreBaseSHA,
-	}
-	closure := productionClosureCheckpoint{
-		Version: productionClosureCheckpointVersion, RunID: policy.RunID, PublicationID: "pub-1",
-		HasProposal: true, InstanceID: instanceID, Origin: domain.ClosureFlagOriginProposeSite,
 	}
 	if err := w.bindClosureMerge(ctx, policy.RunID, binding, closure, merge); err != nil {
 		t.Fatalf("bind closure merge: %v", err)
@@ -216,6 +265,10 @@ func TestReconcileClosureDefaultPolicyRecordsBindingApproval(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
+	if proposal.ClosureProposal == nil || !proposal.ClosureProposal.Resolves ||
+		proposal.ClosureProposal.Origin != origin || proposal.ClosureProposal.Provenance != provenance {
+		t.Fatalf("stored proposal = %+v, want a resolving %q %q proposal", proposal.ClosureProposal, provenance, origin)
+	}
 	if approval == nil {
 		t.Fatal("no policy approval recorded")
 	}
@@ -226,7 +279,7 @@ func TestReconcileClosureDefaultPolicyRecordsBindingApproval(t *testing.T) {
 		t.Error("recorded policy approval does not authorize the bound merge")
 	}
 	if openFound {
-		t.Error("default-policy propose_site opened an attention item; want none")
+		t.Errorf("default-policy %s opened an attention item; want none", origin)
 	}
 }
 

@@ -289,23 +289,28 @@ func (p ClosureProvenance) valid() bool {
 }
 
 // ClosureFlagOrigin records which mechanism produced a source-issue-closure
-// proposal: propose_site when the inference site emitted the flag, or
+// proposal: propose_site when the inference site emitted the flag;
 // daemon_fallback when the daemon minted a durable resolve-false proposal
-// because the site or its admission failed (plan §5.13, #1419). The zero value
-// is invalid.
+// because the site or its admission failed (plan §5.13, #1419); or
+// policy_default when the default policy (gates.source_issue_closure off) set
+// the flag itself and the site was not asked, which always resolves (#3023).
+// The zero value is invalid.
 type ClosureFlagOrigin string
 
 const (
 	ClosureFlagOriginProposeSite    ClosureFlagOrigin = "propose_site"
 	ClosureFlagOriginDaemonFallback ClosureFlagOrigin = "daemon_fallback"
+	ClosureFlagOriginPolicyDefault  ClosureFlagOrigin = "policy_default"
 )
 
 // AllClosureFlagOrigins is the single registration point for the flag origin.
-var AllClosureFlagOrigins = []ClosureFlagOrigin{ClosureFlagOriginProposeSite, ClosureFlagOriginDaemonFallback}
+var AllClosureFlagOrigins = []ClosureFlagOrigin{
+	ClosureFlagOriginProposeSite, ClosureFlagOriginDaemonFallback, ClosureFlagOriginPolicyDefault,
+}
 
 func (o ClosureFlagOrigin) valid() bool {
 	switch o {
-	case ClosureFlagOriginProposeSite, ClosureFlagOriginDaemonFallback:
+	case ClosureFlagOriginProposeSite, ClosureFlagOriginDaemonFallback, ClosureFlagOriginPolicyDefault:
 		return true
 	default:
 		return false

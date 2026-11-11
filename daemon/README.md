@@ -1557,10 +1557,12 @@ Reading the record:
 - **`closure` says why a pull request closes its issue or only refers to
   it.** It is the answer of the last published cycle, the one whose pull
   request `publication` shows, or of the current cycle before any cycle
-  publishes; it is `null` until that cycle's closure step answers. `origin` is `propose_site` (the propose site
-  answered), `daemon_fallback` (it did not, so the proposal never
-  resolves), or `null` (no proposal was made: the
-  source is absent or in another repository). `fallback_cause` names a
+  publishes; it is `null` until that cycle's closure step answers. `origin` is `policy_default` (the default
+  policy set the flag without asking the propose site, so the proposal
+  resolves), `propose_site` (the propose site answered, under the human gate
+  or in a cycle recorded before `policy_default` existed), `daemon_fallback`
+  (it did not, so the proposal never resolves), or `null` (no proposal was
+  made: the source is absent or in another repository). `fallback_cause` names a
   `daemon_fallback`'s cause in fixed text, and is `null` for any other
   origin and for a fallback recorded before causes were. An older
   control-file refusal is the exception: it shows the refusal alone,
@@ -1827,6 +1829,25 @@ An explicit manual Retry of a recorded command returns its original result,
 even if configuration changed or was removed. A new command always creates
 new work, including with identical project, source, and name. For a client
 submission to the deputy, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
+
+#### Choose Whether a Pull Request Closes Its Source Issue
+
+The resolved-policy key `gates.source_issue_closure` decides how a published
+pull request references a source issue it can close: a daemon-bound issue
+subject, or a bare issue URL in the target repository. Set it wherever a
+project's policy keys are supplied, such as its `policy_keys` here or the
+array that `freesided submit -policy` reads. Each run stores its resolved
+policy, so a changed value affects only later runs.
+
+| Value | What a closable source gets |
+| --- | --- |
+| Absent or `false` (the default) | `Closes #N`, approved by the project's policy. The propose site is not asked, no card opens, and the pull request opens ready. The task record's `closure.origin` is `policy_default`. |
+| `true` | The propose site proposes whether the pull request resolves the issue, an `effect_proposal` card opens, and the pull request stays a draft with `Refs #N` until a person decides. |
+
+A value that does not parse as a boolean turns the gate on, so a typo adds a
+card rather than an unreviewed close. A source in another repository, or none,
+gets the descriptive Source issue link either way. Decision record:
+`devlog/2026-11-10-1818-default-policy-closes-source-issue.md`.
 
 ### Set A Usage Pool's Parallel Limit
 

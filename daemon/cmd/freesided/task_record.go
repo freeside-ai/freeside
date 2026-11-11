@@ -100,7 +100,8 @@ type taskRecordSpecificationRetry struct {
 }
 
 // taskRecordClosure is a publication's source-issue-closure answer. Origin is
-// null when no proposal was made. FallbackCause is a daemon_fallback's
+// null when no proposal was made, and policy_default when the default policy
+// closed without asking the propose site (#3023). FallbackCause is a daemon_fallback's
 // fixed-text cause, null for any other origin and for a fallback recorded
 // before causes were, except an older control-file refusal, which stored the
 // refusal text alone.

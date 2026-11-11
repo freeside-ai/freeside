@@ -70,18 +70,46 @@ func newAuthoredMetadataHarnessFromBase(
 	return p
 }
 
+// TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart proves an
+// oversized runtime input refuses each site it would reach with a fixed-text
+// reason that survives a restart. The default policy asks no propose site
+// (#3023), so only the author reason exists and the PR still closes; the human
+// gate asks it, so the closure refuses too and the PR closes nothing.
 func TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		humanGate bool
+	}{
+		{name: "default policy"},
+		{name: "human gate", humanGate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			testOversizedRuntimeInputReasonsSurviveRestart(t, tc.humanGate)
+		})
+	}
+}
+
+func testOversizedRuntimeInputReasonsSurviveRestart(t *testing.T, humanGate bool) {
 	metadata := productionPublicationMetadata()
 	metadata.Title, metadata.Body = "", ""
 	metadata.Recipe = "freeside.client-publication/v2"
 	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+	var keys []domain.PolicyKey
+	if humanGate {
+		keys = []domain.PolicyKey{{
+			Key: "gates.source_issue_closure", Value: "true", Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride, Digest: submissionDigest("closure-gate", "policy-source"),
+			},
+		}}
+	}
 	longRules := strings.Repeat("a", 256<<10)
 	base := newPublicationHarnessWithBaseFiles(t,
 		[]byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`),
 		map[string]string{"AGENTS.md": longRules},
 	)
-	p := newAuthoredMetadataHarnessFromBase(t, base, metadata, nil, map[string]string{"AGENTS.md": "candidate rules\n"})
+	p := newAuthoredMetadataHarnessFromBase(t, base, metadata, keys, map[string]string{"AGENTS.md": "candidate rules\n"})
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	driver := scriptPublicationSites(t, p,
 		inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
@@ -93,14 +121,20 @@ func TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart(t *testing.
 		t.Fatal(err)
 	}
 	prs := p.forge.PullRequests()
-	if len(prs) != 1 || strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 0 {
-		t.Fatalf("oversized input published a close or reached the driver: prs=%d calls=%d", len(prs), len(driver.Requests()))
+	if len(prs) != 1 || strings.Contains(prs[0].Body, "Closes #82") == humanGate || len(driver.Requests()) != 0 {
+		t.Fatalf("oversized input: prs=%d calls=%d, want one PR, Closes only under the default, no driver calls",
+			len(prs), len(driver.Requests()))
 	}
 	authorKey := "production-authoring/" + string(p.runID) + "/" + prs[0].HeadSHA + "/" + p.baseSHA
-	closureKey := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
+	keysWithReason := []string{authorKey}
+	if humanGate {
+		keysWithReason = append(keysWithReason, "production-closure/"+string(p.runID)+"/publish-production-"+string(p.runID))
+	} else {
+		assertClosureOrigin(t, p, domain.ClosureFlagOriginPolicyDefault)
+	}
 	assertReasons := func() {
 		t.Helper()
-		for _, key := range []string{authorKey, closureKey} {
+		for _, key := range keysWithReason {
 			var reason string
 			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 				entry, err := tx.GetInbox(p.ctx, key)
@@ -205,8 +239,9 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if p.forge.PullRequests()[0].Draft || len(driver.Requests()) != 2 {
-		t.Fatal("valid inputs did not reach both author sites and publish a ready PR")
+	// The default policy closes without asking the propose site (#3023).
+	if p.forge.PullRequests()[0].Draft || authorCallCount(driver) != 1 || proposeCallCount(driver) != 0 {
+		t.Fatal("valid inputs did not reach the explain site alone and publish a ready PR")
 	}
 	key := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -492,7 +527,7 @@ func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 			}
 			prs := p.forge.PullRequests()
 			if len(prs) != 1 || !strings.Contains(prs[0].Body, "## Agent-reported implementation (claim)") ||
-				!strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 2 {
+				!strings.Contains(prs[0].Body, "Closes #82") || authorCallCount(driver) != 1 || proposeCallCount(driver) != 0 {
 				t.Fatalf("screen fallback suppressed separately approved closure: prs=%d calls=%d", len(prs), len(driver.Requests()))
 			}
 			authorKey := "production-authoring/" + string(p.runID) + "/" + prs[0].HeadSHA + "/" + p.baseSHA
@@ -546,7 +581,7 @@ func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCheckpoint()
-			if len(driver.Requests()) != 2 || p.forge.PullRequests()[0].Body != prs[0].Body {
+			if len(driver.Requests()) != 1 || p.forge.PullRequests()[0].Body != prs[0].Body {
 				t.Fatal("restart re-authored or changed the fallback")
 			}
 		})
@@ -600,13 +635,48 @@ func scriptPublicationSites(
 }
 
 func authorCallCount(d *inferencefake.Driver) int {
+	return siteCallCount(d, inference.PublicationAuthorExplainSiteID)
+}
+
+func proposeCallCount(d *inferencefake.Driver) int {
+	return siteCallCount(d, inference.PublicationAuthorProposeSiteID)
+}
+
+func siteCallCount(d *inferencefake.Driver, site string) int {
 	n := 0
 	for _, req := range d.Requests() {
-		if req.SiteID == inference.PublicationAuthorExplainSiteID {
+		if req.SiteID == site {
 			n++
 		}
 	}
 	return n
+}
+
+// assertClosureOrigin asserts the publication's closure checkpoint admitted a
+// proposal with origin and recorded no fallback cause.
+func assertClosureOrigin(t *testing.T, p *productionPublicationHarness, origin domain.ClosureFlagOrigin) {
+	t.Helper()
+	key := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetInbox(p.ctx, key)
+		if err != nil {
+			return err
+		}
+		var row struct {
+			HasProposal bool                     `json:"has_proposal"`
+			Origin      domain.ClosureFlagOrigin `json:"origin"`
+			Reason      string                   `json:"reason"`
+		}
+		if err := json.Unmarshal(entry.Payload, &row); err != nil {
+			return err
+		}
+		if !row.HasProposal || row.Origin != origin || row.Reason != "" {
+			t.Fatalf("closure checkpoint = %+v, want a %q proposal with no cause", row, origin)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // assertAuthoredMetadata asserts the single PR renders the stored authored

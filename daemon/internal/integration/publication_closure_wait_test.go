@@ -116,8 +116,9 @@ func newHeldClosureHarness(t *testing.T) (*productionPublicationHarness, domain.
 }
 
 // TestSourceIssueReadFailureFallsBack proves a failed issue read cannot drive
-// either author site or approve a closure proposal. The fallback is durable
-// when the issue becomes readable on a later pass at the same head and base.
+// the author site. The fallback is durable when the issue becomes readable on
+// a later pass at the same head and base. The default policy's close needs no
+// issue text and no model answer (#3023), so the pull request still closes.
 func TestSourceIssueReadFailureFallsBack(t *testing.T) {
 	t.Parallel()
 	t.Run("API failure", func(t *testing.T) { testSourceIssueReadFailureFallsBack(t, false) })
@@ -154,15 +155,15 @@ func testSourceIssueReadFailureFallsBack(t *testing.T, malformedTitle bool) {
 		t.Fatal(err)
 	}
 	prs := p.forge.PullRequests()
-	if len(prs) != 1 || prs[0].Draft || !strings.Contains(prs[0].Body, "Refs #82") ||
-		strings.Contains(prs[0].Body, "Closes #82") {
-		t.Fatalf("failed issue read PR = %+v, want ready with Refs #82", prs)
+	if len(prs) != 1 || prs[0].Draft || !strings.Contains(prs[0].Body, "Closes #82") ||
+		strings.Contains(prs[0].Body, "Refs #82") {
+		t.Fatalf("failed issue read PR = %+v, want ready with Closes #82", prs)
 	}
 	if len(driver.Requests()) != 0 || len(pendingClosureWaits(t, p)) != 0 {
 		t.Fatal("failed issue read reached an author site or armed a closure wait")
 	}
 	if p.forge.IssueReads != 1 {
-		t.Fatalf("source issue reads = %d, want failed read shared by both sites", p.forge.IssueReads)
+		t.Fatalf("source issue reads = %d, want one failed read", p.forge.IssueReads)
 	}
 
 	p.forge.Mu.Lock()

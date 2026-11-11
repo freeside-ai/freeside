@@ -97,10 +97,14 @@ func closureCauseBudget() inference.Budget {
 	}
 }
 
-// TestProposeClosureRecordsFallbackCause proves every closure fallback records
-// its fixed cause in the checkpoint, end to end through the real author-input
-// builder, inference client, and admission: the cause names the failed step or
-// fallback code and never copies the underlying error.
+// TestProposeClosureRecordsFallbackCause proves every closure fallback under
+// the human gate records its fixed cause in the checkpoint, end to end through
+// the real author-input builder, inference client, and admission: the cause
+// names the failed step or fallback code and never copies the underlying
+// error. Under the default policy the same failures cannot arise, because the
+// site is never asked: the proposal is a resolving policy_default with no
+// cause, no request reaches the driver, and no provider dispatch is claimed,
+// even with no inference client (#3023).
 func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 	t.Parallel()
 	oversized := strings.Repeat("x", 64<<10+1)
@@ -116,8 +120,11 @@ func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 		// unknownHead publishes a head the checkout lacks; instructions
 		// names an instruction snapshot the artifact store can't open.
 		unknownHead, instructions bool
-		origin                    domain.ClosureFlagOrigin
-		reason                    string
+		// defaultPolicy leaves gates.source_issue_closure unset; every other
+		// row turns the human gate on so the site is asked.
+		defaultPolicy bool
+		origin        domain.ClosureFlagOrigin
+		reason        string
 	}{
 		{
 			label: "no inference client", noClient: true,
@@ -166,13 +173,33 @@ func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 			script: &inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
 			origin: domain.ClosureFlagOriginProposeSite, reason: "",
 		},
+		{
+			label: "default policy with no inference client", defaultPolicy: true, noClient: true,
+			origin: domain.ClosureFlagOriginPolicyDefault,
+		},
+		{
+			// The forge refuses every read, so an asked site would fall back.
+			label: "default policy builds no author input", defaultPolicy: true,
+			origin: domain.ClosureFlagOriginPolicyDefault,
+		},
+		{
+			// A site that would say no is never asked.
+			label: "default policy ignores the site", defaultPolicy: true,
+			forge:  closureCauseForge{visibility: true, issue: true},
+			script: &inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":false}`), ComputeUnits: 1}},
+			origin: domain.ClosureFlagOriginPolicyDefault,
+		},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
 			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(tc.forge.serve)))
 			defer server.Close()
-			s, policy, taskID := seedClosureChain(t, "run-closure-cause")
+			var keys []domain.PolicyKey
+			if !tc.defaultPolicy {
+				keys = append(keys, closureHumanGateKey())
+			}
+			s, policy, taskID := seedClosureChain(t, "run-closure-cause", keys...)
 			repo, baseSHA, headSHA := closureCauseRepo(t, tc.template)
 			driver := inferencefake.New()
 			if tc.script != nil {
@@ -182,10 +209,14 @@ func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 			if tc.noSite {
 				sites = []inference.Site{inference.TaskNamerSite(closureCauseBudget())}
 			}
+			claims := 0
 			w := &productionPublicationWorkflow{
 				store: s, workDir: t.TempDir(),
-				publisher:     publish.NewPublisher(sourceIssueTestToken{}, server.Client(), server.URL, nil, nil, nil, nil),
-				claimDispatch: func(context.Context, domain.RunID) error { return nil },
+				publisher: publish.NewPublisher(sourceIssueTestToken{}, server.Client(), server.URL, nil, nil, nil, nil),
+				claimDispatch: func(context.Context, domain.RunID) error {
+					claims++
+					return nil
+				},
 			}
 			if !tc.noClient {
 				w.inference = closureCauseClient(t, driver, sites...)
@@ -225,19 +256,44 @@ func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 			if stored != decided {
 				t.Fatalf("stored checkpoint %+v differs from the decided %+v", stored, decided)
 			}
+			if tc.defaultPolicy {
+				if n := len(driver.Requests()); n != 0 || claims != 0 {
+					t.Fatalf("default policy asked the site: %d requests, %d dispatch claims; want none", n, claims)
+				}
+				assertClosureProposalResolves(t, s, decided.InstanceID)
+			}
 		})
+	}
+}
+
+// assertClosureProposalResolves fails unless the stored proposal instance
+// resolves, so the publisher would write Closes once a policy approval binds.
+func assertClosureProposalResolves(t *testing.T, s *store.Store, instanceID domain.ProposalInstanceID) {
+	t.Helper()
+	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+		instance, err := tx.GetProposalInstance(t.Context(), instanceID)
+		if err != nil {
+			return err
+		}
+		if closure := instance.Proposal.ClosureProposal; closure == nil || !closure.Resolves {
+			t.Errorf("stored proposal %+v does not resolve", closure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read proposal: %v", err)
 	}
 }
 
 // TestProposeClosureRetriesSourceIssueCheckpointFault proves a store fault on
 // the shared source-issue checkpoint propagates for retry, as it does in
-// authoring, instead of fixing a permanent daemon_fallback.
+// authoring, instead of fixing a permanent daemon_fallback. Only the human gate
+// builds the author input, so only it can meet the fault.
 func TestProposeClosureRetriesSourceIssueCheckpointFault(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(closureCauseForge{visibility: true, issue: true}.serve)))
 	defer server.Close()
-	s, policy, taskID := seedClosureChain(t, "run-closure-retry")
+	s, policy, taskID := seedClosureChain(t, "run-closure-retry", closureHumanGateKey())
 	repo, baseSHA, headSHA := closureCauseRepo(t, "")
 	w := &productionPublicationWorkflow{
 		store: s, workDir: t.TempDir(),

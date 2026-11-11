@@ -18,7 +18,8 @@ type SourceIssueClosureParameters struct {
 	// proposal was made and may predate a rename.
 	Target IssueSubjectRef `json:"target"`
 	// Resolves reports whether this proposal, if approved, would write the
-	// close. A daemon_fallback proposal always carries false.
+	// close. A daemon_fallback proposal always carries false and a
+	// policy_default proposal always carries true.
 	Resolves bool `json:"resolves"`
 	// Provenance is the trust the target earns (verified or recommended).
 	Provenance ClosureProvenance `json:"provenance"`
@@ -28,7 +29,9 @@ type SourceIssueClosureParameters struct {
 
 // Validate reports whether the parameters are structurally sound. The
 // daemon_fallback invariant (resolves must be false) is enforced here so a
-// decoded row cannot claim a fallback that would nonetheless close an issue.
+// decoded row cannot claim a fallback that would nonetheless close an issue,
+// and the policy_default invariant (resolves must be true) so a row cannot
+// claim the default policy chose not to close.
 func (p SourceIssueClosureParameters) Validate() error {
 	if p.SubjectHandle == "" {
 		return fmt.Errorf("source issue closure subject_handle: %w", ErrEmptyID)
@@ -44,6 +47,9 @@ func (p SourceIssueClosureParameters) Validate() error {
 	}
 	if p.Origin == ClosureFlagOriginDaemonFallback && p.Resolves {
 		return fmt.Errorf("daemon_fallback closure with resolves set: %w", ErrEffectProposalInconsistent)
+	}
+	if p.Origin == ClosureFlagOriginPolicyDefault && !p.Resolves {
+		return fmt.Errorf("policy_default closure without resolves: %w", ErrEffectProposalInconsistent)
 	}
 	return nil
 }
@@ -114,7 +120,7 @@ type SourceIssueClosureInput struct {
 	// Origin records which mechanism is constructing the proposal.
 	Origin ClosureFlagOrigin
 	// Resolves is the requested resolve flag; it is forced false for a
-	// daemon_fallback origin.
+	// daemon_fallback origin and true for a policy_default origin.
 	Resolves bool
 }
 
@@ -137,8 +143,13 @@ func (in SourceIssueClosureInput) parameters() (SourceIssueClosureParameters, er
 		return SourceIssueClosureParameters{}, err
 	}
 	resolves := in.Resolves
-	if in.Origin == ClosureFlagOriginDaemonFallback {
+	switch in.Origin {
+	case ClosureFlagOriginDaemonFallback:
 		resolves = false
+	case ClosureFlagOriginPolicyDefault:
+		resolves = true
+	case ClosureFlagOriginProposeSite:
+		// The site's answer stands.
 	}
 	params := SourceIssueClosureParameters{
 		SubjectHandle: in.SubjectHandle, Target: target, Resolves: resolves,

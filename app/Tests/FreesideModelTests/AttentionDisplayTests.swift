@@ -1249,6 +1249,12 @@ import Testing
         #expect(bound.contains("main@deadbeef"))
     }
 
+    @Test func closureOriginLabelsNameEachMechanism() {
+        #expect(AttentionDisplay.closureOriginLabel(.policy_default) == "Set by project policy")
+        let labels = Components.Schemas.ClosureFlagOrigin.allCases.map(AttentionDisplay.closureOriginLabel)
+        #expect(Set(labels).count == Components.Schemas.ClosureFlagOrigin.allCases.count)
+    }
+
     @Test func effectProposalOnMergeFollowsResolves() throws {
         var facts = try #require(
             AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
