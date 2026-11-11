@@ -359,7 +359,7 @@ is the authority for the settings, and it changes. The pre-spend record's
 | Policy | `submit -policy`: the resolved policy keys, including `gates.spec_approval` and `gates.source_issue_closure` | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
 | Publication | `submit -publication`: for a bare-URL target, the client record with `source_issue` set to that same URL ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)) | Composition preflight and `freesided submit` (`submittedSourceReference`, `daemon/cmd/freesided/submit.go`) |
 | Work-unit declaration | `submit -work-unit`: at least `{"completion_criterion": "bound_pr_merged"}` | Composition preflight and `freesided submit` (`errWorkUnitRequired`, same file). A task accepted without one never records completion (#1931). |
-| Writer lineup | The settings' `writers.*` and `judgment.*` keys, chosen under [Choose The Real Run's Writers](#choose-the-real-runs-writers) | The lineup probe, for a model the pinned CLIs don't serve. Nothing refuses a weak choice. |
+| Writer lineup | The settings' `writers.*` and `judgment.*` keys, chosen under [Choose The Real Run's Writers](#choose-the-real-runs-writers) | The lineup probe, for a model the pinned CLIs don't serve, except the escalated specifier's (#3037). Nothing refuses a weak choice. |
 
 A target in the managed repository becomes the pull request's closing
 reference; one in another repository is linked and stays open.
@@ -376,8 +376,9 @@ CLI-mode rows, for the visibility seed on a fresh root
 ### Choose The Real Run's Writers
 
 The real run's writer and judgment models and efforts are chosen for this
-run and named in the go-ahead, never inherited (#3024). Decision record:
-`devlog/2026-11-10-1639-exit-run-real-lineup.md`.
+run and named in the go-ahead, never inherited (#3024). Decision records:
+`devlog/2026-11-10-1639-exit-run-real-lineup.md`, and for the escalated
+specifier `devlog/2026-11-10-1758-escalated-specifier-default.md`.
 
 - **The tracker's lineup, when the owner pinned one.** The tracker's Exit
   section or its exit-proof unit names it; use it as written.
@@ -386,8 +387,15 @@ run and named in the go-ahead, never inherited (#3024). Decision record:
   | Key | Real-run value |
   | --- | --- |
   | `writers.specifier`, `writers.implementer`, `writers.remediator` | `claude-opus-5-5` at `medium` |
-  | `writers.specifier_escalated` | Absent |
+  | `writers.specifier_escalated` | `claude-fable-5-1` at `medium` |
   | `judgment.model`, `judgment.effort` | `claude-opus-5-5` at `medium` |
+
+  The escalated specifier runs only on a task the triager escalates; the
+  specifier runs the rest
+  ([Subscription-Backed Daemon Judgments](../daemon/README.md#subscription-backed-daemon-judgments)).
+  The triager is a judgment role, and a triager that can't run escalates
+  every task, so keep judgments on (the `judgment` settings set) when the
+  escalated specifier is.
 
   Writer roles on one model and effort share one agent
   (`devlog/2026-10-22-1346-rehearsal-real-models.md`), so a `--task-line`
@@ -404,7 +412,8 @@ run and named in the go-ahead, never inherited (#3024). Decision record:
   never applies to the real run.
 - **What checks it.** The lineup probe
   ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
-  refuses a model the pinned CLIs don't serve. Nothing refuses a weak
+  refuses a model the pinned CLIs don't serve, except the escalated
+  specifier's, which it doesn't launch yet (#3037). Nothing refuses a weak
   choice; the go-ahead is where the owner sees it.
 - **A new lineup is a new tree.** The emitted agent tree depends on each
   writer role's model and effort, and on judgment's when the run has
