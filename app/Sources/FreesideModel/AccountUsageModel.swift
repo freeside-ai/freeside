@@ -200,6 +200,8 @@ package enum UsageDisplay {
         case "seven_day": "Weekly"
         case "seven_day_opus": "Weekly Opus"
         case "seven_day_sonnet": "Weekly Sonnet"
+        // The Claude CLI's name for the Fable weekly bucket.
+        case "seven_day_overage_included": "Weekly Fable"
         default: nil
         }
     }

@@ -406,6 +406,7 @@ import Testing
     @Test func knownWindowsHaveWordsAndOthersShowTheirId() {
         #expect(UsageDisplay.label("seven_day") == "Weekly")
         #expect(UsageDisplay.label("five_hour") == "5-hour")
+        #expect(UsageDisplay.label("seven_day_overage_included") == "Weekly Fable")
         #expect(UsageDisplay.label("seven_day_cowork") == nil)
     }
 
