@@ -777,10 +777,17 @@ import Testing
         #expect(
             NavigationModel.surface(for: .attentionItem("item-b"), in: rows)
                 == .taskPage(taskID: task.task.id, leadingItemID: "item-b"))
-        // Opening the task leads with its newest open item.
+        // The task itself seats no card, though it has items open; its row
+        // and a card's task link name the newest item instead.
         #expect(
             NavigationModel.surface(for: .task(task.task.id), in: rows)
-                == .taskPage(taskID: task.task.id, leadingItemID: "item-a"))
+                == .taskPage(taskID: task.task.id, leadingItemID: nil))
+        #expect(rows.destination(forTask: task.task.id) == .attentionItem("item-a"))
+    }
+
+    @Test func aQuietTasksLinkOpensItsPage() {
+        let (store, task) = task(holding: [])
+        #expect(list(store, tasks: [task]).destination(forTask: task.task.id) == .task(task.task.id))
     }
 
     @Test func aResolvedItemItsTaskOwnsLeadsThePageInItsCurrentState() {
@@ -818,7 +825,7 @@ import Testing
         #expect(navigation.path == [.task(task.task.id)])
         #expect(
             NavigationModel.surface(for: navigation.path[0], in: list)
-                == .taskPage(taskID: task.task.id, leadingItemID: "item-a"))
+                == .taskPage(taskID: task.task.id, leadingItemID: nil))
 
         navigation.setPath([.attentionItem("item-a")])
         #expect(navigation.path == [.attentionItem("item-a")])
@@ -903,15 +910,38 @@ import Testing
     @Test func aNewerItemDoesNotSwapTheCardLeadingATask() {
         let (store, task) = task(holding: ["item-new", "item-lead"])
         let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
-        navigation.route(to: .task(task.task.id))
+        navigation.route(to: .attentionItem("item-lead"))
 
         navigation.repairSelection(in: list(store, tasks: [task]), previouslyOpen: ["item-lead"])
 
         #expect(navigation.path == [.attentionItem("item-lead")])
     }
 
+    /// An item opening under a reader on the task's page leaves the route on
+    /// the task, so no card is seated under them (#1460).
+    @Test func anItemOpeningLeavesATaskRouteOnThePage() {
+        let (store, task) = task(holding: ["item-new"])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .task(task.task.id))
+        let rows = list(store, tasks: [task])
+
+        navigation.repairSelection(in: rows, previouslyOpen: [])
+
+        #expect(navigation.path == [.task(task.task.id)])
+        #expect(navigation.detailSurface(in: rows) == .taskPage(taskID: task.task.id, leadingItemID: nil))
+    }
+
     @Test func aQuietTaskHoldsNoCard() {
         let (store, task) = task(holding: [])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .task(task.task.id))
+        #expect(!navigation.holdsCard(in: list(store, tasks: [task])))
+    }
+
+    /// A task route holds no card even with items open, so a refresh that
+    /// opens one doesn't count as work in progress.
+    @Test func aTaskRouteWithOpenItemsHoldsNoCard() {
+        let (store, task) = task(holding: ["item-a"])
         let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
         navigation.route(to: .task(task.task.id))
         #expect(!navigation.holdsCard(in: list(store, tasks: [task])))

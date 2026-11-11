@@ -225,6 +225,13 @@ package struct UnifiedList {
         needsYou.first { $0.id == .task(taskID) }?.openItems.filter { $0.item.status == .open } ?? []
     }
 
+    /// What selecting a task's row opens: its newest open item when it
+    /// needs you, else its page. A link to a task from a card goes where the
+    /// row would, so it still seats the newest card.
+    package func destination(forTask taskID: String) -> NavigationModel.Destination {
+        rows.first { $0.id == .task(taskID) }?.destination ?? .task(taskID)
+    }
+
     /// The same rule within one task's row.
     package func nextOpenItemID(inTask taskID: String, excluding itemID: String) -> String? {
         needsYou.first { $0.id == .task(taskID) }?.nextOpenItemID(excluding: itemID)

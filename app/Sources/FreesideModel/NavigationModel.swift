@@ -178,15 +178,17 @@ public final class NavigationModel {
     /// The surface a destination opens. An item a held task owns leads that
     /// task's page, open or resolved, so a link and a list row land in the
     /// same place; one no held task owns, which covers a scoped item and a
-    /// link the list hasn't caught up to, is its card alone. A task leads
-    /// with its newest open item.
+    /// link the list hasn't caught up to, is its card alone. A task is its
+    /// page with no card seated, even with items open: an item that opens
+    /// under a reader draws as a one-line row until the operator opens it,
+    /// so the page never changes shape under them (#1460).
     package static func surface(for destination: Destination, in list: UnifiedList) -> DetailSurface {
         switch destination {
         case .attentionItem(let itemID):
             list.taskID(ofItem: itemID).map { .taskPage(taskID: $0, leadingItemID: itemID) }
                 ?? .card(itemID: itemID)
         case .task(let taskID):
-            .taskPage(taskID: taskID, leadingItemID: list.openItems(inTask: taskID).first?.item.id)
+            .taskPage(taskID: taskID, leadingItemID: nil)
         case .run(let taskID, let runID):
             .run(taskID: taskID, runID: runID)
         }
@@ -430,10 +432,9 @@ public final class NavigationModel {
     /// purpose stays, and so does a system health finding's card, which no
     /// row holds (a `-FreesideSelect` launch or a viewed concluded item can
     /// still open one in the main route). A selection with no row left
-    /// clears, taking any run with it. A task with an open item settles on
-    /// the item leading its page, so a newer item can't swap the card under
-    /// an operator working on it. `previouslyOpen` is the open item ids
-    /// before this change.
+    /// clears, taking any run with it. A task route stays the page with no
+    /// card when an item opens; the operator seats the card by opening the
+    /// item. `previouslyOpen` is the open item ids before this change.
     package func repairSelection(in list: UnifiedList, previouslyOpen: Set<String> = []) {
         switch path.first {
         case .attentionItem(let itemID):
@@ -450,10 +451,6 @@ public final class NavigationModel {
             guard list.holds(.task(taskID)) else {
                 path = []
                 return
-            }
-            let open = list.openItems(inTask: taskID)
-            if path.count == 1, let lead = open.first(where: { previouslyOpen.contains($0.item.id) }) ?? open.first {
-                path = [.attentionItem(lead.item.id)]
             }
         case .run, nil:
             break
