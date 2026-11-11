@@ -393,6 +393,14 @@ public enum AgentChoiceDisplay {
         return ([selection.enrollment_id, model] + effort).joined(separator: " · ")
     }
 
+    /// A selection as a confirm states it: enrollment, model by its display
+    /// name, and effort, the harness default included, so nothing the line
+    /// will record is left unsaid.
+    public static func fullLabel(_ selection: Selection, catalog: Catalog?) -> String {
+        let model = modelOption(for: selection, catalog: catalog)?.name ?? selection.model_id
+        return "\(selection.enrollment_id) · \(model) · \(effortLabel(selection.effort))"
+    }
+
     /// An effort as the form names it: the harness's own string, or
     /// `harness default`.
     public static func effortLabel(_ effort: String) -> String {
@@ -456,14 +464,17 @@ public enum AgentChoiceDisplay {
         }
     }
 
-    private static func lineupLabel(
+    /// What picks the agent for a role left to the lineup:
+    /// `lineup` and `defaultSettingsLabel`, or `lineup` alone (with the
+    /// policy's part) when the catalog has no lineup entry for the role.
+    static func lineupLabel(
         role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Catalog?
     ) -> String {
         defaultSettingsLabel(role: role, policy: policy, catalog: catalog).map { "lineup \($0)" }
             ?? "lineup" + policySuffix(role: role, policy: policy)
     }
 
-    private static func policySuffix(role: Role, policy: Components.Schemas.RoutingPolicy?) -> String {
+    static func policySuffix(role: Role, policy: Components.Schemas.RoutingPolicy?) -> String {
         policy?.roles.contains { $0.role == role } == true ? " or routing policy" : ""
     }
 
