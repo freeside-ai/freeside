@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
@@ -54,7 +55,7 @@ func runRenewCodexCommandWithDeps(
 	stdout, stderr io.Writer,
 	refresher ward.CodexAuthRefresher,
 	runtime func(containerBin string) ward.Runtime,
-	discovery func(ward.Runtime) CodexModelDiscoverer,
+	discovery func(ward.Runtime) daemoncompose.CodexModelDiscoverer,
 ) (err error) {
 	flags := flag.NewFlagSet("freesided renew-codex", flag.ContinueOnError)
 	flags.SetOutput(stderr)

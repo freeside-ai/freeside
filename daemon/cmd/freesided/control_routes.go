@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
@@ -149,7 +150,7 @@ func (s pairingControlSocket) Configure(
 	s.pairing.configure(apiURL, mint)
 }
 
-func (s pairingControlSocket) RegisterRoutes(in ControlRouteInputs) {
+func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs) {
 	s.pairing.registerControlRoutes(
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
 		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure)
@@ -159,7 +160,7 @@ func (s pairingControlSocket) Publish() error { return s.pairing.publish() }
 
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
-	approved map[domain.Digest]bool, repositoryID int64, integrityProbe CredentialIntegrityProbe,
+	approved map[domain.Digest]bool, repositoryID int64, integrityProbe daemoncompose.CredentialIntegrityProbe,
 	usage *usagecollect.Coordinator, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,

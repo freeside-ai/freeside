@@ -411,10 +411,10 @@ func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if err := RequireManualProjectsFit(projects, ward.LaunchBound{}); err != nil {
+	if err := daemoncompose.RequireManualProjectsFit(projects, ward.LaunchBound{}); err != nil {
 		t.Fatalf("unbudgeted fit: %v", err)
 	}
-	err = RequireManualProjectsFit(projects, bound)
+	err = daemoncompose.RequireManualProjectsFit(projects, bound)
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "16384 MiB declared plus 256 MiB") {
 		t.Fatalf("budgeted fit = %v, want a never-fits refusal naming the numbers", err)
 	}

@@ -1,11 +1,10 @@
-package main
+package daemoncompose
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
 
-	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -84,7 +83,7 @@ func reconcileWorkUnitCompletionMilestones(ctx context.Context, st *store.Store,
 					"unit", completion.UnitID, "run", declaration.RunID)
 				continue
 			}
-			milestone, err := daemoncompose.CurrentWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, completion)
+			milestone, err := CurrentWorkUnitCompletedMilestone(ctx, tx, declaration.RunID, completion)
 			if err != nil {
 				return err
 			}

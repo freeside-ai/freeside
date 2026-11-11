@@ -590,7 +590,7 @@ type config struct {
 	Logger *slog.Logger
 	// seams are the start's test seams (startSeams). Production leaves them
 	// unset.
-	seams StartSeams
+	seams daemoncompose.StartSeams
 	// Claude configures real execution and its ward gate. Without it, explicit
 	// FakeDriverEnabled, or Scenario, the daemon serves setup and state
 	// without an engine.
@@ -694,7 +694,7 @@ func (cfg config) storeOptions() (store.Options, error) {
 // daemon is what run() starts: the started daemon, and the pairing control
 // its control socket serves, which a test reads.
 type daemon struct {
-	*Daemon
+	*daemoncompose.Daemon
 	pairing *pairingControl
 }
 
@@ -768,7 +768,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 		repositoryID = cfg.Claude.RepositoryID
 	}
 	var pairing *pairingControl
-	started, err := Start(parent, stop, StartOptions{
+	started, err := daemoncompose.Start(parent, stop, daemoncompose.StartOptions{
 		DBPath: cfg.DBPath, StateDir: cfg.StateDir, ListenAddr: cfg.ListenAddr,
 		FakeDriverEnabled: cfg.FakeDriverEnabled, FakeDriverDir: cfg.FakeDriverDir, NtfyURL: cfg.NtfyURL,
 		ReconcileInterval: cfg.ReconcileInterval, DoctorInterval: cfg.DoctorInterval,
@@ -782,7 +782,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 		WrapFakeDriver: func(driver *fake.StageDriver) exec.StageDriver {
 			return autoScriptStageDriver{StageDriver: driver}
 		},
-		OpenControl: func(dbPath, stateDir string) (ControlSocket, error) {
+		OpenControl: func(dbPath, stateDir string) (daemoncompose.ControlSocket, error) {
 			opened, err := newPairingControl(dbPath, stateDir)
 			if err != nil {
 				return nil, err

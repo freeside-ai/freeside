@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -97,7 +98,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 		StateDir:          stateDir,
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: 10 * time.Millisecond,
-		seams: StartSeams{
+		seams: daemoncompose.StartSeams{
 			Now: func() time.Time {
 				clockMu.Lock()
 				defer clockMu.Unlock()

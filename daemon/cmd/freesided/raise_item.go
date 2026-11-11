@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -68,12 +67,6 @@ const (
 	// names itself as synthetic wherever that value is shown.
 	raisedMarker = "synthetic-raise-item"
 )
-
-// RaisedHeldWorkItemPrefix must not parse as the engine's own held-work
-// notice ID (work-held-<run>-<unix>): the engine resolves every open notice
-// of that form whose run has no matching hold, and a raised item has none.
-// The daemon resolves these itself at its next start.
-const RaisedHeldWorkItemPrefix = "raised-work-held-"
 
 var errRaiseItemNoDaemon = errors.New(
 	"raise-item needs a running daemon started with -environment " + string(environmentEphemeral) +
@@ -280,15 +273,6 @@ func raisedItem(
 	return domain.AttentionItem{}, fmt.Errorf("alert %q is not one of %v", req.Alert, AllRaiseAlerts)
 }
 
-// isRaisedHeldWorkNotice reports whether an item is a held-work notice this
-// command raised. The daemon resolves these with the stall notices at
-// startup: the engine resolves a real one when its hold clears and its sweep
-// must not own a raised one, so nothing else ever would. The notice offers
-// no action that closes it.
-func isRaisedHeldWorkNotice(itemID string) bool {
-	return strings.HasPrefix(itemID, RaisedHeldWorkItemPrefix)
-}
-
 // raisedHeldWorkItem builds the engine's work_held notice for a hold that
 // exists only here: no hold row is written, so the run is not held.
 func raisedHeldWorkItem(
@@ -304,7 +288,7 @@ func raisedHeldWorkItem(
 	}
 	// The revision this write commits at keeps a second raise for the same
 	// run from colliding with the first, as the stall notice's ID does.
-	id := domain.ItemID(fmt.Sprintf("%s%s-%d", RaisedHeldWorkItemPrefix, runID, state.Revision+1))
+	id := domain.ItemID(fmt.Sprintf("%s%s-%d", daemoncompose.RaisedHeldWorkItemPrefix, runID, state.Revision+1))
 	hold := domain.RunHoldObservation{
 		RunID: runID, Reason: domain.HoldAdmissionPolicyRefused, FirstObservedAt: now, LastObservedAt: now,
 	}

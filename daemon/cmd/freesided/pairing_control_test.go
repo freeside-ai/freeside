@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -44,7 +45,7 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		DBPath:      filepath.Join(root, "freeside.db"), StateDir: stateDir,
 		ListenAddr: "127.0.0.1:0", Logger: logger,
 		FakeDriverEnabled: true, SeedWalkingSkeleton: true,
-		seams: StartSeams{
+		seams: daemoncompose.StartSeams{
 			Now: func() time.Time {
 				clockMu.Lock()
 				defer clockMu.Unlock()
