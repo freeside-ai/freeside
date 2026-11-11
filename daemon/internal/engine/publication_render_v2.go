@@ -112,10 +112,6 @@ var autolinkTokenRe = regexp.MustCompile(
 		`|\b[0-9a-fA-F]{7,40}\b`, // commit-length hex token
 )
 
-// codeFenceRe matches an opening or closing fenced-code delimiter: up to three
-// leading spaces, then a run of at least three backticks or tildes.
-var codeFenceRe = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
-
 // atxHeadingRe matches an ATX heading: up to three leading spaces, one to six
 // #, then either end of line or a space and the heading text. A trailing run of
 // # is a closing sequence, not content.
@@ -205,13 +201,13 @@ func renderAuthoredBodyProse(bodyText string) string {
 	for _, line := range lines {
 		if fence != "" {
 			out = append(out, line)
-			if isClosingFence(line, fence) {
+			if publicationtext.ClosesFence(line, fence) {
 				fence = ""
 			}
 			continue
 		}
-		if m := codeFenceRe.FindStringSubmatch(line); m != nil && opensFence(m[1], m[2]) {
-			fence = m[1]
+		if opener := publicationtext.FenceOpener(line); opener != "" {
+			fence = opener
 			out = append(out, line)
 			continue
 		}
@@ -243,49 +239,9 @@ func renderAuthoredBodyProse(bodyText string) string {
 	}
 	rendered := strings.Join(out, "\n")
 	if fence != "" {
-		rendered += "\n" + closingFenceFor(fence)
+		rendered += "\n" + publicationtext.ClosingFence(fence)
 	}
 	return rendered
-}
-
-// isClosingFence reports whether line closes an open fence: the same fence
-// character, at least as long as the opener, and nothing but spaces after it.
-func isClosingFence(line, opener string) bool {
-	m := codeFenceRe.FindStringSubmatch(line)
-	if m == nil {
-		return false
-	}
-	run, rest := m[1], m[2]
-	return run[0] == opener[0] && len(run) >= len(opener) && onlySpacesAndTabs(rest)
-}
-
-// opensFence reports whether a fence delimiter run and the info string after it
-// open a fenced code block under GFM. A backtick fence's info string may not
-// contain a backtick: GFM forbids it so inline code is not mistaken for a fence
-// opener, and trusting such a line as a fence would emit the lines after it
-// verbatim while GitHub renders them live. A tilde fence has no such restriction.
-func opensFence(run, info string) bool {
-	return run[0] != '`' || !strings.ContainsRune(info, '`')
-}
-
-// onlySpacesAndTabs reports whether s consists solely of spaces and tabs, the
-// only characters GFM permits after a closing code fence. Unicode whitespace
-// such as a no-break space does not close a fence, so strings.TrimSpace (which
-// trims it) must not decide fence closure: a fence the renderer wrongly treats
-// as closed lets GitHub draw the appended publisher sections into the code block.
-func onlySpacesAndTabs(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] != ' ' && s[i] != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
-// closingFenceFor returns a bare closing delimiter matching an opener's fence
-// character and length.
-func closingFenceFor(opener string) string {
-	return strings.Repeat(string(opener[0]), len(opener))
 }
 
 // neutralizeInlineText renders one line of inline prose safe while keeping

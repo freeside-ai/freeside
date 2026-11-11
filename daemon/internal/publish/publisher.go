@@ -1340,24 +1340,20 @@ func prMatchesPublicationCoordinates(
 // final line (plan §5.15 rule 4). Operator prose is never truncated. The final
 // ceiling check remains a fail-closed guard over the complete composition.
 func desiredPRContent(identity Identity, c Candidate, closure closureResolution) (title, body string, err error) {
-	prose := c.Body
-	parts := make([]string, 0, 7)
-	// The source-issue reference is a publisher-owned section at the head of
-	// the body, so the human merge gate reads how the pull request refers to
-	// its source issue directly under the title, where a PR template asks for
-	// the close keyword, without reading the diff (#1419 Part D, #1540). It
-	// heads the body rather than being spliced into an authored section: the
-	// publisher never sees the target's template, and a splice would need a
-	// Markdown parser to keep the keyword out of a code fence.
+	parts := make([]string, 0, 6)
+	// The source-issue reference is a publisher-owned section the human merge
+	// gate reads without the diff (#1419 Part D, #1540). It closes the prose's
+	// opening Why section, where a PR template asks for the close keyword,
+	// only when placeSourceReference can show GitHub will render it as prose
+	// there; otherwise it heads the body (#3022). A misplaced close keyword
+	// closes nothing while the body shows it, so every placement the rule
+	// can't show safe falls back to the head.
 	sourceReference, err := renderSourceReference(closure)
 	if err != nil {
 		return "", "", err
 	}
-	if sourceReference != "" {
-		parts = append(parts, sourceReference)
-	}
-	if prose != "" {
-		parts = append(parts, prose)
+	if opening := placeSourceReference(sourceReference, c.Body); opening != "" {
+		parts = append(parts, opening)
 	}
 	report, artifact, err := candidateVerificationReport(c)
 	if err != nil {

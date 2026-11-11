@@ -215,14 +215,13 @@ func TestSourceReferenceGolden(t *testing.T) {
 	}
 }
 
-// TestDesiredPRContentPlacesSourceReferenceFirst: the source-reference
-// section heads the body, above the authored prose and Verification, so the
-// person merging reads the close reference under the title (#1540); with no
-// reference the prose leads as before.
-func TestDesiredPRContentPlacesSourceReferenceFirst(t *testing.T) {
+// TestDesiredPRContentPlacesSourceReference: the source-reference section
+// closes an opening Why section (#3022) and otherwise heads the body (#1540),
+// above Verification either way; its first paragraph is the close reference,
+// with no heading between them (#1553). With no reference the prose leads.
+func TestDesiredPRContentPlacesSourceReference(t *testing.T) {
 	t.Parallel()
 	c, _ := verificationFixture(t)
-	c.Title, c.Body = "Placement", "## Why\n\nAuthored prose."
 	identity, err := DeriveIdentity(IdentityInput{
 		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: c.HeadSHA,
 		ArtifactDigests: []domain.Digest{c.Artifacts[0].Digest},
@@ -231,37 +230,39 @@ func TestDesiredPRContentPlacesSourceReferenceFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	closes := closureResolution{outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses}, target: 7}
-	_, body, err := desiredPRContent(identity, c, closes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The section opens the body and its first paragraph is the close
-	// reference, with no heading between them (#1553).
-	if !strings.HasPrefix(body, sourceReferenceOpenMarker+"\n\nCloses #7\n\n") {
-		t.Fatalf("body does not open with the source-reference lead line:\n%s", body)
-	}
-	if strings.Contains(body, "## Source Issue") {
-		t.Fatalf("body carries the retired source-reference heading:\n%s", body)
-	}
-	order := []string{
-		sourceReferenceOpenMarker, "Closes #7", sourceReferenceCloseMarker,
-		"## Why", "## Verification", identity.Marker(),
-	}
-	last := -1
-	for _, want := range order {
-		at := strings.Index(body, want)
-		if at <= last {
-			t.Fatalf("%q at %d, want after %d:\n%s", want, at, last, body)
+	section := sourceReferenceOpenMarker + "\n\nCloses #7\n\n" + sourceReferenceCloseMarker
+	for name, tt := range map[string]struct{ prose, opening string }{
+		"inside Why": {
+			prose:   "## Why\n\nAuthored prose.\n\n## What\n\nChange.",
+			opening: "## Why\n\nAuthored prose.\n\n" + section + "\n\n## What\n\nChange.\n\n",
+		},
+		"at the head": {
+			prose:   "Authored prose.",
+			opening: section + "\n\nAuthored prose.\n\n",
+		},
+	} {
+		c.Title, c.Body = "Placement", tt.prose
+		_, body, err := desiredPRContent(identity, c, closes)
+		if err != nil {
+			t.Fatal(err)
 		}
-		last = at
-	}
-
-	_, plain, err := desiredPRContent(identity, c, closureResolution{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(plain, c.Body) || strings.Contains(plain, sourceReferenceMarkerName) {
-		t.Fatalf("reference-free body does not lead with the prose:\n%s", plain)
+		if !strings.HasPrefix(body, tt.opening) {
+			t.Fatalf("%s: body does not open with %q:\n%s", name, tt.opening, body)
+		}
+		if strings.Contains(body, "## Source Issue") {
+			t.Fatalf("%s: body carries the retired source-reference heading:\n%s", name, body)
+		}
+		verification := strings.Index(body, "## Verification")
+		if verification < strings.Index(body, sourceReferenceCloseMarker) || verification > strings.Index(body, identity.Marker()) {
+			t.Fatalf("%s: sections out of order:\n%s", name, body)
+		}
+		_, plain, err := desiredPRContent(identity, c, closureResolution{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(plain, c.Body) || strings.Contains(plain, sourceReferenceMarkerName) {
+			t.Fatalf("%s: reference-free body does not lead with the prose:\n%s", name, plain)
+		}
 	}
 }
 
