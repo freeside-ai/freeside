@@ -532,6 +532,9 @@ directory named before it in the same bullet. All under `daemon/`:
   setup token a review admission runs with),
   `internal/daemoncompose/auth_adopt.go` (`ValidReviewLaunchModel`, the
   model shape a review admission accepts),
+  `internal/daemoncompose/model_discovery.go` (reads setup tokens and
+  Codex probe credentials and hands them to the probe containers that
+  discover each enrollment's models),
   `internal/exec/claude/spec.go` (the credential mount),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
   `internal/exec/capability.go`, and the `CredentialMode` and
@@ -672,6 +675,8 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/domain/generation_integrity.go`,
   `internal/signet/codex_reenrollment_recovery.go`,
   `internal/operations/credential_integrity.go`,
+  `internal/daemoncompose/credential_integrity.go` (the live probe that
+  reads setup-token volumes and Codex stores),
   `internal/daemoncompose/judgment_credential.go`, and in
   `cmd/freesided/` the files `auth*.go`, `credential_*.go`,
   `enroll_codex.go`, and `renew_codex.go`.
