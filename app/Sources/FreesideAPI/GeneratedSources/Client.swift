@@ -27,6 +27,13 @@ import HTTPTypes
 /// UTC `date-time` strings; durations are int64 nanoseconds; identifiers
 /// and digests are opaque non-empty strings.
 ///
+/// Responses tolerate added fields; requests don't. An object schema that
+/// a response can reach leaves `additionalProperties` open, so a client
+/// built from an older contract ignores a field a newer daemon adds. An
+/// object schema that only requests use sets it to false, and the daemon
+/// rejects an unknown field anywhere in a request. The API lint step
+/// enforces both rules (api/README.md).
+///
 public struct Client: APIProtocol {
     /// The underlying HTTP client.
     private let client: UniversalClient

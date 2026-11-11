@@ -27,6 +27,13 @@ info:
     required and marks Go pointer fields nullable. Timestamps are RFC3339
     UTC `date-time` strings; durations are int64 nanoseconds; identifiers
     and digests are opaque non-empty strings.
+
+    Responses tolerate added fields; requests don't. An object schema that
+    a response can reach leaves `additionalProperties` open, so a client
+    built from an older contract ignores a field a newer daemon adds. An
+    object schema that only requests use sets it to false, and the daemon
+    rejects an unknown field anywhere in a request. The API lint step
+    enforces both rules (api/README.md).
   contact:
     name: Freeside
     url: https://github.com/freeside-ai/freeside
@@ -1226,7 +1233,6 @@ components:
         no sync metadata of its own. A client renders it as a standing indicator and
         never infers the state from attention items: acknowledging or
         dismissing an item does not change it.
-      additionalProperties: false
       required: [admission, stops]
       properties:
         admission:
@@ -1279,7 +1285,6 @@ components:
     UnattendedStop:
       type: object
       description: One stop that closes unattended admission.
-      additionalProperties: false
       required: [kind, item_id, command_id, since]
       properties:
         kind:
@@ -1318,7 +1323,6 @@ components:
         transaction, so a new reading reaches a client through the revision
         and heartbeat path with no task activity. A pool with no record yet
         carries the snapshot's revision and entity_version 0.
-      additionalProperties: false
       required: [as_of_revision, entity_version, pool]
       properties:
         as_of_revision:
@@ -1345,7 +1349,6 @@ components:
         a client only lapses by each mark's resets_at.
         Credential expiry, billing renewal, and reset credit are not recorded,
         so no field carries them.
-      additionalProperties: false
       required:
         - id
         - provider
@@ -1432,7 +1435,6 @@ components:
     CollectionAttempt:
       type: object
       description: The collector's last attempt to read the pool, and how it ended.
-      additionalProperties: false
       required: [status, at, detail]
       properties:
         status:
@@ -1454,7 +1456,6 @@ components:
     UsagePoolEnrollment:
       type: object
       description: One enrollment whose identity meters the pool, with its recorded availability answer.
-      additionalProperties: false
       required: [enrollment_id, auth_identity_id, harness_client, availability]
       properties:
         enrollment_id:
@@ -1474,7 +1475,6 @@ components:
     UsageAvailability:
       type: object
       description: An enrollment's availability answer and when it was observed.
-      additionalProperties: false
       required: [answer, observed_at]
       properties:
         answer:
@@ -1486,7 +1486,6 @@ components:
     UsageModelWindow:
       type: object
       description: One provider window that limits one route model id.
-      additionalProperties: false
       required: [route_model_id, window]
       properties:
         route_model_id:
@@ -1508,7 +1507,6 @@ components:
         enrollment generation. Unknown stays unknown: a reading with a status
         alone is complete. used_percent and quantity are the provider's two
         report forms, at most one set; unit is set exactly when quantity is.
-      additionalProperties: false
       required:
         - window
         - enrollment_id
@@ -1580,7 +1578,6 @@ components:
         One reason the pool's record holds a window exhausted, and what says
         so. invocation_id is set exactly for provider_refusal,
         reading_observed_at exactly for usage_reading.
-      additionalProperties: false
       required: [window, source, invocation_id, reading_observed_at, resets_at, set_at]
       properties:
         window:
@@ -1613,7 +1610,6 @@ components:
         The current routing policy revision (plan §5.4 routing policy).
         as_of_revision is the snapshot's revision; entity_version is the
         policy revision, which every change advances.
-      additionalProperties: false
       required: [as_of_revision, entity_version, policy]
       properties:
         as_of_revision:
@@ -1642,7 +1638,6 @@ components:
         revision stored since #2736 orders enrollment ids, and an older one
         the agent names it recorded. The daemon never translates one into
         the other.
-      additionalProperties: false
       required: [role, enrollments, agents]
       properties:
         role:
@@ -1691,7 +1686,6 @@ components:
         pool a new task runs on, and so which enrollment runs it when the
         operator chose none for the role. A role absent from it keeps lineup
         behaviour. A revision is never edited.
-      additionalProperties: false
       required: [revision, roles, source, set_by, set_at, lineup_revision, drain_first_account]
       properties:
         revision:
@@ -1741,7 +1735,6 @@ components:
         whose enrollment it holds and whose model and effort that
         enrollment's discovery serves; admission also refuses a model its
         route's model list in the tree does not admit.
-      additionalProperties: false
       required: [lineup_revision, enrollments, lineup]
       properties:
         lineup_revision:
@@ -1792,7 +1785,6 @@ components:
         tell "not discovered yet" from "offers nothing". The daemon accepts a
         selection on an enrollment with no discovery record and checks it
         when it admits the role.
-      additionalProperties: false
       required: [enrollment_id, harness_client, discovery]
       properties:
         enrollment_id:
@@ -1813,7 +1805,6 @@ components:
         recorded them. A selection on the enrollment must name one of these
         models and, unless its effort is harness_default, one of that model's
         effort levels.
-      additionalProperties: false
       required: [harness_build, observed_at, models]
       properties:
         harness_build:
@@ -1831,7 +1822,6 @@ components:
     DiscoveredModel:
       type: object
       description: One model an enrollment's harness reported.
-      additionalProperties: false
       required: [id, resolved_model, display_name, effort_levels]
       properties:
         id:
@@ -1861,7 +1851,6 @@ components:
     AgentCatalogLineupLine:
       type: object
       description: The selection the lineup binds to one role.
-      additionalProperties: false
       required: [role, selection]
       properties:
         role:
@@ -1886,7 +1875,6 @@ components:
       description: >
         Store-authenticated, digest-bound proposal facts matched to one exact
         attention-item snapshot before the client enables a decision.
-      additionalProperties: false
       required:
         - as_of_revision
         - entity_version
@@ -1925,7 +1913,6 @@ components:
     TaskProposalRevisionFacts:
       type: object
       description: One digest-bound, bounded side of a proposal revision comparison.
-      additionalProperties: false
       required: [proposal_digest, intent, expected_cost_units, scope]
       properties:
         proposal_digest:
@@ -1947,7 +1934,6 @@ components:
         Exactly one kind member (source_issue_closure, follow_up_filing, or
         image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and
         policy identities stay server-side, as they do for task_proposal.
-      additionalProperties: false
       required:
         - as_of_revision
         - entity_version
@@ -2011,7 +1997,6 @@ components:
         Approving the card records the adoption in the daemon's own image
         policy, for the card's repository only. Mirrors
         domain.ImagePolicyAdoptionParameters plus the repository.
-      additionalProperties: false
       required: [repository, refusal_record_id, recipe_digest, registry_authorities]
       properties:
         repository:
@@ -2037,7 +2022,6 @@ components:
     EffectProposalRevisionFacts:
       type: object
       description: One digest-bound, bounded side of an effect-proposal revision.
-      additionalProperties: false
       required: [proposal_digest, source_issue_closure]
       properties:
         proposal_digest:
@@ -2045,7 +2029,6 @@ components:
         source_issue_closure:
           nullable: true
           type: object
-          additionalProperties: false
           required: [resolves]
           properties:
             resolves:
@@ -2060,7 +2043,6 @@ components:
         Bounded source-issue-closure facts: the daemon-resolved target, the
         closure delta and its trust, and the prospective merge the approval binds
         to. No subject handle or policy identity.
-      additionalProperties: false
       required: [target, resolves, provenance, origin, merge]
       properties:
         target:
@@ -2079,7 +2061,6 @@ components:
       description: >
         The exact merge a closure approval binds to: the publication identity,
         the candidate head, and the base ref and SHA the pull request targets.
-      additionalProperties: false
       required: [publication_identity, candidate_head_sha, base_ref, base_sha]
       properties:
         publication_identity:
@@ -2100,7 +2081,6 @@ components:
         finding the filing answers. No subject handle, policy identity, or
         filing identity; which credential files the issue is chosen at
         dispatch.
-      additionalProperties: false
       required: [repository, labels, milestone, title, body, source]
       properties:
         repository:
@@ -2137,7 +2117,6 @@ components:
         in or an image-policy adoption widens. repository_id is the forge
         identity; repo is the project's current name for it, so a rename
         after the proposal was made shows the new name.
-      additionalProperties: false
       required: [repo, repository_id]
       properties:
         repo:
@@ -2155,7 +2134,6 @@ components:
         under and the verdict. The daemon screens the text again under the
         recorded ruleset on every read, so a served record always carries the
         passed verdict.
-      additionalProperties: false
       required: [text, ruleset, verdict]
       properties:
         text:
@@ -2174,7 +2152,6 @@ components:
         disposition or a separate-work verdict. The link is served as recorded:
         if a later round fixes or re-routes the finding, the facts stay
         readable and the daemon refuses approval.
-      additionalProperties: false
       required: [finding_id, adjudication_digest, kind]
       properties:
         finding_id:
@@ -2235,7 +2212,6 @@ components:
         that harness names it, or harness_default to send none. It names no
         agent. Each value is a launch option: at most 256 bytes, with no
         whitespace or control character, and not starting with "-".
-      additionalProperties: false
       required: [enrollment_id, model_id, effort]
       properties:
         enrollment_id:
@@ -2258,7 +2234,6 @@ components:
         exactly one of agent and selection is non-null. A choice recorded
         since #2598 holds its selection; one recorded before it holds the
         agent name the command named then.
-      additionalProperties: false
       required: [role, agent, selection]
       properties:
         role:
@@ -2324,7 +2299,6 @@ components:
         limits: an image (an image media_type) at most 10 MiB, any other
         file at most 32 MiB, and per task at most 100 MiB in total and
         1,000 attachments.
-      additionalProperties: false
       required: [digest, name, media_type, claimed_media_type, size_bytes]
       properties:
         digest:
@@ -2391,7 +2365,6 @@ components:
         One candidate pool's known weekly reset for its agent's model, as the
         router ranked it: the window that resets soonest, the reset, and when
         the reading that reported it was observed.
-      additionalProperties: false
       required: [pool, window, resets_at, observed_at]
       properties:
         pool:
@@ -2415,7 +2388,6 @@ components:
         pool's window for the candidate's model. Exactly one of enrollment and
         agent is non-null: a mark written since #2736 names the enrollment,
         and an older one the agent it recorded.
-      additionalProperties: false
       required: [agent, enrollment, pool, window, source, marked_at, resets_at]
       properties:
         agent:
@@ -2466,7 +2438,6 @@ components:
         same shape at tier policy_order with an empty ranked_by; its
         passed_over names the agent the move left, with the parked hold's
         mark, when the policy orders that agent, and is null otherwise.
-      additionalProperties: false
       required: [policy_revision, tier, pool, ranked_by, passed_over]
       properties:
         policy_revision:
@@ -2497,7 +2468,6 @@ components:
         selection, and an older one the agent name it recorded. The daemon
         never translates one into the other. provenance is set exactly when
         source is router or alternate_agent_move.
-      additionalProperties: false
       required: [id, task_id, role, agent, selection, version, predecessor_id, source, set_by, set_at, provenance]
       properties:
         id:
@@ -2562,7 +2532,6 @@ components:
     TaskProposalScope:
       type: object
       description: Bounded aggregate scope facts with no paths or target identities.
-      additionalProperties: false
       required: [component_count, declared_path_count, touches_control_plane]
       properties:
         component_count:
@@ -2652,7 +2621,6 @@ components:
     TaskSnapshot:
       type: object
       description: One task and its derived summary at a single server revision.
-      additionalProperties: false
       required: [as_of_revision, entity_version, task]
       properties:
         as_of_revision:
@@ -2675,7 +2643,6 @@ components:
         determines WIP membership; wip is the authoritative slot state, derived
         from lifecycle facts and bound confirmed cancellation. Source is null only for legacy or demo
         work without a recoverable intake reference.
-      additionalProperties: false
       required: [id, project_id, display_names, source, created_at, last_activity_at,
                  lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts, cancellation,
                  task_lines, attachments]
@@ -2771,7 +2738,6 @@ components:
     TaskCancellationRun:
       description: One daemon-derived run and its campaign, including a queued run.
       type: object
-      additionalProperties: false
       required: [run_id, campaign_id]
       properties:
         run_id:
@@ -2785,7 +2751,6 @@ components:
     TaskCancellationTarget:
       description: Ordered task ownership and the current work episode at acceptance.
       type: object
-      additionalProperties: false
       required: [task_id, project_id, episode_ordinal, runs]
       properties:
         task_id:
@@ -2806,7 +2771,6 @@ components:
 
     TaskCancellationAcknowledgement:
       type: object
-      additionalProperties: false
       description: >
         Daemon-only evidence. Confirmed asserts all owned executions are quiescent
         and further launches fenced. No client command accepts this record.
@@ -2830,7 +2794,6 @@ components:
 
     TaskCancellation:
       type: object
-      additionalProperties: false
       description: >
         Durable task fence, independent of lifecycle and WIP. Runtime consumers
         must fence admission, descendants and publication, reconcile ownership
@@ -2865,7 +2828,6 @@ components:
     TaskLifecycleFact:
       type: object
       description: One recorded task lifecycle event.
-      additionalProperties: false
       required: [kind, run_id, binding_unit_id, recorded_at]
       properties:
         kind:
@@ -2886,7 +2848,6 @@ components:
     TaskPosition:
       type: object
       description: The newest run, its latest stage, and its current review round and hold.
-      additionalProperties: false
       required: [run_id, stage, round, hold_reason]
       properties:
         run_id:
@@ -2919,7 +2880,6 @@ components:
     ArtifactSpecificationSource:
       type: object
       description: A digest-addressed, registered submission artifact.
-      additionalProperties: false
       required: [kind, work_item_artifact_id, work_item_artifact_digest, issue_subject]
       properties:
         kind:
@@ -2942,7 +2902,6 @@ components:
     IssueSpecificationSource:
       type: object
       description: An issue subject identified independently of its observed title and body.
-      additionalProperties: false
       required: [kind, work_item_artifact_id, work_item_artifact_digest, issue_subject]
       properties:
         kind:
@@ -2960,7 +2919,6 @@ components:
     IssueSubjectRef:
       type: object
       description: The repository identity and issue number of an intake subject.
-      additionalProperties: false
       required: [repo, repository_id, issue_number]
       properties:
         repo:
@@ -2992,7 +2950,6 @@ components:
         Recorded task history computed under one server revision. The current
         name appears once as a source-labeled claim; no name history is inferred.
         Detailed invocation observations, review evidence, and cost remain on the run timeline.
-      additionalProperties: false
       required: [as_of_revision, as_of, task_id, project_id, name, events, sections]
       properties:
         as_of_revision:
@@ -3053,7 +3010,6 @@ components:
     TaskTimelineSection:
       type: object
       description: A campaign's recorded events and runs, or the legacy run group.
-      additionalProperties: false
       required: [campaign_id, events, runs]
       properties:
         campaign_id:
@@ -3080,7 +3036,6 @@ components:
       description: >
         A run header and its daemon observations. The run id opens the full
         run timeline. Lineage and role are null for legacy runs without a campaign.
-      additionalProperties: false
       required: [run_id, role, attempt_number, attempt_reason, parent_run_id, superseded_by, milestones, hold, events]
       properties:
         run_id:
@@ -3164,7 +3119,6 @@ components:
         triage record (plan §5.13), at its recorded_at. Its reason is
         advisory, for display only.
         All other details are null. Events are observations, never authority.
-      additionalProperties: false
       required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review, line, triage]
       properties:
         milestone:
@@ -3239,7 +3193,6 @@ components:
     TaskEventReview:
       type: object
       description: Recorded review identity and result, never parsed from reviewer output.
-      additionalProperties: false
       required: [invocation_id, round, head_sha, base_sha, outcome, failure]
       properties:
         invocation_id:
@@ -3266,7 +3219,6 @@ components:
     TaskEventVerification:
       type: object
       description: Historical detailed-readiness decision binding, not current readiness.
-      additionalProperties: false
       required: [item_id, class, head_sha, base_sha]
       properties:
         item_id:
@@ -3288,7 +3240,6 @@ components:
         An external review re-entry: the ready card it withdrew, the admitted
         finding that started the cycle with its reviewer's forge login and the
         published head it was left on, and the review round the cycle opens.
-      additionalProperties: false
       required: [item_id, finding_id, reviewer_login, round, head_sha]
       properties:
         item_id:
@@ -3317,7 +3268,6 @@ components:
         version this one supersedes, in that version's encoding; both are
         null for version 1 and after a cleared version. provenance is the
         router's citation, null for an operator line.
-      additionalProperties: false
       required: [line_id, role, agent, selection, version, source, superseded_agent, superseded_selection, provenance]
       properties:
         line_id:
@@ -3363,7 +3313,6 @@ components:
         escalates, and escalated says whether this one did. reason is the
         triager's reason, or the daemon's fallback code for a failure, and
         null when there is none; it is advisory and never a decision.
-      additionalProperties: false
       required: [outcome, tier, reason, escalated]
       properties:
         outcome:
@@ -3414,7 +3363,6 @@ components:
         A computed, typed daemon-observation timeline for one run. Review facts
         are separate from retained reviewer output, which has its own
         authenticated route. Stage labels come from the Run aggregate.
-      additionalProperties: false
       required:
         [as_of_revision, as_of, run_id, milestones, hold, invocations,
          completion, review, billable_cost_so_far, admissions]
@@ -3504,7 +3452,6 @@ components:
     RunReviewFacts:
       type: "object"
       description: Primary review history in ascending round order.
-      additionalProperties: false
       required: ["rounds"]
       properties:
         rounds:
@@ -3518,7 +3465,6 @@ components:
     ReviewSource:
       type: "object"
       description: "Origin of daemon-held facts. Today kind is freeside_invoked and status is null. Open strings reserve future external sources and quarantined/promoted status."
-      additionalProperties: false
       required: ["kind", "status"]
       properties:
         kind:
@@ -3531,7 +3477,6 @@ components:
     ReviewRoundDispositions:
       type: "object"
       description: Counts of immutable dispositions and findings still open in one round.
-      additionalProperties: false
       required: ["fixed", "declined", "deferred", "open"]
       properties:
         fixed:
@@ -3549,7 +3494,6 @@ components:
     ReviewRoundFailure:
       type: "object"
       description: The daemon-recorded failure class and diagnostic for one review round.
-      additionalProperties: false
       required: ["class", "reason"]
       properties:
         class:
@@ -3564,7 +3508,6 @@ components:
     ReviewRoundEvidence:
       type: "object"
       description: Completion evidence identity and availability of its retained reviewer output.
-      additionalProperties: false
       required: ["completion_evidence", "availability"]
       properties:
         completion_evidence:
@@ -3580,7 +3523,6 @@ components:
     ReviewRoundSubject:
       type: "object"
       description: "What a review round reviewed: the invocation whose recorded export is the only one in the run that produced the round's head, classified by that invocation's authenticated dispatch intent."
-      additionalProperties: false
       required: ["kind", "invocation_id", "remediates_round"]
       properties:
         kind:
@@ -3596,7 +3538,6 @@ components:
     ReviewRoundRemediation:
       type: "object"
       description: "The remediation this round's findings adjudication started, bound to this round's review invocation, base and head."
-      additionalProperties: false
       required: ["invocation_id", "finding_ids", "decided_at"]
       properties:
         invocation_id:
@@ -3618,7 +3559,6 @@ components:
     RunReviewRound:
       type: "object"
       description: "One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean. Null subject means the daemon cannot prove which invocation produced the reviewed head; it never means implementation."
-      additionalProperties: false
       required: ["round", "invocation_id", "state", "source", "base_sha", "head_sha", "requested_at", "completed_at", "provider", "model_configuration", "outcome", "findings_count", "dispositions", "failure", "retry_pending", "evidence", "subject", "remediation"]
       properties:
         round:
@@ -3682,7 +3622,6 @@ components:
     ReviewEvidence:
       type: "object"
       description: "Private retained reviewer output, re-authenticated on read. Labeled agent claims, never publishable verifier evidence. Bytes obey the review collection limits."
-      additionalProperties: false
       required: ["source", "run_id", "round", "invocation_id", "content_kind", "head_binding", "source_head_sha", "sensitivity_class", "publish_eligible", "availability", "collection_evidence", "events", "result", "exit_status"]
       properties:
         source:
@@ -3738,7 +3677,6 @@ components:
         unit's completion criterion, the merge commit, the bound issue when
         the criterion names one, and the instant the daemon recorded the
         completion. The milestone itself carries none of these.
-      additionalProperties: false
       required: [pr_number, merge_commit_sha, bound_issue, recorded_at]
       properties:
         pr_number:
@@ -3824,7 +3762,6 @@ components:
         domain.QuotaWindowHold: the pool and window a provider refused on and
         the mark that keeps the parked attempt waiting until its reset, and
         the agents the operator may move the task to instead.
-      additionalProperties: false
       required: [pool, window, source, invocation_id, reading_observed_at, resets_at, set_at, alternate_agents]
       properties:
         pool:
@@ -3872,7 +3809,6 @@ components:
         domain.MachineCapacityHold: the launch's reservation (declared memory
         plus the runtime's per-VM overhead), what launches already hold, the
         instance's budget, and how many waiting launches are granted first.
-      additionalProperties: false
       required: [reservation_mib, reserved_mib, budget_mib, ahead]
       properties:
         reservation_mib:
@@ -3895,7 +3831,6 @@ components:
         domain.ImageUpkeepHold: what the run waits on and, past a rebuild,
         the upkeep refusal record and the item or task that answers it, each
         by reference.
-      additionalProperties: false
       required: [pending, refusal_record_id, proposal_item_id, maintenance_task_id]
       properties:
         pending:
@@ -3958,7 +3893,6 @@ components:
         refusal which part of the selection the daemon does not serve. The
         agent is a name from the admitted agent tree; refusal error text never
         appears here.
-      additionalProperties: false
       required: [check, agent, launch_stage, launch_digest, unserved]
       properties:
         check:
@@ -3995,7 +3929,6 @@ components:
         The part of a refused selection the daemon does not serve, mirrored
         from domain.AdmissionUnserved. It never carries what the operator
         typed, since a credential can be pasted into a selection.
-      additionalProperties: false
       required: [part, enrollment_id]
       properties:
         part:
@@ -4105,7 +4038,6 @@ components:
       description: >
         One append-only, first-observation-wins daemon milestone. Detail
         fields are kind-scoped and use explicit null when absent.
-      additionalProperties: false
       required: [run_id, kind, invocation_id, terminal, outcome, reason, recorded_at]
       properties:
         run_id:
@@ -4136,7 +4068,6 @@ components:
     RunHold:
       type: object
       description: The daemon's current typed hold observation for one run.
-      additionalProperties: false
       required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, quota_window, machine_capacity, first_observed_at, last_observed_at]
       properties:
         run_id:
@@ -4196,7 +4127,6 @@ components:
     InvocationObservation:
       type: object
       description: The daemon's latest observation of one run invocation.
-      additionalProperties: false
       required: [invocation_id, run_id, status, live, observed_at]
       properties:
         invocation_id:
@@ -4466,7 +4396,6 @@ components:
         Whether it is safe to restart the daemon now (mirrors
         domain.RestartReadiness). ready is true exactly when drain is
         non-null and blockers is empty.
-      additionalProperties: false
       required: [ready, drain, blockers, as_of]
       properties:
         ready:
@@ -4506,7 +4435,6 @@ components:
         An update drain in force: new launches wait for the daemon to
         restart on a new build instead of starting work the update would
         cancel.
-      additionalProperties: false
       required: [since, forced]
       properties:
         since:
@@ -4520,7 +4448,6 @@ components:
     RestartBlocker:
       type: object
       description: How many of one kind of running work a restart would cut short.
-      additionalProperties: false
       required: [kind, count]
       properties:
         kind:
@@ -4557,7 +4484,6 @@ components:
         revision gap, a changed verdict, or a changed lineup_revision tells
         the client to bootstrap, never to adopt state from this payload.
       required: [sync_epoch, revision, unattended_operation, lineup_revision]
-      additionalProperties: false
       properties:
         sync_epoch:
           type: string
@@ -4684,7 +4610,11 @@ components:
         operator commands refresh_usage, reassign_collector, change_task_line,
         set_routing_policy, and move_parked_task. New command
         types are typed as the signet/saddle pair exercises the surface, via
-        kind:contract changes.
+        kind:contract changes. The daemon rejects an unknown field anywhere
+        in a request, including inside the schemas that responses also use
+        (AlternateAgentChoice, AlternativeChoice, TaskLineSelection,
+        TaskProposalScope), which leave additionalProperties open only so
+        that a client tolerates fields a newer daemon adds to responses.
       required:
         - command_id
         - device_id
@@ -4791,7 +4721,6 @@ components:
 
     StopTaskRecord:
       type: object
-      additionalProperties: false
       description: >
         Immutable decoded request and cancellation snapshot at acceptance.
         Exact replay returns this receipt and its original revision, even after
@@ -4949,7 +4878,6 @@ components:
 
     UsageRefreshRecord:
       type: object
-      additionalProperties: false
       description: The receipt that a refresh was requested for the pool.
       required: [kind, command_id, device_id, pool, requested_at]
       properties:
@@ -4971,7 +4899,6 @@ components:
 
     CollectorReassignmentRecord:
       type: object
-      additionalProperties: false
       description: The receipt that the pool's collector was reassigned.
       required: [kind, command_id, device_id, pool, collector, recorded_at]
       properties:
@@ -4996,7 +4923,6 @@ components:
 
     TaskLineChangeRecord:
       type: object
-      additionalProperties: false
       description: >
         The receipt of a line change: the request, whether it recorded a new
         version, and the role's current line after it. The request holds at
@@ -5040,7 +4966,6 @@ components:
 
     RoutingPolicyChangeRecord:
       type: object
-      additionalProperties: false
       description: >
         The receipt of a routing policy change: the request's expected
         revision, whether it recorded a new revision, and the policy current
@@ -5067,7 +4992,6 @@ components:
 
     ParkedTaskMoveRecord:
       type: object
-      additionalProperties: false
       description: >
         The receipt of a parked task's move: the request, the record of the
         operator's choice, and the task lines the move set, each citing the
@@ -5098,7 +5022,6 @@ components:
 
     AlternateAgentRetry:
       type: object
-      additionalProperties: false
       description: >
         An operator's choice to run a role under another enrollment after a
         quota, credential, or capacity failure (plan §5.4 admission step 5):
@@ -5144,7 +5067,6 @@ components:
 
     AlternateAgentOffer:
       type: object
-      additionalProperties: false
       description: >
         One enrollment the daemon offers to run a failed role under: its id,
         the usage pool it draws on, its harness and the implementer lineup's
@@ -5174,7 +5096,6 @@ components:
         model_id or effort is the implementer lineup line's; an enrollment
         with no recorded catalog takes only the lineup's. Each value is a
         launch option, as in TaskLineSelection.
-      additionalProperties: false
       required: [enrollment_id, model_id, effort]
       properties:
         enrollment_id:
@@ -5193,11 +5114,18 @@ components:
           nullable: true
 
     CommandRejection:
-      description: A command conflict with the replacement state it was refused against.
+      description: >
+        A command conflict with the replacement state it was refused against.
+        The arms carry no discriminator, so a client tries them in the order
+        listed and takes the first that decodes. Responses tolerate added
+        fields, so an arm whose required fields are a subset of another's
+        matches that other's bodies too: TaskLineChangeRejection precedes
+        StaleTaskRejection for that reason, and a new arm goes before any
+        arm whose required fields its own include.
       oneOf:
         - $ref: "#/components/schemas/StaleVersionRejection"
-        - $ref: "#/components/schemas/StaleTaskRejection"
         - $ref: "#/components/schemas/TaskLineChangeRejection"
+        - $ref: "#/components/schemas/StaleTaskRejection"
         - $ref: "#/components/schemas/RoutingPolicyRejection"
 
     TaskLineChangeRejection:
@@ -5205,7 +5133,6 @@ components:
         A line change refused because an attempt of the role runs, with the
         current task projection and epoch.
       type: object
-      additionalProperties: false
       required: [message, reason, replacement_task, sync_epoch]
       properties:
         message:
@@ -5225,7 +5152,6 @@ components:
         current policy revision, with the current policy (null when none was
         ever set).
       type: object
-      additionalProperties: false
       required: [message, current_policy]
       properties:
         message:
@@ -5238,7 +5164,6 @@ components:
     StaleTaskRejection:
       description: Current task projection and epoch for an obsolete prepared Stop.
       type: object
-      additionalProperties: false
       required: [message, replacement_task, sync_epoch]
       properties:
         message:
@@ -5516,7 +5441,6 @@ components:
         - attachments
         - answer_route
         - decision_evidence
-      additionalProperties: false
       properties:
         kind:
           type: string
@@ -5633,7 +5557,6 @@ components:
         - task_id
         - specification_run_id
         - name
-      additionalProperties: false
       properties:
         kind:
           type: string
@@ -5706,7 +5629,6 @@ components:
         an authorization input. An empty action_surface_digest is the intended
         unclassified case, not a loss.
       required: [action_surface_digest, recommended_action, recommendation_source]
-      additionalProperties: false
       properties:
         action_surface_digest:
           type: string
@@ -5736,7 +5658,6 @@ components:
         server revision the transaction applied at. A retry of the same
         command_id returns this exact value (sync test 4).
       required: [record, revision]
-      additionalProperties: false
       properties:
         record:
           oneOf:
@@ -5804,7 +5725,6 @@ components:
         deliberately not disclosed here (plan §4 owns them, behind
         authentication).
       required: [status, contract_digest, version, started_at]
-      additionalProperties: false
       properties:
         status:
           type: string
@@ -5891,7 +5811,6 @@ components:
         would not. Returned by POST /pairing/preview and carried on every
         PairingGrant.
       required: [host_display_name, code_expires_at, connection_mode, granted_scope]
-      additionalProperties: false
       properties:
         host_display_name:
           type: string
@@ -5945,7 +5864,6 @@ components:
         The daemon stores only the token's digest, so a lost token means
         revoking the device and pairing again.
       required: [device_token, device, ntfy_subscription, facts]
-      additionalProperties: false
       properties:
         device_token:
           type: string
@@ -5987,7 +5905,6 @@ components:
         hints. The topic is a stable per-device capability derived under a
         daemon-held key; it must be kept private and is never client-computable.
       required: [server_url, topic]
-      additionalProperties: false
       properties:
         server_url:
           type: string
@@ -6106,7 +6023,6 @@ components:
         The waiver that lets a required failure stay ready (plan §6; mirrors
         domain.ReadinessWaiver): its identity, the dimension it covers, the
         authority that granted it, and when.
-      additionalProperties: false
       required: [id, dimension, authority, granted_at]
       properties:
         id:
@@ -6129,7 +6045,6 @@ components:
         when the state is passed; waiver is present only on a required,
         waiver-eligible failure or not_run. The client renders the entry
         from these typed fields and derives no reason from the verdict class.
-      additionalProperties: false
       required: [requirement_key, check_class, kind, state, proof_recipe_digest, waiver]
       properties:
         requirement_key:
@@ -6154,7 +6069,6 @@ components:
     ReadinessBoundBase:
       type: object
       description: The base the evaluation's proofs were bound to.
-      additionalProperties: false
       required: [base_ref, base_sha]
       properties:
         base_ref:
@@ -6171,7 +6085,6 @@ components:
         domain.ProspectiveMergeIdentity): merge_sha is a merge commit whose
         parents are base_sha then head_sha. head_sha stays the head the
         forge and its reviewers see. The three commits are distinct.
-      additionalProperties: false
       required: [base_sha, head_sha, merge_sha]
       properties:
         base_sha:
@@ -6198,7 +6111,6 @@ components:
         its candidate_head equals pr_head_sha. Clients compare only these
         daemon-supplied coordinates against readiness_invalidation to
         render a stale verdict as stale.
-      additionalProperties: false
       required: [evaluation_set_digest, candidate_head, base, requirements]
       properties:
         evaluation_set_digest:
@@ -6249,7 +6161,6 @@ components:
         - declined
         - deferred
         - outcome
-      additionalProperties: false
       properties:
         round:
           type: integer
@@ -6288,7 +6199,6 @@ components:
         with this round's; the run's first round has no predecessor, so there
         it compares the bound base with the head and equals cumulative. Both
         pairs share one head. These are engine facts, never model output.
-      additionalProperties: false
       required: [cumulative, round]
       properties:
         cumulative:
@@ -6316,7 +6226,6 @@ components:
         records and finding dispositions when review reaches a convergence
         decision or a candidate becomes ready.
       required: [rounds, terminal_outcome]
-      additionalProperties: false
       properties:
         rounds:
           type: array
@@ -6339,7 +6248,6 @@ components:
     DaemonPolicyRecommendationProvenance:
       type: object
       description: The registered daemon rule and canonical input behind a deterministic recommendation.
-      additionalProperties: false
       required: [rule_digest, input_digest]
       properties:
         rule_digest:
@@ -6350,7 +6258,6 @@ components:
     AgentJudgmentRecommendationProvenance:
       type: object
       description: The declared judgment invocation and bound artifact behind an agent recommendation.
-      additionalProperties: false
       required: [judgment_site, invocation_id, artifact_digest]
       properties:
         judgment_site:
@@ -6364,7 +6271,6 @@ components:
     ProjectPolicyRecommendationProvenance:
       type: object
       description: The resolved project policy and authenticated application behind a policy recommendation.
-      additionalProperties: false
       required: [policy_key, resolved_policy_digest, application_digest]
       properties:
         policy_key:
@@ -6377,7 +6283,6 @@ components:
 
     RecommendationProvenance:
       type: object
-      additionalProperties: false
       description: >
         Closed source-specific provenance. Exactly one property is non-null,
         and it must match Recommendation.source. This nullable-property shape
@@ -6400,7 +6305,6 @@ components:
     Recommendation:
       type: object
       description: A daemon-derived lead that selects one action already offered by the attention item.
-      additionalProperties: false
       required: [action, reason, source, provenance, confidence]
       properties:
         action:
@@ -6419,7 +6323,6 @@ components:
 
     DecisionSurfaceRef:
       type: object
-      additionalProperties: false
       description: >
         The daemon-owned epoch and digest identifying this item's current
         structural decision surface. Both fields mirror the authoritative
@@ -6440,7 +6343,6 @@ components:
     DisplayName:
       type: object
       description: One daemon-authored display label and whether it is a name or identifier fallback.
-      additionalProperties: false
       required: [text, source]
       properties:
         text:
@@ -6452,7 +6354,6 @@ components:
     DisplayNames:
       type: object
       description: Human-readable project and work-unit labels for a card or run row.
-      additionalProperties: false
       required: [project, task]
       properties:
         project:
@@ -6463,7 +6364,6 @@ components:
     CostSoFar:
       type: object
       description: Billable cost observations aggregated across completed invocations.
-      additionalProperties: false
       required: [currency, amount, invocations, complete]
       properties:
         currency:
@@ -6539,7 +6439,6 @@ components:
       type: object
       description: The registered capability contract (domain.ClientCapabilityContract).
       required: [device_id, actions, digest]
-      additionalProperties: false
       properties:
         device_id:
           type: string
@@ -6572,7 +6471,6 @@ components:
         - client_capability_digest
         - actions
         - digest
-      additionalProperties: false
       properties:
         device_id:
           type: string
@@ -6662,7 +6560,6 @@ components:
         - occurred_at
         - sequence
         - received_at
-      additionalProperties: false
       properties:
         device_id:
           type: string
@@ -6719,7 +6616,6 @@ components:
     DecisionOption:
       type: object
       description: One enumerated answer to a Decision.
-      additionalProperties: false
       required: [label, tradeoffs]
       properties:
         label:
@@ -6738,7 +6634,6 @@ components:
         why it blocks the work, two to six labeled options, and the agent's
         recommendation, which names one option's label exactly and is an
         agent claim, never a verified fact.
-      additionalProperties: false
       required: [question, why_blocking, options, recommendation]
       properties:
         question:
@@ -6763,7 +6658,6 @@ components:
     ScopeConflictFacts:
       type: object
       description: Untouched required paths outside the run's immutable approved scope, bound to its imported candidate.
-      additionalProperties: false
       required: [paths, declared_paths, head_sha]
       properties:
         paths:
@@ -6784,7 +6678,6 @@ components:
     ScopeDecisionFacts:
       type: object
       description: The durable operator decision to keep approved paths, with the required out-of-scope work still unmet.
-      additionalProperties: false
       required: [paths, declared_paths, head_sha, command_id, answer, decided_at]
       properties:
         paths:
@@ -6819,7 +6712,6 @@ components:
         the specification stage), and the one to eight decisions the human is
         asked to make. The item's Question claim carries the same decisions as
         a content-addressed artifact from the asking invocation.
-      additionalProperties: false
       required: [stage, invocation_id, kind, decisions, scope_conflict]
       properties:
         scope_conflict:
@@ -6853,7 +6745,6 @@ components:
         those; a review admission never records credential mode, egress
         profile, operating mode, or isolation class. Clients render null as
         unavailable.
-      additionalProperties: false
       required:
         - invocation_id
         - kind
@@ -6975,7 +6866,6 @@ components:
     IndependenceEntry:
       type: object
       description: A judging role's lineage relation to one writing role (plan §7).
-      additionalProperties: false
       required: [writing_role, lineage]
       properties:
         writing_role:
@@ -7045,7 +6935,6 @@ components:
         The terminal execution outcome and invocation that failed within a
         workflow stage. cause is present exactly when outcome is failed,
         copied from the recorded outcome, and absent for canceled and lost.
-      additionalProperties: false
       required: [outcome, stage, invocation_id]
       properties:
         outcome:
@@ -7079,7 +6968,6 @@ components:
         exported, while it read that output. The export is the invocation's
         terminal authority, so an item carries these facts or
         ExecutionFailureFacts, never both.
-      additionalProperties: false
       required: [cause, stage, invocation_id]
       properties:
         cause:
@@ -7093,7 +6981,6 @@ components:
     CapabilityManifestOffer:
       type: object
       description: A policy-derived capability manifest offered for an execution retry.
-      additionalProperties: false
       required: [name, egress_profile, digest]
       properties:
         name:
@@ -7120,7 +7007,6 @@ components:
 
     PublishBlockFacts:
       type: object
-      additionalProperties: false
       description: Exactly one of hold_reason or trust_rule is non-null.
       required: [hold_reason, trust_rule]
       properties:
@@ -7136,7 +7022,6 @@ components:
     DiffStats:
       type: object
       description: Prospective change counts bound to the exact base and head revisions.
-      additionalProperties: false
       required: [files_changed, additions, deletions, base_sha, head_sha]
       properties:
         files_changed:
@@ -7158,7 +7043,6 @@ components:
     SpecDiff:
       type: object
       description: A bounded unified line diff and its complete line counts.
-      additionalProperties: false
       required: [lines_added, lines_removed, unified, truncated]
       properties:
         lines_added:
@@ -7177,7 +7061,6 @@ components:
     SpecRevisionComment:
       type: object
       description: One durable operator comment that caused a specification revision.
-      additionalProperties: false
       required: [comment_id, artifact_id, digest, raised_on_item_id, iteration, body]
       properties:
         comment_id:
@@ -7202,7 +7085,6 @@ components:
     SpecAddressalClaim:
       type: object
       description: The agent's claimed response to one known operator comment.
-      additionalProperties: false
       required: [comment_id, response]
       properties:
         comment_id:
@@ -7219,7 +7101,6 @@ components:
         Authenticated facts for a revised specification approval card. Comment
         bodies and claimed addressals are bound to durable artifact digests;
         the claims are displayed as agent statements, not verified outcomes.
-      additionalProperties: false
       required:
         - iteration
         - prior_item_id
@@ -7267,7 +7148,6 @@ components:
 
     BlockedWait:
       type: object
-      additionalProperties: false
       description: >-
         What a `blocked` item was waiting on. The reference variant must
         match kind. Retired with the `blocked` attention type (plan revision
@@ -7296,7 +7176,6 @@ components:
     HealthDiagnostic:
       type: object
       description: A daemon diagnostic code and its current operational impact.
-      additionalProperties: false
       required: [code, impairs]
       properties:
         code:
@@ -7310,7 +7189,6 @@ components:
       description: >
         The complete finding binding for one completed review round, with the
         subset of findings that require a human decision on a routed dispute.
-      additionalProperties: false
       required: [run_id, round, finding_ids, completion_evidence]
       properties:
         findings:
@@ -7343,7 +7221,6 @@ components:
     DisputedFinding:
       type: object
       description: A bound review finding and the routes the human may execute.
-      additionalProperties: false
       required: [finding_id, message, location, severity, external, offered_routes, adjudication]
       properties:
         finding_id:
@@ -7362,7 +7239,6 @@ components:
         external:
           type: object
           nullable: true
-          additionalProperties: false
           required: [reviewer_login, thread_id]
           properties:
             reviewer_login:
@@ -7388,7 +7264,6 @@ components:
             model-authored adjudication for the finding (the adjudicator was
             unconfigured or its batch failed validation, or the finding was
             never judged), and on an item stored before this field existed.
-          additionalProperties: false
           required: [lean, confidence, rationale, below_threshold]
           properties:
             lean:
@@ -8057,7 +7932,6 @@ components:
     TaskSubject:
       type: object
       description: An attention item about a task across its runs.
-      additionalProperties: false
       required: [subject_type, subject_id, run_id, task_id]
       properties:
         subject_type:
@@ -8087,7 +7961,6 @@ components:
         text; its digest then binds that content (see ClaimText), so the
         claim path carries prose under the same digest discipline as
         every other artifact.
-      additionalProperties: false
       required: [label, artifact_id, digest, provenance, text, metadata]
       properties:
         label:
@@ -8126,7 +7999,6 @@ components:
         memory-only prose travels the referenced attachment path.
         Summaries stay agent-asserted context: they render as labeled
         claims, never in evidence_snapshot (plan §5.15 unchanged).
-      additionalProperties: false
       required: [media_type, content]
       properties:
         media_type:
@@ -8194,7 +8066,6 @@ components:
         gates, so the daemon carries no such disposition. availability is
         recomputed at serialization (see EvidenceAvailability); the other
         fields are fixed at the artifact's or claim's creation.
-      additionalProperties: false
       required: [media_type, size_bytes, created_at, source, availability]
       properties:
         media_type:
@@ -8354,7 +8225,6 @@ components:
         §5.15 rule 2). source_head_sha is not a member and extra properties
         are forbidden, so a head-independent artifact that names a head is
         unrepresentable.
-      additionalProperties: false
       required:
         - producer_class
         - producer_invocation_id
@@ -8421,7 +8291,6 @@ components:
         source_head_sha names that head. Every member is required and extra
         properties are forbidden on both claim branches, so a smuggled
         publish_eligible is non-conformant, not an ignored extra.
-      additionalProperties: false
       required:
         - producer_class
         - producer_invocation_id
@@ -8460,7 +8329,6 @@ components:
         carries no source_head_sha (not a member, extra properties
         forbidden), so a head-independent claim that names a head is
         unrepresentable.
-      additionalProperties: false
       required:
         - producer_class
         - producer_invocation_id
@@ -9210,7 +9078,6 @@ components:
 
     AttentionItemConclusion:
       type: object
-      additionalProperties: false
       description: >
         How an attention item closed (mirrors domain.Conclusion). cause
         decision pairs with a non-null decision and an empty reason; every
@@ -9256,7 +9123,6 @@ components:
         - resolved_by_daemon
     ConclusionDecision:
       type: object
-      additionalProperties: false
       description: >
         The accepted command that concluded an attention item, as recorded
         at decision time.
@@ -9396,7 +9262,6 @@ components:
         or unresolved_reason. The file carries no version field (the
         reserved label and path identify the format), and import rejects
         unknown fields. String caps count Unicode code points.
-      additionalProperties: false
       required: [head_sha, claim_digest, stops, questions, notes]
       properties:
         head_sha:
@@ -9430,7 +9295,6 @@ components:
       description: >
         One stop in a review guide, in reading order; mirrors
         domain.ReviewStop.
-      additionalProperties: false
       required: [title, summary, attention, excerpts]
       properties:
         title:
@@ -9462,7 +9326,6 @@ components:
         base (side base), at most 8 KiB of UTF-8; unresolved_reason says why
         the daemon could not read it, and a span whose text would exceed the
         cap resolves to too_large.
-      additionalProperties: false
       required: [path, side, start_line, end_line, caption, text, unresolved_reason]
       properties:
         path:
@@ -9609,7 +9472,6 @@ components:
 
     FindingAdjudicationBinding:
       type: object
-      additionalProperties: false
       description: >
         Sync-carried proposal projection bound to one immutable finding
         adjudication artifact. The store authenticates each proposal's copied
@@ -9643,7 +9505,6 @@ components:
         adjudication entry (see evidence for its producer-dependent
         provenance). The daemon re-gates every copied field against its
         immutable source.
-      additionalProperties: false
       required:
         [finding_id, finding_message, finding_location, producer,
          goal_relationship, compatibility, route, rationale, evidence,
@@ -9712,7 +9573,6 @@ components:
     OfferedAlternative:
       type: object
       description: A selectable non-recommended route and its expected consequence.
-      additionalProperties: false
       required: [route, consequence]
       properties:
         route:
@@ -9728,7 +9588,6 @@ components:
         inclusive, 1-based line range. A start_line and end_line of 0 with a
         path is the whole-file location; a null finding_location on a proposal
         is a review-level finding that carries no path.
-      additionalProperties: false
       required: [path, start_line, end_line]
       properties:
         path:
@@ -9744,7 +9603,6 @@ components:
     AlternativeChoice:
       type: object
       description: The operator-selected offered route for one finding.
-      additionalProperties: false
       required: [finding_id, route]
       properties:
         finding_id:
