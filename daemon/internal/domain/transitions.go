@@ -488,7 +488,7 @@ func stagesExtend(old, updated []Stage) bool {
 			return false
 		}
 		for j, oa := range os.Attempts {
-			if ns.Attempts[j] != oa {
+			if !sameAttempt(ns.Attempts[j], oa) {
 				return false
 			}
 		}

@@ -122,6 +122,10 @@ type Attempt struct {
 	StageID      StageID      `json:"stage_id"`
 	Number       int          `json:"number"`
 	InvocationID InvocationID `json:"invocation_id"`
+	// Purpose says why a specification invocation ran. It is nil on other
+	// stages' attempts and on attempts recorded before #3044, and is never
+	// filled in later.
+	Purpose *AttemptPurpose `json:"purpose"`
 }
 
 // Validate reports whether the attempt is well-formed. StageID is the parent
@@ -139,5 +143,23 @@ func (a Attempt) Validate() error {
 	if a.Number < 1 {
 		return fmt.Errorf("attempt %s number %d: %w", a.ID, a.Number, ErrNonPositive)
 	}
+	if a.Purpose != nil && !a.Purpose.valid() {
+		return fmt.Errorf("attempt %s purpose %q: %w", a.ID, *a.Purpose, ErrInvalidAttemptPurpose)
+	}
 	return nil
+}
+
+// sameAttempt reports whether two attempts record the same execution. It
+// compares the purpose by value rather than by pointer and every other field
+// with ==, so a field added later is covered without changing this function.
+func sameAttempt(a, b Attempt) bool {
+	aPurpose, bPurpose := a.Purpose, b.Purpose
+	a.Purpose, b.Purpose = nil, nil
+	if a != b {
+		return false
+	}
+	if aPurpose == nil || bPurpose == nil {
+		return aPurpose == bPurpose
+	}
+	return *aPurpose == *bPurpose
 }
