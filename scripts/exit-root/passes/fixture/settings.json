@@ -1,0 +1,19 @@
+{
+  "repository": {
+    "repo": "freeasinbird/freeside-review-challenge",
+    "repository_id": 1363494422,
+    "base_ref": "main",
+    "base_sha": "584dba6120ee6e126460438032c3189762603306",
+    "allowed_paths": ["src/**", "test/**", "README.md"],
+    "project": "fixture"
+  },
+  "manual_submission_config": "",
+  "writers": {
+    "specifier": {"model": "claude-haiku-5-5", "effort": "low"},
+    "implementer": {"model": "claude-haiku-5-5", "effort": "low"},
+    "remediator": {"model": "claude-haiku-5-5", "effort": "low"}
+  },
+  "review": {"model": "gpt-6-luna", "effort": "low", "auth_mode": "subscription"},
+  "agent_tree": {"review_harness": "codex_cli"},
+  "judgment": {"model": "claude-haiku-5-5", "effort": "low"}
+}

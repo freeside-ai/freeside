@@ -1,0 +1,11 @@
+{
+  "base": "fixture",
+  "second_writer": true,
+  "routing": {
+    "specifier": ["second_writer", "writer"],
+    "implementer": ["second_writer", "writer"],
+    "remediator": ["second_writer", "writer"]
+  },
+  "pool_limits": {"writer": 1, "second_writer": 1},
+  "seed_exhausted": "second_writer"
+}
