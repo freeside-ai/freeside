@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 )
 
@@ -37,6 +38,12 @@ type Scenario struct {
 	// and a routing policy that orders both for the implementer, so a park
 	// or a failure card has another agent to offer.
 	SecondSubscription bool
+	// PublicationTransitionHook, when set, is the publication lane's
+	// TransitionHook (engine.ProductionPublicationConfig). No named scenario
+	// sets it: a test sets it to stop a run at a durable boundary, such as
+	// before the publication effect, so the stored state it captures holds a
+	// publication task with no forge effect.
+	PublicationTransitionHook engine.DurableTransitionHook
 }
 
 // ScenarioQuotaRefusal is the refusal a quota scenario's first

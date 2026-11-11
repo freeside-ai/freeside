@@ -283,6 +283,7 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			// No image upkeep is composed, so nothing is pending.
 			ImageUpkeepPending: nil,
 			Now:                now,
+			TransitionHook:     sc.PublicationTransitionHook,
 			NewRoom: func(domain.ProjectImage, ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 				home, err := os.MkdirTemp(world.Dir, "verification-home-")
 				if err != nil {
