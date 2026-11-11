@@ -22,8 +22,8 @@ import (
 // (.github/workflows/daemon-ci.yml); a module whose go.mod asks for anything
 // newer is refused rather than letting Go fetch a toolchain.
 const (
-	goToolchainVersion       = "1.27.3"
-	goToolchainArchiveSHA256 = "a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49"
+	goToolchainVersion       = "1.27.4"
+	goToolchainArchiveSHA256 = "3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92"
 	goToolchainArchivePath   = "/opt/freeside/project-toolchain/go.tar.gz"
 
 	golangciLintVersion       = "2.15.0"

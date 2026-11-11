@@ -26,7 +26,7 @@ import (
 // change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 	t.Parallel()
-	const want = "sha256:ca124be8942ff2330b24d870c71dbe6889e52f518ef74ba4bb304420b0a6ff71"
+	const want = "sha256:6f70439f10630e8bc186da3c53f4f288cb066df4dd22e741e07469a8ca5bfacb"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
 		t.Fatalf("PreparationDigest() = %q, want a content address", got)

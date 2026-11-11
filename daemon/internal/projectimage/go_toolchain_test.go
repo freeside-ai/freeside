@@ -227,7 +227,7 @@ func TestBuildContextRefusesUnsupportedGoInputs(t *testing.T) {
 		},
 		{
 			"go directive above the baked version", "daemon",
-			tree{"daemon/go.mod": "module example.test/m\n\ngo 1.27.4\n"},
+			tree{"daemon/go.mod": "module example.test/m\n\ngo 1.27.5\n"},
 			"above the baked Go " + goToolchainVersion, false,
 		},
 		{
@@ -353,7 +353,7 @@ func TestCheckGoModuleAcceptsWhatTheBakedToolchainServes(t *testing.T) {
 		}
 	}
 	for _, goMod := range []string{
-		"module m\n\ngo 1.27.4\n",
+		"module m\n\ngo 1.27.5\n",
 		"module m\n\ngo 2\n",
 		"module m\n\ngo banana\n",
 		"module m\n\ntoolchain default\n",
