@@ -98,7 +98,7 @@ func TestAuthSeedExhaustedUsesTheRunningDaemon(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	seedUsagePools(t, h.store)
+	seedUsagePools(t, h.Store)
 	ctx := context.WithValue(t.Context(), directStoreOpenerKey{}, directStoreOpener(
 		func(context.Context, string, store.Options, storeOpenMode) (*store.Store, error) {
 			return nil, errors.New("unexpected direct store open")
@@ -108,7 +108,7 @@ func TestAuthSeedExhaustedUsesTheRunningDaemon(t *testing.T) {
 	if output, err := runAuthUsage(t, ctx, seedExhaustedArgs(dbPath, resetsAt)...); err != nil {
 		t.Fatalf("seed-exhausted = %v (%s)", err, output)
 	}
-	wantSeededMark(t, h.store, resetsAt)
+	wantSeededMark(t, h.Store, resetsAt)
 	if _, err := runAuthUsage(t, ctx, seedExhaustedArgs(dbPath, time.Now().Add(-time.Minute))...); err == nil ||
 		!strings.Contains(err.Error(), "is not in the future") {
 		t.Fatalf("forwarded past reset = %v, want it refused", err)

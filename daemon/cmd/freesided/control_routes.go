@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
@@ -130,9 +131,36 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 	return value, err
 }
 
+// pairingControlSocket is the control socket a start opens: the pairing
+// control, and the facts its routes read from main's configuration.
+type pairingControlSocket struct {
+	pairing      *pairingControl
+	repositoryID int64
+	environment  environment
+	execution    executionMode
+	launch       *deputyLaunch
+}
+
+func (s pairingControlSocket) Serve() error { return s.pairing.Serve() }
+func (s pairingControlSocket) Close() error { return s.pairing.Close() }
+
+func (s pairingControlSocket) Configure(
+	apiURL string, mint func(context.Context) (string, domain.PairingCode, error),
+) {
+	s.pairing.configure(apiURL, mint)
+}
+
+func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs) {
+	s.pairing.registerControlRoutes(
+		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
+		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure)
+}
+
+func (s pairingControlSocket) Publish() error { return s.pairing.publish() }
+
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
-	approved map[domain.Digest]bool, repositoryID int64, integrityProbe credentialIntegrityProbe,
+	approved map[domain.Digest]bool, repositoryID int64, integrityProbe daemoncompose.CredentialIntegrityProbe,
 	usage *usagecollect.Coordinator, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -97,16 +98,18 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 		StateDir:          stateDir,
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: 10 * time.Millisecond,
-		now: func() time.Time {
-			clockMu.Lock()
-			defer clockMu.Unlock()
-			return clockNow
-		},
-		afterBackgroundStart: func() error {
-			clockMu.Lock()
-			clockNow = clockNow.Add(11 * time.Minute)
-			clockMu.Unlock()
-			return nil
+		seams: daemoncompose.StartSeams{
+			Now: func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return clockNow
+			},
+			AfterBackgroundStart: func() error {
+				clockMu.Lock()
+				clockNow = clockNow.Add(11 * time.Minute)
+				clockMu.Unlock()
+				return nil
+			},
 		},
 	})
 	if err != nil {
@@ -198,13 +201,13 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("GET /health after durable stop = %d, want 200", response.StatusCode)
 	}
-	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(context.Background(), func(tx *store.ReadTx) error {
 		return tx.RequireUnattendedOperationOpen(context.Background())
 	}); !errors.Is(err, domain.ErrBlockingSystemHealth) {
 		t.Fatalf("admission after durable stop = %v, want blocking system health", err)
 	}
 	var durableStop domain.AttentionItem
-	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(context.Background(), func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
 		if err != nil {
 			return err

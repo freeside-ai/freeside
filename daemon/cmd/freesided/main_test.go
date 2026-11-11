@@ -78,24 +78,26 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: time.Millisecond,
 		Logger:            logger,
-		afterBackgroundStart: func() error {
-			deadline := time.NewTimer(30 * time.Second)
-			defer deadline.Stop()
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-			for {
-				if strings.Contains(logs.String(), "reconcile loop started") {
-					return startupErr
+		seams: daemoncompose.StartSeams{
+			AfterBackgroundStart: func() error {
+				deadline := time.NewTimer(30 * time.Second)
+				defer deadline.Stop()
+				ticker := time.NewTicker(time.Millisecond)
+				defer ticker.Stop()
+				for {
+					if strings.Contains(logs.String(), "reconcile loop started") {
+						return startupErr
+					}
+					select {
+					case <-deadline.C:
+						return errors.New("reconcile loop did not start")
+					case <-ticker.C:
+					}
 				}
-				select {
-				case <-deadline.C:
-					return errors.New("reconcile loop did not start")
-				case <-ticker.C:
-				}
-			}
-		},
-		beforeStoreClose: func() {
-			logsAtStoreClose = logs.String()
+			},
+			BeforeStoreClose: func() {
+				logsAtStoreClose = logs.String()
+			},
 		},
 	}
 
@@ -153,12 +155,12 @@ func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 	}, 1)
 	go func() {
 		h, err := run(t.Context(), nil, config{
-			Environment:          environmentEphemeral,
-			DBPath:               filepath.Join(root, "freeside.db"),
-			FakeDriverDir:        filepath.Join(root, "driver"),
-			ListenAddr:           "127.0.0.1:0",
-			ReconcileInterval:    time.Millisecond,
-			afterBackgroundStart: func() error { return startupErr },
+			Environment:       environmentEphemeral,
+			DBPath:            filepath.Join(root, "freeside.db"),
+			FakeDriverDir:     filepath.Join(root, "driver"),
+			ListenAddr:        "127.0.0.1:0",
+			ReconcileInterval: time.Millisecond,
+			seams:             daemoncompose.StartSeams{AfterBackgroundStart: func() error { return startupErr }},
 		})
 		result <- struct {
 			h   *daemon
@@ -319,7 +321,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 
 	for _, attempt := range []string{"first start", "restart"} {
 		h, ctx, cancel := start(t, attempt)
-		health, err := h.store.BackupHealth(context.Background())
+		health, err := h.Store.BackupHealth(context.Background())
 		if err != nil {
 			cancel()
 			t.Fatalf("%s: BackupHealth: %v", attempt, err)
@@ -374,58 +376,6 @@ func TestSubmittedPathBoundaryRefusesAnUnenforceablePolicy(t *testing.T) {
 					tc.value, err)
 			}
 		})
-	}
-}
-
-type recordingSessionCloser struct {
-	calls int
-	err   error
-}
-
-func (c *recordingSessionCloser) Close(context.Context) error {
-	c.calls++
-	return c.err
-}
-
-func TestStartupSessionCleanupTransfersOnlyAfterSuccess(t *testing.T) {
-	t.Parallel()
-	closeErr := errors.New("session close failed")
-	failed := &recordingSessionCloser{err: closeErr}
-	stopped := 0
-	stop := func() { stopped++ }
-	if err := closeStartupSessions(false, failed, stop); !errors.Is(err, closeErr) {
-		t.Fatalf("failed-start cleanup = %v, want %v", err, closeErr)
-	}
-	if failed.calls != 1 {
-		t.Fatalf("failed-start close calls = %d, want 1", failed.calls)
-	}
-	// A failed startup tears down a credential-bearing session while
-	// signal.NotifyContext is still registered; restoring signal disposition
-	// first is what keeps a second SIGTERM able to end a wedged lease cleanup.
-	if stopped != 1 {
-		t.Fatalf("failed-start signal restore calls = %d, want 1", stopped)
-	}
-
-	succeeded := &recordingSessionCloser{}
-	if err := closeStartupSessions(true, succeeded, stop); err != nil {
-		t.Fatalf("successful-start cleanup = %v", err)
-	}
-	if succeeded.calls != 0 {
-		t.Fatalf("successful-start close calls = %d, want daemon ownership", succeeded.calls)
-	}
-	// A successful startup leaves signal handling in place: serve owns the
-	// stop-before-close sequence for the running daemon's teardown.
-	if stopped != 1 {
-		t.Fatalf("successful-start signal restore calls = %d, want no additional restore", stopped)
-	}
-
-	// With no credential-bearing closer (the fake-driver lane), there is
-	// nothing that can wedge, so signal disposition is left untouched.
-	if err := closeStartupSessions(false, nil, stop); err != nil {
-		t.Fatalf("failed-start with no closer = %v", err)
-	}
-	if stopped != 1 {
-		t.Fatalf("no-closer signal restore calls = %d, want no restore", stopped)
 	}
 }
 
@@ -766,7 +716,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	})
-	health, err := h.store.BackupHealth(ctx)
+	health, err := h.Store.BackupHealth(ctx)
 	if err != nil {
 		t.Fatalf("production backup-health source: %v", err)
 	}
@@ -778,7 +728,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 	}
 
 	pairedAt := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutDevice(ctx, domain.Device{
 			ID: "device-1", DisplayName: "Device 1",
 			Status: domain.DeviceActive, PairedAt: pairedAt,
@@ -786,11 +736,11 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("put device: %v", err)
 	}
-	approval, err := h.attention.GetAttentionItem(ctx, "approval-"+domain.ItemID(daemoncompose.DefaultFakeRunID))
+	approval, err := h.Attention.GetAttentionItem(ctx, "approval-"+domain.ItemID(daemoncompose.DefaultFakeRunID))
 	if err != nil {
 		t.Fatalf("get approval: %v", err)
 	}
-	if _, err := h.attention.Submit(ctx, signet.ClientCommand{
+	if _, err := h.Attention.Submit(ctx, signet.ClientCommand{
 		CommandID: "approve-main", DeviceID: "device-1", ExpectedEntityVersion: approval.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: approval.Item.ID, Action: domain.ActionApprove,
@@ -800,8 +750,8 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	feedback := waitForItem(t, h.attention, "feedback-"+domain.ItemID(daemoncompose.DefaultFakeRunID))
-	if _, err := h.attention.Submit(ctx, signet.ClientCommand{
+	feedback := waitForItem(t, h.Attention, "feedback-"+domain.ItemID(daemoncompose.DefaultFakeRunID))
+	if _, err := h.Attention.Submit(ctx, signet.ClientCommand{
 		CommandID: "discuss-main", DeviceID: "device-1", ExpectedEntityVersion: feedback.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: feedback.Item.ID, Action: domain.ActionDiscuss,
@@ -813,16 +763,16 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		run, err := h.attention.GetRun(ctx, daemoncompose.DefaultFakeRunID)
+		run, err := h.Attention.GetRun(ctx, daemoncompose.DefaultFakeRunID)
 		if err != nil {
 			t.Fatalf("get run: %v", err)
 		}
 		if len(run.Run.Stages) == 1 && len(run.Run.Stages[0].Attempts) == 1 {
-			item, err := h.attention.GetAttentionItem(ctx, feedback.Item.ID)
+			item, err := h.Attention.GetAttentionItem(ctx, feedback.Item.ID)
 			if err != nil {
 				t.Fatalf("get feedback: %v", err)
 			}
-			conversation, err := h.attention.GetConversation(ctx, *item.Item.ConversationID)
+			conversation, err := h.Attention.GetConversation(ctx, *item.Item.ConversationID)
 			if err != nil {
 				t.Fatalf("get conversation: %v", err)
 			}
@@ -861,7 +811,7 @@ func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
 		}
 	})
 
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetRun(ctx, daemoncompose.DefaultFakeRunID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("get walking-skeleton run = %v, want ErrNotFound", err)
 		}

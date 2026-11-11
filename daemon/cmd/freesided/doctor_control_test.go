@@ -106,7 +106,7 @@ func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
 		t.Fatal("Doctor omitted artifact closure")
 	}
 	seedDoctor := operations.Doctor{
-		Store: h.store, Attention: signet.NewService(h.store), ProjectID: "project-system",
+		Store: h.Store, Attention: signet.NewService(h.Store), ProjectID: "project-system",
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Mode: domain.ModeAttendedDev,
 		ConfigurationDigest: recipeA,
 		BackupHealthSource: store.BackupHealthSourceFunc(func(context.Context, store.BackupHealthContext) (domain.BackupHealth, error) {
@@ -120,7 +120,7 @@ func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(recipeA, false)
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		items, err := tx.ListAttentionItems(t.Context())
 		if err != nil {
 			return err
@@ -135,7 +135,7 @@ func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(recipeB, true)
-	ordinary, err := h.store.BackupHealth(t.Context())
+	ordinary, err := h.Store.BackupHealth(t.Context())
 	if err != nil || ordinary.ArtifactClosure != domain.BackupHealthHealthy {
 		t.Fatalf("request mutated daemon health: %+v, %v", ordinary, err)
 	}

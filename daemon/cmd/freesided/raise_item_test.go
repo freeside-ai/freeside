@@ -146,9 +146,9 @@ func TestRaiseItemRefusedOutsideEphemeral(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			h := startDaemon(t, config{Environment: env, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 			defer func() { _ = h.Close() }()
-			before := len(storedItems(t, h.store))
+			before := len(storedItems(t, h.Store))
 			_, err := runRaiseItemCommand(t.Context(), raiseItemCommandConfig{DBPath: dbPath, Alert: raiseAlertStall})
-			raised := len(storedItems(t, h.store)) - before
+			raised := len(storedItems(t, h.Store)) - before
 			switch env {
 			case environmentEphemeral:
 				if err != nil || raised != 1 {
@@ -173,7 +173,7 @@ func TestRaiseItemRefusedWithoutDaemon(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	cfg := config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", Environment: environmentEphemeral}
 	h := startDaemon(t, cfg)
-	before := len(storedItems(t, h.store))
+	before := len(storedItems(t, h.Store))
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestRaiseItemRefusedWithoutDaemon(t *testing.T) {
 
 	h = startDaemon(t, cfg)
 	defer func() { _ = h.Close() }()
-	if after := len(storedItems(t, h.store)); after != before {
+	if after := len(storedItems(t, h.Store)); after != before {
 		t.Fatalf("refused raise changed the store: %d items, was %d", after, before)
 	}
 }
@@ -201,13 +201,13 @@ func TestRaiseItemReachesClients(t *testing.T) {
 	})
 	defer func() { _ = h.Close() }()
 	ctx := t.Context()
-	runsBefore, err := h.attention.ListRuns(ctx)
+	runsBefore, err := h.Attention.ListRuns(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decisionsBefore := reviewDecisions(t, h.store, fixtureCompletedRun)
+	decisionsBefore := reviewDecisions(t, h.Store, fixtureCompletedRun)
 	lastReviewRound := 0
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		records, err := tx.ListReviewRecords(ctx, fixtureCompletedRun)
 		for _, record := range records {
 			lastReviewRound = max(lastReviewRound, record.Round)
@@ -216,7 +216,7 @@ func TestRaiseItemReachesClients(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := h.attention.GetRun(ctx, fixtureCompletedRun)
+	completed, err := h.Attention.GetRun(ctx, fixtureCompletedRun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestRaiseItemReachesClients(t *testing.T) {
 				// authenticates it as a decision record. The engine reads a
 				// decision only through that record, so one made on the card
 				// reaches nothing.
-				if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+				if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 					_, err := tx.ReviewDiminishingDecision(ctx, result.ItemID)
 					return err
 				}); err == nil {
@@ -294,17 +294,17 @@ func TestRaiseItemReachesClients(t *testing.T) {
 	// list, the completed run is still served, and the store's review
 	// decisions for it, which authenticate the item at every reviewed round,
 	// read as they did: the raised card sits one round past the last review.
-	runsAfter, err := h.attention.ListRuns(ctx)
+	runsAfter, err := h.Attention.ListRuns(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(runsAfter) != len(runsBefore) {
 		t.Errorf("served runs = %d, were %d", len(runsAfter), len(runsBefore))
 	}
-	if _, err := h.attention.GetRun(ctx, fixtureCompletedRun); err != nil {
+	if _, err := h.Attention.GetRun(ctx, fixtureCompletedRun); err != nil {
 		t.Errorf("served run %s after raising: %v", fixtureCompletedRun, err)
 	}
-	if after := reviewDecisions(t, h.store, fixtureCompletedRun); after != decisionsBefore {
+	if after := reviewDecisions(t, h.Store, fixtureCompletedRun); after != decisionsBefore {
 		t.Errorf("review decisions on %s = %d, were %d", fixtureCompletedRun, after, decisionsBefore)
 	}
 }
@@ -323,7 +323,7 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 	})
 	defer func() { _ = h.Close() }()
 	ctx := t.Context()
-	completed, err := h.attention.GetRun(ctx, fixtureCompletedRun)
+	completed, err := h.Attention.GetRun(ctx, fixtureCompletedRun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 	// A device owes only items created at or after its pairing and its
 	// notifications switch going on, so pairing and turning it on now keeps
 	// the delivery pass to the raised items.
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		paired := time.Now().UTC()
 		if err := tx.PutDevice(ctx, domain.Device{
 			ID: "phone", DisplayName: "phone", Status: domain.DeviceActive, PairedAt: paired,
@@ -367,7 +367,7 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 	// The sweep reads only the task's items, so the daemon-subject stall
 	// notice is out of its reach; the run-bound alerts are what it could take.
 	var retired []domain.ItemID
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		retired, err = engine.RetireCompletedTaskItems(ctx, tx, completed.Run.TaskID)
 		return err
 	}); err != nil {
@@ -385,7 +385,7 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 	}
 
 	sink := newNtfySink(t, http.StatusOK)
-	service := signet.NewService(h.store, signet.WithNtfy(signet.NtfyConfig{
+	service := signet.NewService(h.Store, signet.WithNtfy(signet.NtfyConfig{
 		BaseURL: sink.URL, Client: sink.Client(), TopicKey: []byte("fixture-notification-topic-key-32"),
 	}))
 	if err := service.DeliverOwed(ctx, func(err error) { t.Errorf("delivery: %v", err) }); err != nil {
@@ -417,7 +417,7 @@ func TestRaisedHeldWorkItemSurvivesTheSweep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.workflow.Reconcile(ctx); err != nil {
+	if _, err := h.Workflow.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if item := servedItem(t, h, result.ItemID); item.Status != domain.StatusOpen {
@@ -442,7 +442,7 @@ func TestRaisedHeldWorkItemResolvesAtRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := 0
-	for _, item := range storedItems(t, h.store) {
+	for _, item := range storedItems(t, h.Store) {
 		if item.Value.Status == domain.StatusOpen {
 			open++
 		}
@@ -457,7 +457,7 @@ func TestRaisedHeldWorkItemResolvesAtRestart(t *testing.T) {
 		t.Fatalf("raised held-work item is %s after a restart, want resolved", item.Status)
 	}
 	stillOpen := 0
-	for _, item := range storedItems(t, h.store) {
+	for _, item := range storedItems(t, h.Store) {
 		if item.Value.Status == domain.StatusOpen {
 			stillOpen++
 		}
@@ -479,7 +479,7 @@ func TestRaiseItemReviewGrowthNeedsACompletedRun(t *testing.T) {
 	})
 	defer func() { _ = h.Close() }()
 	ctx := t.Context()
-	before := len(storedItems(t, h.store))
+	before := len(storedItems(t, h.Store))
 	for _, run := range []domain.RunID{fixturePublishedRun, fixturePendingRun} {
 		_, err := runRaiseItemCommand(ctx, raiseItemCommandConfig{
 			DBPath: dbPath, Alert: raiseAlertReviewGrowth, RunID: run,
@@ -489,7 +489,7 @@ func TestRaiseItemReviewGrowthNeedsACompletedRun(t *testing.T) {
 			t.Errorf("raise on %s = %v, want an error containing %q", run, err, want)
 		}
 	}
-	if after := len(storedItems(t, h.store)); after != before {
+	if after := len(storedItems(t, h.Store)); after != before {
 		t.Fatalf("refused raises wrote items: %d, were %d", after, before)
 	}
 }
@@ -523,7 +523,7 @@ func reviewDecisions(t *testing.T, st *store.Store, runID domain.RunID) int {
 func servedItem(t *testing.T, h *daemon, id domain.ItemID) domain.AttentionItem {
 	t.Helper()
 	var served []signet.AttentionItemSnapshot
-	served, err := h.attention.ListAttentionItems(t.Context())
+	served, err := h.Attention.ListAttentionItems(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

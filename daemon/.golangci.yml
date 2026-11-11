@@ -75,7 +75,7 @@ linters:
       # milestones to decide workflow steps and show nothing, so they keep
       # the raw observation read. Matching the text leaves the store.Open
       # rule on for these files.
-      - path: ^(internal/engine/production_attempt\.go|internal/engine/production_workflow\.go|cmd/freesided/completion_reconcile\.go|internal/daemoncompose/completion_milestone\.go)$
+      - path: ^(internal/engine/production_attempt\.go|internal/engine/production_workflow\.go|internal/daemoncompose/completion_reconcile\.go|internal/daemoncompose/completion_milestone\.go)$
         text: ObserveRun
         linters:
           - forbidigo

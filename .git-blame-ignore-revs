@@ -103,3 +103,9 @@ c169cc154c25efb54cbddf5d77d24629f96d41cf
 
 # Move the Claude composition to internal/daemoncompose (#2863)
 19cbb52f5a87c6cfdd3248ab7626c781801a6679
+
+# Export the start's names before their move (#2864)
+f511bd6d3b0baa53d107517ee005dce0c730c23b
+
+# Move freesided's start to internal/daemoncompose (#2864)
+9c0605228b6e6d88f4fdbc78973ccaca18de5034

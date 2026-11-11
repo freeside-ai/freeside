@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -44,10 +45,12 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		DBPath:      filepath.Join(root, "freeside.db"), StateDir: stateDir,
 		ListenAddr: "127.0.0.1:0", Logger: logger,
 		FakeDriverEnabled: true, SeedWalkingSkeleton: true,
-		now: func() time.Time {
-			clockMu.Lock()
-			defer clockMu.Unlock()
-			return now
+		seams: daemoncompose.StartSeams{
+			Now: func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return now
+			},
 		},
 	})
 	if err != nil {
@@ -60,15 +63,15 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 	})
 	// The production control and Signet handlers are real. Only the parked
 	// workflow is a fixture; this test is not live campaign acceptance.
-	if _, err := h.workflow.Reconcile(ctx); err != nil {
+	if _, err := h.Workflow.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	beforeHealth := pairingTestHealth(t, h.Readiness().APIURL)
-	workflow := h.workflow
+	workflow := h.Workflow
 	original := pairingTestRedeem(t, h.Readiness().APIURL, h.Readiness().PairingCode)
 	mint := func() pairingCodeResult {
 		t.Helper()
-		before := pairingTestWorkflow(t, h.store)
+		before := pairingTestWorkflow(t, h.Store)
 		var stdout, stderr bytes.Buffer
 		if err := runPairingCodeCommand(ctx, []string{"-state-dir", stateDir}, &stdout, &stderr); err != nil {
 			t.Fatal(err)
@@ -84,10 +87,10 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		if stderr.Len() != 0 || strings.Contains(logs.String(), result.PairingCode) {
 			t.Fatal("pairing code leaked outside command stdout")
 		}
-		if after := pairingTestWorkflow(t, h.store); !reflect.DeepEqual(before, after) {
+		if after := pairingTestWorkflow(t, h.Store); !reflect.DeepEqual(before, after) {
 			t.Fatal("mint changed workflow state, commands or client revision")
 		}
-		if h.workflow != workflow || pairingTestHealth(t, result.APIURL) != beforeHealth {
+		if h.Workflow != workflow || pairingTestHealth(t, result.APIURL) != beforeHealth {
 			t.Fatal("mint replaced the workflow or daemon")
 		}
 		return result
@@ -115,7 +118,7 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 	pairingTestRejected(t, fresh.APIURL, fresh.PairingCode)
 	pairingTestAuth(t, fresh.APIURL, original.DeviceToken, http.StatusOK)
 	pairingTestAuth(t, fresh.APIURL, second.DeviceToken, http.StatusOK)
-	if _, err := h.attention.Revoke(ctx, second.Device.Device.ID, original.Device.Device.ID); err != nil {
+	if _, err := h.Attention.Revoke(ctx, second.Device.Device.ID, original.Device.Device.ID); err != nil {
 		t.Fatal(err)
 	}
 	_ = mint()

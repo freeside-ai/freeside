@@ -178,13 +178,6 @@ func seedReadyBindingAuthority(
 	}
 }
 
-// capturedRun seeds the store with a declared, PR-bound work unit and
-// returns the ready item whose subject names its run, so the
-// active-resource reconciler's §5.18 completion pass has a unit to settle.
-func capturedRun(t *testing.T, st *store.Store) domain.AttentionItem {
-	return capturedRunNamed(t, st, "run-cap", "item-ready-cap")
-}
-
 func capturedRunNamed(
 	t *testing.T, st *store.Store, runID domain.RunID, itemID domain.ItemID,
 ) domain.AttentionItem {

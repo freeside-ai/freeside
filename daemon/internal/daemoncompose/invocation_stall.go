@@ -134,3 +134,35 @@ func StallInterval(configured time.Duration) time.Duration {
 	}
 	return configured
 }
+
+// concludeInvocationStallNotices resolves every open stall notice at
+// startup. No writer wait survives a daemon restart, so any open notice is
+// stale. A held-work notice raised by `freesided raise-item` goes in the
+// same write, so a start costs one revision, not two.
+func concludeInvocationStallNotices(ctx context.Context, st *store.Store) error {
+	return st.Write(ctx, func(tx *store.WriteTx) error {
+		open, err := OpenInvocationStallNotices(ctx, tx, func(itemID string) bool {
+			return strings.HasPrefix(itemID, InvocationStalledItemPrefix) || isRaisedHeldWorkNotice(itemID)
+		})
+		if err != nil {
+			return err
+		}
+		return ResolveInvocationStallNotices(ctx, tx, open, time.Now().UTC(),
+			"Resolved when the daemon restarted: no writer wait survives a restart.")
+	})
+}
+
+// RaisedHeldWorkItemPrefix must not parse as the engine's own held-work
+// notice ID (work-held-<run>-<unix>): the engine resolves every open notice
+// of that form whose run has no matching hold, and a raised item has none.
+// The daemon resolves these itself at its next start.
+const RaisedHeldWorkItemPrefix = "raised-work-held-"
+
+// isRaisedHeldWorkNotice reports whether an item is a held-work notice this
+// command raised. The daemon resolves these with the stall notices at
+// startup: the engine resolves a real one when its hold clears and its sweep
+// must not own a raised one, so nothing else ever would. The notice offers
+// no action that closes it.
+func isRaisedHeldWorkNotice(itemID string) bool {
+	return strings.HasPrefix(itemID, RaisedHeldWorkItemPrefix)
+}

@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,16 +11,12 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,19 +28,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
-	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
-	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/usagecollect"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 const defaultReconcileInterval = 100 * time.Millisecond
-
-// Approval wakes the filer immediately; this tick bounds recovery delay.
-const defaultFollowUpFilingInterval = time.Minute
 
 const defaultNtfyURL = "https://ntfy.sh"
 
@@ -599,25 +588,9 @@ type config struct {
 	// Nil discards their records, which keeps every test composition quiet
 	// without each one having to build a handler.
 	Logger *slog.Logger
-	// afterBackgroundStart is a test seam for startup failures after the base
-	// background workers have launched. Production leaves it nil.
-	afterBackgroundStart func() error
-	// beforeStoreClose is a test seam for observing failed-start cleanup at
-	// the store-close boundary. Production leaves it nil.
-	beforeStoreClose func()
-	// usageCollectors are the usage collectors by harness client. Production
-	// leaves it nil and gets Claude's, which answers from writer turns'
-	// usage captures; tests set a fake, and then no capture is recorded.
-	usageCollectors map[domain.HarnessClientKind]ward.UsageCollector
-	// claudeModelDiscoverer runs the startup model discovery. Production
-	// leaves it nil and launches the initialize probe; tests set a fake.
-	claudeModelDiscoverer claudeModelDiscoverer
-	// codexModelDiscoverer runs the startup Codex model discovery. Production
-	// leaves it nil and launches the model/list probe; tests set a fake.
-	codexModelDiscoverer codexModelDiscoverer
-	// now is the attention service clock. Production leaves it nil for the
-	// wall clock; tests can advance startup across pairing-code expiry.
-	now func() time.Time
+	// seams are the start's test seams (startSeams). Production leaves them
+	// unset.
+	seams daemoncompose.StartSeams
 	// Claude configures real execution and its ward gate. Without it, explicit
 	// FakeDriverEnabled, or Scenario, the daemon serves setup and state
 	// without an engine.
@@ -652,15 +625,6 @@ func newLogger(w io.Writer, level string) (*slog.Logger, error) {
 		return nil, fmt.Errorf("-log-level %q is not debug, info, warn, or error", level)
 	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: parsed})), nil
-}
-
-// claudeStartup is the configuration the Claude composition reads.
-func (cfg config) claudeStartup() daemoncompose.ClaudeStartupConfig {
-	return daemoncompose.ClaudeStartupConfig{
-		Claude: cfg.Claude, Logger: cfg.Logger, StateDir: cfg.StateDir, DBPath: cfg.DBPath,
-		ApprovedRecipes: cfg.ApprovedRecipes, IntakeInitiators: cfg.IntakeInitiators,
-		DoctorInterval: cfg.DoctorInterval, Now: cfg.now,
-	}
 }
 
 // execution is the mode this configuration runs: a Claude driver, the fake
@@ -727,44 +691,25 @@ func (cfg config) storeOptions() (store.Options, error) {
 	return opts, nil
 }
 
-// reportAttentionDelivery logs one thing the notification sender could not
-// do. A send that failed is a warning with its item, device, and attempt; the
-// provider being down is ordinary, and the sender retries on its own
-// schedule. The error names a status code or a failure class and never the
-// device's topic (signet.ChannelTransportError).
-func reportAttentionDelivery(logger *slog.Logger, err error) {
-	if logger == nil {
-		return
-	}
-	var failure *signet.DeliveryFailure
-	if errors.As(err, &failure) {
-		logger.Warn("phone notification not sent",
-			"item_id", failure.ItemID, "device_id", failure.DeviceID,
-			"attempt", failure.Attempt, "last_attempt", failure.Final, "error", failure.Err)
-		return
-	}
-	logger.Warn("phone notification pass failed", "error", err)
-}
-
-// daemon is what run() composes: the shell that runs the process, and the
-// composition results that startup and the tests reach.
+// daemon is what run() starts: the started daemon, and the pairing control
+// its control socket serves, which a test reads.
 type daemon struct {
-	*daemonshell.Shell
-	store     *store.Store
-	attention *signet.Service
-	workflow  *engine.Engine
-	driver    *fake.StageDriver
-	pairing   *pairingControl
-	usage     *usagecollect.Coordinator
+	*daemoncompose.Daemon
+	pairing *pairingControl
 }
 
-func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
-	startedAt := time.Now().UTC()
+// run translates the configuration into start options and starts the
+// daemon. It validates and defaults cfg and reads the files the flags name
+// before start acquires anything, so a refused configuration leaves no
+// lock, listener, or store behind. Everything a start acquires, and every
+// cleanup of a failed start, belongs to start.
+func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 	if err := validateRunConfig(cfg); err != nil {
 		return nil, err
 	}
 	var fixture seedfixture.Name
 	if cfg.SeedFixture != "" {
+		var err error
 		if fixture, err = parseSeedFixture(cfg); err != nil {
 			return nil, err
 		}
@@ -774,28 +719,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, err
 	}
 	manualInitiator := cfg.DeputyLaunch.gateManualInitiator(manualInitiatorLookup(manualProjects), cfg.Logger)
-	lock, err := daemonlock.Acquire(cfg.DBPath)
-	if err != nil {
-		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
-	}
-	lockTransferred := false
-	defer func() {
-		if !lockTransferred {
-			_ = lock.Close()
-		}
-	}()
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
 	}
-	pairing, err := newPairingControl(cfg.DBPath, cfg.StateDir)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if !lockTransferred {
-			_ = pairing.Close()
-		}
-	}()
 	if cfg.FakeDriverEnabled && cfg.FakeDriverDir == "" {
 		cfg.FakeDriverDir = cfg.DBPath + ".fake-stage-driver"
 	}
@@ -824,8 +750,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.AttentionDeliveryInterval < 0 {
 		return nil, fmt.Errorf("negative attention delivery interval %s", cfg.AttentionDeliveryInterval)
 	}
-	if cfg.now == nil {
-		cfg.now = time.Now
+	if cfg.seams.Now == nil {
+		cfg.seams.Now = time.Now
 	}
 	if cfg.NtfyURL == "" {
 		cfg.NtfyURL = defaultNtfyURL
@@ -834,235 +760,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err != nil {
 		return nil, err
 	}
-	listener, err := daemonshell.ListenPrivileged(cfg.ListenAddr)
-	if err != nil {
-		return nil, err
-	}
-	// A Tailscale-bound daemon also serves the identical API on 127.0.0.1 at the
-	// same port, so a same-host client always has a path a host VPN cannot drop
-	// (#1449; devlog 2026-09-20-1257-same-host-loopback-listener.md). A loopback
-	// primary needs no twin. A twin bind failure is fatal: the daemon must never
-	// run reachable only over the filterable Tailscale address.
-	var loopbackTwin net.Listener
-	success := false
-	defer func() {
-		if !success {
-			_ = listener.Close()
-			if loopbackTwin != nil {
-				_ = loopbackTwin.Close()
-			}
-		}
-	}()
-	loopbackTwin, err = daemonshell.ListenLoopbackTwin(
-		listener,
-		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
-			return net.ListenTCP(network, resolved)
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	// The pairing surface's process-fixed facts (plan §5.14): the connection
-	// mode the bound listener implies and the host's name as a display label.
-	// Both are read once here; a host that cannot name itself must not pair
-	// devices under an empty name, so that failure is fatal at startup.
-	connectionMode, err := daemonshell.ConnectionModeOf(listener.Addr())
-	if err != nil {
-		return nil, err
-	}
-	hostName, err := os.Hostname()
-	if err != nil {
-		return nil, fmt.Errorf("read host name for pairing facts: %w", err)
-	}
-	if hostName == "" {
-		return nil, errors.New("read host name for pairing facts: empty host name")
-	}
-	ctx, cancel := context.WithCancel(parent)
-	defer func() {
-		if !success {
-			cancel()
-		}
-	}()
-
-	pairingKey := make([]byte, 32)
-	if _, err := rand.Read(pairingKey); err != nil {
-		return nil, fmt.Errorf("generate pairing key: %w", err)
-	}
-
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		return nil, fmt.Errorf("open attachment store: %w", err)
-	}
-	localBackupFiles, err := store.NewDefaultLocalBackupFiles(cfg.DBPath)
-	if err != nil {
-		return nil, err
-	}
-	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
-		blobs, storeOptions.ApprovedRecipes,
-		engine.BackupPayloadExtractors())
-	if err != nil {
-		return nil, err
-	}
-	storeOptions.BackupHealthSource = backupHealth
-	st, topicKey, err := openStoreWithTopicKey(parent, cfg.DBPath, storeOptions)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if !success {
-			if cfg.beforeStoreClose != nil {
-				cfg.beforeStoreClose()
-			}
-			_ = st.Close()
-		}
-	}()
-	// The budget's checks wait for the store, because a budget recorded there
-	// wins over the declared one.
-	bound, err := cfg.startupLaunchBound(parent, st, manualProjects)
-	if err != nil {
-		return nil, err
-	}
-	logLaunchBound(cfg.Logger, bound)
-	var startupSessionCloser daemoncompose.SessionCloser
-	defer func() {
-		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
-	}()
-	if fixture != "" {
-		if err := daemoncompose.SeedStartupFixture(parent, st, fixture, cfg.DBPath, cfg.Logger); err != nil {
-			return nil, err
-		}
-	}
-	localBackups, err := daemoncompose.MaintainLocalBackups(parent, st, blobs, localBackupFiles, cfg.Logger)
-	if err != nil {
-		return nil, err
-	}
-	// The fake driver's state directory is only claimed in fake mode: the
-	// production composition must not require walking-skeleton state on a
-	// fresh operator machine.
-	var driver *fake.StageDriver
-	if cfg.FakeDriverEnabled {
-		driver, err = fake.NewStageDriverAt(cfg.FakeDriverDir)
-		if err != nil {
-			return nil, fmt.Errorf("open fake stage driver: %w", err)
-		}
-	}
-	var (
-		workflow              *engine.Engine
-		claudeWiring          *daemoncompose.ClaudeComposition
-		imageUpkeep           *engine.ImageUpkeep
-		scenarioWiring        *daemoncompose.ScenarioComposition
-		doctorConvergenceLock sync.Mutex
-		doctorAvailable       atomic.Bool
-		late                  = &daemoncompose.StartupBindings{}
-		claudeStartup         = cfg.claudeStartup()
-	)
-	usageRefreshAge, usage, claudeUsageCaptures := newUsageCollection(st, cfg)
-	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
-		manualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
-	if cfg.FakeDriverEnabled {
-		workflow, err = daemoncompose.ComposeFakeWorkflow(
-			st, attention, autoScriptStageDriver{StageDriver: driver}, lock, bound, cfg.Logger)
-		if err != nil {
-			return nil, err
-		}
-		// Published before the seed, so an attention option the seed's
-		// writes reach reads this engine, not nil.
-		late.Workflow = workflow
-		if cfg.SeedWalkingSkeleton {
-			if err := daemoncompose.SeedWalkingSkeleton(parent, workflow); err != nil {
-				return nil, err
-			}
-		}
-	} else if cfg.Claude != nil {
-		var claude *daemoncompose.ClaudeWorkflow
-		claude, err = daemoncompose.ComposeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, claudeStartup, manualProjects,
-			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late)
-		if err != nil {
-			return nil, err
-		}
-		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
-	} else if cfg.Scenario != nil {
-		var parts daemoncompose.ScenarioParts
-		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
-		}
-		scenarioWiring, err = daemoncompose.ComposeScenario(ctx, parts)
-		if err != nil {
-			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
-		}
-		late.ScenarioWiring, late.AgentCatalog = scenarioWiring, &scenarioWiring.Catalog
-		// The forge serves only once its loop starts; a start that fails
-		// before then still owns the listener.
-		defer func() {
-			if err != nil {
-				_ = scenarioWiring.Listener.Close()
-			}
-		}()
-		workflow = scenarioWiring.Workflow
-		late.Workflow = workflow
-	}
-	// The live credential-integrity probe exists only in Claude mode, where
-	// the daemon has a runtime and a pinned exporter image to observe with.
-	var integrityProbe credentialIntegrityProbe
-	if cfg.Claude != nil {
-		integrityProbe = newCredentialIntegrityProbe(st,
-			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin)),
-			cfg.now, cfg.Logger)
-	}
-	// The startup pass reports recorded marks only, so starting the daemon
-	// starts no observer container. Scheduled passes run the live probe.
-	if err := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, nil)(parent); err != nil {
-		return nil, fmt.Errorf("initial doctor pass: %w", err)
-	}
-	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, integrityProbe)
-	if workflow != nil {
-		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
-			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
-		}
-	}
-	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.now); err != nil {
-		return nil, fmt.Errorf("report execution configuration: %w", err)
-	}
-	if err := concludeInvocationStallNotices(parent, st); err != nil {
-		return nil, fmt.Errorf("conclude stale invocation stall notices: %w", err)
-	}
-
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	if loopbackTwin != nil {
-		logger.Info("serving same-host loopback twin listener",
-			"primary", listener.Addr().String(), "loopback", loopbackTwin.Addr().String())
-	}
-	// A completion recorded before migration 0066 gains its
-	// work_unit_completed milestone once (#1134); a store already carrying
-	// the milestones is a no-op.
-	if err := reconcileWorkUnitCompletionMilestones(parent, st, logger); err != nil {
-		return nil, err
-	}
-	server := &http.Server{
-		Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
-			Status: "ok", Version: buildVersion(), StartedAt: startedAt,
-		}),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	// Shutdown releases open revision long-polls, so draining the server
-	// stays inside ServerShutdownBudget instead of waiting out their bound.
-	server.RegisterOnShutdown(attention.Shutdown)
-	var sessions daemonshell.SessionCloser
-	if claudeWiring != nil {
-		sessions = claudeWiring.Closer
-	}
-	d := &daemon{
-		Shell: daemonshell.New(daemonshell.Parts{
-			Lock: lock, Store: st, Listener: listener, LoopbackTwin: loopbackTwin, Server: server,
-			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.now,
-		}),
-		store: st, attention: attention, workflow: workflow, driver: driver, pairing: pairing, usage: usage,
-	}
-	d.pairing.configure(d.Readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
 	// extends with its own recipe, and the recipes adopted for the Claude
 	// driver's repository; with no Claude driver there is none.
@@ -1070,79 +767,38 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.Claude != nil {
 		repositoryID = cfg.Claude.RepositoryID
 	}
-	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, storeOptions.ApprovedRecipes, repositoryID, integrityProbe, d.usage,
-		cfg.Environment,
-		cfg.execution(), attention, cfg.DeputyLaunch, func(ctx context.Context, id domain.TaskID, commit func() error) error {
-			if workflow == nil {
-				return commit()
+	var pairing *pairingControl
+	started, err := daemoncompose.Start(parent, stop, daemoncompose.StartOptions{
+		DBPath: cfg.DBPath, StateDir: cfg.StateDir, ListenAddr: cfg.ListenAddr,
+		FakeDriverEnabled: cfg.FakeDriverEnabled, FakeDriverDir: cfg.FakeDriverDir, NtfyURL: cfg.NtfyURL,
+		ReconcileInterval: cfg.ReconcileInterval, DoctorInterval: cfg.DoctorInterval,
+		SchedulerInterval: cfg.SchedulerInterval, AttentionDeliveryInterval: cfg.AttentionDeliveryInterval,
+		ApprovedRecipes: cfg.ApprovedRecipes, SeedWalkingSkeleton: cfg.SeedWalkingSkeleton, SeedFixture: fixture,
+		IntakeInitiators: cfg.IntakeInitiators, MemoryBudgetMiB: cfg.MemoryBudgetMiB, Logger: cfg.Logger,
+		Claude: cfg.Claude, Scenario: cfg.Scenario,
+		ManualProjects: manualProjects, ManualInitiator: manualInitiator, StoreOptions: storeOptions,
+		ReadinessEnvironment: string(cfg.Environment), Version: buildVersion(),
+		IdentityLabel: credentialIdentityLabel,
+		WrapFakeDriver: func(driver *fake.StageDriver) exec.StageDriver {
+			return autoScriptStageDriver{StageDriver: driver}
+		},
+		OpenControl: func(dbPath, stateDir string) (daemoncompose.ControlSocket, error) {
+			opened, err := newPairingControl(dbPath, stateDir)
+			if err != nil {
+				return nil, err
 			}
-			return workflow.CommitTaskWorkflowClosure(ctx, id, commit)
-		})
-	var fakeSched *scheduler.Scheduler
-	var loops *daemoncompose.ClaudeLoops
-	if cfg.FakeDriverEnabled {
-		// Construct every loop before making restart-gated recovery available.
-		// None is running yet, so no operator can resume into a partial start.
-		fakeSched, err = daemoncompose.NewFakeScheduler(st)
-		if err != nil {
-			return nil, err
-		}
-		fakeSched.SetLogger(cfg.Logger)
-	} else if claudeWiring != nil {
-		loops, err = daemoncompose.ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
-			runDoctor, d.usage.CollectAll, late)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if workflow != nil {
-		if err := d.EnableDurableStopRecovery(parent); err != nil {
-			return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
-		}
-	}
-
-	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, localBackups, logger)
-	defer func() {
-		if !success {
-			if stop != nil {
-				stop()
-			}
-			d.AbortStart()
-		}
-	}()
-	if cfg.afterBackgroundStart != nil {
-		if err := cfg.afterBackgroundStart(); err != nil {
-			return nil, err
-		}
-	}
-	if fakeSched != nil {
-		d.Go(func() {
-			d.ComponentExited(parent, ctx, daemonshell.ComponentScheduler,
-				fakeSched.Run(ctx, cfg.SchedulerInterval))
-		})
-	}
-	if loops != nil {
-		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
-	}
-	if scenarioWiring != nil {
-		d.startScenarioLoops(parent, ctx, cfg, scenarioWiring, workflow)
-	}
-	pairingCode, _, err := attention.MintPairingCode(parent)
+			pairing = opened
+			return pairingControlSocket{
+				pairing: opened, repositoryID: repositoryID, environment: cfg.Environment,
+				execution: cfg.execution(), launch: cfg.DeputyLaunch,
+			}, nil
+		},
+		StartSeams: cfg.seams,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("mint startup pairing code: %w", err)
-	}
-	if err := d.PublishReadiness(cfg.StateDir, pairingCode, string(cfg.Environment)); err != nil {
 		return nil, err
 	}
-	if d.pairing != nil {
-		if err := d.pairing.publish(); err != nil {
-			return nil, err
-		}
-	}
-	success = true
-	lockTransferred = true
-	return d, nil
+	return &daemon{Daemon: started, pairing: pairing}, nil
 }
 
 func parseOperatingMode(raw string) (domain.OperatingMode, error) {
@@ -1154,21 +810,6 @@ func parseOperatingMode(raw string) (domain.OperatingMode, error) {
 	default:
 		return "", fmt.Errorf("invalid operating mode %q", raw)
 	}
-}
-
-func closeStartupSessions(success bool, closer daemoncompose.SessionCloser, stop func()) error {
-	if success || closer == nil {
-		return nil
-	}
-	// Restore signal disposition before this teardown, for the reason serve
-	// documents: startupSessionCloser can block on credential-bearing lease
-	// cleanup, and until stop runs signal.NotifyContext keeps absorbing the
-	// operator's SIGTERM, leaving SIGKILL as the only way out. stop is nil
-	// only in tests that never register signal handling.
-	if stop != nil {
-		stop()
-	}
-	return closer.Close(context.Background())
 }
 
 // autoScriptStageDriver gives the standalone 1A.0 daemon a complete fake

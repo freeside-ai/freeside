@@ -1,4 +1,4 @@
-package main
+package daemoncompose
 
 import (
 	"context"
@@ -6,38 +6,37 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
-// claudeModelDiscoverer runs one model discovery through an image under a
+// ClaudeModelDiscoverer runs one model discovery through an image under a
 // setup token. Production binds ward.DiscoverClaudeModels to the daemon's
 // runtime and rig authorizer; tests replace it.
-type claudeModelDiscoverer func(
+type ClaudeModelDiscoverer func(
 	ctx context.Context, image string, token ward.SetupToken,
 ) (ward.ModelReport, error)
 
-func productionClaudeModelDiscoverer(
+func ProductionClaudeModelDiscoverer(
 	runtime ward.Runtime, authorize ward.RuntimeResourceAuthorizer,
-) claudeModelDiscoverer {
+) ClaudeModelDiscoverer {
 	return func(ctx context.Context, image string, token ward.SetupToken) (ward.ModelReport, error) {
 		return ward.DiscoverClaudeModels(ctx, runtime, image, token, authorize)
 	}
 }
 
-// codexModelDiscoverer runs one model discovery through an image under a
+// CodexModelDiscoverer runs one model discovery through an image under a
 // Codex probe credential. Production binds ward.DiscoverCodexModels to the
 // daemon's runtime and rig authorizer; tests replace it.
-type codexModelDiscoverer func(
+type CodexModelDiscoverer func(
 	ctx context.Context, image string, credential ward.LineupProbeCredential,
 ) (ward.ModelReport, error)
 
-func productionCodexModelDiscoverer(
+func ProductionCodexModelDiscoverer(
 	runtime ward.Runtime, authorize ward.RuntimeResourceAuthorizer,
-) codexModelDiscoverer {
+) CodexModelDiscoverer {
 	return func(ctx context.Context, image string, credential ward.LineupProbeCredential) (ward.ModelReport, error) {
 		return ward.DiscoverCodexModels(ctx, runtime, image, credential, authorize)
 	}
@@ -51,7 +50,7 @@ type modelCatalogRefresh struct {
 	// readToken reads an enrollment generation's setup token under the
 	// identity's read hold: wardstore.CredentialReader.Read in production.
 	readToken func(ctx context.Context, id domain.ClientEnrollmentID, ordinal int) (ward.SetupToken, error)
-	discover  claudeModelDiscoverer
+	discover  ClaudeModelDiscoverer
 	image     string
 	// codexImage is the review image Codex discovery runs in; empty skips
 	// Codex discovery. readCodex reads an enrollment's current probe
@@ -59,7 +58,7 @@ type modelCatalogRefresh struct {
 	// wardstore.CodexProbeCredentialReader.Read in production.
 	codexImage    string
 	readCodex     func(ctx context.Context, id domain.ClientEnrollmentID) (ward.LineupProbeCredential, error)
-	discoverCodex codexModelDiscoverer
+	discoverCodex CodexModelDiscoverer
 	now           func() time.Time
 	logger        *slog.Logger
 }
@@ -73,20 +72,20 @@ type modelCatalogRefresh struct {
 // that mode for the reviewer's harness. A nil discoverer is the production
 // probe.
 func newModelCatalogRefresh(
-	st *store.Store, cfg daemoncompose.ClaudeDriverConfig, containerBin string,
-	discover claudeModelDiscoverer, discoverCodex codexModelDiscoverer, logger *slog.Logger,
+	st *store.Store, cfg ClaudeDriverConfig, containerBin string,
+	discover ClaudeModelDiscoverer, discoverCodex CodexModelDiscoverer, logger *slog.Logger,
 ) modelCatalogRefresh {
 	runtime := ward.NewCLIRuntime(containerBin)
-	authorize := daemoncompose.ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
+	authorize := ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)
 	if discover == nil {
-		discover = productionClaudeModelDiscoverer(runtime, authorize)
+		discover = ProductionClaudeModelDiscoverer(runtime, authorize)
 	}
 	if discoverCodex == nil {
-		discoverCodex = productionCodexModelDiscoverer(runtime, authorize)
+		discoverCodex = ProductionCodexModelDiscoverer(runtime, authorize)
 	}
 	utcNow := func() time.Time { return time.Now().UTC() }
 	reader := wardstore.CredentialReader{
-		Store: st, ReadSetupToken: daemoncompose.ProductionSetupTokenReader(runtime, cfg.ExporterImage, authorize), Now: utcNow,
+		Store: st, ReadSetupToken: ProductionSetupTokenReader(runtime, cfg.ExporterImage, authorize), Now: utcNow,
 	}
 	refresh := modelCatalogRefresh{
 		store: st, readToken: reader.Read, discover: discover, image: string(cfg.AgentImage),
@@ -103,7 +102,7 @@ func newModelCatalogRefresh(
 // subscription reviewer: an unattended review whose auth mode only the Codex
 // provider takes. Its input root holds the OAuth stores discovery reads; an
 // API-key reviewer's holds a key file, so it starts no Codex discovery.
-func codexReviewerConfigured(cfg daemoncompose.ClaudeDriverConfig) bool {
+func codexReviewerConfigured(cfg ClaudeDriverConfig) bool {
 	return cfg.OperatingMode == domain.ModeUnattended && cfg.ReviewImage != "" && cfg.ReviewInputRoot != "" &&
 		cfg.ReviewAuthMode == ward.CodexAuthSubscription
 }
@@ -200,31 +199,31 @@ func (r modelCatalogRefresh) discoverOne(ctx context.Context, target modelCatalo
 		if err != nil {
 			return domain.DiscoveredModelCatalog{}, err
 		}
-		return recordModelCatalog(ctx, r.store, report, target.enrollment, r.now)
+		return RecordModelCatalog(ctx, r.store, report, target.enrollment, r.now)
 	}
 	token, err := r.readToken(ctx, target.enrollment, target.generation)
 	if err != nil {
 		return domain.DiscoveredModelCatalog{}, err
 	}
-	return recordClaudeModelCatalog(ctx, r.store, r.discover, r.image, token, target.enrollment, r.now)
+	return RecordClaudeModelCatalog(ctx, r.store, r.discover, r.image, token, target.enrollment, r.now)
 }
 
-// recordClaudeModelCatalog discovers one enrollment's models under its token
+// RecordClaudeModelCatalog discovers one enrollment's models under its token
 // and stores the catalog, replacing the last one only on success.
-func recordClaudeModelCatalog(
-	ctx context.Context, st *store.Store, discover claudeModelDiscoverer, image string, token ward.SetupToken,
+func RecordClaudeModelCatalog(
+	ctx context.Context, st *store.Store, discover ClaudeModelDiscoverer, image string, token ward.SetupToken,
 	enrollment domain.ClientEnrollmentID, now func() time.Time,
 ) (domain.DiscoveredModelCatalog, error) {
 	report, err := discover(ctx, image, token)
 	if err != nil {
 		return domain.DiscoveredModelCatalog{}, err
 	}
-	return recordModelCatalog(ctx, st, report, enrollment, now)
+	return RecordModelCatalog(ctx, st, report, enrollment, now)
 }
 
-// recordModelCatalog stores one enrollment's discovered catalog, replacing
+// RecordModelCatalog stores one enrollment's discovered catalog, replacing
 // the last one.
-func recordModelCatalog(
+func RecordModelCatalog(
 	ctx context.Context, st *store.Store, report ward.ModelReport, enrollment domain.ClientEnrollmentID,
 	now func() time.Time,
 ) (domain.DiscoveredModelCatalog, error) {

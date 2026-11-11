@@ -111,7 +111,7 @@ func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.Write(t.Context(), func(tx *store.WriteTx) error {
+	if err := h.Store.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := tx.PutArtifact(t.Context(), specArtifact); err != nil {
 			return err
 		}
@@ -131,7 +131,7 @@ func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 	if err := json.Unmarshal(declaration, &declared); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.SubmitProductionRun(t.Context(), h.store, engine.ProductionRunSpec{
+	if _, err := engine.SubmitProductionRun(t.Context(), h.Store, engine.ProductionRunSpec{
 		RunID: resolved.RunID, ProjectID: "project-control", SpecArtifactID: specArtifact.ID,
 		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
 		WorkUnit: &domain.WorkUnitDeclarationInput{
@@ -201,7 +201,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 		directOpens.Add(1)
 		return nil, errors.New("unexpected direct observation open")
 	}))
-	if _, err := h.workflow.Reconcile(ctx); err != nil {
+	if _, err := h.Workflow.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var snapshot bytes.Buffer
@@ -230,7 +230,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 		t.Fatal("submission did not create a specification run")
 	}
 	var submittedTask domain.TaskID
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		run, err := tx.GetRun(ctx, submitted.SpecificationRunID)
 		if err == nil {
 			submittedTask = run.TaskID
@@ -250,7 +250,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	}
 	liveID := domain.RunID("run-control-resume")
 	var liveTask domain.TaskID
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, domain.Run{ID: liveID, ProjectID: "project-control", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}); err != nil {
 			return err
 		}
@@ -272,7 +272,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 		t.Fatal("resume did not print an observation")
 	}
 	var emptyTask domain.Task
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		var err error
 		emptyTask, err = tx.GetOrCreateTask(ctx, "project-control", domain.SpecificationSource{
 			Kind:         domain.SpecificationSourceIssueSubject,
@@ -293,7 +293,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	var defects bytes.Buffer
 	claim := "sha256:" + strings.Repeat("c", 64)
 	var itemID domain.ItemID
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		items, err := tx.ListAttentionItems(ctx)
 		if err == nil && len(items) > 0 {
 			itemID = items[0].Value.ID
@@ -312,7 +312,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 		t.Fatal("defect result is not JSON")
 	}
 	profile := approveShadowReviewProfile(t)
-	if err := h.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := h.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordTrustProfile(ctx, profile, time.Now().UTC())
 	}); err != nil {
 		t.Fatal(err)
@@ -654,7 +654,7 @@ func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.Write(t.Context(), func(tx *store.WriteTx) error {
+	if err := h.Store.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := tx.PutRun(t.Context(), domain.Run{ID: runID, ProjectID: item.ProjectID, SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}); err != nil {
 			return err
 		}
@@ -711,7 +711,7 @@ func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
 		remote[test.name] = readSnapshot(test.recipes, test.allowed)
 	}
 	readSnapshot([]domain.Digest{domain.Digest("sha256:" + strings.Repeat("c", 64))}, false)
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		_, err := tx.GetAttentionItem(t.Context(), item.ID)
 		return err
 	}); err != nil {

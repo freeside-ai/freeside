@@ -112,11 +112,11 @@ func TestInspectProposalsServedEqualsDirect(t *testing.T) {
 		Environment: environmentEphemeral, ApprovedRecipes: map[domain.Digest]bool{recipe: true},
 	})
 	ctx := t.Context()
-	open := seedProposalCards(t, h.store, "open")
-	decided := seedProposalCards(t, h.store, "decided")
-	decided.decide(t, h.store, decided.closureCard, domain.ActionDecline)
+	open := seedProposalCards(t, h.Store, "open")
+	decided := seedProposalCards(t, h.Store, "decided")
+	decided.decide(t, h.Store, decided.closureCard, domain.ActionDecline)
 	const evidence = domain.ItemID("execution-failure-evidence")
-	putRecipeEvidenceItem(t, h.store, recipe, fixtureActiveRunID, evidence)
+	putRecipeEvidenceItem(t, h.Store, recipe, fixtureActiveRunID, evidence)
 	served := inspect[proposalCards](t, ctx, "proposals", "-db", dbPath)
 	if err := h.Close(); err != nil {
 		t.Fatal(err)

@@ -112,11 +112,11 @@ func TestScenarioCleanRunPublishes(t *testing.T) {
 	h := startDaemon(t, cfg)
 	submitted := submitAndApproveScenario(t, h, cfg)
 
-	ready := waitForScenarioItem(t, h.attention, domain.ItemID("production-ready-"+string(submitted.RunID)))
+	ready := waitForScenarioItem(t, h.Attention, domain.ItemID("production-ready-"+string(submitted.RunID)))
 	if ready.Item.Type != domain.AttentionReadyForFinalReview {
 		t.Fatalf("publication item type = %q, want %q", ready.Item.Type, domain.AttentionReadyForFinalReview)
 	}
-	assertScenarioPublished(t, h.attention, submitted.TaskID, submitted.RunID)
+	assertScenarioPublished(t, h.Attention, submitted.TaskID, submitted.RunID)
 	// A read that names the scenario's recipe goes through the running
 	// daemon's control route, which must approve what its store approves.
 	source, err := openObservation(t.Context(), cfg.DBPath, verify.RecipeDigest(daemoncompose.ScenarioRecipe))
@@ -134,7 +134,7 @@ func TestScenarioCleanRunPublishes(t *testing.T) {
 	}
 
 	restarted := startDaemon(t, cfg)
-	assertScenarioPublished(t, restarted.attention, submitted.TaskID, submitted.RunID)
+	assertScenarioPublished(t, restarted.Attention, submitted.TaskID, submitted.RunID)
 	if err := restarted.Close(); err != nil {
 		t.Fatalf("close restarted daemon: %v", err)
 	}
@@ -152,21 +152,21 @@ func TestScenarioQuotaParkResumes(t *testing.T) {
 	h := startDaemon(t, cfg)
 	submitted := submitAndApproveScenario(t, h, cfg)
 
-	first := waitForScenarioRun(t, h.store, submitted.RunID)
+	first := waitForScenarioRun(t, h.Store, submitted.RunID)
 	parked, err := engine.ProductionAttemptRunID(first.CampaignID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold := waitForScenarioHold(t, h.store, parked)
+	hold := waitForScenarioHold(t, h.Store, parked)
 	window := hold.QuotaWindow
 	if hold.Reason != domain.HoldQuotaWindowExhausted || window == nil ||
 		window.Window != quota.QuotaRefusal.Window || window.Source != domain.ExhaustedMarkProviderRefusal {
 		t.Fatalf("parked hold = %+v, want quota_window_exhausted on the refused window", hold)
 	}
 
-	recordScenarioAllowedReading(t, h.store, window.Pool, window.Window)
-	assertScenarioPublished(t, h.attention, submitted.TaskID, parked)
-	assertStartedBeforeReset(t, h.attention, submitted.TaskID, parked, window.ResetsAt)
+	recordScenarioAllowedReading(t, h.Store, window.Pool, window.Window)
+	assertScenarioPublished(t, h.Attention, submitted.TaskID, parked)
+	assertStartedBeforeReset(t, h.Attention, submitted.TaskID, parked, window.ResetsAt)
 	if err := h.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -184,12 +184,12 @@ func TestScenarioQuotaMoveMovesTheParkedTask(t *testing.T) {
 	h := startDaemon(t, cfg)
 	submitted := submitAndApproveScenario(t, h, cfg)
 
-	first := waitForScenarioRun(t, h.store, submitted.RunID)
+	first := waitForScenarioRun(t, h.Store, submitted.RunID)
 	parked, err := engine.ProductionAttemptRunID(first.CampaignID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold := waitForScenarioHold(t, h.store, parked)
+	hold := waitForScenarioHold(t, h.Store, parked)
 	window := hold.QuotaWindow
 	if hold.Reason != domain.HoldQuotaWindowExhausted || window == nil || window.Window != quota.QuotaRefusal.Window {
 		t.Fatalf("parked hold = %+v, want quota_window_exhausted on the refused window", hold)
@@ -204,7 +204,7 @@ func TestScenarioQuotaMoveMovesTheParkedTask(t *testing.T) {
 		t.Fatalf("parked hold offers %+v, want %+v among them", window.AlternateAgents, offer)
 	}
 
-	if _, err := h.attention.Submit(t.Context(), signet.ClientCommand{
+	if _, err := h.Attention.Submit(t.Context(), signet.ClientCommand{
 		CommandID: "move-scenario", DeviceID: "device-scenario", Kind: domain.CommandKindMoveParkedTask,
 		MoveParkedTask: signet.MoveParkedTaskPayload{
 			TaskID: submitted.TaskID, Choice: &signet.AlternateAgentChoice{EnrollmentID: target.Enrollment.ID},
@@ -213,9 +213,9 @@ func TestScenarioQuotaMoveMovesTheParkedTask(t *testing.T) {
 		t.Fatalf("move_parked_task: %v", err)
 	}
 
-	assertScenarioPublished(t, h.attention, submitted.TaskID, parked)
-	assertStartedBeforeReset(t, h.attention, submitted.TaskID, parked, window.ResetsAt)
-	timeline, err := h.attention.GetTaskTimeline(t.Context(), submitted.TaskID)
+	assertScenarioPublished(t, h.Attention, submitted.TaskID, parked)
+	assertStartedBeforeReset(t, h.Attention, submitted.TaskID, parked, window.ResetsAt)
+	timeline, err := h.Attention.GetTaskTimeline(t.Context(), submitted.TaskID)
 	if err != nil {
 		t.Fatalf("task timeline: %v", err)
 	}
@@ -230,12 +230,12 @@ func TestScenarioQuotaMoveMovesTheParkedTask(t *testing.T) {
 	if moved == nil {
 		t.Fatalf("task timeline shows no move of the implementer to %s; events: %+v", target.Enrollment.ID, timeline.Events)
 	}
-	admission := scenarioAdmission(t, h.store, parked)
+	admission := scenarioAdmission(t, h.Store, parked)
 	if binding := admission.AgentBinding; binding == nil || binding.EnrollmentID != target.Enrollment.ID ||
 		binding.SelectionSource != domain.AgentSelectionSourceTaskLine {
 		t.Fatalf("parked attempt admission binds %+v, want %s selected by its task line", binding, target.Enrollment.ID)
 	}
-	assertScenarioLineupServed(t, h.attention, quota, target.Enrollment.ID)
+	assertScenarioLineupServed(t, h.Attention, quota, target.Enrollment.ID)
 	if err := h.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -254,8 +254,8 @@ func TestScenarioQuotaNoResetRaisesTheAlternateAgentCard(t *testing.T) {
 	h := startDaemon(t, cfg)
 	submitted := submitAndApproveScenario(t, h, cfg)
 
-	failed := scenarioInvocation(t, h.store, submitted.RunID)
-	card := waitForScenarioItem(t, h.attention, domain.ExecutionFailureItemID(failed))
+	failed := scenarioInvocation(t, h.Store, submitted.RunID)
+	card := waitForScenarioItem(t, h.Attention, domain.ExecutionFailureItemID(failed))
 	item := card.Item
 	if item.Type != domain.AttentionExecutionFailure || item.ExecutionFailure == nil ||
 		item.ExecutionFailure.Cause != domain.FailureCauseQuota {
@@ -266,11 +266,11 @@ func TestScenarioQuotaNoResetRaisesTheAlternateAgentCard(t *testing.T) {
 			t.Fatalf("failure card requests %v, want %s among them", item.RequestedDecision, action)
 		}
 	}
-	refused := scenarioAdmission(t, h.store, submitted.RunID)
+	refused := scenarioAdmission(t, h.Store, submitted.RunID)
 	if refused.AuthIdentityID == nil {
 		t.Fatalf("refused admission %+v names no identity", refused)
 	}
-	target := otherSubscription(t, quota, identityPool(t, h.store, *refused.AuthIdentityID))
+	target := otherSubscription(t, quota, identityPool(t, h.Store, *refused.AuthIdentityID))
 	offer := domain.AlternateAgentOffer{
 		Enrollment: target.Enrollment.ID, Pool: target.Identity.EffectiveUsagePool(),
 		Harness: domain.HarnessClientClaudeCode, Model: daemoncompose.ScenarioWriterModel,
@@ -279,11 +279,11 @@ func TestScenarioQuotaNoResetRaisesTheAlternateAgentCard(t *testing.T) {
 	if !slices.Contains(item.AlternateAgents, offer) {
 		t.Fatalf("failure card offers %+v, want %+v among them", item.AlternateAgents, offer)
 	}
-	retry, err := engine.ProductionAttemptRunID(waitForScenarioRun(t, h.store, submitted.RunID).CampaignID, 2)
+	retry, err := engine.ProductionAttemptRunID(waitForScenarioRun(t, h.Store, submitted.RunID).CampaignID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		if _, found, err := tx.GetRunHold(t.Context(), submitted.RunID); err != nil || found {
 			t.Errorf("refused run hold: found %v, err %v; want none", found, err)
 		}
@@ -309,7 +309,7 @@ func TestScenarioQuotaNoResetRaisesTheAlternateAgentCard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := h.attention.Submit(t.Context(), signet.ClientCommand{
+	if _, err := h.Attention.Submit(t.Context(), signet.ClientCommand{
 		CommandID: "retry-scenario", DeviceID: "device-scenario", ExpectedEntityVersion: card.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: item.ID, Action: domain.ActionRetryWithAlternateAgent, ItemVersion: item.ItemVersion,
@@ -319,8 +319,8 @@ func TestScenarioQuotaNoResetRaisesTheAlternateAgentCard(t *testing.T) {
 		t.Fatalf("retry_with_alternate_agent: %v", err)
 	}
 
-	assertScenarioPublished(t, h.attention, submitted.TaskID, retry)
-	admission := scenarioAdmission(t, h.store, retry)
+	assertScenarioPublished(t, h.Attention, submitted.TaskID, retry)
+	admission := scenarioAdmission(t, h.Store, retry)
 	if binding := admission.AgentBinding; binding == nil || binding.EnrollmentID != target.Enrollment.ID ||
 		binding.SelectionSource != domain.AgentSelectionSourceCard {
 		t.Fatalf("retry admission binds %+v, want %s selected by the card", binding, target.Enrollment.ID)
@@ -476,7 +476,7 @@ func submitAndApproveScenario(t *testing.T, h *daemon, cfg config) submitResult 
 		t.Fatalf("submit: %v", err)
 	}
 
-	if err := h.store.Write(t.Context(), func(tx *store.WriteTx) error {
+	if err := h.Store.Write(t.Context(), func(tx *store.WriteTx) error {
 		return tx.PutDevice(t.Context(), domain.Device{
 			ID: "device-scenario", DisplayName: "Scenario approver",
 			Status: domain.DeviceActive, PairedAt: time.Now().UTC(),
@@ -484,8 +484,8 @@ func submitAndApproveScenario(t *testing.T, h *daemon, cfg config) submitResult 
 	}); err != nil {
 		t.Fatalf("put device: %v", err)
 	}
-	approval := waitForScenarioItem(t, h.attention, domain.ItemID("spec-approval-"+string(submitted.RunID)+"-1"))
-	if _, err := h.attention.Submit(t.Context(), signet.ClientCommand{
+	approval := waitForScenarioItem(t, h.Attention, domain.ItemID("spec-approval-"+string(submitted.RunID)+"-1"))
+	if _, err := h.Attention.Submit(t.Context(), signet.ClientCommand{
 		CommandID: "approve-scenario", DeviceID: "device-scenario", ExpectedEntityVersion: approval.EntityVersion,
 		Payload: signet.DecisionPayload{
 			ItemID: approval.Item.ID, Action: domain.ActionApprove,

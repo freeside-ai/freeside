@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
@@ -94,7 +95,7 @@ func runDoctorCommand(
 	var backupHealth store.BackupHealthSource
 	// Only a running daemon can observe a credential store. With no daemon
 	// the report carries the marks earlier passes recorded.
-	var integrityProbe credentialIntegrityProbe
+	var integrityProbe daemoncompose.CredentialIntegrityProbe
 	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
 		integrityProbe = daemon.credentialIntegrityProbe
 		if err := daemon.requireApproved(ctx, approvedRecipes); err != nil {

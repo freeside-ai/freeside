@@ -210,7 +210,7 @@ func TestSetPoolLimitUsesRunningDaemonStore(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	recordSetPoolLimitIdentities(t, h.store,
+	recordSetPoolLimitIdentities(t, h.Store,
 		setPoolLimitIdentity("claude-writer", "claude"), setPoolLimitIdentity("codex-reviewer", "openai"))
 	ctx := context.WithValue(t.Context(), directStoreOpenerKey{}, directStoreOpener(
 		func(context.Context, string, store.Options, storeOpenMode) (*store.Store, error) {
@@ -230,7 +230,7 @@ func TestSetPoolLimitUsesRunningDaemonStore(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("forwarded refusal = %v", err)
 	}
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		pool, err := tx.GetUsagePool(t.Context(), "pool-claude-writer")
 		if err == nil && pool.MaxParallelExecutions != 8 {
 			t.Errorf("running daemon store limit = %d, want 8", pool.MaxParallelExecutions)

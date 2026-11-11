@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
@@ -114,7 +115,7 @@ type (
 		// credentialIntegrityProbe is the running daemon's live probe, nil
 		// when the daemon has no runtime to observe with. A command that
 		// opens the store itself never has one.
-		credentialIntegrityProbe credentialIntegrityProbe
+		credentialIntegrityProbe daemoncompose.CredentialIntegrityProbe
 		commitWorkflowClosure    func(context.Context, domain.TaskID, func() error) error
 		// usageCollection is the running daemon's usage collection. A
 		// command that opens the store itself never has one.

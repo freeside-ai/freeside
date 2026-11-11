@@ -50,7 +50,7 @@ func startNotifyTestFixture(t *testing.T, ntfyURL string) notifyTestFixture {
 func (f notifyTestFixture) pair(t *testing.T, id domain.DeviceID, name string) {
 	t.Helper()
 	ctx := t.Context()
-	if err := f.daemon.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := f.daemon.Store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutDevice(ctx, domain.Device{
 			ID: id, DisplayName: name,
 			Status: domain.DeviceActive, PairedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
@@ -95,7 +95,7 @@ func TestNotifyTestSendsToEachActiveDevice(t *testing.T) {
 	f.pair(t, "phone", "Ben's iPhone")
 	f.pair(t, "tablet", "Tablet")
 	f.pair(t, "old-phone", "Old Phone")
-	if _, err := f.daemon.attention.Revoke(t.Context(), "phone", "old-phone"); err != nil {
+	if _, err := f.daemon.Attention.Revoke(t.Context(), "phone", "old-phone"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestNotifyTestSendsToEachActiveDevice(t *testing.T) {
 		}
 	}
 	f.assertNoTopic(t, sink.URL, out)
-	if err := f.daemon.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := f.daemon.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		rows, err := tx.ListAttentionDeliveries(t.Context())
 		if len(rows) != 0 {
 			t.Errorf("delivery rows = %d, want none", len(rows))
@@ -143,7 +143,7 @@ func TestNotifyTestOneDevice(t *testing.T) {
 	f.pair(t, "phone", "Phone")
 	f.pair(t, "tablet", "Tablet")
 	f.pair(t, "old-phone", "Old Phone")
-	if _, err := f.daemon.attention.Revoke(t.Context(), "phone", "old-phone"); err != nil {
+	if _, err := f.daemon.Attention.Revoke(t.Context(), "phone", "old-phone"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 

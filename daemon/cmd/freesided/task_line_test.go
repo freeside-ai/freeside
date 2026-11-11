@@ -124,7 +124,7 @@ func TestTaskLineUsesRunningDaemonStore(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	task := seedReviewedRun(t, h.store, "run-line").TaskID
+	task := seedReviewedRun(t, h.Store, "run-line").TaskID
 	ctx := context.WithValue(t.Context(), directStoreOpenerKey{}, directStoreOpener(
 		func(context.Context, string, store.Options, storeOpenMode) (*store.Store, error) {
 			return nil, errors.New("unexpected direct store open")
@@ -142,7 +142,7 @@ func TestTaskLineUsesRunningDaemonStore(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), pasted) {
 		t.Fatalf("forwarded refusal = %v", err)
 	}
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		current, err := tx.CurrentTaskLines(t.Context(), task)
 		if err == nil && current[domain.RoleImplementer].ID != result.Line.ID {
 			t.Errorf("running daemon store line = %+v", current[domain.RoleImplementer])

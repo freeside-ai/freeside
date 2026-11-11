@@ -379,7 +379,7 @@ func TestRoutingUsesRunningDaemonStore(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &revisions); err != nil || len(revisions) != 1 {
 		t.Fatalf("show -revisions = %q, %v", output, err)
 	}
-	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		policy, err := tx.CurrentRoutingPolicy(t.Context())
 		if err == nil && policy.Revision != 1 {
 			t.Errorf("running daemon store revision = %d, want 1", policy.Revision)

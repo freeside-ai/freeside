@@ -49,7 +49,7 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 		t.Fatal(err)
 	}
 	var itemID domain.ItemID
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutDevice(ctx, domain.Device{
 			ID: "doctor-device", DisplayName: "Doctor test", Status: domain.DeviceActive, PairedAt: now,
 		}); err != nil {
@@ -71,18 +71,18 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	item, err := h.attention.GetAttentionItem(ctx, itemID)
+	item, err := h.Attention.GetAttentionItem(ctx, itemID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.attention.Submit(ctx, signet.ClientCommand{
+	_, err = h.Attention.Submit(ctx, signet.ClientCommand{
 		CommandID: "doctor-without-consumer", DeviceID: "doctor-device", ExpectedEntityVersion: item.EntityVersion,
 		Payload: signet.DecisionPayload{ItemID: itemID, ItemVersion: item.Item.ItemVersion, Action: domain.ActionRunDoctor},
 	})
 	if err == nil || !strings.Contains(err.Error(), "doctor is unavailable") {
 		t.Fatalf("unsupported doctor action = %v", err)
 	}
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetCommand(ctx, "doctor-without-consumer"); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("rejected command persisted: %v", err)
 		}

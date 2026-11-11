@@ -35,7 +35,7 @@ func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
 				}
 				t.Cleanup(func() { _ = h.Close() })
 				var taskID domain.TaskID
-				if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+				if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 					if err := tx.PutRun(ctx, domain.Run{ID: "partial-run", ProjectID: "partial-project", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}); err != nil {
 						return err
 					}
@@ -88,7 +88,7 @@ func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
 				}
 				// A newer admission can occur before a delayed repair. The
 				// explicit selector must neither release nor close that start.
-				st := h.store
+				st := h.Store
 				if !live {
 					st, err = store.OpenExisting(ctx, dbPath, store.Options{})
 					if err != nil {
@@ -160,7 +160,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 		}
 	})
 	var taskID domain.TaskID
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		for _, runID := range []domain.RunID{"abandon-selected", "abandon-other"} {
 			if err := tx.PutRun(ctx, domain.Run{ID: runID, ProjectID: "abandon-project", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}); err != nil {
 				return err
@@ -191,7 +191,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
+		if err := h.Store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 			t.Fatal(err)
 		}
 		return item
@@ -205,7 +205,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 		seed("other-approval", "abandon-other", domain.AttentionSpecApproval),
 		seed("execution-failure-other", "abandon-other", domain.AttentionExecutionFailure),
 	}
-	service := signet.NewService(h.store)
+	service := signet.NewService(h.Store)
 	read := func(id domain.ItemID) signet.AttentionItemSnapshot {
 		t.Helper()
 		item, err := service.GetAttentionItem(ctx, id)
@@ -241,7 +241,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 			t.Fatalf("unrelated card changed: %s", item.ID)
 		}
 	}
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItemRecordsForTask(ctx, taskID)
 		if err != nil {
 			return err
@@ -267,7 +267,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 	if got := read(approval.ID); !reflect.DeepEqual(got, after) {
 		t.Fatal("rejected decision changed item")
 	}
-	if err := h.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := h.Store.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.GetCommand(ctx, "abandoned-decision")
 		if !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("rejected command recorded: %v", err)
@@ -278,7 +278,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 	}
 	late := failure
 	late.ID = "execution-failure-late"
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := h.Store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutAttentionItem(ctx, late)
 	}); !errors.Is(err, store.ErrTaskWorkflowClosed) {
 		t.Fatalf("late card = %v, want closed workflow", err)
@@ -287,7 +287,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 	if err != nil || result.Released || !result.WorkflowClosed || len(result.RetiredItems) != 0 {
 		t.Fatalf("repeat abandon = %+v, %v", result, err)
 	}
-	stateBefore, err := h.store.ServerState(ctx)
+	stateBefore, err := h.Store.ServerState(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestAbandonRetiresAttentionItems(t *testing.T) {
 	if err != nil || result.Released || result.RetiredItems == nil || len(result.RetiredItems) != 0 {
 		t.Fatalf("empty repeat = %+v, %v", result, err)
 	}
-	stateAfter, err := h.store.ServerState(ctx)
+	stateAfter, err := h.Store.ServerState(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
