@@ -357,26 +357,16 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 		}
 	}
-	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.Now); err != nil {
-		return nil, fmt.Errorf("report execution configuration: %w", err)
-	}
-	if err := concludeInvocationStallNotices(parent, st); err != nil {
-		return nil, fmt.Errorf("conclude stale invocation stall notices: %w", err)
-	}
-
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	if err := ConvergeStoredState(parent, st, workflow != nil, cfg.Now, logger); err != nil {
+		return nil, err
+	}
 	if loopbackTwin != nil {
 		logger.Info("serving same-host loopback twin listener",
 			"primary", listener.Addr().String(), "loopback", loopbackTwin.Addr().String())
-	}
-	// A completion recorded before migration 0066 gains its
-	// work_unit_completed milestone once (#1134); a store already carrying
-	// the milestones is a no-op.
-	if err := reconcileWorkUnitCompletionMilestones(parent, st, logger); err != nil {
-		return nil, err
 	}
 	server := &http.Server{
 		Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
