@@ -22,9 +22,11 @@ import (
 // package boundary actually constrains it (internal/observe's import
 // allowlist), not here.
 
-// runFollowMain runs the follow verb. Exit contract: 0 observed (including an
-// interrupted follow, and including a run whose own outcome is blocked or
-// failed), 1 could not observe, 2 invocation mistake.
+// runFollowMain runs the follow verb. Exit contract (observe.ExitCode): 0
+// observed (including an interrupted follow, and including a run whose own
+// outcome is blocked or failed) or an -until condition met, 1 could not
+// observe or an -until wait that timed out or was interrupted, 2 invocation
+// mistake.
 func runFollowMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

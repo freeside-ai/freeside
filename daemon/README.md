@@ -3615,7 +3615,7 @@ daemon records it, plus a status block (current hold, per-invocation status
 and liveness, elapsed time, last observation) whenever the observed state
 changes. The timeline is durable, so a disconnected or restarted follow
 resumes with everything already observed; `-once` prints one snapshot instead
-of following. Liveness distinguishes an observed live invocation from an
+of following, and `-until` waits for a checkpoint (below). Liveness distinguishes an observed live invocation from an
 `observation_gap`: a stopped daemon leaves its last observation behind, and
 the reader's `-freshness-window` (30s by default) is what turns that stale
 observation into a gap rather than a claim. A finished invocation shows its
@@ -3640,6 +3640,38 @@ control socket when it is running and through a locked direct store when it is
 stopped, the same routing rule as `freesided submit`. It never reads a live
 writer's filesystem, stdout, stderr, or transcript; see the Run Observation
 Contract below for that boundary and its limits.
+
+`freesided follow -db <path> -run <run-id> -until <condition> -timeout
+<duration>` waits for one checkpoint instead of the outcome. Every
+`-interval` it reads the run's supervision snapshot (the one `-snapshot`
+prints), prints new milestones and status blocks as a follow does, and stops
+at the first read where the condition holds:
+
+| Condition | Holds when |
+| --- | --- |
+| `card=<attention type>` | The run has an open item of that type that requests a decision, the test the snapshot's `attention_required` state uses. `ready_for_final_review` is refused: the snapshot never lists it, so wait for the outcome instead. |
+| `stage-started=<stage>` | An invocation of `specification` or `implementation` has an `invocation_started` milestone. |
+| `stage-finished=<stage>` | An `implementation` invocation has a `terminal_recorded` milestone. |
+| `park-ended` | The run has an `invocation_admitted` milestone. A parked attempt admits nothing until its quota window resets; the hold alone is no proof, because another hold can replace it. The park allocates that attempt as a new run, so follow the parked run: on the refused run, which already admitted an invocation, it holds at once. |
+
+The stage conditions name only stages whose invocations record that
+milestone on the run. Review and verification invocations record no
+execution admission or invocation milestones, and a specification run's
+terminal records no `terminal_recorded` milestone, so `stage-finished`
+takes `implementation` alone: wait on a specification's end with
+`card=spec_approval`, the card it opens. To see a review's agent, model,
+and effort, read `runs[].review_admissions` in the task record.
+
+The last line names the condition and how the wait ended: `until <condition>
+met` exits 0; `timed out` and `interrupted` exit 1, so a script never reads an
+interrupt as a met condition. A failed read exits 1 and a bad flag exits 2.
+`-until` requires a positive `-timeout`, so a wait always ends, and can't be
+combined with `-once` or `-snapshot`. The snapshot reconstructs every open
+item and approves only the recipes a request names, through a running
+daemon as on a stopped root, so an item whose evidence names a recipe
+fails the read and the wait exits 1: pass `-approved-recipe`, as for
+`-snapshot` (`approved_recipe` in `<root>/daemon/settings.json` for a deputy
+root). A timeout also ends a read still in flight.
 
 **Follow is the pull diagnostic, not the way a stall reaches an operator.**
 Freeside's premise is that nobody is watching: work that needs judgment

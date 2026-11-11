@@ -864,6 +864,38 @@ func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
 			name: "recipe without snapshot",
 			args: []string{"-db", path, "-run", string(followRun), "-approved-recipe", "sha256:recipe"},
 		},
+		{
+			name: "until without timeout",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "park-ended"},
+		},
+		{
+			name: "until with a non-positive timeout",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "park-ended", "-timeout", "0s"},
+		},
+		{
+			name: "timeout without until",
+			args: []string{"-db", path, "-run", string(followRun), "-timeout", "1m"},
+		},
+		{
+			name: "until with once",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "park-ended", "-timeout", "1m", "-once"},
+		},
+		{
+			name: "until with snapshot",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "park-ended", "-timeout", "1m", "-snapshot"},
+		},
+		{
+			name: "unknown until condition",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "outcome=published", "-timeout", "1m"},
+		},
+		{
+			name: "until a ready item",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "card=ready_for_final_review", "-timeout", "1m"},
+		},
+		{
+			name: "until a review stage",
+			args: []string{"-db", path, "-run", string(followRun), "-until", "stage-started=review", "-timeout", "1m"},
+		},
 		{name: "unknown flag", args: []string{"-db", path, "-run", string(followRun), "-tail"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
