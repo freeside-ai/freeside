@@ -103,6 +103,9 @@ struct ConversationView: View {
     }
 
     let snapshot: Components.Schemas.ConversationSnapshot?
+    /// Whether the thread opens with its `Conversation` keyword. Off where
+    /// a fold's label already names it.
+    var showsKeyword = true
     var priorExchanges: [PriorExchange] = []
     var reply: Reply? = nil
     let attachments: AttachmentLoader
@@ -118,6 +121,7 @@ struct ConversationView: View {
     /// expanded state; the app always starts with every long body bounded.
     init(
         snapshot: Components.Schemas.ConversationSnapshot?,
+        showsKeyword: Bool = true,
         priorExchanges: [PriorExchange] = [],
         reply: Reply? = nil,
         attachments: AttachmentLoader,
@@ -127,6 +131,7 @@ struct ConversationView: View {
         initiallyExpandedMessageIDs: Set<String> = []
     ) {
         self.snapshot = snapshot
+        self.showsKeyword = showsKeyword
         self.priorExchanges = priorExchanges
         self.reply = reply
         self.attachments = attachments
@@ -138,8 +143,10 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            KeywordLabel(text: "Conversation")
-                .accessibilityAddTraits(.isHeader)
+            if showsKeyword {
+                KeywordLabel(text: "Conversation")
+                    .accessibilityAddTraits(.isHeader)
+            }
 
             ForEach(priorExchanges) { exchange in
                 priorExchange(exchange)

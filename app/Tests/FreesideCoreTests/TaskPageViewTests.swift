@@ -1243,27 +1243,94 @@ import Testing
         #expect(TaskTimelinePresentation.technicalRows(task: bare).map(\.label) == ["Task ID"])
     }
 
-    @Test func eachNamedConversationDrawsOnceNewestFirst() {
-        func item(_ id: String, _ conversation: String?, hoursOld: Double) -> Components.Schemas.AttentionItem {
-            var item = question(id, hoursOld: hoursOld).item
-            item.conversation_id = conversation
-            return item
+    private func thread(_ id: String, messages: Int) -> Components.Schemas.ConversationSnapshot {
+        var thread = AttentionFixtures.defaultConversations()[0]
+        thread.conversation.id = id
+        let first = thread.conversation.messages[0]
+        thread.conversation.messages = (0..<messages).map { index in
+            var message = first
+            message.id = "\(id)-\(index)"
+            message.sequence = index + 1
+            message.created_at = Date(timeIntervalSince1970: 1_799_000_000 - 60 * Double(messages - 1 - index))
+            return message
         }
-        var older = AttentionFixtures.defaultConversations()[0]
-        older.conversation.id = "conv-older"
-        var newer = older
-        newer.conversation.id = "conv-newer"
-        let held = ["conv-older": older, "conv-newer": newer]
+        return thread
+    }
 
-        let drawn = TaskTimelinePresentation.conversations([
-            item("a", "conv-older", hoursOld: 9),
-            item("b", "conv-newer", hoursOld: 1),
-            item("c", "conv-older", hoursOld: 2),
-            item("d", nil, hoursOld: 0),
-            item("e", "conv-unheld", hoursOld: 0),
-        ]) { held[$0] }
+    private func item(
+        _ id: String, _ conversation: String?, hoursOld: Double, status: Components.Schemas.ItemStatus = .resolved
+    ) -> Components.Schemas.AttentionItem {
+        var item = question(id, hoursOld: hoursOld).item
+        item.conversation_id = conversation
+        item.status = status
+        return item
+    }
 
-        #expect(drawn.map(\.conversation.id) == ["conv-newer", "conv-older"])
+    /// Acceptance 1 (#3041): the earlier threads, newest first, each once
+    /// with the newest item that names it. The leading item's thread, an
+    /// open item's, an empty one, and an unheld one stay out.
+    @Test func earlierThreadsListClosedItemsNewestFirstOnce() {
+        let held = [
+            "conv-lead": thread("conv-lead", messages: 2), "conv-a": thread("conv-a", messages: 2),
+            "conv-b": thread("conv-b", messages: 1), "conv-open": thread("conv-open", messages: 3),
+            "conv-empty": thread("conv-empty", messages: 0),
+        ]
+        func earlier(leadStatus: Components.Schemas.ItemStatus) -> [TaskTimelinePresentation.EarlierConversation] {
+            TaskTimelinePresentation.earlierConversations(
+                [
+                    item("lead", "conv-lead", hoursOld: 0, status: leadStatus),
+                    // Named by the leading item too, so its card draws it.
+                    item("closed-lead", "conv-lead", hoursOld: 8),
+                    item("a-older", "conv-a", hoursOld: 9),
+                    item("b", "conv-b", hoursOld: 1),
+                    item("a", "conv-a", hoursOld: 2),
+                    // The newest item naming it is open, so its card does.
+                    item("open", "conv-open", hoursOld: 3, status: .open),
+                    item("open-older", "conv-open", hoursOld: 7),
+                    item("empty", "conv-empty", hoursOld: 4),
+                    item("unheld", "conv-unheld", hoursOld: 5),
+                    item("none", nil, hoursOld: 6),
+                ], leadingItemID: "lead"
+            ) { held[$0] }
+        }
+        for leadStatus in [Components.Schemas.ItemStatus.open, .resolved] {
+            let listed = earlier(leadStatus: leadStatus)
+            #expect(listed.map(\.conversation.conversation.id) == ["conv-b", "conv-a"])
+            #expect(listed.map(\.item.id) == ["b", "a"])
+        }
+    }
+
+    /// Acceptance 2 (#3041): the fold names the item and says its status,
+    /// how many messages, and when the last one came.
+    @Test func anEarlierThreadsFoldSaysWhichDecisionAndWhen() {
+        func summary(_ status: Components.Schemas.ItemStatus, messages: Int) -> String {
+            var approval = TaskStageFixtures.item(.spec_approval, id: "approval", hoursOld: 0).item
+            approval.status = status
+            return TaskTimelinePresentation.earlierConversationSummary(
+                .init(item: approval, conversation: thread("conv", messages: messages)),
+                now: now, locale: locale, timeZone: timeZone)
+        }
+        let approval = TaskStageFixtures.item(.spec_approval, id: "approval", hoursOld: 0).item
+        #expect(AttentionDisplay.title(approval) == "Spec Approval")
+        #expect(summary(.resolved, messages: 6) == "Resolved · 6 messages · Jan 3, 6:13\u{202F}PM")
+        #expect(summary(.superseded, messages: 1) == "Superseded · 1 message · Jan 3, 6:13\u{202F}PM")
+        #expect(summary(.dismissed, messages: 2).hasPrefix("Dismissed · 2 messages · "))
+        #expect(summary(.expired, messages: 2).hasPrefix("Expired · 2 messages · "))
+    }
+
+    /// Acceptance 5 (#3041): the Conversation chip goes to one place: the
+    /// card's thread when it has one, Earlier Conversations otherwise, and
+    /// nowhere with neither. The page jumps where this names.
+    @Test func theConversationChipHasOneDestination() {
+        let earlier = [
+            TaskTimelinePresentation.EarlierConversation(
+                item: item("a", "conv-a", hoursOld: 1), conversation: thread("conv-a", messages: 2)),
+            TaskTimelinePresentation.EarlierConversation(
+                item: item("b", "conv-b", hoursOld: 2), conversation: thread("conv-b", messages: 3)),
+        ]
+        #expect(TaskPageView.conversationChip(cardThreadMessages: 4, earlier: earlier) == .inCard(messages: 4))
+        #expect(TaskPageView.conversationChip(cardThreadMessages: 0, earlier: earlier) == .earlier(messages: 5))
+        #expect(TaskPageView.conversationChip(cardThreadMessages: 0, earlier: []) == nil)
     }
 
     @Test func aRecordedDecisionLinksToItsItemOnlyWhenTheClientHoldsIt() throws {

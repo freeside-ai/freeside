@@ -208,12 +208,22 @@ import Testing
             TaskPageView.taskActions(history, task: .init(taskID: "task-1")).map(\.title) == ["Copy all identifiers"])
     }
 
-    @Test func theConversationChipDrawsFromOneMessage() {
-        #expect(TaskPageSection.outline(decisions: 0, conversationMessages: 0) == [.task, .timeline, .runs])
+    /// Acceptance 3 (#3041): the Conversation chip sits where its thread
+    /// is, in page order: before the Timeline for the card's thread, after
+    /// Runs for Earlier Conversations, and nowhere with neither.
+    @Test func theConversationChipFollowsTheThread() {
         #expect(
-            TaskPageSection.outline(decisions: 2, conversationMessages: 1) == [
+            TaskPageSection.outline(decisions: 2, conversation: .inCard(messages: 3)) == [
                 .decisions, .task, .conversation, .timeline, .runs,
             ])
+        #expect(OutlineConversation.inCard(messages: 3).messages == 3)
+        #expect(
+            TaskPageSection.outline(decisions: 0, conversation: .earlier(messages: 5)) == [
+                .task, .timeline, .runs, .conversation,
+            ])
+        #expect(OutlineConversation.earlier(messages: 5).messages == 5)
+        #expect(TaskPageSection.outline(decisions: 0, conversation: nil) == [.task, .timeline, .runs])
+        #expect(TaskPageSection.outline(decisions: 1, conversation: nil) == [.decisions, .task, .timeline, .runs])
     }
 
     // MARK: Readers

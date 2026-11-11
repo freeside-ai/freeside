@@ -2981,15 +2981,24 @@
                         claimed_media_type: path.hasSuffix(".png") ? "image/png" : "text/markdown",
                         size_bytes: 412_000)
                 }
-            for (name, width) in [("task-page-attachments", CGFloat?.none), ("task-page-attachments-390", 390)] {
-                surfaces.append(
-                    Surface(
-                        name: name,
-                        width: width,
-                        view: AnyView(
-                            TaskPageView(coordinator: attachedCoordinator, snapshot: attachedTask, onOpenRun: { _ in })
-                                .screenshotContent(retryTimeline)
-                        )))
+            // The files sit in the page head as one fold under the
+            // documents line: `task-page-attachments` draws it open,
+            // `-folded` closed, as a task first shows it.
+            for (base, open) in [("task-page-attachments", true), ("task-page-attachments-folded", false)] {
+                let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
+                disclosures.setExpanded(open, .attachments, taskID: attachedTask.task.id)
+                for (tail, width) in [("", CGFloat?.none), ("-390", 390)] {
+                    surfaces.append(
+                        Surface(
+                            name: base + tail,
+                            width: width,
+                            view: AnyView(
+                                TaskPageView(
+                                    coordinator: attachedCoordinator, snapshot: attachedTask, onOpenRun: { _ in }
+                                )
+                                .screenshotContent(retryTimeline, disclosures: disclosures)
+                            )))
+                }
             }
             // A remediation under way (#2100): the task's events return to
             // Implementation at the remediator's start, under the decision
@@ -4773,6 +4782,47 @@
                                         } ?? [],
                                         pinned: pinned))))
                     }
+                }
+            }
+            // Earlier Conversations (#3041): a finished task with no open
+            // item and two closed items' threads, folded under the
+            // Timeline newest first, the newer open and the older closed.
+            var approved = approval
+            approved.item.status = .resolved
+            var answered = TaskStageFixtures.item(.agent_question, id: "page-answered", hoursOld: 1)
+            answered.item.status = .superseded
+            answered.item.conversation_id = "conv-page-answered"
+            var answeredThread = try #require(AttentionFixtures.defaultConversations().first)
+            answeredThread.conversation.id = "conv-page-answered"
+            answeredThread.conversation.messages = zip(
+                answeredThread.conversation.messages,
+                [
+                    "Should the migration pause between projects?",
+                    "Yes. Each project finishes and verifies before the next one starts.",
+                ]
+            ).map { message, body in
+                var message = message
+                message.id = "answered-" + message.id
+                message.conversation_id = "conv-page-answered"
+                message.body = body
+                return message
+            }
+            var earlier = finished
+            earlier.items = [answered, approved]
+            let (earlierCoordinator, earlierTask) = try TaskStageFixtures.coordinator(
+                earlier, conversations: AttentionFixtures.defaultConversations() + [answeredThread])
+            let earlierTimeline = try #require(earlier.history)
+            let earlierFolds = TaskTimelineDisclosurePreferences(defaults: nil)
+            earlierFolds.setExpanded(true, .conversation("conv-page-answered"), taskID: earlierTimeline.task_id)
+            let earlierView = TaskPageView(coordinator: earlierCoordinator, snapshot: earlierTask, onOpenRun: { _ in })
+            for scheme in [ColorScheme.light, .dark] {
+                let suffix = scheme == .dark ? "-dark" : ""
+                for (width, tail) in [(CGFloat?.none, ""), (390, "-390")] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-page-earlier-conversations" + tail + suffix, width: width,
+                            colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(earlierView.screenshotContent(earlierTimeline, disclosures: earlierFolds))))
                 }
             }
             return surfaces
