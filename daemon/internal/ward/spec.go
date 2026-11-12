@@ -896,6 +896,19 @@ type RuntimeResourceNames struct {
 // before the runtime owner may create or clean up any member of it.
 type RuntimeResourceAuthorizer func(context.Context, RuntimeResourceNames) error
 
+// RuntimeResourceReleaser withdraws a durable grant an authorizer made, so a
+// long-lived rig hold does not accumulate every name it ever bound. Nil means
+// no rig, the same rule as the authorizer.
+//
+// Releasing a name removes it from rig cleanup and stale recovery, so a
+// caller releases only a name it owns, only after its final teardown, and
+// only when no later path creates an object under the name without
+// authorizing it again. Callers go through ReleaseAbsentRuntimeResources,
+// which also re-observes the runtime and keeps any name that still has an
+// object. Releasing too late only keeps a name bound; releasing too early
+// would leave an object the rig cannot enumerate.
+type RuntimeResourceReleaser func(context.Context, RuntimeResourceNames) error
+
 // RuntimeResourceNamesFor returns every deterministic runtime object name for
 // runID from ward's single naming authority.
 func RuntimeResourceNamesFor(runID string) RuntimeResourceNames {

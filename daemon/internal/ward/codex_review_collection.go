@@ -426,6 +426,14 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 		return codexReviewJournalCheckf(
 			CheckControlPlaneIsolation, "close Codex review launch intent: %v", err)
 	}
+	// The source stored this review's outcome before cleanup, and that
+	// outcome fences any relaunch of runID, so no later path creates under
+	// these names. Every cleanup or recovery path authorizes them again
+	// before it acts. Pre-launch recovery is deliberately not a release
+	// point: its launch continues under the same names.
+	releaseAfterClose(ctx, b.rt, b.cfg.ReleaseRuntime, b.cfg.TeardownTimeout, b.cfg.Logger, runID,
+		concatRuntimeResourceNames(
+			codexReviewRuntimeResourceNames(runID, names), reviewRuntimeResourceNamesFor(provider, runID)))
 	return nil
 }
 

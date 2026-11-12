@@ -575,6 +575,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 				err = fmt.Errorf("journal close %s: %w", outcome, cerr)
 			}
 			jcancel()
+			if err == nil {
+				b.releaseHandoffNamespace(ctx, rec.RunID)
+			}
 		}
 		if st.archiveDir != "" {
 			_ = os.RemoveAll(st.archiveDir)

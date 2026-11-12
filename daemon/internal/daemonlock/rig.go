@@ -671,10 +671,15 @@ func readRigLockMetadataLog(path string) (*RigManifest, uint64, bool, error) {
 		}
 		current = record.Manifest
 		sequence = record.Sequence
+		// Each record after the first is one bind (it only adds names) or one
+		// unbind (it only drops names). A record that does both matches no
+		// operation the holder performs, so it is refused as substitution.
 		if index == 0 {
 			first = current
-		} else if !rigManifestIdentityEqual(first, current) || !rigManifestResourceSubset(previous, current) {
-			return nil, 0, partial, fmt.Errorf("rig lock metadata record %d violates append-only authority", index)
+		} else if !rigManifestIdentityEqual(first, current) {
+			return nil, 0, partial, fmt.Errorf("rig lock metadata record %d changes the rig identity", index)
+		} else if !rigManifestResourceSubset(previous, current) && !rigManifestResourceSubset(current, previous) {
+			return nil, 0, partial, fmt.Errorf("rig lock metadata record %d both adds and drops runtime resources", index)
 		}
 		previous = current
 	}
@@ -1028,9 +1033,31 @@ func decodeRigTokenDigest(value string) []byte {
 }
 
 // BindRigRuntimeResources atomically amends both manifest copies only while the
-// token matches and another process demonstrably holds both flocks.
+// token matches and another process demonstrably holds both flocks. A bind
+// that adds no new name writes nothing.
 func BindRigRuntimeResources(
 	stateRoot, token string, containers, volumes, networks []string,
+) (RigManifest, error) {
+	return amendRigRuntimeResources(stateRoot, token, false, containers, volumes, networks)
+}
+
+// UnbindRigRuntimeResources removes names from the held manifest under the
+// same gate, token, and live-lock checks as BindRigRuntimeResources. A name
+// that is not bound is ignored, and an unbind that drops nothing writes
+// nothing.
+//
+// Removing a name drops it from rig cleanup, stale recovery, and the
+// deputy's release proof. The caller must therefore be the name's owner,
+// must have proven every object under it absent after its final teardown,
+// and must bind it again before any later path creates an object under it.
+func UnbindRigRuntimeResources(
+	stateRoot, token string, containers, volumes, networks []string,
+) (RigManifest, error) {
+	return amendRigRuntimeResources(stateRoot, token, true, containers, volumes, networks)
+}
+
+func amendRigRuntimeResources(
+	stateRoot, token string, unbind bool, containers, volumes, networks []string,
 ) (RigManifest, error) {
 	canonicalStateRoot, err := canonicalPath(stateRoot)
 	if err != nil {
@@ -1041,22 +1068,30 @@ func BindRigRuntimeResources(
 		return RigManifest{}, err
 	}
 	defer func() { _ = closeRigLock(gate) }()
-	manifest, err := AuthenticateRig(canonicalStateRoot, token)
+	current, err := AuthenticateRig(canonicalStateRoot, token)
 	if err != nil {
 		return RigManifest{}, err
 	}
-	_, manifestPaths := rigPaths(manifest.Resources)
-	manifest.Resources.Containers = append(manifest.Resources.Containers, containers...)
-	sort.Strings(manifest.Resources.Containers)
-	manifest.Resources.Containers = slices.Compact(manifest.Resources.Containers)
-	manifest.Resources.Volumes = append(manifest.Resources.Volumes, volumes...)
-	sort.Strings(manifest.Resources.Volumes)
-	manifest.Resources.Volumes = slices.Compact(manifest.Resources.Volumes)
-	manifest.Resources.Networks = append(manifest.Resources.Networks, networks...)
-	sort.Strings(manifest.Resources.Networks)
-	manifest.Resources.Networks = slices.Compact(manifest.Resources.Networks)
+	_, manifestPaths := rigPaths(current.Resources)
+	amend := mergeRigNames
+	if unbind {
+		amend = removeRigNames
+	}
+	manifest := cloneRigManifest(current)
+	manifest.Resources.Containers = amend(manifest.Resources.Containers, containers)
+	manifest.Resources.Volumes = amend(manifest.Resources.Volumes, volumes)
+	manifest.Resources.Networks = amend(manifest.Resources.Networks, networks)
 	if err := manifest.validate(); err != nil {
 		return RigManifest{}, err
+	}
+	// An unchanged name set appends no record. The pre-job hook rebinds the
+	// same names on every start retry, and the authority log is read whole
+	// on every amendment.
+	if rigManifestResourceSubset(manifest, current) && rigManifestResourceSubset(current, manifest) {
+		return manifest, nil
+	}
+	if unbind {
+		return manifest, publishRigUnbind(canonicalStateRoot, manifestPaths, manifest, token)
 	}
 	// Reject an amendment the public manifest decoder could not read before the
 	// signed authority log changes. A failed oversized bind therefore leaves the
@@ -1086,6 +1121,39 @@ func BindRigRuntimeResources(
 		return RigManifest{}, errors.Join(err, rollbackErr)
 	}
 	return manifest, nil
+}
+
+// publishRigUnbind writes every mirror shrunk before it appends the shrunk
+// authority record, the reverse of bind. Each mirror must stay a subset of
+// the authority, so an unbind interrupted between the two leaves smaller
+// mirrors under the larger authority: ReadRigManifest and stale recovery
+// still succeed and return the larger set, which is the safe direction. For
+// the same reason a failed mirror write needs no rollback.
+func publishRigUnbind(
+	canonicalStateRoot string, manifestPaths []string, manifest RigManifest, token string,
+) error {
+	if err := writeRigManifest(globalRigStatePath(manifest.Resources), manifest); err != nil {
+		return fmt.Errorf("publish global rig unbind: %w", err)
+	}
+	if err := writeRigManifest(manifestPaths[1], manifest); err != nil {
+		return err
+	}
+	if err := writeRigManifest(manifestPaths[0], manifest); err != nil {
+		return err
+	}
+	return appendRigLockMetadata(filepath.Join(canonicalStateRoot, rigLockName), manifest, token)
+}
+
+func mergeRigNames(current, added []string) []string {
+	merged := append(slices.Clone(current), added...)
+	sort.Strings(merged)
+	return slices.Compact(merged)
+}
+
+func removeRigNames(current, removed []string) []string {
+	return slices.DeleteFunc(slices.Clone(current), func(name string) bool {
+		return slices.Contains(removed, name)
+	})
 }
 
 // AuthenticateRig returns the manifest only when the caller has the live

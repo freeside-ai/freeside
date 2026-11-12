@@ -735,6 +735,9 @@ func decodeNetworkList(out []byte) ([]NetworkSummary, error) {
 	if err := json.Unmarshal(out, &resources); err != nil {
 		return nil, fmt.Errorf("decode network list output: %w", err)
 	}
+	if resources == nil {
+		return nil, errors.New("decode network list output: output is null, want an array")
+	}
 	result := make([]NetworkSummary, 0, len(resources))
 	for _, resource := range resources {
 		if resource.ID == "" || resource.ID != resource.Configuration.Name {

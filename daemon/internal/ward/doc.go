@@ -246,6 +246,8 @@
 //     inference calls
 //   - recover.go       restart-safe recovery: adopt-or-loss, the orphan
 //     audit, and the committed outcome
+//   - runtime_release.go releasing a closed run's rig names once the runtime
+//     lists no object under them
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
 //     verification, and the fail-closed output-scanner hook
 //   - suite.go         the invocable conformance suite: Full (checks 1-5, 7,

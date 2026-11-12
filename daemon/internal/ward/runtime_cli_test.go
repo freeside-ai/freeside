@@ -119,6 +119,25 @@ func TestDecodeNetworkRejectsInconsistentIdentity(t *testing.T) {
 	}
 }
 
+// TestDecodeRuntimeListsRejectNull pins that a null list never reads as an
+// empty one: teardown's absence proof and the rig name release both treat a
+// name missing from a list as proof its object is gone.
+func TestDecodeRuntimeListsRejectNull(t *testing.T) {
+	t.Parallel()
+	if _, err := decodeContainerList([]byte("null")); err == nil {
+		t.Error("null container list accepted")
+	}
+	if _, err := decodeVolumeList([]byte("null")); err == nil {
+		t.Error("null volume list accepted")
+	}
+	if _, err := decodeNetworkList([]byte("null")); err == nil {
+		t.Error("null network list accepted")
+	}
+	if got, err := decodeNetworkList([]byte("[]")); err != nil || len(got) != 0 {
+		t.Errorf("empty network list = %v, %v; want an empty list", got, err)
+	}
+}
+
 // TestDecodeInspectHostile pins the mappings verification depends on to
 // reject a hostile configuration: virtiofs decodes to the bind type, an
 // unknown mount kind and an unnamed volume decode to invalid types (never

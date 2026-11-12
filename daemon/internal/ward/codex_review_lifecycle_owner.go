@@ -20,6 +20,7 @@ type codexReviewLifecycleConfig struct {
 	SeedTimeout        time.Duration
 	TeardownTimeout    time.Duration
 	Logger             *slog.Logger
+	ReleaseRuntime     RuntimeResourceReleaser
 }
 
 func newCodexReviewLifecycleConfig(cfg Config) codexReviewLifecycleConfig {
@@ -34,6 +35,7 @@ func newCodexReviewLifecycleConfig(cfg Config) codexReviewLifecycleConfig {
 		SeedTimeout:        cfg.SeedTimeout,
 		TeardownTimeout:    cfg.TeardownTimeout,
 		Logger:             cfg.Logger,
+		ReleaseRuntime:     cfg.ReleaseRuntimeResources,
 	}
 }
 

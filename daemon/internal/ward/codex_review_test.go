@@ -48,6 +48,7 @@ type fakeCodexReviewJournal struct {
 	failGetOutcome      error
 	failGetBinding      error
 	failDeleteWorkspace error
+	failClose           error
 }
 
 func (j *fakeCodexReviewJournal) PutCodexReviewRequest(
@@ -441,6 +442,9 @@ func (j *fakeCodexReviewJournal) MarkCodexReviewIntentStarted(_ context.Context,
 }
 
 func (j *fakeCodexReviewJournal) CloseCodexReviewIntent(_ context.Context, runID string) error {
+	if j.failClose != nil {
+		return j.failClose
+	}
 	return j.transitionCodexReviewIntent(runID, []CodexReviewIntentState{
 		CodexReviewIntentPreparing, CodexReviewIntentPrepared,
 		CodexReviewIntentStarting, CodexReviewIntentStarted,
