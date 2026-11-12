@@ -24,7 +24,10 @@ import (
 //
 // The first run fetches every dependency and builds the app twice, so it
 // takes minutes and leaves a few hundred megabytes in the cache.
-const swiftLiveCommit = "ccba46aa722ac9ad8ce9be08f3a2e8bb22abeb00"
+//
+// The pin is #3032's merge, the first main commit whose app tests pass in
+// the room, which has no window-server session.
+const swiftLiveCommit = "406563b94a95eb38dd3e8429bb509d3e425d6bba"
 
 // swiftLiveRecipes are the recipe commands daemon/README.md documents, run
 // from the job's workspace.
