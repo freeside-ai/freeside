@@ -660,13 +660,6 @@ if [[ -e "$destination" ]]; then
     previous_requirement="$(designated_requirement "$destination")"
 fi
 
-# Invalidate before any fallible build or swap step. A failed install may make
-# the old app re-register its unchanged helper once, which is harmless; waiting
-# until the new bundle is canonical creates a SIGKILL window where launchd can
-# remain bound to the old generation indefinitely.
-defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
-    >/dev/null 2>&1 || true
-
 mkdir -p "$daemon_state_dir"
 [[ -d "$daemon_state_dir" && ! -L "$daemon_state_dir" ]] ||
     die "the daemon state path is not a regular directory: $daemon_state_dir"
@@ -828,6 +821,44 @@ codesign --force --sign "$identity" "$bundled_daemon" ||
     die "the bundled freesided executable could not be signed"
 codesign --verify --strict "$bundled_daemon" ||
     die "the bundled freesided executable failed signature verification"
+
+# The daemon is unchanged when the installed bundle recorded the same
+# unsigned digest, its LaunchAgent plist is byte-identical to the new one,
+# and its helper has the same designated requirement as the one just signed.
+# An install that predates the digest key counts as changed. An unchanged
+# daemon keeps running: the registration marker stays, so the new app leaves
+# the LaunchAgent alone, and nothing restarts it.
+daemon_unchanged=false
+installed_daemon="$destination/Contents/Resources/freesided"
+installed_launch_agent="$destination/Contents/Library/LaunchAgents/$daemon_label.plist"
+if [[ -d "$destination" && -f "$installed_daemon" ]] &&
+    installed_digest=$(plist_value "$destination/Contents/Info.plist" FreesideDaemonDigest) &&
+    [[ "$installed_digest" == "$new_daemon_digest" ]] &&
+    cmp -s "$installed_launch_agent" "$launch_agent_plist" &&
+    installed_helper_requirement=$(designated_requirement "$installed_daemon") &&
+    new_helper_requirement=$(designated_requirement "$bundled_daemon") &&
+    [[ -n "$installed_helper_requirement" &&
+        "$installed_helper_requirement" == "$new_helper_requirement" ]]; then
+    daemon_unchanged=true
+fi
+if [[ "$daemon_unchanged" == true ]]; then
+    echo "install-mac-app: freesided is unchanged; leaving the daemon and its registration as they are"
+    # Ship the installed, already-signed bytes, not the copy just signed. The
+    # daemon's build identity is the sha256 of its executable (ExecutableBuild
+    # in daemon/internal/daemoncompose/update_drain.go), and a re-signed copy
+    # hashes differently because its signature differs. A crash restart in
+    # the middle of a later drain would then read as a new build and lift the
+    # drain.
+    ditto "$installed_daemon" "$bundled_daemon" ||
+        die "could not copy the installed freesided into the app bundle"
+    cmp -s "$installed_daemon" "$bundled_daemon" ||
+        die "the bundled freesided differs from the installed one it was copied from"
+    codesign --verify --strict "$bundled_daemon" ||
+        die "the installed freesided failed signature verification"
+else
+    echo "install-mac-app: freesided changed; the daemon restarts on the new build"
+fi
+
 codesign --force --sign "$identity" --entitlements "$preserved_entitlements" "$built_app" ||
     die "the templated app could not be signed"
 final_entitlements="$build_dir/FreesideMac.final.entitlements"
@@ -947,12 +978,17 @@ roll_back_and_abort() {
 trap roll_back_install EXIT
 trap roll_back_and_abort INT TERM
 
-# The old app can re-register its unchanged helper while the build runs and
-# restore the marker deleted above. It has now been stopped; invalidate that
-# stale generation again at the last possible point before the replacement
-# becomes canonical.
-defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
-    >/dev/null 2>&1 || true
+# A changed daemon needs the new app to re-register the LaunchAgent, which
+# restarts the daemon from the new bundle; deleting the registration marker
+# asks for that. It is deleted only now, with the old app stopped: deleted
+# earlier, an app launch during the build would re-register the old helper
+# and restart the daemon, canceling its work. It is deleted before the swap,
+# so a SIGKILL after the swap cannot leave launchd bound to the old
+# generation.
+if [[ "$daemon_unchanged" == false ]]; then
+    defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
+        >/dev/null 2>&1 || true
+fi
 
 if [[ -e "$destination" ]]; then
     mv "$destination" "$superseded"

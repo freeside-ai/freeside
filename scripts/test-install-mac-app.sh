@@ -242,7 +242,11 @@ case " $* " in
     cat "$target/Contents/entitlements.fixture"
     ;;
 *" --display "*)
-    printf '%s\n' '# designated => identifier "ai.freeside.app.macos"' >&2
+    # A sidecar file gives one binary its own requirement, so a case can
+    # make the installed helper's differ from the new one's.
+    requirement='identifier "ai.freeside.app.macos"'
+    [[ ! -f "$target.designated" ]] || requirement=$(cat "$target.designated")
+    printf '# designated => %s\n' "$requirement" >&2
     ;;
 *" --force --sign "*)
     printf 'called\n' >"${STUB_CASE_DIR:?}/codesign-sign-called"
@@ -1621,7 +1625,7 @@ assert_file_contains \
 assert_file_contains \
     "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
     "__FREESIDE_ENVIRONMENT__"
-assert_file_contains \
+assert_file_omits \
     "$CASE_DIR/defaults-calls" \
     "before-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
 assert_file_contains \
@@ -1698,6 +1702,90 @@ run_installer
 assert_rc 0
 assert_contains "skipped the database check: the prod tier has no database yet"
 assert_absent "$CASE_DIR/check-database-args"
+
+# Forget what one install run recorded, so a case can install twice and
+# assert on the second run alone.
+reset_case_records() {
+    rm -rf "$CASE_DIR/Build"
+    rm -f "$CASE_DIR/install-steps" "$CASE_DIR/defaults-calls" \
+        "$CASE_DIR/go-args" "$CASE_DIR/go-goflags" "$CASE_DIR/xcodebuild-called" \
+        "$CASE_DIR/codesign-verify-count"
+}
+
+# Install once with the case's daemon, then mark the installed helper as a
+# signed copy: signing changes the bytes, so a reinstall that reuses the
+# installed helper keeps this line and one that ships a fresh copy loses it.
+install_first_generation() {
+    run_built_installer
+    [[ "$RC" -eq 0 ]] || report_failure "the first install failed"
+    printf '# installed signature\n' >>"$destination/Contents/Resources/freesided"
+    cp "$destination/Contents/Resources/freesided" "$CASE_DIR/installed-freesided"
+    reset_case_records
+}
+
+assert_marker_not_deleted() {
+    if [[ -f "$CASE_DIR/defaults-calls" ]] &&
+        grep -Fq "delete" "$CASE_DIR/defaults-calls"; then
+        report_failure "the registration marker was deleted: $(cat "$CASE_DIR/defaults-calls")"
+    else
+        pass=$((pass + 1))
+    fi
+}
+
+# An update that leaves the daemon's digest, LaunchAgent, and signing
+# requirement as they were keeps the running daemon: the marker stays, and
+# the new bundle ships the installed helper's exact signed bytes (#3106).
+begin_case "an unchanged daemon keeps its registration and signed bytes" daemon-unchanged
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+install_first_generation
+run_built_installer
+assert_rc 0
+assert_contains "freesided is unchanged; leaving the daemon and its registration as they are"
+assert_marker_not_deleted
+if cmp -s "$CASE_DIR/installed-freesided" "$destination/Contents/Resources/freesided"; then
+    pass=$((pass + 1))
+else
+    report_failure "the new bundle's freesided is not the installed one"
+fi
+
+# Each condition alone makes the daemon changed, and so does an install
+# that predates the digest key. A changed daemon ships the fresh copy and
+# deletes the marker so the new app re-registers it.
+for mismatch in digest launch-agent requirement no-key; do
+    begin_case "an installed daemon with a different $mismatch counts as changed" \
+        "daemon-changed-$mismatch"
+    destination=$CASE_DIR/Applications/Freeside.app
+    export STUB_BUILD_SUCCEEDS=true
+    install_first_generation
+    installed_info=$destination/Contents/Info.plist
+    case "$mismatch" in
+    digest | no-key)
+        grep -v '^FreesideDaemonDigest=' "$installed_info" >"$installed_info.tmp"
+        mv "$installed_info.tmp" "$installed_info"
+        [[ "$mismatch" == no-key ]] ||
+            printf 'FreesideDaemonDigest=%064d\n' 0 >>"$installed_info"
+        ;;
+    launch-agent)
+        printf '<!-- an older template -->\n' \
+            >>"$destination/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
+        ;;
+    requirement)
+        printf 'identifier "freesided" and certificate leaf = H"0000"\n' \
+            >"$destination/Contents/Resources/freesided.designated"
+        ;;
+    esac
+    run_built_installer
+    assert_rc 0
+    assert_contains "freesided changed; the daemon restarts on the new build"
+    assert_file_contains "$CASE_DIR/defaults-calls" \
+        "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+    if cmp -s "$CASE_DIR/freesided" "$destination/Contents/Resources/freesided"; then
+        pass=$((pass + 1))
+    else
+        report_failure "a changed daemon did not ship the freshly built freesided"
+    fi
+done
 
 # A state path bearing a JSON metacharacter must bind byte-for-byte. Here the
 # state root carries a literal backslash before `t`; a raw interpolation into the `-json`
@@ -1811,7 +1899,7 @@ assert_file_contains \
     "keychain-access-groups.0=ABCDE12345.ai.freeside.app.macos.dev"
 assert_file_contains \
     "$CASE_DIR/defaults-calls" \
-    "before-build delete ai.freeside.app.macos.dev FreesideLaunchAgentRegistrationCurrent"
+    "after-build delete ai.freeside.app.macos.dev FreesideLaunchAgentRegistrationCurrent"
 assert_file_omits \
     "$CASE_DIR/defaults-calls" \
     "delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
@@ -1895,16 +1983,13 @@ REJECTED_STATE_ROOT=relative/root run_rejected_target_case \
     "a relative state root is refused" state-root-relative \
     "FREESIDE_MAC_STATE_ROOT must be absolute: relative/root" dev
 
-begin_case "registration invalidation precedes a later build failure" 30
+# The marker goes only once the old app is stopped, so a failed build leaves
+# the running daemon's registration alone (#3106).
+begin_case "a build failure leaves the registration marker alone" 30
 run_installer
 assert_rc 1
 assert_contains "build failed"
-assert_file_contains \
-    "$CASE_DIR/defaults-calls" \
-    "before-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
-assert_file_omits \
-    "$CASE_DIR/defaults-calls" \
-    "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+assert_absent "$CASE_DIR/defaults-calls"
 
 has_real_swift=false
 if [[ -n "$REAL_SWIFT" ]] && "$REAL_SWIFT" --version >/dev/null 2>&1; then
