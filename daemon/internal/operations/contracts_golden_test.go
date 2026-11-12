@@ -25,6 +25,9 @@ func TestOperationalContractGoldens(t *testing.T) {
 		AuditedRef: "main",
 		AuditedAt:  auditedAt, WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+		IssueCommentWorkflows: []domain.IssueCommentWorkflow{
+			{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+		},
 	}
 	if err := audit.Validate(); err != nil {
 		t.Fatal(err)
@@ -37,6 +40,9 @@ func TestOperationalContractGoldens(t *testing.T) {
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        audit.WorkflowAuditDigest,
+		// Onboarding proposes the comment operation over the audited set.
+		AllowIssueCommentWorkflows: true,
+		IssueCommentWorkflows:      audit.IssueCommentWorkflows,
 		Review: domain.ReviewSettings{
 			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},

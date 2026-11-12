@@ -1754,6 +1754,38 @@ func (a ExternalReviewAuthority) valid() bool {
 	}
 }
 
+// IssueCommentWorkflowChange names how an observed issue_comment workflow
+// differs from the approved set. The zero value is invalid by design.
+type IssueCommentWorkflowChange string
+
+const (
+	// IssueCommentWorkflowUnaccepted: the profile does not accept the
+	// comment operation, whatever the audit observed.
+	IssueCommentWorkflowUnaccepted IssueCommentWorkflowChange = "unaccepted"
+	// IssueCommentWorkflowAdded: observed but not in the approved set.
+	IssueCommentWorkflowAdded IssueCommentWorkflowChange = "added"
+	// IssueCommentWorkflowRemoved: in the approved set but not observed.
+	IssueCommentWorkflowRemoved IssueCommentWorkflowChange = "removed"
+	// IssueCommentWorkflowChanged: in both, with a different closure digest.
+	IssueCommentWorkflowChanged IssueCommentWorkflowChange = "changed"
+)
+
+// AllIssueCommentWorkflowChanges lists every valid IssueCommentWorkflowChange.
+var AllIssueCommentWorkflowChanges = []IssueCommentWorkflowChange{
+	IssueCommentWorkflowUnaccepted, IssueCommentWorkflowAdded,
+	IssueCommentWorkflowRemoved, IssueCommentWorkflowChanged,
+}
+
+func (c IssueCommentWorkflowChange) valid() bool {
+	switch c {
+	case IssueCommentWorkflowUnaccepted, IssueCommentWorkflowAdded,
+		IssueCommentWorkflowRemoved, IssueCommentWorkflowChanged:
+		return true
+	default:
+		return false
+	}
+}
+
 // ReviewOutcome is the result of one completed, exact-base/head review pass.
 // The zero value is invalid by design.
 type ReviewOutcome string

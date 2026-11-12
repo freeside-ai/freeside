@@ -951,6 +951,19 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The issue_comment set is passed unsorted with a duplicate, for the
+	// same reason; a listed set needs the key.
+	issueCommentInput := trustProfileInput
+	issueCommentInput.AllowIssueCommentWorkflows = true
+	issueCommentInput.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+		{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+		{Path: ".github/workflows/bot.yml", Digest: "sha256:bot-closure"},
+		{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+	}
+	trustProfileIssueCommentWorkflows, err := domain.NewAutomationTrustProfile(issueCommentInput)
+	if err != nil {
+		t.Fatal(err)
+	}
 	workflowAudit := domain.WorkflowAudit{
 		Repo:                "freeside-ai/demo",
 		AuditedCommitSHA:    "cafebabe",
@@ -961,7 +974,10 @@ func TestGolden(t *testing.T) {
 		OIDCAvailable:       false,
 		PullRequestTarget:   true,
 		ReusableWorkflows:   true,
-		ReviewDecisionRef:   "decision-1",
+		IssueCommentWorkflows: []domain.IssueCommentWorkflow{
+			{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+		},
+		ReviewDecisionRef: "decision-1",
 	}
 
 	// The findings are passed out of canonical order to exercise
@@ -2674,6 +2690,7 @@ func TestGolden(t *testing.T) {
 		{"key_provenance", policyKey.Provenance},
 		{"trust_profile", trustProfile},
 		{"trust_profile_external_reviewers", trustProfileExternalReviewers},
+		{"trust_profile_issue_comment_workflows", trustProfileIssueCommentWorkflows},
 		{"workflow_audit", workflowAudit},
 		{"candidate_authorization", authorization},
 		{"candidate_authorization_blocked", blockedAuthorization},

@@ -266,6 +266,12 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		AllowReusableWorkflows:     audit.ReusableWorkflows,
 		AllowPackagePublishing:     audit.PackagePublishing,
 		AllowArtifactConsumers:     audit.ArtifactConsumers,
+		// The issue_comment set mirrors the audit like every other observed
+		// privilege. Approving this profile's digest is the owner's acceptance
+		// of the comment operation over exactly these workflows, none
+		// included; declining it accepts no comment.
+		AllowIssueCommentWorkflows: true,
+		IssueCommentWorkflows:      audit.IssueCommentWorkflows,
 		CommitPlan:                 req.Policy.CommitPlan,
 		MessageRuleset:             req.Policy.MessageRuleset,
 		WorkflowAuditDigest:        audit.WorkflowAuditDigest,

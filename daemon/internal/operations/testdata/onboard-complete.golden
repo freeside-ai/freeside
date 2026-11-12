@@ -15,6 +15,7 @@
     "allow_reusable_workflows": false,
     "allow_package_publishing": false,
     "allow_artifact_consumers": false,
+    "allow_issue_comment_workflows": true,
     "commit_plan": "single_commit",
     "message_ruleset": "github/1",
     "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
@@ -37,7 +38,13 @@
       "extra_egress_and_trust_patterns": null,
       "extra_materiality_rules_patterns": null
     },
-    "profile_digest": "sha256:d5443f44d82f953e8139f34dfc215162d974874534157a530d0d98aa3463535a"
+    "issue_comment_workflows": [
+      {
+        "path": ".github/workflows/triage.yml",
+        "digest": "sha256:triage-closure"
+      }
+    ],
+    "profile_digest": "sha256:16527b0748adddce79b5460d25d954f5fcd47a7214e8c95dd1ab7a1329bc73be"
   },
   "review": {
     "profile": {
@@ -54,6 +61,7 @@
       "allow_reusable_workflows": false,
       "allow_package_publishing": false,
       "allow_artifact_consumers": false,
+      "allow_issue_comment_workflows": true,
       "commit_plan": "single_commit",
       "message_ruleset": "github/1",
       "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
@@ -76,7 +84,13 @@
         "extra_egress_and_trust_patterns": null,
         "extra_materiality_rules_patterns": null
       },
-      "profile_digest": "sha256:d5443f44d82f953e8139f34dfc215162d974874534157a530d0d98aa3463535a"
+      "issue_comment_workflows": [
+        {
+          "path": ".github/workflows/triage.yml",
+          "digest": "sha256:triage-closure"
+        }
+      ],
+      "profile_digest": "sha256:16527b0748adddce79b5460d25d954f5fcd47a7214e8c95dd1ab7a1329bc73be"
     },
     "approved": {
       "audit": {
@@ -95,7 +109,13 @@
           "reusable_workflows": false,
           "self_hosted_runners": false,
           "package_publishing": false,
-          "artifact_consuming_workflows": false
+          "artifact_consuming_workflows": false,
+          "issue_comment_workflows": [
+            {
+              "path": ".github/workflows/triage.yml",
+              "digest": "sha256:triage-closure"
+            }
+          ]
         }
       },
       "evidence": {
@@ -121,7 +141,13 @@
           "reusable_workflows": false,
           "self_hosted_runners": false,
           "package_publishing": false,
-          "artifact_consuming_workflows": false
+          "artifact_consuming_workflows": false,
+          "issue_comment_workflows": [
+            {
+              "path": ".github/workflows/triage.yml",
+              "digest": "sha256:triage-closure"
+            }
+          ]
         }
       },
       "evidence": {

@@ -427,7 +427,7 @@ func TestWorkflowAuditAppendOnly(t *testing.T) {
 			got, want := rec.Audit, audit
 			got.Evidence, want.Evidence = nil, nil
 			got.AuditedAt, want.AuditedAt = time.Time{}, time.Time{}
-			if got != want {
+			if !reflect.DeepEqual(got, want) {
 				t.Errorf("audit %d round-trip mismatch:\ngot  %+v\nwant %+v", i, got, want)
 			}
 		}

@@ -25,6 +25,9 @@ type workflowFacts struct {
 	ReusableWorkflows   bool
 	PackagePublishing   bool
 	ArtifactConsumers   bool
+	// IssueCommentWorkflows is filled by issueCommentWorkflows, not
+	// analyzeWorkflows: it lists workflows rather than deriving a privilege.
+	IssueCommentWorkflows []domain.IssueCommentWorkflow
 }
 
 type workflowSource struct {
@@ -346,7 +349,9 @@ func workflowEvents(n yaml.Node) (map[string]bool, error) {
 	case yaml.MappingNode:
 		for i := 0; i < len(n.Content); i += 2 {
 			key := n.Content[i]
-			if key.Kind != yaml.ScalarNode || key.Value == "" {
+			// A merge key (<<) would hide the triggers it merges in, so it
+			// fails closed rather than reading as an event named "<<".
+			if key.Kind != yaml.ScalarNode || key.Value == "" || key.ShortTag() == "!!merge" {
 				return nil, errors.New("invalid workflow trigger map")
 			}
 			events[key.Value] = true

@@ -654,6 +654,8 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/domain/trust_profile.go`,
   `internal/domain/shadow_review_configuration.go`,
   `cmd/freesided/approve_shadow_review.go`,
+  `internal/operations/onboard.go` (binds the owner's approval digest to
+  the profile it activates),
   `internal/store/effect_proposal.go`,
   `internal/store/image_policy_adoption.go`,
   `internal/signet/image_policy_adoption.go`,

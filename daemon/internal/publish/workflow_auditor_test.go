@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -276,7 +277,7 @@ func TestGitHubWorkflowAuditorAcceptsDynamicWorkflowRows(t *testing.T) {
 	baseline.WorkflowAuditDigest, audit.WorkflowAuditDigest = "", ""
 	baseline.Evidence, audit.Evidence = nil, nil
 	baseline.AuditedAt, audit.AuditedAt = time.Time{}, time.Time{}
-	if audit != baseline {
+	if !reflect.DeepEqual(audit, baseline) {
 		t.Fatalf("dynamic row changed derived facts: %+v != %+v", audit, baseline)
 	}
 }
@@ -346,5 +347,39 @@ func TestGitHubWorkflowAuditorDigestCoversLiveSettings(t *testing.T) {
 				t.Fatalf("settings change retained digest %q", got.WorkflowAuditDigest)
 			}
 		})
+	}
+}
+
+// TestGitHubWorkflowAuditorListsIssueCommentWorkflows: a repository with one
+// issue_comment workflow yields an audit whose set lists it with a closure
+// digest that covers the local action it uses, and a repository with none
+// lists nothing.
+func TestGitHubWorkflowAuditorListsIssueCommentWorkflows(t *testing.T) {
+	t.Parallel()
+	baseline := runAuditFixture(t, &auditFixtureServer{t: t})
+	if baseline.IssueCommentWorkflows != nil {
+		t.Fatalf("repository without issue_comment workflows listed %+v", baseline.IssueCommentWorkflows)
+	}
+
+	const bot = "on: issue_comment\njobs:\n  respond:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/release\n"
+	audited := func(action string) domain.WorkflowAudit {
+		return runAuditFixture(t, &auditFixtureServer{
+			t:                 t,
+			baseOnlyWorkflow:  bot,
+			localAction:       action,
+			extraWorkflowRows: []string{`{"path":".github/workflows/base-only.yml","state":"active"}`},
+		})
+	}
+	audit := audited("runs:\n  using: composite\n  steps:\n    - run: echo one\n      shell: bash\n")
+	if len(audit.IssueCommentWorkflows) != 1 || audit.IssueCommentWorkflows[0].Path != ".github/workflows/base-only.yml" ||
+		audit.IssueCommentWorkflows[0].Digest == "" {
+		t.Fatalf("issue_comment workflows = %+v, want base-only.yml with a digest", audit.IssueCommentWorkflows)
+	}
+	if err := audit.Validate(); err != nil {
+		t.Fatalf("audit with an issue_comment workflow invalid: %v", err)
+	}
+	edited := audited("runs:\n  using: composite\n  steps:\n    - run: echo two\n      shell: bash\n")
+	if len(edited.IssueCommentWorkflows) != 1 || edited.IssueCommentWorkflows[0].Digest == audit.IssueCommentWorkflows[0].Digest {
+		t.Fatalf("editing the used action left the closure digest at %+v", edited.IssueCommentWorkflows)
 	}
 }

@@ -198,6 +198,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["ExternalReviewAuthority"] = append(valids["ExternalReviewAuthority"], v.valid)
 	}
 	invalids["ExternalReviewAuthority"] = ExternalReviewAuthority("").valid
+	for _, v := range AllIssueCommentWorkflowChanges {
+		valids["IssueCommentWorkflowChange"] = append(valids["IssueCommentWorkflowChange"], v.valid)
+	}
+	invalids["IssueCommentWorkflowChange"] = IssueCommentWorkflowChange("").valid
 	for _, v := range AllCandidateFindingClasses {
 		valids["CandidateFindingClass"] = append(valids["CandidateFindingClass"], v.valid)
 	}
