@@ -11,19 +11,21 @@ public import struct Foundation.Date
 #endif
 /// A type that performs HTTP operations defined by the OpenAPI document.
 public protocol APIProtocol: Sendable {
-    /// Process liveness, contract identity, version, and start time
+    /// Process liveness, contract identity, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
-    /// contract, since when." Supervisors and the external liveness probe
-    /// poll it (plan §5.2); the operator client uses `contract_digest`
-    /// for client/daemon contract-skew detection, `version` for the human
-    /// build label, and `started_at` for restart visibility (a start time
-    /// that keeps moving under a supervisor is crash-loop evidence). The
-    /// response deliberately carries no operational state:
+    /// contract, which named features, since when." Supervisors and the
+    /// external liveness probe poll it (plan §5.2); the operator client
+    /// uses `contract_digest` for client/daemon contract-skew detection,
+    /// `features` to turn off what this build doesn't serve, `version` for
+    /// the human build label, and `started_at` for restart visibility (a
+    /// start time that keeps moving under a supervisor is crash-loop
+    /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, version, and start time.
+    /// beyond liveness, contract identity, the build's feature names,
+    /// version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -423,19 +425,21 @@ public protocol APIProtocol: Sendable {
 
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
-    /// Process liveness, contract identity, version, and start time
+    /// Process liveness, contract identity, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
-    /// contract, since when." Supervisors and the external liveness probe
-    /// poll it (plan §5.2); the operator client uses `contract_digest`
-    /// for client/daemon contract-skew detection, `version` for the human
-    /// build label, and `started_at` for restart visibility (a start time
-    /// that keeps moving under a supervisor is crash-loop evidence). The
-    /// response deliberately carries no operational state:
+    /// contract, which named features, since when." Supervisors and the
+    /// external liveness probe poll it (plan §5.2); the operator client
+    /// uses `contract_digest` for client/daemon contract-skew detection,
+    /// `features` to turn off what this build doesn't serve, `version` for
+    /// the human build label, and `started_at` for restart visibility (a
+    /// start time that keeps moving under a supervisor is crash-loop
+    /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, version, and start time.
+    /// beyond liveness, contract identity, the build's feature names,
+    /// version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -1195,21 +1199,6 @@ public enum Components {
                 case admission
                 case stops
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.admission = try container.decode(
-                    Components.Schemas.UnattendedAdmission.self,
-                    forKey: .admission
-                )
-                self.stops = try container.decode(
-                    [Components.Schemas.UnattendedStop].self,
-                    forKey: .stops
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "admission",
-                    "stops"
-                ])
-            }
         }
         /// The unattended-operation gate's verdict (mirrors domain.UnattendedAdmission). Widening it is a contract change.
         ///
@@ -1218,6 +1207,7 @@ public enum Components {
         @frozen public enum UnattendedAdmission: String, Codable, Hashable, Sendable, CaseIterable {
             case open = "open"
             case stopped = "stopped"
+            case unknown = "unknown"
         }
         /// Why unattended admission is closed (mirrors domain.UnattendedStopKind). operator_stop is an accepted stop_unattended that only resume_unattended lifts; blocking_system_health is an open blocking system_health item, which includes the daemon's own durable stop and clears when the daemon resolves the item or a validated configuration supersedes it; update_drain is an update drain in force, which the daemon lifts when it restarts on a new build. Widening it is a contract change.
         ///
@@ -1227,6 +1217,7 @@ public enum Components {
             case operator_stop = "operator_stop"
             case blocking_system_health = "blocking_system_health"
             case update_drain = "update_drain"
+            case unknown = "unknown"
         }
         /// One stop that closes unattended admission.
         ///
@@ -1273,31 +1264,6 @@ public enum Components {
                 case command_id
                 case since
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.UnattendedStopKind.self,
-                    forKey: .kind
-                )
-                self.item_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.command_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.since = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .since
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "item_id",
-                    "command_id",
-                    "since"
-                ])
-            }
         }
         /// One usage pool's usage record with its sync metadata (plan §5.4 usage observation, §5.14). Every write of the record is a client-visible transaction, so a new reading reaches a client through the revision and heartbeat path with no task activity. A pool with no record yet carries the snapshot's revision and entity_version 0.
         ///
@@ -1332,26 +1298,6 @@ public enum Components {
                 case as_of_revision
                 case entity_version
                 case pool
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Components.Schemas.AsOfRevision.self,
-                    forKey: .as_of_revision
-                )
-                self.entity_version = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .entity_version
-                )
-                self.pool = try container.decode(
-                    Components.Schemas.UsagePoolUsage.self,
-                    forKey: .pool
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "entity_version",
-                    "pool"
-                ])
             }
         }
         /// What the daemon recorded about one pool: its declaration, collector, refresh status, every enrollment on it, its readings, and the exhausted marks the record holds. It is observation, never authority, and nothing is added across pools. A client derives no value the daemon did not record: freshness is as_of_revision and each reading's own instants, and the daemon computes recorded_exhausted_marks, which a client only lapses by each mark's resets_at. Credential expiry, billing renewal, and reset credit are not recorded, so no field carries them.
@@ -1467,61 +1413,6 @@ public enum Components {
                 case windows
                 case recorded_exhausted_marks
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                self.provider = try container.decode(
-                    Swift.String.self,
-                    forKey: .provider
-                )
-                self.max_parallel_executions = try container.decode(
-                    Swift.Int.self,
-                    forKey: .max_parallel_executions
-                )
-                self.plan = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .plan
-                )
-                self.collector = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .collector
-                )
-                self.last_attempt = try container.decodeIfPresent(
-                    Components.Schemas.UsagePoolUsage.last_attemptPayload.self,
-                    forKey: .last_attempt
-                )
-                self.enrollments = try container.decode(
-                    [Components.Schemas.UsagePoolEnrollment].self,
-                    forKey: .enrollments
-                )
-                self.model_windows = try container.decode(
-                    [Components.Schemas.UsageModelWindow].self,
-                    forKey: .model_windows
-                )
-                self.windows = try container.decode(
-                    [Components.Schemas.UsageWindowReading].self,
-                    forKey: .windows
-                )
-                self.recorded_exhausted_marks = try container.decode(
-                    [Components.Schemas.UsageExhaustedMark].self,
-                    forKey: .recorded_exhausted_marks
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "provider",
-                    "max_parallel_executions",
-                    "plan",
-                    "collector",
-                    "last_attempt",
-                    "enrollments",
-                    "model_windows",
-                    "windows",
-                    "recorded_exhausted_marks"
-                ])
-            }
         }
         /// How the collector's last attempt ended (mirrors domain.CollectionAttemptStatus).
         ///
@@ -1530,6 +1421,7 @@ public enum Components {
             case succeeded = "succeeded"
             case failed = "failed"
             case unsupported = "unsupported"
+            case unknown = "unknown"
         }
         /// The collector's last attempt to read the pool, and how it ended.
         ///
@@ -1563,26 +1455,6 @@ public enum Components {
                 case at
                 case detail
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.status = try container.decode(
-                    Components.Schemas.CollectionAttemptStatus.self,
-                    forKey: .status
-                )
-                self.at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .at
-                )
-                self.detail = try container.decode(
-                    Swift.String.self,
-                    forKey: .detail
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "status",
-                    "at",
-                    "detail"
-                ])
-            }
         }
         /// The provider's answer under one enrollment's own credential (mirrors domain.AvailabilityAnswer).
         ///
@@ -1592,6 +1464,7 @@ public enum Components {
             case supported = "supported"
             case unsupported = "unsupported"
             case failed = "failed"
+            case unknown = "unknown"
         }
         /// One enrollment whose identity meters the pool, with its recorded availability answer.
         ///
@@ -1651,31 +1524,6 @@ public enum Components {
                 case harness_client
                 case availability
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.enrollment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.auth_identity_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .auth_identity_id
-                )
-                self.harness_client = try container.decode(
-                    Components.Schemas.HarnessClientKind.self,
-                    forKey: .harness_client
-                )
-                self.availability = try container.decodeIfPresent(
-                    Components.Schemas.UsagePoolEnrollment.availabilityPayload.self,
-                    forKey: .availability
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "enrollment_id",
-                    "auth_identity_id",
-                    "harness_client",
-                    "availability"
-                ])
-            }
         }
         /// An enrollment's availability answer and when it was observed.
         ///
@@ -1700,21 +1548,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case answer
                 case observed_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.answer = try container.decode(
-                    Components.Schemas.AvailabilityAnswer.self,
-                    forKey: .answer
-                )
-                self.observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .observed_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "answer",
-                    "observed_at"
-                ])
             }
         }
         /// One provider window that limits one route model id.
@@ -1741,21 +1574,6 @@ public enum Components {
                 case route_model_id
                 case window
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.route_model_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .route_model_id
-                )
-                self.window = try container.decode(
-                    Swift.String.self,
-                    forKey: .window
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "route_model_id",
-                    "window"
-                ])
-            }
         }
         /// What a reading says about a provider window (mirrors domain.WindowStatus).
         ///
@@ -1763,6 +1581,7 @@ public enum Components {
         @frozen public enum WindowStatus: String, Codable, Hashable, Sendable, CaseIterable {
             case allowed = "allowed"
             case exhausted = "exhausted"
+            case unknown = "unknown"
         }
         /// One provider window as the collector last saw it, under the named enrollment generation. Unknown stays unknown: a reading with a status alone is complete. used_percent and quantity are the provider's two report forms, at most one set; unit is set exactly when quantity is.
         ///
@@ -1848,66 +1667,6 @@ public enum Components {
                 case observed_at
                 case stale_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.window = try container.decode(
-                    Swift.String.self,
-                    forKey: .window
-                )
-                self.enrollment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.generation = try container.decode(
-                    Swift.Int.self,
-                    forKey: .generation
-                )
-                self.status = try container.decode(
-                    Components.Schemas.WindowStatus.self,
-                    forKey: .status
-                )
-                self.used_percent = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .used_percent
-                )
-                self.quantity = try container.decodeIfPresent(
-                    Swift.Int64.self,
-                    forKey: .quantity
-                )
-                self.unit = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .unit
-                )
-                self.resets_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .resets_at
-                )
-                self.length_seconds = try container.decodeIfPresent(
-                    Swift.Int64.self,
-                    forKey: .length_seconds
-                )
-                self.observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .observed_at
-                )
-                self.stale_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .stale_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "window",
-                    "enrollment_id",
-                    "generation",
-                    "status",
-                    "used_percent",
-                    "quantity",
-                    "unit",
-                    "resets_at",
-                    "length_seconds",
-                    "observed_at",
-                    "stale_at"
-                ])
-            }
         }
         /// What made a window exhausted (mirrors domain.ExhaustedMarkSource).
         ///
@@ -1915,6 +1674,7 @@ public enum Components {
         @frozen public enum ExhaustedMarkSource: String, Codable, Hashable, Sendable, CaseIterable {
             case provider_refusal = "provider_refusal"
             case usage_reading = "usage_reading"
+            case unknown = "unknown"
         }
         /// One reason the pool's record holds a window exhausted, and what says so. invocation_id is set exactly for provider_refusal, reading_observed_at exactly for usage_reading.
         ///
@@ -1968,41 +1728,6 @@ public enum Components {
                 case resets_at
                 case set_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.window = try container.decode(
-                    Swift.String.self,
-                    forKey: .window
-                )
-                self.source = try container.decode(
-                    Components.Schemas.ExhaustedMarkSource.self,
-                    forKey: .source
-                )
-                self.invocation_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.reading_observed_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .reading_observed_at
-                )
-                self.resets_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .resets_at
-                )
-                self.set_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .set_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "window",
-                    "source",
-                    "invocation_id",
-                    "reading_observed_at",
-                    "resets_at",
-                    "set_at"
-                ])
-            }
         }
         /// The current routing policy revision (plan §5.4 routing policy). as_of_revision is the snapshot's revision; entity_version is the policy revision, which every change advances.
         ///
@@ -2035,26 +1760,6 @@ public enum Components {
                 case entity_version
                 case policy
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Components.Schemas.AsOfRevision.self,
-                    forKey: .as_of_revision
-                )
-                self.entity_version = try container.decode(
-                    Components.Schemas.EntityVersion.self,
-                    forKey: .entity_version
-                )
-                self.policy = try container.decode(
-                    Components.Schemas.RoutingPolicy.self,
-                    forKey: .policy
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "entity_version",
-                    "policy"
-                ])
-            }
         }
         /// The path that set a routing policy revision (mirrors domain.RoutingPolicySource): cli_routing_set is `freesided routing set` on the daemon host, client_routing_set a paired client's set_routing_policy command.
         ///
@@ -2063,6 +1768,7 @@ public enum Components {
         @frozen public enum RoutingPolicySource: String, Codable, Hashable, Sendable, CaseIterable {
             case cli_routing_set = "cli_routing_set"
             case client_routing_set = "client_routing_set"
+            case unknown = "unknown"
         }
         /// One role's order: the router's candidates for the role, whose pools it ranks by the drain-first account, then the soonest known weekly reset, then this order, passing over a pool whose window is marked exhausted. Exactly one of enrollments and agents is non-null: a revision stored since #2736 orders enrollment ids, and an older one the agent names it recorded. The daemon never translates one into the other.
         ///
@@ -2094,26 +1800,6 @@ public enum Components {
                 case role
                 case enrollments
                 case agents
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.enrollments = try container.decodeIfPresent(
-                    [Swift.String].self,
-                    forKey: .enrollments
-                )
-                self.agents = try container.decodeIfPresent(
-                    [Swift.String].self,
-                    forKey: .agents
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "role",
-                    "enrollments",
-                    "agents"
-                ])
             }
         }
         /// One role's order in a set_routing_policy request: enrollment ids the daemon holds, each run on the role's lineup model and effort, with no id twice. A request cannot order agent names.
@@ -2219,46 +1905,6 @@ public enum Components {
                 case lineup_revision
                 case drain_first_account
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.revision = try container.decode(
-                    Swift.Int.self,
-                    forKey: .revision
-                )
-                self.roles = try container.decode(
-                    [Components.Schemas.RoutingPolicyRole].self,
-                    forKey: .roles
-                )
-                self.source = try container.decode(
-                    Components.Schemas.RoutingPolicySource.self,
-                    forKey: .source
-                )
-                self.set_by = try container.decode(
-                    Swift.String.self,
-                    forKey: .set_by
-                )
-                self.set_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .set_at
-                )
-                self.lineup_revision = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .lineup_revision
-                )
-                self.drain_first_account = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .drain_first_account
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "revision",
-                    "roles",
-                    "source",
-                    "set_by",
-                    "set_at",
-                    "lineup_revision",
-                    "drain_first_account"
-                ])
-            }
         }
         /// What a client can choose for a task line (plan §5.4). It is always present. enrollments is every enrollment the daemon holds, each with the models the daemon discovered for it; it is store state, so a new discovery record moves the sync revision. lineup is the committed agent tree's lineup, which runs a role when no task line or routing policy chooses; it is empty, and lineup_revision null, when the daemon holds no committed tree. The daemon loads the tree once at startup, so that half changes only when the daemon restarts on a changed tree; lineup_revision, the tree's digest and the value a RoutingPolicy records as its lineup_revision, then changes with it, and the heartbeat carries it too. The daemon records a task line whose enrollment it holds and whose model and effort that enrollment's discovery serves; admission also refuses a model its route's model list in the tree does not admit.
         ///
@@ -2318,26 +1964,6 @@ public enum Components {
                 case enrollments
                 case lineup
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.lineup_revision = try container.decodeIfPresent(
-                    Components.Schemas.AgentCatalog.lineup_revisionPayload.self,
-                    forKey: .lineup_revision
-                )
-                self.enrollments = try container.decode(
-                    [Components.Schemas.AgentCatalogEnrollment].self,
-                    forKey: .enrollments
-                )
-                self.lineup = try container.decode(
-                    [Components.Schemas.AgentCatalogLineupLine].self,
-                    forKey: .lineup
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "lineup_revision",
-                    "enrollments",
-                    "lineup"
-                ])
-            }
         }
         /// One enrollment a task line can select. discovery is null until the daemon records the enrollment's discovered models, so a client can tell "not discovered yet" from "offers nothing". The daemon accepts a selection on an enrollment with no discovery record and checks it when it admits the role.
         ///
@@ -2390,26 +2016,6 @@ public enum Components {
                 case harness_client
                 case discovery
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.enrollment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.harness_client = try container.decode(
-                    Components.Schemas.HarnessClientKind.self,
-                    forKey: .harness_client
-                )
-                self.discovery = try container.decodeIfPresent(
-                    Components.Schemas.AgentCatalogEnrollment.discoveryPayload.self,
-                    forKey: .discovery
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "enrollment_id",
-                    "harness_client",
-                    "discovery"
-                ])
-            }
         }
         /// The models an enrollment's harness reported, as the daemon last recorded them. A selection on the enrollment must name one of these models and, unless its effort is harness_default, one of that model's effort levels.
         ///
@@ -2443,26 +2049,6 @@ public enum Components {
                 case harness_build
                 case observed_at
                 case models
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.harness_build = try container.decode(
-                    Swift.String.self,
-                    forKey: .harness_build
-                )
-                self.observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .observed_at
-                )
-                self.models = try container.decode(
-                    [Components.Schemas.DiscoveredModel].self,
-                    forKey: .models
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "harness_build",
-                    "observed_at",
-                    "models"
-                ])
             }
         }
         /// One model an enrollment's harness reported.
@@ -2509,31 +2095,6 @@ public enum Components {
                 case display_name
                 case effort_levels
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                self.resolved_model = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .resolved_model
-                )
-                self.display_name = try container.decode(
-                    Swift.String.self,
-                    forKey: .display_name
-                )
-                self.effort_levels = try container.decode(
-                    [Swift.String].self,
-                    forKey: .effort_levels
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "resolved_model",
-                    "display_name",
-                    "effort_levels"
-                ])
-            }
         }
         /// The selection the lineup binds to one role.
         ///
@@ -2558,21 +2119,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case role
                 case selection
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.selection = try container.decode(
-                    Components.Schemas.TaskLineSelection.self,
-                    forKey: .selection
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "role",
-                    "selection"
-                ])
             }
         }
         /// A resource snapshot wrapping one attention item (plan §5.14).
@@ -2691,51 +2237,6 @@ public enum Components {
                 case expected_cost_units
                 case scope
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Components.Schemas.AsOfRevision.self,
-                    forKey: .as_of_revision
-                )
-                self.entity_version = try container.decode(
-                    Components.Schemas.EntityVersion.self,
-                    forKey: .entity_version
-                )
-                self.item_version = try container.decode(
-                    Swift.Int.self,
-                    forKey: .item_version
-                )
-                self.proposal_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .proposal_digest
-                )
-                self.supersedes = try container.decodeIfPresent(
-                    Components.Schemas.TaskProposalFactsSnapshot.supersedesPayload.self,
-                    forKey: .supersedes
-                )
-                self.intent = try container.decode(
-                    Components.Schemas.TaskProposalIntent.self,
-                    forKey: .intent
-                )
-                self.expected_cost_units = try container.decode(
-                    Swift.Int.self,
-                    forKey: .expected_cost_units
-                )
-                self.scope = try container.decode(
-                    Components.Schemas.TaskProposalScope.self,
-                    forKey: .scope
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "entity_version",
-                    "item_version",
-                    "proposal_digest",
-                    "supersedes",
-                    "intent",
-                    "expected_cost_units",
-                    "scope"
-                ])
-            }
         }
         /// One digest-bound, bounded side of a proposal revision comparison.
         ///
@@ -2772,31 +2273,6 @@ public enum Components {
                 case intent
                 case expected_cost_units
                 case scope
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.proposal_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .proposal_digest
-                )
-                self.intent = try container.decode(
-                    Components.Schemas.TaskProposalIntent.self,
-                    forKey: .intent
-                )
-                self.expected_cost_units = try container.decode(
-                    Swift.Int.self,
-                    forKey: .expected_cost_units
-                )
-                self.scope = try container.decode(
-                    Components.Schemas.TaskProposalScope.self,
-                    forKey: .scope
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "proposal_digest",
-                    "intent",
-                    "expected_cost_units",
-                    "scope"
-                ])
             }
         }
         /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure, follow_up_filing, or image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
@@ -2962,56 +2438,6 @@ public enum Components {
                 case follow_up_filing
                 case image_policy_adoption
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Components.Schemas.AsOfRevision.self,
-                    forKey: .as_of_revision
-                )
-                self.entity_version = try container.decode(
-                    Components.Schemas.EntityVersion.self,
-                    forKey: .entity_version
-                )
-                self.item_version = try container.decode(
-                    Swift.Int.self,
-                    forKey: .item_version
-                )
-                self.proposal_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .proposal_digest
-                )
-                self.effect_kind = try container.decode(
-                    Components.Schemas.EffectKind.self,
-                    forKey: .effect_kind
-                )
-                self.supersedes = try container.decodeIfPresent(
-                    Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload.self,
-                    forKey: .supersedes
-                )
-                self.source_issue_closure = try container.decodeIfPresent(
-                    Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload.self,
-                    forKey: .source_issue_closure
-                )
-                self.follow_up_filing = try container.decodeIfPresent(
-                    Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload.self,
-                    forKey: .follow_up_filing
-                )
-                self.image_policy_adoption = try container.decodeIfPresent(
-                    Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload.self,
-                    forKey: .image_policy_adoption
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "entity_version",
-                    "item_version",
-                    "proposal_digest",
-                    "effect_kind",
-                    "supersedes",
-                    "source_issue_closure",
-                    "follow_up_filing",
-                    "image_policy_adoption"
-                ])
-            }
         }
         /// The policy change an adoption card proposes to answer one policy-class project-image upkeep refusal (plan §5.7, Project-image upkeep): the refusal record it answers and the recipe digest to approve, the registry authorities to add, or both, and the repository the adoption widens, served from the card's project's current record. Approving the card records the adoption in the daemon's own image policy, for the card's repository only. Mirrors domain.ImagePolicyAdoptionParameters plus the repository.
         ///
@@ -3075,31 +2501,6 @@ public enum Components {
                 case recipe_digest
                 case registry_authorities
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.repository = try container.decode(
-                    Components.Schemas.ProjectRepository.self,
-                    forKey: .repository
-                )
-                self.refusal_record_id = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .refusal_record_id
-                )
-                self.recipe_digest = try container.decodeIfPresent(
-                    Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload.self,
-                    forKey: .recipe_digest
-                )
-                self.registry_authorities = try container.decode(
-                    [Swift.String].self,
-                    forKey: .registry_authorities
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "repository",
-                    "refusal_record_id",
-                    "recipe_digest",
-                    "registry_authorities"
-                ])
-            }
         }
         /// One digest-bound, bounded side of an effect-proposal revision.
         ///
@@ -3124,16 +2525,6 @@ public enum Components {
                 public enum CodingKeys: String, CodingKey {
                     case resolves
                 }
-                public init(from decoder: any Swift.Decoder) throws {
-                    let container = try decoder.container(keyedBy: CodingKeys.self)
-                    self.resolves = try container.decode(
-                        Swift.Bool.self,
-                        forKey: .resolves
-                    )
-                    try decoder.ensureNoAdditionalProperties(knownKeys: [
-                        "resolves"
-                    ])
-                }
             }
             /// The prior closure delta for a source_issue_closure revision; null for any other effect kind.
             ///
@@ -3155,21 +2546,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case proposal_digest
                 case source_issue_closure
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.proposal_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .proposal_digest
-                )
-                self.source_issue_closure = try container.decodeIfPresent(
-                    Components.Schemas.EffectProposalRevisionFacts.source_issue_closurePayload.self,
-                    forKey: .source_issue_closure
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "proposal_digest",
-                    "source_issue_closure"
-                ])
             }
         }
         /// Bounded source-issue-closure facts: the daemon-resolved target, the closure delta and its trust, and the prospective merge the approval binds to. No subject handle or policy identity.
@@ -3215,36 +2591,6 @@ public enum Components {
                 case origin
                 case merge
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.target = try container.decode(
-                    Components.Schemas.IssueSubjectRef.self,
-                    forKey: .target
-                )
-                self.resolves = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .resolves
-                )
-                self.provenance = try container.decode(
-                    Components.Schemas.ClosureProvenance.self,
-                    forKey: .provenance
-                )
-                self.origin = try container.decode(
-                    Components.Schemas.ClosureFlagOrigin.self,
-                    forKey: .origin
-                )
-                self.merge = try container.decode(
-                    Components.Schemas.ProspectiveMergeFacts.self,
-                    forKey: .merge
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "target",
-                    "resolves",
-                    "provenance",
-                    "origin",
-                    "merge"
-                ])
-            }
         }
         /// The exact merge a closure approval binds to: the publication identity, the candidate head, and the base ref and SHA the pull request targets.
         ///
@@ -3282,31 +2628,6 @@ public enum Components {
                 case candidate_head_sha
                 case base_ref
                 case base_sha
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.publication_identity = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .publication_identity
-                )
-                self.candidate_head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .candidate_head_sha
-                )
-                self.base_ref = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_ref
-                )
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "publication_identity",
-                    "candidate_head_sha",
-                    "base_ref",
-                    "base_sha"
-                ])
             }
         }
         /// Bounded follow-up-filing facts (plan §5.17): the repository, labels, and milestone the daemon derived from the project and the run's resolved policy, the screened title and body the filing would publish, and the finding the filing answers. No subject handle, policy identity, or filing identity; which credential files the issue is chosen at dispatch.
@@ -3364,41 +2685,6 @@ public enum Components {
                 case body
                 case source
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.repository = try container.decode(
-                    Components.Schemas.ProjectRepository.self,
-                    forKey: .repository
-                )
-                self.labels = try container.decode(
-                    [Swift.String].self,
-                    forKey: .labels
-                )
-                self.milestone = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .milestone
-                )
-                self.title = try container.decode(
-                    Components.Schemas.ScreenedIssueText.self,
-                    forKey: .title
-                )
-                self.body = try container.decode(
-                    Components.Schemas.ScreenedIssueText.self,
-                    forKey: .body
-                )
-                self.source = try container.decode(
-                    Components.Schemas.FollowUpFilingSource.self,
-                    forKey: .source
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "repository",
-                    "labels",
-                    "milestone",
-                    "title",
-                    "body",
-                    "source"
-                ])
-            }
         }
         /// A project's repository, such as the one a follow-up issue is filed in or an image-policy adoption widens. repository_id is the forge identity; repo is the project's current name for it, so a rename after the proposal was made shows the new name.
         ///
@@ -3424,21 +2710,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case repo
                 case repository_id
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.repo = try container.decode(
-                    Swift.String.self,
-                    forKey: .repo
-                )
-                self.repository_id = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .repository_id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "repo",
-                    "repository_id"
-                ])
             }
         }
         /// One agent-controlled issue text field with the ruleset it was screened under and the verdict. The daemon screens the text again under the recorded ruleset on every read, so a served record always carries the passed verdict.
@@ -3472,26 +2743,6 @@ public enum Components {
                 case ruleset
                 case verdict
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.text = try container.decode(
-                    Swift.String.self,
-                    forKey: .text
-                )
-                self.ruleset = try container.decode(
-                    Components.Schemas.IssueTextRuleset.self,
-                    forKey: .ruleset
-                )
-                self.verdict = try container.decode(
-                    Components.Schemas.ScreeningVerdict.self,
-                    forKey: .verdict
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "text",
-                    "ruleset",
-                    "verdict"
-                ])
-            }
         }
         /// What a follow-up filing came from: the finding, the finding-adjudication artifact that routed it, and whether the route was a deferred disposition or a separate-work verdict. The link is served as recorded: if a later round fixes or re-routes the finding, the facts stay readable and the daemon refuses approval.
         ///
@@ -3523,26 +2774,6 @@ public enum Components {
                 case finding_id
                 case adjudication_digest
                 case kind
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.finding_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .finding_id
-                )
-                self.adjudication_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .adjudication_digest
-                )
-                self.kind = try container.decode(
-                    Components.Schemas.FollowUpSourceKind.self,
-                    forKey: .kind
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "finding_id",
-                    "adjudication_digest",
-                    "kind"
-                ])
             }
         }
         /// Bounded public parameters an operator may revise; the opaque work-unit handle and current policy remain store-derived authority.
@@ -3606,6 +2837,7 @@ public enum Components {
             case implementer = "implementer"
             case remediator = "remediator"
             case reviewer = "reviewer"
+            case unknown = "unknown"
         }
         /// An operator's choice for one role on one task: the selection the role runs. The role's prompt stays the lineup's. When it accepts the command the daemon refuses, with a 400 that names the field, a selection whose enrollment it doesn't hold, or whose model or effort the enrollment's discovery record doesn't list; with no discovery record it checks the selection when it admits the role.
         ///
@@ -3679,26 +2911,6 @@ public enum Components {
                 case model_id
                 case effort
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.enrollment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.model_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .model_id
-                )
-                self.effort = try container.decode(
-                    Swift.String.self,
-                    forKey: .effort
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "enrollment_id",
-                    "model_id",
-                    "effort"
-                ])
-            }
         }
         /// A recorded choice for one role, in the encoding it was recorded in: exactly one of agent and selection is non-null. A choice recorded since #2598 holds its selection; one recorded before it holds the agent name the command named then.
         ///
@@ -3748,26 +2960,6 @@ public enum Components {
                 case role
                 case agent
                 case selection
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
-                )
-                self.selection = try container.decodeIfPresent(
-                    Components.Schemas.TaskLineChoice.selectionPayload.self,
-                    forKey: .selection
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "role",
-                    "agent",
-                    "selection"
-                ])
             }
         }
         /// One file a submit_task command attaches: a digest the client uploaded first through PUT /attachments/{digest}, the relative-path name to bind it to, and the client's claimed media type. The daemon, not the client, enforces every rule: the name is a relative path of "/"-separated segments with no empty, ".", or ".." segment, no leading "/", no control character, valid UTF-8, at most 1,024 bytes in all, and each segment at most 255 bytes. The claim is a lowercase type/subtype token with no parameters, at most 255 bytes; it is kept for display and decides nothing.
@@ -3839,6 +3031,7 @@ public enum Components {
             case image_sol_gif = "image/gif"
             case image_sol_webp = "image/webp"
             case application_sol_octet_hyphen_stream = "application/octet-stream"
+            case unknown = "unknown"
         }
         /// One attachment recorded on a task, as its submission carried it. Attachments are operator input, never evidence: they are not artifacts and never enter an evidence_snapshot (plan §5.15). Size limits: an image (an image media_type) at most 10 MiB, any other file at most 32 MiB, and per task at most 100 MiB in total and 1,000 attachments.
         ///
@@ -3891,36 +3084,6 @@ public enum Components {
                 case claimed_media_type
                 case size_bytes
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .digest
-                )
-                self.name = try container.decode(
-                    Swift.String.self,
-                    forKey: .name
-                )
-                self.media_type = try container.decode(
-                    Components.Schemas.TaskAttachmentMediaType.self,
-                    forKey: .media_type
-                )
-                self.claimed_media_type = try container.decode(
-                    Swift.String.self,
-                    forKey: .claimed_media_type
-                )
-                self.size_bytes = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .size_bytes
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "digest",
-                    "name",
-                    "media_type",
-                    "claimed_media_type",
-                    "size_bytes"
-                ])
-            }
         }
         /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line. alternate_agent_move is an operator's move_parked_task re-pinning a parked task to the chosen agent's pool, citing the move's AlternateAgentRetry by id in set_by. router and alternate_agent_move are the only sources that carry provenance. triage is the triager's escalation of the specifier to its escalated counterpart (plan §5.13), citing the task's triage record; it carries no provenance.
         ///
@@ -3935,6 +3098,7 @@ public enum Components {
             case client_line_change = "client_line_change"
             case triage = "triage"
             case alternate_agent_move = "alternate_agent_move"
+            case unknown = "unknown"
         }
         /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an enrollment on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
         ///
@@ -3944,6 +3108,7 @@ public enum Components {
             case drain_first_account = "drain_first_account"
             case soonest_reset = "soonest_reset"
             case policy_order = "policy_order"
+            case unknown = "unknown"
         }
         /// One candidate pool's known weekly reset for its agent's model, as the router ranked it: the window that resets soonest, the reset, and when the reading that reported it was observed.
         ///
@@ -3981,31 +3146,6 @@ public enum Components {
                 case window
                 case resets_at
                 case observed_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.window = try container.decode(
-                    Swift.String.self,
-                    forKey: .window
-                )
-                self.resets_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .resets_at
-                )
-                self.observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .observed_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "pool",
-                    "window",
-                    "resets_at",
-                    "observed_at"
-                ])
             }
         }
         /// The exhausted mark that made the router pass over a candidate ranked ahead of the chosen one: the candidate, its pool, and the mark on that pool's window for the candidate's model. Exactly one of enrollment and agent is non-null: a mark written since #2736 names the enrollment, and an older one the agent it recorded.
@@ -4064,46 +3204,6 @@ public enum Components {
                 case source
                 case marked_at
                 case resets_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
-                )
-                self.enrollment = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .enrollment
-                )
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.window = try container.decode(
-                    Swift.String.self,
-                    forKey: .window
-                )
-                self.source = try container.decode(
-                    Components.Schemas.ExhaustedMarkSource.self,
-                    forKey: .source
-                )
-                self.marked_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .marked_at
-                )
-                self.resets_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .resets_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "agent",
-                    "enrollment",
-                    "pool",
-                    "window",
-                    "source",
-                    "marked_at",
-                    "resets_at"
-                ])
             }
         }
         /// How the router chose a routing's pool: the policy revision it applied, the tier that chose, the pool, the resets that ranked the candidates, and any exhausted mark it passed over. One routing writes one provenance onto every line it writes. ranked_by holds one reading per candidate pool whose weekly reset was known, in rank order (ascending resets_at, ties in the policy's order, no pool twice); it is empty when no reset was known. passed_over is the first candidate ranked ahead of the chosen pool whose pool's window was marked exhausted, null when none was. The tier fixes the rest: drain_first_account passes over no one; soonest_reset names a pool in ranked_by, and passed_over is set when that pool is not first; policy_order names a pool absent from ranked_by, and passed_over is set when ranked_by is not empty. A pool passed over for a mark keeps its reading in ranked_by. An alternate_agent_move line carries the same shape at tier policy_order with an empty ranked_by; its passed_over names the agent the move left, with the parked hold's mark, when the policy orders that agent, and is null otherwise.
@@ -4166,36 +3266,6 @@ public enum Components {
                 case pool
                 case ranked_by
                 case passed_over
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.policy_revision = try container.decode(
-                    Swift.Int.self,
-                    forKey: .policy_revision
-                )
-                self.tier = try container.decode(
-                    Components.Schemas.TaskLineSelectionTier.self,
-                    forKey: .tier
-                )
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.ranked_by = try container.decode(
-                    [Components.Schemas.TaskLineRankingReading].self,
-                    forKey: .ranked_by
-                )
-                self.passed_over = try container.decodeIfPresent(
-                    Components.Schemas.TaskLineProvenance.passed_overPayload.self,
-                    forKey: .passed_over
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "policy_revision",
-                    "tier",
-                    "pool",
-                    "ranked_by",
-                    "passed_over"
-                ])
             }
         }
         /// One version of a task's line for one role: what was chosen for that role in that task. A change is a new version naming the one it supersedes; a version is never edited. id is the content address of the version as the daemon records it. Exactly one of agent and selection is non-null: a version recorded since #2597 carries its selection, and an older one the agent name it recorded. The daemon never translates one into the other. provenance is set exactly when source is router or alternate_agent_move.
@@ -4337,66 +3407,6 @@ public enum Components {
                 case set_at
                 case provenance
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .id
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
-                )
-                self.selection = try container.decodeIfPresent(
-                    Components.Schemas.TaskLine.selectionPayload.self,
-                    forKey: .selection
-                )
-                self.version = try container.decode(
-                    Swift.Int.self,
-                    forKey: .version
-                )
-                self.predecessor_id = try container.decodeIfPresent(
-                    Components.Schemas.TaskLine.predecessor_idPayload.self,
-                    forKey: .predecessor_id
-                )
-                self.source = try container.decode(
-                    Components.Schemas.TaskLineSource.self,
-                    forKey: .source
-                )
-                self.set_by = try container.decode(
-                    Swift.String.self,
-                    forKey: .set_by
-                )
-                self.set_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .set_at
-                )
-                self.provenance = try container.decodeIfPresent(
-                    Components.Schemas.TaskLine.provenancePayload.self,
-                    forKey: .provenance
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "task_id",
-                    "role",
-                    "agent",
-                    "selection",
-                    "version",
-                    "predecessor_id",
-                    "source",
-                    "set_by",
-                    "set_at",
-                    "provenance"
-                ])
-            }
         }
         /// The bounded revision an operator may apply to a source_issue_closure proposal with approve_with_changes. It carries one required source_issue_closure arm holding only the resolve flag; the daemon owns the target, provenance, and origin, and rebuilds the revised proposal from the prior one. The arm is the sole kind today; a second effect kind would relax this to a union requiring exactly one non-null arm.
         ///
@@ -4481,26 +3491,6 @@ public enum Components {
                 case declared_path_count
                 case touches_control_plane
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.component_count = try container.decode(
-                    Swift.Int.self,
-                    forKey: .component_count
-                )
-                self.declared_path_count = try container.decode(
-                    Swift.Int.self,
-                    forKey: .declared_path_count
-                )
-                self.touches_control_plane = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .touches_control_plane
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "component_count",
-                    "declared_path_count",
-                    "touches_control_plane"
-                ])
-            }
         }
         /// Closed intent understood by the task-proposal registry.
         ///
@@ -4517,6 +3507,7 @@ public enum Components {
             case source_issue_closure = "source_issue_closure"
             case follow_up_filing = "follow_up_filing"
             case image_policy_adoption = "image_policy_adoption"
+            case unknown = "unknown"
         }
         /// The versioned ruleset an issue text field was screened under. Matches domain.AllIssueTextRulesets.
         ///
@@ -4532,6 +3523,7 @@ public enum Components {
         @frozen public enum ScreeningVerdict: String, Codable, Hashable, Sendable, CaseIterable {
             case passed = "passed"
             case rejected = "rejected"
+            case unknown = "unknown"
         }
         /// What produced a follow-up filing: deferred_disposition when a finding's effective disposition is deferred, separate_work_verdict when adjudication parked the finding as separate work (plan §5.17). Matches domain.AllFollowUpSourceKinds.
         ///
@@ -4540,6 +3532,7 @@ public enum Components {
         @frozen public enum FollowUpSourceKind: String, Codable, Hashable, Sendable, CaseIterable {
             case deferred_disposition = "deferred_disposition"
             case separate_work_verdict = "separate_work_verdict"
+            case unknown = "unknown"
         }
         /// The trust a source-issue-closure target earns: verified when the daemon bound the issue subject, recommended when a same-repository target came from a client-supplied source the daemon cannot re-derive (plan §5.13). Matches domain.AllClosureProvenances.
         ///
@@ -4548,6 +3541,7 @@ public enum Components {
         @frozen public enum ClosureProvenance: String, Codable, Hashable, Sendable, CaseIterable {
             case verified = "verified"
             case recommended = "recommended"
+            case unknown = "unknown"
         }
         /// Which mechanism produced a source-issue-closure proposal: propose_site when the inference site emitted the flag, daemon_fallback when the daemon minted a durable resolve-false proposal, policy_default when the default policy set a resolving flag without asking the site (plan §5.13). Matches domain.AllClosureFlagOrigins.
         ///
@@ -4557,6 +3551,7 @@ public enum Components {
             case propose_site = "propose_site"
             case daemon_fallback = "daemon_fallback"
             case policy_default = "policy_default"
+            case unknown = "unknown"
         }
         /// A resource snapshot wrapping one attention delivery (plan §5.14).
         ///
@@ -4619,26 +3614,6 @@ public enum Components {
                 case entity_version
                 case task
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .as_of_revision
-                )
-                self.entity_version = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .entity_version
-                )
-                self.task = try container.decode(
-                    Components.Schemas.Task.self,
-                    forKey: .task
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "entity_version",
-                    "task"
-                ])
-            }
         }
         /// Stored work identity and name across specification revisions, campaigns, and retries. Lifecycle projects task completion, confirmed stopping or explicit abandonment, otherwise the newest run's display state. It never determines WIP membership; wip is the authoritative slot state, derived from lifecycle facts and bound confirmed cancellation. Source is null only for legacy or demo work without a recoverable intake reference.
         ///
@@ -4685,6 +3660,7 @@ public enum Components {
                 case stopped = "stopped"
                 case abandoned = "abandoned"
                 case _empty = ""
+                case unknown = "unknown"
             }
             /// A completed current episode is finished. Otherwise bound confirmed cancellation is stopped, explicit current-episode abandonment is abandoned, and unaffected tasks keep the newest run's display state. Null means no run or terminal decision. A stopped task may have no run or current_position. A finished run alone proves neither task completion nor execution quiescence. Pending or failed cancellation does not supply a terminal override.
             ///
@@ -4827,86 +3803,6 @@ public enum Components {
                 case task_lines
                 case attachments
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                self.project_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .project_id
-                )
-                self.display_names = try container.decode(
-                    Components.Schemas.DisplayNames.self,
-                    forKey: .display_names
-                )
-                self.source = try container.decodeIfPresent(
-                    Components.Schemas.Task.sourcePayload.self,
-                    forKey: .source
-                )
-                self.created_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .created_at
-                )
-                self.last_activity_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .last_activity_at
-                )
-                self.lifecycle = try container.decodeIfPresent(
-                    Components.Schemas.Task.lifecyclePayload.self,
-                    forKey: .lifecycle
-                )
-                self.current_position = try container.decodeIfPresent(
-                    Components.Schemas.Task.current_positionPayload.self,
-                    forKey: .current_position
-                )
-                self.campaign_ids = try container.decode(
-                    [Swift.String].self,
-                    forKey: .campaign_ids
-                )
-                self.run_ids = try container.decode(
-                    [Swift.String].self,
-                    forKey: .run_ids
-                )
-                self.wip = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .wip
-                )
-                self.lifecycle_facts = try container.decode(
-                    [Components.Schemas.TaskLifecycleFact].self,
-                    forKey: .lifecycle_facts
-                )
-                self.cancellation = try container.decodeIfPresent(
-                    Components.Schemas.Task.cancellationPayload.self,
-                    forKey: .cancellation
-                )
-                self.task_lines = try container.decode(
-                    [Components.Schemas.TaskLine].self,
-                    forKey: .task_lines
-                )
-                self.attachments = try container.decode(
-                    [Components.Schemas.TaskAttachment].self,
-                    forKey: .attachments
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "project_id",
-                    "display_names",
-                    "source",
-                    "created_at",
-                    "last_activity_at",
-                    "lifecycle",
-                    "current_position",
-                    "campaign_ids",
-                    "run_ids",
-                    "wip",
-                    "lifecycle_facts",
-                    "cancellation",
-                    "task_lines",
-                    "attachments"
-                ])
-            }
         }
         /// Request acceptance is not quiescence; failure retains the fence.
         ///
@@ -4915,6 +3811,7 @@ public enum Components {
             case requested = "requested"
             case confirmed = "confirmed"
             case failed_to_stop = "failed_to_stop"
+            case unknown = "unknown"
         }
         /// One daemon-derived run and its campaign, including a queued run.
         ///
@@ -4939,21 +3836,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case run_id
                 case campaign_id
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.campaign_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .campaign_id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "run_id",
-                    "campaign_id"
-                ])
             }
         }
         /// Ordered task ownership and the current work episode at acceptance.
@@ -4995,31 +3877,6 @@ public enum Components {
                 case project_id
                 case episode_ordinal
                 case runs
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.project_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .project_id
-                )
-                self.episode_ordinal = try container.decode(
-                    Swift.Int.self,
-                    forKey: .episode_ordinal
-                )
-                self.runs = try container.decode(
-                    [Components.Schemas.TaskCancellationRun].self,
-                    forKey: .runs
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "task_id",
-                    "project_id",
-                    "episode_ordinal",
-                    "runs"
-                ])
             }
         }
         /// Daemon-only evidence. Confirmed asserts all owned executions are quiescent and further launches fenced. No client command accepts this record.
@@ -5070,41 +3927,6 @@ public enum Components {
                 case state
                 case evidence_digest
                 case recorded_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                self.request_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .request_id
-                )
-                self.target_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .target_digest
-                )
-                self.state = try container.decode(
-                    Components.Schemas.TaskCancellationState.self,
-                    forKey: .state
-                )
-                self.evidence_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .evidence_digest
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "request_id",
-                    "target_digest",
-                    "state",
-                    "evidence_digest",
-                    "recorded_at"
-                ])
             }
         }
         /// Durable task fence, independent of lifecycle and WIP. Runtime consumers must fence admission, descendants and publication, reconcile ownership after restart, and retain late results without publishing them. Only bound daemon evidence confirms quiescence. Confirmation is final.
@@ -5186,51 +4008,6 @@ public enum Components {
                 case state
                 case acknowledgement
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.request_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .request_id
-                )
-                self.target = try container.decode(
-                    Components.Schemas.TaskCancellationTarget.self,
-                    forKey: .target
-                )
-                self.target_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .target_digest
-                )
-                self.sync_epoch = try container.decode(
-                    Swift.String.self,
-                    forKey: .sync_epoch
-                )
-                self.fence_revision = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .fence_revision
-                )
-                self.requested_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .requested_at
-                )
-                self.state = try container.decode(
-                    Components.Schemas.TaskCancellationState.self,
-                    forKey: .state
-                )
-                self.acknowledgement = try container.decodeIfPresent(
-                    Components.Schemas.TaskCancellation.acknowledgementPayload.self,
-                    forKey: .acknowledgement
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "request_id",
-                    "target",
-                    "target_digest",
-                    "sync_epoch",
-                    "fence_revision",
-                    "requested_at",
-                    "state",
-                    "acknowledgement"
-                ])
-            }
         }
         /// One recorded task lifecycle event.
         ///
@@ -5241,6 +4018,7 @@ public enum Components {
                 case started = "started"
                 case completed = "completed"
                 case abandoned = "abandoned"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/kind`.
             public var kind: Components.Schemas.TaskLifecycleFact.kindPayload
@@ -5275,31 +4053,6 @@ public enum Components {
                 case run_id
                 case binding_unit_id
                 case recorded_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.TaskLifecycleFact.kindPayload.self,
-                    forKey: .kind
-                )
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.binding_unit_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .binding_unit_id
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "run_id",
-                    "binding_unit_id",
-                    "recorded_at"
-                ])
             }
         }
         /// The newest run, its latest stage, and its current review round and hold.
@@ -5355,31 +4108,6 @@ public enum Components {
                 case stage
                 case round
                 case hold_reason
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.stage = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .stage
-                )
-                self.round = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.hold_reason = try container.decodeIfPresent(
-                    Components.Schemas.TaskPosition.hold_reasonPayload.self,
-                    forKey: .hold_reason
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "run_id",
-                    "stage",
-                    "round",
-                    "hold_reason"
-                ])
             }
         }
         /// The submitted artifact or stable issue identity that supplied the task.
@@ -5485,31 +4213,6 @@ public enum Components {
                 case work_item_artifact_digest
                 case issue_subject
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.ArtifactSpecificationSource.kindPayload.self,
-                    forKey: .kind
-                )
-                self.work_item_artifact_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .work_item_artifact_id
-                )
-                self.work_item_artifact_digest = try container.decode(
-                    Components.Schemas.ArtifactSpecificationSource.work_item_artifact_digestPayload.self,
-                    forKey: .work_item_artifact_digest
-                )
-                self.issue_subject = try container.decodeIfPresent(
-                    OpenAPIRuntime.OpenAPIValueContainer.self,
-                    forKey: .issue_subject
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "work_item_artifact_id",
-                    "work_item_artifact_digest",
-                    "issue_subject"
-                ])
-            }
         }
         /// An issue subject identified independently of its observed title and body.
         ///
@@ -5551,31 +4254,6 @@ public enum Components {
                 case work_item_artifact_digest
                 case issue_subject
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.IssueSpecificationSource.kindPayload.self,
-                    forKey: .kind
-                )
-                self.work_item_artifact_id = try container.decodeIfPresent(
-                    OpenAPIRuntime.OpenAPIValueContainer.self,
-                    forKey: .work_item_artifact_id
-                )
-                self.work_item_artifact_digest = try container.decodeIfPresent(
-                    OpenAPIRuntime.OpenAPIValueContainer.self,
-                    forKey: .work_item_artifact_digest
-                )
-                self.issue_subject = try container.decode(
-                    Components.Schemas.IssueSubjectRef.self,
-                    forKey: .issue_subject
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "work_item_artifact_id",
-                    "work_item_artifact_digest",
-                    "issue_subject"
-                ])
-            }
         }
         /// The repository identity and issue number of an intake subject.
         ///
@@ -5606,26 +4284,6 @@ public enum Components {
                 case repo
                 case repository_id
                 case issue_number
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.repo = try container.decode(
-                    Swift.String.self,
-                    forKey: .repo
-                )
-                self.repository_id = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .repository_id
-                )
-                self.issue_number = try container.decode(
-                    Swift.Int.self,
-                    forKey: .issue_number
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "repo",
-                    "repository_id",
-                    "issue_number"
-                ])
             }
         }
         /// A resource snapshot wrapping one run aggregate (plan §5.14).
@@ -5722,46 +4380,6 @@ public enum Components {
                 case events
                 case sections
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Components.Schemas.AsOfRevision.self,
-                    forKey: .as_of_revision
-                )
-                self.as_of = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .as_of
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.project_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .project_id
-                )
-                self.name = try container.decode(
-                    Components.Schemas.DisplayName.self,
-                    forKey: .name
-                )
-                self.events = try container.decode(
-                    [Components.Schemas.TaskEvent].self,
-                    forKey: .events
-                )
-                self.sections = try container.decode(
-                    [Components.Schemas.TaskTimelineSection].self,
-                    forKey: .sections
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "as_of",
-                    "task_id",
-                    "project_id",
-                    "name",
-                    "events",
-                    "sections"
-                ])
-            }
         }
         /// A campaign's recorded events and runs, or the legacy run group.
         ///
@@ -5799,26 +4417,6 @@ public enum Components {
                 case campaign_id
                 case events
                 case runs
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.campaign_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .campaign_id
-                )
-                self.events = try container.decode(
-                    [Components.Schemas.TaskEvent].self,
-                    forKey: .events
-                )
-                self.runs = try container.decode(
-                    [Components.Schemas.TaskTimelineRun].self,
-                    forKey: .runs
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "campaign_id",
-                    "events",
-                    "runs"
-                ])
             }
         }
         /// A run header and its daemon observations. The run id opens the full run timeline. Lineage and role are null for legacy runs without a campaign.
@@ -5927,56 +4525,6 @@ public enum Components {
                 case milestones
                 case hold
                 case events
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.role = try container.decodeIfPresent(
-                    Components.Schemas.TaskTimelineRun.rolePayload.self,
-                    forKey: .role
-                )
-                self.attempt_number = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .attempt_number
-                )
-                self.attempt_reason = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .attempt_reason
-                )
-                self.parent_run_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .parent_run_id
-                )
-                self.superseded_by = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .superseded_by
-                )
-                self.milestones = try container.decode(
-                    [Components.Schemas.RunMilestone].self,
-                    forKey: .milestones
-                )
-                self.hold = try container.decodeIfPresent(
-                    Components.Schemas.TaskTimelineRun.holdPayload.self,
-                    forKey: .hold
-                )
-                self.events = try container.decode(
-                    [Components.Schemas.TaskEvent].self,
-                    forKey: .events
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "run_id",
-                    "role",
-                    "attempt_number",
-                    "attempt_reason",
-                    "parent_run_id",
-                    "superseded_by",
-                    "milestones",
-                    "hold",
-                    "events"
-                ])
             }
         }
         /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. specifier_triaged requires triage and no run_id: the task's one triage record (plan §5.13), at its recorded_at. Its reason is advisory, for display only. All other details are null. Events are observations, never authority.
@@ -6202,81 +4750,6 @@ public enum Components {
                 case pr_number
                 case merge_commit_sha
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.milestone = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.milestonePayload.self,
-                    forKey: .milestone
-                )
-                self.review = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.reviewPayload.self,
-                    forKey: .review
-                )
-                self.verification = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.verificationPayload.self,
-                    forKey: .verification
-                )
-                self.external_review = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.external_reviewPayload.self,
-                    forKey: .external_review
-                )
-                self.line = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.linePayload.self,
-                    forKey: .line
-                )
-                self.triage = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.triagePayload.self,
-                    forKey: .triage
-                )
-                self.kind = try container.decode(
-                    Components.Schemas.TaskEventKind.self,
-                    forKey: .kind
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                self.campaign_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .campaign_id
-                )
-                self.run_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.approved_spec_digest = try container.decodeIfPresent(
-                    Components.Schemas.TaskEvent.approved_spec_digestPayload.self,
-                    forKey: .approved_spec_digest
-                )
-                self.specification_run_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .specification_run_id
-                )
-                self.pr_number = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .pr_number
-                )
-                self.merge_commit_sha = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .merge_commit_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "milestone",
-                    "review",
-                    "verification",
-                    "external_review",
-                    "line",
-                    "triage",
-                    "kind",
-                    "recorded_at",
-                    "campaign_id",
-                    "run_id",
-                    "approved_spec_digest",
-                    "specification_run_id",
-                    "pr_number",
-                    "merge_commit_sha"
-                ])
-            }
         }
         /// Recorded review identity and result, never parsed from reviewer output.
         ///
@@ -6344,41 +4817,6 @@ public enum Components {
                 case outcome
                 case failure
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                self.outcome = try container.decodeIfPresent(
-                    Components.Schemas.TaskEventReview.outcomePayload.self,
-                    forKey: .outcome
-                )
-                self.failure = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .failure
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "invocation_id",
-                    "round",
-                    "head_sha",
-                    "base_sha",
-                    "outcome",
-                    "failure"
-                ])
-            }
         }
         /// Historical detailed-readiness decision binding, not current readiness.
         ///
@@ -6390,6 +4828,7 @@ public enum Components {
             @frozen public enum _classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case ready_clean = "ready_clean"
                 case ready_degraded = "ready_degraded"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/TaskEventVerification/class`.
             public var _class: Components.Schemas.TaskEventVerification._classPayload
@@ -6420,31 +4859,6 @@ public enum Components {
                 case _class = "class"
                 case head_sha
                 case base_sha
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self._class = try container.decode(
-                    Components.Schemas.TaskEventVerification._classPayload.self,
-                    forKey: ._class
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "item_id",
-                    "class",
-                    "head_sha",
-                    "base_sha"
-                ])
             }
         }
         /// An external review re-entry: the ready card it withdrew, the admitted finding that started the cycle with its reviewer's forge login and the published head it was left on, and the review round the cycle opens.
@@ -6489,36 +4903,6 @@ public enum Components {
                 case reviewer_login
                 case round
                 case head_sha
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.finding_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .finding_id
-                )
-                self.reviewer_login = try container.decode(
-                    Swift.String.self,
-                    forKey: .reviewer_login
-                )
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "item_id",
-                    "finding_id",
-                    "reviewer_login",
-                    "round",
-                    "head_sha"
-                ])
             }
         }
         /// One task line version as the timeline shows it, in its own encoding as TaskLine carries it: at most one of agent and selection is non-null, and both are null on a cleared version, which returned the role to the lineup. superseded_agent and superseded_selection are the version this one supersedes, in that version's encoding; both are null for version 1 and after a cleared version. provenance is the router's citation, null for an operator line.
@@ -6642,56 +5026,6 @@ public enum Components {
                 case superseded_selection
                 case provenance
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.line_id = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .line_id
-                )
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
-                )
-                self.selection = try container.decodeIfPresent(
-                    Components.Schemas.TaskEventTaskLine.selectionPayload.self,
-                    forKey: .selection
-                )
-                self.version = try container.decode(
-                    Swift.Int.self,
-                    forKey: .version
-                )
-                self.source = try container.decode(
-                    Components.Schemas.TaskLineSource.self,
-                    forKey: .source
-                )
-                self.superseded_agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .superseded_agent
-                )
-                self.superseded_selection = try container.decodeIfPresent(
-                    Components.Schemas.TaskEventTaskLine.superseded_selectionPayload.self,
-                    forKey: .superseded_selection
-                )
-                self.provenance = try container.decodeIfPresent(
-                    Components.Schemas.TaskEventTaskLine.provenancePayload.self,
-                    forKey: .provenance
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "line_id",
-                    "role",
-                    "agent",
-                    "selection",
-                    "version",
-                    "source",
-                    "superseded_agent",
-                    "superseded_selection",
-                    "provenance"
-                ])
-            }
         }
         /// A task's triage record as the timeline shows it (plan §5.13, Specifier Triage). tier is the triager's answer, present exactly when outcome is answered. Every outcome but an answered standard escalates, and escalated says whether this one did. reason is the triager's reason, or the daemon's fallback code for a failure, and null when there is none; it is advisory and never a decision.
         ///
@@ -6748,31 +5082,6 @@ public enum Components {
                 case reason
                 case escalated
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.outcome = try container.decode(
-                    Components.Schemas.TriageOutcome.self,
-                    forKey: .outcome
-                )
-                self.tier = try container.decodeIfPresent(
-                    Components.Schemas.TaskEventTriage.tierPayload.self,
-                    forKey: .tier
-                )
-                self.reason = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .reason
-                )
-                self.escalated = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .escalated
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "outcome",
-                    "tier",
-                    "reason",
-                    "escalated"
-                ])
-            }
         }
         /// What the triager's one call for a task came to: answered, or the failure or skip that stood in for an answer (call_failed, invalid_answer, budget_spent, no_triager_line).
         ///
@@ -6784,6 +5093,7 @@ public enum Components {
             case invalid_answer = "invalid_answer"
             case budget_spent = "budget_spent"
             case no_triager_line = "no_triager_line"
+            case unknown = "unknown"
         }
         /// The triager's bounded choice: standard keeps the specifier on its lineup agent; escalated moves it to that agent's escalated counterpart.
         ///
@@ -6792,6 +5102,7 @@ public enum Components {
         @frozen public enum TriageTier: String, Codable, Hashable, Sendable, CaseIterable {
             case standard = "standard"
             case escalated = "escalated"
+            case unknown = "unknown"
         }
         /// Closed vocabulary of recorded task-wide milestone history.
         ///
@@ -6816,6 +5127,7 @@ public enum Components {
             case external_review_reentered = "external_review_reentered"
             case task_line_set = "task_line_set"
             case specifier_triaged = "specifier_triaged"
+            case unknown = "unknown"
         }
         /// The run's role in its production attempt.
         ///
@@ -6823,6 +5135,7 @@ public enum Components {
         @frozen public enum TaskRunRole: String, Codable, Hashable, Sendable, CaseIterable {
             case specification = "specification"
             case implementation = "implementation"
+            case unknown = "unknown"
         }
         /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate.
         ///
@@ -6986,61 +5299,6 @@ public enum Components {
                 case billable_cost_so_far
                 case admissions
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.as_of_revision = try container.decode(
-                    Components.Schemas.AsOfRevision.self,
-                    forKey: .as_of_revision
-                )
-                self.as_of = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .as_of
-                )
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.milestones = try container.decode(
-                    [Components.Schemas.RunMilestone].self,
-                    forKey: .milestones
-                )
-                self.hold = try container.decodeIfPresent(
-                    Components.Schemas.RunTimeline.holdPayload.self,
-                    forKey: .hold
-                )
-                self.invocations = try container.decode(
-                    [Components.Schemas.InvocationObservation].self,
-                    forKey: .invocations
-                )
-                self.review = try container.decodeIfPresent(
-                    Components.Schemas.RunTimeline.reviewPayload.self,
-                    forKey: .review
-                )
-                self.completion = try container.decodeIfPresent(
-                    Components.Schemas.RunTimeline.completionPayload.self,
-                    forKey: .completion
-                )
-                self.billable_cost_so_far = try container.decodeIfPresent(
-                    Components.Schemas.RunTimeline.billable_cost_so_farPayload.self,
-                    forKey: .billable_cost_so_far
-                )
-                self.admissions = try container.decode(
-                    [Components.Schemas.InvocationAdmissionFacts].self,
-                    forKey: .admissions
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "as_of_revision",
-                    "as_of",
-                    "run_id",
-                    "milestones",
-                    "hold",
-                    "invocations",
-                    "review",
-                    "completion",
-                    "billable_cost_so_far",
-                    "admissions"
-                ])
-            }
         }
         /// Primary review history in ascending round order.
         ///
@@ -7058,16 +5316,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case rounds
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.rounds = try container.decode(
-                    [Components.Schemas.RunReviewRound].self,
-                    forKey: .rounds
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "rounds"
-                ])
-            }
         }
         /// Progress derived from request, invocation and terminal review facts.
         ///
@@ -7077,6 +5325,7 @@ public enum Components {
             case running = "running"
             case completed = "completed"
             case failed = "failed"
+            case unknown = "unknown"
         }
         /// Origin of daemon-held facts. Today kind is freeside_invoked and status is null. Open strings reserve future external sources and quarantined/promoted status.
         ///
@@ -7101,21 +5350,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case status
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Swift.String.self,
-                    forKey: .kind
-                )
-                self.status = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .status
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "status"
-                ])
             }
         }
         /// Counts of immutable dispositions and findings still open in one round.
@@ -7154,31 +5388,6 @@ public enum Components {
                 case deferred
                 case open
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.fixed = try container.decode(
-                    Swift.Int.self,
-                    forKey: .fixed
-                )
-                self.declined = try container.decode(
-                    Swift.Int.self,
-                    forKey: .declined
-                )
-                self.deferred = try container.decode(
-                    Swift.Int.self,
-                    forKey: .deferred
-                )
-                self.open = try container.decode(
-                    Swift.Int.self,
-                    forKey: .open
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "fixed",
-                    "declined",
-                    "deferred",
-                    "open"
-                ])
-            }
         }
         /// The daemon-recorded failure class and diagnostic for one review round.
         ///
@@ -7203,21 +5412,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case _class = "class"
                 case reason
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self._class = try container.decode(
-                    Swift.String.self,
-                    forKey: ._class
-                )
-                self.reason = try container.decode(
-                    Swift.String.self,
-                    forKey: .reason
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "class",
-                    "reason"
-                ])
             }
         }
         /// Whether authenticated retained reviewer output can be inspected.
@@ -7270,21 +5464,6 @@ public enum Components {
                 case completion_evidence
                 case availability
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.completion_evidence = try container.decodeIfPresent(
-                    Components.Schemas.ReviewRoundEvidence.completion_evidencePayload.self,
-                    forKey: .completion_evidence
-                )
-                self.availability = try container.decode(
-                    Components.Schemas.ReviewEvidenceAvailability.self,
-                    forKey: .availability
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "completion_evidence",
-                    "availability"
-                ])
-            }
         }
         /// The role of the invocation whose export produced a reviewed head: the implementer, a remediator of an earlier round's findings, or an operator-feedback pass.
         ///
@@ -7293,6 +5472,7 @@ public enum Components {
             case implementation = "implementation"
             case remediation = "remediation"
             case operator_feedback = "operator_feedback"
+            case unknown = "unknown"
         }
         /// What a review round reviewed: the invocation whose recorded export is the only one in the run that produced the round's head, classified by that invocation's authenticated dispatch intent.
         ///
@@ -7325,26 +5505,6 @@ public enum Components {
                 case kind
                 case invocation_id
                 case remediates_round
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.ReviewSubjectKind.self,
-                    forKey: .kind
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.remediates_round = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .remediates_round
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "invocation_id",
-                    "remediates_round"
-                ])
             }
         }
         /// The remediation this round's findings adjudication started, bound to this round's review invocation, base and head.
@@ -7382,26 +5542,6 @@ public enum Components {
                 case invocation_id
                 case finding_ids
                 case decided_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.finding_ids = try container.decode(
-                    [Swift.String].self,
-                    forKey: .finding_ids
-                )
-                self.decided_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .decided_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "invocation_id",
-                    "finding_ids",
-                    "decided_at"
-                ])
             }
         }
         /// One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean. Null subject means the daemon cannot prove which invocation produced the reviewed head; it never means implementation.
@@ -7614,101 +5754,6 @@ public enum Components {
                 case subject
                 case remediation
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.state = try container.decode(
-                    Components.Schemas.ReviewProgressState.self,
-                    forKey: .state
-                )
-                self.source = try container.decode(
-                    Components.Schemas.ReviewSource.self,
-                    forKey: .source
-                )
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                self.requested_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .requested_at
-                )
-                self.completed_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .completed_at
-                )
-                self.provider = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .provider
-                )
-                self.model_configuration = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .model_configuration
-                )
-                self.outcome = try container.decodeIfPresent(
-                    Components.Schemas.RunReviewRound.outcomePayload.self,
-                    forKey: .outcome
-                )
-                self.findings_count = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .findings_count
-                )
-                self.dispositions = try container.decodeIfPresent(
-                    Components.Schemas.RunReviewRound.dispositionsPayload.self,
-                    forKey: .dispositions
-                )
-                self.failure = try container.decodeIfPresent(
-                    Components.Schemas.RunReviewRound.failurePayload.self,
-                    forKey: .failure
-                )
-                self.retry_pending = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .retry_pending
-                )
-                self.evidence = try container.decode(
-                    Components.Schemas.ReviewRoundEvidence.self,
-                    forKey: .evidence
-                )
-                self.subject = try container.decodeIfPresent(
-                    Components.Schemas.RunReviewRound.subjectPayload.self,
-                    forKey: .subject
-                )
-                self.remediation = try container.decodeIfPresent(
-                    Components.Schemas.RunReviewRound.remediationPayload.self,
-                    forKey: .remediation
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "round",
-                    "invocation_id",
-                    "state",
-                    "source",
-                    "base_sha",
-                    "head_sha",
-                    "requested_at",
-                    "completed_at",
-                    "provider",
-                    "model_configuration",
-                    "outcome",
-                    "findings_count",
-                    "dispositions",
-                    "failure",
-                    "retry_pending",
-                    "evidence",
-                    "subject",
-                    "remediation"
-                ])
-            }
         }
         /// Private retained reviewer output, re-authenticated on read. Labeled agent claims, never publishable verifier evidence. Bytes obey the review collection limits.
         ///
@@ -7840,81 +5885,6 @@ public enum Components {
                 case result
                 case exit_status
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.source = try container.decode(
-                    Components.Schemas.ReviewSource.self,
-                    forKey: .source
-                )
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.content_kind = try container.decode(
-                    Components.Schemas.ReviewEvidence.content_kindPayload.self,
-                    forKey: .content_kind
-                )
-                self.head_binding = try container.decode(
-                    Components.Schemas.ReviewEvidence.head_bindingPayload.self,
-                    forKey: .head_binding
-                )
-                self.source_head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .source_head_sha
-                )
-                self.sensitivity_class = try container.decode(
-                    Components.Schemas.ReviewEvidence.sensitivity_classPayload.self,
-                    forKey: .sensitivity_class
-                )
-                self.publish_eligible = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .publish_eligible
-                )
-                self.availability = try container.decode(
-                    Components.Schemas.ReviewEvidenceAvailability.self,
-                    forKey: .availability
-                )
-                self.collection_evidence = try container.decodeIfPresent(
-                    Components.Schemas.ReviewEvidence.collection_evidencePayload.self,
-                    forKey: .collection_evidence
-                )
-                self.events = try container.decodeIfPresent(
-                    OpenAPIRuntime.Base64EncodedData.self,
-                    forKey: .events
-                )
-                self.result = try container.decodeIfPresent(
-                    OpenAPIRuntime.Base64EncodedData.self,
-                    forKey: .result
-                )
-                self.exit_status = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .exit_status
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "source",
-                    "run_id",
-                    "round",
-                    "invocation_id",
-                    "content_kind",
-                    "head_binding",
-                    "source_head_sha",
-                    "sensitivity_class",
-                    "publish_eligible",
-                    "availability",
-                    "collection_evidence",
-                    "events",
-                    "result",
-                    "exit_status"
-                ])
-            }
         }
         /// The facts behind a work_unit_completed milestone, read from the daemon's re-gated completion record: the PR whose merge satisfied the unit's completion criterion, the merge commit, the bound issue when the criterion names one, and the instant the daemon recorded the completion. The milestone itself carries none of these.
         ///
@@ -7956,31 +5926,6 @@ public enum Components {
                 case bound_issue
                 case recorded_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.pr_number = try container.decode(
-                    Swift.Int.self,
-                    forKey: .pr_number
-                )
-                self.merge_commit_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .merge_commit_sha
-                )
-                self.bound_issue = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .bound_issue
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "pr_number",
-                    "merge_commit_sha",
-                    "bound_issue",
-                    "recorded_at"
-                ])
-            }
         }
         /// The closed milestone vocabulary mirrored from domain.RunMilestoneKind. Widening it is a contract change.
         ///
@@ -7996,6 +5941,7 @@ public enum Components {
             case publication_ready = "publication_ready"
             case publication_blocked = "publication_blocked"
             case work_unit_completed = "work_unit_completed"
+            case unknown = "unknown"
         }
         /// The closed, operator-safe hold vocabulary mirrored from domain.RunHoldReason. Values are typed daemon observations, never free text.
         ///
@@ -8025,6 +5971,7 @@ public enum Components {
             case quota_window_exhausted = "quota_window_exhausted"
             case machine_capacity = "machine_capacity"
             case update_drain = "update_drain"
+            case unknown = "unknown"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
@@ -8034,6 +5981,7 @@ public enum Components {
             case rebuild = "rebuild"
             case adoption_proposal = "adoption_proposal"
             case maintenance_task = "maintenance_task"
+            case unknown = "unknown"
         }
         /// The typed fact beside a quota_window_exhausted hold, mirrored from domain.QuotaWindowHold: the pool and window a provider refused on and the mark that keeps the parked attempt waiting until its reset, and the agents the operator may move the task to instead.
         ///
@@ -8105,51 +6053,6 @@ public enum Components {
                 case set_at
                 case alternate_agents
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.window = try container.decode(
-                    Swift.String.self,
-                    forKey: .window
-                )
-                self.source = try container.decode(
-                    Components.Schemas.ExhaustedMarkSource.self,
-                    forKey: .source
-                )
-                self.invocation_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.reading_observed_at = try container.decodeIfPresent(
-                    Foundation.Date.self,
-                    forKey: .reading_observed_at
-                )
-                self.resets_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .resets_at
-                )
-                self.set_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .set_at
-                )
-                self.alternate_agents = try container.decodeIfPresent(
-                    [Components.Schemas.AlternateAgentOffer].self,
-                    forKey: .alternate_agents
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "pool",
-                    "window",
-                    "source",
-                    "invocation_id",
-                    "reading_observed_at",
-                    "resets_at",
-                    "set_at",
-                    "alternate_agents"
-                ])
-            }
         }
         /// The typed fact beside a machine_capacity hold, mirrored from domain.MachineCapacityHold: the launch's reservation (declared memory plus the runtime's per-VM overhead), what launches already hold, the instance's budget, and how many waiting launches are granted first.
         ///
@@ -8187,31 +6090,6 @@ public enum Components {
                 case reserved_mib
                 case budget_mib
                 case ahead
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.reservation_mib = try container.decode(
-                    Swift.Int.self,
-                    forKey: .reservation_mib
-                )
-                self.reserved_mib = try container.decode(
-                    Swift.Int.self,
-                    forKey: .reserved_mib
-                )
-                self.budget_mib = try container.decode(
-                    Swift.Int.self,
-                    forKey: .budget_mib
-                )
-                self.ahead = try container.decode(
-                    Swift.Int.self,
-                    forKey: .ahead
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "reservation_mib",
-                    "reserved_mib",
-                    "budget_mib",
-                    "ahead"
-                ])
             }
         }
         /// The typed fact beside an image_upkeep_pending hold, mirrored from domain.ImageUpkeepHold: what the run waits on and, past a rebuild, the upkeep refusal record and the item or task that answers it, each by reference.
@@ -8277,31 +6155,6 @@ public enum Components {
                 case proposal_item_id
                 case maintenance_task_id
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.pending = try container.decode(
-                    Components.Schemas.ImageUpkeepPending.self,
-                    forKey: .pending
-                )
-                self.refusal_record_id = try container.decodeIfPresent(
-                    Components.Schemas.ImageUpkeepHold.refusal_record_idPayload.self,
-                    forKey: .refusal_record_id
-                )
-                self.proposal_item_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .proposal_item_id
-                )
-                self.maintenance_task_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .maintenance_task_id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "pending",
-                    "refusal_record_id",
-                    "proposal_item_id",
-                    "maintenance_task_id"
-                ])
-            }
         }
         /// The closed admission-check vocabulary mirrored from domain.AdmissionCheck: the check that refused an admission_policy_refused hold. Values are typed daemon observations, never free text.
         ///
@@ -8332,6 +6185,7 @@ public enum Components {
             case agent_egress_authority = "agent_egress_authority"
             case agent_snapshot = "agent_snapshot"
             case agent_admission = "agent_admission"
+            case unknown = "unknown"
         }
         /// The typed detail of an admission_policy_refused hold, mirrored from domain.AdmissionRefusal: the refused check and, once each resolved, the agent and the launch it refused, and for an agent_resolution refusal which part of the selection the daemon does not serve. The agent is a name from the admitted agent tree; refusal error text never appears here.
         ///
@@ -8448,36 +6302,6 @@ public enum Components {
                 case launch_digest
                 case unserved
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.check = try container.decode(
-                    Components.Schemas.AdmissionCheck.self,
-                    forKey: .check
-                )
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
-                )
-                self.launch_stage = try container.decodeIfPresent(
-                    Components.Schemas.AdmissionRefusal.launch_stagePayload.self,
-                    forKey: .launch_stage
-                )
-                self.launch_digest = try container.decodeIfPresent(
-                    Components.Schemas.AdmissionRefusal.launch_digestPayload.self,
-                    forKey: .launch_digest
-                )
-                self.unserved = try container.decodeIfPresent(
-                    Components.Schemas.AdmissionRefusal.unservedPayload.self,
-                    forKey: .unserved
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "check",
-                    "agent",
-                    "launch_stage",
-                    "launch_digest",
-                    "unserved"
-                ])
-            }
         }
         /// The part of a refused selection the daemon does not serve, mirrored from domain.AdmissionUnserved. It never carries what the operator typed, since a credential can be pasted into a selection.
         ///
@@ -8507,21 +6331,6 @@ public enum Components {
                 case part
                 case enrollment_id
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.part = try container.decode(
-                    Components.Schemas.AgentSelectionPart.self,
-                    forKey: .part
-                )
-                self.enrollment_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "part",
-                    "enrollment_id"
-                ])
-            }
         }
         /// A part of an agent selection, mirrored from domain.AgentSelectionPart: enrollment (the daemon holds no such enrollment), model (the enrollment does not serve the model), or effort (the enrollment does not serve the effort for the model).
         ///
@@ -8531,6 +6340,7 @@ public enum Components {
             case enrollment = "enrollment"
             case model = "model"
             case effort = "effort"
+            case unknown = "unknown"
         }
         /// The daemon-derived run result mirrored from domain.RunOutcome. Pending can coexist with a current hold; blocked means a definitive publication_blocked milestone, not merely a transient hold. A run with no observation history (a pre-migration-0024 legacy run, which is deliberately not backfilled, and with no nonterminal invocation observation) classifies as unobserved, never pending, so a legacy terminal run is not shown as in flight; a legacy run still executing across the upgrade has a nonterminal invocation observation and reports pending. Completed means the work unit satisfied its completion criterion after publication (a work_unit_completed milestone); it outranks published and blocked and is terminal. Handed_off, stopped, and abandoned are terminal outcomes for a run no milestone concludes but nothing will run again: handed_off is a specification run whose approved specification bound an implementation run that took over its work; stopped is a run its task's confirmed cancellation named; abandoned is a run of an abandoned workflow episode with no invocation still pending or running. A run already terminal from its milestones keeps that outcome, and handed_off outranks stopped, which outranks abandoned.
         ///
@@ -8547,6 +6357,7 @@ public enum Components {
             case handed_off = "handed_off"
             case stopped = "stopped"
             case abandoned = "abandoned"
+            case unknown = "unknown"
         }
         /// Whether a run still has something pending for the daemon or the operator (active) or is done with (finished), derived from RunOutcome and supersession. Finished covers completed, failed, lost, unobserved, handed_off, stopped, abandoned, and any run superseded by a retry or by implementation taking over an approved specification run's work; active covers pending, published with no completion yet, and blocked with no successor. A client splits the runs list on this field instead of re-deriving it.
         ///
@@ -8555,6 +6366,7 @@ public enum Components {
         @frozen public enum RunLifecycle: String, Codable, Hashable, Sendable, CaseIterable {
             case active = "active"
             case finished = "finished"
+            case unknown = "unknown"
         }
         /// The daemon's closed observation-side invocation lifecycle.
         ///
@@ -8567,6 +6379,7 @@ public enum Components {
             case canceled = "canceled"
             case blocked = "blocked"
             case gone = "gone"
+            case unknown = "unknown"
         }
         /// The closed non-export terminal authority vocabulary. blocked is the implementer's typed stop: no candidate exists and the run waits on an agent_question answer.
         ///
@@ -8577,6 +6390,7 @@ public enum Components {
             case canceled = "canceled"
             case lost = "lost"
             case blocked = "blocked"
+            case unknown = "unknown"
         }
         /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure.
         ///
@@ -8593,7 +6407,7 @@ public enum Components {
             case memory_limit = "memory_limit"
             case unknown = "unknown"
         }
-        /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. It has no unknown member: every writer names its cause.
+        /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. Every writer names its cause, so the daemon never sends unknown; a client decodes a cause it doesn't know as unknown.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/InterpretationFailureCause`.
@@ -8605,6 +6419,7 @@ public enum Components {
             case invalid_output = "invalid_output"
             case transcript_unreadable = "transcript_unreadable"
             case input_undeliverable = "input_undeliverable"
+            case unknown = "unknown"
         }
         /// One append-only, first-observation-wins daemon milestone. Detail fields are kind-scoped and use explicit null when absent.
         ///
@@ -8714,46 +6529,6 @@ public enum Components {
                 case outcome
                 case reason
                 case recorded_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.kind = try container.decode(
-                    Components.Schemas.RunMilestoneKind.self,
-                    forKey: .kind
-                )
-                self.invocation_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.terminal = try container.decodeIfPresent(
-                    Components.Schemas.RunMilestone.terminalPayload.self,
-                    forKey: .terminal
-                )
-                self.outcome = try container.decodeIfPresent(
-                    Components.Schemas.RunMilestone.outcomePayload.self,
-                    forKey: .outcome
-                )
-                self.reason = try container.decodeIfPresent(
-                    Components.Schemas.RunMilestone.reasonPayload.self,
-                    forKey: .reason
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "run_id",
-                    "kind",
-                    "invocation_id",
-                    "terminal",
-                    "outcome",
-                    "reason",
-                    "recorded_at"
-                ])
             }
         }
         /// The daemon's current typed hold observation for one run.
@@ -8927,61 +6702,6 @@ public enum Components {
                 case first_observed_at
                 case last_observed_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.invocation_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.reason = try container.decode(
-                    Components.Schemas.RunHoldReason.self,
-                    forKey: .reason
-                )
-                self.detail = try container.decodeIfPresent(
-                    Components.Schemas.RunHold.detailPayload.self,
-                    forKey: .detail
-                )
-                self.image_upkeep = try container.decodeIfPresent(
-                    Components.Schemas.RunHold.image_upkeepPayload.self,
-                    forKey: .image_upkeep
-                )
-                self.usage_pool = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .usage_pool
-                )
-                self.quota_window = try container.decodeIfPresent(
-                    Components.Schemas.RunHold.quota_windowPayload.self,
-                    forKey: .quota_window
-                )
-                self.machine_capacity = try container.decodeIfPresent(
-                    Components.Schemas.RunHold.machine_capacityPayload.self,
-                    forKey: .machine_capacity
-                )
-                self.first_observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .first_observed_at
-                )
-                self.last_observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .last_observed_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "run_id",
-                    "invocation_id",
-                    "reason",
-                    "detail",
-                    "image_upkeep",
-                    "usage_pool",
-                    "quota_window",
-                    "machine_capacity",
-                    "first_observed_at",
-                    "last_observed_at"
-                ])
-            }
         }
         /// The daemon's latest observation of one run invocation.
         ///
@@ -9024,36 +6744,6 @@ public enum Components {
                 case status
                 case live
                 case observed_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.status = try container.decode(
-                    Components.Schemas.ObservedInvocationStatus.self,
-                    forKey: .status
-                )
-                self.live = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .live
-                )
-                self.observed_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .observed_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "invocation_id",
-                    "run_id",
-                    "status",
-                    "live",
-                    "observed_at"
-                ])
             }
         }
         /// A resource snapshot wrapping one whole conversation (plan §5.14).
@@ -9129,6 +6819,7 @@ public enum Components {
             case doctor = "doctor"
             case janitor = "janitor"
             case image_upkeep = "image_upkeep"
+            case unknown = "unknown"
         }
         /// One publication deadline that elapsed on an open ready_for_final_review item (mirrors domain.ElapsedDeadline). armed_at is the nominal deadline minus deadline_seconds, so a re-armed schedule generation records the same deadline. kind is pr_checks_deadline or review_wait_threshold. elapsed_at is the instant the daemon's scheduler handled the fire, never before armed_at plus deadline_seconds.
         ///
@@ -9177,6 +6868,7 @@ public enum Components {
             case fired = "fired"
             case resolved = "resolved"
             case expired = "expired"
+            case unknown = "unknown"
         }
         /// The closed vocabulary of terminal causes (mirrors domain.ScheduleResolutionReason); a code, never free text.
         ///
@@ -9187,6 +6879,7 @@ public enum Components {
             case condition_satisfied = "condition_satisfied"
             case subject_concluded = "subject_concluded"
             case intent_expired = "intent_expired"
+            case unknown = "unknown"
         }
         /// How and when a schedule's generation terminated; present exactly on terminal schedules (mirrors domain.ScheduleResolution).
         ///
@@ -9222,6 +6915,7 @@ public enum Components {
             case attention_item = "attention_item"
             case installation_intent = "installation_intent"
             case trusted_config = "trusted_config"
+            case unknown = "unknown"
         }
         /// The schedule's subject binding and the expected subject version its consuming handler rechecks (plan §5.16; mirrors domain.ScheduleSubject). Fields are type-scoped: attention_item subjects carry item_id and item_version; installation_intent subjects carry the §5.9 activation coordinates (registration, active epoch, durable intent revision); trusted_config subjects carry neither.
         ///
@@ -9449,31 +7143,6 @@ public enum Components {
                 case blockers
                 case as_of
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.ready = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .ready
-                )
-                self.drain = try container.decodeIfPresent(
-                    Components.Schemas.RestartReadiness.drainPayload.self,
-                    forKey: .drain
-                )
-                self.blockers = try container.decode(
-                    [Components.Schemas.RestartBlocker].self,
-                    forKey: .blockers
-                )
-                self.as_of = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .as_of
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "ready",
-                    "drain",
-                    "blockers",
-                    "as_of"
-                ])
-            }
         }
         /// An update drain in force: new launches wait for the daemon to restart on a new build instead of starting work the update would cancel.
         ///
@@ -9504,21 +7173,6 @@ public enum Components {
                 case since
                 case forced
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.since = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .since
-                )
-                self.forced = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .forced
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "since",
-                    "forced"
-                ])
-            }
         }
         /// How many of one kind of running work a restart would cut short.
         ///
@@ -9544,21 +7198,6 @@ public enum Components {
                 case kind
                 case count
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.RestartBlockerKind.self,
-                    forKey: .kind
-                )
-                self.count = try container.decode(
-                    Swift.Int.self,
-                    forKey: .count
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "count"
-                ])
-            }
         }
         /// A kind of running work a daemon restart would cut short (mirrors domain.RestartBlockerKind). execution_launch and review_launch are admissions that still hold their slot; verification_job, image_build, probe, and publication are work in progress in the running daemon; credential_lease is a held auth-store mutation lease, such as an enrollment or a token refresh, that no counted launch holds. Widening it is a contract change.
         ///
@@ -9572,6 +7211,7 @@ public enum Components {
             case probe = "probe"
             case publication = "publication"
             case credential_lease = "credential_lease"
+            case unknown = "unknown"
         }
         /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState and unattended-admission verdict from one read transaction, and the committed agent tree's revision. A revision gap, a changed verdict, or a changed lineup_revision tells the client to bootstrap, never to adopt state from this payload.
         ///
@@ -9638,31 +7278,6 @@ public enum Components {
                 case revision
                 case unattended_operation
                 case lineup_revision
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.sync_epoch = try container.decode(
-                    Swift.String.self,
-                    forKey: .sync_epoch
-                )
-                self.revision = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .revision
-                )
-                self.unattended_operation = try container.decode(
-                    Components.Schemas.UnattendedOperationSnapshot.self,
-                    forKey: .unattended_operation
-                )
-                self.lineup_revision = try container.decodeIfPresent(
-                    Components.Schemas.ServerRevision.lineup_revisionPayload.self,
-                    forKey: .lineup_revision
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "sync_epoch",
-                    "revision",
-                    "unattended_operation",
-                    "lineup_revision"
-                ])
             }
         }
         /// A resource snapshot wrapping one paired device (plan §5.14).
@@ -9756,7 +7371,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, and move_parked_task. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, and move_parked_task. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes. The daemon rejects an unknown field anywhere in a request, including inside the schemas that responses also use (AlternateAgentChoice, AlternativeChoice, TaskLineSelection, TaskProposalScope), which leave additionalProperties open only so that a client tolerates fields a newer daemon adds to responses.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
@@ -10069,51 +7684,6 @@ public enum Components {
                 case expected_sync_epoch
                 case expected_entity_version
                 case cancellation
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.StopTaskRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.project_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .project_id
-                )
-                self.expected_sync_epoch = try container.decode(
-                    Swift.String.self,
-                    forKey: .expected_sync_epoch
-                )
-                self.expected_entity_version = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .expected_entity_version
-                )
-                self.cancellation = try container.decode(
-                    Components.Schemas.TaskCancellation.self,
-                    forKey: .cancellation
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "task_id",
-                    "project_id",
-                    "expected_sync_epoch",
-                    "expected_entity_version",
-                    "cancellation"
-                ])
             }
         }
         /// Ask the daemon to collect the pool's usage now. The receipt records the request; new readings arrive through the pool's usage record on the revision path, never in the command result.
@@ -10471,36 +8041,6 @@ public enum Components {
                 case pool
                 case requested_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.UsageRefreshRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.requested_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .requested_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "pool",
-                    "requested_at"
-                ])
-            }
         }
         /// The receipt that the pool's collector was reassigned.
         ///
@@ -10553,41 +8093,6 @@ public enum Components {
                 case pool
                 case collector
                 case recorded_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.CollectorReassignmentRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.collector = try container.decode(
-                    Swift.String.self,
-                    forKey: .collector
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "pool",
-                    "collector",
-                    "recorded_at"
-                ])
             }
         }
         /// The receipt of a line change: the request, whether it recorded a new version, and the role's current line after it. The request holds at most one of agent and selection, and neither for a clear: a request accepted since #2598 holds its selection, one accepted before it the agent name it sent. recorded false means the role already had that line. line is null when the role has no line: it never had one, or the change cleared it.
@@ -10697,56 +8202,6 @@ public enum Components {
                 case recorded
                 case line
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.TaskLineChangeRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.agent = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .agent
-                )
-                self.selection = try container.decodeIfPresent(
-                    Components.Schemas.TaskLineChangeRecord.selectionPayload.self,
-                    forKey: .selection
-                )
-                self.recorded = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .recorded
-                )
-                self.line = try container.decodeIfPresent(
-                    Components.Schemas.TaskLineChangeRecord.linePayload.self,
-                    forKey: .line
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "task_id",
-                    "role",
-                    "agent",
-                    "selection",
-                    "recorded",
-                    "line"
-                ])
-            }
         }
         /// The receipt of a routing policy change: the request's expected revision, whether it recorded a new revision, and the policy current after it. recorded false means the policy already held these orders.
         ///
@@ -10800,41 +8255,6 @@ public enum Components {
                 case expected_revision
                 case recorded
                 case policy
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.RoutingPolicyChangeRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.expected_revision = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .expected_revision
-                )
-                self.recorded = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .recorded
-                )
-                self.policy = try container.decode(
-                    Components.Schemas.RoutingPolicy.self,
-                    forKey: .policy
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "expected_revision",
-                    "recorded",
-                    "policy"
-                ])
             }
         }
         /// The receipt of a parked task's move: the request, the record of the operator's choice, and the task lines the move set, each citing the record.
@@ -10895,46 +8315,6 @@ public enum Components {
                 case choice
                 case retry
                 case lines
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.ParkedTaskMoveRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.choice = try container.decode(
-                    Components.Schemas.AlternateAgentChoice.self,
-                    forKey: .choice
-                )
-                self.retry = try container.decode(
-                    Components.Schemas.AlternateAgentRetry.self,
-                    forKey: .retry
-                )
-                self.lines = try container.decode(
-                    [Components.Schemas.TaskLine].self,
-                    forKey: .lines
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "task_id",
-                    "choice",
-                    "retry",
-                    "lines"
-                ])
             }
         }
         /// An operator's choice to run a role under another enrollment after a quota, credential, or capacity failure (plan §5.4 admission step 5): selection is the enrollment, model, and effort the choice resolved to. id is the content address of every other field. item_id is the execution-failure card a retry_with_alternate_agent decided, empty for a move_parked_task.
@@ -11010,61 +8390,6 @@ public enum Components {
                 case qualification
                 case recorded_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .id
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.role = try container.decode(
-                    Components.Schemas.TaskLineRole.self,
-                    forKey: .role
-                )
-                self.failed_invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .failed_invocation_id
-                )
-                self.item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.selection = try container.decode(
-                    Components.Schemas.TaskLineSelection.self,
-                    forKey: .selection
-                )
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.qualification = try container.decode(
-                    Components.Schemas.AlternateAgentQualification.self,
-                    forKey: .qualification
-                )
-                self.recorded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .recorded_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "task_id",
-                    "role",
-                    "failed_invocation_id",
-                    "item_id",
-                    "command_id",
-                    "selection",
-                    "pool",
-                    "qualification",
-                    "recorded_at"
-                ])
-            }
         }
         /// The rule an alternate agent escapes its failure under (plan §5.4): different_pool for a quota exhaustion, valid_generation for an expired or revoked credential, different_route for exhausted service capacity.
         ///
@@ -11074,6 +8399,7 @@ public enum Components {
             case different_pool = "different_pool"
             case valid_generation = "valid_generation"
             case different_route = "different_route"
+            case unknown = "unknown"
         }
         /// One enrollment the daemon offers to run a failed role under: its id, the usage pool it draws on, its harness and the implementer lineup's model it was offered at, and the rule it escapes the failure under.
         ///
@@ -11118,36 +8444,6 @@ public enum Components {
                 case model
                 case qualification
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.enrollment = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment
-                )
-                self.pool = try container.decode(
-                    Swift.String.self,
-                    forKey: .pool
-                )
-                self.harness = try container.decode(
-                    Components.Schemas.HarnessClientKind.self,
-                    forKey: .harness
-                )
-                self.model = try container.decode(
-                    Swift.String.self,
-                    forKey: .model
-                )
-                self.qualification = try container.decode(
-                    Components.Schemas.AlternateAgentQualification.self,
-                    forKey: .qualification
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "enrollment",
-                    "pool",
-                    "harness",
-                    "model",
-                    "qualification"
-                ])
-            }
         }
         /// What an operator picks from alternate_agents: an offered enrollment and, optionally, a model id and an effort its catalog serves. A null model_id or effort is the implementer lineup line's; an enrollment with no recorded catalog takes only the lineup's. Each value is a launch option, as in TaskLineSelection.
         ///
@@ -11180,37 +8476,18 @@ public enum Components {
                 case model_id
                 case effort
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.enrollment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.model_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .model_id
-                )
-                self.effort = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .effort
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "enrollment_id",
-                    "model_id",
-                    "effort"
-                ])
-            }
         }
-        /// A command conflict with the replacement state it was refused against.
+        /// A command conflict with the replacement state it was refused against. The arms carry no discriminator, so a client tries them in the order listed and takes the first that decodes. Responses tolerate added fields, so an arm whose required fields are a subset of another's matches that other's bodies too: TaskLineChangeRejection precedes StaleTaskRejection for that reason, and a new arm goes before any arm whose required fields its own include.
+        ///
         ///
         /// - Remark: Generated from `#/components/schemas/CommandRejection`.
         @frozen public enum CommandRejection: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/CommandRejection/case1`.
             case StaleVersionRejection(Components.Schemas.StaleVersionRejection)
             /// - Remark: Generated from `#/components/schemas/CommandRejection/case2`.
-            case StaleTaskRejection(Components.Schemas.StaleTaskRejection)
-            /// - Remark: Generated from `#/components/schemas/CommandRejection/case3`.
             case TaskLineChangeRejection(Components.Schemas.TaskLineChangeRejection)
+            /// - Remark: Generated from `#/components/schemas/CommandRejection/case3`.
+            case StaleTaskRejection(Components.Schemas.StaleTaskRejection)
             /// - Remark: Generated from `#/components/schemas/CommandRejection/case4`.
             case RoutingPolicyRejection(Components.Schemas.RoutingPolicyRejection)
             public init(from decoder: any Swift.Decoder) throws {
@@ -11222,13 +8499,13 @@ public enum Components {
                     errors.append(error)
                 }
                 do {
-                    self = .StaleTaskRejection(try .init(from: decoder))
+                    self = .TaskLineChangeRejection(try .init(from: decoder))
                     return
                 } catch {
                     errors.append(error)
                 }
                 do {
-                    self = .TaskLineChangeRejection(try .init(from: decoder))
+                    self = .StaleTaskRejection(try .init(from: decoder))
                     return
                 } catch {
                     errors.append(error)
@@ -11249,9 +8526,9 @@ public enum Components {
                 switch self {
                 case let .StaleVersionRejection(value):
                     try value.encode(to: encoder)
-                case let .StaleTaskRejection(value):
-                    try value.encode(to: encoder)
                 case let .TaskLineChangeRejection(value):
+                    try value.encode(to: encoder)
+                case let .StaleTaskRejection(value):
                     try value.encode(to: encoder)
                 case let .RoutingPolicyRejection(value):
                     try value.encode(to: encoder)
@@ -11299,31 +8576,6 @@ public enum Components {
                 case replacement_task
                 case sync_epoch
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.message = try container.decode(
-                    Swift.String.self,
-                    forKey: .message
-                )
-                self.reason = try container.decode(
-                    Components.Schemas.TaskLineChangeRejection.reasonPayload.self,
-                    forKey: .reason
-                )
-                self.replacement_task = try container.decode(
-                    Components.Schemas.TaskSnapshot.self,
-                    forKey: .replacement_task
-                )
-                self.sync_epoch = try container.decode(
-                    Swift.String.self,
-                    forKey: .sync_epoch
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "message",
-                    "reason",
-                    "replacement_task",
-                    "sync_epoch"
-                ])
-            }
         }
         /// A routing policy change refused because expected_revision is not the current policy revision, with the current policy (null when none was ever set).
         ///
@@ -11368,21 +8620,6 @@ public enum Components {
                 case message
                 case current_policy
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.message = try container.decode(
-                    Swift.String.self,
-                    forKey: .message
-                )
-                self.current_policy = try container.decodeIfPresent(
-                    Components.Schemas.RoutingPolicyRejection.current_policyPayload.self,
-                    forKey: .current_policy
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "message",
-                    "current_policy"
-                ])
-            }
         }
         /// Current task projection and epoch for an obsolete prepared Stop.
         ///
@@ -11413,26 +8650,6 @@ public enum Components {
                 case message
                 case replacement_task
                 case sync_epoch
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.message = try container.decode(
-                    Swift.String.self,
-                    forKey: .message
-                )
-                self.replacement_task = try container.decode(
-                    Components.Schemas.TaskSnapshot.self,
-                    forKey: .replacement_task
-                )
-                self.sync_epoch = try container.decode(
-                    Swift.String.self,
-                    forKey: .sync_epoch
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "message",
-                    "replacement_task",
-                    "sync_epoch"
-                ])
             }
         }
         /// The payload of a decision command: which attention item is decided, the action taken, and the exact bindings the decision was rendered against (the accepted item version, PR head, and the rendered digest set). The daemon cross-checks these against the live item, so an approval cannot commit against inputs that changed after it was rendered (the stale-approval class, plan §3.1; §4 "approvals bind to digests"). Mirrors the binding fields of domain.Command.
@@ -12052,71 +9269,6 @@ public enum Components {
                 case answer_route
                 case decision_evidence
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.CommandRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.item_version = try container.decode(
-                    Swift.Int.self,
-                    forKey: .item_version
-                )
-                self.pr_head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .pr_head_sha
-                )
-                self.artifact_digests = try container.decode(
-                    [Components.Schemas.Digest].self,
-                    forKey: .artifact_digests
-                )
-                self.action = try container.decode(
-                    Components.Schemas.Action.self,
-                    forKey: .action
-                )
-                self.message = try container.decode(
-                    Swift.String.self,
-                    forKey: .message
-                )
-                self.attachments = try container.decode(
-                    [Components.Schemas.Digest].self,
-                    forKey: .attachments
-                )
-                self.answer_route = try container.decodeIfPresent(
-                    Components.Schemas.CommandRecord.answer_routePayload.self,
-                    forKey: .answer_route
-                )
-                self.decision_evidence = try container.decodeIfPresent(
-                    Components.Schemas.CommandRecord.decision_evidencePayload.self,
-                    forKey: .decision_evidence
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "device_id",
-                    "item_id",
-                    "item_version",
-                    "pr_head_sha",
-                    "artifact_digests",
-                    "action",
-                    "message",
-                    "attachments",
-                    "answer_route",
-                    "decision_evidence"
-                ])
-            }
         }
         /// Who recorded a task submission (mirrors domain.TaskSubmissionOrigin). device is a paired device's submit_task command. daemon is project-image upkeep's repair task, which the daemon accepts only against a recorded repair-class upkeep refusal for the project's repository and re-checks whenever it reads the record back. Widening it is a contract change.
         ///
@@ -12125,6 +9277,7 @@ public enum Components {
         @frozen public enum TaskSubmissionOrigin: String, Codable, Hashable, Sendable, CaseIterable {
             case device = "device"
             case daemon = "daemon"
+            case unknown = "unknown"
         }
         /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created and its specification run, keyed by command_id. Explicit manual Retry returns this record and its committed revision unchanged, including historical results that reused a source-keyed task. The name is the display name recorded at acceptance, not the requested-name fingerprint.
         ///
@@ -12259,61 +9412,6 @@ public enum Components {
                 case name
                 case task_lines
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.TaskSubmissionRecord.kindPayload.self,
-                    forKey: .kind
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.origin = try container.decode(
-                    Components.Schemas.TaskSubmissionOrigin.self,
-                    forKey: .origin
-                )
-                self.device_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.project_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .project_id
-                )
-                self.source_digest = try container.decode(
-                    Components.Schemas.TaskSubmissionRecord.source_digestPayload.self,
-                    forKey: .source_digest
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                self.specification_run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .specification_run_id
-                )
-                self.name = try container.decode(
-                    Components.Schemas.TaskSubmissionRecord.namePayload.self,
-                    forKey: .name
-                )
-                self.task_lines = try container.decodeIfPresent(
-                    [Components.Schemas.TaskLineChoice].self,
-                    forKey: .task_lines
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "command_id",
-                    "origin",
-                    "device_id",
-                    "project_id",
-                    "source_digest",
-                    "task_id",
-                    "specification_run_id",
-                    "name",
-                    "task_lines"
-                ])
-            }
         }
         /// The daemon-authored decision context stamped onto an accepted command (domain.CommandDecisionEvidence, plan §8): the DecisionActionSurface it referenced and the item's recommendation at acceptance. It is telemetry evidence read by the §9 override query, never caller-supplied and never an authorization input. An empty action_surface_digest is the intended unclassified case, not a loss.
         ///
@@ -12394,26 +9492,6 @@ public enum Components {
                 case action_surface_digest
                 case recommended_action
                 case recommendation_source
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.action_surface_digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .action_surface_digest
-                )
-                self.recommended_action = try container.decodeIfPresent(
-                    Components.Schemas.CommandDecisionEvidence.recommended_actionPayload.self,
-                    forKey: .recommended_action
-                )
-                self.recommendation_source = try container.decodeIfPresent(
-                    Components.Schemas.CommandDecisionEvidence.recommendation_sourcePayload.self,
-                    forKey: .recommendation_source
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "action_surface_digest",
-                    "recommended_action",
-                    "recommendation_source"
-                ])
             }
         }
         /// The command's committed result: the durable decision record plus the server revision the transaction applied at. A retry of the same command_id returns this exact value (sync test 4).
@@ -12516,21 +9594,6 @@ public enum Components {
                 case record
                 case revision
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.record = try container.decode(
-                    Components.Schemas.CommandResult.recordPayload.self,
-                    forKey: .record
-                )
-                self.revision = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .revision
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "record",
-                    "revision"
-                ])
-            }
         }
         /// An optimistic-concurrency rejection carrying the replacement item snapshot (plan §5.14 sync test 2).
         ///
@@ -12573,11 +9636,16 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/HealthStatus/status`.
             public var status: Components.Schemas.HealthStatus.statusPayload
-            /// Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client built from a different spec must not expect to sync; it compares this with its own compiled-in digest to diagnose a contract skew instead of a silent sync failure.
+            /// Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client compares this with its own compiled-in digest to diagnose a contract skew when a sync read fails, instead of a silent sync failure.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/HealthStatus/contract_digest`.
             public var contract_digest: Swift.String
+            /// The named features this build serves. An app reads it at the start of each sync round and turns off a surface whose feature isn't listed, instead of failing sync on a command the daemon would refuse. It is optional so an app still reads `/health` from a daemon built before the list existed: a daemon that omits it serves none of the named features.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/HealthStatus/features`.
+            public var features: [Components.Schemas.DaemonFeature]?
             /// The daemon build version: a human-readable build label, not a contract identity (see `contract_digest`).
             ///
             ///
@@ -12592,51 +9660,38 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - status: Fixed at `ok`; liveness is proven by answering at all.
-            ///   - contract_digest: Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client built from a different spec must not expect to sync; it compares this with its own compiled-in digest to diagnose a contract skew instead of a silent sync failure.
+            ///   - contract_digest: Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client compares this with its own compiled-in digest to diagnose a contract skew when a sync read fails, instead of a silent sync failure.
+            ///   - features: The named features this build serves. An app reads it at the start of each sync round and turns off a surface whose feature isn't listed, instead of failing sync on a command the daemon would refuse. It is optional so an app still reads `/health` from a daemon built before the list existed: a daemon that omits it serves none of the named features.
             ///   - version: The daemon build version: a human-readable build label, not a contract identity (see `contract_digest`).
             ///   - started_at: The current process's start time (RFC3339 UTC). Under a supervisor, a start time that keeps advancing across polls is crash-loop evidence.
             public init(
                 status: Components.Schemas.HealthStatus.statusPayload,
                 contract_digest: Swift.String,
+                features: [Components.Schemas.DaemonFeature]? = nil,
                 version: Swift.String,
                 started_at: Foundation.Date
             ) {
                 self.status = status
                 self.contract_digest = contract_digest
+                self.features = features
                 self.version = version
                 self.started_at = started_at
             }
             public enum CodingKeys: String, CodingKey {
                 case status
                 case contract_digest
+                case features
                 case version
                 case started_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.status = try container.decode(
-                    Components.Schemas.HealthStatus.statusPayload.self,
-                    forKey: .status
-                )
-                self.contract_digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .contract_digest
-                )
-                self.version = try container.decode(
-                    Swift.String.self,
-                    forKey: .version
-                )
-                self.started_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .started_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "status",
-                    "contract_digest",
-                    "version",
-                    "started_at"
-                ])
-            }
+        }
+        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DaemonFeature`.
+        @frozen public enum DaemonFeature: String, Codable, Hashable, Sendable, CaseIterable {
+            case parked_task_move = "parked_task_move"
+            case unknown = "unknown"
         }
         /// The pairing exchange's input: the short-lived code read off the daemon host and the human label the new device will carry.
         ///
@@ -12758,31 +9813,6 @@ public enum Components {
                 case connection_mode
                 case granted_scope
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.host_display_name = try container.decode(
-                    Swift.String.self,
-                    forKey: .host_display_name
-                )
-                self.code_expires_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .code_expires_at
-                )
-                self.connection_mode = try container.decode(
-                    Components.Schemas.ConnectionMode.self,
-                    forKey: .connection_mode
-                )
-                self.granted_scope = try container.decode(
-                    Components.Schemas.DeviceScope.self,
-                    forKey: .granted_scope
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "host_display_name",
-                    "code_expires_at",
-                    "connection_mode",
-                    "granted_scope"
-                ])
-            }
         }
         /// How the client is reaching the daemon (domain.ConnectionMode), derived from the daemon's bound listener: loopback when the listener is bound to a loopback address, tailscale when it is bound to a Tailscale-owned address, the only two the daemon admits. A relay mode arrives with the §5.19 relay.
         ///
@@ -12791,6 +9821,7 @@ public enum Components {
         @frozen public enum ConnectionMode: String, Codable, Hashable, Sendable, CaseIterable {
             case loopback = "loopback"
             case tailscale = "tailscale"
+            case unknown = "unknown"
         }
         /// The authority a pairing grants the new device (domain.DeviceScope). There is no device role model today, so the vocabulary has one member: operator, the operator's full authority over this daemon (every ClientCommand), revocable from the host.
         ///
@@ -12839,31 +9870,6 @@ public enum Components {
                 case ntfy_subscription
                 case facts
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.device_token = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_token
-                )
-                self.device = try container.decode(
-                    Components.Schemas.DeviceSnapshot.self,
-                    forKey: .device
-                )
-                self.ntfy_subscription = try container.decode(
-                    Components.Schemas.NtfySubscription.self,
-                    forKey: .ntfy_subscription
-                )
-                self.facts = try container.decode(
-                    Components.Schemas.PairingFacts.self,
-                    forKey: .facts
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "device_token",
-                    "device",
-                    "ntfy_subscription",
-                    "facts"
-                ])
-            }
         }
         /// Everything this device needs to subscribe for read-only notification hints. The topic is a stable per-device capability derived under a daemon-held key; it must be kept private and is never client-computable.
         ///
@@ -12893,21 +9899,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case server_url
                 case topic
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.server_url = try container.decode(
-                    Swift.String.self,
-                    forKey: .server_url
-                )
-                self.topic = try container.decode(
-                    Swift.String.self,
-                    forKey: .topic
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "server_url",
-                    "topic"
-                ])
             }
         }
         /// The stored attachment's digest reference.
@@ -12943,6 +9934,40 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case message
             }
+        }
+        /// A refused command: the daemon applied and recorded nothing. A refusal with reason `unknown_command_kind` meets every retry to the same daemon; any other refusal may clear when state changes, as when a snooze ends.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/CommandRequestRejection`.
+        public struct CommandRequestRejection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/CommandRequestRejection/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/CommandRequestRejection/reason`.
+            public var reason: Components.Schemas.CommandRequestRejectionReason?
+            /// Creates a new `CommandRequestRejection`.
+            ///
+            /// - Parameters:
+            ///   - message:
+            ///   - reason:
+            public init(
+                message: Swift.String,
+                reason: Components.Schemas.CommandRequestRejectionReason? = nil
+            ) {
+                self.message = message
+                self.reason = reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case message
+                case reason
+            }
+        }
+        /// Why the daemon refused a command, when the client acts on the reason. `unknown_command_kind`: this daemon serves no command of the payload's kind, as when an app newer than the daemon sends a command the daemon's build predates; the client drops the command rather than keeping it for retry.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/CommandRequestRejectionReason`.
+        @frozen public enum CommandRequestRejectionReason: String, Codable, Hashable, Sendable, CaseIterable {
+            case unknown_command_kind = "unknown_command_kind"
+            case unknown = "unknown"
         }
         /// A content digest, algorithm-prefixed (e.g. `sha256:...`).
         ///
@@ -12983,6 +10008,7 @@ public enum Components {
             @frozen public enum _classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case ready_clean = "ready_clean"
                 case ready_degraded = "ready_degraded"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/ReadinessSummary/class`.
             public var _class: Components.Schemas.ReadinessSummary._classPayload
@@ -13014,6 +10040,7 @@ public enum Components {
             case failed = "failed"
             case not_run = "not_run"
             case not_applicable = "not_applicable"
+            case unknown = "unknown"
         }
         /// A registered §6 requirement class (domain.VerificationCheckClass). Only repo_change_policy admits a waiver; clean_verification and independent_review never do.
         ///
@@ -13023,6 +10050,7 @@ public enum Components {
             case clean_verification = "clean_verification"
             case independent_review = "independent_review"
             case repo_change_policy = "repo_change_policy"
+            case unknown = "unknown"
         }
         /// Whether an applicable check is required for readiness or advisory only (domain.RequirementKind). An optional non-pass degrades the verdict; a required one blocks it unless waived.
         ///
@@ -13031,6 +10059,7 @@ public enum Components {
         @frozen public enum RequirementKind: String, Codable, Hashable, Sendable, CaseIterable {
             case required = "required"
             case optional = "optional"
+            case unknown = "unknown"
         }
         /// The closed set that can accept degraded readiness (plan §6; domain.WaiverGrantingAuthority). Resolved policy and agent inference are intentionally absent.
         ///
@@ -13039,6 +10068,7 @@ public enum Components {
         @frozen public enum WaiverGrantingAuthority: String, Codable, Hashable, Sendable, CaseIterable {
             case explicit_human_approval = "explicit_human_approval"
             case daemon_trusted_configuration = "daemon_trusted_configuration"
+            case unknown = "unknown"
         }
         /// The waiver that lets a required failure stay ready (plan §6; mirrors domain.ReadinessWaiver): its identity, the dimension it covers, the authority that granted it, and when.
         ///
@@ -13076,31 +10106,6 @@ public enum Components {
                 case dimension
                 case authority
                 case granted_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                self.dimension = try container.decode(
-                    Swift.String.self,
-                    forKey: .dimension
-                )
-                self.authority = try container.decode(
-                    Components.Schemas.WaiverGrantingAuthority.self,
-                    forKey: .authority
-                )
-                self.granted_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .granted_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "id",
-                    "dimension",
-                    "authority",
-                    "granted_at"
-                ])
             }
         }
         /// One evaluated requirement as the ready card lists it (mirrors domain.ReadinessRequirement). proof_recipe_digest is present exactly when the state is passed; waiver is present only on a required, waiver-eligible failure or not_run. The client renders the entry from these typed fields and derives no reason from the verdict class.
@@ -13192,41 +10197,6 @@ public enum Components {
                 case proof_recipe_digest
                 case waiver
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.requirement_key = try container.decode(
-                    Swift.String.self,
-                    forKey: .requirement_key
-                )
-                self.check_class = try container.decode(
-                    Components.Schemas.VerificationCheckClass.self,
-                    forKey: .check_class
-                )
-                self.kind = try container.decode(
-                    Components.Schemas.RequirementKind.self,
-                    forKey: .kind
-                )
-                self.state = try container.decode(
-                    Components.Schemas.ReadinessRequirementState.self,
-                    forKey: .state
-                )
-                self.proof_recipe_digest = try container.decodeIfPresent(
-                    Components.Schemas.ReadinessRequirement.proof_recipe_digestPayload.self,
-                    forKey: .proof_recipe_digest
-                )
-                self.waiver = try container.decodeIfPresent(
-                    Components.Schemas.ReadinessRequirement.waiverPayload.self,
-                    forKey: .waiver
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "requirement_key",
-                    "check_class",
-                    "kind",
-                    "state",
-                    "proof_recipe_digest",
-                    "waiver"
-                ])
-            }
         }
         /// The base the evaluation's proofs were bound to.
         ///
@@ -13251,21 +10221,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case base_ref
                 case base_sha
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.base_ref = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_ref
-                )
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "base_ref",
-                    "base_sha"
-                ])
             }
         }
         /// A merge the daemon built locally and never pushed (mirrors domain.ProspectiveMergeIdentity): merge_sha is a merge commit whose parents are base_sha then head_sha. head_sha stays the head the forge and its reviewers see. The three commits are distinct.
@@ -13298,26 +10253,6 @@ public enum Components {
                 case base_sha
                 case head_sha
                 case merge_sha
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                self.merge_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .merge_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "base_sha",
-                    "head_sha",
-                    "merge_sha"
-                ])
             }
         }
         /// The evaluation behind a ready item's verdict (plan §6; mirrors domain.ReadinessDetail): the evaluation-set digest, the exact candidate head and base the proofs bind, the target tip the handoff check resolved (plan §7) and, when that tip had moved past base, the verified merge of the head into it, and every requirement of the evaluated set in key order with its state, proof recipe, or waiver. Built by the daemon from the same evaluation that produced readiness, so its digest equals readiness.evaluation_set_digest and its candidate_head equals pr_head_sha. Clients compare only these daemon-supplied coordinates against readiness_invalidation to render a stale verdict as stale.
@@ -13371,41 +10306,6 @@ public enum Components {
                 case handoff_tip
                 case handoff_merge
                 case requirements
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.evaluation_set_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .evaluation_set_digest
-                )
-                self.candidate_head = try container.decode(
-                    Swift.String.self,
-                    forKey: .candidate_head
-                )
-                self.base = try container.decode(
-                    Components.Schemas.ReadinessBoundBase.self,
-                    forKey: .base
-                )
-                self.handoff_tip = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .handoff_tip
-                )
-                self.handoff_merge = try container.decodeIfPresent(
-                    Components.Schemas.ProspectiveMergeIdentity.self,
-                    forKey: .handoff_merge
-                )
-                self.requirements = try container.decode(
-                    [Components.Schemas.ReadinessRequirement].self,
-                    forKey: .requirements
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "evaluation_set_digest",
-                    "candidate_head",
-                    "base",
-                    "handoff_tip",
-                    "handoff_merge",
-                    "requirements"
-                ])
             }
         }
         /// The daemon-derived yield totals for one persisted routed-review round. New and recurring findings are classified by stable finding fingerprint against earlier rounds in the same reviewer-configuration segment; dispositions remain attributed to the round that produced the finding. diff_metrics is omitted, never null, when nothing was recorded for the round: that is how a gap shows, and every round recorded before the field existed is one. drift_verdict is likewise omitted, never null. A round carries it only when a drift audit was recorded for the round and the history also holds a later round, so the last round of a history never carries one.
@@ -13481,61 +10381,6 @@ public enum Components {
                 case diff_metrics
                 case drift_verdict
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.findings_ingested = try container.decode(
-                    Swift.Int.self,
-                    forKey: .findings_ingested
-                )
-                self.new_findings = try container.decode(
-                    Swift.Int.self,
-                    forKey: .new_findings
-                )
-                self.recurring_findings = try container.decode(
-                    Swift.Int.self,
-                    forKey: .recurring_findings
-                )
-                self.fixed = try container.decode(
-                    Swift.Int.self,
-                    forKey: .fixed
-                )
-                self.declined = try container.decode(
-                    Swift.Int.self,
-                    forKey: .declined
-                )
-                self.deferred = try container.decode(
-                    Swift.Int.self,
-                    forKey: .deferred
-                )
-                self.outcome = try container.decode(
-                    Components.Schemas.ReviewOutcome.self,
-                    forKey: .outcome
-                )
-                self.diff_metrics = try container.decodeIfPresent(
-                    Components.Schemas.ReviewRoundDiffMetrics.self,
-                    forKey: .diff_metrics
-                )
-                self.drift_verdict = try container.decodeIfPresent(
-                    Components.Schemas.DriftVerdict.self,
-                    forKey: .drift_verdict
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "round",
-                    "findings_ingested",
-                    "new_findings",
-                    "recurring_findings",
-                    "fixed",
-                    "declined",
-                    "deferred",
-                    "outcome",
-                    "diff_metrics",
-                    "drift_verdict"
-                ])
-            }
         }
         /// One review round's daemon-computed diff shape as two named pairs (plan §7 Review Drift). cumulative compares the round's bound base with its candidate head. round compares the previous round's candidate head with this round's; the run's first round has no predecessor, so there it compares the bound base with the head and equals cumulative. Both pairs share one head. These are engine facts, never model output.
         ///
@@ -13561,21 +10406,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case cumulative
                 case round
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.cumulative = try container.decode(
-                    Components.Schemas.DiffStats.self,
-                    forKey: .cumulative
-                )
-                self.round = try container.decode(
-                    Components.Schemas.DiffStats.self,
-                    forKey: .round
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "cumulative",
-                    "round"
-                ])
             }
         }
         /// The immutable review-yield digest derived from persisted review records and finding dispositions when review reaches a convergence decision or a candidate becomes ready.
@@ -13603,21 +10433,6 @@ public enum Components {
                 case rounds
                 case terminal_outcome
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.rounds = try container.decode(
-                    [Components.Schemas.ReviewYieldRound].self,
-                    forKey: .rounds
-                )
-                self.terminal_outcome = try container.decode(
-                    Components.Schemas.ReviewOutcome.self,
-                    forKey: .terminal_outcome
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "rounds",
-                    "terminal_outcome"
-                ])
-            }
         }
         /// The closed authority class behind an item recommendation.
         ///
@@ -13626,6 +10441,7 @@ public enum Components {
             case daemon_policy = "daemon_policy"
             case agent_judgment = "agent_judgment"
             case project_policy = "project_policy"
+            case unknown = "unknown"
         }
         /// A declared daemon-side judgment site (plan §5.13).
         ///
@@ -13633,6 +10449,7 @@ public enum Components {
         @frozen public enum JudgmentSite: String, Codable, Hashable, Sendable, CaseIterable {
             case finding_adjudicator = "finding_adjudicator"
             case task_namer = "task_namer"
+            case unknown = "unknown"
         }
         /// The registered daemon rule and canonical input behind a deterministic recommendation.
         ///
@@ -13657,21 +10474,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case rule_digest
                 case input_digest
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.rule_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .rule_digest
-                )
-                self.input_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .input_digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "rule_digest",
-                    "input_digest"
-                ])
             }
         }
         /// The declared judgment invocation and bound artifact behind an agent recommendation.
@@ -13704,26 +10506,6 @@ public enum Components {
                 case invocation_id
                 case artifact_digest
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.judgment_site = try container.decode(
-                    Components.Schemas.JudgmentSite.self,
-                    forKey: .judgment_site
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.artifact_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .artifact_digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "judgment_site",
-                    "invocation_id",
-                    "artifact_digest"
-                ])
-            }
         }
         /// The resolved project policy and authenticated application behind a policy recommendation.
         ///
@@ -13754,26 +10536,6 @@ public enum Components {
                 case policy_key
                 case resolved_policy_digest
                 case application_digest
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.policy_key = try container.decode(
-                    Swift.String.self,
-                    forKey: .policy_key
-                )
-                self.resolved_policy_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .resolved_policy_digest
-                )
-                self.application_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .application_digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "policy_key",
-                    "resolved_policy_digest",
-                    "application_digest"
-                ])
             }
         }
         /// Closed source-specific provenance. Exactly one property is non-null, and it must match Recommendation.source. This nullable-property shape mirrors the Go contract without a wire discriminator.
@@ -13861,26 +10623,6 @@ public enum Components {
                 case agent_judgment
                 case project_policy
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.daemon_policy = try container.decodeIfPresent(
-                    Components.Schemas.RecommendationProvenance.daemon_policyPayload.self,
-                    forKey: .daemon_policy
-                )
-                self.agent_judgment = try container.decodeIfPresent(
-                    Components.Schemas.RecommendationProvenance.agent_judgmentPayload.self,
-                    forKey: .agent_judgment
-                )
-                self.project_policy = try container.decodeIfPresent(
-                    Components.Schemas.RecommendationProvenance.project_policyPayload.self,
-                    forKey: .project_policy
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "daemon_policy",
-                    "agent_judgment",
-                    "project_policy"
-                ])
-            }
         }
         /// A daemon-derived lead that selects one action already offered by the attention item.
         ///
@@ -13942,36 +10684,6 @@ public enum Components {
                 case provenance
                 case confidence
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.action = try container.decode(
-                    Components.Schemas.Action.self,
-                    forKey: .action
-                )
-                self.reason = try container.decode(
-                    Swift.String.self,
-                    forKey: .reason
-                )
-                self.source = try container.decode(
-                    Components.Schemas.RecommendationSource.self,
-                    forKey: .source
-                )
-                self.provenance = try container.decode(
-                    Components.Schemas.RecommendationProvenance.self,
-                    forKey: .provenance
-                )
-                self.confidence = try container.decodeIfPresent(
-                    Components.Schemas.Recommendation.confidencePayload.self,
-                    forKey: .confidence
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "action",
-                    "reason",
-                    "source",
-                    "provenance",
-                    "confidence"
-                ])
-            }
         }
         /// The daemon-owned epoch and digest identifying this item's current structural decision surface. Both fields mirror the authoritative persisted row and are never client-set.
         ///
@@ -13998,21 +10710,6 @@ public enum Components {
                 case epoch
                 case digest
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.epoch = try container.decode(
-                    Swift.Int.self,
-                    forKey: .epoch
-                )
-                self.digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "epoch",
-                    "digest"
-                ])
-            }
         }
         /// Whether a display label is a chosen name or an explicit identifier fallback.
         ///
@@ -14023,6 +10720,7 @@ public enum Components {
             case _operator = "operator"
             case agent = "agent"
             case specification = "specification"
+            case unknown = "unknown"
         }
         /// One daemon-authored display label and whether it is a name or identifier fallback.
         ///
@@ -14048,21 +10746,6 @@ public enum Components {
                 case text
                 case source
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.text = try container.decode(
-                    Swift.String.self,
-                    forKey: .text
-                )
-                self.source = try container.decode(
-                    Components.Schemas.DisplayNameSource.self,
-                    forKey: .source
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "text",
-                    "source"
-                ])
-            }
         }
         /// Human-readable project and work-unit labels for a card or run row.
         ///
@@ -14087,21 +10770,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case project
                 case task
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.project = try container.decode(
-                    Components.Schemas.DisplayName.self,
-                    forKey: .project
-                )
-                self.task = try container.decode(
-                    Components.Schemas.DisplayName.self,
-                    forKey: .task
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "project",
-                    "task"
-                ])
             }
         }
         /// Billable cost observations aggregated across completed invocations.
@@ -14140,31 +10808,6 @@ public enum Components {
                 case invocations
                 case complete
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.currency = try container.decode(
-                    Swift.String.self,
-                    forKey: .currency
-                )
-                self.amount = try container.decode(
-                    Swift.String.self,
-                    forKey: .amount
-                )
-                self.invocations = try container.decode(
-                    Swift.Int.self,
-                    forKey: .invocations
-                )
-                self.complete = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .complete
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "currency",
-                    "amount",
-                    "invocations",
-                    "complete"
-                ])
-            }
         }
         /// The workflow stage that owns an execution outcome.
         ///
@@ -14174,6 +10817,7 @@ public enum Components {
             case implementation = "implementation"
             case review = "review"
             case verification = "verification"
+            case unknown = "unknown"
         }
         /// Where a human's answer to an implementation-stage agent_question re-enters the workflow.
         ///
@@ -14182,6 +10826,7 @@ public enum Components {
         @frozen public enum AnswerRoute: String, Codable, Hashable, Sendable, CaseIterable {
             case retry_implementation = "retry_implementation"
             case revise_specification = "revise_specification"
+            case unknown = "unknown"
         }
         /// One typed decision-path event the clients emit (plan §8, §9). The six kinds are the only comprehension events collected; they are tied to §9's specific measures, never an unrestricted clickstream.
         ///
@@ -14194,6 +10839,7 @@ public enum Components {
             case action_taken = "action_taken"
             case recommendation_override = "recommendation_override"
             case not_decidable_here_shown = "not_decidable_here_shown"
+            case unknown = "unknown"
         }
         /// The new value of a device's notifications switch.
         ///
@@ -14288,26 +10934,6 @@ public enum Components {
                 case actions
                 case digest
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.actions = try container.decode(
-                    [Components.Schemas.Action].self,
-                    forKey: .actions
-                )
-                self.digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "device_id",
-                    "actions",
-                    "digest"
-                ])
-            }
         }
         /// The daemon-derived actions offered to one device for one item's decision surface (domain.DecisionActionSurface, plan §5.14, §8): the intersection of the item's requested decisions with the device's capability contract. Telemetry evidence only; it never widens the item's actions and never authorizes a command.
         ///
@@ -14365,41 +10991,6 @@ public enum Components {
                 case client_capability_digest
                 case actions
                 case digest
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.item_decision_surface_digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_decision_surface_digest
-                )
-                self.client_capability_digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .client_capability_digest
-                )
-                self.actions = try container.decode(
-                    [Components.Schemas.Action].self,
-                    forKey: .actions
-                )
-                self.digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "device_id",
-                    "item_id",
-                    "item_decision_surface_digest",
-                    "client_capability_digest",
-                    "actions",
-                    "digest"
-                ])
             }
         }
         /// The client-supplied fields of one comprehension event (plan §8). The device is the bearer credential's and the event_id is the path idempotency key, so neither appears here; received_at is daemon-stamped. The action-bearing kinds (action_taken, recommendation_override) carry decision_action_surface_digest and command_id; every other kind carries neither.
@@ -14584,61 +11175,6 @@ public enum Components {
                 case sequence
                 case received_at
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.event_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .event_id
-                )
-                self.item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.kind = try container.decode(
-                    Components.Schemas.ComprehensionEventKind.self,
-                    forKey: .kind
-                )
-                self.item_decision_surface_digest = try container.decode(
-                    Swift.String.self,
-                    forKey: .item_decision_surface_digest
-                )
-                self.decision_action_surface_digest = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .decision_action_surface_digest
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.occurred_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .occurred_at
-                )
-                self.sequence = try container.decode(
-                    Swift.Int.self,
-                    forKey: .sequence
-                )
-                self.received_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .received_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "device_id",
-                    "event_id",
-                    "item_id",
-                    "kind",
-                    "item_decision_surface_digest",
-                    "decision_action_surface_digest",
-                    "command_id",
-                    "occurred_at",
-                    "sequence",
-                    "received_at"
-                ])
-            }
         }
         /// Why the implementer stopped instead of producing a candidate; the decisions beside it enumerate what would unblock it.
         ///
@@ -14650,6 +11186,7 @@ public enum Components {
             case scope_expansion = "scope_expansion"
             case capability_unavailable = "capability_unavailable"
             case commit_plan_collision = "commit_plan_collision"
+            case unknown = "unknown"
         }
         /// One enumerated answer to a Decision.
         ///
@@ -14674,21 +11211,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case label
                 case tradeoffs
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.label = try container.decode(
-                    Swift.String.self,
-                    forKey: .label
-                )
-                self.tradeoffs = try container.decode(
-                    Swift.String.self,
-                    forKey: .tradeoffs
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "label",
-                    "tradeoffs"
-                ])
             }
         }
         /// One question the agent cannot answer without the human: what it asks, why it blocks the work, two to six labeled options, and the agent's recommendation, which names one option's label exactly and is an agent claim, never a verified fact.
@@ -14728,31 +11250,6 @@ public enum Components {
                 case options
                 case recommendation
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.question = try container.decode(
-                    Swift.String.self,
-                    forKey: .question
-                )
-                self.why_blocking = try container.decode(
-                    Swift.String.self,
-                    forKey: .why_blocking
-                )
-                self.options = try container.decode(
-                    [Components.Schemas.DecisionOption].self,
-                    forKey: .options
-                )
-                self.recommendation = try container.decode(
-                    Swift.String.self,
-                    forKey: .recommendation
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "question",
-                    "why_blocking",
-                    "options",
-                    "recommendation"
-                ])
-            }
         }
         /// Untouched required paths outside the run's immutable approved scope, bound to its imported candidate.
         ///
@@ -14783,26 +11280,6 @@ public enum Components {
                 case paths
                 case declared_paths
                 case head_sha
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.paths = try container.decode(
-                    [Swift.String].self,
-                    forKey: .paths
-                )
-                self.declared_paths = try container.decode(
-                    [Swift.String].self,
-                    forKey: .declared_paths
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "paths",
-                    "declared_paths",
-                    "head_sha"
-                ])
             }
         }
         /// The durable operator decision to keep approved paths, with the required out-of-scope work still unmet.
@@ -14852,41 +11329,6 @@ public enum Components {
                 case command_id
                 case answer
                 case decided_at
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.paths = try container.decode(
-                    [Swift.String].self,
-                    forKey: .paths
-                )
-                self.declared_paths = try container.decode(
-                    [Swift.String].self,
-                    forKey: .declared_paths
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.answer = try container.decode(
-                    Swift.String.self,
-                    forKey: .answer
-                )
-                self.decided_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .decided_at
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "paths",
-                    "declared_paths",
-                    "head_sha",
-                    "command_id",
-                    "answer",
-                    "decided_at"
-                ])
             }
         }
         /// Typed facts on an agent_question item: the stage and invocation that stopped to ask, the blocker kind on the implementation stage (null on the specification stage), and the one to eight decisions the human is asked to make. The item's Question claim carries the same decisions as a content-addressed artifact from the asking invocation.
@@ -14967,36 +11409,6 @@ public enum Components {
                 case invocation_id
                 case kind
                 case decisions
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.scope_conflict = try container.decodeIfPresent(
-                    Components.Schemas.AgentQuestionFacts.scope_conflictPayload.self,
-                    forKey: .scope_conflict
-                )
-                self.stage = try container.decode(
-                    Components.Schemas.StageName.self,
-                    forKey: .stage
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.kind = try container.decodeIfPresent(
-                    Components.Schemas.AgentQuestionFacts.kindPayload.self,
-                    forKey: .kind
-                )
-                self.decisions = try container.decode(
-                    [Components.Schemas.Decision].self,
-                    forKey: .decisions
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "scope_conflict",
-                    "stage",
-                    "invocation_id",
-                    "kind",
-                    "decisions"
-                ])
             }
         }
         /// What ran one invocation, as its admission recorded it (plan §5.4, §7). Every value is read from the admission record. A field the record does not carry is null and never filled from current configuration: a legacy execution admission has no agent binding; a binding admitted before harness, lineage group, and cost owner were recorded lacks those; a review admission never records credential mode, egress profile, operating mode, or isolation class. Clients render null as unavailable.
@@ -15316,116 +11728,6 @@ public enum Components {
                 case isolation_class
                 case independence
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.kind = try container.decode(
-                    Components.Schemas.AdmissionKind.self,
-                    forKey: .kind
-                )
-                self.role = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.rolePayload.self,
-                    forKey: .role
-                )
-                self.admitted_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .admitted_at
-                )
-                self.agent_digest = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.agent_digestPayload.self,
-                    forKey: .agent_digest
-                )
-                self.selection_source = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.selection_sourcePayload.self,
-                    forKey: .selection_source
-                )
-                self.harness = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.harnessPayload.self,
-                    forKey: .harness
-                )
-                self.model = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .model
-                )
-                self.requested_effort = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.requested_effortPayload.self,
-                    forKey: .requested_effort
-                )
-                self.native_effort = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .native_effort
-                )
-                self.enrollment_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .enrollment_id
-                )
-                self.selection_model_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .selection_model_id
-                )
-                self.selection_effort = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .selection_effort
-                )
-                self.selection_digest = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.selection_digestPayload.self,
-                    forKey: .selection_digest
-                )
-                self.cost_owner = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .cost_owner
-                )
-                self.lineage_group = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .lineage_group
-                )
-                self.credential_mode = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.credential_modePayload.self,
-                    forKey: .credential_mode
-                )
-                self.egress_profile = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.egress_profilePayload.self,
-                    forKey: .egress_profile
-                )
-                self.operating_mode = try container.decodeIfPresent(
-                    Components.Schemas.InvocationAdmissionFacts.operating_modePayload.self,
-                    forKey: .operating_mode
-                )
-                self.isolation_class = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .isolation_class
-                )
-                self.independence = try container.decodeIfPresent(
-                    [Components.Schemas.IndependenceEntry].self,
-                    forKey: .independence
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "invocation_id",
-                    "kind",
-                    "role",
-                    "admitted_at",
-                    "agent_digest",
-                    "selection_source",
-                    "harness",
-                    "model",
-                    "requested_effort",
-                    "native_effort",
-                    "enrollment_id",
-                    "selection_model_id",
-                    "selection_effort",
-                    "selection_digest",
-                    "cost_owner",
-                    "lineage_group",
-                    "credential_mode",
-                    "egress_profile",
-                    "operating_mode",
-                    "isolation_class",
-                    "independence"
-                ])
-            }
         }
         /// A judging role's lineage relation to one writing role (plan §7).
         ///
@@ -15451,21 +11753,6 @@ public enum Components {
                 case writing_role
                 case lineage
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.writing_role = try container.decode(
-                    Components.Schemas.RoleName.self,
-                    forKey: .writing_role
-                )
-                self.lineage = try container.decode(
-                    Components.Schemas.LineageRelation.self,
-                    forKey: .lineage
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "writing_role",
-                    "lineage"
-                ])
-            }
         }
         /// The admission record an invocation's facts are read from.
         ///
@@ -15473,6 +11760,7 @@ public enum Components {
         @frozen public enum AdmissionKind: String, Codable, Hashable, Sendable, CaseIterable {
             case execution = "execution"
             case review = "review"
+            case unknown = "unknown"
         }
         /// A role an invocation runs as (plan §5.4).
         ///
@@ -15492,6 +11780,7 @@ public enum Components {
             case attention_discussion = "attention_discussion"
             case briefer = "briefer"
             case triager = "triager"
+            case unknown = "unknown"
         }
         /// A judging role's lineage group against a writing role's. unknown when either side records no lineage group or no writer was admitted.
         ///
@@ -15508,6 +11797,7 @@ public enum Components {
         @frozen public enum HarnessClientKind: String, Codable, Hashable, Sendable, CaseIterable {
             case claude_code = "claude_code"
             case codex_cli = "codex_cli"
+            case unknown = "unknown"
         }
         /// The effort an agent requested, in Freeside's vocabulary (plan §5.4).
         ///
@@ -15518,6 +11808,7 @@ public enum Components {
             case medium = "medium"
             case high = "high"
             case max = "max"
+            case unknown = "unknown"
         }
         /// What chose the agent an invocation was admitted with.
         ///
@@ -15526,6 +11817,7 @@ public enum Components {
             case lineup = "lineup"
             case task_line = "task_line"
             case card = "card"
+            case unknown = "unknown"
         }
         /// The provider-credential containment an attempt was admitted under (plan §5.4).
         ///
@@ -15534,6 +11826,7 @@ public enum Components {
             case subscription_contained = "subscription_contained"
             case api_key_isolated = "api_key_isolated"
             case local_trusted = "local_trusted"
+            case unknown = "unknown"
         }
         /// Whether an attempt was admitted attended or unattended.
         ///
@@ -15541,6 +11834,7 @@ public enum Components {
         @frozen public enum OperatingMode: String, Codable, Hashable, Sendable, CaseIterable {
             case attended_dev = "attended_dev"
             case unattended = "unattended"
+            case unknown = "unknown"
         }
         /// The terminal execution outcome and invocation that failed within a workflow stage. cause is present exactly when outcome is failed, copied from the recorded outcome, and absent for canceled and lost.
         ///
@@ -15618,41 +11912,6 @@ public enum Components {
                 case offered_manifests
                 case admitted
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.outcome = try container.decode(
-                    Components.Schemas.ExecutionOutcomeStatus.self,
-                    forKey: .outcome
-                )
-                self.cause = try container.decodeIfPresent(
-                    Components.Schemas.FailureCause.self,
-                    forKey: .cause
-                )
-                self.stage = try container.decode(
-                    Components.Schemas.StageName.self,
-                    forKey: .stage
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                self.offered_manifests = try container.decodeIfPresent(
-                    [Components.Schemas.CapabilityManifestOffer].self,
-                    forKey: .offered_manifests
-                )
-                self.admitted = try container.decodeIfPresent(
-                    Components.Schemas.ExecutionFailureFacts.admittedPayload.self,
-                    forKey: .admitted
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "outcome",
-                    "cause",
-                    "stage",
-                    "invocation_id",
-                    "offered_manifests",
-                    "admitted"
-                ])
-            }
         }
         /// A failure the daemon found after the invocation completed and exported, while it read that output. The export is the invocation's terminal authority, so an item carries these facts or ExecutionFailureFacts, never both.
         ///
@@ -15685,26 +11944,6 @@ public enum Components {
                 case stage
                 case invocation_id
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.cause = try container.decode(
-                    Components.Schemas.InterpretationFailureCause.self,
-                    forKey: .cause
-                )
-                self.stage = try container.decode(
-                    Components.Schemas.StageName.self,
-                    forKey: .stage
-                )
-                self.invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .invocation_id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "cause",
-                    "stage",
-                    "invocation_id"
-                ])
-            }
         }
         /// A policy-derived capability manifest offered for an execution retry.
         ///
@@ -15736,26 +11975,6 @@ public enum Components {
                 case egress_profile
                 case digest
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.name = try container.decode(
-                    Swift.String.self,
-                    forKey: .name
-                )
-                self.egress_profile = try container.decode(
-                    Components.Schemas.EgressProfile.self,
-                    forKey: .egress_profile
-                )
-                self.digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "name",
-                    "egress_profile",
-                    "digest"
-                ])
-            }
         }
         /// The network exposure a stage runs under (plan §5.4). provider_registry adds only the project policy's declared set of public package-registry hosts to provider_only.
         ///
@@ -15766,6 +11985,7 @@ public enum Components {
             case provider_registry = "provider_registry"
             case provider_web_read = "provider_web_read"
             case clean_verification = "clean_verification"
+            case unknown = "unknown"
         }
         /// A definitive publication trust rule surfaced on a blocked card.
         ///
@@ -15775,6 +11995,7 @@ public enum Components {
             case verification_failed = "verification_failed"
             case trust_profile_drift = "trust_profile_drift"
             case target_base_advanced = "target_base_advanced"
+            case unknown = "unknown"
         }
         /// Exactly one of hold_reason or trust_rule is non-null.
         ///
@@ -15836,21 +12057,6 @@ public enum Components {
                 case hold_reason
                 case trust_rule
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.hold_reason = try container.decodeIfPresent(
-                    Components.Schemas.PublishBlockFacts.hold_reasonPayload.self,
-                    forKey: .hold_reason
-                )
-                self.trust_rule = try container.decodeIfPresent(
-                    Components.Schemas.PublishBlockFacts.trust_rulePayload.self,
-                    forKey: .trust_rule
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "hold_reason",
-                    "trust_rule"
-                ])
-            }
         }
         /// Prospective change counts bound to the exact base and head revisions.
         ///
@@ -15894,36 +12100,6 @@ public enum Components {
                 case base_sha
                 case head_sha
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.files_changed = try container.decode(
-                    Swift.Int.self,
-                    forKey: .files_changed
-                )
-                self.additions = try container.decode(
-                    Swift.Int.self,
-                    forKey: .additions
-                )
-                self.deletions = try container.decode(
-                    Swift.Int.self,
-                    forKey: .deletions
-                )
-                self.base_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .base_sha
-                )
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "files_changed",
-                    "additions",
-                    "deletions",
-                    "base_sha",
-                    "head_sha"
-                ])
-            }
         }
         /// A bounded unified line diff and its complete line counts.
         ///
@@ -15960,31 +12136,6 @@ public enum Components {
                 case lines_removed
                 case unified
                 case truncated
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.lines_added = try container.decode(
-                    Swift.Int.self,
-                    forKey: .lines_added
-                )
-                self.lines_removed = try container.decode(
-                    Swift.Int.self,
-                    forKey: .lines_removed
-                )
-                self.unified = try container.decode(
-                    Swift.String.self,
-                    forKey: .unified
-                )
-                self.truncated = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .truncated
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "lines_added",
-                    "lines_removed",
-                    "unified",
-                    "truncated"
-                ])
             }
         }
         /// One durable operator comment that caused a specification revision.
@@ -16035,41 +12186,6 @@ public enum Components {
                 case iteration
                 case body
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.comment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .comment_id
-                )
-                self.artifact_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .artifact_id
-                )
-                self.digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .digest
-                )
-                self.raised_on_item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .raised_on_item_id
-                )
-                self.iteration = try container.decode(
-                    Swift.Int.self,
-                    forKey: .iteration
-                )
-                self.body = try container.decode(
-                    Swift.String.self,
-                    forKey: .body
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "comment_id",
-                    "artifact_id",
-                    "digest",
-                    "raised_on_item_id",
-                    "iteration",
-                    "body"
-                ])
-            }
         }
         /// The agent's claimed response to one known operator comment.
         ///
@@ -16094,21 +12210,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case comment_id
                 case response
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.comment_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .comment_id
-                )
-                self.response = try container.decode(
-                    Swift.String.self,
-                    forKey: .response
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "comment_id",
-                    "response"
-                ])
             }
         }
         /// Authenticated facts for a revised specification approval card. Comment bodies and claimed addressals are bound to durable artifact digests; the claims are displayed as agent statements, not verified outcomes.
@@ -16172,51 +12273,6 @@ public enum Components {
                 case claimed_addressals
                 case addressals_digest
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.iteration = try container.decode(
-                    Swift.Int.self,
-                    forKey: .iteration
-                )
-                self.prior_item_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .prior_item_id
-                )
-                self.prior_spec_artifact_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .prior_spec_artifact_id
-                )
-                self.prior_spec_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .prior_spec_digest
-                )
-                self.diff = try container.decode(
-                    Components.Schemas.SpecDiff.self,
-                    forKey: .diff
-                )
-                self.prior_comments = try container.decode(
-                    [Components.Schemas.SpecRevisionComment].self,
-                    forKey: .prior_comments
-                )
-                self.claimed_addressals = try container.decode(
-                    [Components.Schemas.SpecAddressalClaim].self,
-                    forKey: .claimed_addressals
-                )
-                self.addressals_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .addressals_digest
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "iteration",
-                    "prior_item_id",
-                    "prior_spec_artifact_id",
-                    "prior_spec_digest",
-                    "diff",
-                    "prior_comments",
-                    "claimed_addressals",
-                    "addressals_digest"
-                ])
-            }
         }
         /// The authority or event a blocked item was waiting on. Retired with the `blocked` attention type (plan revision 84); it stays so closed items stored before the retirement still decode.
         ///
@@ -16225,6 +12281,7 @@ public enum Components {
             case spec_approval = "spec_approval"
             case pr_checks = "pr_checks"
             case external_review = "external_review"
+            case unknown = "unknown"
         }
         /// What a `blocked` item was waiting on. The reference variant must match kind. Retired with the `blocked` attention type (plan revision 84); only a closed item carries one.
         ///
@@ -16280,31 +12337,6 @@ public enum Components {
                 case item_id
                 case pr_reference
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.kind = try container.decode(
-                    Components.Schemas.BlockedWaitKind.self,
-                    forKey: .kind
-                )
-                self.since = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .since
-                )
-                self.item_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .item_id
-                )
-                self.pr_reference = try container.decodeIfPresent(
-                    Components.Schemas.BlockedWait.pr_referencePayload.self,
-                    forKey: .pr_reference
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "kind",
-                    "since",
-                    "item_id",
-                    "pr_reference"
-                ])
-            }
         }
         /// The operator capability currently affected by a health diagnostic.
         ///
@@ -16314,6 +12346,7 @@ public enum Components {
             case run_visibility = "run_visibility"
             case agent_credential = "agent_credential"
             case none = "none"
+            case unknown = "unknown"
         }
         /// A daemon diagnostic code and its current operational impact.
         ///
@@ -16338,21 +12371,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case code
                 case impairs
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.code = try container.decode(
-                    Swift.String.self,
-                    forKey: .code
-                )
-                self.impairs = try container.decode(
-                    Components.Schemas.ImpairedCapability.self,
-                    forKey: .impairs
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "code",
-                    "impairs"
-                ])
             }
         }
         /// The complete finding binding for one completed review round, with the subset of findings that require a human decision on a routed dispute.
@@ -16403,36 +12421,6 @@ public enum Components {
                 case finding_ids
                 case completion_evidence
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.findings = try container.decodeIfPresent(
-                    [Components.Schemas.DisputedFinding].self,
-                    forKey: .findings
-                )
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.finding_ids = try container.decode(
-                    [Swift.String].self,
-                    forKey: .finding_ids
-                )
-                self.completion_evidence = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .completion_evidence
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "findings",
-                    "run_id",
-                    "round",
-                    "finding_ids",
-                    "completion_evidence"
-                ])
-            }
         }
         /// A bound review finding and the routes the human may execute.
         ///
@@ -16469,6 +12457,7 @@ public enum Components {
                 case P1 = "P1"
                 case P2 = "P2"
                 case P3 = "P3"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/DisputedFinding/severity`.
             public var severity: Components.Schemas.DisputedFinding.severityPayload
@@ -16493,21 +12482,6 @@ public enum Components {
                 public enum CodingKeys: String, CodingKey {
                     case reviewer_login
                     case thread_id
-                }
-                public init(from decoder: any Swift.Decoder) throws {
-                    let container = try decoder.container(keyedBy: CodingKeys.self)
-                    self.reviewer_login = try container.decode(
-                        Swift.String.self,
-                        forKey: .reviewer_login
-                    )
-                    self.thread_id = try container.decode(
-                        Swift.String.self,
-                        forKey: .thread_id
-                    )
-                    try decoder.ensureNoAdditionalProperties(knownKeys: [
-                        "reviewer_login",
-                        "thread_id"
-                    ])
                 }
             }
             /// - Remark: Generated from `#/components/schemas/DisputedFinding/external`.
@@ -16576,31 +12550,6 @@ public enum Components {
                     case rationale
                     case below_threshold
                 }
-                public init(from decoder: any Swift.Decoder) throws {
-                    let container = try decoder.container(keyedBy: CodingKeys.self)
-                    self.lean = try container.decodeIfPresent(
-                        Components.Schemas.DisputedFinding.adjudicationPayload.leanPayload.self,
-                        forKey: .lean
-                    )
-                    self.confidence = try container.decode(
-                        Components.Schemas.AdjudicationConfidence.self,
-                        forKey: .confidence
-                    )
-                    self.rationale = try container.decode(
-                        Swift.String.self,
-                        forKey: .rationale
-                    )
-                    self.below_threshold = try container.decode(
-                        Swift.Bool.self,
-                        forKey: .below_threshold
-                    )
-                    try decoder.ensureNoAdditionalProperties(knownKeys: [
-                        "lean",
-                        "confidence",
-                        "rationale",
-                        "below_threshold"
-                    ])
-                }
             }
             /// The adjudicator's proposal for this finding, shown so the human does not decide blind. It is a model judgment, never a route the human can send: offered_routes alone are executable, and lean may name a route they do not include. Null when the round has no model-authored adjudication for the finding (the adjudicator was unconfigured or its batch failed validation, or the finding was never judged), and on an item stored before this field existed.
             ///
@@ -16642,46 +12591,6 @@ public enum Components {
                 case external
                 case offered_routes
                 case adjudication
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.finding_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .finding_id
-                )
-                self.message = try container.decode(
-                    Swift.String.self,
-                    forKey: .message
-                )
-                self.location = try container.decodeIfPresent(
-                    Components.Schemas.DisputedFinding.locationPayload.self,
-                    forKey: .location
-                )
-                self.severity = try container.decode(
-                    Components.Schemas.DisputedFinding.severityPayload.self,
-                    forKey: .severity
-                )
-                self.external = try container.decodeIfPresent(
-                    Components.Schemas.DisputedFinding.externalPayload.self,
-                    forKey: .external
-                )
-                self.offered_routes = try container.decode(
-                    [Components.Schemas.AdjudicationRoute].self,
-                    forKey: .offered_routes
-                )
-                self.adjudication = try container.decodeIfPresent(
-                    Components.Schemas.DisputedFinding.adjudicationPayload.self,
-                    forKey: .adjudication
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "finding_id",
-                    "message",
-                    "location",
-                    "severity",
-                    "external",
-                    "offered_routes",
-                    "adjudication"
-                ])
             }
         }
         /// A decision request (plan §4); mirrors domain.AttentionItem. item_version increments on every state change except a change to timing alone, and version-binds client decisions. timing is daemon-derived, never client-set; a notification delivery or an opened receipt that changes it raises the snapshot's entity_version and leaves item_version where it was.
@@ -17846,31 +13755,6 @@ public enum Components {
                 case run_id
                 case task_id
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.subject_type = try container.decode(
-                    Components.Schemas.TaskSubject.subject_typePayload.self,
-                    forKey: .subject_type
-                )
-                self.subject_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .subject_id
-                )
-                self.run_id = try container.decodeIfPresent(
-                    OpenAPIRuntime.OpenAPIValueContainer.self,
-                    forKey: .run_id
-                )
-                self.task_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .task_id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "subject_type",
-                    "subject_id",
-                    "run_id",
-                    "task_id"
-                ])
-            }
         }
         /// A labeled, digest-bound agent claim; mirrors domain.AgentClaim. Agent-generated evidence appears only here, never in evidence_snapshot (plan §5.15). The provenance is agent-pinned (#173), and extra properties are forbidden here and on both provenance branches: a claim asserting a verifier or daemon producer, or carrying an undeclared trust bit such as publish_eligible, is non-conformant. A text claim (plan §9's renderable summary carrier) additionally inlines its content in text; its digest then binds that content (see ClaimText), so the claim path carries prose under the same digest discipline as every other artifact.
         ///
@@ -17921,41 +13805,6 @@ public enum Components {
                 case text
                 case metadata
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.label = try container.decode(
-                    Swift.String.self,
-                    forKey: .label
-                )
-                self.artifact_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .artifact_id
-                )
-                self.digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .digest
-                )
-                self.provenance = try container.decode(
-                    Components.Schemas.ClaimProvenance.self,
-                    forKey: .provenance
-                )
-                self.text = try container.decodeIfPresent(
-                    Components.Schemas.ClaimText.self,
-                    forKey: .text
-                )
-                self.metadata = try container.decode(
-                    Components.Schemas.EvidenceMetadata.self,
-                    forKey: .metadata
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "label",
-                    "artifact_id",
-                    "digest",
-                    "provenance",
-                    "text",
-                    "metadata"
-                ])
-            }
         }
         /// The inline renderable body of a text claim; null for every other claim (the daemon always emits the member, null when absent). When present, the enclosing claim's digest MUST equal "sha256:<hex>" over the content's UTF-8 bytes; domain.AgentClaim.Validate recomputes it and rejects a mismatch fail-closed, so a claim cannot display one text while binding another digest, and the digest remains a valid content address for the same bytes. Content must be non-empty valid UTF-8 of at most 65536 bytes (domain.MaxClaimTextBytes; maxLength below counts code points, the daemon's byte cap is authoritative). A claim whose provenance carries sensitivity_class high_sensitivity never carries inline text (the daemon rejects the combination): clients persist item metadata in disk caches under §5.14's no-high-sensitivity-at-rest default, so memory-only prose travels the referenced attachment path. Summaries stay agent-asserted context: they render as labeled claims, never in evidence_snapshot (plan §5.15 unchanged).
         ///
@@ -17966,6 +13815,7 @@ public enum Components {
             @frozen public enum media_typePayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case text_sol_plain = "text/plain"
                 case text_sol_markdown = "text/markdown"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/ClaimText/media_type`.
             public var media_type: Components.Schemas.ClaimText.media_typePayload
@@ -17987,23 +13837,8 @@ public enum Components {
                 case media_type
                 case content
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.media_type = try container.decode(
-                    Components.Schemas.ClaimText.media_typePayload.self,
-                    forKey: .media_type
-                )
-                self.content = try container.decode(
-                    Swift.String.self,
-                    forKey: .content
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "media_type",
-                    "content"
-                ])
-            }
         }
-        /// The daemon-validated media type of an evidence or claim reference (plan §5.15 rule 3; domain.EvidenceMediaType). The daemon validates magic bytes, type, and size, so a client reads the type from this field rather than inferring it from a fetch. The set is closed; adding a member is a contract change (the generated client's enum rejects an unknown value).
+        /// The daemon-validated media type of an evidence or claim reference (plan §5.15 rule 3; domain.EvidenceMediaType). The daemon validates magic bytes, type, and size, so a client reads the type from this field rather than inferring it from a fetch. Adding a member is a contract change; a client built before it decodes the new member as unknown.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EvidenceMediaType`.
@@ -18016,6 +13851,7 @@ public enum Components {
             case text_sol_markdown = "text/markdown"
             case application_sol_json = "application/json"
             case application_sol_jsonl = "application/jsonl"
+            case unknown = "unknown"
         }
         /// Which sync-contract container an evidence reference rides in (domain.EvidenceSource): run for every artifact in an item's evidence_snapshot, claim for every entry in agent_claims. The daemon pins the value to its container, so a reference cannot mislabel its channel.
         ///
@@ -18024,6 +13860,7 @@ public enum Components {
         @frozen public enum EvidenceSource: String, Codable, Hashable, Sendable, CaseIterable {
             case run = "run"
             case claim = "claim"
+            case unknown = "unknown"
         }
         /// Whether the bytes the digest names are currently in the daemon's blob store (domain.EvidenceAvailability): available means present and fetchable at GET /attachments/{digest}; bytes_absent means the digest is held but the bytes are not, so a fetch would 404. It is a daemon read-time fact, recomputed from the blob store immediately before serialization on every synced item and never a trusted persisted value, so it can differ between two reads of the same item version.
         ///
@@ -18032,6 +13869,7 @@ public enum Components {
         @frozen public enum EvidenceAvailability: String, Codable, Hashable, Sendable, CaseIterable {
             case available = "available"
             case bytes_absent = "bytes_absent"
+            case unknown = "unknown"
         }
         /// The §5.15 daemon-validated facts about an evidence or claim reference (domain.EvidenceMetadata), so a client renders an explicit evidence state from typed fields alone rather than inferring it from a fetch. "Oversized" and "unsupported" are deliberately absent: they are client dispositions derived from size_bytes and media_type against a device-specific render cap (today 8 MiB on iOS, 64 MiB on macOS), and over-cap content never passes the daemon's own validation gates, so the daemon carries no such disposition. availability is recomputed at serialization (see EvidenceAvailability); the other fields are fixed at the artifact's or claim's creation.
         ///
@@ -18082,36 +13920,6 @@ public enum Components {
                 case source
                 case availability
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.media_type = try container.decode(
-                    Components.Schemas.EvidenceMediaType.self,
-                    forKey: .media_type
-                )
-                self.size_bytes = try container.decode(
-                    Swift.Int64.self,
-                    forKey: .size_bytes
-                )
-                self.created_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .created_at
-                )
-                self.source = try container.decode(
-                    Components.Schemas.EvidenceSource.self,
-                    forKey: .source
-                )
-                self.availability = try container.decode(
-                    Components.Schemas.EvidenceAvailability.self,
-                    forKey: .availability
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "media_type",
-                    "size_bytes",
-                    "created_at",
-                    "source",
-                    "availability"
-                ])
-            }
         }
         /// A digest-addressed artifact admissible as evidence: the subset of domain.Artifact that domain.EligibleForEvidenceSnapshot admits (plan §5.15 rule 2). Only verifier or daemon artifacts produced under a verification recipe appear in an item's evidence_snapshot; agent output appears only in labeled agent_claims, so an agent-produced artifact is unrepresentable here. Whether the recipe is on the approved set is runtime policy state, checked by the daemon's gate, not expressible in the schema. publish_eligible is computed by trusted policy, never supplied by the agent, and is always true here: the gate admits an artifact as evidence only when the same approved-recipe computation that drives publish_eligible succeeds (domain.EligibleForEvidenceSnapshot).
         ///
@@ -18131,6 +13939,7 @@ public enum Components {
                 case command_transcript = "command_transcript"
                 case verify_log = "verify_log"
                 case license_scan = "license_scan"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/EvidenceArtifact/type`.
             public var _type: Components.Schemas.EvidenceArtifact._typePayload
@@ -18224,6 +14033,7 @@ public enum Components {
             @frozen public enum producer_classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case verifier = "verifier"
                 case daemon = "daemon"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/HeadBoundProvenance/producer_class`.
             public var producer_class: Components.Schemas.HeadBoundProvenance.producer_classPayload
@@ -18283,6 +14093,7 @@ public enum Components {
             @frozen public enum producer_classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case verifier = "verifier"
                 case daemon = "daemon"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/HeadIndependentProvenance/producer_class`.
             public var producer_class: Components.Schemas.HeadIndependentProvenance.producer_classPayload
@@ -18325,36 +14136,6 @@ public enum Components {
                 case head_binding
                 case verification_recipe_digest
                 case sensitivity_class
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.producer_class = try container.decode(
-                    Components.Schemas.HeadIndependentProvenance.producer_classPayload.self,
-                    forKey: .producer_class
-                )
-                self.producer_invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .producer_invocation_id
-                )
-                self.head_binding = try container.decode(
-                    Components.Schemas.HeadIndependentProvenance.head_bindingPayload.self,
-                    forKey: .head_binding
-                )
-                self.verification_recipe_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .verification_recipe_digest
-                )
-                self.sensitivity_class = try container.decode(
-                    Components.Schemas.SensitivityClass.self,
-                    forKey: .sensitivity_class
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "producer_class",
-                    "producer_invocation_id",
-                    "head_binding",
-                    "verification_recipe_digest",
-                    "sensitivity_class"
-                ])
             }
         }
         /// Provenance of an agent claim; the claim subset of domain.Provenance (plan §5.15 rule 2, #173): producer_class is always "agent" (domain.AgentClaim.Validate pins it), and verification_recipe_digest is always null because agent output is never produced under a verification recipe. There is no publish_eligible member at any level: trusted policy computes eligibility on Artifact; the agent side never carries it. The head-binding branches mirror EvidenceProvenance, so an ambiguous head is unrepresentable here too.
@@ -18459,41 +14240,6 @@ public enum Components {
                 case verification_recipe_digest
                 case sensitivity_class
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.producer_class = try container.decode(
-                    Components.Schemas.HeadBoundClaimProvenance.producer_classPayload.self,
-                    forKey: .producer_class
-                )
-                self.producer_invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .producer_invocation_id
-                )
-                self.head_binding = try container.decode(
-                    Components.Schemas.HeadBoundClaimProvenance.head_bindingPayload.self,
-                    forKey: .head_binding
-                )
-                self.source_head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .source_head_sha
-                )
-                self.verification_recipe_digest = try container.decodeIfPresent(
-                    Components.Schemas.NullRecipeDigest.self,
-                    forKey: .verification_recipe_digest
-                )
-                self.sensitivity_class = try container.decode(
-                    Components.Schemas.SensitivityClass.self,
-                    forKey: .sensitivity_class
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "producer_class",
-                    "producer_invocation_id",
-                    "head_binding",
-                    "source_head_sha",
-                    "verification_recipe_digest",
-                    "sensitivity_class"
-                ])
-            }
         }
         /// An agent claim intentionally decoupled from repository head; it carries no source_head_sha (not a member, extra properties forbidden), so a head-independent claim that names a head is unrepresentable.
         ///
@@ -18545,36 +14291,6 @@ public enum Components {
                 case head_binding
                 case verification_recipe_digest
                 case sensitivity_class
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.producer_class = try container.decode(
-                    Components.Schemas.HeadIndependentClaimProvenance.producer_classPayload.self,
-                    forKey: .producer_class
-                )
-                self.producer_invocation_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .producer_invocation_id
-                )
-                self.head_binding = try container.decode(
-                    Components.Schemas.HeadIndependentClaimProvenance.head_bindingPayload.self,
-                    forKey: .head_binding
-                )
-                self.verification_recipe_digest = try container.decodeIfPresent(
-                    Components.Schemas.NullRecipeDigest.self,
-                    forKey: .verification_recipe_digest
-                )
-                self.sensitivity_class = try container.decode(
-                    Components.Schemas.SensitivityClass.self,
-                    forKey: .sensitivity_class
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "producer_class",
-                    "producer_invocation_id",
-                    "head_binding",
-                    "verification_recipe_digest",
-                    "sensitivity_class"
-                ])
             }
         }
         /// Daemon-derived delivery timing aggregates; mirrors domain.TimingSummary. Never client-set. submit_to_first_open is a duration in int64 nanoseconds.
@@ -19356,6 +15072,7 @@ public enum Components {
             case discussion_reply = "discussion_reply"
             case revision = "revision"
             case retry = "retry"
+            case unknown = "unknown"
         }
         /// The kind of decision an attention item asks for (plan §4). `blocked` is retired (plan revision 84): nothing raises it and no item of the type is ever open. The member stays so closed items stored before the retirement still decode.
         ///
@@ -19375,6 +15092,7 @@ public enum Components {
             case effect_proposal = "effect_proposal"
             case system_health = "system_health"
             case blocked = "blocked"
+            case unknown = "unknown"
         }
         /// The result of one routed-review pass.
         ///
@@ -19382,6 +15100,7 @@ public enum Components {
         @frozen public enum ReviewOutcome: String, Codable, Hashable, Sendable, CaseIterable {
             case clean = "clean"
             case findings = "findings"
+            case unknown = "unknown"
         }
         /// A drift audit's verdict on one review round (plan §7 Review Drift). converged means the change still implements the approved specification without excess hardening; over_hardened means review fixes added defenses the specification does not need, and the audit names what to undo; stuck means the rounds are not approaching the specification.
         ///
@@ -19391,6 +15110,7 @@ public enum Components {
             case converged = "converged"
             case over_hardened = "over_hardened"
             case stuck = "stuck"
+            case unknown = "unknown"
         }
         /// Why the review loop stopped and asked for a decision (plan §7). low_value_streak means the latest rounds raised only low-value findings; fixed_recurrence means a finding already fixed came back; final_review_findings means the last allowed round still had findings; growth_without_blockers means the change kept growing while no round raised a blocker; drift_audit means a drift audit judged the change against the approved specification.
         ///
@@ -19402,6 +15122,7 @@ public enum Components {
             case final_review_findings = "final_review_findings"
             case growth_without_blockers = "growth_without_blockers"
             case drift_audit = "drift_audit"
+            case unknown = "unknown"
         }
         /// One review fix a drift audit says to undo (plan §7 Review Drift); mirrors domain.DriftReversal.
         ///
@@ -19555,6 +15276,7 @@ public enum Components {
         @frozen public enum InterruptionClass: String, Codable, Hashable, Sendable, CaseIterable {
             case planned_gate = "planned_gate"
             case exceptional = "exceptional"
+            case unknown = "unknown"
         }
         /// A decision a client can take on an attention item (plan §4). answer_and_retry and answer_without_retry carry the answer in DecisionPayload.message; return_to_agent carries required feedback there.
         ///
@@ -19595,6 +15317,7 @@ public enum Components {
             case accept_recommended_route = "accept_recommended_route"
             case choose_alternative_route = "choose_alternative_route"
             case adjudicate_findings = "adjudicate_findings"
+            case unknown = "unknown"
         }
         /// Item priority. Provisional vocabulary (domain enums.go).
         ///
@@ -19604,6 +15327,7 @@ public enum Components {
             case normal = "normal"
             case high = "high"
             case urgent = "urgent"
+            case unknown = "unknown"
         }
         /// How a review finding relates to the assigned work-unit goal.
         ///
@@ -19613,6 +15337,7 @@ public enum Components {
             case adjacent = "adjacent"
             case contradictory = "contradictory"
             case unclear = "unclear"
+            case unknown = "unknown"
         }
         /// Whether the finding can be acted on within the current work unit.
         ///
@@ -19637,6 +15362,7 @@ public enum Components {
             case decline = "decline"
             case dispute = "dispute"
             case attention_unclear = "attention_unclear"
+            case unknown = "unknown"
         }
         /// The proposal's judgment and authority provenance. engine_model means the goal judgment and confidence came from the model while the engine independently derived the allowed remediation authority.
         ///
@@ -19647,6 +15373,7 @@ public enum Components {
             case model = "model"
             case engine_model = "engine_model"
             case human = "human"
+            case unknown = "unknown"
         }
         /// The proposal producer's confidence in its recommended route.
         ///
@@ -19655,6 +15382,7 @@ public enum Components {
             case low = "low"
             case medium = "medium"
             case high = "high"
+            case unknown = "unknown"
         }
         /// How an attention item closed (mirrors domain.Conclusion). cause decision pairs with a non-null decision and an empty reason; every other cause pairs with a null decision and the daemon's one-sentence reason.
         ///
@@ -19730,36 +15458,6 @@ public enum Components {
                 case successor_item_id
                 case decision
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.cause = try container.decode(
-                    Components.Schemas.ConclusionCause.self,
-                    forKey: .cause
-                )
-                self.concluded_at = try container.decode(
-                    Foundation.Date.self,
-                    forKey: .concluded_at
-                )
-                self.reason = try container.decode(
-                    Swift.String.self,
-                    forKey: .reason
-                )
-                self.successor_item_id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .successor_item_id
-                )
-                self.decision = try container.decodeIfPresent(
-                    Components.Schemas.AttentionItemConclusion.decisionPayload.self,
-                    forKey: .decision
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "cause",
-                    "concluded_at",
-                    "reason",
-                    "successor_item_id",
-                    "decision"
-                ])
-            }
         }
         /// Why an attention item closed. decision is a client command; expired, superseded, and resolved_by_daemon are daemon closes (domain enums.go).
         ///
@@ -19770,6 +15468,7 @@ public enum Components {
             case expired = "expired"
             case superseded = "superseded"
             case resolved_by_daemon = "resolved_by_daemon"
+            case unknown = "unknown"
         }
         /// The accepted command that concluded an attention item, as recorded at decision time.
         ///
@@ -19848,41 +15547,6 @@ public enum Components {
                 case finding_routes
                 case answer_route
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.command_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .command_id
-                )
-                self.action = try container.decode(
-                    Components.Schemas.Action.self,
-                    forKey: .action
-                )
-                self.device_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_id
-                )
-                self.device_display_name = try container.decode(
-                    Swift.String.self,
-                    forKey: .device_display_name
-                )
-                self.finding_routes = try container.decodeIfPresent(
-                    [Components.Schemas.AlternativeChoice].self,
-                    forKey: .finding_routes
-                )
-                self.answer_route = try container.decodeIfPresent(
-                    Components.Schemas.ConclusionDecision.answer_routePayload.self,
-                    forKey: .answer_route
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "command_id",
-                    "action",
-                    "device_id",
-                    "device_display_name",
-                    "finding_routes",
-                    "answer_route"
-                ])
-            }
         }
         /// Item lifecycle status. Provisional vocabulary (domain enums.go).
         ///
@@ -19893,6 +15557,7 @@ public enum Components {
             case superseded = "superseded"
             case dismissed = "dismissed"
             case expired = "expired"
+            case unknown = "unknown"
         }
         /// Whether an open system_health item blocks unrelated unattended admission or remains advisory (plan §4; domain enums.go).
         ///
@@ -19901,6 +15566,7 @@ public enum Components {
         @frozen public enum HealthPosture: String, Codable, Hashable, Sendable, CaseIterable {
             case blocking = "blocking"
             case advisory = "advisory"
+            case unknown = "unknown"
         }
         /// The class of validated configuration that can supersede a system_health item's blocking effect (plan §4; domain attention_item.go).
         ///
@@ -19918,6 +15584,7 @@ public enum Components {
             case base_advanced = "base_advanced"
             case retargeted = "retargeted"
             case identity_changed = "identity_changed"
+            case unknown = "unknown"
         }
         /// The daemon-recorded fact that a ready_for_final_review item's clean-pass claim was invalidated (plan §7; mirrors domain.ReadinessInvalidation). observed differs from bound by construction, and that divergence (revalidated by the daemon) is what invalidates the pass.
         ///
@@ -20010,36 +15677,6 @@ public enum Components {
                 case questions
                 case notes
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.head_sha = try container.decode(
-                    Swift.String.self,
-                    forKey: .head_sha
-                )
-                self.claim_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .claim_digest
-                )
-                self.stops = try container.decode(
-                    [Components.Schemas.ReviewStop].self,
-                    forKey: .stops
-                )
-                self.questions = try container.decode(
-                    [Swift.String].self,
-                    forKey: .questions
-                )
-                self.notes = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .notes
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "head_sha",
-                    "claim_digest",
-                    "stops",
-                    "questions",
-                    "notes"
-                ])
-            }
         }
         /// One stop in a review guide, in reading order; mirrors domain.ReviewStop.
         ///
@@ -20077,31 +15714,6 @@ public enum Components {
                 case summary
                 case attention
                 case excerpts
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.title = try container.decode(
-                    Swift.String.self,
-                    forKey: .title
-                )
-                self.summary = try container.decode(
-                    Swift.String.self,
-                    forKey: .summary
-                )
-                self.attention = try container.decode(
-                    Components.Schemas.ReviewAttention.self,
-                    forKey: .attention
-                )
-                self.excerpts = try container.decode(
-                    [Components.Schemas.ReviewExcerpt].self,
-                    forKey: .excerpts
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "title",
-                    "summary",
-                    "attention",
-                    "excerpts"
-                ])
             }
         }
         /// A line range the stop points at, with its text as a daemon fact (mirrors domain.ReviewExcerpt). path is a canonical repository-relative path (no leading slash, no backslash, no control character, no empty, `.`, or `..` segment). start_line and end_line are 1-based and inclusive, start_line <= end_line, and the span covers at most 80 lines. Exactly one of text and unresolved_reason is null: text is the range read from the imported commit (side head) or its bound base (side base), at most 8 KiB of UTF-8; unresolved_reason says why the daemon could not read it, and a span whose text would exceed the cap resolves to too_large.
@@ -20177,46 +15789,6 @@ public enum Components {
                 case text
                 case unresolved_reason
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.path = try container.decode(
-                    Swift.String.self,
-                    forKey: .path
-                )
-                self.side = try container.decode(
-                    Components.Schemas.ReviewExcerptSide.self,
-                    forKey: .side
-                )
-                self.start_line = try container.decode(
-                    Swift.Int.self,
-                    forKey: .start_line
-                )
-                self.end_line = try container.decode(
-                    Swift.Int.self,
-                    forKey: .end_line
-                )
-                self.caption = try container.decode(
-                    Swift.String.self,
-                    forKey: .caption
-                )
-                self.text = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .text
-                )
-                self.unresolved_reason = try container.decodeIfPresent(
-                    Components.Schemas.ReviewExcerpt.unresolved_reasonPayload.self,
-                    forKey: .unresolved_reason
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "path",
-                    "side",
-                    "start_line",
-                    "end_line",
-                    "caption",
-                    "text",
-                    "unresolved_reason"
-                ])
-            }
         }
         /// What a review stop asks the reviewer to weigh (mirrors domain.ReviewAttention).
         ///
@@ -20228,6 +15800,7 @@ public enum Components {
             case product = "product"
             case risk = "risk"
             case accessibility = "accessibility"
+            case unknown = "unknown"
         }
         /// Which commit an excerpt reads: head is the imported commit, base its bound base (mirrors domain.ReviewExcerptSide).
         ///
@@ -20236,6 +15809,7 @@ public enum Components {
         @frozen public enum ReviewExcerptSide: String, Codable, Hashable, Sendable, CaseIterable {
             case head = "head"
             case base = "base"
+            case unknown = "unknown"
         }
         /// Why the daemon could not read an excerpt (mirrors domain.ReviewExcerptUnresolved): path_missing (no such file on that side), range_out_of_file (the range runs past the file's end), binary (the file is not text), too_large (the text exceeds 8 KiB).
         ///
@@ -20246,6 +15820,7 @@ public enum Components {
             case range_out_of_file = "range_out_of_file"
             case binary = "binary"
             case too_large = "too_large"
+            case unknown = "unknown"
         }
         /// Every coordinate of one immutable persisted review contradiction, including its exact body digest. A recover_review command authorizes only this row; a later contradiction requires another decision.
         ///
@@ -20401,31 +15976,6 @@ public enum Components {
                 case round
                 case adjudication_digest
                 case proposals
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.run_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .run_id
-                )
-                self.round = try container.decode(
-                    Swift.Int.self,
-                    forKey: .round
-                )
-                self.adjudication_digest = try container.decode(
-                    Components.Schemas.Digest.self,
-                    forKey: .adjudication_digest
-                )
-                self.proposals = try container.decode(
-                    [Components.Schemas.FindingAdjudicationProposal].self,
-                    forKey: .proposals
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "run_id",
-                    "round",
-                    "adjudication_digest",
-                    "proposals"
-                ])
             }
         }
         /// One finding's recommendation-led projection, with authenticated routing axes and the model's rationale, qualifications, and viable alternatives. It also carries the finding context the operator sees before committing a route: the daemon-authenticated message and location copied from the immutable stored finding, and the evidence copied from the matching adjudication entry (see evidence for its producer-dependent provenance). The daemon re-gates every copied field against its immutable source.
@@ -20591,81 +16141,6 @@ public enum Components {
                 case confidence
                 case offered_alternatives
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.finding_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .finding_id
-                )
-                self.finding_message = try container.decode(
-                    Swift.String.self,
-                    forKey: .finding_message
-                )
-                self.finding_location = try container.decodeIfPresent(
-                    Components.Schemas.FindingAdjudicationProposal.finding_locationPayload.self,
-                    forKey: .finding_location
-                )
-                self.producer = try container.decode(
-                    Components.Schemas.AdjudicationProducer.self,
-                    forKey: .producer
-                )
-                self.goal_relationship = try container.decode(
-                    Components.Schemas.GoalRelationship.self,
-                    forKey: .goal_relationship
-                )
-                self.compatibility = try container.decodeIfPresent(
-                    Components.Schemas.FindingAdjudicationProposal.compatibilityPayload.self,
-                    forKey: .compatibility
-                )
-                self.route = try container.decode(
-                    Components.Schemas.AdjudicationRoute.self,
-                    forKey: .route
-                )
-                self.rationale = try container.decode(
-                    Swift.String.self,
-                    forKey: .rationale
-                )
-                self.evidence = try container.decode(
-                    [Swift.String].self,
-                    forKey: .evidence
-                )
-                self.cited_rules = try container.decode(
-                    [Swift.String].self,
-                    forKey: .cited_rules
-                )
-                self.assumptions = try container.decode(
-                    [Swift.String].self,
-                    forKey: .assumptions
-                )
-                self.open_questions = try container.decode(
-                    [Swift.String].self,
-                    forKey: .open_questions
-                )
-                self.confidence = try container.decodeIfPresent(
-                    Components.Schemas.FindingAdjudicationProposal.confidencePayload.self,
-                    forKey: .confidence
-                )
-                self.offered_alternatives = try container.decode(
-                    [Components.Schemas.OfferedAlternative].self,
-                    forKey: .offered_alternatives
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "finding_id",
-                    "finding_message",
-                    "finding_location",
-                    "producer",
-                    "goal_relationship",
-                    "compatibility",
-                    "route",
-                    "rationale",
-                    "evidence",
-                    "cited_rules",
-                    "assumptions",
-                    "open_questions",
-                    "confidence",
-                    "offered_alternatives"
-                ])
-            }
         }
         /// A selectable non-recommended route and its expected consequence.
         ///
@@ -20690,21 +16165,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case route
                 case consequence
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.route = try container.decode(
-                    Components.Schemas.AdjudicationRoute.self,
-                    forKey: .route
-                )
-                self.consequence = try container.decode(
-                    Swift.String.self,
-                    forKey: .consequence
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "route",
-                    "consequence"
-                ])
             }
         }
         /// Machine-actionable source location for a review finding: a path plus an inclusive, 1-based line range. A start_line and end_line of 0 with a path is the whole-file location; a null finding_location on a proposal is a review-level finding that carries no path.
@@ -20738,26 +16198,6 @@ public enum Components {
                 case start_line
                 case end_line
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.path = try container.decode(
-                    Swift.String.self,
-                    forKey: .path
-                )
-                self.start_line = try container.decode(
-                    Swift.Int.self,
-                    forKey: .start_line
-                )
-                self.end_line = try container.decode(
-                    Swift.Int.self,
-                    forKey: .end_line
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "path",
-                    "start_line",
-                    "end_line"
-                ])
-            }
         }
         /// The operator-selected offered route for one finding.
         ///
@@ -20782,21 +16222,6 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case finding_id
                 case route
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.finding_id = try container.decode(
-                    Swift.String.self,
-                    forKey: .finding_id
-                )
-                self.route = try container.decode(
-                    Components.Schemas.AdjudicationRoute.self,
-                    forKey: .route
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "finding_id",
-                    "route"
-                ])
             }
         }
         /// The operator-selected offered route for one disputed finding, with the operator's reason when the route replies to an external reviewer.
@@ -20928,6 +16353,7 @@ public enum Components {
             case normal = "normal"
             case sensitive = "sensitive"
             case high_sensitivity = "high_sensitivity"
+            case unknown = "unknown"
         }
         /// Who authored a message. Provisional vocabulary (domain enums.go).
         ///
@@ -20936,6 +16362,7 @@ public enum Components {
             case user = "user"
             case agent = "agent"
             case daemon = "daemon"
+            case unknown = "unknown"
         }
         /// Where a conversation sits in its request/response cycle: awaiting_agent between a committed discuss and the accepted agent completion, idle otherwise (plan §5.14 sync test 12). Provisional vocabulary (domain enums.go).
         ///
@@ -20944,6 +16371,7 @@ public enum Components {
         @frozen public enum ConversationStatus: String, Codable, Hashable, Sendable, CaseIterable {
             case idle = "idle"
             case awaiting_agent = "awaiting_agent"
+            case unknown = "unknown"
         }
         /// Why a consumed commit-plan channel did not structure the import (plan §5.6; domain enums.go): absent, structural, and screening name the plan_preferred fallback classes on a non-empty import; present_but_not_honored records a present plan consumed but not used (single_commit, or a zero-change plan_preferred import).
         ///
@@ -20954,6 +16382,7 @@ public enum Components {
             case structural = "structural"
             case screening = "screening"
             case present_but_not_honored = "present_but_not_honored"
+            case unknown = "unknown"
         }
         /// A paired client device; mirrors domain.Device. The record carries no credential material: the credential is a separate daemon-internal record with no wire schema, so neither the sync surface nor this document can represent even its hash (plan §5.14). revoked_at corresponds exactly to the status (domain Device.Validate), so each status is its own branch; revoked is terminal, and revocation stops future access only (sync tests 15-16). revoked_at on or after paired_at is not schema-expressible and holds by the same validator.
         ///
@@ -21168,19 +16597,21 @@ public enum Components {
 
 /// API operations, with input and output types, generated from `#/paths` in the OpenAPI document.
 public enum Operations {
-    /// Process liveness, contract identity, version, and start time
+    /// Process liveness, contract identity, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
-    /// contract, since when." Supervisors and the external liveness probe
-    /// poll it (plan §5.2); the operator client uses `contract_digest`
-    /// for client/daemon contract-skew detection, `version` for the human
-    /// build label, and `started_at` for restart visibility (a start time
-    /// that keeps moving under a supervisor is crash-loop evidence). The
-    /// response deliberately carries no operational state:
+    /// contract, which named features, since when." Supervisors and the
+    /// external liveness probe poll it (plan §5.2); the operator client
+    /// uses `contract_digest` for client/daemon contract-skew detection,
+    /// `features` to turn off what this build doesn't serve, `version` for
+    /// the human build label, and `started_at` for restart visibility (a
+    /// start time that keeps moving under a supervisor is crash-loop
+    /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, version, and start time.
+    /// beyond liveness, contract identity, the build's feature names,
+    /// version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -24133,6 +19564,58 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct BadRequest: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/commands/POST/responses/400/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/commands/POST/responses/400/content/application\/json`.
+                    case json(Components.Schemas.CommandRequestRejection)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.CommandRequestRejection {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.submitCommand.Output.BadRequest.Body
+                /// Creates a new `BadRequest`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.submitCommand.Output.BadRequest.Body) {
+                    self.body = body
+                }
+            }
+            /// The daemon refused the request without applying or recording anything. `reason` names a refusal the client acts on; a 400 without one is one of the malformed or invalid commands this operation's description lists, and carries `message` alone.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Operations.submitCommand.Output.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Operations.submitCommand.Output.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
                             response: self
                         )
                     }

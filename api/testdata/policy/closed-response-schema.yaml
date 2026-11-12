@@ -1,0 +1,83 @@
+# expects-rule: response-schemas-tolerate-added-fields
+# A policy fixture for scripts/check.sh api policy, which fails unless
+# linting this file fails and reports the rule named on the first line.
+# The fixture is otherwise clean: Widget, which the response reaches
+# through Gadget, closes additionalProperties.
+openapi: 3.0.3
+info:
+  title: Policy fixture
+  version: 0.1.0
+  description: A fixture spec for the response-tolerance rules.
+  contact:
+    name: Freeside
+    url: https://github.com/freeside-ai/freeside
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+servers:
+  - url: http://localhost
+tags:
+  - name: widgets
+    description: Widgets.
+paths:
+  /widgets:
+    post:
+      operationId: createWidget
+      tags: [widgets]
+      summary: Create a widget
+      description: Creates a widget.
+      requestBody:
+        description: The widget to create.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WidgetInput"
+      responses:
+        "200":
+          description: The created widget.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Gadget"
+components:
+  schemas:
+    WidgetInput:
+      type: object
+      description: A request-only schema.
+      required: [name, shared]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        shared:
+          $ref: "#/components/schemas/Shared"
+    Shared:
+      type: object
+      description: Both directions use it, so it stays open.
+      required: [label]
+      properties:
+        label:
+          type: string
+    Gadget:
+      type: object
+      description: A response schema that reaches Widget.
+      required: [widget, shared, tags]
+      properties:
+        widget:
+          $ref: "#/components/schemas/Widget"
+        shared:
+          $ref: "#/components/schemas/Shared"
+        tags:
+          type: object
+          description: A map, which neither rule constrains.
+          additionalProperties:
+            type: string
+    Widget:
+      type: object
+      description: A response schema.
+      required: [id]
+      additionalProperties: false
+      properties:
+        id:
+          type: string

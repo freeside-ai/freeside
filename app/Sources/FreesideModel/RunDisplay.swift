@@ -174,6 +174,10 @@ package enum RunDisplay {
         return project.isEmpty ? run.project_id : project
     }
 
+    /// The pipeline's stages in order: the generated cases without
+    /// `unknown`, the member the app decodes a stage it doesn't know as.
+    static let pipelineStages = Components.Schemas.StageName.allCases.filter { $0 != .unknown }
+
     /// The four workflow stages in order, then any stage the daemon
     /// recorded under another name. Production uses its derived workflow
     /// phase; other runs use the last recorded stage. Stages left behind read
@@ -184,7 +188,7 @@ package enum RunDisplay {
     static func stageRail(
         _ run: Components.Schemas.Run, stage named: Components.Schemas.StageName? = nil
     ) -> DecisionStageRailPresentation {
-        var names = Components.Schemas.StageName.allCases.map {
+        var names = pipelineStages.map {
             (name: $0.rawValue, label: AttentionDisplay.label($0))
         }
         let recorded = run.stages.map { canonicalStageName($0.name) }
@@ -192,11 +196,13 @@ package enum RunDisplay {
             names.append((name: name, label: stageLabel(name)))
         }
         let phase = workflowPhase(run)
-        let override = named.flatMap { $0 == phase?.stage ? nil : $0 }
+        // A stage this build doesn't know names no position on the rail, so
+        // it marks no stage completed.
+        let override = named.flatMap { $0 == phase?.stage || $0 == .unknown ? nil : $0 }
         let current = override?.rawValue ?? phase?.stage.rawValue ?? recorded.last
         let completed =
             override.map { stage in
-                Components.Schemas.StageName.allCases.prefix { $0 != stage }.map(\.rawValue)
+                pipelineStages.prefix { $0 != stage }.map(\.rawValue)
             } ?? phase?.completed.map(\.rawValue) ?? []
         let entries = names.map { name, label in
             let state: DecisionStageRailPresentation.State =
@@ -233,6 +239,7 @@ package enum RunDisplay {
             isSpecificationHandoff(run) ? .completed : (run.lifecycle == .active ? .current : .pending)
         case .blocked: run.lifecycle == .active ? .current : .pending
         case .unobserved, .stopped, .abandoned: .pending
+        case .unknown: .pending
         }
     }
 
@@ -369,6 +376,7 @@ package enum RunDisplay {
         switch value {
         case .claude_code: "Claude Code"
         case .codex_cli: "Codex CLI"
+        case .unknown: "Unknown"
         }
     }
 
@@ -379,6 +387,7 @@ package enum RunDisplay {
         case .medium: "Medium"
         case .high: "High"
         case .max: "Max"
+        case .unknown: "Unknown"
         }
     }
 
@@ -387,6 +396,7 @@ package enum RunDisplay {
         case .subscription_contained: "Subscription, contained"
         case .api_key_isolated: "API key, isolated"
         case .local_trusted: "Local, trusted"
+        case .unknown: "Unknown"
         }
     }
 
@@ -396,6 +406,7 @@ package enum RunDisplay {
         case .provider_registry: "Provider and package registries"
         case .provider_web_read: "Provider and web read"
         case .clean_verification: "Clean verification"
+        case .unknown: "Unknown"
         }
     }
 
@@ -403,6 +414,7 @@ package enum RunDisplay {
         switch value {
         case .attended_dev: "Attended"
         case .unattended: "Unattended"
+        case .unknown: "Unknown"
         }
     }
 
@@ -497,6 +509,7 @@ package enum RunDisplay {
         case .handed_off: "Handed Off"
         case .stopped: "Stopped"
         case .abandoned: "Abandoned"
+        case .unknown: "Unknown"
         }
     }
 
@@ -541,6 +554,7 @@ package enum RunDisplay {
         case .quota_window_exhausted: "Waiting for quota window to reset"
         case .machine_capacity: "Waiting for machine capacity"
         case .update_drain: "Waiting for an update"
+        case .unknown: "Held for a reason this app doesn't recognize"
         }
     }
 
@@ -584,6 +598,7 @@ package enum RunDisplay {
         case .enrollment: return "The enrollment isn't one the daemon holds"
         case .model: return "The model isn't one \(enrollment) serves"
         case .effort: return "The effort isn't one \(enrollment) serves for this model"
+        case .unknown: return "The daemon can't serve this choice"
         }
     }
 
@@ -601,6 +616,7 @@ package enum RunDisplay {
         case .doctor: "Doctor"
         case .janitor: "Janitor"
         case .image_upkeep: "Image upkeep"
+        case .unknown: "Unknown"
         }
     }
 }

@@ -154,9 +154,18 @@ package final class TaskStopModel {
                 coordinator.finishTaskStop(entry.command.command_id)
                 messages[taskID] = "Task state changed. Review the refreshed task and confirm Stop again."
                 await coordinator.refreshAfterCommit()
+            case .badRequest(let refusal):
+                // The daemon refused the command before accepting it.
+                coordinator.finishTaskStop(entry.command.command_id)
+                messages[taskID] = CommandRefusal.message(
+                    refusal,
+                    otherwise:
+                        "Stop was rejected by the daemon (status 400). Review the refreshed task before confirming again."
+                )
+                await coordinator.refreshAfterCommit()
             case .undocumented(let status, _):
                 switch status {
-                case 400, 404:
+                case 404:
                     // These daemon responses reject the command before acceptance.
                     // Other statuses may leave an earlier attempt's outcome unknown.
                     coordinator.finishTaskStop(entry.command.command_id)

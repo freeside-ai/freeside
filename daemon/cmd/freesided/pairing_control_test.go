@@ -90,7 +90,7 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 		if after := pairingTestWorkflow(t, h.Store); !reflect.DeepEqual(before, after) {
 			t.Fatal("mint changed workflow state, commands or client revision")
 		}
-		if h.Workflow != workflow || pairingTestHealth(t, result.APIURL) != beforeHealth {
+		if h.Workflow != workflow || !reflect.DeepEqual(pairingTestHealth(t, result.APIURL), beforeHealth) {
 			t.Fatal("mint replaced the workflow or daemon")
 		}
 		return result

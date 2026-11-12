@@ -133,6 +133,10 @@ public actor MockServer {
     private var healthStartedAt = Date(timeIntervalSince1970: 1_725_184_800)
     private var healthContractDigest = APIContract.digest
     private var healthAvailable = true
+    /// The features `/health` lists, or nil to omit the field as a daemon
+    /// built before the list does. A command whose feature isn't listed is
+    /// refused as a kind this daemon doesn't serve.
+    private var healthFeatures: [Components.Schemas.DaemonFeature]? = MockServer.servedFeatures
     private var backupHealthy = true
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
@@ -490,6 +494,18 @@ public actor MockServer {
     /// exercise the client/daemon contract-skew diagnosis.
     public func setHealthContractDigest(_ digest: String) {
         healthContractDigest = digest
+    }
+
+    /// Every feature the mock serves unless a test withholds one.
+    public static let servedFeatures = Components.Schemas.DaemonFeature.allCases.filter { $0 != .unknown }
+
+    /// Serves `features` from `/health`, or omits the field when nil, as an
+    /// older daemon does. A command of a feature not listed then answers the
+    /// 400 a daemon gives a command kind it predates: the generated client
+    /// can't encode a kind it doesn't know, so withholding a feature is how a
+    /// test reaches that path.
+    public func setHealthFeatures(_ features: [Components.Schemas.DaemonFeature]?) {
+        healthFeatures = features
     }
 
     public func restart(version: String? = nil, startedAt: Date) {
@@ -924,6 +940,8 @@ public actor MockServer {
         case staleTask(Components.Schemas.StaleTaskRejection)
         case taskLineRejected(Components.Schemas.TaskLineChangeRejection)
         case routingPolicyRejected(Components.Schemas.RoutingPolicyRejection)
+        /// The command's feature is withheld: the daemon's build predates it.
+        case unservedKind
     }
 
     struct UnknownItemError: Error {
@@ -1062,8 +1080,8 @@ public actor MockServer {
     func healthStatus() throws -> Components.Schemas.HealthStatus {
         guard healthAvailable else { throw HealthUnavailableError() }
         return .init(
-            status: .ok, contract_digest: healthContractDigest, version: healthVersion,
-            started_at: healthStartedAt)
+            status: .ok, contract_digest: healthContractDigest, features: healthFeatures,
+            version: healthVersion, started_at: healthStartedAt)
     }
 
     /// One canonical snapshot of every synchronized resource from a
@@ -1732,7 +1750,27 @@ public actor MockServer {
         return snapshot
     }
 
+    /// The named feature a command belongs to, or nil for a command every
+    /// daemon serves.
+    static func feature(
+        of payload: Components.Schemas.ClientCommand.payloadPayload
+    )
+        -> Components.Schemas.DaemonFeature?
+    {
+        switch payload {
+        case .move_parked_task: .parked_task_move
+        case .stop_task, .submit_task, .decision, .refresh_usage, .reassign_collector, .change_task_line,
+            .set_routing_policy:
+            nil
+        }
+    }
+
     func submitCommand(_ command: Components.Schemas.ClientCommand) throws -> SubmitOutcome {
+        // The daemon refuses a kind it doesn't serve on the kind alone,
+        // before it decodes the payload (signet submitCommand's default arm).
+        if let feature = Self.feature(of: command.payload), !(healthFeatures ?? []).contains(feature) {
+            return .unservedKind
+        }
         convergeProposalSnoozes()
         // Structural well-formedness precedes every lookup, as the signet
         // boundary orders it (domain.NewCommand, then

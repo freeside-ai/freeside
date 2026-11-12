@@ -158,38 +158,43 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.comprehensionDeviceID = comprehensionDeviceID
     }
 
+    /// Set on the decoder for a file the load keeps only the ledger of.
+    static let ledgerOnly: CodingUserInfoKey = {
+        guard let key = CodingUserInfoKey(rawValue: "freeside.cache.ledgerOnly") else {
+            preconditionFailure("a non-empty raw value always makes a key")
+        }
+        return key
+    }()
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        cursors = try container.decodeIfPresent(SyncCursors.self, forKey: .cursors)
-        attentionItems = try container.decode(
-            [Components.Schemas.AttentionItemSnapshot].self, forKey: .attentionItems)
-        conversations =
-            try container.decodeIfPresent(
-                [Components.Schemas.ConversationSnapshot].self, forKey: .conversations) ?? []
-        runs =
-            try container.decodeIfPresent(
-                [Components.Schemas.RunSnapshot].self, forKey: .runs) ?? []
-        schedules =
-            try container.decodeIfPresent(
-                [Components.Schemas.ScheduleSnapshot].self, forKey: .schedules) ?? []
-        unattendedOperation = try container.decodeIfPresent(
-            Components.Schemas.UnattendedOperationSnapshot.self, forKey: .unattendedOperation)
-        agentCatalog = try container.decodeIfPresent(
-            Components.Schemas.AgentCatalog.self, forKey: .agentCatalog)
-        routingPolicy = try container.decodeIfPresent(
-            Components.Schemas.RoutingPolicySnapshot.self, forKey: .routingPolicy)
-        usagePools =
-            try container.decodeIfPresent(
-                [Components.Schemas.UsagePoolSnapshot].self, forKey: .usagePools) ?? []
-        runTimelines =
-            try container.decodeIfPresent(
-                [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []
-        tasks =
-            try container.decodeIfPresent(
-                [Components.Schemas.TaskSnapshot].self, forKey: .tasks) ?? []
-        taskTimelines =
-            try container.decodeIfPresent(
-                [Components.Schemas.TaskTimeline].self, forKey: .taskTimelines) ?? []
+        // A file the load keeps only the ledger of skips its snapshots, which
+        // another contract may have written in a shape this build no longer
+        // decodes, such as one lacking a field this build requires.
+        let ledgerOnly = decoder.userInfo[Self.ledgerOnly] as? Bool == true
+        cursors = ledgerOnly ? nil : try container.decodeIfPresent(SyncCursors.self, forKey: .cursors)
+        attentionItems =
+            ledgerOnly
+            ? []
+            : try container.decode(
+                [Components.Schemas.AttentionItemSnapshot].self, forKey: .attentionItems)
+        func snapshots<T: Decodable>(_ type: [T].Type, _ key: CodingKeys) throws -> [T] {
+            ledgerOnly ? [] : try container.decodeIfPresent(type, forKey: key) ?? []
+        }
+        func snapshot<T: Decodable>(_ type: T.Type, _ key: CodingKeys) throws -> T? {
+            ledgerOnly ? nil : try container.decodeIfPresent(type, forKey: key)
+        }
+        conversations = try snapshots([Components.Schemas.ConversationSnapshot].self, .conversations)
+        runs = try snapshots([Components.Schemas.RunSnapshot].self, .runs)
+        schedules = try snapshots([Components.Schemas.ScheduleSnapshot].self, .schedules)
+        unattendedOperation = try snapshot(
+            Components.Schemas.UnattendedOperationSnapshot.self, .unattendedOperation)
+        agentCatalog = try snapshot(Components.Schemas.AgentCatalog.self, .agentCatalog)
+        routingPolicy = try snapshot(Components.Schemas.RoutingPolicySnapshot.self, .routingPolicy)
+        usagePools = try snapshots([Components.Schemas.UsagePoolSnapshot].self, .usagePools)
+        runTimelines = try snapshots([Components.Schemas.RunTimeline].self, .runTimelines)
+        tasks = try snapshots([Components.Schemas.TaskSnapshot].self, .tasks)
+        taskTimelines = try snapshots([Components.Schemas.TaskTimeline].self, .taskTimelines)
         // The ledger section is forgiving on its own: an undecodable
         // section loads as absent without failing the whole file.
         pendingCommands = try? container.decodeIfPresent(
@@ -269,12 +274,31 @@ public struct DiskCacheStore: CacheStore {
     /// rendered as agent names, and its cursor would skip the bootstrap that
     /// replaces it. An unsettled routing change from before format 12 orders
     /// names the daemon now refuses, so it fails its own section's decode
-    /// and loads absent. A pre-current cache cannot claim freshness while
-    /// durable rows from a newer client surface are absent.
-    static let format = 12
+    /// and loads absent. 13: the file records the contract digest it was
+    /// written under (#1266), and a file from another contract keeps only its
+    /// epoch-independent state, as an older format does. Responses tolerate
+    /// additive change, so a snapshot from an older contract still decodes,
+    /// but it lacks what the newer contract added and may hold `unknown`
+    /// where this build now knows the value; its cursor would skip the
+    /// bootstrap that supplies both. The digest moves with every contract
+    /// change, so such a change needs no format bump of its own. A
+    /// pre-current cache cannot claim freshness while durable rows from a
+    /// newer client surface are absent.
+    static let format = 13
+
+    /// The format and contract a file was written under, read before the
+    /// rest so a file the load keeps only the ledger of never has its
+    /// snapshots decoded.
+    private struct CacheHeader: Decodable {
+        var format: Int
+        var contract: String?
+    }
 
     private struct CacheFile: Codable {
         var format: Int
+        /// The contract digest the file was written under; absent before
+        /// format 13.
+        var contract: String?
         var state: CachedState
     }
 
@@ -285,16 +309,19 @@ public struct DiskCacheStore: CacheStore {
     }
 
     public func load() -> CachedState? {
-        guard let data = try? Data(contentsOf: fileURL),
-            let file = try? Self.decoder.decode(
-                CacheFile.self, from: Self.migratingLegacyEncodings(data))
+        guard let raw = try? Data(contentsOf: fileURL) else { return nil }
+        let data = Self.migratingLegacyEncodings(raw)
+        guard let header = try? Self.decoder.decode(CacheHeader.self, from: data) else { return nil }
+        let current = header.format == Self.format && header.contract == APIContract.digest
+        guard let file = try? (current ? Self.decoder : Self.ledgerDecoder).decode(CacheFile.self, from: data)
         else { return nil }
         switch file.format {
-        case Self.format:
+        case Self.format where file.contract == APIContract.digest:
             return file.state
-        case 2, 3, 4, 5, 6, 7, 8, 9, 10, 11:
-            // Formats 2 to 11 already carried retryable commands, but predate
-            // later durable read surfaces. Keep only the epoch-independent
+        case 2...Self.format:
+            // Formats 2 to 12, and a current-format file written under another
+            // contract, already carried retryable commands, but predate later
+            // durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
             // telemetry queue and its registration (absent before format 4),
@@ -617,7 +644,8 @@ public struct DiskCacheStore: CacheStore {
     }
 
     public func save(_ state: CachedState) throws {
-        let data = try Self.encoder.encode(CacheFile(format: Self.format, state: state))
+        let data = try Self.encoder.encode(
+            CacheFile(format: Self.format, contract: APIContract.digest, state: state))
         // createDirectory(withIntermediateDirectories:) is a no-op when the
         // directory already exists, so the steady state never throws here.
         try FileManager.default.createDirectory(
@@ -647,6 +675,15 @@ public struct DiskCacheStore: CacheStore {
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    /// Decodes only the epoch-independent sections, for a file the load
+    /// keeps only the ledger of.
+    private static let ledgerDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        decoder.userInfo[CachedState.ledgerOnly] = true
         return decoder
     }()
 }

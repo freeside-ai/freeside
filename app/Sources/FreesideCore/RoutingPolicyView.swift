@@ -240,6 +240,8 @@ struct RoutingPolicyView: View {
             return deviceNames[id] ?? policy.set_by
         case .cli_routing_set:
             return "\(policy.set_by) on the daemon host"
+        case .unknown:
+            return policy.set_by
         }
     }
 
@@ -334,7 +336,7 @@ struct RoutingPolicyEditor: View {
                     get: { model.draft?.drainFirstAccount },
                     set: { model.draft?.drainFirstAccount = $0 }))
         }
-        ForEach(RoutingPolicyDraft.Role.allCases, id: \.self) { role in
+        ForEach(AgentChoiceDisplay.roleOrder, id: \.self) { role in
             card(title: RoutingPolicyView.roleName(role)) {
                 let enrollments = draft.enrollments(for: role)
                 if enrollments.isEmpty { lineupLine(role) }

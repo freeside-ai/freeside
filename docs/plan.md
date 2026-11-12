@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 116
+revision: 117
 status: active
 updated: 2026-11-11
 ---
@@ -892,13 +892,17 @@ implementation exists.
 
 **Liveness and address.**
 
-- Unauthenticated `GET /health` returns exactly `{status, contract_digest,
-  version, started_at}`: liveness, API contract-skew detection
+- Unauthenticated `GET /health` returns `{status, contract_digest, version,
+  started_at, features}`: liveness, API contract-skew detection
   (`contract_digest`, the SHA-256 of `api/openapi.yaml`, so a client and
   daemon built from different specs are diagnosed rather than silently
-  failing to sync), the build version, and crash-loop evidence (a moving
-  start time under a supervisor). Everything richer stays on the
-  authenticated surfaces (Sections [4](#4-the-attention-model) and [5.14](#514-client-synchronization-and-conversations)); the route tells an unpaired
+  failing to sync), the build version, crash-loop evidence (a moving start
+  time under a supervisor), and the names of the features the build serves,
+  which a client reads to turn off what an older daemon lacks (Section
+  [5.14](#514-client-synchronization-and-conversations), Version skew;
+  revision 117). The feature names describe the build, as the version does,
+  and reveal no state. Everything richer stays on the authenticated
+  surfaces (Sections [4](#4-the-attention-model) and [5.14](#514-client-synchronization-and-conversations)); the route tells an unpaired
   caller nothing more.
 - Under supervision, the unit file sets an explicit fixed listen port per
   tier, never the ephemeral default (Section [10](#10-operations-and-onboarding), Environments), on loopback or
@@ -4578,15 +4582,18 @@ outside `ClientCommand`:
 
 Phase 1 has no offline approvals.
 
-**Version skew** (revision 116; not built yet, tracker #3113). An app and a
+**Version skew** (revisions 116 and 117; tracker #3113). An app and a
 daemon need not be the same build. An app tolerates additions to the daemon's
-responses. The daemon advertises the features it serves, and it states a
-compatibility floor that moves only when a change breaks older apps. An app
-below the floor refuses to work and prompts for an update; every other app
-keeps working. The daemon never refuses a client on version: strict command
-decoding and digest-bound decisions stay as they are, and they, not matching
-versions, keep a stale app from doing harm. Until this is built the contract is
-strict on both sides, so a difference can fail every sync read, and Section
+responses, a field or an enum member it doesn't know, and an unknown member
+never grants what a known one would. The daemon advertises the features it
+serves on `/health`, and an app offers no control for a feature the daemon
+doesn't list. The daemon states a compatibility floor that moves only when a
+change breaks older apps. An app below the floor refuses to work and prompts
+for an update; every other app keeps working. The daemon never refuses a
+client on version: strict command decoding and digest-bound decisions stay as
+they are, and they, not matching versions, keep a stale app from doing harm.
+Tolerance and the feature list are built (#1266); the floor is not (#3109).
+Until it is, a breaking change can fail every sync read, and Section
 [5.2](#52-the-daemon-and-its-supervisor)'s contract digest diagnoses it.
 
 Client caches are part of the threat model:
@@ -7340,71 +7347,21 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 116 ("Graceful Updates, Restart Re-Runs, and Version Skew"):
+Revision 117 ("The Daemon Names Its Features to Any Caller"):
 
-1. **An update drains first, and the drain is the one state a start lifts.**
-   The daemon keeps accepting submissions, starts no new launch, and lets
-   running launches finish; the operator may force the update, which cancels
-   them (Section [5.2](#52-the-daemon-and-its-supervisor)). The drain lifts
-   by itself when a different build starts, a restart of the same build keeps
-   it, and an abandoned or undone update ends its own. This adds one exception to revision 20's rule that a restart
-   never reopens unattended admission; the rule stands for the operator stop
-   and for every system stop. The condition that changed: Freeside is about
-   to develop Freeside (tracker #2873), so the daemon is updated many times a
-   day while runs are in flight.
-2. **An invocation lost to a restart or a forced update re-runs without the
-   operator.** Re-runs count against a durable limit across restarts,
-   forced-update cancellations don't count, and repeated restarts hold every
-   launch behind one item, a system stop no restart lifts (Sections [5.2](#52-the-daemon-and-its-supervisor)
-   and [5.9](#59-durability-effectively-once)). This amends revision 94 item
-   4's rejection of automatic failover to say what stays rejected: a second
-   writer started while the first may still be alive. A re-run starts only
-   after the loss is proven. A launch lost on a runner host keeps revision
-   94's rule. Rejected: salvaging a lost invocation's partial workspace or
-   resuming its agent session.
-3. **An update is provisional until the new build reopens.** A new build is
-   checked against a copy of the database before the drain, and the previous
-   bundle and database come back if the updated daemon fails to start
-   (Section [10](#10-operations-and-onboarding), Environments). No downgrade
-   exists, as before: this undoes only an update that never reopened.
-   Rejected: soaking builds on the `dev` install, which never holds
-   production publication credentials.
-4. **App and daemon no longer need the same build.** Responses tolerate
-   additions, the daemon advertises the features it serves, and an app
-   refuses only below a compatibility floor that moves when a change breaks
-   older apps; the daemon never refuses on version (Section
-   [5.14](#514-client-synchronization-and-conversations)). This replaces
-   strict response decoding, under which any contract difference could fail
-   every sync read, so that app and daemon had to match in practice. It
-   overturns revision 57's non-goals of version tolerance and per-feature
-   gating; revision 57's digest stays as the diagnosis, and command decoding
-   stays strict.
-5. **Every build reads what earlier builds stored.** The reverse isn't
-   promised, and a format that must change is migrated without dropping the
-   old reader (Section [5.9](#59-durability-effectively-once)). This answers
-   #854's gating question: yes.
-6. **Runner hosts need the control plane's runner protocol version, not its
-   build.** A drain covers every host, a host on another version is awaiting
-   update, and a runner host installs the control plane's build when idle
-   (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-   Execution Hosts). This overturns two rules revision 94 set there: the same
-   build on every host, and a runner whose build the control plane's protocol
-   version does not accept treated as unreachable until upgraded. Rejected: updating runners before the control plane with
-   two-version protocol tolerance.
-7. **The installer drains through the daemon before it swaps.** Revision 69's
-   installer path and revision 85's lifecycle command stay the two sanctioned
-   paths, and scripts and agents still never stop, unload, or re-register
-   `ai.freeside.daemon`. Deferred: automatic updates of the primary daemon,
-   and a separate process for the ward runtime and proxy on the daemon host,
-   which revision 94 rejected weighing isolation and not independent
-   lifetimes; it is revisited when the live proof (#3111) reports drain waits
-   and re-runs per update.
+1. **`/health` lists the features the daemon's build serves, so an unpaired
+   caller learns them.** This narrows Section
+   [5.2](#52-the-daemon-and-its-supervisor)'s rule that the route tells an
+   unpaired caller nothing beyond liveness, the contract digest, the
+   version, and the start time. The names describe the build, as the
+   version already does, and reveal no state. `/health` is the read the
+   app already makes to diagnose a skew, and revision 116's feature
+   advertisement needs a read the app can make each sync round; an
+   authenticated feature route would add a second read per round for
+   names the version already implies.
 
-Nothing in this revision is built yet: tracker #3113 carries the work, and
-#3112 on tracker #2161 carries the runner hosts.
-
-(Owner decisions of 2026-11-11, in chat, on #3102;
-[decision note](../devlog/2026-11-11-1630-graceful-updates-and-version-skew.md).)
+(Owner decision of 2026-11-11 on #1266, a planning default not vetoed;
+[decision note](../devlog/2026-11-11-1640-additive-contract-tolerance.md).)
 ## 14. Risks
 
 | Risk | Current response |

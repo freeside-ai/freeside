@@ -225,6 +225,7 @@ import Testing
             .effect_proposal: "Effect Proposal",
             .system_health: "System Health",
             .blocked: "Blocked",
+            .unknown: "Unrecognized Item",
         ]
 
         #expect(Set(titles.keys) == Set(Components.Schemas.AttentionType.allCases))
@@ -796,6 +797,7 @@ import Testing
             .decline: "Decline the finding",
             .dispute: "Park: dispute the finding",
             .attention_unclear: "Park: unclear if the goal needs it",
+            .unknown: "Unrecognized route",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.AdjudicationRoute.allCases))
         for (route, label) in labels {
@@ -1571,14 +1573,14 @@ import Testing
     @Test func everyReviewGuideEnumHasALabel() {
         #expect(
             Components.Schemas.ReviewAttention.allCases.map(AttentionDisplay.label)
-                == ["Tradeoff", "Contract", "Product", "Risk", "Accessibility"])
+                == ["Tradeoff", "Contract", "Product", "Risk", "Accessibility", "Unknown"])
         #expect(
-            Components.Schemas.ReviewExcerptSide.allCases.map(AttentionDisplay.label) == ["Head", "Base"])
+            Components.Schemas.ReviewExcerptSide.allCases.map(AttentionDisplay.label) == ["Head", "Base", "Unknown"])
         let reasons = Components.Schemas.ReviewExcerptUnresolved.allCases
         #expect(
             reasons.map { AttentionDisplay.label($0, side: .head) } == [
                 "No such file at the head.", "The lines run past the end of the file.",
-                "The file is binary.", "The lines are too large to show.",
+                "The file is binary.", "The lines are too large to show.", "The lines can't be shown.",
             ])
         #expect(AttentionDisplay.label(.path_missing, side: .base) == "No such file at the base.")
     }

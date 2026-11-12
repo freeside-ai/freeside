@@ -104,7 +104,10 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
     }
 
     /// The orders as the command sends them: roles with an enrollment, in
-    /// TaskLineRole order, the order the policy records them in.
+    /// TaskLineRole order, the order the policy records them in. A role a
+    /// newer daemon added decodes as `unknown` and stays in the command, so
+    /// the daemon refuses the save rather than the app silently dropping an
+    /// order it can't show.
     public var roles: [Components.Schemas.RoutingPolicyRoleInput] {
         Role.allCases.compactMap { role in
             orders[role].map { .init(role: role, enrollments: $0) }
@@ -396,9 +399,16 @@ package final class RoutingPolicyModel {
                     message: "The policy changed before your change reached the daemon. Nothing was changed.",
                     currentPolicy: rejection.current_policy?.value1)
                 await coordinator.refreshAfterCommit()
+            case .badRequest(let refusal):
+                // The daemon refused the command before accepting it.
+                coordinator.finishRoutingPolicyChange()
+                failure = RoutingPolicyFailure(
+                    message: CommandRefusal.message(
+                        refusal, otherwise: "The daemon rejected the change (status 400). Nothing was changed."))
+                await coordinator.refreshAfterCommit()
             case .undocumented(let status, _):
                 switch status {
-                case 400, 404:
+                case 404:
                     // The daemon refused the command before accepting it.
                     coordinator.finishRoutingPolicyChange()
                     failure = RoutingPolicyFailure(

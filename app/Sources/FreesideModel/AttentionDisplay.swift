@@ -171,6 +171,7 @@ package enum AttentionDisplay {
         case .effect_proposal: return "Effect Proposal"
         case .system_health: return "System Health"
         case .blocked: return "Blocked"
+        case .unknown: return "Unrecognized Item"
         }
     }
 
@@ -333,6 +334,8 @@ package enum AttentionDisplay {
             // A blocked card offers no decision, so where the daemon typed
             // the wait the card leads with it (survey frame 5.5).
             return blockedWaitSentence(item) ?? "What is keeping this run blocked?"
+        case .unknown:
+            return "Update this app to decide this item."
         }
     }
 
@@ -398,6 +401,8 @@ package enum AttentionDisplay {
             return "\(lead). \(label(diagnostic.impairs)) is impaired."
         case .blocked:
             return blockedWaitSentence(item) ?? "A run is waiting on a blocker."
+        case .unknown:
+            return "This app doesn't recognize this kind of item; update it to decide."
         }
     }
 
@@ -543,6 +548,8 @@ package enum AttentionDisplay {
         case .spec_approval, .finding_adjudication, .task_proposal, .effect_proposal,
             .review_contradiction, .review_configuration:
             return []
+        case .unknown:
+            return []
         }
     }
 
@@ -567,6 +574,8 @@ package enum AttentionDisplay {
             guard let adoption = facts.image_policy_adoption?.value1 else { return [] }
             return imagePolicyAdoptionRows(adoption)
         case .run_proposal:
+            return []
+        case .unknown:
             return []
         }
     }
@@ -751,6 +760,7 @@ package enum AttentionDisplay {
         switch kind {
         case .deferred_disposition: return "Deferred disposition"
         case .separate_work_verdict: return "Separate-work verdict"
+        case .unknown: return "Unrecognized source"
         }
     }
 
@@ -766,6 +776,7 @@ package enum AttentionDisplay {
         switch verdict {
         case .passed: return "passed"
         case .rejected: return "rejected"
+        case .unknown: return "unrecognized verdict"
         }
     }
 
@@ -841,6 +852,7 @@ package enum AttentionDisplay {
         case .source_issue_closure: return "Source issue closure"
         case .follow_up_filing: return "Follow-up issue filing"
         case .image_policy_adoption: return "Image policy adoption"
+        case .unknown: return "Unrecognized effect"
         }
     }
 
@@ -851,6 +863,9 @@ package enum AttentionDisplay {
         case .verified: return "The daemon bound this issue reference at intake."
         case .recommended:
             return "From the submission's source URL; approving confirms this reference."
+        case .unknown:
+            return "The daemon reports this reference's source in a way this app doesn't "
+                + "recognize; treat it as unconfirmed."
         }
     }
 
@@ -864,6 +879,7 @@ package enum AttentionDisplay {
         case .propose_site: return "Emitted by the inference site"
         case .daemon_fallback: return "Daemon resolve-false fallback"
         case .policy_default: return "Set by project policy"
+        case .unknown: return "Unrecognized origin"
         }
     }
 
@@ -965,6 +981,7 @@ package enum AttentionDisplay {
         case .accept_recommended_route: return "Accept Recommended Route"
         case .choose_alternative_route: return "Choose Another Route"
         case .adjudicate_findings: return "Apply Finding Routes"
+        case .unknown: return "Unrecognized Action"
         }
     }
 
@@ -1001,6 +1018,7 @@ package enum AttentionDisplay {
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route, .adjudicate_findings:
             return nil
+        case .unknown: return nil
         }
     }
 
@@ -1018,7 +1036,7 @@ package enum AttentionDisplay {
             case .spec_approval, .review_diminishing_returns, .review_dispute,
                 .review_contradiction, .execution_failure, .agent_question,
                 .publish_blocked, .ready_for_final_review, .task_proposal,
-                .effect_proposal, .system_health, .blocked:
+                .effect_proposal, .system_health, .blocked, .unknown:
                 break
             }
             return "The current invocation is discarded. Work already exported stays; the round in flight does not."
@@ -1034,7 +1052,7 @@ package enum AttentionDisplay {
             case .spec_approval, .execution_failure, .agent_question,
                 .review_diminishing_returns, .review_dispute, .review_contradiction,
                 .review_configuration, .finding_adjudication, .ready_for_final_review,
-                .publish_blocked, .task_proposal, .system_health, .blocked:
+                .publish_blocked, .task_proposal, .system_health, .blocked, .unknown:
                 return "The proposal is dismissed and no run starts."
             }
         case .dismiss:
@@ -1049,6 +1067,8 @@ package enum AttentionDisplay {
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route, .adjudicate_findings:
             return nil
+        case .unknown:
+            return nil
         }
     }
 
@@ -1058,6 +1078,7 @@ package enum AttentionDisplay {
         case .canceled: return "Canceled"
         case .lost: return "Lost"
         case .blocked: return "Blocked"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1083,6 +1104,7 @@ package enum AttentionDisplay {
         case .product: return "Product"
         case .risk: return "Risk"
         case .accessibility: return "Accessibility"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1093,6 +1115,7 @@ package enum AttentionDisplay {
         switch side {
         case .head: return "Head"
         case .base: return "Base"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1111,6 +1134,8 @@ package enum AttentionDisplay {
             return "The file is binary."
         case .too_large:
             return "The lines are too large to show."
+        case .unknown:
+            return "The lines can't be shown."
         }
     }
 
@@ -1143,6 +1168,7 @@ package enum AttentionDisplay {
         case .implementation: return "Implementation"
         case .review: return "Review"
         case .verification: return "Verification"
+        case .unknown: return "Unknown Stage"
         }
     }
 
@@ -1152,6 +1178,7 @@ package enum AttentionDisplay {
         case .verification_failed: return "Verification failed"
         case .trust_profile_drift: return "Trust profile drifted"
         case .target_base_advanced: return "Target base advanced"
+        case .unknown: return "Unrecognized trust rule"
         }
     }
 
@@ -1174,6 +1201,7 @@ package enum AttentionDisplay {
         case .run_visibility: return "Run visibility"
         case .agent_credential: return "Agent credential"
         case .none: return "No capability"
+        case .unknown: return "Unrecognized capability"
         }
     }
 
@@ -1182,6 +1210,7 @@ package enum AttentionDisplay {
         case .spec_approval: return "Specification approval"
         case .pr_checks: return "PR checks"
         case .external_review: return "External review"
+        case .unknown: return "Unrecognized wait"
         }
     }
 
@@ -1192,6 +1221,7 @@ package enum AttentionDisplay {
         case .spec_approval: return "specification approval"
         case .pr_checks: return "PR checks"
         case .external_review: return "external review"
+        case .unknown: return "a wait this app doesn't recognize"
         }
     }
 
@@ -1202,6 +1232,7 @@ package enum AttentionDisplay {
         case .superseded: return "Superseded"
         case .dismissed: return "Dismissed"
         case .expired: return "Expired"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1209,6 +1240,7 @@ package enum AttentionDisplay {
         switch posture {
         case .blocking: return "Blocking"
         case .advisory: return "Advisory"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1218,6 +1250,7 @@ package enum AttentionDisplay {
         case .structural: return "Plan rejected (structure)"
         case .screening: return "Plan rejected (message screening)"
         case .present_but_not_honored: return "Plan present, not honored"
+        case .unknown: return "Unrecognized notice"
         }
     }
 
@@ -1496,6 +1529,8 @@ package enum AttentionDisplay {
             return .init("Review", "None after \(duration) · \(ago)")
         case .installation_poll, .doctor, .janitor, .image_upkeep:
             return nil
+        case .unknown:
+            return nil
         }
     }
 
@@ -1504,6 +1539,7 @@ package enum AttentionDisplay {
         case .pr_checks_deadline: return "Checks Deadline Elapsed"
         case .review_wait_threshold: return "Review Deadline Elapsed"
         case .installation_poll, .doctor, .janitor, .image_upkeep: return nil
+        case .unknown: return nil
         }
     }
 
@@ -1549,6 +1585,7 @@ package enum AttentionDisplay {
         switch outcome {
         case .clean: return "Clean"
         case .findings: return "Findings"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1582,6 +1619,7 @@ package enum AttentionDisplay {
         switch readiness._class {
         case .ready_clean: verdict = "Clean"
         case .ready_degraded: verdict = "Degraded"
+        case .unknown: verdict = "Unknown"
         }
         var rows = [BindingRow(label: "Readiness", value: verdict)]
         guard let detail = item.readiness_detail?.value1 else { return rows }
@@ -1623,6 +1661,7 @@ package enum AttentionDisplay {
         case .failed: return "Failed"
         case .not_run: return "Not run"
         case .not_applicable: return "Not applicable"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1631,6 +1670,7 @@ package enum AttentionDisplay {
         case .clean_verification: return "Clean verification"
         case .independent_review: return "Independent review"
         case .repo_change_policy: return "Repo change policy"
+        case .unknown: return "Unrecognized check"
         }
     }
 
@@ -1638,6 +1678,7 @@ package enum AttentionDisplay {
         switch kind {
         case .required: return "Required"
         case .optional: return "Optional"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1645,6 +1686,7 @@ package enum AttentionDisplay {
         switch authority {
         case .explicit_human_approval: return "Explicit human approval"
         case .daemon_trusted_configuration: return "Daemon trusted configuration"
+        case .unknown: return "Unrecognized authority"
         }
     }
 
@@ -1654,6 +1696,7 @@ package enum AttentionDisplay {
         case .base_advanced: return "Base advanced"
         case .retargeted: return "Retargeted"
         case .identity_changed: return "Identity changed"
+        case .unknown: return "Unrecognized reason"
         }
     }
 
@@ -1683,6 +1726,7 @@ package enum AttentionDisplay {
         case .decline: return "Decline the finding"
         case .dispute: return "Park: dispute the finding"
         case .attention_unclear: return "Park: unclear if the goal needs it"
+        case .unknown: return "Unrecognized route"
         }
     }
 
@@ -1690,6 +1734,7 @@ package enum AttentionDisplay {
         switch site {
         case .finding_adjudicator: return "Finding adjudicator"
         case .task_namer: return "Task namer"
+        case .unknown: return "Unrecognized site"
         }
     }
 
@@ -1699,6 +1744,7 @@ package enum AttentionDisplay {
         case .adjacent: return "Adjacent"
         case .contradictory: return "Contradictory"
         case .unclear: return "Unclear"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1707,6 +1753,7 @@ package enum AttentionDisplay {
         case .low: return "Low"
         case .medium: return "Medium"
         case .high: return "High"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -1775,6 +1822,12 @@ package enum AttentionDisplay {
             return .init(
                 modelBacked: true, mark: "Agent · engine may fix",
                 sentence: "Model judgment with engine-authorized remediation",
+                spokenConfidence: nil)
+        case .unknown:
+            // A producer this build doesn't know is never shown as the daemon or
+            // a human: it reads as an unverified claim.
+            return .init(
+                modelBacked: true, mark: "Unverified", sentence: "Unverified proposal",
                 spokenConfidence: nil)
         }
     }

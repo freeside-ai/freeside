@@ -6,18 +6,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/migrations"
@@ -965,6 +970,34 @@ func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
 	}
 	if description, live, err := host.ProbeDaemon(t.Context(), address); err != nil || live {
 		t.Fatalf("free address: description %q, live %v, err %v; want idle", description, live, err)
+	}
+}
+
+// TestProbeDaemonNamesAnOccupantOfAnyBuild: the occupant's version shows
+// whether it is this build, whose /health lists features, or a newer one
+// that adds a field this build doesn't name.
+func TestProbeDaemonNamesAnOccupantOfAnyBuild(t *testing.T) {
+	t.Parallel()
+	startedAt := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	newer := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"ok","contract_digest":"sha256:`+strings.Repeat("0", 64)+
+			`","features":["parked_task_move","added_by_a_newer_daemon"],"added_by_a_newer_daemon":true,`+
+			`"version":"v9","started_at":"2026-11-11T12:00:00Z"}`)
+	})
+	for name, handler := range map[string]http.Handler{
+		"this build":  signet.NewHTTPHandler(nil, nil, signet.HealthResponse{Version: "v9", StartedAt: startedAt}),
+		"newer build": newer,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+			host := productionRigHost{client: server.Client(), dial: (&net.Dialer{}).DialContext}
+			description, live, err := host.ProbeDaemon(t.Context(), server.Listener.Addr().String())
+			if want := "freesided version=v9 started_at=2026-11-11T12:00:00Z"; err != nil || !live || description != want {
+				t.Fatalf("description %q, live %v, err %v; want %q", description, live, err, want)
+			}
+		})
 	}
 }
 

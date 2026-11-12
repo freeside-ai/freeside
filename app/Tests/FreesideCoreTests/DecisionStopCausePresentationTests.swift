@@ -34,7 +34,8 @@ import Testing
             .drift_audit:
                 "Review stopped because a drift audit judged the change over-hardened.",
         ]
-        #expect(Set(expected.keys) == Set(Cause.allCases))
+        // unknown is the app's decode-only member; no fixture carries it.
+        #expect(Set(expected.keys) == Set(Cause.allCases.filter { $0 != .unknown }))
         for (cause, sentence) in expected {
             var item = AttentionFixtures.reviewDiminishing(cause: cause).item
             item.reason = "A finding recurred after a fixed disposition."
@@ -58,7 +59,7 @@ import Testing
                 "Stuck", "Review stopped because a drift audit judged the review rounds stuck."
             ),
         ]
-        #expect(Set(expected.keys) == Set(Verdict.allCases))
+        #expect(Set(expected.keys) == Set(Verdict.allCases.filter { $0 != .unknown }))
         for (verdict, words) in expected {
             let item = drift(verdict)
             let presentation = try #require(DecisionStopCausePresentation(item))

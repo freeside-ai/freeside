@@ -42,9 +42,34 @@ import Testing
     private func status(_ output: Operations.submitCommand.Output) -> Int {
         switch output {
         case .ok: 200
+        case .badRequest: 400
         case .conflict: 409
         case .undocumented(let status, _): status
         }
+    }
+
+    /// #1266: the mock lists the features it serves on `/health`, omits the
+    /// list when told to, as an older daemon does, and answers a withheld
+    /// feature's command with the typed refusal, recording nothing.
+    @Test func aWithheldFeaturesCommandIsRefusedAsAnUnservedKind() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        #expect(try await client.getHealth().ok.body.json.features == MockServer.servedFeatures)
+        await server.setHealthFeatures(nil)
+        #expect(try await client.getHealth().ok.body.json.features == nil)
+
+        let before = try await client.getSyncRevision().ok.body.json.revision
+        let move = Components.Schemas.ClientCommand(
+            command_id: "cmd-move", device_id: "device-1",
+            payload: .move_parked_task(
+                .init(kind: .move_parked_task, task_id: "task-1", choice: .init(enrollment_id: "enrollment-1"))))
+        guard case .badRequest(let refusal) = try await client.submitCommand(body: .json(move)) else {
+            Issue.record("a withheld feature's command was not refused")
+            return
+        }
+        let rejection = try refusal.body.json
+        #expect(rejection.reason == .unknown_command_kind && !rejection.message.isEmpty)
+        #expect(try await client.getSyncRevision().ok.body.json.revision == before)
     }
 
     @Test func usageCommandsRecordAReceiptAndReplay() async throws {

@@ -27,6 +27,8 @@ package enum ConclusionDisplay {
                 : "Superseded by a newer \(subjectNoun(item._type))."
         case .resolved_by_daemon:
             return "Resolved by the daemon."
+        case .unknown:
+            return "Closed."
         }
     }
 
@@ -71,6 +73,7 @@ package enum ConclusionDisplay {
         case .accept_recommended_route: return "Recommended route accepted."
         case .choose_alternative_route: return "Another route chosen."
         case .adjudicate_findings: return "Findings adjudicated."
+        case .unknown: return "Decided."
         }
     }
 
@@ -81,7 +84,7 @@ package enum ConclusionDisplay {
         case .task_proposal: "task proposal"
         case .execution_failure, .agent_question, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication, .ready_for_final_review,
-            .publish_blocked, .system_health, .blocked:
+            .publish_blocked, .system_health, .blocked, .unknown:
             "item"
         }
     }

@@ -32,6 +32,7 @@ enum ConversationPresentation {
         case .user: "You"
         case .agent: "Agent"
         case .daemon: "Freeside"
+        case .unknown: "Unknown"
         }
     }
 
@@ -250,7 +251,7 @@ struct ConversationView: View {
     @ViewBuilder
     private func messageShape(_ message: Components.Schemas.Message) -> some View {
         switch message.author {
-        case .agent:
+        case .agent, .unknown:
             messageContent(message)
                 .quoteSurface(cornerRadius: 8)
         case .user, .daemon:

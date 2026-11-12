@@ -15,7 +15,7 @@
 # Components and steps (`--list` prints the same table):
 #   daemon       build test vet lint
 #   app          generate format test linux build-mac build-ios
-#   api          lint digest
+#   api          lint digest policy
 #   scripts      syntax shellcheck suites vocabulary tier-a-paths trackercollect
 #   convergence  run
 #   docs         plan-links
@@ -179,7 +179,7 @@ steps_for() { # <component>; prints the component's steps in default order
   case $1 in
     daemon) echo 'build test vet lint' ;;
     app) echo 'generate format test linux build-mac build-ios' ;;
-    api) echo 'lint digest' ;;
+    api) echo 'lint digest policy' ;;
     scripts) echo 'syntax shellcheck suites vocabulary tier-a-paths trackercollect' ;;
     convergence) echo 'run' ;;
     docs) echo 'plan-links' ;;
@@ -654,10 +654,49 @@ app_build_ios() {
 
 api_lint() {
   # shellcheck disable=SC2086 # VACUUM may carry arguments (the go run form)
-  in_dir "$ROOT" $VACUUM lint -r api/vacuum.ruleset.yaml --details \
-    --fail-severity warn api/openapi.yaml
+  in_dir "$ROOT" $VACUUM lint -r api/vacuum.ruleset.yaml -f api/functions \
+    --details --fail-severity warn api/openapi.yaml
 }
 api_digest() { in_dir "$ROOT" bash scripts/api-contract-digest.sh --check; }
+# api_policy proves the lint's custom rules still fire: each fixture under
+# api/testdata/policy/ names on its first line (`# expects-rule: <id>`) the
+# one rule it breaks, and the step fails unless linting the fixture fails
+# and reports that rule. Without it, a rule that silently stopped matching
+# would pass the real spec forever. Fixture names never contain a rule id,
+# because vacuum's output prints the file path.
+api_policy() {
+  local fixture rule out found=0
+  for fixture in "$ROOT"/api/testdata/policy/*.yaml; do
+    [ -e "$fixture" ] || continue
+    found=1
+    rule=$(sed -n '1s/^# expects-rule: //p' "$fixture")
+    if [ -z "$rule" ]; then
+      printf 'policy fixture %s has no expects-rule line\n' "$fixture" >&2
+      return 1
+    fi
+    # shellcheck disable=SC2086 # VACUUM may carry arguments (the go run form)
+    if out=$(in_dir "$ROOT" $VACUUM lint -r api/vacuum.ruleset.yaml \
+      -f api/functions --details --fail-severity warn \
+      "${fixture#"$ROOT"/}" 2>&1); then
+      printf 'policy fixture %s passed the lint; it must fail rule %s\n' \
+        "$fixture" "$rule" >&2
+      return 1
+    fi
+    case $out in
+      *"$rule"*) printf 'policy fixture %s fails rule %s\n' "$fixture" "$rule" ;;
+      *)
+        printf '%s\n' "$out" >&2
+        printf 'policy fixture %s failed without reporting rule %s\n' \
+          "$fixture" "$rule" >&2
+        return 1
+        ;;
+    esac
+  done
+  if [ "$found" -eq 0 ]; then
+    echo 'no policy fixtures under api/testdata/policy/' >&2
+    return 1
+  fi
+}
 
 # --- scripts ---------------------------------------------------------------
 

@@ -208,7 +208,7 @@ import Testing
         #expect(readyRounds.map(\.drift_verdict) == [nil, .converged, nil])
         #expect(diminishingRounds.map(\.drift_verdict) == [.over_hardened, .stuck, nil])
         let covered = Set((readyRounds + diminishingRounds).compactMap(\.drift_verdict))
-        #expect(covered == Set(Components.Schemas.DriftVerdict.allCases))
+        #expect(covered == Set(Components.Schemas.DriftVerdict.allCases.filter { $0 != .unknown }))
     }
 
     @Test func driftVerdictIsOmittedNotNullOnTheWire() throws {

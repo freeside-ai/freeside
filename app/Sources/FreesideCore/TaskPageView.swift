@@ -2411,7 +2411,7 @@ enum TaskTimelinePresentation {
             switch stage {
             case .specification: .specifier
             case .review: .reviewer
-            case .implementation, .verification, nil: .implementer
+            case .implementation, .verification, .unknown, nil: .implementer
             }
         guard let line = task.task_lines.first(where: { $0.role == role }) else { return [] }
         return [
@@ -2532,6 +2532,7 @@ enum TaskTimelinePresentation {
         switch role {
         case .specification: .specification
         case .implementation: .implementation
+        case .unknown: .unknown
         }
     }
 
@@ -2626,7 +2627,7 @@ enum TaskTimelinePresentation {
             return label(.specification)
         case .implementation:
             return [label(.implementation), attempt].compactMap { $0 }.joined(separator: " · ")
-        case nil:
+        case .unknown?, nil:
             return attempt ?? "Run \(ShortIdentifier.short(run.run_id))"
         }
     }
@@ -2700,7 +2701,7 @@ enum TaskTimelinePresentation {
                 return "specification run"
             case .implementation:
                 return run.attempt_number.map { "implementation attempt \($0)" } ?? "implementation run"
-            case nil:
+            case .unknown?, nil:
                 return run.attempt_number.map { "attempt \($0)" } ?? ShortIdentifier.short(runID)
             }
         }
@@ -3006,6 +3007,7 @@ enum TaskTimelinePresentation {
         switch role {
         case .specification: "Specification"
         case .implementation: "Implementation"
+        case .unknown: "Run"
         }
     }
 
@@ -3030,6 +3032,7 @@ enum TaskTimelinePresentation {
         case .external_review_reentered: "External review re-entered"
         case .task_line_set: "Agent set"
         case .specifier_triaged: "Specifying tier chosen"
+        case .unknown: "Task event"
         }
     }
 
@@ -3060,6 +3063,7 @@ enum TaskTimelinePresentation {
             switch tier {
             case .standard: return "Specifying tier · Standard"
             case .escalated: return "Specifying tier · Escalated"
+            case .unknown: return "Specifying tier · Unrecognized"
             }
         }
         let cause =
@@ -3069,6 +3073,7 @@ enum TaskTimelinePresentation {
             case .invalid_answer: "invalid answer"
             case .budget_spent: "budget spent"
             case .no_triager_line: "no triager line"
+            case .unknown: "unrecognized outcome"
             }
         return "Specifying tier escalated · \(cause)"
     }
@@ -3079,6 +3084,7 @@ enum TaskTimelinePresentation {
         case .implementer: "Implementing agent"
         case .remediator: "Remediating agent"
         case .reviewer: "Reviewing agent"
+        case .unknown: "Agent"
         }
     }
 

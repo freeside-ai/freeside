@@ -1292,6 +1292,22 @@
                                 submit: { _, _ in true }))))
             }
 
+            // A type a newer daemon added: the generic card, with the
+            // daemon's reason and its offered action disabled.
+            let newerTypeStore = InboxStore(client: client)
+            let newerTypeItem = AttentionFixtures.newerTypeFixture()
+            newerTypeStore.replaceAll(with: [newerTypeItem])
+            let newerTypeDetail = DecisionDetailView(
+                store: newerTypeStore,
+                itemID: newerTypeItem.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-newer_type",
+                    view: AnyView(newerTypeDetail.screenshotCard(newerTypeItem.item, at: dynamicTypeSize))))
+
             let awaitingStore = InboxStore(client: client)
             let awaitingItem = AttentionFixtures.fixture(type: .spec_approval)
             var awaitingConversation = AttentionFixtures.defaultConversations()[0]
@@ -2618,6 +2634,9 @@
                         taskTimelines: [wait.history].compactMap { $0 }))
                 let waitCoordinator = SyncCoordinator(
                     client: APIClientFactory.mock(server: MockServer()), cache: waitCache)
+                // The page offers the move only once /health lists it, and
+                // this coordinator never syncs.
+                waitCoordinator.daemonFeatures = [.parked_task_move]
                 for width in [CGFloat(390), CGFloat(820)] {
                     for scheme in [ColorScheme.light, .dark] {
                         surfaces.append(
@@ -5353,7 +5372,7 @@
                         ]))
             case .spec_approval, .review_contradiction, .review_configuration,
                 .finding_adjudication, .agent_question, .publish_blocked,
-                .task_proposal, .effect_proposal, .system_health, .blocked:
+                .task_proposal, .effect_proposal, .system_health, .blocked, .unknown:
                 return .init()
             }
         }

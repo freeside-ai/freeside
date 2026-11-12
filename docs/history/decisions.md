@@ -3668,3 +3668,69 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-10 on #3022;
 [decision note](../../devlog/2026-11-10-1757-readable-pr-bodies.md).)
+
+## Revision 116 ("Graceful Updates, Restart Re-Runs, and Version Skew"):
+
+1. **An update drains first, and the drain is the one state a start lifts.**
+   The daemon keeps accepting submissions, starts no new launch, and lets
+   running launches finish; the operator may force the update, which cancels
+   them (Section [5.2](../plan.md#52-the-daemon-and-its-supervisor)). The drain lifts
+   by itself when a different build starts, a restart of the same build keeps
+   it, and an abandoned or undone update ends its own. This adds one exception to revision 20's rule that a restart
+   never reopens unattended admission; the rule stands for the operator stop
+   and for every system stop. The condition that changed: Freeside is about
+   to develop Freeside (tracker #2873), so the daemon is updated many times a
+   day while runs are in flight.
+2. **An invocation lost to a restart or a forced update re-runs without the
+   operator.** Re-runs count against a durable limit across restarts,
+   forced-update cancellations don't count, and repeated restarts hold every
+   launch behind one item, a system stop no restart lifts (Sections [5.2](../plan.md#52-the-daemon-and-its-supervisor)
+   and [5.9](../plan.md#59-durability-effectively-once)). This amends revision 94 item
+   4's rejection of automatic failover to say what stays rejected: a second
+   writer started while the first may still be alive. A re-run starts only
+   after the loss is proven. A launch lost on a runner host keeps revision
+   94's rule. Rejected: salvaging a lost invocation's partial workspace or
+   resuming its agent session.
+3. **An update is provisional until the new build reopens.** A new build is
+   checked against a copy of the database before the drain, and the previous
+   bundle and database come back if the updated daemon fails to start
+   (Section [10](../plan.md#10-operations-and-onboarding), Environments). No downgrade
+   exists, as before: this undoes only an update that never reopened.
+   Rejected: soaking builds on the `dev` install, which never holds
+   production publication credentials.
+4. **App and daemon no longer need the same build.** Responses tolerate
+   additions, the daemon advertises the features it serves, and an app
+   refuses only below a compatibility floor that moves when a change breaks
+   older apps; the daemon never refuses on version (Section
+   [5.14](../plan.md#514-client-synchronization-and-conversations)). This replaces
+   strict response decoding, under which any contract difference could fail
+   every sync read, so that app and daemon had to match in practice. It
+   overturns revision 57's non-goals of version tolerance and per-feature
+   gating; revision 57's digest stays as the diagnosis, and command decoding
+   stays strict.
+5. **Every build reads what earlier builds stored.** The reverse isn't
+   promised, and a format that must change is migrated without dropping the
+   old reader (Section [5.9](../plan.md#59-durability-effectively-once)). This answers
+   #854's gating question: yes.
+6. **Runner hosts need the control plane's runner protocol version, not its
+   build.** A drain covers every host, a host on another version is awaiting
+   update, and a runner host installs the control plane's build when idle
+   (Section [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Execution Hosts). This overturns two rules revision 94 set there: the same
+   build on every host, and a runner whose build the control plane's protocol
+   version does not accept treated as unreachable until upgraded. Rejected: updating runners before the control plane with
+   two-version protocol tolerance.
+7. **The installer drains through the daemon before it swaps.** Revision 69's
+   installer path and revision 85's lifecycle command stay the two sanctioned
+   paths, and scripts and agents still never stop, unload, or re-register
+   `ai.freeside.daemon`. Deferred: automatic updates of the primary daemon,
+   and a separate process for the ward runtime and proxy on the daemon host,
+   which revision 94 rejected weighing isolation and not independent
+   lifetimes; it is revisited when the live proof (#3111) reports drain waits
+   and re-runs per update.
+
+Nothing in this revision is built yet: tracker #3113 carries the work, and
+#3112 on tracker #2161 carries the runner hosts.
+
+(Owner decisions of 2026-11-11, in chat, on #3102;
+[decision note](../../devlog/2026-11-11-1630-graceful-updates-and-version-skew.md).)

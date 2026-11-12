@@ -139,9 +139,16 @@ package final class AccountUsageModel {
                 // No usage command refuses with a conflict; an unexpected one
                 // leaves the saved command unresolved.
                 break
+            case .badRequest(let refusal):
+                // The daemon refused the command before accepting it.
+                coordinator.finishUsageCommand()
+                let refused = if case .refresh_usage = entry.command.payload { "refresh" } else { "reassignment" }
+                failure = CommandRefusal.message(
+                    refusal, otherwise: "The daemon rejected the \(refused) (status 400). Nothing was changed.")
+                await coordinator.refreshAfterCommit()
             case .undocumented(let status, _):
                 switch status {
-                case 400, 404:
+                case 404:
                     // The daemon refused the command before accepting it.
                     coordinator.finishUsageCommand()
                     let refused = if case .refresh_usage = entry.command.payload { "refresh" } else { "reassignment" }
@@ -361,6 +368,7 @@ package enum UsageDisplay {
         case .succeeded: return .init(text: "read \(time(attempt.at))", isWax: false, instant: attempt.at)
         case .failed: return .init(text: "refresh failed \(time(attempt.at))", isWax: true, instant: attempt.at)
         case .unsupported: return .init(text: "unsupported \(time(attempt.at))", isWax: true, instant: attempt.at)
+        case .unknown: return .init(text: "unrecognized reading \(time(attempt.at))", isWax: true, instant: attempt.at)
         }
     }
 }

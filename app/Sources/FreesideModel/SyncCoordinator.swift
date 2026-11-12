@@ -112,6 +112,15 @@ public final class SyncCoordinator {
     public private(set) var answeredRunTimelineIDs: Set<String> = []
     public private(set) var answeredTaskTimelineIDs: Set<String> = []
     public private(set) var lastUpdatedAt: Date?
+    /// The named features the daemon's `/health` listed at its last answered
+    /// read (#1266). A surface whose feature is missing offers no control and
+    /// sends no command, rather than failing on a command the daemon refuses.
+    /// A daemon that omits the list serves none of the named features. A read
+    /// that fails keeps the last answered set, and the set is empty until the
+    /// first one answers. Not persisted: every round reads it again, which is
+    /// what catches a daemon restarted on another build, a change that moves
+    /// neither the sync epoch nor the revision.
+    public internal(set) var daemonFeatures: Set<Components.Schemas.DaemonFeature> = []
 
     private let cache: CacheStore
     /// The bytes of the attachments `pendingTaskSubmissions` and the
@@ -642,6 +651,10 @@ public final class SyncCoordinator {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             guard let self else { return false }
+            // The feature read runs beside the round's reads rather than
+            // ahead of them, so it adds no round trip.
+            let client = store.client
+            let healthRead = Task { await Self.readHealth(client) }
             await heartbeat()
             let observedBeforeRuns = cursors?.highestObservedServerRevision
             await refreshRuns()
@@ -657,6 +670,9 @@ public final class SyncCoordinator {
                 // failed opening heartbeat: a partial read leaves a failing
                 // state in place (#1947), so `.unvalidated` alone would skip it.
                 await heartbeat()
+            }
+            if let health = await healthRead.value {
+                daemonFeatures = Set(health.features ?? [])
             }
             return store.freshness == .fresh
         }
@@ -1074,26 +1090,28 @@ public final class SyncCoordinator {
     /// refresh task so later refreshes only join it. Timeout falls back to
     /// `.syncFailing`, the same as any other unreachable-probe outcome.
     private func diagnoseSyncFailure() async -> InboxStore.Freshness {
-        let client = store.client
-        return await withTaskGroup(of: InboxStore.Freshness.self) { group in
+        guard let body = await Self.readHealth(store.client), body.contract_digest != APIContract.digest else {
+            return .syncFailing
+        }
+        return .contractMismatch(daemonContract: body.contract_digest)
+    }
+
+    /// Reads `/health`, or nil when it doesn't answer 200 with a body this
+    /// client decodes within a short timeout. The timeout keeps a daemon that
+    /// stops mid-round, or a network that black-holes traffic, from holding
+    /// the shared refresh task until the transport gives up.
+    private nonisolated static func readHealth(_ client: any APIProtocol) async -> Components.Schemas.HealthStatus? {
+        await withTaskGroup(of: Components.Schemas.HealthStatus?.self) { group in
             group.addTask {
-                guard let output = try? await client.getHealth(),
-                    case .ok(let ok) = output,
-                    let body = try? ok.body.json
-                else {
-                    return .syncFailing
-                }
-                if body.contract_digest != APIContract.digest {
-                    return .contractMismatch(daemonContract: body.contract_digest)
-                }
-                return .syncFailing
+                guard let output = try? await client.getHealth(), case .ok(let ok) = output else { return nil }
+                return try? ok.body.json
             }
             group.addTask {
                 try? await Task.sleep(for: .seconds(3))
-                return .syncFailing
+                return nil
             }
             defer { group.cancelAll() }
-            return await group.next() ?? .syncFailing
+            return await group.next() ?? nil
         }
     }
 

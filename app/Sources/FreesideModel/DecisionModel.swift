@@ -230,9 +230,10 @@ public final class DecisionModel {
     /// read-only (#97) — since #96 it offers the empty set, so the
     /// blocked guard is a backstop for a stray offered action. The
     /// boundary rejects both, so the card offers them disabled instead
-    /// of as buttons that can only fail.
+    /// of as buttons that can only fail. A type this build doesn't know is
+    /// read-only the same way: the app can't show what deciding it means.
     public func isSubmittable(_ action: Components.Schemas.Action) -> Bool {
-        guard snapshot?.item._type != .blocked else { return false }
+        if let type = snapshot?.item._type, type == .blocked || type == .unknown { return false }
         if action == .discuss, conversation?.conversation.status == .awaiting_agent {
             return false
         }
@@ -697,6 +698,10 @@ public final class DecisionModel {
                 && facts.follow_up_filing == nil
                 && facts.supersedes == nil
                 && (adoption.recipe_digest != nil || !adoption.registry_authorities.isEmpty)
+        case .unknown:
+            // A kind this build doesn't know binds nothing it can show, so the
+            // card never approves it.
+            return false
         }
     }
 
@@ -1243,6 +1248,15 @@ public final class DecisionModel {
                     phase = .superseded
                     markValidated()
                 }
+            case .badRequest(let refusal):
+                // An authoritative daemon rejection (misuse, a command this
+                // build doesn't serve): the command was definitively not
+                // recorded.
+                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                phase = .idle
+                submissionError = CommandRefusal.message(
+                    refusal, otherwise: "the daemon rejected the command (status 400)")
+                await validate()
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The credential gate rejected this first request
@@ -1728,6 +1742,10 @@ public final class DecisionModel {
                 }
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 return .conflicted(applied: isCurrent, awaitingAgent: awaitingAgent)
+            case .badRequest:
+                guard ownsSlot else { return .displaced }
+                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                return .rejected
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The resend died at the credential gate, which

@@ -58,6 +58,7 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         case .scope_expansion: return "Scope expansion"
         case .capability_unavailable: return "Capability unavailable"
         case .commit_plan_collision: return "Commit plan collision"
+        case .unknown: return "Unrecognized blocker"
         }
     }
 
@@ -88,6 +89,7 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         switch route {
         case .retry_implementation: return "Retry the implementer"
         case .revise_specification: return "Revise the specification"
+        case .unknown: return "Unrecognized route"
         }
     }
 }

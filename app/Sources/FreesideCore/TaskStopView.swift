@@ -144,6 +144,7 @@ struct TaskStopView: View {
             case .requested: (.neutral, "Requested")
             case .failed_to_stop: (.wax, "Unconfirmed")
             case .confirmed: (.neutral, "Recorded")
+            case .unknown: (.wax, "Unrecognized")
             }
         return Notice(tone: tone, keyword: keyword, sentence: cancellationText(state))
             .accessibilityElement(children: .combine)
@@ -155,6 +156,7 @@ struct TaskStopView: View {
         case .failed_to_stop:
             "Freeside starts no new work for this task but hasn't confirmed that work already running has ended."
         case .confirmed: "Stop confirmed by the daemon. Existing history and PRs remain available."
+        case .unknown: "The daemon reports a stop state this app doesn't recognize."
         }
     }
 }

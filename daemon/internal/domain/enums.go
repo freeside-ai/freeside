@@ -2844,3 +2844,58 @@ func (k TaskLifecycleFactKind) valid() bool {
 		return false
 	}
 }
+
+// DaemonFeature names a feature this daemon build serves, advertised on
+// GET /health so an app can turn off a surface an older daemon lacks
+// instead of failing sync on a command the daemon would refuse. The unit
+// that adds an app-visible surface registers its name here and in
+// api/openapi.yaml's DaemonFeature. The zero value is invalid.
+type DaemonFeature string
+
+const (
+	// DaemonFeatureParkedTaskMove is the move_parked_task command.
+	DaemonFeatureParkedTaskMove DaemonFeature = "parked_task_move"
+)
+
+// AllDaemonFeatures lists every feature this build serves; it is the single
+// registration point and the list GET /health advertises.
+var AllDaemonFeatures = []DaemonFeature{
+	DaemonFeatureParkedTaskMove,
+}
+
+func (f DaemonFeature) valid() bool {
+	switch f {
+	case DaemonFeatureParkedTaskMove:
+		return true
+	default:
+		return false
+	}
+}
+
+// CommandRequestRejectionReason names why POST /commands refused a command
+// when the client acts on the reason. A refusal without one carries only its
+// message. The zero value is invalid.
+type CommandRequestRejectionReason string
+
+const (
+	// CommandRequestRejectionUnknownCommandKind: this build serves no
+	// command of the payload's kind, as when an app newer than the daemon
+	// sends one. The client drops the command instead of keeping it for
+	// retry.
+	CommandRequestRejectionUnknownCommandKind CommandRequestRejectionReason = "unknown_command_kind"
+)
+
+// AllCommandRequestRejectionReasons lists every valid reason; it is the
+// single registration point and drives table-driven tests.
+var AllCommandRequestRejectionReasons = []CommandRequestRejectionReason{
+	CommandRequestRejectionUnknownCommandKind,
+}
+
+func (r CommandRequestRejectionReason) valid() bool {
+	switch r {
+	case CommandRequestRejectionUnknownCommandKind:
+		return true
+	default:
+		return false
+	}
+}

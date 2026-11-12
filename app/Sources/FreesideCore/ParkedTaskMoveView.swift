@@ -25,9 +25,13 @@ struct ParkedTaskMoveView: View {
         model.failure.flatMap { $0.taskID == taskID ? $0.message : nil }
     }
 
+    /// Whether the page offers the move menu: the hold offers an agent and
+    /// the daemon serves the move.
+    var offersMove: Bool { !offers.isEmpty && model.isServed }
+
     /// True while there is nothing to say for this task, so the page leaves
     /// the view out.
-    var isQuiet: Bool { offers.isEmpty && pending == nil && failure == nil }
+    var isQuiet: Bool { !offersMove && pending == nil && failure == nil }
 
     /// Why the menu is disabled, or nil while a pick can send. A device
     /// sends one move at a time, so a move waiting on another task names
@@ -60,7 +64,7 @@ struct ParkedTaskMoveView: View {
                 } else {
                     statement("Moving the task. The page updates once the daemon records the move.")
                 }
-            } else if !offers.isEmpty {
+            } else if offersMove {
                 menu
                 // A disabled menu can't open, so its reason stands beside it.
                 if let blockedReason {

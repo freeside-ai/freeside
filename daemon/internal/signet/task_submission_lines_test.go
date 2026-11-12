@@ -350,6 +350,10 @@ func TestSubmitTaskCommandHTTPRejectsMalformedTaskLines(t *testing.T) {
 		"unknown enrollment": `[{"role":"reviewer","selection":{"enrollment_id":"` + secret + `/codex_cli",` +
 			`"model_id":"model-codex","effort":"high"}}]`,
 		"unknown field": `[{"role":"reviewer","selection":` + codex + `,"prompt":"review"}]`,
+		// TaskLineSelection is open in responses (api/README.md, Response
+		// Tolerance); the daemon still refuses an unknown field in it.
+		"unknown selection field": `[{"role":"reviewer","selection":{"enrollment_id":"line-codex/codex_cli",` +
+			`"model_id":"model-codex","effort":"high","prompt":"review"}}]`,
 	} {
 		commandID := "cmd-" + strings.ReplaceAll(name, " ", "-")
 		body := `{"command_id":"` + commandID + `","device_id":"device-1","payload":{"kind":"submit_task",` +

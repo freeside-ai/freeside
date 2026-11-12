@@ -1,0 +1,83 @@
+# expects-rule: response-enums-list-unknown
+# A policy fixture for scripts/check.sh api policy, which fails unless
+# linting this file fails and reports the rule named on the first line.
+# The fixture is otherwise clean: Widget.color, an enum the response
+# reaches, lists no unknown. Shape.kind is exempt as the property its
+# union discriminates on, and Widget.flavor as a constant.
+openapi: 3.0.3
+info:
+  title: Policy fixture
+  version: 0.1.0
+  description: A fixture spec for the response-tolerance rules.
+  contact:
+    name: Freeside
+    url: https://github.com/freeside-ai/freeside
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+servers:
+  - url: http://localhost
+tags:
+  - name: widgets
+    description: Widgets.
+paths:
+  /widgets:
+    get:
+      operationId: getWidget
+      tags: [widgets]
+      summary: Read a widget
+      description: Reads a widget.
+      responses:
+        "200":
+          description: The widget.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Widget"
+components:
+  schemas:
+    Widget:
+      type: object
+      description: A response schema.
+      required: [color, flavor, sizes, shape]
+      properties:
+        color:
+          type: string
+          enum: [red, blue]
+        flavor:
+          type: string
+          enum: [plain]
+        sizes:
+          type: array
+          items:
+            type: string
+            enum: [small, large, unknown]
+        shape:
+          $ref: "#/components/schemas/Shape"
+    Shape:
+      description: A union that discriminates on kind.
+      oneOf:
+        - $ref: "#/components/schemas/Circle"
+        - $ref: "#/components/schemas/Square"
+      discriminator:
+        propertyName: kind
+    Circle:
+      type: object
+      description: One arm of Shape.
+      required: [kind, radius]
+      properties:
+        kind:
+          type: string
+          enum: [circle, round]
+        radius:
+          type: number
+    Square:
+      type: object
+      description: The other arm of Shape.
+      required: [kind, side]
+      properties:
+        kind:
+          type: string
+          enum: [square, box]
+        side:
+          type: number

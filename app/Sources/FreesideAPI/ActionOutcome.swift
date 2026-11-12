@@ -64,6 +64,11 @@ public enum ActionOutcome: Equatable {
             return .records
         case .convert_to_policy:
             return .pending
+        case .unknown:
+            // An action this build doesn't know grants nothing: it is never
+            // offered to the daemon as presentable, and a card never submits
+            // it (DecisionModel.isSubmittable).
+            return .pending
         }
     }
 }

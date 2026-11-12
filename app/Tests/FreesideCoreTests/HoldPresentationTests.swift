@@ -31,6 +31,7 @@ import Testing
             .quota_window_exhausted: "Waiting for quota window to reset",
             .machine_capacity: "Waiting for machine capacity",
             .update_drain: "Waiting for an update",
+            .unknown: "Held for a reason this app doesn't recognize",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
         for reason in Components.Schemas.RunHoldReason.allCases {

@@ -27,6 +27,24 @@ import Testing
         #expect(model.offeredActions == offered)
     }
 
+    /// A type a newer daemon added decodes as `unknown`. The card still lists
+    /// what the daemon offers, but submits none of it: the app can't show
+    /// what deciding the item means.
+    @Test func aNewerTypeOffersItsActionsButSubmitsNone() {
+        let newer = AttentionFixtures.newerTypeFixture()
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.replaceAll(with: [newer])
+        let model = DecisionModel(store: store, itemID: newer.item.id)
+
+        #expect(model.offeredActions == newer.item.requested_decision)
+        #expect(!model.offeredActions.isEmpty)
+        for action in model.offeredActions {
+            #expect(!model.isSubmittable(action), "\(action)")
+        }
+        #expect(AttentionDisplay.title(newer.item) == "Unrecognized Item")
+        #expect(AttentionDisplay.ask(newer.item) == "Update this app to decide this item.")
+    }
+
     @Test func holdAfterPublicationOpensItsPullRequestAndStaysOpen() async {
         let hold = AttentionFixtures.publishBlockedAfterPublication()
         let store = await makeStore(server: MockServer(items: [hold]))
@@ -1722,6 +1740,22 @@ import Testing
                 == #"[{"finding_id":"finding-1","route":"decline","reason":"Out of scope."}]"#)
     }
 
+    /// A route a newer daemon offers decodes as unknown. The app never sends
+    /// unknown back (#1266), so a finding routed only that way leaves Apply
+    /// waiting rather than sending it.
+    @Test func anUnknownDisputeRouteIsNeverSent() throws {
+        var findings = try #require(
+            AttentionFixtures.routedReviewDispute().item.review_dispute?.value1.findings)
+        findings[0].offered_routes.append(.unknown)
+        let selections: [String: Components.Schemas.AdjudicationRoute] = [
+            findings[0].finding_id: .unknown, findings[1].finding_id: ._defer,
+        ]
+        #expect(
+            DecisionDetailView.selectedFindingRoutes(findings, selections: selections)
+                == [.init(finding_id: findings[1].finding_id, route: ._defer)])
+        #expect(!DecisionDetailView.findingRoutesReady(findings, selections: selections, reasons: [:]))
+    }
+
     /// Apply waits for a sendable reason on each route that replies in an
     /// external thread, and a kept draft never rides on a route that does
     /// not reply.
@@ -1789,6 +1823,12 @@ import Testing
                 multiFinding,
                 selections: ["review-finding-17": .dispute]
             ) == [.init(finding_id: "review-finding-17", route: .dispute)])
+        // A route a newer daemon added decodes as unknown, and the app never
+        // sends unknown back (#1266).
+        #expect(
+            DecisionDetailView.selectedAlternatives(
+                multiFinding, selections: ["review-finding-17": .unknown]
+            ).isEmpty)
     }
 
     @Test func findingAlternativeCannotUseUntypedSubmitPath() async {

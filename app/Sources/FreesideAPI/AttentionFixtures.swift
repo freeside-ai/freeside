@@ -49,6 +49,22 @@ public enum AttentionFixtures {
         .system_health,
     ]
 
+    /// Every attention type the daemon can send, `blocked` included, in the
+    /// schema's enum order: the generated cases without `unknown`, the member
+    /// the app decodes a type it doesn't know as. A fixture exists for each.
+    public static let fixtureTypes = Components.Schemas.AttentionType.allCases.filter { $0 != .unknown }
+
+    /// An open item of a type a newer daemon added, as this build decodes it:
+    /// its type reads `unknown`, and it keeps the daemon's reason and the
+    /// action the daemon offers.
+    public static func newerTypeFixture() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .review_contradiction)
+        snapshot.item._type = .unknown
+        snapshot.item.id = "item-newer-type"
+        snapshot.item.reason = "The release window closes before this change can land."
+        return snapshot
+    }
+
     /// Plan §4's per-type action sets (docs/plan.md §4 "Actions"; approve
     /// is not universal), matching signet's authoritative
     /// allowedActionsByType policy. The retired `blocked` type keeps its
@@ -234,6 +250,7 @@ public enum AttentionFixtures {
         case .superseded: closed.item.status = .superseded
         case .resolved_by_daemon: closed.item.status = .resolved
         case .decision: preconditionFailure("a decision closes through closedByDecision")
+        case .unknown: preconditionFailure("the daemon never closes an item with an unknown cause")
         }
         closed.item.id = id
         closed.item.item_version += 1
@@ -551,6 +568,8 @@ public enum AttentionFixtures {
             }
         case .stuck:
             explanation = "Three rounds of fixes have not moved the change toward the approved specification."
+        case .unknown:
+            preconditionFailure("the daemon never sends an unknown drift verdict")
         }
         snapshot.item.review_diminishing = .init(
             value1: .init(
@@ -1271,6 +1290,8 @@ public enum AttentionFixtures {
                     "Work on **\(key)** is ready; one decision is open."
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
+                case .unknown:
+                    preconditionFailure("no fixture for an unknown attention type")
                 }
             let label =
                 switch type {
@@ -1283,6 +1304,8 @@ public enum AttentionFixtures {
                     "freeside.summary"
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
+                case .unknown:
+                    preconditionFailure("no fixture for an unknown attention type")
                 }
             agentClaims.append(
                 agentClaim(
@@ -1398,7 +1421,7 @@ public enum AttentionFixtures {
                 ))
         case .spec_approval, .execution_failure, .agent_question, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
+            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked, .unknown:
             yieldHistory = nil
         }
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
@@ -1729,7 +1752,7 @@ public enum AttentionFixtures {
                 + "Use Discuss to argue for fixing it in this PR."
             recommendation = "Park the run: \(findingID) needs separate work."
         case .attention_human_decision, .park_unknown, ._defer, .decline, .dispute,
-            .attention_unclear:
+            .attention_unclear, .unknown:
             preconditionFailure("no single-finding fixture for route \(route.rawValue)")
         }
 
@@ -2050,6 +2073,8 @@ public enum AttentionFixtures {
         case .blocked:
             // Consistent with the typed blocked_on wait the card leads with.
             return "the run is waiting on specification approval"
+        case .unknown:
+            preconditionFailure("no fixture for an unknown attention type")
         }
     }
 }

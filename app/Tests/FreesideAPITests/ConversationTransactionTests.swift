@@ -205,7 +205,7 @@ import Testing
             against: before)
 
         let output = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let status, _) = output else {
+        guard let status = output.refusalStatus else {
             Issue.record("missing attachment was accepted: \(output)")
             return
         }
