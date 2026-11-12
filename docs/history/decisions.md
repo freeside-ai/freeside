@@ -3750,3 +3750,56 @@ Nothing in this revision is built yet: tracker #3113 carries the work, and
 
 (Owner decision of 2026-11-11 on #1266, a planning default not vetoed;
 [decision note](../../devlog/2026-11-11-1640-additive-contract-tolerance.md).)
+
+## Revision 118 ("A Profile May Publish Workflow Edits; a Merge Reviews Them; Freeside Protects No Path"):
+
+1. **A trust profile may mark automation-control advisory.** Under
+   `candidate_automation_changes: advisory`, a candidate edit to
+   `.github/workflows/**` or any other automation-control path publishes,
+   surfaced as an advisory finding the way a reviewer-instruction edit is
+   (Section [5.5](../plan.md#55-the-ci-trust-boundary)). `block` stays the default,
+   detection stays a widen-only minimum, and only profile review sets the
+   value. The owner accepts that the candidate's workflow runs in CI before
+   review, with whatever authority the repository's settings give a
+   pull-request job. Rejected: keeping the block and editing workflows by
+   hand, and a hold that waits for approval before publishing. This
+   overturns revision 7 item 1's universal block.
+2. **Under such a profile, the owner's merge reviews the workflow change it
+   carried.** The daemon accepts the default branch's new workflow files
+   with no profile review only when a merged, surfaced Freeside pull
+   request explains every difference unchanged, nothing else the audit
+   records moved, the audit stays inside every limit, and no workflow's
+   token could have made the merge. Everything else stays drift
+   and fails closed, and acceptance leaves the profile's digest, and so
+   every run in flight, alone. The owner accepts that whoever may merge can
+   accept a workflow change, that accepted changes add up without a fresh
+   review of the whole surface, and that workflow scripts and remote
+   actions on mutable refs stay unpinned. Rejected: a profile review after
+   every merged workflow edit, which is a pause beyond the pull request;
+   accepting any new digest unchecked, which also accepts a direct push;
+   and pinning repository settings instead of workflow content, which
+   misses privileged jobs on other triggers.
+3. **Repository-specific protection is a profile-review choice, and
+   Freeside's profile protects none** (Sections
+   [3.1](../plan.md#31-autonomy-inside-the-ward), [5.8](../plan.md#58-control-plane-trust),
+   and [11](../plan.md#11-roadmap-build-order-and-coordination)). A protected path
+   still blocks with no per-run waiver. A Freeside candidate that edits a
+   check script is graded by its own edit, and the plan's materiality gate
+   rests on the owner's review of the pull request. This overturns the
+   "control-plane paths stay operator-authored" sentence of revisions 92
+   and 113 and narrows revision 42's "every other control-plane category
+   stays blocking and non-waivable".
+4. **Every registration requests `workflows: write`, and the publication
+   token carries it only under `advisory`** (Sections
+   [5.5](../plan.md#55-the-ci-trust-boundary) and
+   [10](../plan.md#10-operations-and-onboarding)). GitHub refuses a workflow push
+   without it, and only the daemon's publication path holds it.
+
+Nothing in this revision is built yet: #3125 builds the option and the
+token, on tracker #3132; #3123 drops Freeside's protected paths, on tracker
+#2873; and #3140, not yet scheduled, builds the acceptance of merged
+workflow changes and the advisory's job list.
+
+(Owner decisions of 2026-11-11 on #3132 and #3123, and of 2026-11-12, in
+chat, on #3124;
+[decision note](../../devlog/2026-11-12-0840-advisory-automation-control.md).)
