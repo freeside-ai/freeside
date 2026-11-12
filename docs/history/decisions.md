@@ -3803,3 +3803,44 @@ workflow changes and the advisory's job list.
 (Owner decisions of 2026-11-11 on #3132 and #3123, and of 2026-11-12, in
 chat, on #3124;
 [decision note](../../devlog/2026-11-12-0840-advisory-automation-control.md).)
+
+## Revision 119 ("The Specification Comment Posts Early, Edits in Place, and Claims the Issue"):
+
+1. **The specification comment posts when the daemon accepts and screens a
+   bound task's specification, under either `gates.spec_approval` setting**
+   (Sections [1](../plan.md#1-what-freeside-is),
+   [5.11](../plan.md#511-github-integration-reconciliation-plus-intake), and
+   [14](../plan.md#14-risks)). Screened agent text now reaches a public issue before a
+   person reads it, and with the gate off a person may never read it first.
+   This reverses revision 66's approval trigger and its "no comment when the
+   gate is off". The subsection is renamed The Specification Comment.
+2. **One comment per task, edited in place** (Sections
+   [5.5](../plan.md#55-the-ci-trust-boundary) and
+   [5.11](../plan.md#511-github-integration-reconciliation-plus-intake)). A revised
+   specification, an approval, and the release each replace the comment's
+   text, addressed by the comment ID the daemon stored from its own create
+   and re-checked as App-authored on the target issue before each edit. The
+   frame states the comment's state, a refused revision shows the frame
+   alone, and a deleted comment is never re-created. The narrowed token now
+   also edits that one comment, and each edit is another `issue_comment`
+   event. This reverses revision 66's append-only successor comments.
+3. **The comment is the unit's work claim** (Section
+   [5.11](../plan.md#511-github-integration-reconciliation-plus-intake) and
+   `docs/coordination.md`, Claiming). Its `Claim:` line names the task, not a
+   branch, because the publication branch doesn't exist until a candidate is
+   ready. It has no lease, and the daemon releases it by an edit when the
+   task ends with no open pull request of its own; cancellation never fences
+   that edit. A daemon claim wins over any hand-run claim on the unit. A
+   claim, release, or reservation marker counts from the repository's owner,
+   members, and collaborators, and the project's own Freeside App's marker
+   counts as its task claim only, which settles #1738's question.
+4. **The specification comment is not an implementation plan**
+   (`docs/coordination.md`, Stages). A `Handle` session reads it as context.
+
+Nothing in this revision is built yet: #1433 through #1439 build the
+comment, and #1738 teaches `trackercollect` the claimant rule and the daemon
+claim.
+
+(Owner direction of 2026-11-11 on #3132, with the settled items decided in
+review of #3128's pull request;
+[decision note](../../devlog/2026-11-12-1014-spec-comment-edit-in-place.md).)
