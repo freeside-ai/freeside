@@ -17,13 +17,18 @@ struct TaskRowView: View {
     /// ticks its own, so the relative last-active text ages without a data
     /// change, as `InboxRowView` does.
     var now: Date?
-    /// Set when another visible task shares this one's name, so the context
-    /// line carries a short task id to tell the two rows apart.
+    /// Set for a look-alike task (`TaskDisplay.ambiguousTaskIDs`), so the
+    /// context line ends with its creation time and short id to tell the
+    /// two rows apart.
     var showsIdentifier = false
     /// The Working or Finished section's reading of this row, when a section
     /// draws it.
     var sectionRow: TaskDisplay.SectionRow?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The marker's clock reads the view's locale and time zone, as the
+    /// task page's header does, so the two print the same string.
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
 
     var body: some View {
         Group {
@@ -67,7 +72,7 @@ struct TaskRowView: View {
                 name: name, font: FreesideFont.rowTitle, monoFont: FreesideFont.monoValue,
                 lineLimit: dynamicTypeSize.isAccessibilitySize ? nil : 2, drawsAgentMark: false)
         } context: {
-            contextText
+            contextText(at: now)
         } closing: {
             if closing.isDrawn {
                 closingLine(closing)
@@ -89,10 +94,12 @@ struct TaskRowView: View {
     /// The context line. It wraps where the sidebar is too narrow for one
     /// line, since the phase and round at its end are what the row kept
     /// when the phase sentence left it; each separator stays with the
-    /// segment before it.
-    private var contextText: some View {
-        let identifier = showsIdentifier ? " · \(ShortIdentifier.short(task.id))" : ""
-        let context = (sectionRow?.context ?? TaskDisplay.rowContext(task, position: position)) + identifier
+    /// segment before it. A look-alike task's line ends with its marker.
+    private func contextText(at now: Date) -> some View {
+        let marker =
+            showsIdentifier
+            ? " · \(TaskDisplay.lookAlikeMarker(task, now: now, locale: locale, timeZone: timeZone))" : ""
+        let context = (sectionRow?.context ?? TaskDisplay.rowContext(task, position: position)) + marker
         return SidebarRowContext(text: context)
     }
 

@@ -171,16 +171,45 @@ package enum TaskDisplay {
         }
     }
 
-    /// The ids of tasks whose displayed name text equals another visible
-    /// task's, so the row can append a short id only where two rows would
-    /// otherwise read alike. An identifier-fallback name is the task id, which
-    /// is unique, so those rows never collide.
+    /// The ids of look-alike tasks (#1922): a task whose displayed name text
+    /// equals another visible task's, or whose source issue (repository and
+    /// issue number) is another's, whatever their names. Rows and the task
+    /// page draw `lookAlikeMarker` only for these, so it appears only where
+    /// two tasks would otherwise read alike. An identifier-fallback name is
+    /// the task id, which is unique, so those rows never collide by name.
     package static func ambiguousTaskIDs(_ tasks: [Components.Schemas.TaskSnapshot]) -> Set<String> {
         var idsByName: [String: [String]] = [:]
+        var idsByIssue: [SourceIssue: [String]] = [:]
         for snapshot in tasks {
-            idsByName[snapshot.task.display_names.task.text, default: []].append(snapshot.task.id)
+            let task = snapshot.task
+            idsByName[task.display_names.task.text, default: []].append(task.id)
+            if case .issue_subject(let source)? = task.source?.value1 {
+                let issue = source.issue_subject
+                idsByIssue[.init(repositoryID: issue.repository_id, number: issue.issue_number), default: []]
+                    .append(task.id)
+            }
         }
-        return Set(idsByName.values.filter { $0.count > 1 }.flatMap { $0 })
+        let groups = Array(idsByName.values) + Array(idsByIssue.values)
+        return Set(groups.filter { $0.count > 1 }.flatMap { $0 })
+    }
+
+    /// The daemon's key for an issue-sourced task: the repository's id,
+    /// which survives a rename, and the issue number.
+    private struct SourceIssue: Hashable {
+        let repositoryID: Int64
+        let number: Int
+    }
+
+    /// What tells a look-alike task from its twin (#1922): when it was
+    /// created, in the task surfaces' short time format, then its short id
+    /// (`created Nov 9, 2:14 PM · task-AB12CD34…`). The time is something
+    /// the operator can relate to what they did; the id matches the one the
+    /// Identifiers footer and the Stop sheet print.
+    package static func lookAlikeMarker(
+        _ task: Components.Schemas.Task, now: Date, locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> String {
+        let created = FreesideFormat.shortTime(task.created_at, now: now, locale: locale, timeZone: timeZone)
+        return "created \(created) · \(ShortIdentifier.short(task.id))"
     }
 
     /// A task with no lifecycle yet (no run) is work that exists and has

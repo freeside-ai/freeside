@@ -72,6 +72,9 @@ struct UnifiedListView: View {
     var lastUpdatedAt: Date?
     var onRefresh: @MainActor () async -> Void = {}
     var onRevealTechnicalDetails: (String) -> Void = { _ in }
+    /// The look-alike marker's clock, as the task page's header reads it.
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
     @State private var projectFilterPresented = false
     /// How many Finished rows an expanded Finished draws (`FinishedPage`);
     /// collapsing it starts the page over.
@@ -467,11 +470,15 @@ struct UnifiedListView: View {
             let identifier = ambiguousTaskIDs.contains(task.id)
             if let leading = openItems.first {
                 let context = TaskDisplay.rowContext(task, position: position)
+                // A live row has no fixed clock; the marker reads `now` only
+                // to decide whether to print the year.
                 itemRow(
                     leading.item,
                     task: .init(
                         task: task,
-                        context: identifier ? "\(context) · \(ShortIdentifier.short(task.id))" : context),
+                        context: identifier
+                            ? "\(context) · \(TaskDisplay.lookAlikeMarker(task, now: now ?? .now, locale: locale, timeZone: timeZone))"
+                            : context),
                     isSelected: isSelected, now: now)
             } else {
                 TaskRowView(

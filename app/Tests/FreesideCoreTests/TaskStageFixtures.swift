@@ -243,10 +243,12 @@ enum TaskStageFixtures {
 
     /// A coordinator holding `page` and `runTimelines` as a confirmed-fresh
     /// sync would, and the task's snapshot, for drawing the whole task page.
+    /// `otherTasks` sit in the list beside it, such as a look-alike twin.
     @MainActor
     static func coordinator(
         _ page: TaskProgressFixtures.Case, runTimelines: [Components.Schemas.RunTimeline] = [],
-        conversations: [Components.Schemas.ConversationSnapshot] = []
+        conversations: [Components.Schemas.ConversationSnapshot] = [],
+        otherTasks: [Components.Schemas.TaskSnapshot] = []
     ) throws -> (coordinator: SyncCoordinator, task: Components.Schemas.TaskSnapshot) {
         var task = TaskFixtures.approvedCampaign().task
         task.task = page.task
@@ -257,7 +259,7 @@ enum TaskStageFixtures {
                     syncEpoch: "stage-epoch", lastFullSnapshotRevision: task.as_of_revision,
                     highestObservedServerRevision: task.as_of_revision),
                 attentionItems: page.items, conversations: conversations, runs: page.runs, runTimelines: runTimelines,
-                tasks: [task], taskTimelines: [page.history].compactMap { $0 }))
+                tasks: [task] + otherTasks, taskTimelines: [page.history].compactMap { $0 }))
         let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: MockServer()), cache: cache)
         coordinator.store.freshness = .fresh
         return (coordinator, task)

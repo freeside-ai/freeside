@@ -763,9 +763,12 @@ struct TaskPageView: View {
     /// (5.6): the task's project, issue, and stage over its name, one status
     /// line, the hold when there is one, and where to act. The task id lives
     /// in the page's Identifiers footer; the copy menu keeps a quick path to
-    /// it. Internal so a screenshot golden can draw the header on its own.
+    /// it. A look-alike task's header leads its detail with the marker its
+    /// row draws, so a card on the page says which task it belongs to.
+    /// Internal so a screenshot golden can draw the header on its own.
     func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
+        let marker = Self.lookAlikeMarker(task, in: list, now: now, locale: locale, timeZone: timeZone)
         let position = position(timeline)
         let lines = TaskDisplay.rowLines(task, position: position)
         let stage = TaskDisplay.detailStage(
@@ -785,6 +788,9 @@ struct TaskPageView: View {
                 lineLimit: 3),
             status: status
         ) {
+            if let marker {
+                SidebarRowContext(text: marker)
+            }
             documentsLine(timeline)
             attachmentsFold
             // A parked status line already names the hold.
@@ -824,6 +830,20 @@ struct TaskPageView: View {
         .copyMenu {
             Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
         }
+    }
+
+    /// The marker the header draws for a look-alike task (#1922), or nil for
+    /// any other. It reads the list's rows, the input the list's own marker
+    /// reads, so the page marks exactly the tasks whose rows do. Not the
+    /// eyebrow: `CardEyebrow` uppercases its text, so the id would no longer
+    /// match the row's.
+    static func lookAlikeMarker(
+        _ task: Components.Schemas.Task, in list: UnifiedList, now: Date, locale: Locale, timeZone: TimeZone
+    ) -> String? {
+        guard TaskDisplay.ambiguousTaskIDs(list.rows.compactMap(\.taskSnapshot)).contains(task.id) else {
+            return nil
+        }
+        return TaskDisplay.lookAlikeMarker(task, now: now, locale: locale, timeZone: timeZone)
     }
 
     /// The documents line (◆D): accent link words at body size with faint

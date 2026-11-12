@@ -11,8 +11,9 @@ import SwiftUI
 struct FinishedRowView: View {
     enum Subject {
         /// `status` is the recorded status the full row's keyword drew;
-        /// `showsIdentifier` adds the short task id when another visible
-        /// task shares the name.
+        /// `showsIdentifier` marks a look-alike task
+        /// (`TaskDisplay.ambiguousTaskIDs`): the one-line row draws its
+        /// short id, and VoiceOver reads the full marker.
         case task(Components.Schemas.Task, status: String, showsIdentifier: Bool)
         case item(Components.Schemas.AttentionItem)
     }
@@ -23,6 +24,10 @@ struct FinishedRowView: View {
     var now: Date?
     var onRevealTechnicalDetails: () -> Void = {}
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The marker's clock reads the view's locale and time zone, as the
+    /// task page's header does, so the two print the same string.
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
 
     var body: some View {
         Group {
@@ -55,7 +60,7 @@ struct FinishedRowView: View {
         .modifier(Surface(isSelected: isSelected))
         .textSelection(.disabled)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([titleText, status, time?.text].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([titleText(at: now), status, time?.text].compactMap { $0 }.joined(separator: ", "))
     }
 
     /// One line at the standard sizes; an accessibility size lifts the cap,
@@ -84,11 +89,14 @@ struct FinishedRowView: View {
         }
     }
 
-    private var titleText: String {
+    /// The title VoiceOver reads. A look-alike task's carries the whole
+    /// marker the one-line row has no room to draw.
+    private func titleText(at now: Date) -> String {
         switch subject {
         case .task(let task, _, let showsIdentifier):
             showsIdentifier
-                ? "\(task.display_names.task.text), \(ShortIdentifier.short(task.id))" : task.display_names.task.text
+                ? "\(task.display_names.task.text), \(TaskDisplay.lookAlikeMarker(task, now: now, locale: locale, timeZone: timeZone))"
+                : task.display_names.task.text
         case .item(let item):
             AttentionDisplay.rowSummary(item)
         }

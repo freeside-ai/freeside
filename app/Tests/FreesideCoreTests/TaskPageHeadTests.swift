@@ -188,6 +188,37 @@ import Testing
         #expect(none.allSatisfy { $0.readerRequest == nil })
     }
 
+    // MARK: Look-Alike Marker
+
+    /// Acceptance (#1922): a look-alike task's header draws the marker its
+    /// row draws, so a card on the page says which task it belongs to, and
+    /// a task with no look-alike draws none. The twin shares the source
+    /// issue under another name.
+    @Test func onlyALookAlikeTasksHeaderDrawsTheMarker() throws {
+        let page = TaskStageFixtures.page(.review)
+        let now = RunFixtures.screenshotInstant
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US")
+        func marker(_ coordinator: SyncCoordinator, _ task: Components.Schemas.Task) -> String? {
+            TaskPageView.lookAlikeMarker(task, in: coordinator.unifiedList, now: now, locale: locale, timeZone: utc)
+        }
+        let (alone, task) = try TaskStageFixtures.coordinator(page)
+        #expect(TaskDisplay.issueReference(task.task) != nil)
+        #expect(marker(alone, task.task) == nil)
+
+        var twin = task
+        twin.task.id = "task-twin"
+        twin.task.display_names.task = .init(text: "Another name for the same issue", source: ._operator)
+        twin.task.created_at = task.task.created_at.addingTimeInterval(-3600)
+        let (paired, _) = try TaskStageFixtures.coordinator(page, otherTasks: [twin])
+        #expect(
+            marker(paired, task.task)
+                == TaskDisplay.lookAlikeMarker(task.task, now: now, locale: locale, timeZone: utc))
+        #expect(
+            marker(paired, twin.task) == TaskDisplay.lookAlikeMarker(twin.task, now: now, locale: locale, timeZone: utc)
+        )
+    }
+
     // MARK: Outline and Task Actions
 
     /// Task Actions sits in the outline row at regular width and in the
