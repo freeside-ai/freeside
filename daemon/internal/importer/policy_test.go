@@ -389,64 +389,36 @@ func TestImportControlPlanePaths(t *testing.T) {
 }
 
 // freesideProtectedPaths is the protected-path widening Freeside's own
-// onboarding passes as -protected-path flags. daemon/README.md (Onboard
-// Freeside) carries the copy the owner runs; change both together.
-var freesideProtectedPaths = domain.ProtectedPathConfig{
-	ExtraAutomationControlPatterns: []string{".githooks/**", ".github/**"},
-	ExtraVerificationControlPatterns: []string{
-		".freeside/**",
-		"api/vacuum.ruleset.yaml",
-		"daemon/.golangci.yml",
-		"scripts/api-contract-digest.sh",
-		"scripts/check-commit-messages.sh",
-		"scripts/check-migration-history.sh",
-		"scripts/check-vocabulary.sh",
-		"scripts/check.sh",
-		"scripts/daemon-test-shards.json",
-		"scripts/daemon-test-shards.py",
-		"scripts/link-plan-section-refs.sh",
-		"scripts/merge-result-audit.sh",
-		"scripts/run-convergence.sh",
-	},
-	ExtraPromptsAndPolicyPatterns: []string{"policy/**", "prompts/**"},
-	ExtraMaterialityRulesPatterns: []string{"docs/plan.md"},
-}
+// onboarding passes: none. Onboarding passes no -protected-path flag, and
+// daemon/README.md (Onboard Freeside) says the same; change both together.
+// Decision record: devlog/2026-11-12-0908-freeside-unprotected-paths.md.
+var freesideProtectedPaths = domain.ProtectedPathConfig{}
 
-// TestImportFreesideProtectedPaths shows Freeside's widening turns an
-// agent's edit to its hooks, any file under .github/ (the pull request
-// template included, which the defaults leave out), recipe, verification
-// scripts, API lint configuration, prompts, or plan into a publish-blocking
-// control-plane finding, while ordinary app/, daemon/, devlog/, docs/, api/,
-// and scripts/ edits, a script's own regression suite included, draw none.
+// TestImportFreesideProtectedPaths shows Freeside's profile widens no class:
+// an agent's edit to the paths it once protected (its hooks, the pull request
+// template, the recipe, verification scripts, lint configuration, prompts,
+// policy, and the plan) imports with no finding, while the importer's
+// built-in defaults still fire. A workflow edit still lifts to a blocking
+// automation-control finding, and a reviewer-instruction edit under .github/
+// still draws only an advisory one.
 func TestImportFreesideProtectedPaths(t *testing.T) {
 	t.Parallel()
 	if err := freesideProtectedPaths.Validate(); err != nil {
 		t.Fatalf("Freeside's protected paths: %v", err)
 	}
-	want := map[string]struct {
-		kind     FindingKind
-		category domain.ControlPlaneCategory
-	}{
-		".githooks/pre-commit":             {FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration},
-		".github/pull_request_template.md": {FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration},
-		".freeside/verify.json":            {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"daemon/.golangci.yml":             {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"scripts/check.sh":                 {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"scripts/check-vocabulary.sh":      {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"api/vacuum.ruleset.yaml":          {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"scripts/run-convergence.sh":       {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
-		"prompts/system.md":                {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
-		"policy/materiality.yaml":          {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
-		"docs/plan.md":                     {FindingMaterialityRulesPath, domain.ControlPlaneMaterialityRules},
-	}
+	const (
+		workflow    = ".github/workflows/ci.yml"
+		instruction = ".github/copilot-instructions.md"
+	)
 	unflagged := []string{
+		".githooks/pre-commit", ".github/pull_request_template.md", ".freeside/verify.json",
+		"daemon/.golangci.yml", "scripts/check.sh", "scripts/check-vocabulary.sh",
+		"scripts/run-convergence.sh", "api/vacuum.ruleset.yaml", "prompts/system.md",
+		"policy/materiality.yaml", "docs/plan.md",
 		"daemon/cmd/freesided/main.go", "docs/intro.md", "api/README.md", "scripts/test-check.sh",
 		"app/Package.swift", "devlog/README.md",
 	}
-	baseFiles := map[string]string{}
-	for path := range want {
-		baseFiles[path] = "old\n"
-	}
+	baseFiles := map[string]string{workflow: "old\n", instruction: "old\n"}
 	for _, path := range unflagged {
 		baseFiles[path] = "old\n"
 	}
@@ -476,6 +448,24 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 	if res.CommitSHA == "" {
 		t.Fatal("control-plane findings must not withhold the commit; the route needs it")
 	}
+	// No finding means something only if every edit reached the change set.
+	changed := map[string]bool{}
+	for _, c := range res.Changes {
+		changed[c.Path] = true
+	}
+	for path := range baseFiles {
+		if !changed[path] {
+			t.Fatalf("%s missing from the change set; changes = %+v", path, res.Changes)
+		}
+	}
+	want := map[string]struct {
+		kind        FindingKind
+		disposition domain.FindingDisposition
+		category    domain.ControlPlaneCategory
+	}{
+		workflow:    {FindingAutomationControlPath, domain.DispositionBlocking, domain.ControlPlaneWorkflowConfiguration},
+		instruction: {FindingReviewerInstructionPath, domain.DispositionAdvisory, domain.ControlPlaneReviewerInstructions},
+	}
 	seen := map[string]bool{}
 	for _, finding := range res.Findings {
 		expected, ok := want[finding.Path]
@@ -483,19 +473,22 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 			t.Fatalf("unexpected finding %+v; findings = %+v", finding, res.Findings)
 		}
 		seen[finding.Path] = true
+		if finding.Advisory() != (expected.disposition == domain.DispositionAdvisory) {
+			t.Fatalf("finding for %s: Advisory() = %v, want disposition %s", finding.Path, finding.Advisory(), expected.disposition)
+		}
 		lifted := finding.Candidate()
 		if err := lifted.Validate(); err != nil {
 			t.Fatalf("lifted finding for %s: %v", finding.Path, err)
 		}
-		if lifted.Class != domain.FindingClassControlPlane || lifted.Disposition != domain.DispositionBlocking ||
+		if lifted.Class != domain.FindingClassControlPlane || lifted.Disposition != expected.disposition ||
 			lifted.Category == nil || *lifted.Category != expected.category {
-			t.Fatalf("lifted finding for %s = %+v, want a blocking %s control-plane finding",
-				finding.Path, lifted, expected.category)
+			t.Fatalf("lifted finding for %s = %+v, want a %s %s control-plane finding",
+				finding.Path, lifted, expected.disposition, expected.category)
 		}
 	}
 	for path := range want {
 		if !seen[path] {
-			t.Fatalf("no finding for protected %s; findings = %+v", path, res.Findings)
+			t.Fatalf("no finding for %s; findings = %+v", path, res.Findings)
 		}
 	}
 }
