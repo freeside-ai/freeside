@@ -377,12 +377,31 @@ case " $* " in
 esac
 STUB
 
-# No case runs the installed client, so pgrep finds nothing. The stand-in
-# records the call, which marks when the installer reached its quit step.
+# No case runs the installed client, so pgrep finds nothing unless
+# STUB_APP_RUNNING says the app will not quit. The stand-in records the
+# call, which marks when the installer reached its quit step.
 cat >"$STUB_BIN/pgrep" <<'STUB'
 #!/usr/bin/env bash
 printf 'pgrep\n' >>"$STUB_CASE_DIR/install-steps"
-exit 1
+[[ -n "${STUB_APP_RUNNING:-}" ]]
+STUB
+
+cat >"$STUB_BIN/pkill" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+
+# The drain wait and the quit loop sleep between polls; the suite does not.
+# STUB_TERM_ON_SLEEP interrupts the installer at its first sleep instead.
+cat >"$STUB_BIN/sleep" <<'STUB'
+#!/usr/bin/env bash
+[[ -z "${STUB_TERM_ON_SLEEP:-}" ]] || kill -TERM "$PPID"
+exit 0
+STUB
+
+cat >"$STUB_BIN/open" <<'STUB'
+#!/usr/bin/env bash
+printf 'open %s\n' "$*" >>"$STUB_CASE_DIR/install-steps"
 STUB
 
 cat >"$STUB_BIN/ditto" <<'STUB'
@@ -390,11 +409,18 @@ cat >"$STUB_BIN/ditto" <<'STUB'
 cp -R "$1" "$2"
 STUB
 
+# STUB_MARKER_SET makes the registration marker read as set.
 cat >"$STUB_BIN/defaults" <<'STUB'
 #!/usr/bin/env bash
 phase=before-build
 [[ -e "${STUB_CASE_DIR:?}/xcodebuild-called" ]] && phase=after-build
 printf '%s %s\n' "$phase" "$*" >>"$STUB_CASE_DIR/defaults-calls"
+printf 'defaults %s\n' "$1" >>"$STUB_CASE_DIR/install-steps"
+if [[ "$1" == read ]]; then
+    [[ -n "${STUB_MARKER_SET:-}" ]] || exit 1
+    printf '1\n'
+fi
+exit 0
 STUB
 
 cat >"$STUB_BIN/stat" <<'STUB'
@@ -579,6 +605,72 @@ cat >"$STUB_AGENT_TEMPLATE" <<'PLIST'
 </plist>
 PLIST
 
+# The daemon stand-in every case bundles. check-database records its
+# arguments and exits with STUB_CHECK_DATABASE_RC. drain records its action
+# and answers as STUB_DRAIN says: absent (the default) refuses as freesided
+# does with no daemon running, unsupported fails as a daemon older than the
+# drain command does, and running answers -status with the next line of
+# $STUB_CASE_DIR/drain-statuses, repeating the last. STUB_TERM_ON_CANCEL makes
+# the first cancel act as one a second interrupt killed: it signals the
+# installer and fails.
+STUB_DAEMON=$TMP/freesided-stub
+cat >"$STUB_DAEMON" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+check-database)
+    printf '%s\n' "$@" >"$STUB_CASE_DIR/check-database-args"
+    printf 'check-database\n' >>"$STUB_CASE_DIR/install-steps"
+    exit "${STUB_CHECK_DATABASE_RC:-0}"
+    ;;
+drain)
+    action=request
+    for argument in "$@"; do
+        case "$argument" in
+        -force) action=force ;;
+        -cancel) action=cancel ;;
+        -status) action=status ;;
+        esac
+    done
+    printf '%s\n' "$*" >>"$STUB_CASE_DIR/drain-calls"
+    printf 'drain %s\n' "$action" >>"$STUB_CASE_DIR/install-steps"
+    case "${STUB_DRAIN:-absent}" in
+    absent)
+        echo "freesided: drain: no daemon is running on $3; there is nothing to drain" >&2
+        exit 1
+        ;;
+    unsupported)
+        echo 'freesided: control call /update-drain: 404 page not found' >&2
+        exit 1
+        ;;
+    running)
+        if [[ "$action" == cancel && -n "${STUB_TERM_ON_CANCEL:-}" &&
+            ! -f "$STUB_CASE_DIR/cancel-interrupted" ]]; then
+            : >"$STUB_CASE_DIR/cancel-interrupted"
+            kill -TERM "$PPID"
+            exit 130
+        fi
+        if [[ "$action" != status ]]; then
+            printf '{"ready":false,"drain":null,"blockers":[]}\n'
+            exit 0
+        fi
+        count_file=$STUB_CASE_DIR/drain-status-count
+        count=0
+        [[ ! -f "$count_file" ]] || read -r count <"$count_file"
+        count=$((count + 1))
+        printf '%s\n' "$count" >"$count_file"
+        total=$(wc -l <"$STUB_CASE_DIR/drain-statuses")
+        ((count <= total)) || count=$total
+        sed -n "${count}p" "$STUB_CASE_DIR/drain-statuses"
+        exit 0
+        ;;
+    esac
+    exit 64
+    ;;
+esac
+exit 0
+STUB
+chmod +x "$STUB_DAEMON"
+
 pass=0
 fail=0
 skip=0
@@ -591,8 +683,7 @@ begin_case() {
     CASE=$1
     CASE_DIR=$TMP/case-$2
     mkdir -p "$CASE_DIR/Applications" "$CASE_DIR/home"
-    printf '#!/usr/bin/env bash\n' >"$CASE_DIR/freesided"
-    chmod +x "$CASE_DIR/freesided"
+    cp "$STUB_DAEMON" "$CASE_DIR/freesided"
     export STUB_CASE_DIR=$CASE_DIR
     unset STUB_BUNDLE_ID
     unset STUB_INTERLOPER_DEST
@@ -624,6 +715,12 @@ begin_case() {
     unset STUB_GO_FAILS
     unset STUB_GIT_HEAD
     unset STUB_GIT_STATUS
+    unset STUB_DRAIN
+    unset STUB_MARKER_SET
+    unset STUB_TERM_ON_SLEEP
+    unset STUB_TERM_ON_CANCEL
+    unset STUB_APP_RUNNING
+    unset STUB_CHECK_DATABASE_RC
     unset RUN_STATE_ROOT
     echo "case: $CASE"
 }
@@ -646,7 +743,7 @@ run_dev_installer() {
 # The ordinary prod install with no --daemon-path, so the installer builds
 # freesided itself.
 run_built_installer() {
-    run_installer_raw --prod
+    run_installer_raw --prod "$@"
 }
 
 sha256_of() {
@@ -1399,6 +1496,7 @@ assert_contains "stub compile error"
 assert_contains "the freesided build failed"
 assert_absent "$CASE_DIR/xcodebuild-called"
 assert_inode "$destination" "$old_inode" "a failed daemon build replaced the installed app"
+assert_file_omits "$CASE_DIR/install-steps" "drain"
 
 begin_case "daemon path must be absolute" 27
 run_installer_raw --daemon-path ./freesided
@@ -1632,19 +1730,6 @@ assert_file_contains \
     "$CASE_DIR/defaults-calls" \
     "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
 
-# The bundled-daemon stand-in for the database check: it records its
-# arguments and its place among the install steps, and exits with
-# STUB_CHECK_DATABASE_RC.
-write_check_database_daemon() {
-    cat >"$CASE_DIR/freesided" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$@" >"$STUB_CASE_DIR/check-database-args"
-printf 'check-database\n' >>"$STUB_CASE_DIR/install-steps"
-exit "${STUB_CHECK_DATABASE_RC:-0}"
-STUB
-    chmod +x "$CASE_DIR/freesided"
-}
-
 # The installer checks the new daemon against the tier's database, with the
 # LaunchAgent's own tier and paths, before it reaches the quit step (#3107).
 begin_case "database check runs with the tier's paths before the quit" check-database
@@ -1652,7 +1737,6 @@ destination=$CASE_DIR/Applications/Freeside.app
 daemon_dir=$CASE_DIR/home/Library/Application\ Support/Freeside/daemon
 mkdir -p "$daemon_dir"
 printf 'live database\n' >"$daemon_dir/freeside.db"
-write_check_database_daemon
 export STUB_BUILD_SUCCEEDS=true
 run_installer
 assert_rc 0
@@ -1664,10 +1748,11 @@ if [[ "$(cat "$CASE_DIR/check-database-args" 2>/dev/null)" == "$(printf '%s\n' \
 else
     report_failure "check-database arguments: $(cat "$CASE_DIR/check-database-args" 2>/dev/null)"
 fi
-if [[ "$(cat "$CASE_DIR/install-steps" 2>/dev/null)" == "$(printf '%s\n' check-database pgrep)" ]]; then
+if [[ "$(cat "$CASE_DIR/install-steps" 2>/dev/null)" == "$(printf '%s\n' check-database \
+    'drain request' pgrep 'defaults read' 'defaults delete')" ]]; then
     pass=$((pass + 1))
 else
-    report_failure "install steps: $(cat "$CASE_DIR/install-steps" 2>/dev/null), want the check before the quit"
+    report_failure "install steps: $(cat "$CASE_DIR/install-steps" 2>/dev/null), want the check before the drain request and the quit"
 fi
 assert_file_contains "$daemon_dir/freeside.db" "live database"
 
@@ -1680,7 +1765,6 @@ old_inode=$(inode "$destination")
 daemon_dir=$CASE_DIR/home/Library/Application\ Support/Freeside/daemon
 mkdir -p "$daemon_dir"
 printf 'live database\n' >"$daemon_dir/freeside.db"
-write_check_database_daemon
 export STUB_BUILD_SUCCEEDS=true
 export STUB_CHECK_DATABASE_RC=1
 run_installer
@@ -1692,11 +1776,11 @@ assert_inode "$destination" "$old_inode" "a failed database check replaced the i
 assert_absent "$destination.install-staging"
 assert_absent "$destination.install-superseded"
 assert_file_omits "$CASE_DIR/install-steps" "pgrep"
+assert_file_omits "$CASE_DIR/install-steps" "drain"
 
 # A tier with no database yet has nothing to check: the install goes on and
 # says so.
 begin_case "tier without a database skips the check and says so" check-database-none
-write_check_database_daemon
 export STUB_BUILD_SUCCEEDS=true
 run_installer
 assert_rc 0
@@ -1709,7 +1793,8 @@ reset_case_records() {
     rm -rf "$CASE_DIR/Build"
     rm -f "$CASE_DIR/install-steps" "$CASE_DIR/defaults-calls" \
         "$CASE_DIR/go-args" "$CASE_DIR/go-goflags" "$CASE_DIR/xcodebuild-called" \
-        "$CASE_DIR/codesign-verify-count"
+        "$CASE_DIR/codesign-verify-count" "$CASE_DIR/drain-calls" \
+        "$CASE_DIR/drain-status-count"
 }
 
 # Install once with the case's daemon, then mark the installed helper as a
@@ -1738,11 +1823,13 @@ assert_marker_not_deleted() {
 begin_case "an unchanged daemon keeps its registration and signed bytes" daemon-unchanged
 destination=$CASE_DIR/Applications/Freeside.app
 export STUB_BUILD_SUCCEEDS=true
+export STUB_MARKER_SET=true
 install_first_generation
 run_built_installer
 assert_rc 0
 assert_contains "freesided is unchanged; leaving the daemon and its registration as they are"
 assert_marker_not_deleted
+assert_absent "$CASE_DIR/drain-calls"
 if cmp -s "$CASE_DIR/installed-freesided" "$destination/Contents/Resources/freesided"; then
     pass=$((pass + 1))
 else
@@ -1786,6 +1873,265 @@ for mismatch in digest launch-agent requirement no-key; do
         report_failure "a changed daemon did not ship the freshly built freesided"
     fi
 done
+
+# Readiness as freesided drain -status prints it. not_ready takes count and
+# kind pairs.
+not_ready() {
+    local blockers='' separator=''
+    while [[ $# -gt 0 ]]; do
+        blockers+="$separator{\"kind\":\"$2\",\"count\":$1}"
+        separator=,
+        shift 2
+    done
+    printf '{"ready":false,"drain":{"since":"2026-11-12T00:00:00Z","forced":false},"blockers":[%s],"as_of":"2026-11-12T00:00:00Z"}' \
+        "$blockers"
+}
+READY='{"ready":true,"drain":{"since":"2026-11-12T00:00:00Z","forced":false},"blockers":[],"as_of":"2026-11-12T00:00:01Z"}'
+
+drain_statuses() {
+    printf '%s\n' "$@" >"$CASE_DIR/drain-statuses"
+}
+
+assert_steps() {
+    local expected
+    expected=$(printf '%s\n' "$@")
+    if [[ "$(cat "$CASE_DIR/install-steps" 2>/dev/null)" == "$expected" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "install steps:"$'\n'"$(cat "$CASE_DIR/install-steps" 2>/dev/null)"$'\n'"want:"$'\n'"$expected"
+    fi
+}
+
+assert_first_drain_call() {
+    if [[ "$(head -1 "$CASE_DIR/drain-calls" 2>/dev/null)" == "$1" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "first drain call: $(head -1 "$CASE_DIR/drain-calls" 2>/dev/null), want: $1"
+    fi
+}
+
+prod_db="$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
+
+# A changed daemon drains before anything running is touched: the commits
+# print first, the wait names each new set of blockers once, and the
+# marker, the quit, and the swap all follow ready. The new app opens even
+# without --launch, because the drained daemon holds all work until the new
+# build starts (#3106).
+begin_case "a changed daemon drains before the swap, then the new app opens" drain-changed
+destination=$CASE_DIR/Applications/Freeside.app
+prod_db="$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
+make_recovery_app "$destination"
+printf 'FreesideBuildCommit=%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    >>"$destination/Contents/Info.plist"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+export STUB_MARKER_SET=true
+export STUB_GIT_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+drain_statuses "$(not_ready 2 execution_launch)" "$(not_ready 2 execution_launch)" \
+    "$(not_ready 1 execution_launch 1 probe)" "$READY"
+run_built_installer
+assert_rc 0
+assert_steps 'go build' 'drain request' 'drain status' 'drain status' 'drain status' \
+    'drain status' 'defaults read' 'defaults delete' pgrep 'defaults delete' \
+    "open $destination"
+assert_first_drain_call "drain -db $prod_db"
+before_request=${OUT%%requested a drain*}
+if [[ "$before_request" != "$OUT" &&
+    "$before_request" == *"installed commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"* &&
+    "$before_request" == *"new commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"* ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "both commits must print before the drain request"
+fi
+if [[ "$(grep -c 'waiting for the daemon to drain: 2 execution_launch$' <<<"$OUT")" -eq 1 ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "an unchanged set of blockers must print once"
+fi
+assert_contains "waiting for the daemon to drain: 1 execution_launch, 1 probe"
+assert_contains "the daemon is drained and ready to restart"
+assert_contains "opening the new app, which restarts the drained daemon on the new build"
+assert_file_omits "$CASE_DIR/drain-calls" "-cancel"
+assert_file_omits "$CASE_DIR/defaults-calls" " write "
+if cmp -s "$CASE_DIR/freesided" "$destination/Contents/Resources/freesided"; then
+    pass=$((pass + 1))
+else
+    report_failure "the drained install did not ship the new freesided"
+fi
+
+# freesided drain refuses when no daemon holds the database; there is then
+# nothing to drain, and the install goes on as before the drain existed.
+begin_case "with no daemon running, a changed install skips the drain wait" drain-absent
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+run_built_installer
+assert_rc 0
+assert_contains "installed commit: unknown, installed before the commit was recorded"
+assert_contains "no prod daemon is running, so there is nothing to drain"
+assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete'
+assert_contains "installed $destination"
+
+# A running daemon that cannot drain (older than the drain command, or any
+# other failure) stops the install before the quit, with the installed app
+# and the marker untouched. The request may have landed, so it is canceled.
+# The installer tells "no daemon" from a failed drain by freesided's own
+# refusal text, which the stub above copies; pin it to the source so a
+# rewording fails here rather than stopping every install with no daemon.
+begin_case "the no-daemon match is freesided drain's refusal text" drain-refusal-text
+# shellcheck disable=SC2016 # both patterns are literal source text
+if grep -Fq '"drain: no daemon is running on %s; there is nothing to drain"' \
+    "$SCRIPT_DIR/../daemon/cmd/freesided/drain.go" &&
+    grep -Fq 'grep -Fq "no daemon is running" "$drain_error"' "$INSTALLER"; then
+    pass=$((pass + 1))
+else
+    report_failure "freesided drain's no-daemon refusal no longer matches the installer"
+fi
+
+begin_case "a running daemon that cannot drain stops the install unchanged" drain-unsupported
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=unsupported
+export STUB_MARKER_SET=true
+run_built_installer
+assert_rc 1
+assert_contains "404 page not found"
+assert_contains "the running daemon could not drain, so nothing was replaced"
+assert_contains "daemon from the Freeside menu, then re-run the installer"
+assert_steps 'go build' 'drain request' 'drain cancel'
+assert_absent "$CASE_DIR/defaults-calls"
+assert_inode "$destination" "$old_inode" "a failed drain replaced the installed app"
+assert_absent "$destination.install-staging"
+
+begin_case "--force sends a forced drain and swaps once ready" drain-force
+destination=$CASE_DIR/Applications/Freeside.app
+prod_db="$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+drain_statuses "$(not_ready 1 execution_launch)" "$READY"
+run_built_installer --force
+assert_rc 0
+assert_contains "requested a forced drain"
+assert_first_drain_call "drain -db $prod_db -force"
+assert_steps 'go build' 'drain force' 'drain status' 'drain status' 'defaults read' \
+    'defaults delete' pgrep 'defaults delete' "open $destination"
+
+begin_case "--force does nothing for an unchanged daemon" drain-force-unchanged
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_MARKER_SET=true
+install_first_generation
+export STUB_DRAIN=running
+run_built_installer --force
+assert_rc 0
+assert_contains "--force has nothing to do: the daemon is unchanged and keeps running"
+assert_absent "$CASE_DIR/drain-calls"
+assert_marker_not_deleted
+
+# An install killed after a drained swap leaves the new bundle in place, the
+# marker deleted, and the old daemon drained. A re-run of the same sources
+# must not read that as unchanged: it drains again (already drained, so
+# ready at once) and opens the app, whose new daemon lifts the drain.
+begin_case "an unchanged bundle with the marker absent drains and opens the app" \
+    daemon-unchanged-marker-absent
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+install_first_generation
+export STUB_DRAIN=running
+drain_statuses "$READY"
+run_built_installer
+assert_rc 0
+assert_contains "freesided changed; the daemon restarts on the new build"
+assert_contains "the daemon is drained and ready to restart"
+assert_steps 'go build' 'defaults read' 'drain request' 'drain status' 'defaults read' \
+    'defaults delete' pgrep 'defaults delete' "open $destination"
+
+# Each way out between the drain request and a verified new bundle cancels
+# the drain and puts back a marker it deleted, so the old install keeps
+# serving with no restart at the next app launch.
+begin_case "an interrupt during the drain wait cancels the drain" drain-interrupted
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+export STUB_MARKER_SET=true
+export STUB_TERM_ON_SLEEP=true
+drain_statuses "$(not_ready 1 review_launch)"
+run_built_installer
+assert_rc 130
+assert_contains "canceled the drain; the installed daemon keeps serving"
+assert_steps 'go build' 'drain request' 'drain status' 'drain cancel'
+assert_absent "$CASE_DIR/defaults-calls"
+assert_inode "$destination" "$old_inode" "an interrupted drain replaced the installed app"
+
+# A second interrupt kills the first cancel. The drain must not then be left
+# in force with nothing said: bash 5 re-enters the handler, which cancels
+# again; bash 3.2 does not, and the undo reports that the cancel failed.
+begin_case "a second interrupt during the cancel never leaves the drain silently" \
+    drain-interrupted-twice
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+export STUB_TERM_ON_SLEEP=true
+export STUB_TERM_ON_CANCEL=true
+drain_statuses "$(not_ready 1 review_launch)"
+run_built_installer
+assert_rc 130
+if [[ "$OUT" == *"canceled the drain; the installed daemon keeps serving"* ||
+    "$OUT" == *"could not cancel the drain request"* ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "an interrupted cancel left the drain with no message:"$'\n'"$OUT"
+fi
+
+begin_case "a failed quit after the drain cancels it and restores the marker" drain-quit-fails
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+export STUB_MARKER_SET=true
+export STUB_APP_RUNNING=true
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "the installed app is still running; quit it and re-run"
+if [[ "$(tail -2 "$CASE_DIR/install-steps")" == "$(printf '%s\n' 'drain cancel' 'defaults write')" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "install steps end: $(tail -2 "$CASE_DIR/install-steps"), want the cancel and the marker restore"
+fi
+assert_file_contains "$CASE_DIR/defaults-calls" \
+    "after-build write ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent -bool true"
+assert_inode "$destination" "$old_inode" "a failed quit replaced the installed app"
+
+begin_case "a swap rollback after the drain cancels it and restores the marker" drain-rollback
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+export STUB_MARKER_SET=true
+export STUB_FAIL_VERIFY_CALL=4
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "restored the previous install"
+assert_steps 'go build' 'drain request' 'drain status' 'defaults read' 'defaults delete' \
+    pgrep 'defaults delete' 'drain cancel' 'defaults write'
+# The undo runs before the restore, so a failed restore cannot skip it.
+after_cancel=${OUT#*canceled the drain}
+if [[ "$after_cancel" != "$OUT" && "$after_cancel" == *"restored the previous install"* ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "the rollback must cancel the drain before it restores the bundle"
+fi
+assert_inode "$destination" "$old_inode" "a rolled-back swap did not restore the installed app"
 
 # A state path bearing a JSON metacharacter must bind byte-for-byte. Here the
 # state root carries a literal backslash before `t`; a raw interpolation into the `-json`
