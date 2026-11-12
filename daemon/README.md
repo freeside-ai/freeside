@@ -4048,42 +4048,21 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   `macos_host` commands are unproven as slots: the executor defects in #3009
   stop a slot after its first job. #3016 measures all four once #3009
   lands.
-- **Protected paths:** exactly these flags, in this order. Quote each
-  pattern so the shell does not expand `**`.
-
-  ```sh
-  -protected-path 'automation_control=.githooks/**' \
-  -protected-path 'automation_control=.github/**' \
-  -protected-path 'verification_control=.freeside/**' \
-  -protected-path 'verification_control=api/vacuum.ruleset.yaml' \
-  -protected-path 'verification_control=daemon/.golangci.yml' \
-  -protected-path 'verification_control=scripts/api-contract-digest.sh' \
-  -protected-path 'verification_control=scripts/check-commit-messages.sh' \
-  -protected-path 'verification_control=scripts/check-migration-history.sh' \
-  -protected-path 'verification_control=scripts/check-vocabulary.sh' \
-  -protected-path 'verification_control=scripts/check.sh' \
-  -protected-path 'verification_control=scripts/daemon-test-shards.json' \
-  -protected-path 'verification_control=scripts/daemon-test-shards.py' \
-  -protected-path 'verification_control=scripts/link-plan-section-refs.sh' \
-  -protected-path 'verification_control=scripts/merge-result-audit.sh' \
-  -protected-path 'verification_control=scripts/run-convergence.sh' \
-  -protected-path 'prompts_and_policy=policy/**' \
-  -protected-path 'prompts_and_policy=prompts/**' \
-  -protected-path 'materiality_rules=docs/plan.md'
-  ```
-
-  `TestImportFreesideProtectedPaths` in `internal/importer` pins the same
-  list; change both together. `docs/plan.md` is protected whole, because a
-  path pattern cannot select §9, so every agent edit to the plan is a
-  control-plane hold. The reasons for each entry are in
-  `devlog/2026-10-27-1204-freeside-protected-paths.md`; the `api/` and
-  `scripts/` additions follow the same rule, the scripts `check.sh` or a CI
-  workflow runs to decide pass or fail, plus the API lint ruleset.
-  `.github/**` is protected whole, since the defaults leave out files such
-  as the pull request template. That makes the reviewer-instruction files
-  under `.github/` hold publication too, not just surface
-  (`devlog/2026-11-10-1040-app-steps-executor-switch.md`). The
-  `scripts/test-*.sh` suites stay unprotected, like daemon `_test.go` files.
+- **Protected paths:** none. Pass no `-protected-path` flag, so Freeside's
+  profile widens no class, and an agent's edit to the hooks, the recipe,
+  the check scripts, `prompts/`, `policy/`, `docs/plan.md`, or a `.github/`
+  file outside the defaults below imports with no finding (plan §11,
+  revision 118). `TestImportFreesideProtectedPaths` in
+  `internal/importer` pins that; change both together. The importer's
+  built-in patterns still apply: an automation-control edit
+  (`.github/workflows/**`, `.github/actions/**`, and the rest of
+  `DefaultAutomationControlPatterns`) holds publication until #3125 makes it
+  advisory, a reviewer-instruction edit is advisory, and a git-metadata edit
+  is waivable. The verify stage still flags an edit to the recipe or a
+  script it names directly. The owner's accepted residual risk is in
+  `devlog/2026-11-12-0908-freeside-unprotected-paths.md`. A profile approved
+  with the flags this section used to list needs a fresh onboarding review,
+  because the approval digest binds them.
 - **Deputy scope:** set the deputy's `repository.allowed_paths` to every
   top-level entry but `images/`:
 
@@ -4099,8 +4078,8 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   `AGENTS.md`, `CLAUDE.md`, `.claude/**`, or `.agents/skills/**` draws an
   advisory reviewer-instruction finding and publishes with it surfaced. An
   edit to `.gitattributes` draws a waivable git-metadata finding. An edit to
-  a protected path above holds publication. A new top-level entry needs its
-  own allowed-path decision. `app/` is allowed, but an `api/openapi.yaml`
+  an automation-control path holds publication. A new top-level entry needs
+  its own allowed-path decision. `app/` is allowed, but an `api/openapi.yaml`
   change still fails the recipe's `api digest` step: its fix is a
   regenerated client, and `app generate` needs the network the writer's
   room lacks, so schema work stays human-run.
