@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -309,6 +310,118 @@ func RoleHarnessClient(
 		return "", fmt.Errorf("role %s: %w", role, errors.Join(ErrAgentNotAdmissible, err))
 	}
 	return agent.Enrollment.HarnessClient, nil
+}
+
+// AdapterProofSubstitutes chooses which other credentials the adapter
+// conformance proof may run under when the role's own lineup agent cannot
+// run it or falls short: the role's lineup line, with its enrollment swapped
+// for each other enrollment that could run the line. It re-checks, against
+// the store and the tree now, that each substitute's identity is enabled and
+// the enrollment bound to it (domain.ValidateEnrollmentIdentityBinding), that
+// it serves the line's model and effort (lineupServes, the rule
+// alternate-agent offers use), that its route is in the tree and names every
+// EffectiveEgress authority, and that its current generation exists and is
+// unmarked. The line's own enrollment is never a substitute. The result is
+// sorted by enrollment ID, with Line and the generation set and Select not
+// yet run, like ResolveRole's.
+//
+// The caller still picks the adapter for each substitute's launch and checks
+// the credential's expiry against the proof's budget, which need the launch.
+// A substitute fails no admission: the proof binds its invocation to the
+// substitute's generation (daemoncompose.AdapterConformanceLeaser), and no
+// task runs on it.
+func (s AgentSelection) AdapterProofSubstitutes(
+	ctx context.Context, st *store.Store, role domain.RoleName,
+) ([]RoleAgent, error) {
+	line, err := lineupLine(s.Tree, role)
+	if err != nil {
+		return nil, fmt.Errorf("role %s: %w", role, err)
+	}
+	var substitutes []RoleAgent
+	err = st.Read(ctx, func(tx *store.ReadTx) error {
+		client, err := lineupClient(ctx, tx, line)
+		if err != nil {
+			return err
+		}
+		identities, err := tx.ListAuthIdentities(ctx)
+		if err != nil {
+			return err
+		}
+		for _, identity := range identities {
+			if !identity.Enabled {
+				continue
+			}
+			enrollments, err := tx.ListClientEnrollments(ctx, identity.ID)
+			if err != nil {
+				return err
+			}
+			for _, enrollment := range enrollments {
+				agent, ok, err := s.adapterProofSubstitute(ctx, tx, line, client, identity, enrollment)
+				if err != nil {
+					return err
+				}
+				if ok {
+					substitutes = append(substitutes, agent)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(substitutes, func(a, b RoleAgent) int { return cmp.Compare(a.Enrollment.ID, b.Enrollment.ID) })
+	return substitutes, nil
+}
+
+// adapterProofSubstitute is one enrollment as an AdapterProofSubstitutes
+// candidate, or false when it fails one of that function's checks. Only a
+// store read failure is an error.
+func (s AgentSelection) adapterProofSubstitute(
+	ctx context.Context, tx *store.ReadTx, line domain.LineupSelection, client domain.HarnessClientKind,
+	identity domain.AuthIdentity, enrollment domain.ClientEnrollment,
+) (RoleAgent, bool, error) {
+	if enrollment.ID == domain.ClientEnrollmentID(line.Names.Enrollment) ||
+		domain.ValidateEnrollmentIdentityBinding(identity, enrollment) != nil {
+		return RoleAgent{}, false, nil
+	}
+	catalog, err := readCatalog(ctx, tx, enrollment.ID)
+	if err != nil {
+		return RoleAgent{}, false, err
+	}
+	if !lineupServes(enrollment, catalog, line, client) {
+		return RoleAgent{}, false, nil
+	}
+	route, ok := s.Tree.Route(enrollment.Route)
+	if !ok {
+		return RoleAgent{}, false, nil
+	}
+	for _, authority := range s.EffectiveEgress {
+		if !slices.Contains(route.InferenceAuthorities, authority) {
+			return RoleAgent{}, false, nil
+		}
+	}
+	line.Names.Enrollment = string(enrollment.ID)
+	// The checks above are the ones resolveNames refuses on, so a refusal
+	// here is a store failure.
+	agent, err := resolveNames(ctx, tx, s.Tree, line.Names, lineupText(line))
+	if err != nil {
+		return RoleAgent{}, false, err
+	}
+	agent.Line = line
+	agent.Generation, err = tx.CurrentEnrollmentGeneration(ctx, enrollment.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return RoleAgent{}, false, nil
+	}
+	if err != nil {
+		return RoleAgent{}, false, err
+	}
+	if err := agent.requireUnmarked(ctx, tx); errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+		return RoleAgent{}, false, nil
+	} else if err != nil {
+		return RoleAgent{}, false, err
+	}
+	return agent, true, nil
 }
 
 func lineupLine(tree agenttree.Tree, role domain.RoleName) (domain.LineupSelection, error) {

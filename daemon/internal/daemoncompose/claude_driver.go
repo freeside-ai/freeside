@@ -1627,10 +1627,11 @@ func runClaudeConformance(
 		return err
 	}
 	// Only a passed ward suite reaches here, so no new adapter record rests
-	// on a failed runner proof. A proof that cannot run (the implementer
-	// runs another adapter, or its generation is marked) records nothing,
-	// and the adapter's last record stands across an image change: that
-	// record is scoped to the harness build its digest names, not the image.
+	// on a failed runner proof. A proof that no subscription can run (the
+	// implementer runs another adapter, or every subscription that could run
+	// its line is marked or expiring) records nothing, and the adapter's last
+	// record stands across an image change: that record is scoped to the
+	// harness build its digest names, not the image.
 	return proveClaudeAdapter(ctx, st, backend, cfg, leaser)
 }
 

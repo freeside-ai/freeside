@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -73,7 +74,7 @@ func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
 			if runErr == nil {
 				t.Fatal("incomplete run passed")
 			}
-			if err := proveResolvedClaudeAdapter(t.Context(), st, adapter.Digest, func() (domain.LaunchCapabilitySet, error) { return observed, runErr }); err != nil {
+			if err := proveAdapterOnCandidates(t.Context(), st, []engine.RoleAgent{{Adapter: adapter}}, noRecheck, func(engine.RoleAgent) (domain.LaunchCapabilitySet, error) { return observed, runErr }); err != nil {
 				t.Fatal(err)
 			}
 			if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
@@ -91,13 +92,107 @@ func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := proveResolvedClaudeAdapter(t.Context(), st, codex.Digest, func() (domain.LaunchCapabilitySet, error) { t.Fatal("launched another adapter"); return nil, nil }); err != nil {
+	if err := proveAdapterOnCandidates(t.Context(), st, []engine.RoleAgent{{Adapter: codex}}, noRecheck, func(engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+		t.Fatal("launched another adapter")
+		return nil, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
 		_, found, err := tx.LatestAdapterConformance(t.Context(), codex.Digest)
 		if found {
 			t.Fatal("non-Claude adapter got a record")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// noRecheck passes every candidate's launch-time recheck: these candidates
+// are not in the store.
+func noRecheck(engine.RoleAgent) error { return nil }
+
+// TestAdapterProofSkipsAnExpiringCredential: a subscription whose observable
+// expiry falls inside the proof's budget is not launched. The proof goes to
+// the next subscription, or records nothing when there is none.
+func TestAdapterProofSkipsAnExpiringCredential(t *testing.T) {
+	t.Parallel()
+	adapter, err := agentbaseline.ClaudeWardAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiring := engine.RoleAgent{Adapter: adapter}
+	expiring.Enrollment.ID, expiring.Enrollment.AuthMethod = "claude-oauth/claude_code", domain.AuthMethodOAuth
+	expiring.Generation.EnrollmentID = expiring.Enrollment.ID
+	expiring.Generation.TokenExpiry = new(time.Now().Add(adapterProofBudget / 2))
+	healthy := engine.RoleAgent{Adapter: adapter}
+	healthy.Enrollment.ID, healthy.Generation.EnrollmentID = "claude-healthy/claude_code", "claude-healthy/claude_code"
+	for name, tc := range map[string]struct {
+		candidates []engine.RoleAgent
+		launched   []domain.ClientEnrollmentID
+	}{
+		"next subscription": {candidates: []engine.RoleAgent{expiring, healthy}, launched: []domain.ClientEnrollmentID{healthy.Enrollment.ID}},
+		"no other":          {candidates: []engine.RoleAgent{expiring}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			var launched []domain.ClientEnrollmentID
+			if err := proveAdapterOnCandidates(t.Context(), st, tc.candidates, noRecheck, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+				launched = append(launched, agent.Enrollment.ID)
+				return testObservedClaudeCapabilities(), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(launched, tc.launched) {
+				t.Fatalf("launched %v, want %v", launched, tc.launched)
+			}
+			if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+				_, found, err := tx.LatestAdapterConformance(t.Context(), adapter.Digest)
+				if found != (tc.launched != nil) {
+					t.Fatalf("record found = %t after launching %v", found, launched)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestAdapterRecoveryPendingStopsTheProof: a proof whose cleanup is still
+// pending records its failure and returns at once, so recovery runs before
+// any other subscription launches a proof.
+func TestAdapterRecoveryPendingStopsTheProof(t *testing.T) {
+	t.Parallel()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	adapter, err := agentbaseline.ClaudeWardAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recordTestClaudeAdapterConformance(t.Context(), st, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	first, second := engine.RoleAgent{Adapter: adapter}, engine.RoleAgent{Adapter: adapter}
+	first.Enrollment.ID, second.Enrollment.ID = "claude-first/claude_code", "claude-second/claude_code"
+	first.Generation.EnrollmentID, second.Generation.EnrollmentID = first.Enrollment.ID, second.Enrollment.ID
+	var launched []domain.ClientEnrollmentID
+	pending := &adapterRecoveryPending{errors.New("runtime still present")}
+	err = proveAdapterOnCandidates(t.Context(), st, []engine.RoleAgent{first, second}, noRecheck, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+		launched = append(launched, agent.Enrollment.ID)
+		return nil, pending
+	})
+	if !errors.Is(err, pending) {
+		t.Fatalf("recovery pending = %v, want it returned", err)
+	}
+	if !slices.Equal(launched, []domain.ClientEnrollmentID{first.Enrollment.ID}) {
+		t.Fatalf("launched %v, want only the first candidate", launched)
+	}
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		record, _, err := tx.LatestAdapterConformance(t.Context(), adapter.Digest)
+		if err == nil && record.Outcome != domain.ConformanceFailed {
+			t.Fatalf("recovery pending recorded %+v, want failed", record)
 		}
 		return err
 	}); err != nil {
