@@ -361,7 +361,7 @@ func TestOnboardUsage(t *testing.T) {
 			if !errors.Is(err, flag.ErrHelp) {
 				t.Fatalf("err = %v, want flag.ErrHelp", err)
 			}
-			for _, want := range []string{"Usage: freesided onboard <owner/name> [flags]", "-db", "-protected-path"} {
+			for _, want := range []string{"Usage: freesided onboard <owner/name> [flags]", "-db", "-protected-path", "-candidate-automation-changes"} {
 				if !strings.Contains(output.String(), want) {
 					t.Fatalf("usage missing %q:\n%s", want, output.String())
 				}
@@ -469,18 +469,51 @@ func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
 	}
 }
 
-func TestOnboardRejectsInvalidCommitPlanBeforeStoreWork(t *testing.T) {
+func TestOnboardRejectsInvalidPolicyFlagsBeforeStoreWork(t *testing.T) {
 	t.Parallel()
-	recipePath := filepath.Join(t.TempDir(), "verify.json")
-	if err := os.WriteFile(
-		recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
-	); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct{ flag, want string }{
+		{"-commit-plan", "-commit-plan \"bogus\" is invalid; valid values: [single_commit plan_preferred]"},
+		{"-candidate-automation-changes", "-candidate-automation-changes \"bogus\" is invalid; valid values: [block advisory]"},
+	} {
+		t.Run(tc.flag, func(t *testing.T) {
+			t.Parallel()
+			recipePath := filepath.Join(t.TempDir(), "verify.json")
+			if err := os.WriteFile(
+				recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			// The database path's parent does not exist, so any store work
+			// would fail differently: the flag is refused first.
+			err := runOnboardCommand(t.Context(), []string{
+				"example/repo",
+				"-db", filepath.Join(t.TempDir(), "missing", "freeside.db"),
+				"-state-dir", t.TempDir(),
+				"-registration-id", "11",
+				"-repository-id", "44",
+				"-commit", "0123456789012345678901234567890123456789",
+				"-base-ref", "main",
+				"-base-image", "example.invalid/agent@sha256:test",
+				"-base-build-ref", "local/agent:test",
+				"-review-config-digest", "sha256:review",
+				"-recipe", recipePath,
+				tc.flag, "bogus",
+			}, io.Discard, io.Discard)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("runOnboardCommand error = %v, want %q", err, tc.want)
+			}
+		})
 	}
-	err := runOnboardCommand(t.Context(), []string{
+}
+
+// TestParseOnboardConfigAutomationChanges: the stance defaults to block, the
+// owner's value reaches the proposed policy, and so the approval digest.
+func TestParseOnboardConfigAutomationChanges(t *testing.T) {
+	t.Parallel()
+	baseArgs := []string{
 		"example/repo",
-		"-db", filepath.Join(t.TempDir(), "missing", "freeside.db"),
-		"-state-dir", t.TempDir(),
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
 		"-registration-id", "11",
 		"-repository-id", "44",
 		"-commit", "0123456789012345678901234567890123456789",
@@ -488,12 +521,27 @@ func TestOnboardRejectsInvalidCommitPlanBeforeStoreWork(t *testing.T) {
 		"-base-image", "example.invalid/agent@sha256:test",
 		"-base-build-ref", "local/agent:test",
 		"-review-config-digest", "sha256:review",
-		"-recipe", recipePath,
-		"-commit-plan", "bogus",
-	}, io.Discard, io.Discard)
-	const want = "-commit-plan \"bogus\" is invalid; valid values: [single_commit plan_preferred]"
-	if err == nil || err.Error() != want {
-		t.Fatalf("runOnboardCommand error = %v, want %q", err, want)
+		"-recipe", "/tmp/verify.json",
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want domain.AutomationChangePolicy
+	}{
+		{"default", nil, domain.AutomationChangesBlocked},
+		{"block", []string{"-candidate-automation-changes", "block"}, domain.AutomationChangesBlocked},
+		{"advisory", []string{"-candidate-automation-changes", "advisory"}, domain.AutomationChangesAdvisory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs), tc.args...), io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := onboardPolicy(cfg).CandidateAutomationChanges; got != tc.want {
+				t.Fatalf("CandidateAutomationChanges = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

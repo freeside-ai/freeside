@@ -185,6 +185,7 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
 			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,
@@ -211,6 +212,17 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 	if preferredReview.ApprovalDigest == singleCommitReview.ApprovalDigest {
 		t.Fatal("plan-preferred review reused the single-commit approval digest")
 	}
+	// The automation-change stance is part of what the owner approves.
+	req.Policy.CandidateAutomationChanges = domain.AutomationChangesAdvisory
+	advisoryReview, err := onboard.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("advisory review pass: %v", err)
+	}
+	if advisoryReview.Profile.CandidateAutomationChanges != domain.AutomationChangesAdvisory ||
+		advisoryReview.ApprovalDigest == preferredReview.ApprovalDigest {
+		t.Fatalf("advisory review = %+v, want its own approval digest", advisoryReview)
+	}
+	req.Policy.CandidateAutomationChanges = domain.AutomationChangesBlocked
 	// The declared Go module and Swift package directories are part of what
 	// the owner approves.
 	req.Image.GoModuleDir = "daemon"
@@ -306,6 +318,7 @@ func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
 			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,
@@ -414,6 +427,7 @@ func TestOnboardReRunBindsProtectedPaths(t *testing.T) {
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
 			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,
@@ -540,6 +554,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
 			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,
@@ -806,6 +821,7 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
 			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,

@@ -45,6 +45,11 @@ type OnboardPolicy struct {
 	// Freeside whose findings may start a round (plan §5.19). Empty admits
 	// nobody and proposes the same profile as before the field existed.
 	ExternalReviewers []domain.ExternalReviewer
+	// CandidateAutomationChanges is the owner's stance on candidate edits to
+	// automation-control paths (plan §5.5): block refuses them at import,
+	// advisory publishes them with an advisory finding. The profile digest,
+	// and so the approval digest, binds it.
+	CandidateAutomationChanges domain.AutomationChangePolicy
 }
 
 // OnboardRequest binds the review and image build to one repository identity.
@@ -251,7 +256,7 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		Repo:                       req.Repository,
 		RepositoryID:               req.RepositoryID,
 		PRExecution:                req.Policy.PRExecution,
-		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		CandidateAutomationChanges: req.Policy.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   audit.EffectiveTokenPerms,
 		AllowOIDC:                  audit.OIDCAvailable,
 		AllowEnvironmentSecrets:    audit.EnvironmentSecrets,
