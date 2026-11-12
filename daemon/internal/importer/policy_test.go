@@ -400,11 +400,26 @@ var freesideProtectedPaths = domain.ProtectedPathConfig{}
 // an agent's edit to the paths it once protected (its hooks, the pull request
 // template, the recipe, verification scripts, lint configuration, prompts,
 // policy, and the plan) imports with no finding, while the importer's
-// built-in defaults still fire. A workflow edit still lifts to a blocking
-// automation-control finding, and a reviewer-instruction edit under .github/
-// still draws only an advisory one.
+// built-in defaults still fire. Under the block stance a workflow edit still
+// lifts to a blocking automation-control finding; under the advisory stance
+// (plan §5.5) the same edit lifts as advisory. Under both, a
+// reviewer-instruction edit under .github/ draws only an advisory finding.
 func TestImportFreesideProtectedPaths(t *testing.T) {
 	t.Parallel()
+	for stance, workflowDisposition := range map[domain.AutomationChangePolicy]domain.FindingDisposition{
+		domain.AutomationChangesBlocked:  domain.DispositionBlocking,
+		domain.AutomationChangesAdvisory: domain.DispositionAdvisory,
+	} {
+		t.Run(string(stance), func(t *testing.T) {
+			t.Parallel()
+			importFreesideProtectedPaths(t, stance, workflowDisposition)
+		})
+	}
+}
+
+func importFreesideProtectedPaths(
+	t *testing.T, stance domain.AutomationChangePolicy, workflowDisposition domain.FindingDisposition,
+) {
 	if err := freesideProtectedPaths.Validate(); err != nil {
 		t.Fatalf("Freeside's protected paths: %v", err)
 	}
@@ -438,7 +453,7 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 	handoff := exportWorkspace(t, ws)
 	clone := cloneAtBase(t, checkout)
 	opts := testImportOptions(base)
-	pol, err := opts.Policy.WithProtectedPaths(fixtureTrustProfileProtecting(t, freesideProtectedPaths))
+	pol, err := opts.Policy.WithProtectedPaths(fixtureTrustProfileWithStance(t, freesideProtectedPaths, stance))
 	if err != nil {
 		t.Fatalf("WithProtectedPaths: %v", err)
 	}
@@ -465,7 +480,7 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 		disposition domain.FindingDisposition
 		category    domain.ControlPlaneCategory
 	}{
-		workflow:    {FindingAutomationControlPath, domain.DispositionBlocking, domain.ControlPlaneWorkflowConfiguration},
+		workflow:    {FindingAutomationControlPath, workflowDisposition, domain.ControlPlaneWorkflowConfiguration},
 		instruction: {FindingReviewerInstructionPath, domain.DispositionAdvisory, domain.ControlPlaneReviewerInstructions},
 	}
 	seen := map[string]bool{}
@@ -475,10 +490,11 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 			t.Fatalf("unexpected finding %+v; findings = %+v", finding, res.Findings)
 		}
 		seen[finding.Path] = true
-		if finding.Advisory() != (expected.disposition == domain.DispositionAdvisory) {
-			t.Fatalf("finding for %s: Advisory() = %v, want disposition %s", finding.Path, finding.Advisory(), expected.disposition)
+		if finding.Advisory(stance) != (expected.disposition == domain.DispositionAdvisory) {
+			t.Fatalf("finding for %s: Advisory() = %v, want disposition %s",
+				finding.Path, finding.Advisory(stance), expected.disposition)
 		}
-		lifted := finding.Candidate()
+		lifted := finding.Candidate(stance)
 		if err := lifted.Validate(); err != nil {
 			t.Fatalf("lifted finding for %s: %v", finding.Path, err)
 		}
@@ -531,7 +547,7 @@ func TestImportRegistrySetDeclarationIsControlPlane(t *testing.T) {
 	if len(res.Findings) != 1 || res.Findings[0].Kind != FindingPromptsPolicyPath || res.Findings[0].Path != declaration {
 		t.Fatalf("findings = %+v, want one prompts-and-policy finding for %s", res.Findings, declaration)
 	}
-	lifted := res.Findings[0].Candidate()
+	lifted := res.Findings[0].Candidate(opts.Policy.CandidateAutomationChanges)
 	if err := lifted.Validate(); err != nil {
 		t.Fatalf("lifted finding: %v", err)
 	}
@@ -595,14 +611,14 @@ func TestPublishBlockingPatternsMatchGate(t *testing.T) {
 	for _, pattern := range listed {
 		path := samplePath(pattern)
 		findings := applyPolicy([]plannedChange{{path: path, kind: ChangeModified, size: 1}}, pol)
-		if !slices.ContainsFunc(findings, func(f Finding) bool { return f.Fatal(nil) }) {
+		if !slices.ContainsFunc(findings, func(f Finding) bool { return f.Fatal(nil, pol.CandidateAutomationChanges) }) {
 			t.Errorf("listed pattern %q: %s draws no fatal finding: %+v", pattern, path, findings)
 		}
 	}
 	for _, pattern := range pol.reviewerInstruction() {
 		path := samplePath(pattern)
 		findings := applyPolicy([]plannedChange{{path: path, kind: ChangeModified, size: 1}}, pol)
-		if len(findings) == 0 || !AllAdvisory(findings) {
+		if len(findings) == 0 || !AllAdvisory(findings, pol.CandidateAutomationChanges) {
 			t.Errorf("reviewer-instruction pattern %q: %s findings = %+v, want advisory only", pattern, path, findings)
 		}
 	}

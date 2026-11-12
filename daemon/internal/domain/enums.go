@@ -1610,22 +1610,31 @@ func (m PRExecutionMode) valid() bool {
 }
 
 // AutomationChangePolicy is the trust profile's stance on candidate changes
-// to automation-control paths (plan §5.5). The single member is deliberate:
-// block is the only §5.5 stance (such changes route through the
-// control-plane change process, never the ordinary candidate flow), so
-// loosening it is an explicit vocabulary change, not a flag flip.
+// to automation-control paths (plan §5.5). block is the default: such a
+// change is refused at import and routes through the control-plane change
+// process. advisory is the opt-in only a profile review sets: the change
+// publishes with an advisory finding the human sees before merging. The
+// stance is read only from the digest-bound profile
+// (ControlPlaneCategory.AdvisoryUnder), never from a stored finding.
 type AutomationChangePolicy string
 
-// AutomationChangesBlocked blocks candidate automation-control changes in
-// the ordinary workflow.
-const AutomationChangesBlocked AutomationChangePolicy = "block"
+const (
+	// AutomationChangesBlocked blocks candidate automation-control changes
+	// in the ordinary workflow.
+	AutomationChangesBlocked AutomationChangePolicy = "block"
+	// AutomationChangesAdvisory publishes candidate automation-control
+	// changes with an advisory finding instead of refusing them.
+	AutomationChangesAdvisory AutomationChangePolicy = "advisory"
+)
 
 // AllAutomationChangePolicies lists every valid AutomationChangePolicy.
-var AllAutomationChangePolicies = []AutomationChangePolicy{AutomationChangesBlocked}
+var AllAutomationChangePolicies = []AutomationChangePolicy{
+	AutomationChangesBlocked, AutomationChangesAdvisory,
+}
 
 func (p AutomationChangePolicy) valid() bool {
 	switch p {
-	case AutomationChangesBlocked:
+	case AutomationChangesBlocked, AutomationChangesAdvisory:
 		return true
 	default:
 		return false
@@ -2066,34 +2075,14 @@ func (c ControlPlaneCategory) valid() bool {
 	}
 }
 
-// Advisory reports whether a candidate change in this category is surfaced
-// as an advisory finding instead of blocking publication (plan §5.8,
-// revision 42). Only reviewer instructions qualify: the coding agent and the
-// Freeside-invoked reviewer load them from the exact trusted base, so a
-// candidate's edit cannot govern its own review, and the edit lands as
-// reviewed repository content behind the human merge gate. Every other
-// category is Freeside-owned configuration and stays publish-blocking. The
-// switch omits default so a new category must decide its stance; the
-// trailing return fails closed for the invalid zero value.
-func (c ControlPlaneCategory) Advisory() bool {
-	switch c {
-	case ControlPlaneReviewerInstructions:
-		return true
-	case ControlPlaneWorkflowConfiguration, ControlPlanePromptsAndPolicy,
-		ControlPlaneEgressAndTrust, ControlPlaneVerificationRecipes,
-		ControlPlaneMaterialityRules:
-		return false
-	}
-	return false
-}
-
 // FindingDisposition is a finding's effective publication stance: blocking
 // until a trusted decision record waives it, and waivable only for classes
 // plan §3.1 does not name non-waivable. Advisory is the third stance: the
 // finding is surfaced to the human and never blocks, carries no waiver, and
-// is valid only for a control-plane category whose Advisory predicate holds
-// (plan §5.8, revision 42). It is policy the emitting gate assigns, never a
-// decision record.
+// is valid only for a control-plane category that some profile stance makes
+// advisory (ControlPlaneCategory.AdvisoryUnder; plan §5.8, revision 42, and
+// §5.5). It is policy the emitting gate assigns from the bound profile, never
+// a decision record.
 type FindingDisposition string
 
 const (

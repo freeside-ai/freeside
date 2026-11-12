@@ -144,8 +144,9 @@ func categoryFor(kind FindingKind) (domain.ControlPlaneCategory, bool) {
 }
 
 // PublishBlockingPatterns lists, sorted and without duplicates, every path
-// pattern whose match is fatal under the publish_strict finding profile: each
-// control-plane class whose finding is not advisory, plus git metadata, with
+// pattern whose match is fatal under the publish_strict finding profile and
+// the policy's automation-change stance: each control-plane class whose
+// finding is not advisory, plus git metadata, with
 // the defaults and the policy's widening together. It reads the same Fatal
 // predicate the pipeline applies to an import's findings, so the list and the
 // gate cannot disagree on a class. The list informs a writer before it edits;
@@ -154,11 +155,11 @@ func categoryFor(kind FindingKind) (domain.ControlPlaneCategory, bool) {
 func (p Policy) PublishBlockingPatterns() []string {
 	var patterns []string
 	for _, cl := range controlPlaneClasses {
-		if (Finding{Kind: cl.kind}).Fatal(nil) {
+		if (Finding{Kind: cl.kind}).Fatal(nil, p.CandidateAutomationChanges) {
 			patterns = append(patterns, cl.patterns(p)...)
 		}
 	}
-	if (Finding{Kind: FindingGitMetadataPath}).Fatal(nil) {
+	if (Finding{Kind: FindingGitMetadataPath}).Fatal(nil, p.CandidateAutomationChanges) {
 		patterns = append(patterns, p.gitMetadata()...)
 	}
 	slices.Sort(patterns)

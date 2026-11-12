@@ -1,6 +1,10 @@
 package importer
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+)
 
 func TestFindingKindValid(t *testing.T) {
 	t.Parallel()
@@ -86,17 +90,18 @@ func TestFindingFatalPublishStrict(t *testing.T) {
 	strict := FindingProfilePublishStrict
 	for _, k := range AllFindingKinds {
 		want := k != FindingReviewerInstructionPath
-		if (Finding{Kind: k}).Fatal(&strict) != want {
+		if (Finding{Kind: k}).Fatal(&strict, "") != want {
 			t.Errorf("Fatal(%q, publish-strict) = %v, want %v", k, !want, want)
 		}
-		if (Finding{Kind: k}).Fatal(nil) != want {
+		if (Finding{Kind: k}).Fatal(nil, "") != want {
 			t.Errorf("Fatal(%q, nil) = %v, want %v (nil is the strict default)", k, !want, want)
 		}
 	}
 	// An unknown profile fails closed to fully strict.
 	bogus := FindingProfile("bogus")
-	if !(Finding{Kind: FindingAllowlistViolation}).Fatal(&bogus) {
-		t.Error("an unknown profile must treat every finding as fatal")
+	if !(Finding{Kind: FindingAllowlistViolation}).Fatal(&bogus, "") ||
+		!(Finding{Kind: FindingAutomationControlPath}).Fatal(&bogus, domain.AutomationChangesAdvisory) {
+		t.Error("an unknown profile must treat every finding as fatal, under every stance")
 	}
 }
 
@@ -133,19 +138,19 @@ func TestFindingFatalSpecification(t *testing.T) {
 			t.Errorf("kind %q missing from the specification fatality table", k)
 			continue
 		}
-		if fatal := (Finding{Kind: k}).Fatal(&spec); fatal != got {
+		if fatal := (Finding{Kind: k}).Fatal(&spec, ""); fatal != got {
 			t.Errorf("Fatal(%q, specification) = %v, want %v", k, fatal, got)
 		}
 	}
 	// A tolerated kind that withholds the commit never occurs (blocksCommit and
 	// tolerated are disjoint here), but the invalid zero kind must fail closed.
-	if !(Finding{Kind: FindingKind("")}).Fatal(&spec) {
+	if !(Finding{Kind: FindingKind("")}).Fatal(&spec, "") {
 		t.Error("invalid zero kind must be fatal under any profile")
 	}
 	// Every inherently-commit-blocking kind must also be fatal for specification:
 	// a withheld commit cannot become a completed candidate.
 	for _, k := range AllFindingKinds {
-		if k.blocksCommit() && !(Finding{Kind: k}).Fatal(&spec) {
+		if k.blocksCommit() && !(Finding{Kind: k}).Fatal(&spec, "") {
 			t.Errorf("commit-blocking kind %q tolerated under specification", k)
 		}
 	}

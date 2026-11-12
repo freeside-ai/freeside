@@ -1,8 +1,10 @@
 package importer
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,11 +33,20 @@ func fixtureTrustProfileProtecting(
 	t *testing.T, paths domain.ProtectedPathConfig,
 ) domain.AutomationTrustProfile {
 	t.Helper()
+	return fixtureTrustProfileWithStance(t, paths, domain.AutomationChangesBlocked)
+}
+
+// fixtureTrustProfileWithStance is fixtureTrustProfileProtecting under the
+// given candidate_automation_changes stance.
+func fixtureTrustProfileWithStance(
+	t *testing.T, paths domain.ProtectedPathConfig, stance domain.AutomationChangePolicy,
+) domain.AutomationTrustProfile {
+	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
 		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
-		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		CandidateAutomationChanges: stance,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
@@ -102,7 +113,7 @@ func TestFindingCandidateLift(t *testing.T) {
 		t.Fatalf("wantClass covers %d kinds, AllFindingKinds has %d", len(wantClass), len(AllFindingKinds))
 	}
 	for _, k := range AllFindingKinds {
-		cf := Finding{Kind: k, Path: "p/x", Detail: "added"}.Candidate()
+		cf := Finding{Kind: k, Path: "p/x", Detail: "added"}.Candidate(domain.AutomationChangesBlocked)
 		if err := cf.Validate(); err != nil {
 			t.Errorf("%s: Candidate().Validate() = %v", k, err)
 		}
@@ -112,14 +123,25 @@ func TestFindingCandidateLift(t *testing.T) {
 		if cf.Origin != domain.FindingOriginImport {
 			t.Errorf("%s: origin = %q, want import", k, cf.Origin)
 		}
-		// Reviewer instructions are the one advisory kind (plan §5.8,
-		// revision 42); every other kind lifts blocking.
+		// Under block, reviewer instructions are the one advisory kind (plan
+		// §5.8, revision 42); every other kind lifts blocking. The advisory
+		// stance adds automation-control paths and nothing else.
 		wantDisposition := domain.DispositionBlocking
 		if k == FindingReviewerInstructionPath {
 			wantDisposition = domain.DispositionAdvisory
 		}
 		if cf.Disposition != wantDisposition {
 			t.Errorf("%s: disposition = %q, want %q", k, cf.Disposition, wantDisposition)
+		}
+		advisory := Finding{Kind: k, Path: "p/x", Detail: "added"}.Candidate(domain.AutomationChangesAdvisory)
+		if err := advisory.Validate(); err != nil {
+			t.Errorf("%s: Candidate(advisory).Validate() = %v", k, err)
+		}
+		if k == FindingAutomationControlPath {
+			wantDisposition = domain.DispositionAdvisory
+		}
+		if advisory.Disposition != wantDisposition {
+			t.Errorf("%s: disposition under advisory = %q, want %q", k, advisory.Disposition, wantDisposition)
 		}
 		if cf.Kind != string(k) {
 			t.Errorf("%s: kind token = %q", k, cf.Kind)
@@ -137,31 +159,46 @@ func TestFindingCandidateLift(t *testing.T) {
 	}
 }
 
-// TestFindingAdvisoryStance: exactly the reviewer-instruction kind is
-// advisory (plan §5.8, revision 42): non-fatal under the default and
-// publish-strict profiles, still fatal under the specification profile, and
-// AllAdvisory is the clean bar an import meets.
+// TestFindingAdvisoryStance: under the block stance (and its zero value)
+// exactly the reviewer-instruction kind is advisory (plan §5.8, revision 42);
+// the advisory stance adds the automation-control kind (§5.5) and nothing
+// else. An advisory finding is non-fatal under the default and
+// publish-strict profiles and still fatal under the specification profile,
+// and AllAdvisory is the clean bar an import meets.
 func TestFindingAdvisoryStance(t *testing.T) {
 	t.Parallel()
 	strict := FindingProfilePublishStrict
 	spec := FindingProfileSpecification
-	for _, k := range AllFindingKinds {
-		f := Finding{Kind: k, Path: "p/x"}
-		wantAdvisory := k == FindingReviewerInstructionPath
-		if f.Advisory() != wantAdvisory {
-			t.Errorf("%s: Advisory() = %v, want %v", k, f.Advisory(), wantAdvisory)
-		}
-		if f.Fatal(nil) != !wantAdvisory || f.Fatal(&strict) != !wantAdvisory {
-			t.Errorf("%s: Fatal(nil)=%v Fatal(strict)=%v, want %v", k, f.Fatal(nil), f.Fatal(&strict), !wantAdvisory)
-		}
-		if wantAdvisory && !f.Fatal(&spec) {
-			t.Errorf("%s: specification profile must keep the instruction path fatal", k)
+	stances := map[domain.AutomationChangePolicy][]FindingKind{
+		"":                               {FindingReviewerInstructionPath},
+		domain.AutomationChangesBlocked:  {FindingReviewerInstructionPath},
+		domain.AutomationChangesAdvisory: {FindingReviewerInstructionPath, FindingAutomationControlPath},
+	}
+	for stance, advisoryKinds := range stances {
+		for _, k := range AllFindingKinds {
+			f := Finding{Kind: k, Path: "p/x"}
+			wantAdvisory := slices.Contains(advisoryKinds, k)
+			if f.Advisory(stance) != wantAdvisory {
+				t.Errorf("%q %s: Advisory() = %v, want %v", stance, k, f.Advisory(stance), wantAdvisory)
+			}
+			if f.Fatal(nil, stance) != !wantAdvisory || f.Fatal(&strict, stance) != !wantAdvisory {
+				t.Errorf("%q %s: Fatal(nil)=%v Fatal(strict)=%v, want %v",
+					stance, k, f.Fatal(nil, stance), f.Fatal(&strict, stance), !wantAdvisory)
+			}
+			if wantAdvisory && !f.Fatal(&spec, stance) {
+				t.Errorf("%q %s: specification profile must keep the path fatal", stance, k)
+			}
 		}
 	}
 	advisory := Finding{Kind: FindingReviewerInstructionPath, Path: "AGENTS.md"}
-	if !AllAdvisory(nil) || !AllAdvisory([]Finding{advisory}) ||
-		AllAdvisory([]Finding{advisory, {Kind: FindingSizeViolation, Path: "big.bin"}}) {
+	workflow := Finding{Kind: FindingAutomationControlPath, Path: ".github/workflows/ci.yml"}
+	if !AllAdvisory(nil, "") || !AllAdvisory([]Finding{advisory}, "") ||
+		AllAdvisory([]Finding{advisory, {Kind: FindingSizeViolation, Path: "big.bin"}}, "") {
 		t.Error("AllAdvisory: empty and advisory-only sets qualify, a blocking sibling does not")
+	}
+	if AllAdvisory([]Finding{advisory, workflow}, domain.AutomationChangesBlocked) ||
+		!AllAdvisory([]Finding{advisory, workflow}, domain.AutomationChangesAdvisory) {
+		t.Error("AllAdvisory: a workflow edit qualifies under advisory only")
 	}
 }
 
@@ -170,7 +207,7 @@ func TestFindingAdvisoryStance(t *testing.T) {
 // mutual-exclusion, which CandidateFinding.Validate enforces).
 func TestFindingCandidateLiftPathHex(t *testing.T) {
 	t.Parallel()
-	cf := Finding{Kind: FindingReviewerInstructionPath, PathHex: "6261", Detail: "deleted"}.Candidate()
+	cf := Finding{Kind: FindingReviewerInstructionPath, PathHex: "6261", Detail: "deleted"}.Candidate("")
 	if err := cf.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}
@@ -186,8 +223,8 @@ func TestFindingCandidateLiftPathHex(t *testing.T) {
 // sinking the authorization instead of recording the blocking secrets.
 func TestFindingCandidateLiftSecretsDistinct(t *testing.T) {
 	t.Parallel()
-	a := Finding{Kind: FindingSecret, Path: "conf.env", Rule: "aws_key", Line: 3}.Candidate()
-	b := Finding{Kind: FindingSecret, Path: "conf.env", Rule: "gh_token", Line: 7}.Candidate()
+	a := Finding{Kind: FindingSecret, Path: "conf.env", Rule: "aws_key", Line: 3}.Candidate("")
+	b := Finding{Kind: FindingSecret, Path: "conf.env", Rule: "gh_token", Line: 7}.Candidate("")
 	if a.Detail == b.Detail {
 		t.Fatalf("two secret matches in one file lifted to the same detail %q", a.Detail)
 	}
@@ -278,6 +315,44 @@ func TestWithProtectedPathsSnapshots(t *testing.T) {
 	profile.ProtectedPaths.ExtraPromptsAndPolicyPatterns[0] = "other/**"
 	if got.ExtraPromptsPolicyPatterns[0] != "prompts/**" {
 		t.Fatalf("policy aliases the profile's backing array: %v", got.ExtraPromptsPolicyPatterns)
+	}
+}
+
+// TestWithProtectedPathsStance: the automation-change stance crosses the
+// boundary from the digest-verified profile. Advisory is recorded; block is
+// the policy's zero value, so a block profile's options keep the bytes they
+// had before the field existed, and a prior advisory value on the policy is
+// replaced rather than merged.
+func TestWithProtectedPathsStance(t *testing.T) {
+	t.Parallel()
+	advisory, err := (Policy{}).WithProtectedPaths(
+		fixtureTrustProfileWithStance(t, domain.ProtectedPathConfig{}, domain.AutomationChangesAdvisory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.CandidateAutomationChanges != domain.AutomationChangesAdvisory {
+		t.Fatalf("advisory profile stance = %q, want advisory", advisory.CandidateAutomationChanges)
+	}
+	blocked, err := advisory.WithProtectedPaths(fixtureTrustProfileProtecting(t, domain.ProtectedPathConfig{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.CandidateAutomationChanges != "" {
+		t.Fatalf("block profile stance = %q, want the zero value", blocked.CandidateAutomationChanges)
+	}
+	encoded, err := json.Marshal(blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "CandidateAutomationChanges") {
+		t.Fatalf("block policy encodes the stance key: %s", encoded)
+	}
+	// A profile whose stance was flipped after its digest was computed never
+	// reaches the policy.
+	tampered := fixtureTrustProfileProtecting(t, domain.ProtectedPathConfig{})
+	tampered.CandidateAutomationChanges = domain.AutomationChangesAdvisory
+	if _, err := (Policy{}).WithProtectedPaths(tampered); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("tampered stance error = %v, want ErrProfileDigestMismatch", err)
 	}
 }
 

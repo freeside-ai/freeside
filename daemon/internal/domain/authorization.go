@@ -105,7 +105,8 @@ type CandidateFinding struct {
 // Validate reports whether the finding is well-formed: a control-plane
 // finding must name its §5.8 category (and only control-plane findings may),
 // a waived finding must carry a waiver record for a waivable class, and an
-// advisory finding must belong to an advisory control-plane category.
+// advisory finding must belong to a control-plane category some profile
+// stance makes advisory.
 func (f CandidateFinding) Validate() error {
 	if !f.Class.valid() {
 		return fmt.Errorf("finding class %q: %w", f.Class, ErrInvalidFindingClass)
@@ -155,14 +156,36 @@ func (f CandidateFinding) Validate() error {
 		}
 	case DispositionAdvisory:
 		// Advisory is a category-scoped policy stance, not a decision
-		// record: only a control-plane category whose Advisory predicate
-		// holds may carry it, and it never pairs with a waiver. A stricter
-		// blocking stance stays representable for every category.
-		if f.Class != FindingClassControlPlane || !f.Category.Advisory() {
+		// record: only a control-plane category that some profile stance
+		// makes advisory may carry it, and it never pairs with a waiver. A
+		// stricter blocking stance stays representable for every category.
+		// This guards representability only; whether the bound profile's
+		// stance grants the disposition is ValidateAdvisoryStance's check,
+		// made where the profile is in reach.
+		if f.Class != FindingClassControlPlane || !f.Category.AdvisoryUnder(AutomationChangesAdvisory) {
 			return fmt.Errorf("advisory finding %q class %s: %w", f.Kind, f.Class, ErrNonAdvisoryFinding)
 		}
 		if f.Waiver != nil {
 			return fmt.Errorf("advisory finding %q carries a waiver: %w", f.Kind, ErrWaiverInconsistent)
+		}
+	}
+	return nil
+}
+
+// ValidateAdvisoryStance re-checks every advisory finding the authorization
+// binds against the stance of the trust profile the caller has bound the
+// candidate to (ControlPlaneCategory.AdvisoryUnder). Validate accepts an
+// advisory workflow-configuration finding because some stance grants it;
+// this refuses one when the bound profile's stance does not, so a stored
+// authorization never carries the advisory disposition past a block profile
+// on its own say-so. It fails with ErrNonAdvisoryFinding.
+func (a CandidateAuthorization) ValidateAdvisoryStance(policy AutomationChangePolicy) error {
+	for _, f := range a.Findings {
+		if f.Disposition != DispositionAdvisory {
+			continue
+		}
+		if f.Category == nil || !f.Category.AdvisoryUnder(policy) {
+			return fmt.Errorf("advisory finding %q under stance %q: %w", f.Kind, policy, ErrNonAdvisoryFinding)
 		}
 	}
 	return nil

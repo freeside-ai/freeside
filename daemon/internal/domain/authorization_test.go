@@ -315,35 +315,58 @@ func TestNonWaivableClasses(t *testing.T) {
 }
 
 // TestAdvisoryDisposition: advisory is a category-scoped policy stance
-// (plan §5.8, revision 42): valid only for a control-plane category whose
-// Advisory predicate holds, never paired with a waiver, and never blocking.
-// The table covers every category so a new one must take a stance here.
+// (plan §5.8, revision 42, and §5.5): AdvisoryUnder decides it per profile
+// stance, Validate admits an advisory disposition only on a category some
+// stance makes advisory, and it is never paired with a waiver and never
+// blocking. The table covers every category and stance so a new one must
+// take a stance here.
 func TestAdvisoryDisposition(t *testing.T) {
-	advisory := map[domain.ControlPlaneCategory]bool{
-		domain.ControlPlaneWorkflowConfiguration: false,
-		domain.ControlPlanePromptsAndPolicy:      false,
-		domain.ControlPlaneEgressAndTrust:        false,
-		domain.ControlPlaneVerificationRecipes:   false,
-		domain.ControlPlaneMaterialityRules:      false,
-		domain.ControlPlaneReviewerInstructions:  true,
+	advisory := map[domain.AutomationChangePolicy]map[domain.ControlPlaneCategory]bool{
+		domain.AutomationChangesBlocked: {
+			domain.ControlPlaneWorkflowConfiguration: false,
+			domain.ControlPlanePromptsAndPolicy:      false,
+			domain.ControlPlaneEgressAndTrust:        false,
+			domain.ControlPlaneVerificationRecipes:   false,
+			domain.ControlPlaneMaterialityRules:      false,
+			domain.ControlPlaneReviewerInstructions:  true,
+		},
+		domain.AutomationChangesAdvisory: {
+			domain.ControlPlaneWorkflowConfiguration: true,
+			domain.ControlPlanePromptsAndPolicy:      false,
+			domain.ControlPlaneEgressAndTrust:        false,
+			domain.ControlPlaneVerificationRecipes:   false,
+			domain.ControlPlaneMaterialityRules:      false,
+			domain.ControlPlaneReviewerInstructions:  true,
+		},
 	}
-	if len(advisory) != len(domain.AllControlPlaneCategories) {
-		t.Fatalf("advisory table covers %d categories, vocabulary has %d", len(advisory), len(domain.AllControlPlaneCategories))
+	if len(advisory) != len(domain.AllAutomationChangePolicies) {
+		t.Fatalf("advisory table covers %d stances, vocabulary has %d", len(advisory), len(domain.AllAutomationChangePolicies))
+	}
+	// Validate's representability bar: advisory under some stance.
+	representable := map[domain.ControlPlaneCategory]bool{}
+	for _, policy := range domain.AllAutomationChangePolicies {
+		if len(advisory[policy]) != len(domain.AllControlPlaneCategories) {
+			t.Fatalf("%s table covers %d categories, vocabulary has %d",
+				policy, len(advisory[policy]), len(domain.AllControlPlaneCategories))
+		}
+		for _, category := range domain.AllControlPlaneCategories {
+			if got := category.AdvisoryUnder(policy); got != advisory[policy][category] {
+				t.Errorf("%s.AdvisoryUnder(%s) = %v, want %v", category, policy, got, advisory[policy][category])
+			}
+			representable[category] = representable[category] || advisory[policy][category]
+		}
 	}
 	for _, category := range domain.AllControlPlaneCategories {
-		if got := category.Advisory(); got != advisory[category] {
-			t.Errorf("%s.Advisory() = %v, want %v", category, got, advisory[category])
-		}
 		f := domain.CandidateFinding{
 			Class: domain.FindingClassControlPlane, Category: &category,
 			Origin: domain.FindingOriginImport, Kind: "k", Path: "AGENTS.md",
 			Disposition: domain.DispositionAdvisory,
 		}
 		err := f.Validate()
-		if advisory[category] && err != nil {
+		if representable[category] && err != nil {
 			t.Errorf("advisory %s finding rejected: %v", category, err)
 		}
-		if !advisory[category] && !errors.Is(err, domain.ErrNonAdvisoryFinding) {
+		if !representable[category] && !errors.Is(err, domain.ErrNonAdvisoryFinding) {
 			t.Errorf("advisory %s finding error = %v, want ErrNonAdvisoryFinding", category, err)
 		}
 		// Blocking stays representable for every category, advisory or not.
@@ -352,8 +375,14 @@ func TestAdvisoryDisposition(t *testing.T) {
 			t.Errorf("blocking %s finding rejected: %v", category, err)
 		}
 	}
-	if domain.ControlPlaneCategory("").Advisory() {
-		t.Error("zero-value category is advisory")
+	// The invalid zero category and zero stance fail closed.
+	for _, policy := range append([]domain.AutomationChangePolicy{""}, domain.AllAutomationChangePolicies...) {
+		if domain.ControlPlaneCategory("").AdvisoryUnder(policy) {
+			t.Errorf("zero-value category is advisory under %q", policy)
+		}
+	}
+	if domain.ControlPlaneWorkflowConfiguration.AdvisoryUnder("") {
+		t.Error("workflow configuration is advisory under the zero stance")
 	}
 
 	category := domain.ControlPlaneReviewerInstructions
@@ -400,6 +429,57 @@ func TestAdvisoryDisposition(t *testing.T) {
 	}
 	if authorization.AuthorizesPublication {
 		t.Error("blocking sibling of an advisory finding authorized publication")
+	}
+}
+
+// TestValidateAdvisoryStance: a stored authorization whose
+// workflow-configuration finding claims the advisory disposition passes
+// Validate (some stance grants it) but is refused against a bound block
+// profile's stance; reviewer-instruction advisories pass under every stance.
+func TestValidateAdvisoryStance(t *testing.T) {
+	workflow := domain.ControlPlaneWorkflowConfiguration
+	reviewer := domain.ControlPlaneReviewerInstructions
+	input := validAuthorizationInput()
+	input.Findings = []domain.CandidateFinding{{
+		Class: domain.FindingClassControlPlane, Category: &workflow,
+		Origin: domain.FindingOriginImport, Kind: "automation_control_path",
+		Path: ".github/workflows/ci.yml", Disposition: domain.DispositionAdvisory,
+	}}
+	authorization, err := domain.NewCandidateAuthorization(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authorization.AuthorizesPublication {
+		t.Fatal("advisory workflow finding withheld authorization")
+	}
+	if err := authorization.ValidateAdvisoryStance(domain.AutomationChangesAdvisory); err != nil {
+		t.Errorf("advisory stance refused its own advisory: %v", err)
+	}
+	for _, policy := range []domain.AutomationChangePolicy{domain.AutomationChangesBlocked, ""} {
+		if err := authorization.ValidateAdvisoryStance(policy); !errors.Is(err, domain.ErrNonAdvisoryFinding) {
+			t.Errorf("stance %q error = %v, want ErrNonAdvisoryFinding", policy, err)
+		}
+	}
+
+	input.Findings[0].Category = &reviewer
+	input.Findings[0].Kind, input.Findings[0].Path = "reviewer_instruction_path", "AGENTS.md"
+	authorization, err = domain.NewCandidateAuthorization(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range domain.AllAutomationChangePolicies {
+		if err := authorization.ValidateAdvisoryStance(policy); err != nil {
+			t.Errorf("reviewer-instruction advisory refused under %s: %v", policy, err)
+		}
+	}
+	// A blocking workflow finding needs no stance.
+	input.Findings[0] = blockingFinding()
+	authorization, err = domain.NewCandidateAuthorization(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authorization.ValidateAdvisoryStance(domain.AutomationChangesBlocked); err != nil {
+		t.Errorf("blocking finding refused by the stance check: %v", err)
 	}
 }
 

@@ -499,14 +499,26 @@ func blockedItemID(runID domain.RunID) domain.ItemID {
 	return fakepublication.BlockedItemID(runID)
 }
 
+// candidateFindings lifts a candidate's import and verification findings into
+// the authorization's findings. stance is the bound trust profile's
+// automation-change stance, which decides whether an automation-control
+// import finding lifts as advisory; it is never read from a stored finding.
 func candidateFindings(
 	importFindings []importer.Finding,
 	verifyFindings []verify.Finding,
+	stance domain.AutomationChangePolicy,
 ) []domain.CandidateFinding {
 	out := make([]domain.CandidateFinding, 0, len(importFindings)+len(verifyFindings))
 	for _, finding := range importFindings {
-		out = append(out, finding.Candidate())
+		out = append(out, finding.Candidate(stance))
 	}
+	return append(out, verificationCandidateFindings(verifyFindings)...)
+}
+
+// verificationCandidateFindings lifts verification findings, which are always
+// blocking verification-recipe findings under every profile stance.
+func verificationCandidateFindings(verifyFindings []verify.Finding) []domain.CandidateFinding {
+	out := make([]domain.CandidateFinding, 0, len(verifyFindings))
 	for _, finding := range verifyFindings {
 		category := domain.ControlPlaneVerificationRecipes
 		out = append(out, domain.CandidateFinding{

@@ -630,7 +630,7 @@ func exportProductionReplay(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !importer.AllAdvisory(imported.Findings) || imported.CommitSHA == "" {
+	if !importer.AllAdvisory(imported.Findings, h.profile.CandidateAutomationChanges) || imported.CommitSHA == "" {
 		t.Fatalf("production replay import = %#v", imported)
 	}
 	author := strings.TrimSpace(runGit(

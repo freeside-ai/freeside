@@ -540,19 +540,19 @@ func TestPartitionFindingsByProfile(t *testing.T) {
 	}
 	// A nil profile is the default publish-strict behavior: every finding
 	// fatal except an advisory one (plan §5.8, revision 42).
-	fatalStrict, tolStrict := partitionFindings(findings, nil)
+	fatalStrict, tolStrict := partitionFindings(findings, nil, "")
 	if len(fatalStrict) != 3 || len(tolStrict) != 0 {
 		t.Fatalf("publish-strict partition = %d fatal, %d tolerated; want 3, 0",
 			len(fatalStrict), len(tolStrict))
 	}
 	advisory := importer.Finding{Kind: importer.FindingReviewerInstructionPath, Path: "AGENTS.md"}
-	fatalAdvisory, tolAdvisory := partitionFindings(append(findings, advisory), nil)
+	fatalAdvisory, tolAdvisory := partitionFindings(append(findings, advisory), nil, "")
 	if len(fatalAdvisory) != 3 || len(tolAdvisory) != 1 || tolAdvisory[0].Path != "AGENTS.md" {
 		t.Fatalf("publish-strict partition with advisory = %d fatal, %+v tolerated; want 3 fatal and the instruction path",
 			len(fatalAdvisory), tolAdvisory)
 	}
 	spec := importer.FindingProfileSpecification
-	fatalSpec, tolSpec := partitionFindings(findings, &spec)
+	fatalSpec, tolSpec := partitionFindings(findings, &spec, "")
 	if len(fatalSpec) != 1 || fatalSpec[0].Kind != importer.FindingSecret {
 		t.Fatalf("specification fatal = %+v, want only the secret", fatalSpec)
 	}
@@ -766,7 +766,7 @@ func TestSpecificationProfileToleratesWorkspaceDebris(t *testing.T) {
 			{Kind: importer.FindingSecretScanSkipped, Path: "dist/big.bin"},
 		},
 	}
-	if err := d.validateImportFindings(rejectionIntent(), imported, specProfile(), true); err != nil {
+	if err := d.validateImportFindings(rejectionIntent(), imported, specProfile(), "", true); err != nil {
 		t.Fatalf("specification profile rejected pure debris: %v", err)
 	}
 	if _, found, err := exports.LookupExportRejection(context.Background(), testInvoke); err != nil || found {
@@ -789,7 +789,7 @@ func TestValidateImportFindingsRejectsWithoutWriting(t *testing.T) {
 			{Kind: importer.FindingSecret, Path: "config.yaml", Rule: "aws_key", Line: 12},
 		},
 	}
-	err := d.validateImportFindings(rejectionIntent(), imported, specProfile(), true)
+	err := d.validateImportFindings(rejectionIntent(), imported, specProfile(), "", true)
 	if !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("secret under specification = %v, want definitive rejection", err)
 	}
@@ -869,7 +869,7 @@ func TestPublishStrictRejectsAnyFinding(t *testing.T) {
 		CommitSHA: strings.Repeat("c", 40),
 		Findings:  []importer.Finding{{Kind: importer.FindingAllowlistViolation, Path: "outside-scope.txt"}},
 	}
-	if err := d.validateImportFindings(rejectionIntent(), imported, nil, true); !errors.Is(err, errDefinitiveExportRejection) {
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil, "", true); !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("publish-strict finding = %v, want definitive rejection", err)
 	}
 }
@@ -883,13 +883,44 @@ func TestPublishStrictToleratesAdvisoryFinding(t *testing.T) {
 	d := newTestDriver(t, &stubGate{}, newStubExports())
 	advisory := importer.Finding{Kind: importer.FindingReviewerInstructionPath, Path: "AGENTS.md"}
 	imported := importer.Result{CommitSHA: strings.Repeat("c", 40), Findings: []importer.Finding{advisory}}
-	if err := d.validateImportFindings(rejectionIntent(), imported, nil, true); err != nil {
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil, "", true); err != nil {
 		t.Fatalf("advisory-only findings = %v, want tolerated", err)
 	}
 	imported.Findings = append(imported.Findings,
 		importer.Finding{Kind: importer.FindingAutomationControlPath, Path: ".github/workflows/ci.yml"})
-	if err := d.validateImportFindings(rejectionIntent(), imported, nil, true); !errors.Is(err, errDefinitiveExportRejection) {
+	if err := d.validateImportFindings(rejectionIntent(), imported, nil, "", true); !errors.Is(err, errDefinitiveExportRejection) {
 		t.Fatalf("advisory with fatal sibling = %v, want definitive rejection", err)
+	}
+}
+
+// TestAdvisoryStanceToleratesAutomationControlFinding: under the advisory
+// automation-change stance (plan §5.5) the export stage tolerates a workflow
+// edit as it does a reviewer-instruction edit; under block, and the zero
+// stance, it rejects it; the specification profile keeps it fatal under
+// every stance.
+func TestAdvisoryStanceToleratesAutomationControlFinding(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	imported := importer.Result{CommitSHA: strings.Repeat("c", 40), Findings: []importer.Finding{
+		{Kind: importer.FindingAutomationControlPath, Path: ".github/workflows/ci.yml"},
+		{Kind: importer.FindingReviewerInstructionPath, Path: "AGENTS.md"},
+	}}
+	if err := d.validateImportFindings(
+		rejectionIntent(), imported, nil, domain.AutomationChangesAdvisory, true,
+	); err != nil {
+		t.Fatalf("advisory stance workflow edit = %v, want tolerated", err)
+	}
+	for _, stance := range []domain.AutomationChangePolicy{domain.AutomationChangesBlocked, ""} {
+		if err := d.validateImportFindings(
+			rejectionIntent(), imported, nil, stance, true,
+		); !errors.Is(err, errDefinitiveExportRejection) {
+			t.Fatalf("stance %q workflow edit = %v, want definitive rejection", stance, err)
+		}
+	}
+	spec := importer.FindingProfileSpecification
+	fatal, _ := partitionFindings(imported.Findings, &spec, domain.AutomationChangesAdvisory)
+	if len(fatal) != 2 {
+		t.Fatalf("specification fatal under advisory = %+v, want both control-plane findings", fatal)
 	}
 }
 

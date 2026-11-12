@@ -268,7 +268,7 @@ func TestImportFindingsBlockPublication(t *testing.T) {
 	// the authorization carries both stages' publish-blocking findings.
 	var findings []domain.CandidateFinding
 	for _, f := range importFindings {
-		findings = append(findings, f.Candidate())
+		findings = append(findings, f.Candidate(domain.AutomationChangesBlocked))
 	}
 	verificationCat := domain.ControlPlaneVerificationRecipes
 	findings = append(findings, domain.CandidateFinding{

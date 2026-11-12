@@ -186,53 +186,61 @@ func (p FindingProfile) valid() bool {
 }
 
 // Fatal reports whether this finding must terminally fail the invocation under
-// the given profile. It is the exported dispatch a pipeline uses to partition
-// a result's findings into definitively-fatal and tolerated. A nil profile is
-// the default publish-strict behavior.
-func (f Finding) Fatal(profile *FindingProfile) bool {
-	return f.Kind.fatalForProfile(profile)
+// the given profile and automation-change stance. It is the exported dispatch
+// a pipeline uses to partition a result's findings into definitively-fatal and
+// tolerated. A nil profile is the default publish-strict behavior. The stance
+// must be the one the import ran under (Policy.CandidateAutomationChanges) or
+// the bound trust profile's; "" means block.
+func (f Finding) Fatal(profile *FindingProfile, stance domain.AutomationChangePolicy) bool {
+	return f.Kind.fatalForProfile(profile, stance)
 }
 
 // Advisory reports whether the finding lifts with the advisory disposition
-// (plan §5.8, revision 42): detected and surfaced, never fatal to the export
-// and never publication-blocking. The stance is the control-plane
-// category's, read from the domain predicate, so this package never names
-// an advisory kind itself.
-func (f Finding) Advisory() bool {
-	return f.Kind.advisory()
+// (plan §5.8, revision 42, and §5.5): detected and surfaced, never fatal to
+// the export and never publication-blocking. The stance is the control-plane
+// category's under the given profile stance, read from the domain predicate
+// (ControlPlaneCategory.AdvisoryUnder), so this package never names an
+// advisory kind itself. A reviewer-instruction finding is advisory under
+// every stance; an automation-control finding only under advisory. Callers
+// pass the bound profile's stance, never one read from a stored finding.
+func (f Finding) Advisory(stance domain.AutomationChangePolicy) bool {
+	return f.Kind.advisory(stance)
 }
 
-// AllAdvisory reports whether every finding is advisory, which is the
-// "clean" bar a publishable import meets; an empty set trivially qualifies.
-func AllAdvisory(findings []Finding) bool {
+// AllAdvisory reports whether every finding is advisory under the stance,
+// which is the "clean" bar a publishable import meets; an empty set
+// trivially qualifies.
+func AllAdvisory(findings []Finding, stance domain.AutomationChangePolicy) bool {
 	for _, f := range findings {
-		if !f.Advisory() {
+		if !f.Advisory(stance) {
 			return false
 		}
 	}
 	return true
 }
 
-func (k FindingKind) advisory() bool {
+func (k FindingKind) advisory(stance domain.AutomationChangePolicy) bool {
 	cat, ok := categoryFor(k)
-	return ok && cat.Advisory()
+	return ok && cat.AdvisoryUnder(stance)
 }
 
 // fatalForProfile dispatches per-profile. A nil (absent) profile is
 // publish-strict. The switch omits default so a new profile must decide its
 // stance; the trailing return fails closed, treating an unknown profile as
 // fully publish-strict.
-func (k FindingKind) fatalForProfile(profile *FindingProfile) bool {
+func (k FindingKind) fatalForProfile(profile *FindingProfile, stance domain.AutomationChangePolicy) bool {
 	if profile == nil {
-		return !k.advisory()
+		return !k.advisory(stance)
 	}
 	switch *profile {
 	case FindingProfilePublishStrict:
 		// Every finding blocks publication of repo-channel content except
 		// an advisory one, which the export carries into publication as
 		// surfaced content.
-		return !k.advisory()
+		return !k.advisory(stance)
 	case FindingProfileSpecification:
+		// The stance never applies here: a specifier editing CI is
+		// off-contract under every profile stance.
 		return k.fatalForSpecification()
 	}
 	return true
@@ -291,12 +299,14 @@ type Finding struct {
 // shape the publication gate consumes (plan §5.6, §5.8): it assigns the trust
 // class the gate dispatches on and, for a §5.8 control-plane finding, its
 // category. The importer's flat kinds map in without the domain package
-// enumerating them. Import findings are always blocking at emission — a
-// waiver is a downstream human decision — and every import finding originates
-// in the import stage. The switch omits default so the exhaustive linter
-// forces a new kind to be classed; an unclassed (invalid zero) kind falls
-// through with an empty Class, which fails CandidateFinding.Validate closed.
-func (f Finding) Candidate() domain.CandidateFinding {
+// enumerating them. Import findings are blocking at emission unless the
+// stance makes their control-plane category advisory (Advisory) — a waiver
+// is a downstream human decision — and every import finding originates in
+// the import stage. The stance must be the bound trust profile's. The switch
+// omits default so the exhaustive linter forces a new kind to be classed; an
+// unclassed (invalid zero) kind falls through with an empty Class, which
+// fails CandidateFinding.Validate closed.
+func (f Finding) Candidate(stance domain.AutomationChangePolicy) domain.CandidateFinding {
 	// A secret finding locates its match by rule id and 1-based line; the
 	// domain CandidateFinding has neither field (it carries no candidate
 	// content and locates only by path), so fold them into Detail. Two secret
@@ -342,7 +352,7 @@ func (f Finding) Candidate() domain.CandidateFinding {
 		// predicate is the single place that names which control-plane
 		// category surfaces instead of blocking, and Validate rejects an
 		// advisory lift for any other.
-		if f.Kind.advisory() {
+		if f.Kind.advisory(stance) {
 			cf.Disposition = domain.DispositionAdvisory
 		}
 	}

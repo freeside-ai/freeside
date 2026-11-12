@@ -1329,10 +1329,12 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, fmt.Errorf("reconstruct execution export: %w", err)
 	}
-	// Advisory findings (plan §5.8, revision 42) are the one class a clean
-	// reconstruction may carry: they never block, and the authorization
-	// built below binds them so the publisher can surface them.
-	if imported.CommitSHA != binding.export.HeadSHA || !importer.AllAdvisory(imported.Findings) {
+	// Advisory findings (plan §5.8, revision 42, and §5.5) are the one class
+	// a clean reconstruction may carry: they never block, and the
+	// authorization built below binds them so the publisher can surface them.
+	// The stance is the bound profile's, never the replay payload's.
+	if imported.CommitSHA != binding.export.HeadSHA ||
+		!importer.AllAdvisory(imported.Findings, binding.profile.CandidateAutomationChanges) {
 		if _, remediation := remediationRoundForInvocation(
 			task.RunID, task.ProducingInvocationID,
 		); remediation && imported.CommitSHA == binding.export.HeadSHA {

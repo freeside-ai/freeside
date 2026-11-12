@@ -104,6 +104,14 @@ type Policy struct {
 	// profile values.
 	CommitPlan     domain.CommitPlanMode
 	MessageRuleset domain.MessageRuleset
+	// CandidateAutomationChanges is the reviewed profile's stance on a
+	// candidate's automation-control edits (plan §5.5), which decides whether
+	// an automation_control_path finding is advisory (Finding.Advisory). The
+	// zero value means block: direct importer callers keep the refusal, and
+	// WithProtectedPaths records only the advisory opt-in, so the options a
+	// block profile yields, and every ImportOptions recorded before this
+	// field existed, encode byte-identically with the key omitted.
+	CandidateAutomationChanges domain.AutomationChangePolicy `json:",omitempty"`
 	// FindingProfile, when non-nil, selects how the pipeline dispatches on the
 	// findings this import produces. nil is the default publish-strict profile
 	// (every finding fatal) and serializes as an omitted key, so records written
@@ -290,6 +298,12 @@ func (o Options) validate() error {
 	case domain.MessageRulesetGitHub1:
 	default:
 		return fmt.Errorf("message ruleset %q: %w", o.Policy.MessageRuleset, ErrInvalidOptions)
+	}
+	switch o.Policy.CandidateAutomationChanges {
+	case "":
+	case domain.AutomationChangesBlocked, domain.AutomationChangesAdvisory:
+	default:
+		return fmt.Errorf("candidate automation changes %q: %w", o.Policy.CandidateAutomationChanges, ErrInvalidOptions)
 	}
 	if fp := o.Policy.FindingProfile; fp != nil && !fp.valid() {
 		return fmt.Errorf("finding profile %q: %w", *fp, ErrInvalidOptions)

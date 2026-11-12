@@ -538,7 +538,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		HeadSHA: imported.CommitSHA, ImportResultDigest: importDigest,
 		VerificationRecipeDigest: verified.RecipeDigest,
 		EvidenceSnapshotDigest:   evidenceDigest, VerificationOutcome: outcome,
-		Findings:           candidateFindings(imported.Findings, verified.Findings),
+		Findings:           candidateFindings(imported.Findings, verified.Findings, binding.profile.CandidateAutomationChanges),
 		TrustProfileDigest: binding.profile.ProfileDigest,
 		InvocationID:       task.verificationInvocationID(), CreatedAt: binding.export.RecordedAt,
 	})
@@ -771,6 +771,7 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	if !versionMatches ||
 		checkpoint.TaskKey != authorizingTaskKey ||
 		checkpoint.ProjectImage != binding.verificationImage().ID || authorization.Validate() != nil ||
+		authorization.ValidateAdvisoryStance(binding.profile.CandidateAutomationChanges) != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
 		authorization.BaseSHA != binding.admission.Base.BaseSHA ||
 		authorization.HeadSHA != task.HeadSHA ||

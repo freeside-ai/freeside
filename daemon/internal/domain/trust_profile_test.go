@@ -296,6 +296,45 @@ func TestTrustProfileDigestStability(t *testing.T) {
 	}
 }
 
+// TestTrustProfileAdvisoryAutomationChanges: the advisory stance joined the
+// profile without an encoding bump. A block profile keeps the v6 pin above,
+// an advisory profile is a different digest (so approving it is a fresh
+// profile review), flipping a stored block profile to advisory under its old
+// digest fails the digest recompute, and a stance value this build does not
+// know fails Validate before any digest is trusted.
+func TestTrustProfileAdvisoryAutomationChanges(t *testing.T) {
+	in := fullyPopulatedTrustProfileInput()
+	if in.CandidateAutomationChanges != domain.AutomationChangesBlocked {
+		t.Fatalf("fixture stance = %q, want block", in.CandidateAutomationChanges)
+	}
+	blocked, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.CandidateAutomationChanges = domain.AutomationChangesAdvisory
+	advisory, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("advisory profile refused: %v", err)
+	}
+	if advisory.ProfileDigest == blocked.ProfileDigest {
+		t.Fatal("advisory and block profiles share a digest")
+	}
+	if err := advisory.Validate(); err != nil {
+		t.Fatalf("advisory profile fails Validate: %v", err)
+	}
+
+	flipped := blocked
+	flipped.CandidateAutomationChanges = domain.AutomationChangesAdvisory
+	if err := flipped.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("flipped stance under the block digest error = %v, want ErrProfileDigestMismatch", err)
+	}
+	unknown := advisory
+	unknown.CandidateAutomationChanges = "allow"
+	if err := unknown.Validate(); !errors.Is(err, domain.ErrInvalidAutomationChanges) {
+		t.Fatalf("unknown stance error = %v, want ErrInvalidAutomationChanges", err)
+	}
+}
+
 // TestTrustProfileV4DigestRequiresReapproval pins the v5 repository-ID
 // binding: approval under v4 named only owner/repo, so it cannot authorize a
 // canonical repository ID without owner re-approval.

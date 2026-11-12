@@ -144,8 +144,10 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	}
 	if !versionMatches || checkpoint.TaskKey != sourceTaskKey ||
 		checkpoint.Imported.CommitSHA != request.HeadSHA ||
-		!validCommitSHA(checkpoint.Imported.TreeSHA) || !importer.AllAdvisory(checkpoint.Imported.Findings) ||
+		!validCommitSHA(checkpoint.Imported.TreeSHA) ||
+		!importer.AllAdvisory(checkpoint.Imported.Findings, binding.profile.CandidateAutomationChanges) ||
 		authorization.Validate() != nil ||
+		authorization.ValidateAdvisoryStance(binding.profile.CandidateAutomationChanges) != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
 		authorization.BaseSHA != request.BaseSHA || authorization.HeadSHA != request.HeadSHA ||
 		authorization.ImportResultDigest != importDigest ||
