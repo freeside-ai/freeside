@@ -4140,6 +4140,12 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   `devlog/2026-11-12-0908-freeside-unprotected-paths.md`. A profile approved
   with the flags this section used to list needs a fresh onboarding review,
   because the approval digest binds them.
+- **External reviewers:** pass
+  `-external-reviewer github:53575454:bennelsonweiss=drive_round`, the
+  owner's account. The lander posts its hand-back comment as the owner, and
+  an admitted account's pull request conversation comment is an external
+  finding (#3127), which the hand-back cycle (#3160) consumes. A comment from
+  an account the profile doesn't list is stored and drives nothing.
 - **Deputy scope:** set the deputy's `repository.allowed_paths` to every
   top-level entry:
 

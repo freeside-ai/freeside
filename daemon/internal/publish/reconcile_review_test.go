@@ -2,13 +2,17 @@ package publish_test
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
 func intptr(n int) *int { return &n }
 
-// TestReconcilePullReviewActivityConditional proves the three review
+// TestReconcilePullReviewActivityConditional proves the four review
 // sub-resources are read, then ride If-None-Match with no churn while
 // unchanged, and re-read a changed sub-resource while the unchanged siblings
 // stay on their 304.
@@ -26,6 +30,10 @@ func TestReconcilePullReviewActivityConditional(t *testing.T) {
 	}}
 	gh.reactions[7] = []fakeReaction{{
 		ID: 700300, Login: "someone-else", Content: "heart", CreatedAt: "2026-01-02T05:00:00Z",
+	}}
+	gh.conversation[7] = []fakeConversationComment{{
+		ID: 600100, AccountID: 4101, Login: "maintainer", Body: "please also check the docs",
+		CreatedAt: "2026-01-02T05:06:05Z",
 	}}
 	r := newTestReconciler(t, gh)
 
@@ -47,6 +55,12 @@ func TestReconcilePullReviewActivityConditional(t *testing.T) {
 	if len(first.Reactions) != 1 || first.Reactions[0].Content != "heart" {
 		t.Errorf("reactions = %+v", first.Reactions)
 	}
+	if len(first.ConversationComments) != 1 || first.ConversationComments[0] != (publish.PullConversationComment{
+		ID: 600100, AuthorID: 4101, AuthorLogin: "maintainer", Body: "please also check the docs",
+		CreatedAt: time.Date(2026, 1, 2, 5, 6, 5, 0, time.UTC),
+	}) {
+		t.Errorf("conversation comments = %+v", first.ConversationComments)
+	}
 
 	second, err := r.ReconcilePullReviewActivity(context.Background(), testRepo, 7)
 	if err != nil {
@@ -58,11 +72,12 @@ func TestReconcilePullReviewActivityConditional(t *testing.T) {
 	second.NotModified = false
 	if len(second.Reviews) != 1 || second.Reviews[0] != first.Reviews[0] ||
 		len(second.Comments) != 1 || second.Comments[0] != first.Comments[0] ||
-		len(second.Reactions) != 1 || second.Reactions[0] != first.Reactions[0] {
+		len(second.Reactions) != 1 || second.Reactions[0] != first.Reactions[0] ||
+		len(second.ConversationComments) != 1 || second.ConversationComments[0] != first.ConversationComments[0] {
 		t.Errorf("304 churned the observation: %+v vs %+v", second, first)
 	}
-	if conditionalRequests(gh) != 3 {
-		t.Errorf("second poll did not ride If-None-Match on all three sub-resources: %v", gh.requestLog())
+	if conditionalRequests(gh) != 4 {
+		t.Errorf("second poll did not ride If-None-Match on all four sub-resources: %v", gh.requestLog())
 	}
 
 	// A new reaction (the clean-pass signal) changes only that sub-resource.
@@ -83,9 +98,60 @@ func TestReconcilePullReviewActivityConditional(t *testing.T) {
 	// The unchanged reviews and comments stayed on their 304 and kept their
 	// cached values.
 	if len(third.Reviews) != 1 || third.Reviews[0] != first.Reviews[0] ||
-		len(third.Comments) != 1 || third.Comments[0] != first.Comments[0] {
-		t.Errorf("unchanged siblings churned: reviews=%+v comments=%+v", third.Reviews, third.Comments)
+		len(third.Comments) != 1 || third.Comments[0] != first.Comments[0] ||
+		len(third.ConversationComments) != 1 || third.ConversationComments[0] != first.ConversationComments[0] {
+		t.Errorf("unchanged siblings churned: reviews=%+v comments=%+v conversation=%+v",
+			third.Reviews, third.Comments, third.ConversationComments)
 	}
+
+	// A new conversation comment changes only that sub-resource, and alone
+	// makes the observation a change.
+	gh.mu.Lock()
+	gh.conversation[7] = append(gh.conversation[7], fakeConversationComment{
+		ID: 600101, AccountID: 4101, Login: "maintainer", Body: "and the README", CreatedAt: "2026-01-02T07:00:00Z",
+	})
+	gh.conversationRevs[7]++
+	gh.mu.Unlock()
+	fourth, err := r.ReconcilePullReviewActivity(context.Background(), testRepo, 7)
+	if err != nil {
+		t.Fatalf("fourth ReconcilePullReviewActivity: %v", err)
+	}
+	if fourth.NotModified || len(fourth.ConversationComments) != 2 || fourth.ConversationComments[1].ID != 600101 {
+		t.Errorf("new conversation comment not observed: %+v", fourth)
+	}
+}
+
+// TestReconcilePullReviewActivityConversationFailsClosed proves a
+// conversation listing that names another resource, or that GitHub refuses,
+// fails the whole observation: a conversation comment can start a round
+// (#3127), so it is never read from a foreign list or treated as absent the
+// way a refused reactions read is.
+func TestReconcilePullReviewActivityConversationFailsClosed(t *testing.T) {
+	t.Parallel()
+	t.Run("foreign issue", func(t *testing.T) {
+		t.Parallel()
+		gh := newFakeGitHub(t)
+		seedReviewActivity(gh)
+		gh.conversation[7] = []fakeConversationComment{{
+			ID: 600100, AccountID: 4101, Login: "maintainer", Body: "elsewhere",
+			CreatedAt: "2026-01-02T05:06:05Z", IssueURL: "https://api.github.com/repos/other/repo/issues/7",
+		}}
+		r := newTestReconciler(t, gh)
+		if _, err := r.ReconcilePullReviewActivity(context.Background(), testRepo, 7); err == nil ||
+			!strings.Contains(err.Error(), "another resource") {
+			t.Fatalf("foreign conversation comment = %v, want a refused observation", err)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+		gh := newFakeGitHub(t)
+		seedReviewActivity(gh)
+		gh.conversationRefusal[7] = fakeRefusal{Status: http.StatusForbidden}
+		r := newTestReconciler(t, gh)
+		if _, err := r.ReconcilePullReviewActivity(context.Background(), testRepo, 7); err == nil {
+			t.Fatal("refused conversation read did not fail the observation")
+		}
+	})
 }
 
 // TestReconcilePullReviewActivityReadsAuthorAndOrigin proves the fields
@@ -243,10 +309,11 @@ func TestReconcilePullReviewActivityValidation(t *testing.T) {
 	}
 }
 
-// TestReconcilePullReviewActivityMultiPageDropsValidator proves reviews and
-// review comments that span pages never ride a first-page 304: either can
-// start a review round (issue #524), and a first-page validator cannot see
-// one appended to a later page. Reactions keep theirs.
+// TestReconcilePullReviewActivityMultiPageDropsValidator proves reviews,
+// review comments, and conversation comments that span pages never ride a
+// first-page 304: each can start a review round (issues #524 and #3127), and
+// a first-page validator cannot see one appended to a later page. Reactions
+// keep theirs.
 func TestReconcilePullReviewActivityMultiPageDropsValidator(t *testing.T) {
 	t.Parallel()
 	gh := newFakeGitHub(t)
@@ -264,15 +331,21 @@ func TestReconcilePullReviewActivityMultiPageDropsValidator(t *testing.T) {
 			CommitID: "cafebabe", CreatedAt: "2026-01-02T05:04:05Z",
 		}
 	}
+	conversation := func(id int64) fakeConversationComment {
+		return fakeConversationComment{
+			ID: id, AccountID: 4101, Login: "maintainer", Body: "note", CreatedAt: "2026-01-02T05:04:05Z",
+		}
+	}
 	gh.reviews[7] = []fakeReview{review(900100), review(900101), review(900102)}
 	gh.reviewComments[7] = []fakeReviewComment{comment(800200), comment(800201), comment(800202)}
+	gh.conversation[7] = []fakeConversationComment{conversation(600100), conversation(600101), conversation(600102)}
 	r := newTestReconciler(t, gh)
 
 	first, err := r.ReconcilePullReviewActivity(context.Background(), testRepo, 7)
 	if err != nil {
 		t.Fatalf("first ReconcilePullReviewActivity: %v", err)
 	}
-	if first.NotModified || len(first.Reviews) != 3 || len(first.Comments) != 3 {
+	if first.NotModified || len(first.Reviews) != 3 || len(first.Comments) != 3 || len(first.ConversationComments) != 3 {
 		t.Fatalf("first multi-page observation = %+v", first)
 	}
 
@@ -281,15 +354,16 @@ func TestReconcilePullReviewActivityMultiPageDropsValidator(t *testing.T) {
 	gh.mu.Lock()
 	gh.reviews[7] = append(gh.reviews[7], review(900103))
 	gh.reviewComments[7] = append(gh.reviewComments[7], comment(800203))
+	gh.conversation[7] = append(gh.conversation[7], conversation(600103))
 	gh.mu.Unlock()
 	before := len(gh.requestLog())
 	second, err := r.ReconcilePullReviewActivity(context.Background(), testRepo, 7)
 	if err != nil {
 		t.Fatalf("second ReconcilePullReviewActivity: %v", err)
 	}
-	if second.NotModified || len(second.Reviews) != 4 || len(second.Comments) != 4 {
-		t.Fatalf("later-page activity not observed: %d reviews, %d comments, not modified %t",
-			len(second.Reviews), len(second.Comments), second.NotModified)
+	if second.NotModified || len(second.Reviews) != 4 || len(second.Comments) != 4 || len(second.ConversationComments) != 4 {
+		t.Fatalf("later-page activity not observed: %d reviews, %d comments, %d conversation comments, not modified %t",
+			len(second.Reviews), len(second.Comments), len(second.ConversationComments), second.NotModified)
 	}
 	conditional := 0
 	for _, request := range gh.requestLog()[before:] {

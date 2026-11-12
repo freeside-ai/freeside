@@ -114,7 +114,7 @@ func externalFindingByThread(t *testing.T, runID domain.RunID, thread string) do
 	built, skipped := buildExternalFindings(externalReentryActivity(), domain.ReadyItemPRBinding{
 		RunID: runID, Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
 		BaseRef: "main", HeadSHA: reentryTestHead,
-	})
+	}, 0)
 	if len(skipped) != 0 {
 		t.Fatalf("fixture skipped activity: %v", skipped)
 	}

@@ -160,7 +160,7 @@ func TestBuildExternalFindings(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, skipped := buildExternalFindings(tc.obs, binding)
+			got, skipped := buildExternalFindings(tc.obs, binding, 0)
 			if len(skipped) != tc.wantSkipped {
 				t.Errorf("skipped %d, want %d: %v", len(skipped), tc.wantSkipped, skipped)
 			}
@@ -200,10 +200,10 @@ func TestBuildExternalFindingsIsOrderIndependent(t *testing.T) {
 		ID: 900101, AuthorID: 4102, AuthorLogin: "review-bot[bot]", State: "COMMENTED",
 		Body: "One nit below.", CommitID: "cafed00d", SubmittedAt: activeResourceTestTime.Add(time.Second),
 	})
-	first, _ := buildExternalFindings(obs, externalTestBinding())
+	first, _ := buildExternalFindings(obs, externalTestBinding(), 0)
 	obs.Reviews[0], obs.Reviews[1] = obs.Reviews[1], obs.Reviews[0]
 	obs.Comments[0], obs.Comments[1] = obs.Comments[1], obs.Comments[0]
-	second, _ := buildExternalFindings(obs, externalTestBinding())
+	second, _ := buildExternalFindings(obs, externalTestBinding(), 0)
 	if len(first) != 2 || len(second) != len(first) {
 		t.Fatalf("built %d then %d findings, want 2 both times", len(first), len(second))
 	}
@@ -224,7 +224,7 @@ func TestBuildExternalFindingsKeepsBodyWithoutUsableInlineComments(t *testing.T)
 		} else {
 			obs.Comments = nil
 		}
-		findings, skipped := buildExternalFindings(obs, externalTestBinding())
+		findings, skipped := buildExternalFindings(obs, externalTestBinding(), 0)
 		if len(findings) != 1 || findings[0].External.ThreadID != "review/900100" || findings[0].Message != obs.Reviews[0].Body {
 			t.Fatalf("review body was lost: %#v", findings)
 		}
@@ -279,7 +279,7 @@ func TestActiveResourceStoresExternalFindings(t *testing.T) {
 		t.Fatalf("Reconcile = %+v, %v", result, err)
 	}
 
-	want, _ := buildExternalFindings(externalReviewActivity(), externalTestBinding())
+	want, _ := buildExternalFindings(externalReviewActivity(), externalTestBinding(), 0)
 	if len(want) != 2 {
 		t.Fatalf("fixture builds %d findings, want 2", len(want))
 	}
@@ -353,7 +353,7 @@ func TestActiveResourceExternalFindingsConverge(t *testing.T) {
 
 	// The reviewer deletes the comment and posts the same words again: same
 	// thread, head, and text, so the same finding ID with a later timestamp.
-	first, _ := buildExternalFindings(activity, externalTestBinding())
+	first, _ := buildExternalFindings(activity, externalTestBinding(), 0)
 	activity.Comments[0].CreatedAt = activity.Comments[0].CreatedAt.Add(time.Hour)
 	reconcile("reposted comment")
 	if got := readRevision(t, st); got != stored {
@@ -404,7 +404,7 @@ func TestActiveResourceExternalIntakeSkipsUnusableActivity(t *testing.T) {
 	if len(result.Skipped) != 1 || !errors.Is(result.Skipped[0], domain.ErrNativeReviewTextTooLarge) {
 		t.Fatalf("skipped = %v, want the oversized comment", result.Skipped)
 	}
-	kept, _ := buildExternalFindings(activity, externalTestBinding())
+	kept, _ := buildExternalFindings(activity, externalTestBinding(), 0)
 	if len(kept) != 1 || kept[0].External.ThreadID != "review_comment/800200" {
 		t.Fatalf("fixture findings = %#v, want only the usable inline comment", kept)
 	}
@@ -481,7 +481,7 @@ func TestActiveResourceExternalIntakeFailureIsolated(t *testing.T) {
 	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen {
 		t.Fatalf("a failed intake changed the ready item to %s", got.Status)
 	}
-	want, _ := buildExternalFindings(externalReviewActivity(), externalTestBinding())
+	want, _ := buildExternalFindings(externalReviewActivity(), externalTestBinding(), 0)
 	if _, err := readStoredFinding(t, st, want[0].ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a failed intake stored a finding: %v", err)
 	}

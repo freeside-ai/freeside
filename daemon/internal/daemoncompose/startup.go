@@ -504,6 +504,7 @@ func ComposeClaudeLoops(
 		// (plan §5.16, §7; AGENTS.md, Automated reviewer).
 		Reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
 		reviewInvalidate: claudeWiring.reviewInvalidate,
+		appBotIdentity:   claudeWiring.appBotIdentity,
 		evictConcluded:   claudeWiring.evictConcluded,
 		tipWatch: repositoryTipWatch{
 			Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,

@@ -13,10 +13,10 @@ import (
 
 // Native review observation endpoints (plan §5.16, §7; issue #497): the
 // active-resource reconciler observes a ready PR's native (forge-hosted)
-// review activity as best-effort extra evidence. Three list resources are
-// read conditionally — the PR's reviews, its inline review comments, and its
-// description reactions (the reviewer's clean-pass signal is a reaction, not a
-// review). This layer is pure transport: it decodes the raw forge fields and
+// review activity as best-effort extra evidence. Four list resources are
+// read conditionally — the PR's reviews, its inline review comments, its
+// conversation comments (#3127), and its description reactions (the
+// reviewer's clean-pass signal is a reaction, not a review). This layer is pure transport: it decodes the raw forge fields and
 // leaves reviewer-login filtering, badge normalization, and the trust-boundary
 // bounds to the reconciler that builds the durable domain observation.
 
@@ -77,6 +77,18 @@ type PullDescriptionReaction struct {
 	ID          int64
 	AuthorLogin string
 	Content     string
+	CreatedAt   time.Time
+}
+
+// PullConversationComment is one comment in a pull request's main
+// conversation (the issues comments surface). AuthorID is the author's
+// immutable forge account ID; see PullReview. It has no commit: the forge
+// does not anchor a conversation comment to a head.
+type PullConversationComment struct {
+	ID          int64
+	AuthorID    int64
+	AuthorLogin string
+	Body        string
 	CreatedAt   time.Time
 }
 
@@ -197,6 +209,52 @@ func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number 
 	return listRead[PullReviewComment]{Items: comments, ETag: resultETag}, nil
 }
 
+type conversationCommentResponse struct {
+	IssueURL string `json:"issue_url"`
+	ID       int64  `json:"id"`
+	User     struct {
+		ID    int64  `json:"id"`
+		Login string `json:"login"`
+	} `json:"user"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
+}
+
+// getPullConversationComments observes a pull request's conversation comments
+// conditionally. Every item must name this pull request's issue: the list is
+// read as the pull request's own review activity, so an item from another
+// resource fails the read rather than being bound to this one.
+func (f *forge) getPullConversationComments(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullConversationComment], error) {
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100", repo.path(), number)
+	raw, resultETag, notModified, multiPage, err := fetchConditionalList[conversationCommentResponse](ctx, f, repo, path, etag)
+	if err != nil {
+		return listRead[PullConversationComment]{}, fmt.Errorf("get pull conversation comments: %w", err)
+	}
+	if notModified {
+		return listRead[PullConversationComment]{NotModified: true, ETag: etag}, nil
+	}
+	issueURL := fmt.Sprintf("%s/repos/%s/issues/%d", f.baseURL, repo.path(), number)
+	comments := make([]PullConversationComment, 0, len(raw))
+	for _, c := range raw {
+		if c.IssueURL != issueURL {
+			return listRead[PullConversationComment]{}, errors.New("get pull conversation comments: comment belongs to another resource")
+		}
+		created, err := time.Parse(time.RFC3339, c.CreatedAt)
+		if err != nil {
+			return listRead[PullConversationComment]{}, fmt.Errorf("get pull conversation comments: parse created_at: %w", err)
+		}
+		comments = append(comments, PullConversationComment{
+			ID: c.ID, AuthorID: c.User.ID, AuthorLogin: c.User.Login, Body: c.Body, CreatedAt: created.UTC(),
+		})
+	}
+	if multiPage {
+		// As for reviews: a comment on a later page can start a round, so it
+		// must not hide behind an unchanged first page.
+		resultETag = ""
+	}
+	return listRead[PullConversationComment]{Items: comments, ETag: resultETag}, nil
+}
+
 // getIssueReactions observes the reactions on a pull request's description
 // conditionally (the reactions surface is served under the issues path). Its
 // error wraps the list reader's *APIError, so ReconcilePullReviewActivity can
@@ -235,7 +293,8 @@ func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int,
 // appended to (or removed from) a later page while the first page is unchanged
 // answers 304 and is observed only once the first page changes. It reports
 // multiPage so a caller whose correctness needs the whole list (label intake,
-// and the reviews and review comments that can start a round) can drop the
+// and the reviews, review comments, and conversation comments that can start
+// a round) can drop the
 // validator and force an unconditional re-read; the reactions caller accepts
 // the degradation as best-effort (readiness-inert) completeness, never a
 // safety property. The page bound fails closed on an unbounded history
