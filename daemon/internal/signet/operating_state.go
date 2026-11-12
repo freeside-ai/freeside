@@ -27,8 +27,11 @@ const stoppedNoticeDiagnostic = "unattended_operation_stopped"
 // operator stop comes first, bound to its open resume notice; that notice is
 // itself a blocking item, so it is reported once, as the operator stop,
 // rather than a second time as an unrelated finding. Every other blocking
-// item follows in the gate's item-id order.
-func unattendedOperationSnapshot(gate domain.UnattendedOperationGate) UnattendedOperationSnapshot {
+// item follows in the gate's item-id order, and an update drain in force comes
+// last (issue #3104). drain is nil when none is in force.
+func unattendedOperationSnapshot(
+	gate domain.UnattendedOperationGate, drain *domain.UpdateDrainTransition,
+) UnattendedOperationSnapshot {
 	out := UnattendedOperationSnapshot{
 		Admission: domain.UnattendedAdmissionOpen,
 		Stops:     []UnattendedStop{},
@@ -56,6 +59,11 @@ func unattendedOperationSnapshot(gate domain.UnattendedOperationGate) Unattended
 			Kind:   domain.UnattendedStopBlockingSystemHealth,
 			ItemID: &blocking.Item.ID,
 			Since:  blocking.Item.CreatedAt,
+		})
+	}
+	if drain != nil {
+		out.Stops = append(out.Stops, UnattendedStop{
+			Kind: domain.UnattendedStopUpdateDrain, Since: &drain.OccurredAt,
 		})
 	}
 	if len(out.Stops) > 0 {

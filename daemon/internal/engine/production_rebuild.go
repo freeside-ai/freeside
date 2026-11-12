@@ -487,6 +487,20 @@ func (w *productionPublicationWorkflow) rebuildUnderGate(
 			verifiedSHA, productionPublicationRetryableError(errProjectImageBuilderBusy))
 	}
 	defer w.rebuild.gate.release()
+	// An update drain holds the build like a busy builder, as a retryable
+	// wait the task records as update_drain (issue #3104).
+	end, err := w.running.BeginUnlessDraining(ctx, w.store, domain.RestartBlockerImageBuild)
+	if errors.Is(err, store.ErrUpdateDrainInForce) {
+		if w.logger != nil {
+			w.logger.Info("publication rebuild held while an update drain is in force", "verified_sha", verifiedSHA)
+		}
+		return domain.ProjectImage{}, nil, fmt.Errorf("rebuild project image at %s: %w",
+			verifiedSHA, productionPublicationRetryableError(err))
+	}
+	if err != nil {
+		return domain.ProjectImage{}, nil, err
+	}
+	defer end()
 	rebuilt, found, err := w.recordedRebuild(ctx, binding.image, head)
 	if err != nil || found {
 		return rebuilt, nil, err
@@ -513,11 +527,14 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 	// Reading the recipe runs a container at the verification size, so it
 	// reserves as the verification room does, under the same invocation, and
 	// releases once the read proves its container gone.
-	if err := w.reserveVerification(ctx, task, binding); err != nil {
+	end, err := w.reserveVerification(ctx, task, binding)
+	if err != nil {
 		return domain.ProjectImage{}, nil, err
 	}
 	_, recipe, err := w.roomAndRecipe(ctx, task, binding, binding.image)
-	if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
+	releaseErr := w.releaseVerification(ctx, task, binding.run, err)
+	end()
+	if releaseErr != nil {
 		return domain.ProjectImage{}, nil, errors.Join(err, releaseErr)
 	}
 	if err != nil {

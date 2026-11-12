@@ -322,11 +322,11 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 }
 
 // refuseShadowReviewAdmission handles a shadow admission the gate refused. A
-// source failure abandons the observation, and a full pool or memory waits
-// within the shadow window. The shadow arm only observes, so a launch the
-// budget refuses for good abandons the observation rather than hold the
-// routed gate; it may have waited for memory under a higher budget, so it
-// leaves the order and its hold as an expired wait does.
+// source failure abandons the observation, and a full pool, memory, or an
+// update drain waits within the shadow window. The shadow arm only observes, so a launch the budget refuses for good abandons
+// the observation rather than hold the routed gate; it may have waited for
+// memory under a higher budget, so it leaves the order and its hold as an
+// expired wait does.
 func (w *productionPublicationWorkflow) refuseShadowReviewAdmission(
 	ctx context.Context, task productionPublicationTask, routed domain.ReviewRecord,
 	id domain.InvocationID, err error,
@@ -385,7 +385,9 @@ func (w *productionPublicationWorkflow) abandonWaitingShadowReview(
 			if err := tx.LeaveLaunchWait(ctx, id); err != nil {
 				return err
 			}
-			for _, cause := range []domain.RunHoldReason{domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity} {
+			for _, cause := range []domain.RunHoldReason{
+				domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity, domain.HoldUpdateDrain,
+			} {
 				if err := tx.ClearRunHoldCause(ctx, task.RunID, cause); err != nil {
 					return err
 				}

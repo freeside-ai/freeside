@@ -773,7 +773,8 @@ retry-only states an explicit reconcile-pass bound. It runs under ordinary
   owns specification-answer and operator-feedback rows;
   `internal/integration/production_publication_test.go` owns verification,
   review request/result, publication, ready-item, and terminal rows plus the
-  registry-completeness check.
+  registry-completeness check; `internal/engine/update_drain_test.go` owns
+  the update drain's request, cancel, and lift rows.
 - `internal/exec/stage/recovery_test.go` is the sibling registry for seed
   handoff and execution export. Its durable phases feed the deeper per-phase
   recovery fixtures that assert single handoff, credential attachment, export,

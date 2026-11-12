@@ -178,8 +178,11 @@ func noticeLaunchMemoryRefusal(
 // why it was refused. A launch refused for memory joins the order, or
 // refreshes its wait so the gate keeps counting it (store.LaunchWaitRefresh);
 // one refused for anything else, such as a pool slot taken since it joined,
-// leaves it, so it holds back no launch on another pool. A refused launch is retried every pass and every write
-// advances the revision, so the order is written only when it changes or the
+// leaves it, so it holds back no launch on another pool. An update drain
+// changes nothing: it holds every launch alike, so a waiter keeps its place
+// for the lift (issue #3104). A refused launch is retried every pass and
+// every write advances the revision, so the order is written only when it
+// changes or the
 // wait is due a refresh. Between a publication-lane launch's refusals, the
 // pass running keeps its wait alive (launchWaitKeeper), so a wait's refused_at
 // stays its latest real refusal, which this throttles by. With no budget
@@ -190,7 +193,7 @@ func recordLaunchOrder(
 	ctx context.Context, st *store.Store, attention attentionService,
 	runID domain.RunID, invocationID domain.InvocationID, refusal error, now time.Time,
 ) error {
-	if refusal == nil {
+	if refusal == nil || errors.Is(refusal, store.ErrUpdateDrainInForce) {
 		return nil
 	}
 	join := errors.Is(refusal, domain.ErrMachineCapacity)

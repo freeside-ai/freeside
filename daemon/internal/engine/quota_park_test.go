@@ -475,3 +475,50 @@ func TestDecodeProductionTerminalRegatesQuotaRefusal(t *testing.T) {
 		})
 	}
 }
+
+// TestUpdateDrainKeepsAQuotaParkedAttemptsHold: a drain doesn't replace the
+// hold that names a parked attempt's window, which a parked-task move reads.
+// Once the window resets, the drain holds the attempt as update_drain, and
+// the lift lets it start.
+func TestUpdateDrainKeepsAQuotaParkedAttemptsHold(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		resetsAt := time.Now().UTC().Add(time.Hour)
+		f := newFailedImplementationCampaignFixtureScript(t, quotaRefusalScript(domain.FailureCauseQuota,
+			&domain.QuotaRefusal{Window: quotaTestWindow, ResetsAt: &resetsAt}))
+		enrollQuotaPool(t, f)
+		if _, err := f.engine.acceptProductionAttempt(t.Context(), f.run, f.attempt); err != nil {
+			t.Fatal(err)
+		}
+		parked, found := f.parkedRun(t)
+		if !found {
+			t.Fatal("the quota refusal parked no attempt")
+		}
+		f.driver.Script(productionInvocationID(parked.ID), execfake.StageScript{Outcome: execfake.OutcomeComplete})
+		drain := UpdateDrain{Store: f.store, Build: drainOldBuild, Now: func() time.Time { return time.Now().UTC() }}
+		if _, err := drain.Request(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := dispatchParked(t, f, parked); !errors.Is(err, ErrQuotaWindowExhausted) {
+			t.Fatalf("dispatch before the reset = %v, want the quota park", err)
+		}
+		if hold, held := holdOn(t, f, parked.ID); !held || hold.Reason != domain.HoldQuotaWindowExhausted ||
+			hold.QuotaWindow == nil {
+			t.Fatalf("hold under the drain = %+v (held %t), want the quota window", hold, held)
+		}
+		time.Sleep(time.Until(resetsAt))
+		if err := dispatchParked(t, f, parked); !errors.Is(err, store.ErrUpdateDrainInForce) {
+			t.Fatalf("dispatch after the reset = %v, want the drain", err)
+		}
+		if hold, held := holdOn(t, f, parked.ID); !held || hold.Reason != domain.HoldUpdateDrain {
+			t.Fatalf("hold after the reset = %+v (held %t), want update_drain", hold, held)
+		}
+		if _, err := drain.Cancel(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := dispatchParked(t, f, parked); err != nil {
+			t.Fatalf("dispatch after the lift = %v, want the parked attempt to start", err)
+		}
+	})
+}

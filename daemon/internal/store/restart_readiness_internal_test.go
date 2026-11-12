@@ -28,7 +28,7 @@ func TestRestartReadinessCountsHeldReviewSlot(t *testing.T) {
 		var readiness domain.RestartReadiness
 		if err := st.Read(ctx, func(tx *ReadTx) error {
 			var err error
-			readiness, err = tx.RestartReadiness(ctx, slotAt.Add(time.Minute))
+			readiness, err = tx.RestartReadiness(ctx, slotAt.Add(time.Minute), nil)
 			return err
 		}); err != nil {
 			t.Fatal(err)

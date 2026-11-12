@@ -33,6 +33,17 @@
     "refusal_hold_reason": false
   },
   {
+    "case": "an update drain is in force",
+    "hold_reason": "update_drain",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
     "case": "usage pool execution limit reached",
     "hold_reason": "usage_pool_exhausted",
     "admission_refusal": null,

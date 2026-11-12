@@ -28,12 +28,22 @@ type UpdateDrainResponse struct {
 }
 
 // RestartReadiness runs the store's readiness read in one read transaction
-// at the service clock. It writes nothing.
+// at the service clock, with the in-process work counted before it begins.
+// It writes nothing.
+//
+// Counting first errs toward not ready: work that ends between the count and
+// the read still reads as running, and work that starts after the count
+// starts only after checking the drain, which a drained reader has already
+// seen in force.
 func (s *Service) RestartReadiness(ctx context.Context) (RestartReadinessResponse, error) {
+	var running map[domain.RestartBlockerKind]int
+	if s.runningWork != nil {
+		running = s.runningWork()
+	}
 	var readiness domain.RestartReadiness
 	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		readiness, err = tx.RestartReadiness(ctx, s.now().UTC())
+		readiness, err = tx.RestartReadiness(ctx, s.now().UTC(), running)
 		return err
 	}); err != nil {
 		return RestartReadinessResponse{}, fmt.Errorf("restart readiness: %w", err)

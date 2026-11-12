@@ -851,9 +851,11 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	}
 	// The room reserves its memory as a first cycle's does, under this
 	// task's verification invocation: the cycle's own, or a handoff's.
-	if err := w.reserveVerification(ctx, task, binding); err != nil {
+	end, err := w.reserveVerification(ctx, task, binding)
+	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
+	defer end()
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 	if err != nil {
 		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))

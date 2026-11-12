@@ -229,22 +229,46 @@ func reentryHostVerificationRefusedReason(
 // pending and a later pass asks again; a grant ends that hold. One the budget
 // refuses for good is retryable too, so the job waits under the notice
 // recordRetryableHold raises.
+//
+// It also starts the job's count as running verification_job work and
+// refuses the job while an update drain is in force, budget or not, with a
+// retryable error recordRetryableHold records as update_drain (issue #3104).
+// The caller ends the count with the returned end once the job is done; a
+// refusal ends it before returning.
 func (w *productionPublicationWorkflow) reserveVerification(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
-) error {
+) (end func(), err error) {
+	id := task.verificationInvocationID()
+	// began is held apart from the named end, which every refusal below
+	// returns as nil before the deferred call reads it.
+	began, err := w.running.BeginUnlessDraining(ctx, w.store, domain.RestartBlockerVerificationJob)
+	if errors.Is(err, store.ErrUpdateDrainInForce) {
+		return nil, &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
+			fmt.Errorf("start verification: %w", err))}
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			began()
+		}
+	}()
 	// Read before the gate's write, so an unbudgeted job writes nothing. No
 	// command clears a recorded budget, so a budget read here still applies
 	// in the gate. The gate reads the budget again in its own transaction, so
 	// one lowered between the two reads still bounds this reservation.
 	bound, err := currentLaunchBound(ctx, w.store, w.launchBound)
-	if err != nil || !bound.Budgeted() {
-		return err
+	if err != nil {
+		return nil, err
+	}
+	if !bound.Budgeted() {
+		return began, nil
 	}
 	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys, ward.LaunchBound{})
 	if err != nil {
-		return fmt.Errorf("resolve verification size: %w", err)
+		return nil, fmt.Errorf("resolve verification size: %w", err)
 	}
-	id := task.verificationInvocationID()
 	now := w.now().UTC()
 	reservation, _, err := bound.LaunchReservation(
 		id, task.RunID, domain.ReservationVerification, sizes.Verification)
@@ -271,22 +295,25 @@ func (w *productionPublicationWorkflow) reserveVerification(
 	}
 	if errors.Is(err, domain.ErrMachineCapacity) {
 		if orderErr := recordLaunchOrder(ctx, w.store, w.attention, task.RunID, id, err, now); orderErr != nil {
-			return errors.Join(err, orderErr)
+			return nil, errors.Join(err, orderErr)
 		}
-		return &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
+		return nil, &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
 			fmt.Errorf("reserve verification memory: %w", err))}
 	}
 	if launchMemoryRefusal(err) {
-		return &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
+		return nil, &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
 			fmt.Errorf("reserve verification memory: %w", err))}
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if waited {
 		w.holdPace.forget("hold:" + string(task.RunID))
 	}
-	return releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID)
+	if err := releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID); err != nil {
+		return nil, err
+	}
+	return began, nil
 }
 
 // verificationReservationRefused is a verification job's reservation the
@@ -567,9 +594,11 @@ func (w *productionPublicationWorkflow) runVerification(
 	checkoutDir string,
 	recipes map[domain.Digest]bool,
 ) (verify.Result, error) {
-	if err := w.reserveVerification(ctx, task, binding); err != nil {
+	end, err := w.reserveVerification(ctx, task, binding)
+	if err != nil {
 		return verify.Result{}, err
 	}
+	defer end()
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 	if err != nil {
 		return verify.Result{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))

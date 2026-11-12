@@ -115,6 +115,9 @@ type Engine struct {
 	// logger reports what the reconcile loops do. Never nil after New, so
 	// the loops log without checking.
 	logger *slog.Logger
+	// running counts the in-process work a restart would cut short (see
+	// WithRunningWork); nil counts nothing.
+	running *RunningWork
 }
 
 // WithDaemonLock authorizes recovery of a pre-start reservation.
@@ -185,6 +188,18 @@ func WithUnattendedHealthRefresh(refresh func(context.Context) error) Option {
 	}
 }
 
+// WithRunningWork shares the daemon's count of in-process work, which the
+// restart readiness read reports (issue #3104).
+func WithRunningWork(running *RunningWork) Option {
+	return func(e *Engine) error {
+		if running == nil {
+			return errors.New("engine running work: nil counter")
+		}
+		e.running = running
+		return nil
+	}
+}
+
 // New constructs an Engine from already-open boundaries. Their lifetimes stay
 // with the daemon composition that supplied them.
 func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, opts ...Option) (*Engine, error) {
@@ -215,6 +230,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	if e.productionPublication != nil {
 		e.productionPublication.launchBound = e.launchBound
 		e.productionPublication.logger = e.logger
+		e.productionPublication.running = e.running
 		e.productionPublication.beginTaskWork = e.BeginRunWork
 		e.productionPublication.claimDispatch = e.claimRunDispatch
 		if e.admission != nil && !e.productionPublication.holdOnly &&
@@ -345,6 +361,11 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	if e.productionPublication == nil {
 		return ReconcileResult{}, errors.New("production publication workflow is not configured")
 	}
+	end, run, err := e.beginPublicationPass(ctx)
+	if err != nil || !run {
+		return ReconcileResult{}, err
+	}
+	defer end()
 	if e.inference != nil {
 		_ = e.inference.Maintain(ctx)
 	}
@@ -354,10 +375,7 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	if err := e.productionPublication.observeClosedWorkflows(ctx); err != nil {
 		return ReconcileResult{}, err
 	}
-	var (
-		publication productionPublicationResult
-		err         error
-	)
+	var publication productionPublicationResult
 	e.launchWaits.keepDuring(ctx, e.store, e.productionPublication.now, e.logger, func() {
 		publication, err = e.productionPublication.reconcile(ctx)
 	})
@@ -375,6 +393,31 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 		return result, fmt.Errorf("reconcile production publications: %w", err)
 	}
 	return result, nil
+}
+
+// beginPublicationPass counts one publication pass as running and reports
+// whether it may start. While an update drain is in force a pass starts only
+// while a launched review still holds its slot: the pass's cleanup is what
+// marks that review's outcome ready and frees the slot, so pausing every pass
+// would hold readiness at not-ready for good. Such a pass launches nothing
+// new, since every launch inside it checks the drain itself (issue #3104).
+func (e *Engine) beginPublicationPass(ctx context.Context) (end func(), run bool, err error) {
+	end = e.running.Begin(domain.RestartBlockerPublication)
+	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
+		drain, err := tx.UpdateDrainInForce(ctx)
+		if err != nil || drain == nil {
+			run = err == nil
+			return err
+		}
+		held, err := tx.ReviewLaunchesHeld(ctx)
+		run = err == nil && held > 0
+		return err
+	})
+	if err != nil || !run {
+		end()
+		return nil, false, err
+	}
+	return end, true, nil
 }
 
 // Run reconciles immediately and then on interval until ctx is canceled. A

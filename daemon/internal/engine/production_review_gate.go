@@ -848,10 +848,10 @@ func (w *productionPublicationWorkflow) requestReviewRound(
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
 			return reviewRoundInvocation{}, state, true, err
 		}
-		// A full pool, memory that does not fit yet, or a routed reviewer's
-		// marked window is a wait, not a source failure: it spends no retry
-		// budget, and a later pass asks again once capacity frees or the
-		// window resets.
+		// A full pool, memory that does not fit yet, a routed reviewer's
+		// marked window, or an update drain is a wait, not a source failure:
+		// it spends no retry budget, and a later pass asks again once
+		// capacity frees, the window resets, or the drain lifts.
 		if reviewCapacityRefusal(err) {
 			return reviewRoundInvocation{}, productionReviewPending, true,
 				w.holdReviewForCapacity(ctx, task.RunID, id, err)
@@ -2307,8 +2307,14 @@ func (w *productionPublicationWorkflow) storedReviewAdmission(
 // writes the row. A full pool or a reservation that does not fit yet stores
 // nothing and returns ErrUsagePoolExhausted or ErrMachineCapacity, for the
 // caller to wait on, and so does a routed reviewer whose pool's window is
-// marked, with ErrQuotaWindowExhausted; writing the admission ends the wait,
-// and with it the hold the wait recorded and that hold's pace.
+// marked, with ErrQuotaWindowExhausted, and any admission while an update
+// drain is in force, with store.ErrUpdateDrainInForce; writing the admission
+// ends the wait, and with it the hold the wait recorded and that hold's pace.
+//
+// The drain refuses before the row is written, never after: a written
+// admission holds a review slot until its review launches and ends, so one
+// the drain kept from launching would keep a restart from ever being ready
+// (issue #3104). A stored admission returns above and launches, drain or not.
 func (w *productionPublicationWorkflow) ensureReviewAdmission(
 	ctx context.Context, role domain.RoleName, runID domain.RunID, id domain.InvocationID,
 ) (domain.ReviewAdmission, error) {
@@ -2343,6 +2349,9 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
 			return err
 		}
+		if err := tx.RequireNoUpdateDrain(ctx); err != nil {
+			return err
+		}
 		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
 			return err
 		}
@@ -2367,6 +2376,7 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		waited = present && reviewCapacityWait(hold.Reason)
 		for _, cause := range []domain.RunHoldReason{
 			domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity, domain.HoldQuotaWindowExhausted,
+			domain.HoldUpdateDrain,
 		} {
 			if err := tx.ClearRunHoldCause(ctx, runID, cause); err != nil {
 				return err
@@ -2384,24 +2394,24 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 }
 
 // reviewCapacityWait reports whether a hold reason is a review admission's
-// capacity wait: a full pool, memory that does not fit yet, or a routed
-// reviewer's marked quota window.
+// capacity wait: a full pool, memory that does not fit yet, a routed
+// reviewer's marked quota window, or an update drain, which admits nothing.
 func reviewCapacityWait(reason domain.RunHoldReason) bool {
 	return reason == domain.HoldUsagePoolExhausted || reason == domain.HoldMachineCapacity ||
-		reason == domain.HoldQuotaWindowExhausted
+		reason == domain.HoldQuotaWindowExhausted || reason == domain.HoldUpdateDrain
 }
 
 // reviewCapacityRefusal reports whether a review admission refusal is a wait
 // for capacity rather than a failure.
 func reviewCapacityRefusal(err error) bool {
 	return errors.Is(err, domain.ErrUsagePoolExhausted) || errors.Is(err, domain.ErrMachineCapacity) ||
-		errors.Is(err, ErrQuotaWindowExhausted)
+		errors.Is(err, ErrQuotaWindowExhausted) || errors.Is(err, store.ErrUpdateDrainInForce)
 }
 
 // holdReviewForCapacity records the wait of a review refused for a full pool,
-// for memory, or for a routed reviewer's marked window. cause is that
-// refusal, which names the pool, the memory arithmetic, or the window; a
-// memory refusal also places the review in the memory order.
+// for memory, for a routed reviewer's marked window, or for an update drain.
+// cause is that refusal, which names the pool, the memory arithmetic, or the
+// window; a memory refusal also places the review in the memory order.
 func (w *productionPublicationWorkflow) holdReviewForCapacity(
 	ctx context.Context, runID domain.RunID, id domain.InvocationID, cause error,
 ) error {
