@@ -55,7 +55,7 @@ public struct MockServerTransport: ClientTransport {
                 // 16's recorded-replay branch on command submission.
                 if operationID == "submitCommand", let body {
                     let data = try await Data(collecting: body, upTo: 1 << 20)
-                    if let command = try? Self.decoder.decode(
+                    if let command = try? Self.decodeRequest(
                         Components.Schemas.ClientCommand.self, from: data),
                         let recorded = await server.recordedResultForRevokedRetry(
                             command, deviceID: id)
@@ -278,7 +278,7 @@ public struct MockServerTransport: ClientTransport {
                 return (HTTPResponse(status: .badRequest), nil)
             }
             let data = try await Data(collecting: body, upTo: 1 << 20)
-            let pairing = try Self.decoder.decode(
+            let pairing = try Self.decodeRequest(
                 Components.Schemas.PairingRequest.self, from: data)
             do {
                 return try Self.json(status: .created, body: try await server.pairDevice(pairing))
@@ -294,7 +294,7 @@ public struct MockServerTransport: ClientTransport {
                 return (HTTPResponse(status: .badRequest), nil)
             }
             let data = try await Data(collecting: body, upTo: 1 << 20)
-            let preview = try Self.decoder.decode(
+            let preview = try Self.decodeRequest(
                 Components.Schemas.PairingPreviewRequest.self, from: data)
             do {
                 return try Self.json(status: .ok, body: try await server.previewPairing(preview))
@@ -334,7 +334,7 @@ public struct MockServerTransport: ClientTransport {
             }
             let data = try await Data(collecting: body, upTo: 1 << 20)
             guard
-                let input = try? Self.decoder.decode(
+                let input = try? Self.decodeRequest(
                     Components.Schemas.DeviceNotificationsInput.self, from: data)
             else {
                 return try Self.json(
@@ -356,7 +356,7 @@ public struct MockServerTransport: ClientTransport {
                 return (HTTPResponse(status: .badRequest), nil)
             }
             let data = try await Data(collecting: body, upTo: 1 << 20)
-            let command = try Self.decoder.decode(
+            let command = try Self.decodeRequest(
                 Components.Schemas.ClientCommand.self, from: data)
             // One valid device credential can never name another device
             // in a command body (#105), ahead of the contract semantics.
@@ -616,7 +616,7 @@ public struct MockServerTransport: ClientTransport {
             }
             let data = try await Data(collecting: body, upTo: 1 << 20)
             guard
-                let input = try? Self.decoder.decode(
+                let input = try? Self.decodeRequest(
                     Components.Schemas.ClientCapabilityContractInput.self, from: data)
             else {
                 return try Self.json(
@@ -669,7 +669,7 @@ public struct MockServerTransport: ClientTransport {
             }
             let data = try await Data(collecting: body, upTo: 1 << 20)
             guard
-                let input = try? Self.decoder.decode(
+                let input = try? Self.decodeRequest(
                     Components.Schemas.ComprehensionEventInput.self, from: data)
             else {
                 return try Self.json(
@@ -751,6 +751,19 @@ public struct MockServerTransport: ClientTransport {
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }()
+
+    /// Decodes a request body as the daemon does. The generated enums decode
+    /// a value they don't declare as `unknown`, but the daemon refuses any
+    /// value it doesn't register, so a body that carries `unknown` anywhere is
+    /// malformed here too.
+    private static func decodeRequest<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        let value = try decoder.decode(type, from: data)
+        if MockContractValidation.carriesUnknownMember(value) {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: [], debugDescription: "request carries a value the daemon doesn't register"))
+        }
+        return value
+    }
 
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()

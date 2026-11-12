@@ -77,6 +77,19 @@ import Testing
         }
     }
 
+    /// The app decodes a value it doesn't know as `unknown`, so the same
+    /// member can reach a request. The daemon registers no `unknown` action,
+    /// so the mock refuses one at its request boundary.
+    @Test func registerRefusesTheDecodeOnlyUnknownAction() async throws {
+        let p = try await paired()
+        let output = try await p.client.registerCapabilityContract(
+            path: .init(device_id: "device-1"), body: .json(.init(actions: [.approve, .unknown])))
+        if case .badRequest = output {
+        } else {
+            Issue.record("a capability registration carrying unknown was accepted")
+        }
+    }
+
     @Test func actionSurfaceRequiresContract() async throws {
         let p = try await paired()
         let output = try await p.client.getActionSurface(path: .init(item_id: p.itemID))

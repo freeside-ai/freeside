@@ -33,10 +33,14 @@ swift package \
     --only-use-versions-from-resolved-file \
     plugin --allow-writing-to-package-directory \
     generate-code-from-openapi --target FreesideAPI
+# Make every generated enum that lists unknown decode an undeclared value as
+# unknown (app/Sources/FreesideAPI/UnknownTolerantEnum.swift).
+bash "$app_dir/scripts/write-tolerant-enums.sh"
 
 outputs=(
     app/Sources/FreesideAPI/openapi.yaml
     app/Sources/FreesideAPI/GeneratedSources
+    app/Sources/FreesideAPI/TolerantEnums.swift
     app/Sources/FreesideAPI/ContractDigest.swift
     daemon/internal/signet/contract_digest.go
 )
@@ -48,7 +52,8 @@ if [[ $mode == against-index ]]; then
     drift=$(
         git -C "$repo_dir" diff --name-only -- "${outputs[@]}"
         git -C "$repo_dir" ls-files --others --exclude-standard -- \
-            app/Sources/FreesideAPI/GeneratedSources
+            app/Sources/FreesideAPI/GeneratedSources \
+            app/Sources/FreesideAPI/TolerantEnums.swift
     )
     if [[ -n "$drift" ]]; then
         echo "Regenerated API client differs from the index; stage these paths and commit again:" >&2

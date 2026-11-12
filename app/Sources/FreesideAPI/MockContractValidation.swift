@@ -1291,6 +1291,19 @@ enum MockContractValidation {
         return nil
     }
 
+    /// Whether a decoded request carries `unknown` anywhere. The app decodes
+    /// a value it doesn't know as `unknown` (UnknownTolerantEnum), and that
+    /// tolerance reaches the mock's request decoding too, where the daemon
+    /// refuses a value it doesn't register. No request enum gives `unknown` a
+    /// meaning of its own, so any `unknown` in a request is one the daemon
+    /// refuses.
+    static func carriesUnknownMember(_ value: Any) -> Bool {
+        if let member = value as? any UnknownTolerantEnum {
+            return member.rawValue == "unknown"
+        }
+        return Mirror(reflecting: value).children.contains { carriesUnknownMember($0.value) }
+    }
+
     static func validate(_ command: Components.Schemas.ClientCommand) throws {
         try validateStructure(command)
         try validateActionInput(command)

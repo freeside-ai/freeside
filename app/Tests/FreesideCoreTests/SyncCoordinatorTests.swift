@@ -1,7 +1,9 @@
 import Foundation
 import FreesideAPI
 import FreesideTestSupport
+import HTTPTypes
 import Observation
+import OpenAPIRuntime
 import Testing
 
 @testable import FreesideCore
@@ -12,6 +14,28 @@ private func makeCoordinator(
     server: MockServer, cache: CacheStore = InMemoryCacheStore()
 ) -> SyncCoordinator {
     SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache)
+}
+
+/// A newer daemon: renames one attention type in the bootstrap body to a
+/// value this client's contract doesn't declare.
+private struct NewerAttentionTypeTransport: ClientTransport {
+    let base: MockServerTransport
+
+    func send(
+        _ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        let (response, responseBody) = try await base.send(
+            request, body: body, baseURL: baseURL, operationID: operationID)
+        guard operationID == "getSyncBootstrap", let responseBody else {
+            return (response, responseBody)
+        }
+        let text = String(decoding: try await Data(collecting: responseBody, upTo: .max), as: UTF8.self)
+        let renamed = text.replacingOccurrences(
+            of: #""type"\s*:\s*"spec_approval""#, with: #""type":"added_by_a_newer_daemon""#,
+            options: .regularExpression)
+        precondition(renamed != text, "the bootstrap carries no spec_approval item")
+        return (response, HTTPBody(Data(renamed.utf8)))
+    }
 }
 
 /// The mock answered a submit_task command with a non-submission record.
@@ -968,6 +992,21 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.store.freshness == .syncFailing)
         #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .unavailable)
         await recover()
+    }
+
+    @Test func anUndeclaredAttentionTypeSyncsAsUnknown() async throws {
+        // Responses tolerate additive change (#1266): a type a newer daemon
+        // adds decodes as unknown instead of failing the whole sync read.
+        let server = MockServer()
+        // swift-format-ignore: NeverForceUnwrap
+        let client = Client(
+            serverURL: URL(string: "https://freeside.invalid")!,
+            transport: NewerAttentionTypeTransport(base: MockServerTransport(server: server)))
+        let coordinator = SyncCoordinator(client: client, cache: InMemoryCacheStore())
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == .fresh)
+        let newer = coordinator.store.rows.filter { $0.item._type == .unknown }
+        #expect(newer.map(\.item.id) == ["item-spec_approval"])
     }
 
     @Test func rejectedCredentialSurfacesAsUnauthenticated() async throws {

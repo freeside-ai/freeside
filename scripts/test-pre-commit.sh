@@ -133,6 +133,15 @@ setup_repo() {
   cp "$ROOT/scripts/api-contract-digest.sh" \
     "$REPO/scripts/api-contract-digest.sh"
   chmod +x "$REPO/scripts/api-contract-digest.sh"
+  # It also writes TolerantEnums.swift through this script. A stand-in
+  # writes fixed output, as the swift stub stands in for the generator: the
+  # real script needs a generated client with enums in it.
+  cat >"$REPO/app/scripts/write-tolerant-enums.sh" <<'WRITER'
+#!/usr/bin/env bash
+printf 'tolerant: fixed\n' >"$(dirname "$0")/../Sources/FreesideAPI/TolerantEnums.swift"
+WRITER
+  chmod +x "$REPO/app/scripts/write-tolerant-enums.sh"
+  printf 'tolerant: fixed\n' >"$REPO/app/Sources/FreesideAPI/TolerantEnums.swift"
   cp "$ROOT/.githooks/pre-commit" "$REPO/.githooks/pre-commit"
   chmod +x "$REPO/.githooks/pre-commit"
 

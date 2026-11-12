@@ -1334,24 +1334,26 @@ import Testing
     }
 
     /// #936 (plan revision 44) removed choose_alternate_profile from the Action
-    /// vocabulary. A command payload still carrying the string is rejected at
-    /// the transport decode boundary the mock validates behind, as an invalid
-    /// action, not accepted as a pending action. The well-formed sibling proves
-    /// the action token is the only difference.
+    /// vocabulary. The generated decoder reads the string as `unknown`, as it
+    /// reads any action it doesn't declare, and the mock's request boundary
+    /// refuses a body that carries `unknown`, as the daemon refuses an action it
+    /// doesn't register. The well-formed sibling proves the action token is the
+    /// only difference.
     @Test func retiredChooseAlternateProfileFailsCommandDecode() throws {
         let snapshot = AttentionFixtures.fixture(type: .publish_blocked)
         var valid = command(against: snapshot)
         valid.payload.asDecision.action = .rerun_trust_evaluation
         let encoded = try JSONEncoder().encode(valid)
-        _ = try JSONDecoder().decode(Components.Schemas.ClientCommand.self, from: encoded)
+        let sibling = try JSONDecoder().decode(Components.Schemas.ClientCommand.self, from: encoded)
+        #expect(!MockContractValidation.carriesUnknownMember(sibling))
 
         let retired = String(decoding: encoded, as: UTF8.self)
             .replacingOccurrences(
                 of: "\"rerun_trust_evaluation\"", with: "\"choose_alternate_profile\"")
-        #expect(throws: Error.self) {
-            try JSONDecoder().decode(
-                Components.Schemas.ClientCommand.self, from: Data(retired.utf8))
-        }
+        let decoded = try JSONDecoder().decode(
+            Components.Schemas.ClientCommand.self, from: Data(retired.utf8))
+        #expect(decoded.payload.asDecision.action == .unknown)
+        #expect(MockContractValidation.carriesUnknownMember(decoded))
     }
 
     /// Each leg of a line's selection reaches a harness argv, so the mock
