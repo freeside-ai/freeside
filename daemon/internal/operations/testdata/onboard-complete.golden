@@ -95,7 +95,8 @@
           "reusable_workflows": false,
           "self_hosted_runners": false,
           "package_publishing": false,
-          "artifact_consuming_workflows": false
+          "artifact_consuming_workflows": false,
+          "issue_comment_workflows": null
         }
       },
       "evidence": {
@@ -121,7 +122,8 @@
           "reusable_workflows": false,
           "self_hosted_runners": false,
           "package_publishing": false,
-          "artifact_consuming_workflows": false
+          "artifact_consuming_workflows": false,
+          "issue_comment_workflows": null
         }
       },
       "evidence": {

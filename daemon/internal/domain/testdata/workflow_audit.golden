@@ -13,5 +13,11 @@
   "self_hosted_runners": false,
   "package_publishing": false,
   "artifact_consuming_workflows": false,
+  "issue_comment_workflows": [
+    {
+      "path": ".github/workflows/triage.yml",
+      "digest": "sha256:triage-closure"
+    }
+  ],
   "review_decision_ref": "decision-1"
 }

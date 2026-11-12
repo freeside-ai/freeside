@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -276,7 +277,7 @@ func TestGitHubWorkflowAuditorAcceptsDynamicWorkflowRows(t *testing.T) {
 	baseline.WorkflowAuditDigest, audit.WorkflowAuditDigest = "", ""
 	baseline.Evidence, audit.Evidence = nil, nil
 	baseline.AuditedAt, audit.AuditedAt = time.Time{}, time.Time{}
-	if audit != baseline {
+	if !reflect.DeepEqual(audit, baseline) {
 		t.Fatalf("dynamic row changed derived facts: %+v != %+v", audit, baseline)
 	}
 }

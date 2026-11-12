@@ -81,6 +81,44 @@ func TestTrustProfileDigest(t *testing.T) {
 		t.Fatalf("commit-plan flip error = %v, want ErrProfileDigestMismatch", err)
 	}
 
+	// The issue_comment key and each audited entry participate in the
+	// address: accepting a workflow, or a different closure for one, is a new
+	// digest the owner has to approve.
+	withSet := validTrustProfileInput()
+	withSet.AllowIssueCommentWorkflows = true
+	withSet.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+		{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+	}
+	accepted, err := domain.NewAutomationTrustProfile(withSet)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile with issue_comment set: %v", err)
+	}
+	if accepted.ProfileDigest == base.ProfileDigest {
+		t.Fatal("accepting an issue_comment workflow left the digest unchanged")
+	}
+	commentsOnly := validTrustProfileInput()
+	commentsOnly.AllowIssueCommentWorkflows = true
+	acceptedNone, err := domain.NewAutomationTrustProfile(commentsOnly)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile accepting comments with no workflows: %v", err)
+	}
+	if acceptedNone.ProfileDigest == base.ProfileDigest || acceptedNone.ProfileDigest == accepted.ProfileDigest {
+		t.Fatal("accepting the comment operation over no workflows shares another profile's digest")
+	}
+	keyFlipped := accepted
+	keyFlipped.AllowIssueCommentWorkflows = false
+	keyFlipped.IssueCommentWorkflows = nil
+	if err := keyFlipped.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("issue_comment key flip error = %v, want ErrProfileDigestMismatch", err)
+	}
+	entryEdited := accepted
+	entryEdited.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+		{Path: ".github/workflows/triage.yml", Digest: "sha256:edited-closure"},
+	}
+	if err := entryEdited.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("issue_comment entry edit error = %v, want ErrProfileDigestMismatch", err)
+	}
+
 	// Pattern order and duplication do not change the address: the
 	// constructor canonicalizes, so equal content converges on one digest.
 	in := validTrustProfileInput()
@@ -164,6 +202,32 @@ func TestTrustProfileValidation(t *testing.T) {
 		{"parent segment materiality pattern", func(in *domain.AutomationTrustProfileInput) {
 			in.ProtectedPaths.ExtraMaterialityRulesPatterns = []string{"docs/../plan.md"}
 		}, domain.ErrPatternsNotCanonical},
+		{"issue_comment key false with a workflow", func(in *domain.AutomationTrustProfileInput) {
+			in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{{Path: ".github/workflows/a.yml", Digest: "sha256:a"}}
+		}, domain.ErrIssueCommentWorkflowsInvalid},
+		{"issue_comment workflow empty path", func(in *domain.AutomationTrustProfileInput) {
+			in.AllowIssueCommentWorkflows = true
+			in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{{Digest: "sha256:a"}}
+		}, domain.ErrEmptyField},
+		{"issue_comment workflow empty digest", func(in *domain.AutomationTrustProfileInput) {
+			in.AllowIssueCommentWorkflows = true
+			in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{{Path: ".github/workflows/a.yml"}}
+		}, domain.ErrEmptyField},
+		{"issue_comment workflow outside workflows directory", func(in *domain.AutomationTrustProfileInput) {
+			in.AllowIssueCommentWorkflows = true
+			in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{{Path: ".github/actions/a.yml", Digest: "sha256:a"}}
+		}, domain.ErrIssueCommentWorkflowsInvalid},
+		{"issue_comment workflow non-canonical path", func(in *domain.AutomationTrustProfileInput) {
+			in.AllowIssueCommentWorkflows = true
+			in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{{Path: ".github/workflows/../a.yml", Digest: "sha256:a"}}
+		}, domain.ErrIssueCommentWorkflowsInvalid},
+		{"issue_comment workflow listed twice with different digests", func(in *domain.AutomationTrustProfileInput) {
+			in.AllowIssueCommentWorkflows = true
+			in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+				{Path: ".github/workflows/a.yml", Digest: "sha256:a"},
+				{Path: ".github/workflows/a.yml", Digest: "sha256:b"},
+			}
+		}, domain.ErrIssueCommentWorkflowsInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -207,6 +271,186 @@ func TestTrustProfileValidation(t *testing.T) {
 	emptyList.ProtectedPaths.ExtraGitMetadataPatterns = []string{}
 	if err := emptyList.Validate(); !errors.Is(err, domain.ErrPatternsNotCanonical) {
 		t.Fatalf("empty-list patterns error = %v, want ErrPatternsNotCanonical", err)
+	}
+
+	// The issue_comment set has the same one-representation rule.
+	withSet := validTrustProfileInput()
+	withSet.AllowIssueCommentWorkflows = true
+	withSet.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+		{Path: ".github/workflows/a.yml", Digest: "sha256:a"},
+		{Path: ".github/workflows/b.yml", Digest: "sha256:b"},
+	}
+	listed, err := domain.NewAutomationTrustProfile(withSet)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile with issue_comment set: %v", err)
+	}
+	unsortedSet := listed
+	unsortedSet.IssueCommentWorkflows = []domain.IssueCommentWorkflow{listed.IssueCommentWorkflows[1], listed.IssueCommentWorkflows[0]}
+	if err := unsortedSet.Validate(); !errors.Is(err, domain.ErrIssueCommentWorkflowsInvalid) {
+		t.Fatalf("unsorted issue_comment set error = %v, want ErrIssueCommentWorkflowsInvalid", err)
+	}
+	emptySet := base
+	emptySet.IssueCommentWorkflows = []domain.IssueCommentWorkflow{}
+	if err := emptySet.Validate(); !errors.Is(err, domain.ErrIssueCommentWorkflowsInvalid) {
+		t.Fatalf("empty-list issue_comment set error = %v, want ErrIssueCommentWorkflowsInvalid", err)
+	}
+}
+
+// TestTrustProfileIssueCommentWorkflowsDecode: the key and set round-trip
+// through a stored body in every state, and a profile that accepts no comment
+// stores neither member, so its body is the one it had before the fields
+// existed and decodes back as false and empty.
+func TestTrustProfileIssueCommentWorkflowsDecode(t *testing.T) {
+	withSet := validTrustProfileInput()
+	withSet.AllowIssueCommentWorkflows = true
+	withSet.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+		{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+	}
+	commentsOnly := validTrustProfileInput()
+	commentsOnly.AllowIssueCommentWorkflows = true
+	for name, in := range map[string]domain.AutomationTrustProfileInput{
+		"key true with set":   withSet,
+		"key true, no set":    commentsOnly,
+		"key false and empty": validTrustProfileInput(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			original, err := domain.NewAutomationTrustProfile(in)
+			if err != nil {
+				t.Fatalf("NewAutomationTrustProfile: %v", err)
+			}
+			body, err := json.Marshal(original)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var decoded domain.AutomationTrustProfile
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if err := decoded.Validate(); err != nil {
+				t.Fatalf("decoded profile rejected: %v", err)
+			}
+			if !reflect.DeepEqual(decoded, original) {
+				t.Fatalf("round trip diverged:\n got %#v\nwant %#v", decoded, original)
+			}
+		})
+	}
+
+	t.Run("members absent", func(t *testing.T) {
+		original, err := domain.NewAutomationTrustProfile(validTrustProfileInput())
+		if err != nil {
+			t.Fatalf("NewAutomationTrustProfile: %v", err)
+		}
+		body, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(body, &fields); err != nil {
+			t.Fatalf("unmarshal fields: %v", err)
+		}
+		for _, member := range []string{"allow_issue_comment_workflows", "issue_comment_workflows"} {
+			if _, ok := fields[member]; ok {
+				t.Fatalf("profile accepting no comment stores %s: %s", member, body)
+			}
+		}
+		var decoded domain.AutomationTrustProfile
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if decoded.AllowIssueCommentWorkflows || decoded.IssueCommentWorkflows != nil {
+			t.Fatalf("absent members decoded as %t, %#v; want false and nil",
+				decoded.AllowIssueCommentWorkflows, decoded.IssueCommentWorkflows)
+		}
+		if err := decoded.Validate(); err != nil {
+			t.Fatalf("profile without the members rejected: %v", err)
+		}
+	})
+}
+
+// TestEvaluateIssueCommentWorkflowDrift: the comment precondition approves
+// only the set the owner accepted, compared by path and digest, and names the
+// first differing path. Its refusal is not publication drift.
+func TestEvaluateIssueCommentWorkflowDrift(t *testing.T) {
+	triage := domain.IssueCommentWorkflow{Path: ".github/workflows/triage.yml", Digest: "sha256:triage"}
+	bot := domain.IssueCommentWorkflow{Path: ".github/workflows/bot.yml", Digest: "sha256:bot"}
+	none, err := domain.NewAutomationTrustProfile(validTrustProfileInput())
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	in := validTrustProfileInput()
+	in.AllowIssueCommentWorkflows = true
+	acceptedNone, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile accepting no workflows: %v", err)
+	}
+	in.IssueCommentWorkflows = []domain.IssueCommentWorkflow{triage}
+	accepted, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile accepted: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		profile    domain.AutomationTrustProfile
+		observed   []domain.IssueCommentWorkflow
+		wantPath   string
+		wantChange domain.IssueCommentWorkflowChange
+	}{
+		// A profile without the key, as every profile reviewed before it
+		// existed is, approves no comment even on a repository that runs none.
+		{name: "key false, none observed", profile: none, wantChange: domain.IssueCommentWorkflowUnaccepted},
+		{
+			name: "key false, one observed", profile: none, observed: []domain.IssueCommentWorkflow{triage},
+			wantPath: triage.Path, wantChange: domain.IssueCommentWorkflowUnaccepted,
+		},
+		{name: "key true, no set, none observed", profile: acceptedNone},
+		{
+			name: "key true, no set, one observed", profile: acceptedNone, observed: []domain.IssueCommentWorkflow{triage},
+			wantPath: triage.Path, wantChange: domain.IssueCommentWorkflowAdded,
+		},
+		{name: "key true, audited set observed", profile: accepted, observed: []domain.IssueCommentWorkflow{triage}},
+		{
+			name: "added workflow", profile: accepted, observed: []domain.IssueCommentWorkflow{bot, triage},
+			wantPath: bot.Path, wantChange: domain.IssueCommentWorkflowAdded,
+		},
+		{
+			name: "removed workflow", profile: accepted,
+			wantPath: triage.Path, wantChange: domain.IssueCommentWorkflowRemoved,
+		},
+		{
+			name: "changed digest", profile: accepted,
+			observed: []domain.IssueCommentWorkflow{{Path: triage.Path, Digest: "sha256:edited"}},
+			wantPath: triage.Path, wantChange: domain.IssueCommentWorkflowChanged,
+		},
+		{
+			name: "added after the audited set", profile: accepted,
+			observed: []domain.IssueCommentWorkflow{triage, {Path: ".github/workflows/zz.yml", Digest: "sha256:zz"}},
+			wantPath: ".github/workflows/zz.yml", wantChange: domain.IssueCommentWorkflowAdded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := domain.EvaluateIssueCommentWorkflowDrift(tt.profile, tt.observed)
+			if tt.wantChange == "" {
+				if err != nil {
+					t.Fatalf("approved set refused: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, domain.ErrIssueCommentWorkflowsNotApproved) {
+				t.Fatalf("error = %v, want ErrIssueCommentWorkflowsNotApproved", err)
+			}
+			if errors.Is(err, domain.ErrTrustProfileDrift) {
+				t.Fatalf("comment refusal %v matches ErrTrustProfileDrift", err)
+			}
+			var drift *domain.IssueCommentWorkflowDriftError
+			if !errors.As(err, &drift) {
+				t.Fatalf("error %T is not *IssueCommentWorkflowDriftError", err)
+			}
+			if drift.Path != tt.wantPath || drift.Change != tt.wantChange {
+				t.Fatalf("drift = %s %s, want %s %s", drift.Path, drift.Change, tt.wantPath, tt.wantChange)
+			}
+		})
 	}
 }
 
@@ -277,6 +521,10 @@ func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 			ExtraEgressAndTrustPatterns:      []string{"egress.yaml"},
 			ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
 		},
+		AllowIssueCommentWorkflows: true,
+		IssueCommentWorkflows: []domain.IssueCommentWorkflow{
+			{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"},
+		},
 	}
 }
 
@@ -290,7 +538,7 @@ func TestTrustProfileDigestStability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
-	const want = domain.Digest("sha256:b94adf427ed789a207d3e42b2e10022575defc54f3317fa739a5e7704eb2dd47")
+	const want = domain.Digest("sha256:72738dfa0acb0d73d866c1fd98031d69fec08d71064c46783b794c8bc4bfc5b5")
 	if p.ProfileDigest != want {
 		t.Fatalf("v6 canonical digest = %q, want %q", p.ProfileDigest, want)
 	}
@@ -332,6 +580,26 @@ func TestTrustProfileAdvisoryAutomationChanges(t *testing.T) {
 	unknown.CandidateAutomationChanges = "allow"
 	if err := unknown.Validate(); !errors.Is(err, domain.ErrInvalidAutomationChanges) {
 		t.Fatalf("unknown stance error = %v, want ErrInvalidAutomationChanges", err)
+	}
+}
+
+// TestTrustProfileDigestStableWithoutIssueCommentWorkflows: the issue_comment
+// key and set joined the profile without an encoding bump, which is sound
+// only while a profile without them encodes to the bytes it always had. The
+// fully populated fixture without them resolves to the pin it had before
+// they existed, so every stored profile keeps its approved digest and every
+// in-flight publication can still read the profile it was admitted under;
+// such a profile approves no comment (TestEvaluateIssueCommentWorkflowDrift).
+func TestTrustProfileDigestStableWithoutIssueCommentWorkflows(t *testing.T) {
+	in := fullyPopulatedTrustProfileInput()
+	in.AllowIssueCommentWorkflows, in.IssueCommentWorkflows = false, nil
+	p, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	const want = domain.Digest("sha256:b94adf427ed789a207d3e42b2e10022575defc54f3317fa739a5e7704eb2dd47")
+	if p.ProfileDigest != want {
+		t.Fatalf("digest without issue_comment workflows = %q, want the pre-field pin %q", p.ProfileDigest, want)
 	}
 }
 
@@ -403,7 +671,7 @@ func TestTrustProfileDigestStableWithoutExternalReviewers(t *testing.T) {
 	if p.ExternalReviewers != nil {
 		t.Fatalf("empty allowlist = %#v, want nil", p.ExternalReviewers)
 	}
-	const want = domain.Digest("sha256:b94adf427ed789a207d3e42b2e10022575defc54f3317fa739a5e7704eb2dd47")
+	const want = domain.Digest("sha256:72738dfa0acb0d73d866c1fd98031d69fec08d71064c46783b794c8bc4bfc5b5")
 	if p.ProfileDigest != want {
 		t.Fatalf("digest without an allowlist = %q, want the v6 pin %q", p.ProfileDigest, want)
 	}
@@ -610,6 +878,18 @@ func TestWorkflowAuditValidation(t *testing.T) {
 		{"zero audited_at", func(a *domain.WorkflowAudit) { a.AuditedAt = time.Time{} }, domain.ErrMissingTimestamp},
 		{"empty digest", func(a *domain.WorkflowAudit) { a.WorkflowAuditDigest = "" }, domain.ErrEmptyField},
 		{"invalid permissions", func(a *domain.WorkflowAudit) { a.EffectiveTokenPerms = "" }, domain.ErrInvalidTokenPermissions},
+		{"issue_comment workflow without digest", func(a *domain.WorkflowAudit) {
+			a.IssueCommentWorkflows = []domain.IssueCommentWorkflow{{Path: ".github/workflows/a.yml"}}
+		}, domain.ErrEmptyField},
+		{"issue_comment workflows unsorted", func(a *domain.WorkflowAudit) {
+			a.IssueCommentWorkflows = []domain.IssueCommentWorkflow{
+				{Path: ".github/workflows/b.yml", Digest: "sha256:b"},
+				{Path: ".github/workflows/a.yml", Digest: "sha256:a"},
+			}
+		}, domain.ErrIssueCommentWorkflowsInvalid},
+		{"issue_comment workflows empty non-nil", func(a *domain.WorkflowAudit) {
+			a.IssueCommentWorkflows = []domain.IssueCommentWorkflow{}
+		}, domain.ErrIssueCommentWorkflowsInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

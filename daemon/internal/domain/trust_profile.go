@@ -34,11 +34,17 @@ import (
 // recompute and are re-recorded by a human, never migrated (§5.5 drift
 // recovery).
 //
-// The external_reviewers allowlist is the one field added without a bump.
-// It is omitted from the canonical form when empty, so a profile without
-// one encodes to the bytes it had before the field existed and keeps its
-// approved digest; an empty allowlist admits nobody, which is what every
-// such profile already meant. No two builds can disagree about a profile
+// Three fields joined without a bump: the external_reviewers allowlist,
+// allow_issue_comment_workflows, and issue_comment_workflows. Each is
+// omitted from the canonical form when empty or false, so a profile without
+// them encodes to the bytes it had before they existed and keeps its
+// approved digest. Absence means what every such profile already meant: an
+// empty allowlist admits nobody, and a profile without the issue_comment
+// key approves no comment operation (plan §5.5: a profile reviewed before
+// revision 66 approves none until the owner reviews it again under its new
+// digest). Keeping the digest matters beyond re-approval effort: in-flight
+// publication reads its admitted profile by digest, so a bump would strand
+// every publication open across the upgrade. No two builds can disagree about a profile
 // with entries, because no build before this field could hold one: an older
 // build decoding such a body drops the unknown field, recomputes a
 // different digest, and fails closed. A field whose absence would not mean
@@ -256,6 +262,64 @@ func validateExternalReviewers(list []ExternalReviewer) error {
 	return nil
 }
 
+// IssueCommentWorkflow is one active workflow the audit found triggered by
+// issue_comment (plan §5.5, §5.11): a comment the Freeside App posts starts it
+// from the default branch with the repository's secrets. Digest is the content
+// address of the workflow file and the local reusable workflows and local
+// composite actions it uses, followed transitively, so an edit to any of them
+// is a different entry.
+type IssueCommentWorkflow struct {
+	Path   string `json:"path"`
+	Digest Digest `json:"digest"`
+}
+
+// Validate reports whether the entry names a workflow file and a digest.
+func (w IssueCommentWorkflow) Validate() error {
+	if w.Path == "" {
+		return fmt.Errorf("issue_comment workflow path: %w", ErrEmptyField)
+	}
+	if !strings.HasPrefix(w.Path, ".github/workflows/") || path.Clean(w.Path) != w.Path {
+		return fmt.Errorf("issue_comment workflow path %q is not a canonical .github/workflows/ path: %w", w.Path, ErrIssueCommentWorkflowsInvalid)
+	}
+	if w.Digest == "" {
+		return fmt.Errorf("issue_comment workflow %s digest: %w", w.Path, ErrEmptyField)
+	}
+	return nil
+}
+
+// canonicalIssueCommentWorkflows returns a detached copy sorted by path with
+// exact duplicates dropped; an empty set collapses to nil so "no workflows"
+// has one representation. Two entries for one path with different digests
+// both survive, for validateIssueCommentWorkflows to reject.
+func canonicalIssueCommentWorkflows(in []IssueCommentWorkflow) []IssueCommentWorkflow {
+	if len(in) == 0 {
+		return nil
+	}
+	out := slices.Clone(in)
+	slices.SortFunc(out, func(a, b IssueCommentWorkflow) int {
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Digest, b.Digest))
+	})
+	return slices.Compact(out)
+}
+
+// validateIssueCommentWorkflows reports whether the set is well-formed and
+// canonical: strictly ascending by path, so one workflow has one entry and a
+// stored body is a deterministic function of its content.
+func validateIssueCommentWorkflows(list []IssueCommentWorkflow) error {
+	if list != nil && len(list) == 0 {
+		return fmt.Errorf("issue_comment_workflows: empty list must be nil: %w", ErrIssueCommentWorkflowsInvalid)
+	}
+	for i, w := range list {
+		if err := w.Validate(); err != nil {
+			return fmt.Errorf("issue_comment_workflows[%d]: %w", i, err)
+		}
+		if i > 0 && list[i-1].Path >= w.Path {
+			return fmt.Errorf("issue_comment_workflows[%d] %s after %s: %w", i, w.Path, list[i-1].Path, ErrIssueCommentWorkflowsInvalid)
+		}
+	}
+	return nil
+}
+
 // AutomationTrustProfile is the machine-readable per-repository trust profile
 // (plan §5.5): the human-approved posture of the repository's automation
 // authority. The daemon binds runs and publication to ProfileDigest; drift
@@ -278,11 +342,21 @@ type AutomationTrustProfile struct {
 	AllowReusableWorkflows     bool                   `json:"allow_reusable_workflows"`
 	AllowPackagePublishing     bool                   `json:"allow_package_publishing"`
 	AllowArtifactConsumers     bool                   `json:"allow_artifact_consumers"`
+	// AllowIssueCommentWorkflows is the owner's acceptance of the comment
+	// operation and of exactly the IssueCommentWorkflows listed, which may be
+	// none. A listed set requires it, so an approved digest always names what
+	// it accepted. False, and absent from a profile reviewed before the
+	// field existed, approves no comment at all. It gates comment operations
+	// only, never publication (EvaluateIssueCommentWorkflowDrift). The key
+	// and the set are omitted when false or empty; see
+	// trustProfileEncodingVersion.
+	AllowIssueCommentWorkflows bool                   `json:"allow_issue_comment_workflows,omitempty"`
 	CommitPlan                 CommitPlanMode         `json:"commit_plan"`
 	MessageRuleset             MessageRuleset         `json:"message_ruleset"`
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
 	Review                     ReviewSettings         `json:"review"`
 	ProtectedPaths             ProtectedPathConfig    `json:"protected_paths"`
+	IssueCommentWorkflows      []IssueCommentWorkflow `json:"issue_comment_workflows,omitempty"`
 	// ExternalReviewers is omitted when empty so a profile without an
 	// allowlist keeps the stored body and digest it had before the field
 	// existed (see trustProfileEncodingVersion).
@@ -345,11 +419,13 @@ type AutomationTrustProfileInput struct {
 	AllowReusableWorkflows     bool
 	AllowPackagePublishing     bool
 	AllowArtifactConsumers     bool
+	AllowIssueCommentWorkflows bool
 	CommitPlan                 CommitPlanMode
 	MessageRuleset             MessageRuleset
 	WorkflowAuditDigest        Digest
 	Review                     ReviewSettings
 	ProtectedPaths             ProtectedPathConfig
+	IssueCommentWorkflows      []IssueCommentWorkflow
 	ExternalReviewers          []ExternalReviewer
 }
 
@@ -373,11 +449,13 @@ func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustP
 		AllowReusableWorkflows:     in.AllowReusableWorkflows,
 		AllowPackagePublishing:     in.AllowPackagePublishing,
 		AllowArtifactConsumers:     in.AllowArtifactConsumers,
+		AllowIssueCommentWorkflows: in.AllowIssueCommentWorkflows,
 		CommitPlan:                 in.CommitPlan,
 		MessageRuleset:             in.MessageRuleset,
 		WorkflowAuditDigest:        in.WorkflowAuditDigest,
 		Review:                     in.Review,
 		ProtectedPaths:             in.ProtectedPaths.canonicalize(),
+		IssueCommentWorkflows:      canonicalIssueCommentWorkflows(in.IssueCommentWorkflows),
 		ExternalReviewers:          canonicalExternalReviewers(in.ExternalReviewers),
 	}
 	digest, err := p.ComputeDigest()
@@ -409,11 +487,13 @@ type canonicalTrustProfile struct {
 	AllowReusableWorkflows     bool                   `json:"allow_reusable_workflows"`
 	AllowPackagePublishing     bool                   `json:"allow_package_publishing"`
 	AllowArtifactConsumers     bool                   `json:"allow_artifact_consumers"`
+	AllowIssueCommentWorkflows bool                   `json:"allow_issue_comment_workflows,omitempty"`
 	CommitPlan                 CommitPlanMode         `json:"commit_plan"`
 	MessageRuleset             MessageRuleset         `json:"message_ruleset"`
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
 	Review                     ReviewSettings         `json:"review"`
 	ProtectedPaths             ProtectedPathConfig    `json:"protected_paths"`
+	IssueCommentWorkflows      []IssueCommentWorkflow `json:"issue_comment_workflows,omitempty"`
 	ExternalReviewers          []ExternalReviewer     `json:"external_reviewers,omitempty"`
 }
 
@@ -439,11 +519,13 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 		AllowReusableWorkflows:     p.AllowReusableWorkflows,
 		AllowPackagePublishing:     p.AllowPackagePublishing,
 		AllowArtifactConsumers:     p.AllowArtifactConsumers,
+		AllowIssueCommentWorkflows: p.AllowIssueCommentWorkflows,
 		CommitPlan:                 p.CommitPlan,
 		MessageRuleset:             p.MessageRuleset,
 		WorkflowAuditDigest:        p.WorkflowAuditDigest,
 		Review:                     p.Review,
 		ProtectedPaths:             p.ProtectedPaths.canonicalize(),
+		IssueCommentWorkflows:      canonicalIssueCommentWorkflows(p.IssueCommentWorkflows),
 		ExternalReviewers:          canonicalExternalReviewers(p.ExternalReviewers),
 	})
 	if err != nil {
@@ -490,6 +572,16 @@ func (p AutomationTrustProfile) Validate() error {
 	}
 	if err := p.ProtectedPaths.Validate(); err != nil {
 		return fmt.Errorf("trust profile %s: %w", p.Repo, err)
+	}
+	if err := validateIssueCommentWorkflows(p.IssueCommentWorkflows); err != nil {
+		return fmt.Errorf("trust profile %s: %w", p.Repo, err)
+	}
+	// A listed set needs the key: false over a listed set would record
+	// workflows the owner never accepted. True over an empty set is the
+	// owner accepting comments on a repository that runs none.
+	if !p.AllowIssueCommentWorkflows && len(p.IssueCommentWorkflows) > 0 {
+		return fmt.Errorf("trust profile %s allow_issue_comment_workflows %t with %d listed workflows: %w",
+			p.Repo, p.AllowIssueCommentWorkflows, len(p.IssueCommentWorkflows), ErrIssueCommentWorkflowsInvalid)
 	}
 	if err := validateExternalReviewers(p.ExternalReviewers); err != nil {
 		return fmt.Errorf("trust profile %s: %w", p.Repo, err)
@@ -560,6 +652,12 @@ type WorkflowAudit struct {
 	SelfHostedRunners   bool `json:"self_hosted_runners"`
 	PackagePublishing   bool `json:"package_publishing"`
 	ArtifactConsumers   bool `json:"artifact_consuming_workflows"`
+	// IssueCommentWorkflows is every active workflow triggered by
+	// issue_comment, with its closure digest, sorted by path and nil when
+	// none. EvaluateTrustDrift does not compare it;
+	// EvaluateIssueCommentWorkflowDrift does. Audits recorded before the
+	// field existed decode with it nil.
+	IssueCommentWorkflows []IssueCommentWorkflow `json:"issue_comment_workflows"`
 	// ReviewDecisionRef names the human decision record that reviewed this
 	// audit, when one exists; the audit itself is an observation and may
 	// precede review.
@@ -587,6 +685,9 @@ func (a WorkflowAudit) Validate() error {
 	}
 	if !a.EffectiveTokenPerms.valid() {
 		return fmt.Errorf("workflow audit %s effective_token_permissions %q: %w", a.Repo, a.EffectiveTokenPerms, ErrInvalidTokenPermissions)
+	}
+	if err := validateIssueCommentWorkflows(a.IssueCommentWorkflows); err != nil {
+		return fmt.Errorf("workflow audit %s: %w", a.Repo, err)
 	}
 	return nil
 }
@@ -627,6 +728,12 @@ func (e *TrustDriftError) Is(target error) bool { return target == ErrTrustProfi
 // drifts out of band of those files. The WorkflowAuditDigest equality check
 // still guards the file surface and repository settings folded into it
 // (workflows, branch protection, rulesets), which have no attested bool.
+//
+// The one exception is IssueCommentWorkflows: the profile's
+// allow_issue_comment_workflows gates comment operations, never publication,
+// so EvaluateIssueCommentWorkflowDrift compares that set instead. An edit to
+// one of those workflows still drifts publication here through
+// workflow_audit_digest, because the file is part of the audited surface.
 //
 // Every attested privilege the audit carries has an explicit profile axis and
 // drifts when observed without approval. This one-to-one shape is deliberate:
@@ -673,6 +780,65 @@ func EvaluateTrustDrift(profile AutomationTrustProfile, audit WorkflowAudit) err
 		if ax.observed && !ax.allowed {
 			return &TrustDriftError{Axis: ax.name, Approved: "false", Observed: "true"}
 		}
+	}
+	return nil
+}
+
+// IssueCommentWorkflowDriftError names the workflow on which the observed
+// issue_comment set left the approved one. It matches
+// ErrIssueCommentWorkflowsNotApproved, never ErrTrustProfileDrift, so a
+// consumer can tell a refused comment from drifted publication authority.
+// Path is empty only for IssueCommentWorkflowUnaccepted with no workflow
+// observed: the profile accepts no comment operation at all.
+type IssueCommentWorkflowDriftError struct {
+	Path   string
+	Change IssueCommentWorkflowChange
+}
+
+func (e *IssueCommentWorkflowDriftError) Error() string {
+	if e.Path == "" {
+		return fmt.Sprintf("issue_comment workflows %s: %v", e.Change, ErrIssueCommentWorkflowsNotApproved)
+	}
+	return fmt.Sprintf("issue_comment workflow %s %s: %v", e.Path, e.Change, ErrIssueCommentWorkflowsNotApproved)
+}
+
+// Is reports the error as ErrIssueCommentWorkflowsNotApproved.
+func (e *IssueCommentWorkflowDriftError) Is(target error) bool {
+	return target == ErrIssueCommentWorkflowsNotApproved
+}
+
+// EvaluateIssueCommentWorkflowDrift reports whether the observed
+// issue_comment workflows are exactly the set the profile approved (plan
+// §5.5): the precondition for any operation that posts a comment the App's
+// identity would trigger them with. It approves only when the profile accepts
+// the comment operation and the observed set equals the approved one by path
+// and digest, both possibly empty. A profile without the key, including one
+// reviewed before the key existed, approves nothing. Anything else is an
+// *IssueCommentWorkflowDriftError naming the first differing path in path
+// order. It is a pure predicate over a profile the caller has already
+// validated and an observed set from a validated audit (canonical, sorted by
+// path); it performs no I/O.
+func EvaluateIssueCommentWorkflowDrift(profile AutomationTrustProfile, observed []IssueCommentWorkflow) error {
+	if !profile.AllowIssueCommentWorkflows {
+		refusal := &IssueCommentWorkflowDriftError{Change: IssueCommentWorkflowUnaccepted}
+		if len(observed) > 0 {
+			refusal.Path = observed[0].Path
+		}
+		return refusal
+	}
+	approved := profile.IssueCommentWorkflows
+	i, j := 0, 0
+	for i < len(approved) || j < len(observed) {
+		switch {
+		case j == len(observed) || i < len(approved) && approved[i].Path < observed[j].Path:
+			return &IssueCommentWorkflowDriftError{Path: approved[i].Path, Change: IssueCommentWorkflowRemoved}
+		case i == len(approved) || observed[j].Path < approved[i].Path:
+			return &IssueCommentWorkflowDriftError{Path: observed[j].Path, Change: IssueCommentWorkflowAdded}
+		case approved[i].Digest != observed[j].Digest:
+			return &IssueCommentWorkflowDriftError{Path: observed[j].Path, Change: IssueCommentWorkflowChanged}
+		}
+		i++
+		j++
 	}
 	return nil
 }
