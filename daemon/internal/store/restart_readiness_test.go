@@ -16,7 +16,7 @@ func readRestartReadiness(t *testing.T, s *store.Store, now time.Time) domain.Re
 	var readiness domain.RestartReadiness
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		readiness, err = tx.RestartReadiness(ctx, now)
+		readiness, err = tx.RestartReadiness(ctx, now, nil)
 		return err
 	}); err != nil {
 		t.Fatalf("RestartReadiness: %v", err)
@@ -152,5 +152,46 @@ func TestRestartReadinessChangesNothing(t *testing.T) {
 	readRestartReadiness(t, s, admissionEpoch.Add(time.Minute))
 	if after := snapshot(); !reflect.DeepEqual(before, after) {
 		t.Fatalf("state after the read = %+v, want %+v", after, before)
+	}
+}
+
+// TestRestartReadinessAddsRunningWork: the in-process counts the caller
+// passes join the store's kinds, so work only the process holds keeps a
+// drained daemon from reading ready, and none running leaves it ready.
+func TestRestartReadinessAddsRunningWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	drainNow(t, s)
+	now := admissionEpoch.Add(time.Minute)
+
+	var readiness domain.RestartReadiness
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		readiness, err = tx.RestartReadiness(ctx, now, map[domain.RestartBlockerKind]int{
+			domain.RestartBlockerPublication:     1,
+			domain.RestartBlockerVerificationJob: 2,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("RestartReadiness: %v", err)
+	}
+	want := []domain.RestartBlocker{
+		{Kind: domain.RestartBlockerVerificationJob, Count: 2},
+		{Kind: domain.RestartBlockerPublication, Count: 1},
+	}
+	if readiness.Ready || !reflect.DeepEqual(readiness.Blockers, want) {
+		t.Fatalf("readiness with running work = %+v, want not ready with %+v", readiness, want)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		readiness, err = tx.RestartReadiness(ctx, now, map[domain.RestartBlockerKind]int{})
+		return err
+	}); err != nil {
+		t.Fatalf("RestartReadiness: %v", err)
+	}
+	if !readiness.Ready {
+		t.Fatalf("readiness with nothing running = %+v, want ready", readiness)
 	}
 }

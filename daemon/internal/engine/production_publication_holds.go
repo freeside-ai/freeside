@@ -120,6 +120,7 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 }
 
 // recordRetryableHold records the hold behind a retryable reconcile failure:
+// update_drain for a verification job or image build an update drain held;
 // machine_capacity, or the can-never-fit notice, for a verification job the
 // memory budget refused, under the invocation that reserved;
 // image_upkeep_pending for a task waiting on an image (a re-entry whose base
@@ -136,6 +137,12 @@ func (w *productionPublicationWorkflow) recordRetryableHold(
 	var reservation *verificationReservationRefused
 	if errors.As(err, &reservation) {
 		invocationID = reservation.invocationID
+	}
+	if errors.Is(err, store.ErrUpdateDrainInForce) {
+		return w.store.Write(ctx, func(tx *store.WriteTx) error {
+			return recordRunHold(ctx, tx, task.RunID, invocationID,
+				domain.HoldUpdateDrain, holdDetail{}, w.now().UTC())
+		})
 	}
 	if launchMemoryRefusal(err) {
 		return noticeLaunchMemoryRefusal(

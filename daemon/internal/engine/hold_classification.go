@@ -74,6 +74,15 @@ var holdClasses = []holdClass{
 		sentinel: exec.ErrInputUnavailable, action: holdActionInvocation,
 		reason: domain.HoldInputUnavailable,
 	},
+	// An update drain holds each new launch on its own, not the pass: an
+	// intent whose admission was recorded before the drain is running work
+	// and must still start, or its held slot would keep the restart from
+	// ever being ready. Starting the invocation clears the hold, as lifting
+	// the drain does.
+	{
+		sentinel: store.ErrUpdateDrainInForce, action: holdActionInvocation,
+		reason: domain.HoldUpdateDrain, clearsOnStart: true,
+	},
 	// Capacity, memory, image-upkeep, and quota-window holds are current
 	// scheduling state, not history, so starting the invocation clears them.
 	{

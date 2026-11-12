@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -114,4 +115,71 @@ func TestUpdateDrainLeavesOperatorStop(t *testing.T) {
 		State: domain.UpdateDrainLifted, Build: drainBuild, OccurredAt: admissionEpoch.Add(2 * time.Minute),
 	})
 	assertStopped("after lifted")
+}
+
+// TestRequireNoUpdateDrainRefusesWhileDraining: the launch check refuses with
+// the sentinel only while a drain is in force.
+func TestRequireNoUpdateDrainRefusesWhileDraining(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := storetest.Open(t, tempDBPath(t), store.Options{})
+	check := func() error {
+		return s.Read(ctx, func(tx *store.ReadTx) error { return tx.RequireNoUpdateDrain(ctx) })
+	}
+	if err := check(); err != nil {
+		t.Fatalf("check with no drain = %v, want nil", err)
+	}
+	recordDrain(t, s, domain.UpdateDrainTransition{
+		State: domain.UpdateDrainDraining, Build: drainBuild, OccurredAt: admissionEpoch,
+	})
+	if err := check(); !errors.Is(err, store.ErrUpdateDrainInForce) {
+		t.Fatalf("check while draining = %v, want ErrUpdateDrainInForce", err)
+	}
+	recordDrain(t, s, domain.UpdateDrainTransition{
+		State: domain.UpdateDrainLifted, Build: drainBuild, OccurredAt: admissionEpoch.Add(time.Minute),
+	})
+	if err := check(); err != nil {
+		t.Fatalf("check after the lift = %v, want nil", err)
+	}
+}
+
+// TestClearUpdateDrainHoldsLeavesOtherCauses: the lift's clear removes a
+// run's update_drain hold and leaves a hold that names another cause.
+func TestClearUpdateDrainHoldsLeavesOtherCauses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	drained := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, drained, store.Options{AdmissionFloors: attendedFloors()})
+	stopped := domain.RunID("run-stopped")
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, domain.Run{
+			ID: stopped, ProjectID: drained.run.ProjectID,
+			SpecDigest: drained.run.SpecDigest, PolicyDigest: drained.run.PolicyDigest,
+		})
+	}); err != nil {
+		t.Fatalf("seed second run: %v", err)
+	}
+	inv := domain.InvocationID("inv-1")
+	for runID, reason := range map[domain.RunID]domain.RunHoldReason{
+		drained.run.ID: domain.HoldUpdateDrain,
+		stopped:        domain.HoldOperationStopped,
+	} {
+		if err := s.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordRunHold(ctx, domain.RunHoldObservation{
+				RunID: runID, InvocationID: &inv, Reason: reason,
+				FirstObservedAt: admissionEpoch, LastObservedAt: admissionEpoch,
+			})
+		}); err != nil {
+			t.Fatalf("record %s hold: %v", reason, err)
+		}
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.ClearUpdateDrainHolds(ctx) }); err != nil {
+		t.Fatalf("ClearUpdateDrainHolds: %v", err)
+	}
+	if hold := observeRun(t, s, drained.run.ID).Hold; hold != nil {
+		t.Fatalf("drained run hold = %+v, want none", hold)
+	}
+	if hold := observeRun(t, s, stopped).Hold; hold == nil || hold.Reason != domain.HoldOperationStopped {
+		t.Fatalf("stopped run hold = %+v, want operation_stopped", hold)
+	}
 }

@@ -22,6 +22,9 @@ const (
 	DurableTransitionPublicationEffect     DurableTransition = "publication_effect"
 	DurableTransitionReadyItem             DurableTransition = "ready_attention_item"
 	DurableTransitionTerminalCompletion    DurableTransition = "terminal_completion"
+	DurableTransitionUpdateDrainRequest    DurableTransition = "update_drain_request"
+	DurableTransitionUpdateDrainCancel     DurableTransition = "update_drain_cancel"
+	DurableTransitionUpdateDrainLift       DurableTransition = "update_drain_lift"
 )
 
 // AllDurableTransitions is the production engine's crash-matrix registry.
@@ -39,6 +42,9 @@ var AllDurableTransitions = []DurableTransition{
 	DurableTransitionPublicationEffect,
 	DurableTransitionReadyItem,
 	DurableTransitionTerminalCompletion,
+	DurableTransitionUpdateDrainRequest,
+	DurableTransitionUpdateDrainCancel,
+	DurableTransitionUpdateDrainLift,
 }
 
 func (transition DurableTransition) valid() bool {
@@ -53,7 +59,10 @@ func (transition DurableTransition) valid() bool {
 		DurableTransitionFindingAdjudication,
 		DurableTransitionPublicationEffect,
 		DurableTransitionReadyItem,
-		DurableTransitionTerminalCompletion:
+		DurableTransitionTerminalCompletion,
+		DurableTransitionUpdateDrainRequest,
+		DurableTransitionUpdateDrainCancel,
+		DurableTransitionUpdateDrainLift:
 		return true
 	default:
 		return false

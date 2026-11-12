@@ -125,18 +125,21 @@ func (e *Engine) reconcileAttentionDiscussions(ctx context.Context) (int, error)
 }
 
 // attentionDiscussionHeld applies the same fail-closed operating-state rule
-// as invocation dispatch before starting a new external inference call. A
-// completion authenticated above is retirement work, not new work, and never
-// reaches this gate.
+// as invocation dispatch before starting a new external inference call, and
+// holds every call, in any operating mode, while an update drain is in force
+// (issue #3104). A completion authenticated above is retirement work, not new
+// work, and never reaches this gate.
 func (e *Engine) attentionDiscussionHeld(ctx context.Context) (bool, error) {
-	if e.admission != nil && e.admission.environment.OperatingMode == domain.ModeAttendedDev {
-		return false, nil
-	}
+	attended := e.admission != nil && e.admission.environment.OperatingMode == domain.ModeAttendedDev
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		if err := tx.RequireNoUpdateDrain(ctx); err != nil || attended {
+			return err
+		}
 		return tx.RequireUnattendedOperationOpen(ctx)
 	})
 	switch {
-	case errors.Is(err, domain.ErrUnattendedOperationStopped),
+	case errors.Is(err, store.ErrUpdateDrainInForce),
+		errors.Is(err, domain.ErrUnattendedOperationStopped),
 		errors.Is(err, domain.ErrBlockingSystemHealth):
 		return true, nil
 	case err != nil:

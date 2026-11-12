@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
@@ -61,6 +62,9 @@ type modelCatalogRefresh struct {
 	discoverCodex CodexModelDiscoverer
 	now           func() time.Time
 	logger        *slog.Logger
+	// running counts each discovery container as a running probe for the
+	// restart readiness read; nil counts nothing.
+	running *engine.RunningWork
 }
 
 // newModelCatalogRefresh binds the refresh to the Claude driver's runtime,
@@ -126,10 +130,12 @@ func (r modelCatalogRefresh) run(ctx context.Context) {
 		r.logger.Info("Codex model discovery skipped: no Codex reviewer is configured")
 	}
 	for _, target := range targets {
-		if ctx.Err() != nil {
+		end, ok := r.beginProbe(ctx, target)
+		if !ok {
 			return
 		}
 		catalog, err := r.discoverOne(ctx, target)
+		end()
 		if err != nil {
 			r.logger.Warn("model discovery failed; the last catalog stands",
 				"enrollment", target.enrollment, "generation", target.generation, "error", err)
@@ -137,6 +143,42 @@ func (r modelCatalogRefresh) run(ctx context.Context) {
 		}
 		r.logger.Info("model catalog discovered",
 			"enrollment", target.enrollment, "harness_build", catalog.HarnessBuild, "models", len(catalog.Models))
+	}
+}
+
+// beginProbe counts one discovery container as a running probe and reports
+// whether it may start. While an update drain is in force it waits, rather
+// than skip, because discovery runs once per start: a skipped enrollment
+// would keep a stale catalog until the next start. It checks again at each
+// sync revision change, which a cancel or lift makes, and gives up when ctx
+// ends or the drain can't be read (issue #3104).
+func (r modelCatalogRefresh) beginProbe(ctx context.Context, target modelCatalogTarget) (end func(), ok bool) {
+	waiting := false
+	for {
+		if ctx.Err() != nil {
+			return nil, false
+		}
+		// Taken before the check, so a lift that commits between the two
+		// still wakes the wait.
+		changed := r.store.RevisionChanged()
+		end, err := r.running.BeginUnlessDraining(ctx, r.store, domain.RestartBlockerProbe)
+		if err == nil {
+			return end, true
+		}
+		if !errors.Is(err, store.ErrUpdateDrainInForce) {
+			r.logger.Warn("model discovery stopped: the update drain was not read", "error", err)
+			return nil, false
+		}
+		if !waiting {
+			r.logger.Info("model discovery waits while an update drain is in force",
+				"enrollment", target.enrollment, "generation", target.generation)
+			waiting = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-changed:
+		}
 	}
 }
 

@@ -4862,6 +4862,11 @@ func TestProductionTransitionMatrixRegistersEveryEngineBoundary(t *testing.T) {
 		engine.DurableTransitionSpecificationApproval: true,
 		engine.DurableTransitionOperatorFeedback:      true,
 		engine.DurableTransitionFindingAdjudication:   true,
+		// The update drain's restart matrix is in internal/engine's
+		// update_drain_test.go.
+		engine.DurableTransitionUpdateDrainRequest: true,
+		engine.DurableTransitionUpdateDrainCancel:  true,
+		engine.DurableTransitionUpdateDrainLift:    true,
 	}
 	for _, entry := range productionPublicationTransitionMatrix {
 		if covered[entry.transition] {

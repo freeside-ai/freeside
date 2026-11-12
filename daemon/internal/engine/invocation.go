@@ -722,6 +722,16 @@ func (e *Engine) dispatchAdmittedIntent(
 		if err := e.requireQuotaWindowReset(ctx, binding.run, invocationID); err != nil {
 			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
+		// An update drain holds a new attempt, in every operating mode, and
+		// nothing else: a recorded attempt is running work that must start
+		// and finish (issue #3104). It comes after the quota park, so a parked
+		// attempt keeps the hold that names its window. recordAttempt checks
+		// again in the transaction that appends the attempt.
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			return tx.RequireNoUpdateDrain(ctx)
+		}); err != nil {
+			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
 		admission, admitted, err := e.admitAttempt(ctx, binding, stage, invocationID)
 		if err != nil {
 			// A backend below the floor is a typed refusal (§5.7): nothing
@@ -1338,6 +1348,11 @@ func (e *Engine) recordAttempt(
 		}
 		if stageIndex < 0 {
 			return fmt.Errorf("run %q has no stage %q", runID, stageID)
+		}
+		// The race-free half of dispatchAdmittedIntent's drain check: a drain
+		// requested since that read appends no new attempt.
+		if err := tx.RequireNoUpdateDrain(ctx); err != nil {
+			return err
 		}
 		if fresh != nil {
 			if err := e.requireReviewConfigurationApproved(ctx, tx, *fresh); err != nil {

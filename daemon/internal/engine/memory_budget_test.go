@@ -301,7 +301,7 @@ func TestLoweredBudgetRefusesAWaitingVerificationForGood(t *testing.T) {
 	fillMemory(t, f.store, runID, budget, 1024, *f.now)
 	reserve := func() error {
 		t.Helper()
-		err := w.reserveVerification(ctx, task, productionBinding{})
+		_, err := w.reserveVerification(ctx, task, productionBinding{})
 		if err != nil {
 			if holdErr := w.recordRetryableHold(ctx, task, err); holdErr != nil {
 				t.Fatal(holdErr)

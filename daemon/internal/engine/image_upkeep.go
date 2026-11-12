@@ -80,6 +80,9 @@ type ImageUpkeep struct {
 	// no card is raised. Blobs receives a card's evidence body.
 	Projects []domain.ProjectID
 	Blobs    signet.EvidenceBlobWriter
+	// Running counts a build under the gate as running image_build work for
+	// the restart readiness read. Nil counts nothing.
+	Running *RunningWork
 
 	// settledMu guards settled, the last settled outcome this process
 	// reached, which PendingResolution reads.
@@ -422,6 +425,19 @@ func (u *ImageUpkeep) rebuild(
 		return nil, imageUpkeepOutcome{}, err
 	}
 	defer u.Rebuild.gate.release()
+	// Checked once the gate is held, so a drain requested while this pass
+	// waited for it still holds the build. The pass settles nothing, so the
+	// next trigger after the lift, the new build's start among them,
+	// measures the tip again (issue #3104).
+	end, err := u.Running.BeginUnlessDraining(ctx, u.Store, domain.RestartBlockerImageBuild)
+	if errors.Is(err, store.ErrUpdateDrainInForce) {
+		u.Logger.Info("image upkeep: skipped the rebuild while an update drain is in force", "tip", tipSHA)
+		return nil, imageUpkeepOutcome{}, nil
+	}
+	if err != nil {
+		return nil, imageUpkeepOutcome{}, err
+	}
+	defer end()
 	// While this pass waited, another may have advanced the pointer, or a
 	// publication rebuild may have recorded an image serving the tip.
 	again, _, found, err := u.readPointer(ctx)

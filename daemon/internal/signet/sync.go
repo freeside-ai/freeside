@@ -276,7 +276,8 @@ type ScheduleSnapshot struct {
 
 // UnattendedOperationSnapshot is the daemon's unattended-admission state,
 // matching api/openapi.yaml: the verdict of the one gate admission enforces
-// (store.UnattendedOperationGate) and every stop that closes it. It carries
+// (store.UnattendedOperationGate) and every stop that closes it, plus an
+// update drain in force, which holds launches in every mode. It carries
 // no sync metadata of its own because it is not an entity: it is derived
 // at the read that produced it. Live inputs can change the verdict without
 // moving the sync revision.
@@ -367,6 +368,10 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return fmt.Errorf("unattended operation gate: %w", err)
 		}
+		drain, err := tx.UpdateDrainInForce(ctx)
+		if err != nil {
+			return fmt.Errorf("update drain: %w", err)
+		}
 		usagePools, err := usagePoolSnapshots(ctx, tx, state, s.usageRefreshAge)
 		if err != nil {
 			return err
@@ -388,7 +393,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			Tasks:               make([]TaskSnapshot, 0, len(tasks)),
 			Conversations:       make([]ConversationSnapshot, 0, len(conversations)),
 			Schedules:           make([]ScheduleSnapshot, 0, len(schedules)),
-			UnattendedOperation: unattendedOperationSnapshot(gate),
+			UnattendedOperation: unattendedOperationSnapshot(gate, drain),
 			UsagePools:          usagePools,
 			RoutingPolicy:       routingPolicy,
 			AgentCatalog:        agentCatalog,
@@ -497,9 +502,13 @@ func (s *Service) Revision(ctx context.Context) (ServerRevision, error) {
 		if err != nil {
 			return fmt.Errorf("unattended operation gate: %w", err)
 		}
+		drain, err := tx.UpdateDrainInForce(ctx)
+		if err != nil {
+			return fmt.Errorf("update drain: %w", err)
+		}
 		out = ServerRevision{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
-			UnattendedOperation: unattendedOperationSnapshot(gate),
+			UnattendedOperation: unattendedOperationSnapshot(gate, drain),
 			LineupRevision:      lineupRevision(s.agentCatalog()),
 		}
 		return nil

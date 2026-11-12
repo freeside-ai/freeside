@@ -175,6 +175,7 @@ func ComposeClaudeWorkflow(
 	lock *daemonlock.Lock, bound ward.LaunchBound, cfg ClaudeStartupConfig,
 	manualProjects map[domain.ProjectID]engine.ManualInitiator, claudeUsageCaptures engine.ClaudeUsageSink,
 	doctorConvergenceLock *sync.Mutex, startupSessionCloser *SessionCloser, late *StartupBindings,
+	running *engine.RunningWork,
 ) (_ *ClaudeWorkflow, err error) {
 	var (
 		claudeWiring *ClaudeComposition
@@ -218,6 +219,7 @@ func ComposeClaudeWorkflow(
 		HostVerification: claudeWiring.hostVerification,
 		Logger:           cfg.Logger,
 		UsageSink:        claudeUsageCaptures,
+		Running:          running,
 	}
 	judgmentBudget := inference.Budget{
 		Window: 24 * time.Hour,
@@ -359,6 +361,7 @@ func ComposeClaudeWorkflow(
 	if err != nil {
 		return nil, err
 	}
+	imageUpkeep.Running = running
 	if claudeWiring.bindImageUpkeep != nil {
 		claudeWiring.bindImageUpkeep(imageUpkeep.PendingResolution)
 	}

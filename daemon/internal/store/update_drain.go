@@ -36,6 +36,37 @@ func (tx *InternalTx) RecordUpdateDrainTransition(
 	return nil
 }
 
+// ErrUpdateDrainInForce refuses a new launch while an update drain is in
+// force (issue #3104). It is a wait, not a failure: the launch stays pending
+// and starts once the drain lifts.
+var ErrUpdateDrainInForce = errors.New("an update drain is in force")
+
+// RequireNoUpdateDrain refuses with ErrUpdateDrainInForce while a drain is in
+// force. Every launch site runs it, in every operating mode: unlike the
+// operator stop, a drain holds attended work too, because a restart would cut
+// it short all the same.
+func (tx *ReadTx) RequireNoUpdateDrain(ctx context.Context) error {
+	drain, err := tx.UpdateDrainInForce(ctx)
+	if err != nil {
+		return err
+	}
+	if drain != nil {
+		return ErrUpdateDrainInForce
+	}
+	return nil
+}
+
+// ClearUpdateDrainHolds removes every run's hold observation that names
+// update_drain. Lifting a drain ends every such wait at once; a hold that
+// names another cause stays as it is.
+func (tx *WriteTx) ClearUpdateDrainHolds(ctx context.Context) error {
+	if _, err := tx.tx.ExecContext(ctx,
+		`DELETE FROM run_hold_observations WHERE reason = ?`, domain.HoldUpdateDrain); err != nil {
+		return fmt.Errorf("clear update drain holds: %w", err)
+	}
+	return nil
+}
+
 // UpdateDrainInForce returns the latest drain row when it is draining, and
 // nil when the log is empty or the latest row lifted the drain.
 func (tx *ReadTx) UpdateDrainInForce(ctx context.Context) (*domain.UpdateDrainTransition, error) {

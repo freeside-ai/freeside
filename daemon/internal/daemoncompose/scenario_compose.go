@@ -71,6 +71,8 @@ type ScenarioParts struct {
 	DBPath    string
 	Logger    *slog.Logger
 	Scenario  *Scenario
+	// Running is the daemon's count of in-process work; nil counts nothing.
+	Running *engine.RunningWork
 
 	// AdmissionFloor is the unattended admission floor.
 	AdmissionFloor []exec.Capability
@@ -198,7 +200,7 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 	}
 
 	production := ProductionEngine{
-		Lock: parts.Lock, Bound: parts.Bound,
+		Lock: parts.Lock, Bound: parts.Bound, Running: parts.Running,
 		Backend: world.Backend, AdmissionFloor: parts.AdmissionFloor,
 		Admission: engine.AdmissionEnvironment{
 			OperatingMode: domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,

@@ -643,3 +643,40 @@ func TestAttentionDiscussionRecoversAfterStoreRestart(t *testing.T) {
 		t.Fatalf("restart replay Reconcile = %#v, %v", result, err)
 	}
 }
+
+// TestAttentionDiscussionWaitsOutAnUpdateDrain: a drain holds a new reply in
+// either operating mode, before any provider call, and leaves the intent
+// pending; the lift lets the next pass reply.
+func TestAttentionDiscussionWaitsOutAnUpdateDrain(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.OperatingMode{domain.ModeAttendedDev, domain.ModeUnattended} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			driver := inferencefake.New()
+			driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
+				Output: []byte(`{"reply":"after the drain"}`), ComputeUnits: 1,
+			}})
+			f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
+			f.submit(t)
+			drain := UpdateDrain{Store: f.store, Build: drainOldBuild, Now: func() time.Time { return f.now }}
+			if _, err := drain.Request(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			engine := f.engine(t, true)
+			engine.admission = &admitter{environment: AdmissionEnvironment{OperatingMode: mode}}
+			if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 0 {
+				t.Fatalf("drained Reconcile = %#v, %v", result, err)
+			}
+			if requests := driver.Requests(); len(requests) != 0 {
+				t.Fatalf("drained discussion reached the provider: %#v", requests)
+			}
+			if _, err := drain.Cancel(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			held, err := engine.attentionDiscussionHeld(t.Context())
+			if err != nil || held {
+				t.Fatalf("held after the lift = %t, %v; want false", held, err)
+			}
+		})
+	}
+}

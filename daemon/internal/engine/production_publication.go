@@ -362,7 +362,10 @@ type productionPublicationWorkflow struct {
 	afterTerminal        func() error
 	afterTaskLockRelease func() error
 	transitionHook       DurableTransitionHook
-	reconcileMu          sync.Mutex
+	// running counts the lane's verification jobs and image builds for the
+	// restart readiness read; Engine.New sets it from WithRunningWork.
+	running     *RunningWork
+	reconcileMu sync.Mutex
 }
 
 func (w *productionPublicationWorkflow) attentionCreatedAt() time.Time {

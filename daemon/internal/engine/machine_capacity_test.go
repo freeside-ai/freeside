@@ -248,7 +248,8 @@ func newKeptWaitFixture(t *testing.T) *keptWaitFixture {
 // does, which records its wait when memory refuses it.
 func (f *keptWaitFixture) reserveOlder(t *testing.T) error {
 	t.Helper()
-	return f.lane.reserveVerification(t.Context(), f.older, productionBinding{})
+	_, err := f.lane.reserveVerification(t.Context(), f.older, productionBinding{})
+	return err
 }
 
 // reserveNewer asks the gate for the newer task's writer reservation now.

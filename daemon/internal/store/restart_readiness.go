@@ -15,8 +15,8 @@ import (
 //
 // The store records three of the blocker kinds. Verification jobs, image
 // builds, probes, and publications exist only in the running process, so the
-// daemon adds them where it holds each one (#3104). Until then no drain can
-// be requested, so Ready can't be true while those kinds go unread.
+// caller passes their counts in running (#3104), and they are added to the
+// kinds the store counts.
 //
 //   - execution_launch: an execution admission holding its slot, by the
 //     rule pool admission applies (executionSlotsHeld).
@@ -26,7 +26,9 @@ import (
 //     holder, so it isn't counted twice; a Codex auth refresh names its own
 //     holder, so it is counted beside its launch. Counting too much only
 //     delays readiness.
-func (tx *ReadTx) RestartReadiness(ctx context.Context, now time.Time) (domain.RestartReadiness, error) {
+func (tx *ReadTx) RestartReadiness(
+	ctx context.Context, now time.Time, running map[domain.RestartBlockerKind]int,
+) (domain.RestartReadiness, error) {
 	drain, err := tx.UpdateDrainInForce(ctx)
 	if err != nil {
 		return domain.RestartReadiness{}, fmt.Errorf("restart readiness: %w", err)
@@ -56,15 +58,28 @@ func (tx *ReadTx) RestartReadiness(ctx context.Context, now time.Time) (domain.R
 			uncounted++
 		}
 	}
-	readiness, err := domain.NewRestartReadiness(drain, map[domain.RestartBlockerKind]int{
+	counts := map[domain.RestartBlockerKind]int{
 		domain.RestartBlockerExecutionLaunch: len(executions),
 		domain.RestartBlockerReviewLaunch:    len(reviews),
 		domain.RestartBlockerCredentialLease: uncounted,
-	}, now)
+	}
+	for kind, count := range running {
+		counts[kind] += count
+	}
+	readiness, err := domain.NewRestartReadiness(drain, counts, now)
 	if err != nil {
 		return domain.RestartReadiness{}, fmt.Errorf("restart readiness: %w", err)
 	}
 	return readiness, nil
+}
+
+// ReviewLaunchesHeld counts the review admissions holding a slot, by the
+// rule RestartReadiness counts review_launch. While a drain is in force the
+// publication lane keeps passing only while this is above zero: a held slot
+// ends only when a pass inspects its review (#3104).
+func (tx *ReadTx) ReviewLaunchesHeld(ctx context.Context) (int, error) {
+	held, err := tx.reviewSlotsHeld(ctx)
+	return len(held), err
 }
 
 // reviewSlotsHeld returns every review admission holding a slot under

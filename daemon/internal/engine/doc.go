@@ -42,6 +42,9 @@
 //     specifier's first admission, and the line an escalation writes (§5.13)
 //   - machine_capacity.go launch bounds under the instance's memory budget
 //   - quota_park.go   the refused window's hold on a parked attempt
+//   - update_drain.go, running_work.go
+//     the update drain's request, cancel, and lift, and the count of
+//     in-process work a restart would cut short
 //   - capability_manifest.go, capability_retry.go
 //     the capability choices a failed writer card offers and their retries
 //   - alternate_agent.go, alternate_agent_retry.go

@@ -89,6 +89,8 @@ type Service struct {
 	// imageUpkeepWake asks image upkeep for a pass after an approved
 	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
 	imageUpkeepWake func()
+	// runningWork counts in-process restart blockers; nil counts none.
+	runningWork func() map[domain.RestartBlockerKind]int
 	// closing releases every open revision long-poll (RevisionAfter) when the
 	// daemon shuts down; closeOnce makes Shutdown idempotent.
 	closing   chan struct{}
@@ -129,6 +131,14 @@ func (s *Service) wakeFollowUpFiler() {
 // and upkeep's start and doctor-schedule triggers find it.
 func WithImageUpkeepWake(wake func()) Option {
 	return func(s *Service) { s.imageUpkeepWake = wake }
+}
+
+// WithRunningWork supplies the count of in-process work a restart would cut
+// short (verification jobs, image builds, probes, and publication passes),
+// which the restart readiness read adds to what the store records (issue
+// #3104). It must not block. With no option those kinds read as zero.
+func WithRunningWork(counts func() map[domain.RestartBlockerKind]int) Option {
+	return func(s *Service) { s.runningWork = counts }
 }
 
 // WithTaskStopGuard connects Stop acceptance to the runtime's short launch

@@ -127,6 +127,9 @@ type (
 		// usageCollection is the running daemon's usage collection. A
 		// command that opens the store itself never has one.
 		usageCollection *usagecollect.Coordinator
+		// running is the running daemon's count of in-process work, where
+		// the doctor command counts its probe.
+		running *engine.RunningWork
 	}
 )
 
