@@ -3869,3 +3869,58 @@ review of #3128's pull request;
 
 (Owner decision of 2026-11-11 on #3132;
 [decision note](../../devlog/2026-11-12-1006-images-in-deputy-scope.md).)
+
+## Revision 121 ("Effects Are Autonomous by Default; Follow-Up Filing Needs No Card"):
+
+1. **Where an effect has an autonomous path and a human-decision path, the
+   autonomous path is the default** (Section
+   [3.2](../plan.md#32-the-interruption-budget)). Per-project policy turns the human
+   gate on per effect with one `gates.<effect>` key, never one global
+   switch. Absent or false is autonomous; a value that doesn't parse turns
+   the gate on. An unmet precondition takes the human path with a notice
+   naming it, caps stay on either path, and judgment items
+   (`review_dispute`, `finding_adjudication`) are not gates. The stage gates
+   `gates.spec_approval` and `gates.before_final_review` are not effects and
+   keep their preset values, and a `task_proposal`'s start stays under the
+   intake rules.
+2. **Policy resolves in two layers over the built-in default** (Section
+   [3.2](../plan.md#32-the-interruption-budget)): project, then general, with the
+   winning layer recorded as each key's provenance. A key the Workflow
+   settings pane exposes resolves from the stored layers only; caps are
+   per-project defaults, not a budget shared across repositories.
+3. **The workflow audit also enumerates `issues`-triggered workflows**
+   (Section [5.5](../plan.md#55-the-ci-trust-boundary)), under the `issue_comment`
+   set's acceptance, digest, recheck, and drift rules
+   (`allow_issue_workflows`). "The issue-automation audit" means both sets,
+   and a profile reviewed before this revision is reviewed again before it
+   approves an autonomous filing or an `issue_comment` proposal.
+4. **A follow-up filing dispatches without a card when
+   `gates.follow_up_filing` resolves off and the `issues` audit is
+   accepted** (Section [5.17](../plan.md#517-follow-up-issue-filing)). This reverses
+   that section's rule that "every filing takes explicit per-proposal human
+   approval, whatever the profile state", and drops the issue-event
+   authority profile as a filing precondition. The assumption that changed:
+   fan-out is held by ledger lineage at intake, the audit, the screen, and
+   the caps, not by a person reading each proposal. The profile keeps its
+   intake role, and every intake rule stands. Rejected: keeping the card for
+   Freeside's own repository, which #3132's goal of no pause beyond the pull
+   request rules out.
+5. **`issue_comment` joins the effect registry** (Section
+   [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry)):
+   a comment on an issue the task is not bound to, targeting a
+   daemon-enumerated handle, screened as the specification comment is, on
+   the filer's intent ledger, gated by `gates.issue_comment` and, on either
+   path, by the `issue_comment` audit, whose absence refuses it.
+6. **A duplicate search precedes every filing** (Section
+   [7](../plan.md#7-review-policy)): a judgment site of its own, not the finding
+   adjudicator, because a site carries exactly one authority contract,
+   chooses "new" or one listed open issue, and a duplicate yields a
+   comment, not a filing.
+
+Nothing in this revision is built yet: on tracker #3132, #3145 builds the
+settings pane and the layers, #3146 the duplicate search, #3147 the
+`issue_comment` kind, #3150 dispatch without a card, and #1435 the
+`issue_comment` audit; no unit yet builds the `issues` audit.
+
+(Owner decisions of 2026-11-12 on #3132;
+[decision note](../../devlog/2026-11-12-1011-default-autonomous-effects.md).)

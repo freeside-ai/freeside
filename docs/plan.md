@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 121
+revision: 122
 status: active
 updated: 2026-11-12
 ---
@@ -1132,7 +1132,7 @@ sit above the credential-mode floor and represent different risk classes:
 | `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate (Section [5.2](#52-the-daemon-and-its-supervisor) states its loopback half). Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. The profile does not by itself withhold a web search that runs on the provider's servers, as the pinned Claude CLI's does (#1620); the launch decides which roles get that tool (research for the specifier, below). |
 | `provider_registry` | Opt-in per project policy; `provider_only` stays the default, and the rules follow the table. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
-| Clean verification | No network access. |
+| Clean verification | No network access, except a macOS verification job's own reserved ports on the host's own addresses (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). |
 
 **`provider_registry` rules.** The writer keeps the same single host-only
 network and the same daemon CONNECT proxy. The proxy also admits the project
@@ -2924,16 +2924,36 @@ the daemon host, the executor needs nothing from the execution-hosts tracker
 Each job is confined four ways, and each confinement is conformance-proven
 and probed live, as the slot uid, before the recipe runs:
 
-- **Network access is denied twice.** A sandbox profile on the recipe's
-  process tree denies every network operation: off-host connections,
-  loopback connections, and name resolution through the system resolver.
-  Packet-filter rules keyed on the slot's uid add a second layer for
-  off-host traffic: they drop every packet of a socket the uid owns, in and
-  out, so a sandbox escape still cannot reach the network. The probe
-  refutes loopback and the system resolver under the sandbox, and off-host
-  reach under both; why the packet filter alone does not close the first
-  two is in the
-  [macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md).
+- **Network access is limited to the slot's own ports on the host.** A
+  sandbox profile on the recipe's process tree lets the job bind and
+  connect, over TCP or UDP, only at its slot's reserved ports on the host's
+  own addresses, so a recipe command can run a loopback test harness such
+  as the convergence pass, and denies every other network operation: other
+  ports, local sockets, name resolution through the system resolver, and
+  off-host connections. The sandbox can't tell loopback from the host's
+  other addresses (its LAN or Tailscale address), so the allowance covers
+  each of them at the reserved ports; that traffic never leaves the host. A
+  slot's reserved ports are a small fixed set, disjoint from every other
+  slot's, outside the host's ephemeral port range, and never a port the
+  daemon listens on, so the daemon's API and other host services stay out
+  of a job's reach. Packet-filter rules keyed on the slot's uid add a
+  second layer for off-host traffic only: they drop every off-host packet
+  of a socket the uid owns, in and out, so a sandbox escape still cannot
+  reach the network, and they leave the loopback interface, which carries
+  the slot's traffic to the host's own addresses, to the sandbox. The probe
+  refutes every port outside the reserved set (a listener the daemon holds
+  included) and the system resolver under the sandbox, refutes off-host
+  reach under both layers, and checks before each job that nothing else
+  listens on the slot's reserved ports, on any of the host's addresses,
+  over either protocol. The sandbox alone holds the line on the host's own
+  addresses, and that is enough: the plan never counted the packet filter
+  there, because whether a host's packet filter sees loopback at all
+  depends on rules other software loads, and a sandbox escape already
+  reached all of loopback. Why the packet filter does not close
+  loopback or the system resolver is in the
+  [macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md);
+  why the reservation takes this shape is in the
+  [loopback ports note](../devlog/2026-11-12-1107-macos-job-loopback-ports.md).
 - **Writes are confined to the job directory** by the same sandbox profile;
   the probe writes outside it and must fail.
 - **Dependencies come from a trusted offline cache keyed by digest.** A
@@ -2964,7 +2984,17 @@ operator's state and credentials at `0700` and `0600`, bound what it can
 read; a sandbox or kernel escape reaches the host. That is the same class the
 warded verifier names, with a wider blast radius; placing the executor on a
 second Mac enrolled as an execution host shrinks it without changing the
-class.
+class. The escape residual is unchanged by the loopback reservation, since
+an escape already reached all of loopback, but the reservation adds two
+narrower ones. A host process that binds one of a slot's reserved ports by
+number during a job, on any of the host's addresses, is reachable from that
+job; the pre-job check sees only a listener already present. And the
+sandbox filters by port, not by address, so a job's listener on a reserved
+port also accepts connections that arrive on the host's other addresses:
+other uids on the host can connect to it, and off-host connections to it
+rest on the packet filter alone, one layer where every other off-host path
+has two, and one the probe can't exercise, since no connection the host
+makes to itself leaves it.
 
 Writer work that itself needs macOS, such as running the app, driving its UI,
 or an Xcode-only build, is not served by the executor. It takes a **UI-writer
@@ -7654,60 +7684,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 121 ("Effects Are Autonomous by Default; Follow-Up Filing Needs No Card"):
+Revision 122 ("A macOS Verification Job May Use Its Own Ports on the Host"):
 
-1. **Where an effect has an autonomous path and a human-decision path, the
-   autonomous path is the default** (Section
-   [3.2](#32-the-interruption-budget)). Per-project policy turns the human
-   gate on per effect with one `gates.<effect>` key, never one global
-   switch. Absent or false is autonomous; a value that doesn't parse turns
-   the gate on. An unmet precondition takes the human path with a notice
-   naming it, caps stay on either path, and judgment items
-   (`review_dispute`, `finding_adjudication`) are not gates. The stage gates
-   `gates.spec_approval` and `gates.before_final_review` are not effects and
-   keep their preset values, and a `task_proposal`'s start stays under the
-   intake rules.
-2. **Policy resolves in two layers over the built-in default** (Section
-   [3.2](#32-the-interruption-budget)): project, then general, with the
-   winning layer recorded as each key's provenance. A key the Workflow
-   settings pane exposes resolves from the stored layers only; caps are
-   per-project defaults, not a budget shared across repositories.
-3. **The workflow audit also enumerates `issues`-triggered workflows**
-   (Section [5.5](#55-the-ci-trust-boundary)), under the `issue_comment`
-   set's acceptance, digest, recheck, and drift rules
-   (`allow_issue_workflows`). "The issue-automation audit" means both sets,
-   and a profile reviewed before this revision is reviewed again before it
-   approves an autonomous filing or an `issue_comment` proposal.
-4. **A follow-up filing dispatches without a card when
-   `gates.follow_up_filing` resolves off and the `issues` audit is
-   accepted** (Section [5.17](#517-follow-up-issue-filing)). This reverses
-   that section's rule that "every filing takes explicit per-proposal human
-   approval, whatever the profile state", and drops the issue-event
-   authority profile as a filing precondition. The assumption that changed:
-   fan-out is held by ledger lineage at intake, the audit, the screen, and
-   the caps, not by a person reading each proposal. The profile keeps its
-   intake role, and every intake rule stands. Rejected: keeping the card for
-   Freeside's own repository, which #3132's goal of no pause beyond the pull
-   request rules out.
-5. **`issue_comment` joins the effect registry** (Section
-   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)):
-   a comment on an issue the task is not bound to, targeting a
-   daemon-enumerated handle, screened as the specification comment is, on
-   the filer's intent ledger, gated by `gates.issue_comment` and, on either
-   path, by the `issue_comment` audit, whose absence refuses it.
-6. **A duplicate search precedes every filing** (Section
-   [7](#7-review-policy)): a judgment site of its own, not the finding
-   adjudicator, because a site carries exactly one authority contract,
-   chooses "new" or one listed open issue, and a duplicate yields a
-   comment, not a filing.
+1. **A macOS verification job may bind and connect at its slot's reserved
+   ports on the host's own addresses, and nowhere else** (Sections
+   [5.4](#54-credential-modes-egress-profiles-and-concurrency),
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), and
+   [14](#14-risks)). The sandbox can't tell loopback from the host's other
+   addresses, so the allowance covers them all, over TCP or UDP. A slot's
+   reserved ports are a small fixed set, disjoint from every other slot's,
+   outside the ephemeral range, and never a port the daemon listens on. The
+   probe still refutes every other port, the system resolver, and off-host
+   reach, and checks before each job that nothing else listens on the
+   reserved ports. The sandbox profile alone enforces the reservation; the
+   packet filter stays the second layer for off-host traffic only, because
+   whether it sees loopback depends on rules other software loads. The plan
+   names two new residuals: a host process that binds a reserved port
+   during a job is reachable from it, and a job's listener also accepts
+   connections on the host's other addresses, with off-host ones resting on
+   the packet filter alone, unprobed. This lets the convergence pass run
+   in Freeside's verification and narrows revision 96's "denies every
+   network operation". Rejected: leaving the convergence pass outside
+   Freeside's verification, so a pull request Freeside verified could
+   still fail `required`; allowing all of loopback, which reaches the
+   daemon's API and every host service; and a packet-filter loopback rule
+   as a second layer, which the conformance pass cannot prove on a host
+   whose packet filter skips loopback.
 
-Nothing in this revision is built yet: on tracker #3132, #3145 builds the
-settings pane and the layers, #3146 the duplicate search, #3147 the
-`issue_comment` kind, #3150 dispatch without a card, and #1435 the
-`issue_comment` audit; no unit yet builds the `issues` audit.
+Nothing in this revision is built yet: #3155 builds it.
 
-(Owner decisions of 2026-11-12 on #3132;
-[decision note](../devlog/2026-11-12-1011-default-autonomous-effects.md).)
+(Owner decision of 2026-11-12 on #3121;
+[decision note](../devlog/2026-11-12-1107-macos-job-loopback-ports.md).)
 ## 14. Risks
 
 | Risk | Current response |
@@ -7721,7 +7728,7 @@ settings pane and the layers, #3146 the duplicate search, #3147 the
 | **Agent text in a public issue comment** | The specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts a digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, reserved Freeside markers, and command shapes. It posts when the daemon accepts the specification, so screened agent text reaches a public issue before a person reads it, and with `gates.spec_approval` off a person may never read it first; the screen, not a reader, is the check. One comment per task is edited in place, and a revision whose public plan the screen refuses shows the frame alone. Residual: an edit that is refused or hasn't landed leaves the earlier rendering, and an ambiguous create can leave a comment and claim the daemon cannot edit, which the `system_health` item asks a person to delete. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token, which edits only the comment whose ID the daemon stored. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each create and each edit. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment, and possibly an edit, resets stale-issue timers; each sees one screened comment per task, and each state change is another `issue_comment` event with the `edited` action. |
 | **Maintenance tasks Freeside opens for itself** | Project-image upkeep submits a task only for a refusal that needs a repository repair, through the ordinary submission primitive with a daemon origin and the refusal record as its source (Section [5.12](#512-workflow-definition-initiators-and-artifacts)). It passes the ordinary specification approval and the full publication gate like any operator-submitted task, never files an issue, and opens at most one task per refusal record. Residual: operator attention on a task nobody asked for, bounded by the refusal classes that may open one (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose enrollment shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
-| **Host-side macOS verification** | The executor holds no credential and runs no agent; a network-denying sandbox profile plus per-uid packet-filter rules, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. |
+| **Host-side macOS verification** | The executor holds no credential and runs no agent; a sandbox profile that denies all network but the slot's own reserved ports on the host's own addresses, plus per-uid packet-filter rules for off-host traffic, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. A job's listener on a reserved port is reachable from other uids on the host, and from off-host only past the packet filter, a layer the probe can't exercise; and a host process that binds a reserved port during a job is reachable from it. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
