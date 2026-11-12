@@ -44,6 +44,11 @@ Implement the approved specification in the provided workspace.
 
 - Limits: 1 to 8 decisions, 2 to 6 options each, 4 KiB per text field, 64 KiB total; `recommendation` equals one option `label` exactly. A stopped run may still write the reserved summary below.
 
+## Protected Paths
+
+- The "Protected paths" section at the end of this prompt lists patterns whose edit fails the run at import: Freeside discards the candidate before verification or review, and nothing is published. An edit includes adding, deleting, renaming, or changing the mode of a matching path.
+- Leave every matching path untouched. When the work cannot finish without editing one, stop with the blocked outcome above, kind `scope_expansion`, naming the path and why the work needs it, instead of editing it.
+
 ## Commit Plan
 
 - Before finishing, write `.freeside-commit-plan.json` at the repository root of the workspace. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files. Depending on policy, Freeside authors your commits from it or collapses them into one; author it either way. If the repository already tracks `.freeside-commit-plan.json` or any path beneath that name, leave it unchanged and make no repository changes. This run cannot produce an importable result: Freeside rejects the reserved namespace before accepting agent output.

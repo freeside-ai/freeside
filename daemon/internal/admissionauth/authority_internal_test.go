@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -683,5 +685,32 @@ func TestAttendedImportUsesCurrentActiveTrustProfile(t *testing.T) {
 	admission.TrustProfileDigest = nil
 	if _, err := authority.importTrustProfile(ctx, admission); !errors.Is(err, domain.ErrEmptyField) {
 		t.Fatalf("unbound unattended import profile = %v, want ErrEmptyField", err)
+	}
+}
+
+// An attended admission in a repository with no approved profile starts with
+// the built-in patterns, since import, not start, waits for a profile; one
+// bound to a profile the store lacks still fails.
+func TestAttendedProtectedPatternsWithoutProfile(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	authority := Authority{Store: st}
+	admission := domain.ExecutionAdmission{
+		ID: "sha256:attended-admission", OperatingMode: domain.ModeAttendedDev,
+		Base: domain.BaseRevision{Repo: "example/repo", RepositoryID: 44},
+	}
+	spec := exec.StartSpec{Base: admission.Base}
+	got, err := authority.protectedPatterns(ctx, admission, spec)
+	if err != nil {
+		t.Fatalf("attended without a profile: %v", err)
+	}
+	if want := (importer.Policy{}).PublishBlockingPatterns(); !slices.Equal(got, want) || len(want) == 0 {
+		t.Fatalf("patterns = %q, want the built-in list %q", got, want)
+	}
+	missing := domain.Digest("sha256:" + strings.Repeat("9", 64))
+	admission.TrustProfileDigest = &missing
+	if _, err := authority.protectedPatterns(ctx, admission, spec); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("bound profile missing = %v, want ErrNotFound", err)
 	}
 }

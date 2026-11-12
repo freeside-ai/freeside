@@ -646,6 +646,11 @@ func (d *Driver) StartWithInputs(
 		return err
 	}
 	materialized := durableInputsFrom(inputs)
+	// Like a failed load, a failed read commits no intent.
+	materialized.ProtectedPaths, err = d.authority.ProtectedPatterns(ctx, id, spec)
+	if err != nil {
+		return fmt.Errorf("protected paths: %w", err)
+	}
 	delivery := d.provider.PromptDelivery()
 	if !delivery.valid() {
 		return fmt.Errorf("%w: provider prompt delivery is invalid", ErrUnsupportedStart)

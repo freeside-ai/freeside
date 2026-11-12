@@ -110,7 +110,7 @@ func (testProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
 	return renderPromptParts(durableInputs{
 		Specification: inputs.Specification, PromptPackage: inputs.PromptPackage,
 		Policy: inputs.Policy, PriorArtifacts: inputs.PriorArtifacts,
-		PriorArtifactsPersisted: true,
+		PriorArtifactsPersisted: true, ProtectedPaths: inputs.ProtectedPaths,
 	})
 }
 
@@ -155,6 +155,9 @@ func renderPromptParts(inputs durableInputs) (string, error) {
 		prompt += fmt.Sprintf("\n\n--- Prior artifact %d ---\n\n%s", index+1, body)
 	}
 	prompt += "\n\n--- Resolved per-run policy ---\n\n" + string(inputs.Policy) + "\n"
+	if len(inputs.ProtectedPaths) > 0 {
+		prompt += "\n--- Protected paths ---\n\n" + strings.Join(inputs.ProtectedPaths, "\n") + "\n"
+	}
 	if len(prompt) > maxPromptBytes {
 		return "", fmt.Errorf("%w: rendered prompt is %d bytes, limit %d",
 			ErrUnsupportedStart, len(prompt), maxPromptBytes)
@@ -358,6 +361,14 @@ type stubAuthority struct {
 	importErr          error
 	currentImportCalls *int
 	recordImportCalls  *int
+	protected          []string
+	protectedErr       error
+}
+
+func (a stubAuthority) ProtectedPatterns(
+	context.Context, domain.InvocationID, exec.StartSpec,
+) ([]string, error) {
+	return a.protected, a.protectedErr
 }
 
 func (a stubAuthority) AuthenticateAdmission(
