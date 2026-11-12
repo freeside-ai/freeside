@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 120
+revision: 121
 status: active
 updated: 2026-11-12
 ---
@@ -354,10 +354,43 @@ rate is a health metric; a rising rate is a defect, subject to Section [3.1](#31
 must be able to resolve the whole class through the control-plane proposal
 path.
 
+**An effect is autonomous by default, and policy gates it per effect.** Where
+a Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+effect has an autonomous path and a human-decision path, the autonomous path
+is the default. Per-project policy turns the human gate on for one effect at a
+time, through that effect's own `gates.<effect>` key; no single switch gates
+every effect. The rule covers the effects that have such a key: the
+source-issue closure (`gates.source_issue_closure`), follow-up filing
+(`gates.follow_up_filing`), and the `issue_comment` kind
+(`gates.issue_comment`). A `task_proposal`'s start is not one of them: intake
+mode and its proof rules (Sections
+[5.11](#511-github-integration-reconciliation-plus-intake) and
+[5.17](#517-follow-up-issue-filing)) govern it, and no absent key loosens
+them. An absent or false key leaves the effect autonomous, and a value that
+doesn't parse turns its gate on, so a typo never removes a person. An unmet
+precondition of the autonomous path refuses autonomy: the effect takes the
+human path, and a notice names the missing precondition, so the effect never
+falls back to a card silently. Caps stay in force on either path. An attention
+item that exists because a finding needs judgment (`review_dispute`,
+`finding_adjudication`) is not a gate, and no `gates.<effect>` key removes it.
+The workflow's stage gates (`gates.spec_approval`,
+`gates.before_final_review`) share the namespace but gate stages, not effects,
+so this rule leaves their values as the preset sets them. A precondition that
+binds both paths is not an unmet precondition of autonomy: when it fails, the
+effect is refused, not carded.
+
 **Rein is a convenience preset, not a security dial.** When a run is created,
 the preset expands into explicit resolved policy, stored with a digest and the
 provenance of each key. An explicitly set key overrides the preset default, and
-the override is visible.
+the override is visible. Keys resolve in two policy layers over the built-in
+default: a project setting wins over a general setting, which every project
+inherits, and a general setting wins over the default. The resolved policy
+records the winning layer as each key's provenance. A key the Workflow
+settings pane exposes resolves from those stored layers only; a key the pane
+doesn't expose keeps resolving from the policy file a submission names. A
+cap is a default each project inherits and may override, never a budget shared
+across repositories. Not yet built: #3145 builds the layers and the pane.
 
 Work on Freeside itself often touches control-plane paths. Freeside's trust
 profile protects no repository-specific path and marks automation-control
@@ -459,7 +492,7 @@ Approval is not a universal action.
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. When the held run's pull request already exists, the item carries its `pr_reference` and the card also offers viewing the PR (navigation, not resolution); a hold opened before publication gains the reference once and never changes it. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
 | `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. Either may carry operator-authored task lines, bound to the item version (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents; revision 73). It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
-| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), which reaches this card only when project policy keeps the human gate on or as a fallback item (non-blocking under the default policy; a gate-on project still holds the PR until the closure question resolves), the policy actor otherwise recording the approval at publication; follow-up issue filings reuse the same card, and proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
+| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), which reaches this card only when project policy keeps the human gate on or as a fallback item (non-blocking under the default policy; a gate-on project still holds the PR until the closure question resolves), the policy actor otherwise recording the approval at publication; follow-up issue filings and comments on issues the task is not bound to (Section [5.17](#517-follow-up-issue-filing)) reuse the same card, and reach it only when the project's gate for that effect is on or an unmet precondition refuses autonomy (Section [3.2](#32-the-interruption-budget)); proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
 
 **`system_health` rules.** A revoked Codex identity marker also offers resolve
@@ -2126,8 +2159,14 @@ repository_security:
   allow_issue_comment_workflows: false       # workflows triggered by
                                              # issue_comment; gates only the
                                              # specification comment
-                                             # (Section 5.11), never
+                                             # (Section 5.11) and the
+                                             # issue_comment effect kind
+                                             # (Section 5.13), never
                                              # publication
+  allow_issue_workflows: false               # workflows triggered by issues;
+                                             # gates only autonomous
+                                             # follow-up filing (Section
+                                             # 5.17), never publication
   commit_plan: single_commit | plan_preferred
                                              # Section 5.6 agent-proposed
                                              # commit plan; conservative
@@ -2204,6 +2243,26 @@ needs the owner's review of the profile under its new digest.
 The key never affects pull-request publication. A profile
 reviewed before revision 66 does not approve the comment operation until the
 owner reviews it again under its new digest.
+
+The audit likewise enumerates every workflow triggered by `issues`, which a
+filed issue starts when it opens and when it is labeled or milestoned. While
+`allow_issue_workflows` is false, a repository that has one files a
+follow-up issue only on a person's approval (Section
+[5.17](#517-follow-up-issue-filing)). The set follows the `issue_comment`
+set's rules: setting the key true records that the reviewing human accepted
+the listed workflows, each listed workflow carries a content digest in the
+digest-bound profile, the daemon rechecks the set and its digests against the
+default-branch tip immediately before each autonomous filing, and drift
+refuses autonomy until the owner reviews the profile. "The issue-automation
+audit" means both sets. An autonomous filing needs the `issues` set
+accepted; a filing a person approves on the card does not, as today. A
+comment needs the `issue_comment` set accepted on either path. A set the
+audit finds empty needs no acceptance. A profile reviewed before revision 121
+approves neither an autonomous filing nor an `issue_comment` proposal until
+the owner reviews it again under its new digest, because its
+`issue_comment` acceptance covered only the specification comment
+(not yet built: #1435 builds the `issue_comment` set, and no
+unit yet builds the `issues` set).
 
 **Automation-control changes may publish as advisory.** Under
 `candidate_automation_changes: advisory`, a candidate change to an
@@ -4590,7 +4649,8 @@ instance ID is the effect identity for idempotence, ledgering, and crash
 reconciliation; content digests bind approvals. Instances: `task_proposal`
 (existing), follow-up issue filings (Section [5.17](#517-follow-up-issue-filing), 1B.1), proposed watches
 (a planned extension that lands with its schedule kind and consumer,
-Section [5.16](#516-the-durable-scheduler)), and the source-issue closure proposal (1B.1). The
+Section [5.16](#516-the-durable-scheduler)), the source-issue closure proposal (1B.1),
+and `issue_comment`, a comment on an issue the task is not bound to (below). The
 closure proposal carries one bounded parameter, a `resolves` flag; its target is
 the daemon-selected source issue, never an agent-supplied identity. Its trusted
 constructor sets the flag with its provenance (Section
@@ -4622,6 +4682,26 @@ approval never authorizes a close on a changed candidate that may no longer
 resolve the issue. On approval the publisher writes the `Closes` line, and
 merging the candidate then closes the issue; it fails safe to no close. Gates
 read resolved policy; rein is not a security dial.
+
+An `issue_comment` proposal comments on an issue the task is not bound to,
+such as the open issue that already tracks a finding (Section
+[7](#7-review-policy), Finding Adjudication). Its target is a selection among
+daemon-enumerated issue handles, never an issue the agent names. Its one
+parameter is the comment body, screened under the specification comment's
+ruleset (Section [5.11](#511-github-integration-reconciliation-plus-intake)),
+which rejects mentions and command shapes, because the comment notifies the
+target issue's subscribers. It dispatches on the follow-up filer's intent
+ledger (Section [5.17](#517-follow-up-issue-filing)) under the filing caps,
+and its crash recovery follows the specification comment's create rule. It
+dispatches without a card when `gates.issue_comment` resolves off (Section
+[3.2](#32-the-interruption-budget)). On either path it needs the
+`issue_comment` set of the issue-automation audit accepted (Section
+[5.5](#55-the-ci-trust-boundary)), as the specification comment does; without
+that acceptance the comment is a definite refusal, never a card, and the
+refusal is recorded beside the finding's deferred disposition. A comment on
+the issue the task is bound to is not this kind and takes no
+`gates.issue_comment` key. Not yet built: #3147 adds the kind, #3150
+dispatches it without a card, and #1435 builds the `issue_comment` audit.
 
 ### 5.14 Client Synchronization and Conversations
 
@@ -5136,26 +5216,37 @@ durable, queryable, and synced.
 
 Filing a GitHub issue is a fan-out effect. It can start workflows, notify
 people, and wake integrations, and an issue those systems create in response
-could re-enter intake as new work. Filing arrives human-gated (1B.1): every
-filing takes explicit per-proposal human approval, whatever the profile state.
-The policy-approved path below is the later autonomous path. A valid authority
-profile is an additional precondition for that path, never a replacement for
-the 1B.1 human gate.
+could re-enter intake as new work. Filing has two paths (Section
+[3.2](#32-the-interruption-budget)). On the autonomous path, the default, a
+filing dispatches without a card when `gates.follow_up_filing` resolves off
+and the project's trust profile has accepted the `issues` set of the
+issue-automation audit (Section [5.5](#55-the-ci-trust-boundary)). With the
+gate on, every filing takes the `effect_proposal` card's per-proposal
+approval (Section [4](#4-the-attention-model)), as it has since 1B.1. With
+the gate off and that acceptance missing or refused for drift, the filing
+takes the card with a notice naming the missing acceptance. On either path,
+ledger lineage at intake, the per-field screen, the policy-derived target,
+and the caps below hold the fan-out, not a person reading each proposal.
 
 A comment on an issue the task is already bound to is not a filing and takes
 no filing gate. The specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) carries its
-own, smaller fan-out rules.
+own, smaller fan-out rules. A comment on any other issue is the
+`issue_comment` effect kind (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)),
+gated by `gates.issue_comment` and dispatched on this section's intent
+ledger.
 
-The policy-approved path requires a digest-bound, freshness-limited issue-event
-authority profile. The profile covers a complete enumerated authority surface.
-An unknown or uninspectable surface makes the repository ineligible. The
-profile is revalidated immediately before each creation, and it fails closed on
-drift. It is a filing precondition only. The eligibility predicate: every known
-transitive issue-creation or labeling path must be (a) ledgered before intake,
-(b) proven unable to become intake-eligible, or (c) structurally forced to
-propose. That requirement covers every path in the complete enumerated
-authority surface, not merely the known paths. Otherwise filing stays
-human-gated.
+The issue-event authority profile is not a filing precondition (revision
+120); it serves intake only (below). It is digest-bound and
+freshness-limited, and it covers a complete enumerated authority surface. An
+unknown or uninspectable surface makes the repository ineligible. The profile
+is revalidated whenever intake relies on it, and it fails closed on drift.
+The eligibility predicate: every known transitive issue-creation or labeling
+path must be (a) ledgered before intake, (b) proven unable to become
+intake-eligible, or (c) structurally forced to propose. That requirement
+covers every path in the complete enumerated authority surface, not merely
+the known paths. Without a current valid profile, label intake in a
+repository where Freeside has filed stays demoted to propose.
 
 Intake eligibility requires event-level authority proof, checked at the final
 intake transition. The proof is either ledgered proposal-instance lineage or
@@ -5224,7 +5315,8 @@ adopts a candidate at any step: an unproven attempt is residual ambiguity at
 once, and only a recorded success response ledgers an issue. The outcome is
 permanent. A stray issue from a late commit carries no ledgered lineage, so
 intake forces it to propose like any event without proof. Rate, depth, and
-cost caps come from resolved policy.
+cost caps come from resolved policy and bind both paths; each is a default
+the project inherits (Section [3.2](#32-the-interruption-budget)).
 
 Freeside-origin issues enter intake as propose, never `auto_start`, and this is
 enforced at every intake observation, including after relabeling. All label
@@ -5235,6 +5327,12 @@ Freeside-seeded repository is trusted for `auto_start`. A current valid profile
 restores `auto_start` eligibility only for the non-Freeside-origin issues it
 admits that pass the intake proof check. Freeside-origin issues stay
 propose-only whatever the profile state.
+
+Not yet built: #3150 dispatches filings and comments without a card, #3145
+builds the Workflow settings pane that turns the gates on, #3146 builds the
+duplicate search (Section [7](#7-review-policy), Finding Adjudication), and
+no unit yet builds the `issues` audit, so until one does every filing takes
+the card.
 
 ### 5.18 The World Model: Post-Merge Recompute and Frontier Projection
 
@@ -5834,7 +5932,7 @@ route is a function of the axes:
 | `required` | `separate_work_required` | park; recommend prerequisite work (a Section [5.17](#517-follow-up-issue-filing) proposal where it is an issue), wait or stop; never defer-and-ready |
 | `required` | `human_decision_required` | recommendation-led `finding_adjudication` attention |
 | `required` | `unknown` | park plus recommendation-led attention; no scope widening |
-| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation, and the Section [5.17](#517-follow-up-issue-filing) human-gated proposal path (1B.1) consumes that recommendation when it lands |
+| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation, and the Section [5.17](#517-follow-up-issue-filing) filing path consumes that recommendation after the duplicate search below |
 | `contradictory` | absent | reasoned declined disposition, or the `review_dispute` item, where the human adjudicates every listed finding through `adjudicate_findings` (Section [4](#4-the-attention-model)), when the finding's severity is critical or high (the ceilings' second-adjudication case) or the self-assessed proposal confidence is below the resolved-policy threshold |
 | `unclear` | absent | recommendation-led attention with gating questions |
 
@@ -5843,6 +5941,20 @@ enumerate them, not a sample of the cross product. A necessary finding that is
 incompatible with the task's current declared scope parks or replans the run. The
 constraints make silent deferral structurally unrepresentable, because
 `required` has no route to a deferred disposition.
+
+**A duplicate search precedes every filing.** Before a deferred (`adjacent`)
+or separate-work (`separate_work_required`) finding proposes a Section
+[5.17](#517-follow-up-issue-filing) filing, the daemon lists the open issues
+in the filing's policy-derived repository as candidates, each an opaque
+handle, and a duplicate-search judgment site chooses "new" or one candidate
+handle. It is its own site with its own authority contract (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)),
+not the finding adjudicator, whose contract is ceiling-bounded annotation.
+"New" proposes a filing. A chosen
+candidate yields an `issue_comment` proposal on that issue (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)),
+not a filing. The site never names a target: an answer outside the listed
+handles is invalid. Not yet built: #3146.
 
 Permission has a presumptive baseline, not an affirmative-citation requirement.
 Remediation is presumptively `allowed` when its proposed surface stays within
@@ -7542,31 +7654,60 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 120 ("Tasks May Edit the Image Definitions; the Operator Still Builds Them"):
+Revision 121 ("Effects Are Autonomous by Default; Follow-Up Filing Needs No Card"):
 
-1. **Freeside manages `images/`, and the agent bases stay operator-built**
-   (Sections [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)
-   and [11](#11-roadmap-build-order-and-coordination)). A task may edit the
-   agent-base and exporter definitions under `images/`, and the edit
-   publishes with no finding, like any unprotected path. Nothing in
-   Freeside builds or adopts an image from that source: the operator
-   builds, probes, and re-pins an image after the change merges until
-   agent-base upkeep (#2338) admits a base itself, and no task builds or
-   adopts the image it runs in. The recipe checks an image change only
-   through the daemon tests that read the agent bases' CLI pins and the
-   Claude base's managed settings. The owner accepts
-   that the pull request's review is the only check on an image edit
-   before the operator's build. Rejected: keeping `images/` hand-run, which
-   leaves a kind of development outside Freeside. This overturns revision
-   113 item 1's `images/` exclusion. What changed is the owner's rule that
-   every kind of development done by hand goes through Freeside; the
-   exclusion's reason, that the bases need the network to build and sit on
-   the trust boundary, holds for building them, which stays the
-   operator's, not for editing their source.
+1. **Where an effect has an autonomous path and a human-decision path, the
+   autonomous path is the default** (Section
+   [3.2](#32-the-interruption-budget)). Per-project policy turns the human
+   gate on per effect with one `gates.<effect>` key, never one global
+   switch. Absent or false is autonomous; a value that doesn't parse turns
+   the gate on. An unmet precondition takes the human path with a notice
+   naming it, caps stay on either path, and judgment items
+   (`review_dispute`, `finding_adjudication`) are not gates. The stage gates
+   `gates.spec_approval` and `gates.before_final_review` are not effects and
+   keep their preset values, and a `task_proposal`'s start stays under the
+   intake rules.
+2. **Policy resolves in two layers over the built-in default** (Section
+   [3.2](#32-the-interruption-budget)): project, then general, with the
+   winning layer recorded as each key's provenance. A key the Workflow
+   settings pane exposes resolves from the stored layers only; caps are
+   per-project defaults, not a budget shared across repositories.
+3. **The workflow audit also enumerates `issues`-triggered workflows**
+   (Section [5.5](#55-the-ci-trust-boundary)), under the `issue_comment`
+   set's acceptance, digest, recheck, and drift rules
+   (`allow_issue_workflows`). "The issue-automation audit" means both sets,
+   and a profile reviewed before this revision is reviewed again before it
+   approves an autonomous filing or an `issue_comment` proposal.
+4. **A follow-up filing dispatches without a card when
+   `gates.follow_up_filing` resolves off and the `issues` audit is
+   accepted** (Section [5.17](#517-follow-up-issue-filing)). This reverses
+   that section's rule that "every filing takes explicit per-proposal human
+   approval, whatever the profile state", and drops the issue-event
+   authority profile as a filing precondition. The assumption that changed:
+   fan-out is held by ledger lineage at intake, the audit, the screen, and
+   the caps, not by a person reading each proposal. The profile keeps its
+   intake role, and every intake rule stands. Rejected: keeping the card for
+   Freeside's own repository, which #3132's goal of no pause beyond the pull
+   request rules out.
+5. **`issue_comment` joins the effect registry** (Section
+   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)):
+   a comment on an issue the task is not bound to, targeting a
+   daemon-enumerated handle, screened as the specification comment is, on
+   the filer's intent ledger, gated by `gates.issue_comment` and, on either
+   path, by the `issue_comment` audit, whose absence refuses it.
+6. **A duplicate search precedes every filing** (Section
+   [7](#7-review-policy)): a judgment site of its own, not the finding
+   adjudicator, because a site carries exactly one authority contract,
+   chooses "new" or one listed open issue, and a duplicate yields a
+   comment, not a filing.
 
-(Owner decision of 2026-11-11 on #3132;
-[decision note](../devlog/2026-11-12-1006-images-in-deputy-scope.md).)
+Nothing in this revision is built yet: on tracker #3132, #3145 builds the
+settings pane and the layers, #3146 the duplicate search, #3147 the
+`issue_comment` kind, #3150 dispatch without a card, and #1435 the
+`issue_comment` audit; no unit yet builds the `issues` audit.
 
+(Owner decisions of 2026-11-12 on #3132;
+[decision note](../devlog/2026-11-12-1011-default-autonomous-effects.md).)
 ## 14. Risks
 
 | Risk | Current response |
