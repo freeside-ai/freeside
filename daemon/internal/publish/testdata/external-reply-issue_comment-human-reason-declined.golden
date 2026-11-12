@@ -1,0 +1,5 @@
+In response to [comment 44](/owner/repo/pull/7#issuecomment-44):
+
+A maintainer declined this finding.
+
+Reason: The <input> is already checked by `Validate`.

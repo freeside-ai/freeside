@@ -19,7 +19,26 @@ func ExternalReviewCommentThreadID(rootCommentID int64) string {
 	return fmt.Sprintf("review_comment/%d", rootCommentID)
 }
 
-type externalReplyThread struct{ review, root int64 }
+// ExternalReviewConversationThreadID names one comment in a pull request's
+// main conversation (#3127). Like a review body it has no threaded reply
+// endpoint; responses are conversation comments linking it.
+func ExternalReviewConversationThreadID(commentID int64) string {
+	return fmt.Sprintf("issue_comment/%d", commentID)
+}
+
+// IsExternalReviewConversationThread reports whether thread names a
+// conversation comment. Such a thread's first stored finding in a run is
+// final (#3127): the comment has no commit, so an edit or a later head would
+// otherwise make it a new finding and start another round.
+func IsExternalReviewConversationThread(thread string) bool {
+	parsed, err := parseExternalReplyThread(thread)
+	return err == nil && parsed.comment > 0
+}
+
+// externalReplyThread holds exactly one of a review body, an inline thread's
+// root comment, or a conversation comment. Only an inline thread has a root:
+// the other two reply in the conversation.
+type externalReplyThread struct{ review, root, comment int64 }
 
 func parseExternalReplyThread(thread string) (externalReplyThread, error) {
 	kind, value, ok := strings.Cut(thread, "/")
@@ -32,6 +51,8 @@ func parseExternalReplyThread(thread string) (externalReplyThread, error) {
 		return externalReplyThread{review: id}, nil
 	case "review_comment":
 		return externalReplyThread{root: id}, nil
+	case "issue_comment":
+		return externalReplyThread{comment: id}, nil
 	}
 	return externalReplyThread{}, errors.New("review reply: invalid thread")
 }
@@ -63,10 +84,13 @@ func externalReviewReplyText(d domain.ExternalFindingDisposition, entry *domain.
 	if body == "" {
 		return "", errors.New("review reply: unsupported disposition")
 	}
-	if thread.review > 0 {
-		// A root-relative link keeps the review on this forge's web host,
-		// including Enterprise, without guessing from an API hostname.
+	// A root-relative link keeps the source on this forge's web host,
+	// including Enterprise, without guessing from an API hostname.
+	switch {
+	case thread.review > 0:
 		body = fmt.Sprintf("In response to [review %d](/%s/pull/%d#pullrequestreview-%d):\n\n", thread.review, binding.Repo, binding.PRNumber, thread.review) + body
+	case thread.comment > 0:
+		body = fmt.Sprintf("In response to [comment %d](/%s/pull/%d#issuecomment-%d):\n\n", thread.comment, binding.Repo, binding.PRNumber, thread.comment) + body
 	}
 	return body, nil
 }

@@ -376,7 +376,7 @@ func (h *replyHarness) outcome() externalReplyOutcome {
 
 func TestExternalReviewReplierPostsOnce(t *testing.T) {
 	t.Parallel()
-	for _, thread := range []string{"review/42", "review_comment/43"} {
+	for _, thread := range []string{"review/42", "review_comment/43", "issue_comment/44"} {
 		t.Run(thread, func(t *testing.T) {
 			h := newReplyHarness(t, thread, domain.ReviewDispositionDeclined, "Already checked.")
 			h.pass()
@@ -388,6 +388,12 @@ func TestExternalReviewReplierPostsOnce(t *testing.T) {
 			h.pass()
 			if h.creates != 1 {
 				t.Fatalf("creates = %d", h.creates)
+			}
+			// A conversation comment's reply is a conversation comment that
+			// links it, as a review body's links its review (#3127).
+			if want := "In response to [comment 44](/owner/repo/pull/450#issuecomment-44):\n\n"; thread == "issue_comment/44" &&
+				(len(h.bodies) != 1 || !strings.HasPrefix(h.bodies[0], want)) {
+				t.Fatalf("conversation reply bodies = %q, want one starting %q", h.bodies, want)
 			}
 		})
 	}

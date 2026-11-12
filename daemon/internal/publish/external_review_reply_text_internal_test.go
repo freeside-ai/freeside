@@ -20,7 +20,7 @@ func TestExternalReviewReplyTextGolden(t *testing.T) {
 		"": domain.AdjudicationProducerModel, "human-": domain.AdjudicationProducerHuman,
 		"human-reason-": domain.AdjudicationProducerHuman,
 	}
-	for _, form := range []string{ExternalReviewThreadID(42), ExternalReviewCommentThreadID(43)} {
+	for _, form := range []string{ExternalReviewThreadID(42), ExternalReviewCommentThreadID(43), ExternalReviewConversationThreadID(44)} {
 		for prefix, producer := range producers {
 			for _, disposition := range []domain.ReviewDisposition{domain.ReviewDispositionDeclined, domain.ReviewDispositionDeferred, domain.ReviewDispositionFixed} {
 				if producer == domain.AdjudicationProducerHuman && disposition == domain.ReviewDispositionFixed {
@@ -77,9 +77,28 @@ func TestExternalReviewReplyTextRefusesUnsafeReasonsAndThreads(t *testing.T) {
 			t.Errorf("%s: a deferral replied without the entry that decided it", name)
 		}
 	}
-	for _, thread := range []string{"", "review/0", "review/-1", "review/01", "review/+1", "review/1/2", "other/1"} {
+	for _, thread := range []string{"", "review/0", "review/-1", "review/01", "review/+1", "review/1/2", "other/1", "issue_comment/0", "issue_comment/01"} {
 		if _, err := parseExternalReplyThread(thread); err == nil {
 			t.Errorf("accepted %q", thread)
+		}
+	}
+}
+
+// TestIsExternalReviewConversationThread proves only a well-formed
+// conversation thread is final at its first finding (#3127); a review body
+// and an inline thread keep the per-finding rule.
+func TestIsExternalReviewConversationThread(t *testing.T) {
+	t.Parallel()
+	for thread, want := range map[string]bool{
+		ExternalReviewConversationThreadID(44): true,
+		ExternalReviewThreadID(44):             false,
+		ExternalReviewCommentThreadID(44):      false,
+		"issue_comment/0":                      false,
+		"issue_comment/x":                      false,
+		"":                                     false,
+	} {
+		if got := IsExternalReviewConversationThread(thread); got != want {
+			t.Errorf("IsExternalReviewConversationThread(%q) = %t, want %t", thread, got, want)
 		}
 	}
 }
