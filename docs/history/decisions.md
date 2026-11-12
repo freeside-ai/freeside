@@ -3734,3 +3734,19 @@ Nothing in this revision is built yet: tracker #3113 carries the work, and
 
 (Owner decisions of 2026-11-11, in chat, on #3102;
 [decision note](../../devlog/2026-11-11-1630-graceful-updates-and-version-skew.md).)
+
+## Revision 117 ("The Daemon Names Its Features to Any Caller"):
+
+1. **`/health` lists the features the daemon's build serves, so an unpaired
+   caller learns them.** This narrows Section
+   [5.2](../plan.md#52-the-daemon-and-its-supervisor)'s rule that the route tells an
+   unpaired caller nothing beyond liveness, the contract digest, the
+   version, and the start time. The names describe the build, as the
+   version already does, and reveal no state. `/health` is the read the
+   app already makes to diagnose a skew, and revision 116's feature
+   advertisement needs a read the app can make each sync round; an
+   authenticated feature route would add a second read per round for
+   names the version already implies.
+
+(Owner decision of 2026-11-11 on #1266, a planning default not vetoed;
+[decision note](../../devlog/2026-11-11-1640-additive-contract-tolerance.md).)

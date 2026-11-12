@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 117
+revision: 118
 status: active
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Freeside
@@ -260,7 +260,11 @@ maintenance still decide whether Freeside creates a positive return.
    import is hostile and out of process; verification recipes are trusted.
 6. **Contain CI privilege.** Agent-authored code never reaches secret-bearing or
    privileged CI and never changes automation-control paths through the ordinary
-   workflow. A trust profile attests the authority a PR job actually holds.
+   workflow, unless the repository's trust profile marks those changes
+   advisory; then a candidate's workflow may ask for whatever authority the
+   repository's settings give a pull-request job (Section
+   [5.5](#55-the-ci-trust-boundary); not yet built, #3125). A trust profile
+   attests the authority a PR job actually holds.
 7. **Operate remotely from iPhone.** The human judges at gates, then performs
    final review and merge on GitHub.
 8. **Let chat author artifacts and the engine execute them.**
@@ -325,15 +329,21 @@ The following classes are non-waivable:
 
 - GitHub credential separation;
 - CI trust-profile validity;
-- candidate changes to automation-control paths (a reviewer-instruction
-  edit is advisory, Section [5.8](#58-control-plane-trust));
-- control-plane modifications;
+- candidate changes to automation-control paths where the trust profile
+  blocks them, which is the default (a reviewer-instruction edit is
+  advisory, Section [5.8](#58-control-plane-trust));
+- control-plane modifications to paths the trust profile protects;
 - stale-approval rejection;
 - failed runner conformance, including the workspace-handoff gate;
 - host reachability;
 - artifact-integrity failure;
 - secret detection; and
 - capability escalation outside approved manifests.
+
+Which repository-specific paths a trust profile protects, and whether it
+marks automation-control advisory, the owner decides at profile review,
+never per run (Section [5.5](#55-the-ci-trust-boundary); the advisory value
+is not yet built, #3125).
 
 ### 3.2 The Interruption Budget
 
@@ -349,7 +359,13 @@ the preset expands into explicit resolved policy, stored with a digest and the
 provenance of each key. An explicitly set key overrides the preset default, and
 the override is visible.
 
-Accepted hot spot: work on Freeside itself often touches control-plane paths.
+Work on Freeside itself often touches control-plane paths. Freeside's trust
+profile protects no repository-specific path and marks automation-control
+advisory, so that work doesn't stop on those paths. The owner accepts that
+a candidate editing a check script is graded by its own edit, and that the
+plan's materiality gate rests on the owner's review of the pull request
+(Section [11](#11-roadmap-build-order-and-coordination); not yet built,
+#3123 and #3125).
 
 ### 3.3 Portability
 
@@ -1092,7 +1108,7 @@ policy's short, declared set of package-registry authorities, consumed read-only
 `pypi.org`, and `files.pythonhosted.org`).
 
 The set is control-plane policy: a writer change to it is publish-blocked like
-any other control-plane path, and a per-project addition is a reviewed operator
+a protected control-plane path, and a per-project addition is a reviewed operator
 change (the operator's own edit, or an approved image-policy adoption card,
 Section [5.8](#58-control-plane-trust)) that admits only a public package registry the project's
 dependency manifests resolve against. Any other authority is not a registry entry.
@@ -2089,11 +2105,15 @@ Every onboarded repository therefore has an **automation trust profile**:
 ```yaml
 repository_security:
   pr_execution: audited_same_repo | fork_untrusted | local_only
-  candidate_automation_changes: block        # .github/workflows/**,
+  candidate_automation_changes: block | advisory
+                                             # .github/workflows/**,
                                              # .github/actions/**, action.y*ml,
-                                             # CI entrypoints: publish-blocking
-                                             # in the ordinary workflow; routed
-                                             # through control-plane change
+                                             # CI entrypoints. block, the
+                                             # default: publish-blocking in
+                                             # the ordinary workflow; routed
+                                             # through control-plane change.
+                                             # advisory: publishes with the
+                                             # finding surfaced (below)
   pr_github_token_permissions: read_only
   allow_oidc: false
   allow_environment_secrets: false
@@ -2184,8 +2204,67 @@ The key never affects pull-request publication. A profile
 reviewed before revision 66 does not approve the comment operation until the
 owner reviews it again under its new digest.
 
+**Automation-control changes may publish as advisory.** Under
+`candidate_automation_changes: advisory`, a candidate change to an
+automation-control path publishes. It lifts as an advisory finding, shown on
+the ready card and in the PR-body section candidate prose cannot forge, as a
+reviewer-instruction edit does (Section [5.8](#58-control-plane-trust)). It
+never blocks and carries no waiver. Detection stays a mandatory minimum: a
+profile can widen the automation-control patterns but never narrow them, and
+`advisory` changes only what a match does. `block` is the default. The value
+is part of the digest-bound profile, so only the owner sets it, at profile
+review; no candidate or run can set it. What the owner accepts before merge:
+the candidate's workflow runs in CI when the pull request opens, before
+anyone reviews it. That job holds whatever GitHub gives a same-repository
+pull-request job that the edited workflow asks for (a writable token, any
+secret not behind a protected environment, an identity token), not what the
+audit attested for the base's workflows. Where the repository's branch rules
+let such a token merge, the job can merge its own pull request or another;
+and with `pull-requests: write` it can rewrite the pull request's body,
+advisory section included, so the ready card is the advisory record the
+daemon relies on. The
+profile's limits describe pull-request jobs only, so the advisory for a
+workflow change also lists each job the change adds or alters that runs on
+any other trigger, with the token permissions it asks for and whether it
+reads secrets or asks for an identity token. Not yet built: #3125 builds the
+option, and #3140 builds the job list.
+
+**A merge reviews the workflow change it carried.** Under an `advisory`
+profile, merging a pull request that Freeside published is the review of the
+workflow change it carried. The daemon accepts the default branch's workflow
+files as the reviewed surface, with no profile review, only when all of
+these hold:
+
+- every difference between the workflow files last accepted and those on the
+  default branch is a change that a Freeside-published pull request carried,
+  that its advisory on the ready card showed, and that merged with the same
+  content Freeside published;
+- nothing else the audit records has changed: repository settings, runners,
+  environments, and branch rules;
+- the fresh audit stays inside every `allow_*` limit of the profile; and
+- no workflow's token could have made the merge, so a person with merge
+  rights made it. A candidate's CI job never accepts its own workflow
+  change or another's.
+
+Anything those conditions don't cover is drift, and drift still fails closed
+until the owner reviews the profile. The daemon records the accepted surface
+beside the profile, not in it: accepting a change leaves the profile and its
+digest unchanged, so a run in flight keeps the profile it was bound to, and
+drift is measured against the accepted surface.
+Profile review still sets the starting surface and every limit, and the
+approved-specification comment's recheck above is unchanged. What the owner
+accepts after merge: whoever may merge to the default branch can accept a
+workflow change that only profile review could accept before; accepted
+changes add up without a fresh review of the whole surface unless the owner
+asks for one; and neither the audit nor the acceptance covers a script a
+workflow runs or a remote action named by a mutable ref, the gaps Section
+[5.11](#511-github-integration-reconciliation-plus-intake) names for
+`issue_comment` workflows. Not yet built: #3140 builds the acceptance, and
+until it lands every merged workflow change still needs a profile review.
+
 Phase 1A supports one repository with a machine-readable profile. A human
-reviews it once; the daemon binds it by digest; drift fails closed.
+reviews it once; the daemon binds it by digest; drift fails closed, except
+for a merged workflow change accepted as above.
 
 Publication authenticates as a per-user agent principal under Section [10](#10-operations-and-onboarding)'s
 GitHub App identity model. Every trusted registration is bound to that principal
@@ -2202,7 +2281,11 @@ the profile-approved operation. The response is untrusted until Freeside
 verifies that it names exactly that repository, grants no permission beyond the
 approved effective set, includes every permission the operation requires, and
 has the expected bounded expiry. A missing or mismatched field discards the
-token before any worker can receive it and fails closed.
+token before any worker can receive it and fails closed. GitHub refuses a
+push that changes a workflow file unless the token holds `workflows: write`,
+so the publication set includes it under an `advisory` profile and never
+under `block`. Only the daemon's publication path holds that token; no ward
+and no agent-run process ever receives it (not yet built, #3125).
 
 The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) mints its own
 narrowed token: `issues: write` and `metadata: read` for the one target
@@ -2250,9 +2333,11 @@ Exactly two channels leave the agent workspace, and they never mix:
    group into commits, in what order, with what messages, carried as plain
    untrusted data whose schema only the importer interprets and validates,
    never as git objects. The channel permits regular files only. Symlinks,
-   submodules, special files, unusual modes, and automation-control changes
-   (Section [5.5](#55-the-ci-trust-boundary)) are publish-blocking; a reviewer-instruction change
-   (Section [5.8](#58-control-plane-trust)) is detected and published as an advisory finding.
+   submodules, special files, and unusual modes are publish-blocking.
+   Automation-control changes (Section [5.5](#55-the-ci-trust-boundary)) are
+   publish-blocking unless the trust profile marks them advisory (not yet
+   built, #3125); then they publish as an advisory finding, as a
+   reviewer-instruction change (Section [5.8](#58-control-plane-trust)) does.
 2. The **evidence channel** carries typed, provenance-bearing artifacts under
    Section [5.15](#515-evidence-and-images).
 
@@ -3261,8 +3346,12 @@ Review independence does not rest on a block. The implementing agent and the
 Freeside-invoked reviewer both compose their instructions from the exact trusted
 base, so the candidate's copy cannot govern its own review. A merged edit
 governs later runs, and the human merge gate, reading the surfaced advisory, is
-the judgment point for that. Every other control-plane category stays
-publish-blocking and non-waivable (Section [3.1](#31-autonomy-inside-the-ward)).
+the judgment point for that. Automation-control follows the trust profile
+(Section [5.5](#55-the-ci-trust-boundary); the advisory value is not yet
+built, #3125). Every other control-plane category
+is publish-blocking and non-waivable on the paths the profile protects
+(Section [3.1](#31-autonomy-inside-the-ward)); the owner decides which paths
+those are at profile review.
 
 ### 5.9 Durability: Effectively Once
 
@@ -6755,6 +6844,12 @@ existing registration gains it only when its owner accepts the permission
 change on GitHub (#1416). Until then the comment ends as a definite refusal and
 nothing else changes.
 
+Every registration also requests `workflows: write`, for publication under
+an `advisory` trust profile (Section [5.5](#55-the-ci-trust-boundary)). An
+existing registration gains it only when its owner accepts the permission
+change on GitHub; until then a workflow edit under `advisory` ends as a
+definite refusal (not yet built, #3125).
+
 Registration uses the manifest flow, and the initial key lands directly in
 protected storage. Each additional machine receives a distinct private key
 within the registration. For each machine, Freeside computes and records a
@@ -6850,8 +6945,8 @@ requirement, and infrequent workflow or instruction-file changes. Ordinary
 repository features such as tag-only release automation belong in the audited,
 digest-bound trust profile. They are not prose exceptions.
 
-**Freeside follows gh-imgup and manages its whole repository (revisions 92
-and 113).** After the first completed unattended run on gh-imgup (the wave 8
+**Freeside follows gh-imgup and manages its whole repository (revisions 92,
+113, and 118).** After the first completed unattended run on gh-imgup (the wave 8
 exit proof), Freeside is onboarded as a managed repository for every path but
 `images/`, `app/` included, so no task needs a judgment of its edit set
 before Freeside takes it; writer work that itself needs macOS keeps the
@@ -6864,12 +6959,13 @@ verifies the Linux-clean checks and the macOS verification executor verifies
 the Apple-only ones, both networkless under the criteria above (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Toolchains and
 macOS Execution).
-Control-plane paths stay operator-authored, including those inside the
-onboarded directories (verification recipes such as `scripts/check.sh`, and
-the materiality rules in this plan): the accepted hot spot in Section
-[3.2](#32-the-interruption-budget) stands, and a control-plane modification
-stays non-waivable under Section [3.1](#31-autonomy-inside-the-ward). The
-work runs on the ad hoc tracker #2873, starts by fiat, and does not gate the
+Freeside's trust profile protects no repository-specific path and marks
+automation-control advisory (owner, 2026-11-11; not yet built, #3123 and
+#3125), so agents may edit verification recipes such as `scripts/check.sh`,
+the materiality rules in this plan, and CI workflows. The owner accepts what
+follows: a candidate that edits a check script is graded by its own edit,
+and the plan's materiality gate rests on the owner's review of the pull
+request. The work runs on the ad hoc tracker #2873, starts by fiat, and does not gate the
 1B.1 exit.
 
 **macOS execution: Linux-first cores and a credential-free verifier (revision
@@ -7316,9 +7412,12 @@ Safety failures are:
 - an agent reaches a privileged host service;
 - output escapes either gauntlet channel;
 - untrusted PR code receives privileged CI authority, including secrets,
-  writable tokens, or OIDC, without an explicit gate;
+  writable tokens, or OIDC, without an explicit gate (the owner's review of
+  an `advisory` profile is one, Section [5.5](#55-the-ci-trust-boundary));
 - candidate automation-control changes reach publication through the ordinary
-  workflow;
+  workflow under a trust profile that blocks them;
+- the daemon accepts a workflow change that no merged, surfaced
+  Freeside pull request explains (once #3140 builds acceptance);
 - a stale mobile decision takes effect;
 - a crash produces uncontrolled duplicates or advances a workflow twice;
 - concurrent work corrupts provider authentication;
@@ -7347,21 +7446,58 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 117 ("The Daemon Names Its Features to Any Caller"):
+Revision 118 ("A Profile May Publish Workflow Edits; a Merge Reviews Them; Freeside Protects No Path"):
 
-1. **`/health` lists the features the daemon's build serves, so an unpaired
-   caller learns them.** This narrows Section
-   [5.2](#52-the-daemon-and-its-supervisor)'s rule that the route tells an
-   unpaired caller nothing beyond liveness, the contract digest, the
-   version, and the start time. The names describe the build, as the
-   version already does, and reveal no state. `/health` is the read the
-   app already makes to diagnose a skew, and revision 116's feature
-   advertisement needs a read the app can make each sync round; an
-   authenticated feature route would add a second read per round for
-   names the version already implies.
+1. **A trust profile may mark automation-control advisory.** Under
+   `candidate_automation_changes: advisory`, a candidate edit to
+   `.github/workflows/**` or any other automation-control path publishes,
+   surfaced as an advisory finding the way a reviewer-instruction edit is
+   (Section [5.5](#55-the-ci-trust-boundary)). `block` stays the default,
+   detection stays a widen-only minimum, and only profile review sets the
+   value. The owner accepts that the candidate's workflow runs in CI before
+   review, with whatever authority the repository's settings give a
+   pull-request job. Rejected: keeping the block and editing workflows by
+   hand, and a hold that waits for approval before publishing. This
+   overturns revision 7 item 1's universal block.
+2. **Under such a profile, the owner's merge reviews the workflow change it
+   carried.** The daemon accepts the default branch's new workflow files
+   with no profile review only when a merged, surfaced Freeside pull
+   request explains every difference unchanged, nothing else the audit
+   records moved, the audit stays inside every limit, and no workflow's
+   token could have made the merge. Everything else stays drift
+   and fails closed, and acceptance leaves the profile's digest, and so
+   every run in flight, alone. The owner accepts that whoever may merge can
+   accept a workflow change, that accepted changes add up without a fresh
+   review of the whole surface, and that workflow scripts and remote
+   actions on mutable refs stay unpinned. Rejected: a profile review after
+   every merged workflow edit, which is a pause beyond the pull request;
+   accepting any new digest unchecked, which also accepts a direct push;
+   and pinning repository settings instead of workflow content, which
+   misses privileged jobs on other triggers.
+3. **Repository-specific protection is a profile-review choice, and
+   Freeside's profile protects none** (Sections
+   [3.1](#31-autonomy-inside-the-ward), [5.8](#58-control-plane-trust),
+   and [11](#11-roadmap-build-order-and-coordination)). A protected path
+   still blocks with no per-run waiver. A Freeside candidate that edits a
+   check script is graded by its own edit, and the plan's materiality gate
+   rests on the owner's review of the pull request. This overturns the
+   "control-plane paths stay operator-authored" sentence of revisions 92
+   and 113 and narrows revision 42's "every other control-plane category
+   stays blocking and non-waivable".
+4. **Every registration requests `workflows: write`, and the publication
+   token carries it only under `advisory`** (Sections
+   [5.5](#55-the-ci-trust-boundary) and
+   [10](#10-operations-and-onboarding)). GitHub refuses a workflow push
+   without it, and only the daemon's publication path holds it.
 
-(Owner decision of 2026-11-11 on #1266, a planning default not vetoed;
-[decision note](../devlog/2026-11-11-1640-additive-contract-tolerance.md).)
+Nothing in this revision is built yet: #3125 builds the option and the
+token, on tracker #3132; #3123 drops Freeside's protected paths, on tracker
+#2873; and #3140, not yet scheduled, builds the acceptance of merged
+workflow changes and the advisory's job list.
+
+(Owner decisions of 2026-11-11 on #3132 and #3123, and of 2026-11-12, in
+chat, on #3124;
+[decision note](../devlog/2026-11-12-0840-advisory-automation-control.md).)
 ## 14. Risks
 
 | Risk | Current response |
@@ -7369,7 +7505,7 @@ Revision 117 ("The Daemon Names Its Features to Any Caller"):
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected`, held by owner decision (revision 103), would remove the token from the writer and bound a leak to the run's own provider use on declared paths; the search channel would remain. |
 | Provider traffic terminated at the control plane under `subscription_injected` | Held by owner decision (revision 103): nothing runs this design until a revision lifts the hold, and the rest of this row is the held design's response. The proxy holds no durable key: a per-run CA, discarded at teardown; the identity's token stays on the credential volume and in the run's proxy memory. It substitutes the placeholder on the declared provider authorities and paths only, refuses credential shape anywhere else and every refresh or account path, verifies the provider's certificate against the system roots with the server name pinned, admits only the run's network, and records every substitution without bodies. The owner accepts what the provider now sees: the daemon's TLS and HTTP client in place of the vendor CLI's, which a provider's bot defence may treat differently; the egress address is unchanged, since the daemon host already originates every tunnel. Residual: a compromised writer still spends the run's identity, request by request, visibly. The subscription-terms judgment on a substituting proxy is the owner's, per vendor. For Claude it is one reason for the hold: with a subscription token, Anthropic would see the daemon's TLS and HTTP client sending Claude Code's requests, close to the Usage Policy's bar on services that "route requests through consumer subscriptions or misrepresent the product or client being used" (effective 2026-11-12). |
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable; no wider escape is offered while `api_key_isolated` is held (revision 103). Under the held `subscription_injected` design the registry tunnel would be unchanged, but the writer would hold no provider token for such a publish to carry. |
-| CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
+| CI privilege crossing | Attest effective authority; block candidate automation changes by default; fail closed on drift, except a workflow change that a merged, surfaced Freeside pull request explains (Section [5.5](#55-the-ci-trust-boundary); not yet built, #3125 and #3140); prohibit the daemon host as a runner. Residuals under an `advisory` profile: a candidate's workflow runs before review with whatever authority the repository's settings give a pull-request job, can merge a pull request where the branch rules let its token, and can rewrite the pull request's body, advisory section included. So the owner keeps secrets, environments, runners, and merging out of reach of pull-request jobs before opting in, and acceptance counts the advisory on the ready card, which no candidate can edit. And the profile's limits don't describe jobs on other triggers, so the advisory's job list and the owner's merge are the check on those. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipes v2 and v3 (Section [5.15](#515-evidence-and-images)) render authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
@@ -7393,7 +7529,7 @@ Revision 117 ("The Daemon Names Its Features to Any Caller"):
 | Backup confidentiality | Require encryption policy and exclude credentials by default. |
 | Large Phase 1A scope | Order it into three internal exits. |
 | Reviewer monoculture | Require a fresh-context adversarial review at every implementation wave exit. |
-| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths and surface instruction-path edits; enforce egress floors; keep the specifier off the web, with allowlisted sources fetched by the daemon and web search done by a researcher that sees only the research questions (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); gate irreversible actions; use budgets and brakes. Residual: search results come from the open web, not an allowlist, so a research report can carry injected text to the specifier. The report is input and never authority, and the specifier's ward still connects only to its provider. An injected researcher can leak only what its ward holds, the questions and its credential. Also residual: an injected specifier can write task or repository text into its research questions, which leave as search queries; the daemon bounds and secret-scans the questions, which narrows that channel without closing it. And `provider_only` does not withhold provider-side search from the implementation and review launches (#1659). |
+| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths by default, or surface them as advisories where the trust profile says so (not yet built, #3125), and surface instruction-path edits; enforce egress floors; keep the specifier off the web, with allowlisted sources fetched by the daemon and web search done by a researcher that sees only the research questions (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); gate irreversible actions; use budgets and brakes. Residual: search results come from the open web, not an allowlist, so a research report can carry injected text to the specifier. The report is input and never authority, and the specifier's ward still connects only to its provider. An injected researcher can leak only what its ward holds, the questions and its credential. Also residual: an injected specifier can write task or repository text into its research questions, which leave as search queries; the daemon bounds and secret-scans the questions, which narrows that channel without closing it. And `provider_only` does not withhold provider-side search from the implementation and review launches (#1659). |
 
 ## 15. Naming and References
 

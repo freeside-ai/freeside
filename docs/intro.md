@@ -229,7 +229,8 @@ when their YAML names no secret. Every managed repository gets an audited
 **automation trust profile** that describes what a pull-request job can
 actually do. Freeside locks the profile to the reviewed version, stops opening
 pull requests if the repository's automation changes without review, and keeps
-unreviewed candidate code out of secret-bearing CI.
+unreviewed candidate code out of secret-bearing CI unless you opt the
+repository in to agent workflow edits (planned, not yet built).
 
 **Instructions are the second.** Prompts, policy, verification checks, and
 files like `AGENTS.md` load only from an approved commit, never from an agent's
@@ -242,7 +243,9 @@ copy never governs its own review. A candidate that edits a
 reviewer-instruction file such as `AGENTS.md` still publishes. The edit is
 surfaced as an advisory finding in a PR-body section the candidate's prose
 cannot forge; you judge it at merge, and the edit governs only later runs.
-Changes to CI and other automation-control paths still block publication.
+Changes to CI and other automation-control paths block publication unless
+the repository's trust profile marks them advisory (planned, not yet built);
+then they publish with the same kind of surfaced finding.
 Guarded is not frozen: what agents learn flows back into prompts and policy
 through the same reviewed, gated path as any other change.
 
