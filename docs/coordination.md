@@ -518,6 +518,8 @@ rules:
 - **Maintainer-only actions** (repo settings, credentials, App
   administration) get **`needs-human`**. Self-selecting
   sessions and future scan initiators never pick up `needs-human` issues.
+  The lander's pull-request hand-back is `needs-rework` (AGENTS.md, Landing
+  Record), not `needs-human`.
 - **No milestone at escalation.** Open + `deferral` + no milestone is the
   unscheduled queue; the planner schedules eligible items during wave planning's
   deferral sweep and skips `needs-human`, which remains unmilestoned and
