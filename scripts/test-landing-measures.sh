@@ -248,8 +248,11 @@ with tempfile.TemporaryDirectory() as repo:
     # label. #61's label came with no comment within the hour; its earlier
     # comment is a review reply. #62 was handed back before the window.
     # Someone else's comment just before the label is not the hand-back.
+    # #60 to #62 use `needs-human`, the hand-back label before #3126, so a
+    # window from before the switch keeps its hand-backs; #63 uses the
+    # current `needs-rework`, and neither label reads as the reason.
     handed = [pr(60, t(0), "a", closed=t(23)), pr(61, t(0), "a"),
-              pr(62, t(0), "a")]
+              pr(62, t(0), "a"), pr(63, t(0), "a")]
     handed_timelines = {
         60: [comment(3, "Swapping `approved` for `needs-human`: landing "
                         "stopped at `rebase-conflict` in `x.txt`; choose "
@@ -264,15 +267,18 @@ with tempfile.TemporaryDirectory() as repo:
              labeled(9, "needs-human")],
         62: [comment(1, "`checks-failed`", user="owner"),
              {**labeled(1, "needs-human", minute=5),
-              "created_at": "2026-08-31T23:00:00Z"}]}
+              "created_at": "2026-08-31T23:00:00Z"}],
+        63: [comment(10, "Swapping `approved` for `needs-rework`: "
+                         "`checks-failed` on the refreshed head.", user="owner"),
+             labeled(10, "needs-rework", minute=1)]}
     hand_back_failures = m.landing_failures(snapshot(handed, timelines=handed_timelines))
     expect("hand-backs",
            [(h["number"], h["reason"]) for h in hand_back_failures["hand_backs"]],
            [(60, "rebase-conflict"), (60, "Stopped at step 2."),
-            (61, "(no hand-back comment)")])
+            (61, "(no hand-back comment)"), (63, "checks-failed")])
     expect("hand-back reasons", hand_back_failures["hand_back_reasons"],
            [("rebase-conflict", 1, [60]), ("Stopped at step 2.", 1, [60]),
-            ("(no hand-back comment)", 1, [61])])
+            ("(no hand-back comment)", 1, [61]), ("checks-failed", 1, [63])])
 
     # Measure 2's rebase records and measure 4. #42 carries the lander's
     # range-diff comment; #43's only range-diff mention is Codex's.
@@ -398,9 +404,11 @@ with tempfile.TemporaryDirectory() as repo:
             raise AssertionError(f"render lacks {text!r}")
     page = m.render(snapshot(handed), hand_back_failures, conflicts, records,
                     approval_waits, [], top=20)
-    for text in ("handed back 3 times", "on 2 PRs.",
+    for text in ("handed back 4 times",
+                 "(`needs-rework` or `needs-human`, the label before #3126, "
+                 "label events in the window) on 3 PRs.",
                  "- Handed back: #60 (rebase-conflict), #60 (Stopped at step 2.), "
-                 "#61 ((no hand-back comment))",
+                 "#61 ((no hand-back comment)), #63 (checks-failed)",
                  "| 1 | rebase-conflict | #60 |",
                  "- Approved to merge: 2 PRs, median 2.0 h, p90 2.0 h; "
                  "longest #70 (2.0 h), #74 (2.0 h).",

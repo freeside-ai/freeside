@@ -28,8 +28,9 @@ What each measure reads:
    startup_failure; cancelled runs (the concurrency groups cancel on the
    next push) do not count. Failing runs are grouped by workflow, job, and
    first failing step, from the run's latest attempt. Also: every hand-back
-   by the lander (land-approved-prs), read as a `needs-human` label event
-   in the window on any PR, keyed by the reason in the hand-back comment
+   by the lander (land-approved-prs), read as a `needs-rework` label event
+   (or `needs-human`, the hand-back label before #3126) in the window on
+   any PR, keyed by the reason in the hand-back comment
    the same actor posted in the hour before the label: the first
    backticked guard-shaped token (`rebase-conflict`, `checks-failed`), else
    the comment's first line.
@@ -70,8 +71,10 @@ What it cannot see:
   omits the word is missed. A lander comment counts only when posted before
   the merge, though the skill's order comments after it (#2362).
 - A hand-back comment has no fixed format; the reason is a heuristic read of
-  it, and a `needs-human` label with no comment by the same actor in the
+  it, and a hand-back label with no comment by the same actor in the
   previous hour reads as "(no hand-back comment)".
+- Both hand-back labels count, so a `needs-human` label put on a PR after
+  the switch to `needs-rework` reads as a hand-back.
 - A label actor's role is read when the script runs, not when the label was
   added, the same reading the lander's list uses.
 - GitHub records no close reason for a PR; measure 4 lists, it does not
@@ -121,9 +124,12 @@ TIMELINE_EVENTS = {"ready_for_review", "convert_to_draft", "closed",
                    "commented", "labeled", "unlabeled"}
 # The landing record in AGENTS.md: the lander takes PRs labelled APPROVAL by
 # a collaborator at or above the Approver permission and hands them back
-# with HAND_BACK after a comment that names the guard or reason.
+# with a hand-back label after a comment that names the guard or reason.
+# The lander handed back with `needs-human` until #3126 gave the hand-back
+# its own label (devlog/2026-11-12-1004-lander-hand-back-label.md); the old
+# label still counts so a window from before the switch keeps its history.
 APPROVAL_LABEL = "approved"
-HAND_BACK_LABEL = "needs-human"
+HAND_BACK_LABELS = ("needs-rework", "needs-human")
 BASE_ROLES = {"read", "triage", "write", "maintain", "admin"}
 APPROVER_ROLES = {"write", "maintain", "admin"}
 HAND_BACK_COMMENT_WINDOW = dt.timedelta(hours=1)
@@ -519,22 +525,22 @@ def failing_steps(run_record, jobs):
 
 def hand_back_reason(body):
     """The guard or reason a hand-back comment names: its first backticked
-    guard-shaped token that is not one of the two labels, else its first
-    line."""
+    guard-shaped token that is not the approval or a hand-back label, else
+    its first line."""
     for match in GUARD_TOKEN.finditer(body or ""):
-        if match.group(1) not in (APPROVAL_LABEL, HAND_BACK_LABEL):
+        if match.group(1) not in (APPROVAL_LABEL, *HAND_BACK_LABELS):
             return match.group(1)
     lines = [line.strip() for line in (body or "").splitlines() if line.strip()]
     return " ".join(lines[0].split())[:120] if lines else "(empty comment)"
 
 
 def pr_hand_backs(pr, events):
-    """Every HAND_BACK label event on one PR, whenever it happened, with the
+    """Every hand-back label event on one PR, whenever it happened, with the
     reason from the comment the same actor posted in the hour before it,
     oldest first."""
     found = []
     for e in events:
-        if e["event"] != "labeled" or e.get("label") != HAND_BACK_LABEL:
+        if e["event"] != "labeled" or e.get("label") not in HAND_BACK_LABELS:
             continue
         at = parse_time(e["created_at"])
         comments = [c for c in events if c["event"] == "commented"
@@ -847,7 +853,8 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
            f"`{meta['default_branch']}`. Every workflow counts, not only "
            f"the required check. The lander handed back "
            f"{len(failures['hand_backs'])} times "
-           f"(`{HAND_BACK_LABEL}` label events in the window) on "
+           f"(`needs-rework` or `needs-human`, the label before #3126, "
+           f"label events in the window) on "
            f"{len({h['number'] for h in failures['hand_backs']})} PRs.", ""]
     for label, key in (("Sent back", "sent_back"), ("Merged red", "merged_red"),
                        ("Re-run to green", "reran"),
@@ -907,7 +914,7 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
     out += ["", "## 4. Discarded work", "",
             f"{len(discards)} PRs closed unmerged. GitHub records no close "
             f"reason; classify each by hand. Last hand-back is the lander's "
-            f"reason for the last `{HAND_BACK_LABEL}` label before the close, "
+            f"reason for the last hand-back label before the close, "
             "whenever it was added.",
             ""]
     if discards:
@@ -928,7 +935,7 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
             "posted after the merge does not (#2362).",
             "- A hand-back comment has no fixed format: its reason is the "
             "first backticked guard-shaped token, else its first line, and "
-            f"a `{HAND_BACK_LABEL}` label with no comment by the same actor "
+            f"a hand-back label with no comment by the same actor "
             "in the previous hour reads as no comment.",
             "- A label actor's role is read when the script runs, not when "
             "the label was added.",
