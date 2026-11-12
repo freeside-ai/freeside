@@ -149,6 +149,7 @@ func (a *GitHubWorkflowAuditor) Audit(ctx context.Context, repoName, baseRef str
 				SecretBearingPRJobs: facts.SecretBearingPRJobs, PullRequestTarget: facts.PullRequestTarget,
 				ReusableWorkflows: facts.ReusableWorkflows, SelfHostedRunners: facts.SelfHostedRunners,
 				PackagePublishing: facts.PackagePublishing, ArtifactConsumers: facts.ArtifactConsumers,
+				IssueCommentWorkflows: facts.IssueCommentWorkflows,
 			}
 			if err := audit.Validate(); err != nil {
 				return domain.WorkflowAudit{}, fmt.Errorf("workflow audit: construct observation: %w", err)
@@ -201,6 +202,10 @@ func (a *GitHubWorkflowAuditor) collect(ctx context.Context, repo repoRef, sha, 
 		actionSources = append(actionSources, localActionSource{Path: action.Path, Content: action.Content})
 	}
 	facts, err := analyzeWorkflows(sources, actionSources, defaultPerms, secretEnvironments, runners)
+	if err != nil {
+		return workflowAuditEvidence{}, workflowFacts{}, err
+	}
+	facts.IssueCommentWorkflows, err = issueCommentWorkflows(sources, actionSources)
 	if err != nil {
 		return workflowAuditEvidence{}, workflowFacts{}, err
 	}

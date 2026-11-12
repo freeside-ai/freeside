@@ -25,6 +25,9 @@ type workflowFacts struct {
 	ReusableWorkflows   bool
 	PackagePublishing   bool
 	ArtifactConsumers   bool
+	// IssueCommentWorkflows is filled by issueCommentWorkflows, not
+	// analyzeWorkflows: it lists workflows rather than deriving a privilege.
+	IssueCommentWorkflows []domain.IssueCommentWorkflow
 }
 
 type workflowSource struct {
