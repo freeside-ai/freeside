@@ -3,7 +3,17 @@
 /// Identity of the api/openapi.yaml this client was built from.
 public enum APIContract {
     /// "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes.
-    /// The client compares this with the daemon's reported digest on
-    /// GET /health to diagnose a client/daemon contract skew.
-    public static let digest = "sha256:725a62f50609b77986c04037293c2c3b0ec9549ebe4248a84b384ff4c97ec91f"
+    /// It names the contract for diagnosis; compatibility comes from the
+    /// level and floor below, never from a digest difference.
+    public static let digest = "sha256:38081e2b36591a4b81f588c8ecafd8f2771c1de389a94f1f7e5f56ed9797456a"
+
+    /// The spec's x-compatibility-level: the count of changes that broke
+    /// apps built before them. A daemon whose reported floor is above it
+    /// is too new for this app; a daemon whose reported level is below it
+    /// is too old.
+    public static let compatibilityLevel = 0
+
+    /// The spec's x-compatibility-floor: the lowest app level a daemon
+    /// built from this spec serves.
+    public static let compatibilityFloor = 0
 }

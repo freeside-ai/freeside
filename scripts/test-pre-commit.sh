@@ -100,6 +100,12 @@ STUB
 }
 
 # setup_repo builds a fresh in-sync fixture and sets REPO, BINDIR, ARGSFILE.
+# fixture_spec <schema>: a spec body api-contract-digest.sh accepts, which
+# needs the compatibility level and floor under info (#3109).
+fixture_spec() {
+  printf 'info:\n  x-compatibility-level: 0\n  x-compatibility-floor: 0\nschema: %s\n' "$1"
+}
+
 # The initial commit predates core.hooksPath, so it bypasses the hook.
 setup_repo() {
   REPO=$TMP/case$case_number
@@ -117,7 +123,7 @@ setup_repo() {
     "$REPO/app/Sources/FreesideAPI/GeneratedSources" \
     "$REPO/app/scripts" "$REPO/scripts" \
     "$REPO/daemon/internal/signet" "$REPO/.githooks"
-  printf 'schema: v1\n' >"$REPO/api/openapi.yaml"
+  fixture_spec v1 >"$REPO/api/openapi.yaml"
   cp "$REPO/api/openapi.yaml" "$REPO/app/Sources/FreesideAPI/openapi.yaml"
   printf 'generator: config\n' \
     >"$REPO/app/Sources/FreesideAPI/openapi-generator-config.yaml"
@@ -196,7 +202,7 @@ assert_trees_equal() { # <expected-dir> <actual-dir>
 
 begin_case "schema edit staged without regeneration is refused, then succeeds"
 setup_repo
-printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
+fixture_spec v2 >"$REPO/api/openapi.yaml"
 git -C "$REPO" add api/openapi.yaml
 commit_git commit -q -m 'Change the schema'
 assert_rc 1
@@ -210,7 +216,7 @@ assert_rc 0
 
 begin_case "schema edit with regenerated output staged succeeds"
 setup_repo
-printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
+fixture_spec v2 >"$REPO/api/openapi.yaml"
 cp "$REPO/api/openapi.yaml" "$REPO/app/Sources/FreesideAPI/openapi.yaml"
 { printf 'generated-from:\n'; cat "$REPO/api/openapi.yaml"; } \
   >"$REPO/app/Sources/FreesideAPI/GeneratedSources/Types.swift"
@@ -268,9 +274,9 @@ assert_file_absent "$ARGSFILE"
 
 begin_case "unstaged input edits are refused before generation"
 setup_repo
-printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
+fixture_spec v2 >"$REPO/api/openapi.yaml"
 git -C "$REPO" add api/openapi.yaml
-printf 'schema: v3-unstaged\n' >"$REPO/api/openapi.yaml"
+fixture_spec v3-unstaged >"$REPO/api/openapi.yaml"
 commit_git commit -q -m 'Change the schema'
 assert_rc 1
 assert_contains 'stage or stash'
@@ -279,7 +285,7 @@ assert_file_absent "$ARGSFILE"
 
 begin_case "a deleted generated file is reported as drift"
 setup_repo
-printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
+fixture_spec v2 >"$REPO/api/openapi.yaml"
 git -C "$REPO" add api/openapi.yaml
 rm "$REPO/app/Sources/FreesideAPI/GeneratedSources/Client.swift"
 commit_git commit -q -m 'Change the schema'
@@ -288,7 +294,7 @@ assert_contains 'app/Sources/FreesideAPI/GeneratedSources/Client.swift'
 
 begin_case "default mode in a checkout reports a schema edit as drift"
 setup_repo
-printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
+fixture_spec v2 >"$REPO/api/openapi.yaml"
 set +e
 OUT=$(PATH="$BINDIR:$PATH" \
   bash "$REPO/app/scripts/generate-api-client.sh" 2>&1)
@@ -307,7 +313,7 @@ assert_trees_equal "$TMP/before$case_number" "$EXPORT"
 
 begin_case "no-git: a schema edit without regeneration is drift"
 setup_export
-printf 'schema: v2\n' >"$EXPORT/api/openapi.yaml"
+fixture_spec v2 >"$EXPORT/api/openapi.yaml"
 generate_export
 assert_rc 1
 assert_contains 'Generated API client changed'
@@ -348,7 +354,7 @@ mv "$EXPORT" "$TMP/outer$case_number/tree"
 EXPORT=$TMP/outer$case_number/tree
 generate_export
 assert_rc 0
-printf 'schema: v2\n' >"$EXPORT/api/openapi.yaml"
+fixture_spec v2 >"$EXPORT/api/openapi.yaml"
 generate_export
 assert_rc 1
 assert_contains 'app/Sources/FreesideAPI/openapi.yaml'

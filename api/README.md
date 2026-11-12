@@ -11,7 +11,7 @@ The task's `wip` field supplies admission membership independently of display.
 - **Toolchain:** OpenAPI (spec only).
 - **Scope boundary:** the spec and nothing else. Generated code lives with its consumers (`daemon/`, `app/`), never here. Any spec change is treated as a migration.
 - **Status:** `openapi.yaml` holds the **provisional** schema for the §5.14 sync surface (bootstrap snapshot, attention/runs/conversations read surfaces, ClientCommand submission, digest-addressed attachment upload), provisional until exercised by real clients (plan §11 Wave 0; decision record in `docs/history/decisions.md`). The daemon serves this surface (`daemon/internal/signet/http.go`) and the Swift client consumes the generated client under `app/Sources/FreesideAPI`. Schemas mirror `daemon/internal/domain` field-for-field; entity examples are lifted from that package's golden files so the linter proves they validate.
-- **Contract digest:** `scripts/api-contract-digest.sh` computes the contract identity, `sha256:` plus the lowercase hex SHA-256 of `openapi.yaml`'s exact bytes, and `--write` writes it into two compiled-in constants (`daemon/internal/signet/contract_digest.go`, `app/Sources/FreesideAPI/ContractDigest.swift`). The daemon reports it on `GET /health` (`contract_digest`); the Mac client compares it with its own to diagnose a client/daemon build skew instead of a silent sync failure (#1265). `scripts/check.sh api digest` (which runs `--check`), the daemon's `TestContractDigestMatchesSpec`, and the app's `generate` drift check all fail when the spec changes without regenerating the constants; `app/scripts/generate-api-client.sh` runs `--write` so a client regeneration refreshes them together.
+- **Contract digest:** `scripts/api-contract-digest.sh` computes the contract identity, `sha256:` plus the lowercase hex SHA-256 of `openapi.yaml`'s exact bytes, and `--write` writes it into two compiled-in constants (`daemon/internal/signet/contract_digest.go`, `app/Sources/FreesideAPI/ContractDigest.swift`). The same files carry the spec's compatibility level and floor (Compatibility Level below), so `--write` refreshes all three. The daemon reports the digest on `GET /health` (`contract_digest`) to name its contract; no client treats a digest difference alone as a skew. `scripts/check.sh api digest` (which runs `--check`), the daemon's `TestContractDigestMatchesSpec`, and the app's `generate` drift check all fail when the spec changes without regenerating the constants; `app/scripts/generate-api-client.sh` runs `--write` so a client regeneration refreshes them together.
 - **Validate:** from the repo root:
 
   ```sh
@@ -51,6 +51,36 @@ the way in.
   `response-enums-list-unknown`. They read the unresolved
   document (`resolved: false`), because vacuum's resolved document inlines
   every `$ref` and so hides which schema a response reaches.
+
+## Compatibility Level
+
+An app keeps working against any daemon that still serves it, and refuses
+plainly when it can't (#3109). Two integers under `info` in `openapi.yaml`
+carry the rule; `scripts/api-contract-digest.sh` compiles both into the
+daemon and the app beside the digest, and `GET /health` reports them as
+`compatibility_level` and `compatibility_floor`.
+
+- **The level counts breaking changes.** `x-compatibility-level` rises by
+  one with a change that breaks an app built before it: a response field
+  removed or retyped, a response enum member removed, a one-value response
+  enum widened, a new arm in a response union, a request field made
+  required or removed, a route or response status removed. An additive
+  change, the kind Response Tolerance above makes safe, leaves it alone.
+  It never goes down.
+- **The floor is the oldest app a daemon serves.** `x-compatibility-floor`
+  is the lowest app level a daemon built from the spec still serves. A
+  breaking change raises it to the new level, unless the daemon
+  deliberately keeps serving the old shape. It never goes down and never
+  exceeds the level.
+- **The app decides; the daemon never refuses on version.** An app whose
+  level is below the daemon's floor stops syncing, sends no command, and
+  asks the operator to update the app. An app whose level is above the
+  daemon's level asks for a daemon update the same way. Every other pair
+  syncs, with the feature list turning off what an older daemon lacks. A
+  daemon that omits both fields reads as level 0, floor 0. The two fields
+  and the rest of `HealthStatus` an app reads never change shape: an app
+  that can't decode `/health` can't learn it was refused, and keeps
+  syncing as if no verdict had come.
 
 ## Task Cancellation Contract
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,10 +48,14 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	startedAt := time.Date(2026, 8, 10, 12, 13, 14, 0, time.UTC)
-	// A configured digest or feature list is overridden, not served.
+	// A configured digest, compatibility level or floor, or feature list is
+	// overridden, not served.
 	handler := signet.NewHTTPHandler(f.service, nil, signet.HealthResponse{
 		Status: "ok", Version: "v1.2.3", StartedAt: startedAt,
-		ContractDigest: "sha256:configured", Features: []domain.DaemonFeature{"configured_feature"},
+		ContractDigest:     "sha256:configured",
+		CompatibilityLevel: signet.APIContractCompatibilityLevel + 7,
+		CompatibilityFloor: signet.APIContractCompatibilityFloor + 5,
+		Features:           []domain.DaemonFeature{"configured_feature"},
 	})
 	response := bearerRequest(t, handler, http.MethodGet, "/health", "", nil)
 	if response.Code != http.StatusOK {
@@ -60,18 +65,23 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode health: %v", err)
 	}
-	if len(body) != 5 {
-		t.Fatalf("health keys = %v, want exactly status, contract_digest, features, version, started_at", body)
+	if len(body) != 7 {
+		t.Fatalf("health keys = %v, want exactly status, contract_digest, compatibility_level, compatibility_floor, features, version, started_at", body)
 	}
-	// The handler forces the contract digest to the compiled-in constant and
-	// the features to the registry, so no caller can serve a digest that
-	// disagrees with the built spec or a feature the build doesn't serve.
+	// The handler forces the contract digest, compatibility level, and floor
+	// to the compiled-in constants and the features to the registry, so no
+	// caller can serve an identity or compatibility that disagrees with the
+	// built spec or a feature the build doesn't serve.
 	wantDigest := `"` + signet.APIContractDigest + `"`
+	wantLevel := strconv.Itoa(signet.APIContractCompatibilityLevel)
+	wantFloor := strconv.Itoa(signet.APIContractCompatibilityFloor)
 	wantFeatures, err := json.Marshal(domain.AllDaemonFeatures)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(body["status"]) != `"ok"` || string(body["contract_digest"]) != wantDigest ||
+		string(body["compatibility_level"]) != wantLevel ||
+		string(body["compatibility_floor"]) != wantFloor ||
 		string(body["features"]) != string(wantFeatures) ||
 		string(body["version"]) != `"v1.2.3"` ||
 		string(body["started_at"]) != `"2026-08-10T12:13:14Z"` {
