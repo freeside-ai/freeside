@@ -72,6 +72,10 @@ type Engine struct {
 
 	// triageMu serializes specifier triage calls (triageSpecifier).
 	triageMu sync.Mutex
+	// startedRoots holds the root implementation invocations this process
+	// started (domain.InvocationID keys). Their loss is a live failure, not
+	// one a restart caused, so it keeps its card (daemon_rerun.go).
+	startedRoots sync.Map
 	// artifacts reads persisted agent evidence by digest (a blocked
 	// implementer's decisions). It is the blob store the configured
 	// workflows already share; the first workflow option that carries one

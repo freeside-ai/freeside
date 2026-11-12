@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
@@ -23,8 +24,9 @@ var drainEpoch = time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 // drainLogRow is one row of the update drain log, read raw so a test can see
 // a lifted row's build, which no store read returns.
 type drainLogRow struct {
-	State domain.UpdateDrainState
-	Build domain.Digest
+	State  domain.UpdateDrainState
+	Build  domain.Digest
+	Forced bool
 }
 
 func readDrainLog(t *testing.T, dbPath string) []drainLogRow {
@@ -34,7 +36,7 @@ func readDrainLog(t *testing.T, dbPath string) []drainLogRow {
 		t.Fatal(err)
 	}
 	defer db.Close() //nolint:errcheck // test cleanup
-	rows, err := db.QueryContext(t.Context(), `SELECT state, build FROM update_drain_transitions ORDER BY id`)
+	rows, err := db.QueryContext(t.Context(), `SELECT state, build, forced FROM update_drain_transitions ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +44,7 @@ func readDrainLog(t *testing.T, dbPath string) []drainLogRow {
 	log := []drainLogRow{}
 	for rows.Next() {
 		var row drainLogRow
-		if err := rows.Scan(&row.State, &row.Build); err != nil {
+		if err := rows.Scan(&row.State, &row.Build, &row.Forced); err != nil {
 			t.Fatal(err)
 		}
 		log = append(log, row)
@@ -233,12 +235,20 @@ func TestUpdateDrainTransitionsSurviveACrashOnEitherSide(t *testing.T) {
 		want  []drainLogRow
 	}
 	request := func(d UpdateDrain) error { _, err := d.Request(t.Context()); return err }
+	force := func(d UpdateDrain) error {
+		_, err := d.Force(t.Context(), func(context.Context) error { return nil })
+		return err
+	}
 	cancel := func(d UpdateDrain) error { _, err := d.Cancel(t.Context()); return err }
 	lift := func(d UpdateDrain) error { _, err := d.LiftForBuild(t.Context()); return err }
 	none := func(UpdateDrain) error { return nil }
 	drained := []drainLogRow{{State: domain.UpdateDrainDraining, Build: drainOldBuild}}
 	steps := []step{
 		{DurableTransitionUpdateDrainRequest, none, request, drainOldBuild, drained},
+		{
+			DurableTransitionUpdateDrainRequest, request, force, drainOldBuild,
+			append(drained[:1:1], drainLogRow{State: domain.UpdateDrainDraining, Build: drainOldBuild, Forced: true}),
+		},
 		{
 			DurableTransitionUpdateDrainCancel, request, cancel, drainOldBuild,
 			append(drained[:1:1], drainLogRow{State: domain.UpdateDrainLifted, Build: drainOldBuild}),
@@ -345,5 +355,136 @@ func TestBeginUnlessDrainingEndsTheCountOnRefusal(t *testing.T) {
 	}
 	if got := running.Counts(); len(got) != 0 {
 		t.Fatalf("counts after a refusal = %v, want none", got)
+	}
+}
+
+// TestUpdateDrainForceWritesOneForcedRow: a force over a plain drain appends
+// one forced draining row and a repeat writes none, while its cancellation
+// runs every time. A plain request over a forced drain writes nothing.
+func TestUpdateDrainForceWritesOneForcedRow(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	st := storetest.Open(t, dbPath, store.Options{})
+	now := drainEpoch
+	drain := newDrain(st, drainOldBuild, &now)
+	cancels := 0
+	cancel := func(context.Context) error { cancels++; return nil }
+	if _, err := drain.Request(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	forced, err := drain.Force(t.Context(), cancel)
+	if err != nil || !forced.Forced || !forced.OccurredAt.Equal(now) {
+		t.Fatalf("force over a plain drain = %+v, %v; want a forced drain from %s", forced, err, now)
+	}
+	now = now.Add(time.Minute)
+	again, err := drain.Force(t.Context(), cancel)
+	if err != nil || again != forced {
+		t.Fatalf("repeated force = %+v, %v; want the first forced drain %+v", again, err, forced)
+	}
+	if kept, err := drain.Request(t.Context()); err != nil || kept != forced {
+		t.Fatalf("request over a forced drain = %+v, %v; want the forced drain %+v", kept, err, forced)
+	}
+	want := []drainLogRow{
+		{State: domain.UpdateDrainDraining, Build: drainOldBuild},
+		{State: domain.UpdateDrainDraining, Build: drainOldBuild, Forced: true},
+	}
+	if log := readDrainLog(t, dbPath); !reflect.DeepEqual(log, want) {
+		t.Fatalf("drain log = %+v, want %+v", log, want)
+	}
+	if cancels != 2 {
+		t.Fatalf("cancellation ran %d times, want once per force", cancels)
+	}
+}
+
+// TestForcedDrainCancelsAndHoldsTheRerun: a forced drain cancels a running
+// root implementation invocation. Its next attempt carries the cancel
+// reason, holds under update_drain while the drain is in force, and starts
+// once it lifts; the chain's loss count stays zero.
+func TestForcedDrainCancelsAndHoldsTheRerun(t *testing.T) {
+	t.Parallel()
+	f := newRunningCampaignFixture(t)
+	drain := UpdateDrain{Store: f.store, Build: drainOldBuild, Now: func() time.Time { return f.now.UTC() }}
+	if _, err := drain.Force(t.Context(), f.engine.CancelRootImplementations); err != nil {
+		t.Fatal(err)
+	}
+	f.collect(t, f.run, f.attempt)
+	second := f.wantRerun(t, 2, f.run, daemonCancelRerunReason)
+	if losses := f.chainLosses(t, second); losses != 0 {
+		t.Fatalf("chain losses after a forced drain = %d, want 0", losses)
+	}
+
+	f.driver.Script(productionInvocationID(second.ID), stillRunning)
+	if err := dispatchParked(t, f, second); !errors.Is(err, store.ErrUpdateDrainInForce) {
+		t.Fatalf("dispatch under the drain = %v, want ErrUpdateDrainInForce", err)
+	}
+	if hold, held := holdOn(t, f, second.ID); !held || hold.Reason != domain.HoldUpdateDrain {
+		t.Fatalf("re-run hold = %+v (held %t), want update_drain", hold, held)
+	}
+	if _, err := drain.Cancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatchParked(t, f, second); err != nil {
+		t.Fatalf("dispatch after the lift = %v, want the re-run to start", err)
+	}
+}
+
+// TestForcedDrainSurvivesACrashOnEitherSide models process loss at the
+// forced drain's cancellation seams. Before the cancellation the same-build
+// drain stays in force across the restart, and the restart itself loses the
+// writer, so its re-run counts as a loss. After it the writer is already
+// canceled, so its re-run does not count. Either way exactly one re-run is
+// allocated, and the drain holds it.
+func TestForcedDrainSurvivesACrashOnEitherSide(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		side   DurableTransitionSide
+		reason string
+		losses int
+	}{
+		{DurableTransitionBefore, daemonLossRerunReason, 1},
+		{DurableTransitionAfter, daemonCancelRerunReason, 0},
+	} {
+		t.Run(string(tc.side), func(t *testing.T) {
+			t.Parallel()
+			f := newRunningCampaignFixture(t)
+			injected := errors.New("injected process loss")
+			drain := UpdateDrain{
+				Store: f.store, Build: drainOldBuild, Now: func() time.Time { return f.now.UTC() },
+				TransitionHook: func(transition DurableTransition, side DurableTransitionSide) error {
+					if transition == DurableTransitionUpdateDrainForce && side == tc.side {
+						return injected
+					}
+					return nil
+				},
+			}
+			if _, err := drain.Force(t.Context(), f.engine.CancelRootImplementations); !errors.Is(err, injected) {
+				t.Fatalf("force with a crash %s = %v, want the injected loss", tc.side, err)
+			}
+			f = f.restart(t)
+			restarted := UpdateDrain{Store: f.store, Build: drainOldBuild, Now: func() time.Time { return f.now.UTC() }}
+			if lifted, err := restarted.LiftForBuild(t.Context()); err != nil || lifted {
+				t.Fatalf("same-build lift = %t, %v; want the drain kept", lifted, err)
+			}
+			if drain := drainState(t, f.store); drain == nil || !drain.Forced {
+				t.Fatalf("drain after the restart = %+v, want the forced drain in force", drain)
+			}
+			f.collect(t, f.run, f.attempt)
+			second := f.wantRerun(t, 2, f.run, tc.reason)
+			if losses := f.chainLosses(t, second); losses != tc.losses {
+				t.Fatalf("chain losses = %d, want %d", losses, tc.losses)
+			}
+			if _, err := restarted.Force(t.Context(), f.engine.CancelRootImplementations); err != nil {
+				t.Fatalf("repeat force after the restart = %v", err)
+			}
+			f.collect(t, f.run, f.attempt)
+			if _, found := f.attemptRun(t, 3); found {
+				t.Fatal("the repeat allocated a second re-run")
+			}
+			f.driver.Script(productionInvocationID(second.ID), stillRunning)
+			if err := dispatchParked(t, f, second); !errors.Is(err, store.ErrUpdateDrainInForce) {
+				t.Fatalf("dispatch under the drain = %v, want ErrUpdateDrainInForce", err)
+			}
+		})
 	}
 }

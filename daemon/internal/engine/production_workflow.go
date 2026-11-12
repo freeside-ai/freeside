@@ -1702,8 +1702,23 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 	// parked is the hold a quota refusal parks the run's next attempt under,
 	// in place of the failure card (quotaParkHold).
 	var parked *domain.QuotaWindowHold
+	// rerun is the attempt reason of the daemon re-run that answers a lost or
+	// canceled root invocation, in place of the failure card
+	// (daemonRerunReason); "" when there is none.
+	var rerun string
+	// A terminal a daemon re-run may answer is a durable transition: the
+	// terminal and the next attempt commit together or not at all.
+	rerunBoundary := completion == nil && daemonRerunCandidate(run, terminal)
+	_, startedHere := e.startedRoots.Load(terminal.InvocationID)
+	if rerunBoundary {
+		if err := runDurableTransitionHook(e.transitionHook(),
+			DurableTransitionDaemonRerun, DurableTransitionBefore); err != nil {
+			return false, err
+		}
+	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
 		parked = nil
+		rerun = ""
 		if terminal.Status == exec.StatusCompleted {
 			// Repeat the current-policy gate in the terminal write
 			// transaction. The earlier check closes the driver-call window;
@@ -1749,14 +1764,18 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			if err != nil {
 				return err
 			}
-			// A parked quota refusal raises no card: the next attempt waits
-			// under a hold instead. The outcome above still records the cause.
+			// A parked quota refusal or a daemon re-run raises no card: the
+			// next attempt takes its place. The outcome above still records
+			// the cause.
 			if completion == nil {
 				if parked, err = quotaParkHold(ctx, tx, e.agentSelection(), run, terminal, createdAt); err != nil {
 					return err
 				}
+				if rerun, err = daemonRerunReason(ctx, tx, run, terminal, startedHere); err != nil {
+					return err
+				}
 			}
-			if parked == nil {
+			if parked == nil && rerun == "" {
 				if facts != nil && e.admission != nil {
 					policy, policyErr := tx.GetResolvedPolicy(ctx, run.ID)
 					admission, admissionErr := tx.GetExecutionAdmissionRecord(ctx, terminal.InvocationID)
@@ -1824,6 +1843,11 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 				return err
 			}
 		}
+		if rerun != "" {
+			if err := rerunProductionAttempt(ctx, tx, run, rerun); err != nil {
+				return err
+			}
+		}
 		if completion != nil {
 			completionTerminal := terminal
 			completionTerminal.InvocationID = completion.TerminalInvocationID
@@ -1863,8 +1887,15 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 	if err != nil {
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
 	}
+	e.startedRoots.Delete(terminal.InvocationID)
+	if rerunBoundary {
+		if err := runDurableTransitionHook(e.transitionHook(),
+			DurableTransitionDaemonRerun, DurableTransitionAfter); err != nil {
+			return false, err
+		}
+	}
 	if inserted && terminal.Status != exec.StatusCompleted && terminal.Status != exec.StatusBlocked &&
-		parked == nil && e.inference != nil {
+		parked == nil && rerun == "" && e.inference != nil {
 		// A diagnostic claim is advisory-only. Failure to produce or retain one
 		// cannot roll back the durable failure fact or make the engine unavailable.
 		workCtx, finish, workErr := e.beginTaskWork(ctx, run)

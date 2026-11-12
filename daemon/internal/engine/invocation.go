@@ -799,6 +799,9 @@ func (e *Engine) dispatchAdmittedIntent(
 		}
 	} else {
 		startedNow = true
+		if invocationID == productionInvocationID(binding.run.ID) {
+			e.startedRoots.Store(invocationID, struct{}{})
+		}
 	}
 	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {

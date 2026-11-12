@@ -2230,9 +2230,12 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 	case ward.RecoveryLoss:
 		// Every runtime object was proven absent with nothing released, so
 		// the invocation ends with no result: Collect reports ErrNoResult and
-		// the production lane records a gone terminal with its
-		// execution_failure item (the deterministic per-run invocation id
-		// means the engine does not mint a fresh attempt).
+		// the production lane records a gone terminal. The proof above
+		// comes first, so when a restart lost a run's root implementation
+		// invocation the engine allocates the run's next attempt in place of
+		// the execution_failure item, under a per-chain limit (issue #3105);
+		// a loss the starting process sees, or of any other invocation,
+		// keeps the item.
 		return d.commitLost(ctx, in.InvocationID)
 	case ward.RecoveryFailed:
 		result, err := d.failedWriterResult(ctx, in, recovered, hs.Size)

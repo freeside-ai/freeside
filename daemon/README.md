@@ -774,7 +774,8 @@ retry-only states an explicit reconcile-pass bound. It runs under ordinary
   `internal/integration/production_publication_test.go` owns verification,
   review request/result, publication, ready-item, and terminal rows plus the
   registry-completeness check; `internal/engine/update_drain_test.go` owns
-  the update drain's request, cancel, and lift rows.
+  the update drain's request, cancel, lift, and force rows; and
+  `internal/engine/daemon_rerun_test.go` owns the daemon re-run row.
 - `internal/exec/stage/recovery_test.go` is the sibling registry for seed
   handoff and execution export. Its durable phases feed the deeper per-phase
   recovery fixtures that assert single handoff, credential attachment, export,
@@ -1899,7 +1900,8 @@ fake lane, or a scenario.
 is running and start nothing new, so an update can replace it without
 cutting work short (#3104): drain, poll until the daemon reads ready, then
 swap the build. `freesided drain -db <database> -status`
-changes nothing, and `-cancel` lifts the drain by hand. Each form prints the
+changes nothing, `-cancel` lifts the drain by hand, and `-force` drains
+without waiting (below). Each form prints the
 daemon's restart readiness as one JSON object on stdout, the shape
 `GET /restart-readiness` serves: `ready`, the drain in force, and the
 blockers still running by kind.
@@ -1926,6 +1928,42 @@ blockers still running by kind.
   the old build. An operator stop is a separate gate and survives the lift.
 - **It needs a running daemon.** On a database no daemon holds it refuses
   without opening the store: there is nothing to drain.
+- **`-force` cancels the running writers.** It records a forced drain
+  (over a plain drain, one more row; over a forced one, none), then cancels
+  every root implementation invocation that has no terminal yet. Other
+  work, such as remediation rounds, reviews, and verification, still runs
+  to its end. An admitted attempt that had not started when the force ran
+  starts anyway; a repeat `-force` cancels it.
+
+### Daemon Re-Runs
+
+When the daemon itself ends a production run's root implementation
+invocation, the engine allocates the run's next attempt on the same
+campaign, with no `execution_failure` card and no operator step (#3105).
+Two endings count as the daemon's:
+
+- **Lost to a restart.** Restart recovery proves the invocation's runtime
+  gone and releases its auth-store lease before it records the loss, so the
+  re-run never starts beside a live writer. Its attempt reason is `Lost to a
+  daemon restart; re-run from its base.` Only an invocation an earlier
+  process started counts. Ward also records a loss when a writer outlives
+  its stop budget, refuses to start, or loses its provider proxy; the
+  process that started it sees that loss, and it keeps its card.
+- **Canceled by a shutdown or a forced drain**, on a task with no stop and
+  an open workflow. Its attempt reason is `Canceled by a daemon shutdown or
+  forced drain; re-run from its base.` A drain in force holds that attempt
+  under `update_drain` until the new build lifts it.
+
+A chain of daemon re-runs re-runs at most two losses; the third loss raises
+the ordinary card. The count is read from the attempts' lineage, so it
+survives restarts. Cancellations never count, so routine updates can't
+exhaust it, and they don't break the chain either. An operator retry or a
+quota park starts a new chain. Only the campaign's latest attempt re-runs.
+A lost remediation round or operator-feedback invocation keeps its card,
+because a fresh attempt starts from the run's base and would discard the
+reviewed work. A quarantined stage intent records no terminal, so it never
+re-runs. The new attempt passes dispatch's admission re-gate like any
+other.
 
 ### Repair A Quarantined Stage Intent
 

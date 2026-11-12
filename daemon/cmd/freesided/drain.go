@@ -24,6 +24,9 @@ type drainAction string
 const (
 	// drainRequest puts an update drain in force, or keeps the one in force.
 	drainRequest drainAction = "request"
+	// drainForce puts a forced drain in force, or keeps the one in force,
+	// and cancels every running root implementation invocation.
+	drainForce drainAction = "force"
 	// drainCancel lifts the drain in force, if any.
 	drainCancel drainAction = "cancel"
 	// drainStatus changes nothing.
@@ -31,22 +34,26 @@ const (
 )
 
 // allDrainActions registers every drainAction.
-var allDrainActions = []drainAction{drainRequest, drainCancel, drainStatus}
+var allDrainActions = []drainAction{drainRequest, drainForce, drainCancel, drainStatus}
 
 func (a drainAction) valid() bool {
 	switch a {
-	case drainRequest, drainCancel, drainStatus:
+	case drainRequest, drainForce, drainCancel, drainStatus:
 		return true
 	default:
 		return false
 	}
 }
 
-// runDrainMain implements `freesided drain -db <database> [-cancel | -status]`
-// (issue #3104). With no flag it asks the running daemon to drain for an
-// update: it starts no new work and lets what runs finish. -cancel lifts the
-// drain and -status changes nothing. Each form prints the daemon's restart
-// readiness as JSON, so the installer can poll -status until it reads ready.
+// runDrainMain implements
+// `freesided drain -db <database> [-force | -cancel | -status]` (issue
+// #3104). With no flag it asks the running daemon to drain for an update: it
+// starts no new work and lets what runs finish. -force drains too, and
+// cancels every running root implementation invocation instead of waiting
+// for it; each gets its next attempt, held until the drain lifts (issue
+// #3105). -cancel lifts the drain and -status changes nothing. Each form
+// prints the daemon's restart readiness as JSON, so the installer can poll
+// -status until it reads ready.
 //
 // It needs a running daemon and never opens the store itself: the drain
 // holds what a running daemon launches, and a daemon that isn't running has
@@ -73,6 +80,8 @@ func parseDrainCommand(args []string, stderr io.Writer) (drainCommandConfig, err
 	flags := flag.NewFlagSet("freesided drain", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path of the running daemon (required)")
+	force := flags.Bool("force", false,
+		"drain and cancel every running implementation, which re-runs once the drain lifts")
 	cancel := flags.Bool("cancel", false, "lift the update drain in force")
 	status := flags.Bool("status", false, "print restart readiness without changing anything")
 	if err := flags.Parse(args); err != nil {
@@ -81,10 +90,19 @@ func parseDrainCommand(args []string, stderr io.Writer) (drainCommandConfig, err
 	if flags.NArg() != 0 {
 		return drainCommandConfig{}, fmt.Errorf("unexpected positional arguments: %v", flags.Args())
 	}
-	if *cancel && *status {
-		return drainCommandConfig{}, errors.New("-cancel and -status are exclusive")
+	chosen := 0
+	for _, set := range []bool{*force, *cancel, *status} {
+		if set {
+			chosen++
+		}
+	}
+	if chosen > 1 {
+		return drainCommandConfig{}, errors.New("-force, -cancel, and -status are exclusive")
 	}
 	cfg := drainCommandConfig{DBPath: *dbPath, Action: drainRequest}
+	if *force {
+		cfg.Action = drainForce
+	}
 	if *cancel {
 		cfg.Action = drainCancel
 	}
@@ -140,9 +158,11 @@ func runDrainCommand(ctx context.Context, cfg drainCommandConfig) (signet.Restar
 // updateDrainInDaemon applies action inside the running daemon, then reads
 // restart readiness after it. The control socket's peer check already limits
 // callers to the daemon's account, so the drain needs no other binding: it
-// holds work and grants nothing.
+// holds work and grants nothing. cancelRoots is a forced drain's
+// cancellation (engine.Engine.CancelRootImplementations).
 func updateDrainInDaemon(
-	ctx context.Context, drain engine.UpdateDrain, attention *signet.Service, action drainAction,
+	ctx context.Context, drain engine.UpdateDrain, cancelRoots func(context.Context) error,
+	attention *signet.Service, action drainAction,
 ) (signet.RestartReadinessResponse, error) {
 	if !action.valid() {
 		return signet.RestartReadinessResponse{}, fmt.Errorf("drain: unknown action %q", action)
@@ -151,6 +171,10 @@ func updateDrainInDaemon(
 	case drainRequest:
 		if _, err := drain.Request(ctx); err != nil {
 			return signet.RestartReadinessResponse{}, fmt.Errorf("drain: %w", err)
+		}
+	case drainForce:
+		if _, err := drain.Force(ctx, cancelRoots); err != nil {
+			return signet.RestartReadinessResponse{}, fmt.Errorf("drain: force: %w", err)
 		}
 	case drainCancel:
 		if _, err := drain.Cancel(ctx); err != nil {
