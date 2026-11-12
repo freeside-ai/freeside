@@ -951,8 +951,8 @@ func droppedDial(context.Context, string, string) (net.Conn, error) {
 	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}
 }
 
+//nolint:paralleltest // Serial: probes a just-freed loopback port as idle; a parallel test's bind could take it first.
 func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
-	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener
 	if err != nil {
 		t.Fatal(err)
