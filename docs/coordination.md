@@ -140,10 +140,35 @@ comment lease is subsumed (no further expiry), retaining the comment's
 `created_at` and numeric ID when arbitration needs its ordering key. Closing
 that PR unmerged releases the claim; merging closes the issue normally.
 
+Freeside's specification comment
+([docs/plan.md §5.11](plan.md#the-specification-comment)) is also a claim,
+the daemon's. The project's Freeside App posts it on a label-intake task's
+bound issue when the daemon accepts the task's specification. It carries the
+same marker and a `Claim:` line that names the task, not a branch, because
+the daemon can't know its publication branch that early:
+
+```text
+<!-- freeside-work-claim:v1 -->
+Claim: freeside-task-<task-id>
+```
+
+A daemon claim has no 48-hour lease and no PR handoff, because a task can run
+for days before it publishes. It stands until the daemon edits the comment to
+remove the marker, which is its release, or until a person deletes the
+comment; a closed issue needs no claim. The daemon releases it when the task
+ends with no open pull request of its own for the issue. It posts no release
+comment, and a release comment naming the daemon's comment releases nothing;
+an edit that removes the marker is the one comment edit that changes claim
+state. The daemon never reads claims and won't stop for one, so a daemon claim
+wins arbitration against any other claim on the unit, whatever their order. A
+session that finds one releases its own claim, stops, and reports the overlap
+to the owner.
+
 The active claim for a unit is therefore: a non-expired, unreleased comment
 lease; or an open PR from the lease's branch with the issue's close keyword;
-or, during the transition from the previous protocol, a legacy open PR
-claiming the unit with a `Claim #N` commit or close keyword. A legacy open PR
+or a daemon claim whose marker is still present on an open issue; or, during
+the transition from the previous protocol, a legacy open PR claiming the unit
+with a `Claim #N` commit or close keyword. A legacy open PR
 with no claim comment uses its PR `created_at` and numeric PR ID only when
 deterministic ordering is needed; a lease-backed PR always retains its claim
 comment's key. A bare cross-reference (`Refs #N`) is never a claim. One claim
@@ -152,8 +177,18 @@ claim commits; drop any legacy one in the next branch rewrite (the fold-fix
 rules under Commits). Claim state is verified, never assumed: a comment or PR
 API read or write failure at any step fails closed, and work does not begin (or
 continue past the failed step) while claim state cannot be verified.
-Collaborator comments are trusted; adversarial comment editing is outside this
-protocol's threat model.
+
+A claim, release, or reservation marker counts only when its author is the
+repository's owner, a member, or a collaborator (author association `OWNER`,
+`MEMBER`, or `COLLABORATOR`), or is the bot account of the project's own
+Freeside App, identified by its numeric account ID. GitHub reports an App's
+comments with an author association outside those three, so the App needs its
+own rule. The App's marker counts only as a daemon claim, a work-claim marker
+whose `Claim:` line names a `freeside-task-` task; it never posts release or
+reservation markers, and its other comments claim nothing. A claimant ignores
+any other author's marker, and any other App marker, and reports it.
+Adversarial comment editing by a counted author is outside this protocol's
+threat model.
 
 `scripts/trackercollect unit` (its README) may collect the evidence these
 reads use: the issue's typed Dependencies, its claim and reservation state
@@ -162,7 +197,9 @@ issue. It is optional and replaces none of the reads or gates here. Run it
 afresh for the read after posting a claim. An `UNKNOWN` entry in its report
 means that state is not established. Its `exclusive-with` output and its
 `contracts` subcommand's cap and label checks predate the current rules and
-gate nothing (#2357).
+gate nothing (#2357). Until #1738 lands, it never counts the App's marker and
+reports it as an untrusted author instead, so read a daemon claim from the
+issue itself.
 
 `needs-human` deferrals use the fiat door defined under Deferral escalation,
 never self-selection: after the maintainer acts, fiat assigns the issue to a
@@ -221,6 +258,14 @@ authoritative project policy, and dependencies and current code reality may
 invalidate a plan assumption. Implementation executes the plan rather than
 replanning it, but surfaces any such conflict and follows the authoritative
 source.
+
+Only the planning stage's comment is an implementation plan. Freeside's
+specification comment
+([docs/plan.md §5.11](plan.md#the-specification-comment)) is not one: it is
+screened agent text written for the issue's readers, and it leaves out the
+research, owner answers, and implementation detail a planning-stage plan
+carries. `Handle #N, implementation plan in comments` never accepts it as the
+plan; a session that handles such an issue reads it as context.
 
 Apply AGENTS.md's Forge Edits policy throughout planning and recovery. The
 existing reservation coordinates cooperating sessions; it is not a forge lock.
