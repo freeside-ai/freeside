@@ -466,6 +466,15 @@ func scenarioConfig(t *testing.T, played *daemoncompose.Scenario) config {
 // repository and approves the specification from a paired device.
 func submitAndApproveScenario(t *testing.T, h *daemon, cfg config) submitResult {
 	t.Helper()
+	submitted := submitScenario(t, h, cfg)
+	approveScenarioSpecification(t, h, submitted.RunID)
+	return submitted
+}
+
+// submitScenario submits the inputs the scenario wrote beside its repository
+// and records the device that approves its specification.
+func submitScenario(t *testing.T, h *daemon, cfg config) submitResult {
+	t.Helper()
 	inputs := filepath.Join(filepath.Dir(cfg.DBPath), "scenario")
 	submitted, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		DBPath: cfg.DBPath, TaskPath: filepath.Join(inputs, "task.md"),
@@ -484,7 +493,14 @@ func submitAndApproveScenario(t *testing.T, h *daemon, cfg config) submitResult 
 	}); err != nil {
 		t.Fatalf("put device: %v", err)
 	}
-	approval := waitForScenarioItem(t, h.Attention, domain.ItemID("spec-approval-"+string(submitted.RunID)+"-1"))
+	return submitted
+}
+
+// approveScenarioSpecification approves the run's specification from the
+// device submitScenario recorded, once its approval item is open.
+func approveScenarioSpecification(t *testing.T, h *daemon, run domain.RunID) {
+	t.Helper()
+	approval := waitForScenarioItem(t, h.Attention, scenarioSpecApprovalItem(run))
 	if _, err := h.Attention.Submit(t.Context(), signet.ClientCommand{
 		CommandID: "approve-scenario", DeviceID: "device-scenario", ExpectedEntityVersion: approval.EntityVersion,
 		Payload: signet.DecisionPayload{
@@ -494,7 +510,11 @@ func submitAndApproveScenario(t *testing.T, h *daemon, cfg config) submitResult 
 	}); err != nil {
 		t.Fatalf("approve specification: %v", err)
 	}
-	return submitted
+}
+
+// scenarioSpecApprovalItem names the run's first specification-approval item.
+func scenarioSpecApprovalItem(run domain.RunID) domain.ItemID {
+	return domain.ItemID("spec-approval-" + string(run) + "-1")
 }
 
 // waitForScenarioRun waits for the run the approved specification starts.

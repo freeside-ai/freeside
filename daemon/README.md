@@ -847,6 +847,90 @@ daemon, delete its state root `~/Library/Application Support/Freeside Dev/`,
 and reinstall with `app/scripts/install-mac-app.sh dev --daemon-path
 <freesided>`. An `ephemeral` root is disposable already; start a new one.
 
+A migration also adds a fixture set to the stored-state corpus (Stored-State
+Corpus, next).
+
+## Stored-State Corpus
+
+Every build must read what earlier builds stored: start on their database,
+show its history, and finish the work that was in flight. The corpus in
+`cmd/freesided/testdata/stored-corpus/` proves it on every pull request.
+Each fixture is the stopped root of a `-driver scenario` daemon that a real
+earlier build ran (Run A Scenario). `TestStoredCorpusResumes` starts the
+current scenario daemon on a copy of each one, reads every task timeline,
+run, run timeline, and attention item through the signet service, then
+carries the case's work to a published pull request. It fails on a fixture
+it can't migrate, start, read, or resume, on a durable stop, on an empty
+corpus, and on a case it doesn't know.
+
+**The ratchet.** A pull request that adds a migration, or changes a stored
+JSON body or its version, adds a fixture set written by the build before it:
+the `origin/main` commit the branch started from. Every fixture stays in the
+corpus; only the owner prunes one. A newer database opened by an older build
+is out of scope, because the daemon refuses it. After a rebase, replace the
+branch's set with one written from the new merge base, so its name stays a
+`main` commit.
+
+The resume replays each case on the current build's named scenario, so the
+scenario worlds and the fakes' state formats are corpus inputs too: change
+them only in ways every fixture still resumes through.
+
+**Add a fixture set.** From the branch checkout's repo root:
+
+```sh
+git fetch origin
+base="$(git merge-base origin/main HEAD)"
+git worktree add --detach ../corpus-base "$base"
+(cd ../corpus-base/daemon &&
+  FREESIDE_STORED_CORPUS_OUT="$OLDPWD/daemon/cmd/freesided/testdata/stored-corpus" \
+    go test ./cmd/freesided -run '^TestWriteStoredCorpus$' -count=1)
+git worktree remove ../corpus-base
+```
+
+`TestWriteStoredCorpus` skips unless `FREESIDE_STORED_CORPUS_OUT` is set. It
+refuses a `daemon/` tree with uncommitted changes and an existing fixture
+directory, plays each case on its own scenario daemon, and writes
+`<YYYYMMDD>-<sha12>/<case>/`, named for the build's commit date (in the
+commit's own time zone) and SHA. A
+case directory holds:
+
+- `freeside.db.gz`: the closed database, compacted with `VACUUM INTO`.
+- `freeside.db.blobs/`: the blob store.
+- `scenario/stage-driver/` and, once the case reached a review,
+  `scenario/review-source/`: the scenario fakes' durable state, which stands in for the driver's and reviewer's own
+  records. A resume needs it, because the engine re-checks every recorded
+  attempt of an open run against the driver.
+- `fixture.json`: the full build commit, the applied migration count, the
+  case, when and how it was produced, and the task and run the resume
+  continues.
+
+No fixture holds a credential, a pairing code, or the ntfy topic key. The
+producer deletes the pairing code each start mints and refuses a database
+with a `pairing_codes` or `device_credentials` row, or any stored value or
+file that names its temporary root or `$HOME`; the test checks both tables again. The
+reader writes a fresh topic key beside each copy and never writes to a
+committed fixture.
+
+**The cases.** Each stops the daemon with work in flight:
+
+- `spec-approval`: a run between its specification and implementation
+  stages, waiting on an open specification-approval item. The resume
+  approves it.
+- `quota-park`: an implementation attempt parked on a provider quota
+  window. The resume records an allowed reading if the park still holds.
+- `publication-pending`: a production publication task, verified, stopped
+  just before its review request through the scenario's
+  `PublicationTransitionHook`. A later stop can't move to another root: a
+  review request's authority binds the review workspace's absolute path,
+  and the resume rebuilds that path under the new root. So the corpus
+  doesn't yet cover a recorded review (#3115).
+
+**Add a case** in one change: a stop point in `storedCorpusProducers`
+(`stored_corpus_write_test.go`), and the scenario and resume step in
+`storedCorpusCases` (`stored_corpus_test.go`). The producer refuses a case
+set that differs from the test's. Fixture sets from earlier builds won't
+have the new case; the first set written after the change will.
+
 ## Local Test Runs on a Shared Machine
 
 `bash scripts/check.sh daemon test` runs at most one local test step at once

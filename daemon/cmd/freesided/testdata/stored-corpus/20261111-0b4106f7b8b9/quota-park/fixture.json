@@ -1,0 +1,9 @@
+{
+  "build_commit": "0b4106f7b8b95eaa19c301d94213677abfdfc650",
+  "schema_version": 134,
+  "case": "quota-park",
+  "produced_at": "2026-11-11T23:17:24Z",
+  "produced_by": "FREESIDE_STORED_CORPUS_OUT=<corpus> go test ./cmd/freesided -run '^TestWriteStoredCorpus$' -count=1",
+  "task_id": "task-5CCC6NP375XFZR7KYKKOQ3U44U",
+  "run_id": "run-d60fe6d12b7473e5231706697b4a4452bccf7205ac79abf9d4f2a32c0f32628a"
+}
