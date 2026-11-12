@@ -4020,8 +4020,8 @@ recorded before execution.
 
 ### Onboard Freeside
 
-Freeside onboards itself for its whole repository except `images/` (plan
-§11, revisions 92 and 113). It runs the `freesided onboard` flow above with
+Freeside onboards itself for its whole repository (plan §11, revisions
+92, 113, and 120). It runs the `freesided onboard` flow above with
 these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
@@ -4064,15 +4064,20 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   with the flags this section used to list needs a fresh onboarding review,
   because the approval digest binds them.
 - **Deputy scope:** set the deputy's `repository.allowed_paths` to every
-  top-level entry but `images/`:
+  top-level entry:
 
   ```json
   [".agents/**", ".claude/**", ".freeside/**", ".githooks/**", ".github/**",
    ".git-blame-ignore-revs", ".gitattributes", "AGENTS.md", "CLAUDE.md",
    "CONTRIBUTING.md", "LICENSE", "LICENSING-PHILOSOPHY.md", "README.md",
-   "api/**", "app/**", "daemon/**", "devlog/**", "docs/**", "policy/**",
-   "prompts/**", "scripts/**"]
+   "api/**", "app/**", "daemon/**", "devlog/**", "docs/**", "images/**",
+   "policy/**", "prompts/**", "scripts/**"]
   ```
+
+  The `paths` key of the policy file `freesided submit -policy` reads holds
+  the same list in the same order: `admissionauth.ResolvedPathAllowlist`
+  refuses any difference, so change both together while no task is in
+  flight.
 
   Allowed doesn't lift the importer's built-in classes. An edit to
   `AGENTS.md`, `CLAUDE.md`, `.claude/**`, or `.agents/skills/**` draws an
@@ -4083,6 +4088,25 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   change still fails the recipe's `api digest` step: its fix is a
   regenerated client, and `app generate` needs the network the writer's
   room lacks, so schema work stays human-run.
+- **Image changes:** a task may edit `images/`, but nothing in Freeside
+  builds or adopts an image from it (plan §11, revision 120). The recipe
+  checks an image change only through `TestHarnessBuildsMatchTheImagePins`
+  and `TestClaudeImageDisablesEveryBuiltinPlugin` in `scripts/check.sh
+  daemon`, which read the agent bases' CLI pins and the Claude base's
+  managed settings; nothing in a ward builds an image. A merged change
+  reaches use only when the operator runs the matching
+  `scripts/build-*-image.sh`, checks an agent base with
+  `scripts/check-agent-image.sh`, and re-pins it in the deputy's settings:
+  the exporter in `images.exporter`, and the reviewer's base in
+  `images.review` (the Codex base unless `agent_tree.review_harness` is
+  `claude_code`). A new Claude base reaches a writer only through a
+  project image onboarded on it; `images.agent` only seeds an absent
+  admitted-image pointer, so setting the bare base there changes nothing
+  for an onboarded repository. Preflight refuses an agent image whose CLI
+  disagrees with the daemon's pin. A Claude CLI bump also needs the new
+  bundle's built-in plugins measured from the binary, which a writer's
+  room under `provider_only` egress can't fetch, and a live adapter
+  re-proof; both stay operator steps until agent-base upkeep (#2338).
 
 ### Run Real Work With The Deputy
 

@@ -41,6 +41,16 @@ ward resolves a digest only through a registry (Apple `container` 1.1.0 does
 not resolve a local-only digest). The scripts therefore fail before building
 when neither registry mode is selected.
 
+## Changes Through Freeside
+
+A Freeside task may edit this directory, but no Freeside path builds or
+adopts an image from it, and no task builds the image it runs in (plan §11).
+A merged change reaches use only through the operator: build the image,
+check an agent base with `scripts/check-agent-image.sh`, and re-pin its
+digest. Agent-base upkeep (#2338) is the deferred route that would build and
+admit a base without the operator. `daemon/README.md` (Onboard Freeside)
+says what the recipe checks and what stays operator work.
+
 ## Build Egress
 
 `RUN` steps never egress through Apple container's vmnet guest NAT. Every
