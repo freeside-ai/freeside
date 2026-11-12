@@ -45,7 +45,7 @@
 //   - daemon_rerun.go the next attempt of a root implementation invocation
 //     the daemon's own restart, shutdown, or forced drain ended (#3105)
 //   - update_drain.go, running_work.go
-//     the update drain's request, cancel, and lift, and the count of
+//     the update drain's request, cancel, lift, and force, and the count of
 //     in-process work a restart would cut short
 //   - capability_manifest.go, capability_retry.go
 //     the capability choices a failed writer card offers and their retries

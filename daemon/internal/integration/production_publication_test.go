@@ -4867,6 +4867,7 @@ func TestProductionTransitionMatrixRegistersEveryEngineBoundary(t *testing.T) {
 		engine.DurableTransitionUpdateDrainRequest: true,
 		engine.DurableTransitionUpdateDrainCancel:  true,
 		engine.DurableTransitionUpdateDrainLift:    true,
+		engine.DurableTransitionUpdateDrainForce:   true,
 		// The daemon re-run's matrix is in internal/engine's
 		// daemon_rerun_test.go.
 		engine.DurableTransitionDaemonRerun: true,

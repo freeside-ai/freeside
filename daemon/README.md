@@ -774,7 +774,7 @@ retry-only states an explicit reconcile-pass bound. It runs under ordinary
   `internal/integration/production_publication_test.go` owns verification,
   review request/result, publication, ready-item, and terminal rows plus the
   registry-completeness check; `internal/engine/update_drain_test.go` owns
-  the update drain's request, cancel, and lift rows; and
+  the update drain's request, cancel, lift, and force rows; and
   `internal/engine/daemon_rerun_test.go` owns the daemon re-run row.
 - `internal/exec/stage/recovery_test.go` is the sibling registry for seed
   handoff and execution export. Its durable phases feed the deeper per-phase
@@ -1900,7 +1900,8 @@ fake lane, or a scenario.
 is running and start nothing new, so an update can replace it without
 cutting work short (#3104): drain, poll until the daemon reads ready, then
 swap the build. `freesided drain -db <database> -status`
-changes nothing, and `-cancel` lifts the drain by hand. Each form prints the
+changes nothing, `-cancel` lifts the drain by hand, and `-force` drains
+without waiting (below). Each form prints the
 daemon's restart readiness as one JSON object on stdout, the shape
 `GET /restart-readiness` serves: `ready`, the drain in force, and the
 blockers still running by kind.
@@ -1927,6 +1928,12 @@ blockers still running by kind.
   the old build. An operator stop is a separate gate and survives the lift.
 - **It needs a running daemon.** On a database no daemon holds it refuses
   without opening the store: there is nothing to drain.
+- **`-force` cancels the running writers.** It records a forced drain
+  (over a plain drain, one more row; over a forced one, none), then cancels
+  every root implementation invocation that has no terminal yet. Other
+  work, such as remediation rounds, reviews, and verification, still runs
+  to its end. An admitted attempt that had not started when the force ran
+  starts anyway; a repeat `-force` cancels it.
 
 ### Daemon Re-Runs
 

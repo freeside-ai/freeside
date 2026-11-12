@@ -25,6 +25,7 @@ const (
 	DurableTransitionUpdateDrainRequest    DurableTransition = "update_drain_request"
 	DurableTransitionUpdateDrainCancel     DurableTransition = "update_drain_cancel"
 	DurableTransitionUpdateDrainLift       DurableTransition = "update_drain_lift"
+	DurableTransitionUpdateDrainForce      DurableTransition = "update_drain_force"
 	DurableTransitionDaemonRerun           DurableTransition = "daemon_rerun"
 )
 
@@ -46,6 +47,7 @@ var AllDurableTransitions = []DurableTransition{
 	DurableTransitionUpdateDrainRequest,
 	DurableTransitionUpdateDrainCancel,
 	DurableTransitionUpdateDrainLift,
+	DurableTransitionUpdateDrainForce,
 	DurableTransitionDaemonRerun,
 }
 
@@ -65,6 +67,7 @@ func (transition DurableTransition) valid() bool {
 		DurableTransitionUpdateDrainRequest,
 		DurableTransitionUpdateDrainCancel,
 		DurableTransitionUpdateDrainLift,
+		DurableTransitionUpdateDrainForce,
 		DurableTransitionDaemonRerun:
 		return true
 	default:

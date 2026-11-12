@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -44,6 +47,116 @@ func (d UpdateDrain) Request(ctx context.Context) (domain.UpdateDrainTransition,
 		return true, tx.RecordUpdateDrainTransition(ctx, drain)
 	})
 	return drain, err
+}
+
+// Force puts a forced drain in force, then runs cancel to end the work the
+// drain would otherwise wait for (issue #3105). Over no drain or a plain
+// drain it appends one forced draining row; over a forced drain it writes
+// nothing, so its start time stays. A plain Request over a forced drain
+// writes nothing either. cancel runs on every call, so a repeat reaches work
+// admitted since the last one.
+//
+// The row is a request write, under the request's crash seams. The
+// cancellation has its own: a crash before it leaves this build's drain in
+// force across the restart, and the restart itself ends the running work.
+func (d UpdateDrain) Force(
+	ctx context.Context, cancel func(context.Context) error,
+) (domain.UpdateDrainTransition, error) {
+	var drain domain.UpdateDrainTransition
+	err := d.write(ctx, DurableTransitionUpdateDrainRequest, func(tx *store.WriteTx) (bool, error) {
+		existing, err := tx.UpdateDrainInForce(ctx)
+		if err != nil || (existing != nil && existing.Forced) {
+			if existing != nil {
+				drain = *existing
+			}
+			return false, err
+		}
+		drain = d.transition(domain.UpdateDrainDraining)
+		drain.Forced = true
+		return true, tx.RecordUpdateDrainTransition(ctx, drain)
+	})
+	if err != nil {
+		return domain.UpdateDrainTransition{}, err
+	}
+	if err := runDurableTransitionHook(d.TransitionHook,
+		DurableTransitionUpdateDrainForce, DurableTransitionBefore); err != nil {
+		return domain.UpdateDrainTransition{}, err
+	}
+	if err := cancel(ctx); err != nil {
+		return domain.UpdateDrainTransition{}, err
+	}
+	if err := runDurableTransitionHook(d.TransitionHook,
+		DurableTransitionUpdateDrainForce, DurableTransitionAfter); err != nil {
+		return domain.UpdateDrainTransition{}, err
+	}
+	return drain, nil
+}
+
+// CancelRootImplementations cancels every production run's root
+// implementation invocation that has started and has no recorded terminal,
+// through the stage driver's ordinary Cancel. It is a forced drain's
+// cancellation: each canceled terminal then gets an uncounted daemon re-run
+// (daemonRerunReason), which the drain holds until it lifts. Every other
+// launch finishes as it does under a plain drain.
+//
+// An invocation the driver has no intent for yet has nothing to cancel; it is
+// logged and skipped, and a repeated force reaches it once it starts. A
+// marker that does not decode, and any other refusal (such as a quarantined
+// stage intent, whose writer the daemon cannot reach), is returned after
+// every other cancellation has been tried, so one bad record never shields
+// the rest.
+func (e *Engine) CancelRootImplementations(ctx context.Context) error {
+	var (
+		running    []domain.InvocationID
+		unreadable error
+	)
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		running, unreadable = nil, nil
+		entries, err := tx.ListDispatchedOutbox(ctx, KindProductionInvocationRequested)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			request, err := decodeProductionRequest(entry)
+			if err != nil {
+				unreadable = errors.Join(unreadable, fmt.Errorf("production intent %q: %w", entry.IdempotencyKey, err))
+				continue
+			}
+			if request.InvocationID != productionInvocationID(request.RunID) {
+				continue
+			}
+			if _, err := tx.GetInbox(ctx, string(request.InvocationID)); err == nil {
+				continue
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			running = append(running, request.InvocationID)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("list root implementations: %w", err)
+	}
+	var (
+		cancels  sync.WaitGroup
+		mu       sync.Mutex
+		canceled error
+	)
+	for _, id := range running {
+		cancels.Go(func() {
+			err := e.driver.Cancel(ctx, id)
+			if errors.Is(err, exec.ErrUnknownInvocation) {
+				e.logger.Info("forced drain skipped an invocation with no stage intent", "invocation", id)
+				return
+			}
+			if err != nil {
+				mu.Lock()
+				canceled = errors.Join(canceled, fmt.Errorf("cancel %q: %w", id, err))
+				mu.Unlock()
+			}
+		})
+	}
+	cancels.Wait()
+	return errors.Join(unreadable, canceled)
 }
 
 // Cancel lifts the drain in force and reports whether there was one. It

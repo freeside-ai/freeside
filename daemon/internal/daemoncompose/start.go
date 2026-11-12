@@ -139,6 +139,10 @@ type ControlRouteInputs struct {
 	ReleaseVerificationMemory func(context.Context, domain.TaskID, bool) (engine.VerificationMemoryRelease, error)
 	// UpdateDrain requests and cancels this build's update drain.
 	UpdateDrain engine.UpdateDrain
+	// CancelRootImplementations is a forced drain's cancellation of every
+	// running root implementation invocation through the engine; it cancels
+	// nothing when no engine runs, since then none runs.
+	CancelRootImplementations func(context.Context) error
 	// Running is the daemon's count of in-process work; the operator's
 	// doctor counts its probe there.
 	Running *engine.RunningWork
@@ -430,6 +434,12 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 				return commit()
 			}
 			return workflow.CommitTaskStop(ctx, id, commit)
+		},
+		CancelRootImplementations: func(ctx context.Context) error {
+			if workflow == nil {
+				return nil
+			}
+			return workflow.CancelRootImplementations(ctx)
 		},
 	}
 	if workflow != nil {

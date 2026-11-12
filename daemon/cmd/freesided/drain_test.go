@@ -73,6 +73,11 @@ func TestDrainUsesRunningDaemonAndLiftsOnNewBuild(t *testing.T) {
 	h = start(drainTestNewBuild)
 	drained("new build", drainStatus, false)
 	drained("request on the new build", drainRequest, true)
+	drained("force over the request", drainForce, true)
+	if readiness, err := runDrainCommand(ctx, drainCommandConfig{DBPath: dbPath, Action: drainStatus}); err != nil ||
+		readiness.Drain == nil || !readiness.Drain.Forced {
+		t.Fatalf("readiness after a force = %+v, %v; want a forced drain", readiness, err)
+	}
 	drained("cancel", drainCancel, false)
 	stopDaemon(h)
 }
@@ -100,8 +105,10 @@ func TestParseDrainCommand(t *testing.T) {
 	for name, args := range map[string][]string{
 		"no db":         {"-cancel"},
 		"both actions":  {"-db", "state.db", "-cancel", "-status"},
+		"force cancel":  {"-db", "state.db", "-force", "-cancel"},
+		"force status":  {"-db", "state.db", "-force", "-status"},
 		"positional":    {"-db", "state.db", "extra"},
-		"unknown flags": {"-db", "state.db", "-force"},
+		"unknown flags": {"-db", "state.db", "-now"},
 	} {
 		if _, err := parseDrainCommand(args, &bytes.Buffer{}); err == nil {
 			t.Errorf("%s: parse accepted %v", name, args)
@@ -109,6 +116,7 @@ func TestParseDrainCommand(t *testing.T) {
 	}
 	for args, want := range map[string]drainAction{
 		"":        drainRequest,
+		"-force":  drainForce,
 		"-cancel": drainCancel,
 		"-status": drainStatus,
 	} {
