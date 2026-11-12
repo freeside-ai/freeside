@@ -91,6 +91,8 @@ public struct MockServerTransport: ClientTransport {
                 after = value
             }
             return try Self.json(status: .ok, body: await server.serverRevision(after: after))
+        case "getRestartReadiness":
+            return try Self.json(status: .ok, body: await server.restartReadiness())
         case "getSyncBootstrap":
             do {
                 return try Self.json(

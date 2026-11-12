@@ -30,6 +30,7 @@ import Testing
             .verification_memory_limit: "Verification ran out of memory",
             .quota_window_exhausted: "Waiting for quota window to reset",
             .machine_capacity: "Waiting for machine capacity",
+            .update_drain: "Waiting for an update",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
         for reason in Components.Schemas.RunHoldReason.allCases {

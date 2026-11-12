@@ -260,6 +260,10 @@ const (
 	// instance's budget yet, or an older task's launch waits ahead of it
 	// (plan §5.4). The hold names the numbers in MachineCapacityHold.
 	HoldMachineCapacity RunHoldReason = "machine_capacity"
+	// HoldUpdateDrain: an update drain is in force, so the launch waits for
+	// the daemon to restart on a new build instead of starting work the
+	// update would cancel (issue #3103).
+	HoldUpdateDrain RunHoldReason = "update_drain"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -286,6 +290,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldVerificationMemoryLimit,
 	HoldQuotaWindowExhausted,
 	HoldMachineCapacity,
+	HoldUpdateDrain,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -298,7 +303,7 @@ func (r RunHoldReason) valid() bool {
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
 		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending,
 		HoldVerificationMemoryLimit,
-		HoldQuotaWindowExhausted, HoldMachineCapacity:
+		HoldQuotaWindowExhausted, HoldMachineCapacity, HoldUpdateDrain:
 		return true
 	default:
 		return false

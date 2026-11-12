@@ -60,6 +60,10 @@ tags:
       credential boundary and deliberately minimal.
   - name: sync
     description: Cache bootstrap (plan §5.14 revision, epoch, and cache semantics).
+  - name: restart
+    description: >
+      Whether the daemon can restart now without cutting short running work,
+      so an update can wait for that work instead of canceling it.
   - name: attention
     description: Attention items and their deliveries, read surface (plan §4).
   - name: runs
@@ -205,6 +209,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /restart-readiness:
+    get:
+      operationId: getRestartReadiness
+      tags: [restart]
+      summary: Whether it is safe to restart the daemon now
+      description: >
+        Answers whether the daemon can restart now and what a restart is
+        waiting on: the update drain in force, or null, and a count of each
+        kind of running work a restart would cut short. `ready` is true only
+        when a drain is in force and nothing blocks; without a drain a launch
+        can start the moment after the read, so an empty blocker list alone
+        is not ready. The read changes no state.
+      responses:
+        "200":
+          description: The restart readiness verdict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestartReadiness"
 
   /attention/items:
     get:
@@ -1244,11 +1268,13 @@ components:
         stop_unattended that only resume_unattended lifts;
         blocking_system_health is an open blocking system_health item, which
         includes the daemon's own durable stop and clears when the daemon
-        resolves the item or a validated configuration supersedes it.
-        Widening it is a contract change.
+        resolves the item or a validated configuration supersedes it;
+        update_drain is an update drain in force, which the daemon lifts when
+        it restarts on a new build. Widening it is a contract change.
       enum:
         - operator_stop
         - blocking_system_health
+        - update_drain
 
     UnattendedStop:
       type: object
@@ -1265,23 +1291,24 @@ components:
           description: >
             The open system_health item whose decision or resolution reopens
             admission: the blocking item itself, or for an operator stop the
-            notice that offers resume_unattended. Null only for an operator
-            stop with no such notice open.
+            notice that offers resume_unattended. Null for an operator stop
+            with no such notice open, and always null for an update drain.
         command_id:
           type: string
           minLength: 1
           nullable: true
           description: >
             The accepted stop_unattended command for an operator stop; null
-            for a blocking item.
+            for a blocking item and for an update drain.
         since:
           type: string
           format: date-time
           nullable: true
           description: >
             When the stop took effect: the accepting instant of the stop
-            command, or the blocking item's creation instant. Null only for
-            an item recorded without a creation instant.
+            command, the blocking item's creation instant, or when the update
+            drain began. Null only for an item recorded without a creation
+            instant.
 
     UsagePoolSnapshot:
       type: object
@@ -3780,6 +3807,7 @@ components:
         - verification_memory_limit
         - quota_window_exhausted
         - machine_capacity
+        - update_drain
 
     ImageUpkeepPending:
       type: string
@@ -4431,6 +4459,94 @@ components:
         resolution:
           reason: "deadline_elapsed"
           recorded_at: "2026-01-02T03:35:05Z"
+
+    RestartReadiness:
+      type: object
+      description: >
+        Whether it is safe to restart the daemon now (mirrors
+        domain.RestartReadiness). ready is true exactly when drain is
+        non-null and blockers is empty.
+      additionalProperties: false
+      required: [ready, drain, blockers, as_of]
+      properties:
+        ready:
+          type: boolean
+        drain:
+          allOf:
+            - $ref: "#/components/schemas/UpdateDrain"
+          nullable: true
+          description: The update drain in force; null when there is none.
+        blockers:
+          type: array
+          description: >
+            Each kind of running work a restart would cut short, in the
+            order RestartBlockerKind lists them. A kind with nothing running
+            is left out.
+          items:
+            $ref: "#/components/schemas/RestartBlocker"
+        as_of:
+          type: string
+          format: date-time
+          description: When the daemon read the verdict.
+      example:
+        ready: false
+        drain:
+          since: "2026-01-02T03:04:05Z"
+          forced: false
+        blockers:
+          - kind: execution_launch
+            count: 2
+          - kind: credential_lease
+            count: 1
+        as_of: "2026-01-02T03:05:05Z"
+
+    UpdateDrain:
+      type: object
+      description: >
+        An update drain in force: new launches wait for the daemon to
+        restart on a new build instead of starting work the update would
+        cancel.
+      additionalProperties: false
+      required: [since, forced]
+      properties:
+        since:
+          type: string
+          format: date-time
+          description: When the drain began.
+        forced:
+          type: boolean
+          description: Whether the drain was requested with forced cancellation.
+
+    RestartBlocker:
+      type: object
+      description: How many of one kind of running work a restart would cut short.
+      additionalProperties: false
+      required: [kind, count]
+      properties:
+        kind:
+          $ref: "#/components/schemas/RestartBlockerKind"
+        count:
+          type: integer
+          minimum: 1
+
+    RestartBlockerKind:
+      type: string
+      description: >
+        A kind of running work a daemon restart would cut short (mirrors
+        domain.RestartBlockerKind). execution_launch and review_launch are
+        admissions that still hold their slot; verification_job,
+        image_build, probe, and publication are work in progress in the
+        running daemon; credential_lease is a held auth-store mutation
+        lease, such as an enrollment or a token refresh, that no counted
+        launch holds. Widening it is a contract change.
+      enum:
+        - execution_launch
+        - review_launch
+        - verification_job
+        - image_build
+        - probe
+        - publication
+        - credential_lease
 
     ServerRevision:
       type: object

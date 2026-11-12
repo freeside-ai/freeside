@@ -14,6 +14,7 @@ import (
 // leaves: no unserved-part columns on run_hold_observations.
 func rewindRunHoldUnservedDetail(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindUpdateDrain(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_unserved_part`,
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_unserved_enrollment`,
