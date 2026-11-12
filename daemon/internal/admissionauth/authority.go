@@ -403,6 +403,49 @@ func (a Authority) ImportOptions(
 	return opts, nil
 }
 
+// ProtectedPatterns lists the patterns whose edit would fail the invocation
+// at import under publish_strict, from the trust profile ImportOptions would
+// apply. It informs the writer's prompt only: it authorizes nothing, and
+// ImportOptions derives the import's own patterns again at import. An attended
+// admission reads the repository's latest profile, so an owner re-approval
+// during the run can leave the writer's list stale; the import gate decides.
+func (a Authority) ProtectedPatterns(
+	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
+) ([]string, error) {
+	admission, _, err := a.admission(ctx, id, spec, admissionForExecution)
+	if err != nil {
+		return nil, err
+	}
+	return a.protectedPatterns(ctx, admission, spec)
+}
+
+// protectedPatterns derives the list for an authenticated admission. An
+// attended admission binds no profile, and its repository may have none
+// approved yet; import then waits for one, and start must not refuse a run
+// that admission accepted. The built-in patterns apply under every profile,
+// so they are the list until one is approved.
+func (a Authority) protectedPatterns(
+	ctx context.Context, admission domain.ExecutionAdmission, spec exec.StartSpec,
+) ([]string, error) {
+	profile, err := a.importTrustProfile(ctx, admission)
+	if admission.TrustProfileDigest == nil && errors.Is(err, store.ErrNotFound) {
+		return importer.Policy{}.PublishBlockingPatterns(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if profile.Repo != spec.Base.Repo || profile.RepositoryID != spec.Base.RepositoryID {
+		return nil, fmt.Errorf(
+			"trust profile repository disagrees with admitted base: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	policy, err := importer.Policy{}.WithProtectedPaths(profile)
+	if err != nil {
+		return nil, err
+	}
+	return policy.PublishBlockingPatterns(), nil
+}
+
 // applySpecificationFindingProfile sets the specification finding profile when
 // the invocation is an authenticated specification one, so both the live import
 // and its terminal replay reconstruct the same profile from the same durable

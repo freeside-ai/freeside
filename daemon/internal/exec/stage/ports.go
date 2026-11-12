@@ -141,6 +141,11 @@ type ProviderPromptInputs struct {
 	// writer reads under ward.InputFilesTarget. Only this metadata enters the
 	// prompt; the bytes reach the writer through Ward's input volume.
 	Attachments []domain.StageInputAttachment
+	// ProtectedPaths are the patterns whose edit fails the run at import,
+	// captured at start (AdmissionAuthority.ProtectedPatterns). Empty renders
+	// nothing, so an intent recorded before the list existed re-renders its
+	// original prompt.
+	ProtectedPaths []string
 }
 
 // InputFilesFor is the Ward input manifest an admitted start delivers: each
@@ -262,6 +267,11 @@ type AdmissionAuthority interface {
 	// Mutable daemon configuration may block new work but cannot retarget or
 	// strand terminal replay before the publisher applies its current gates.
 	ImportOptionsRecord(context.Context, domain.InvocationID, exec.StartSpec, importer.Options) (importer.Options, error)
+	// ProtectedPatterns lists the path patterns whose edit would fail this
+	// invocation's run at import under publish_strict, derived from the same
+	// trust profile ImportOptions reads. The list only informs the writer's
+	// prompt; it is no authority, and import re-derives its own patterns.
+	ProtectedPatterns(context.Context, domain.InvocationID, exec.StartSpec) ([]string, error)
 }
 
 // Artifacts persists the evidence bytes an export released, and records the

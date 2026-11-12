@@ -120,6 +120,13 @@ type durableInputs struct {
 	Policy                  []byte   `json:"policy"`
 	PriorArtifacts          [][]byte `json:"prior_artifacts,omitempty"`
 	PriorArtifactsPersisted bool     `json:"prior_artifacts_persisted,omitempty"`
+	// ProtectedPaths is the writer's protected-path list captured at start, so
+	// reconstruction re-renders the prompt the writer received rather than a
+	// list derived from a trust profile approved since. It is advice, not an
+	// authority: import derives its own patterns, so nothing re-gates it.
+	// Absent on an intent recorded before the list existed (omitempty keeps
+	// that encoding), which renders no section.
+	ProtectedPaths []string `json:"protected_paths,omitempty"`
 }
 
 func durableInputsFrom(inputs exec.StageInputs) durableInputs {
@@ -146,6 +153,7 @@ func providerPromptInputsFrom(inputs durableInputs, spec exec.StartSpec) Provide
 		PromptPackage:  slices.Clone(inputs.PromptPackage),
 		Policy:         slices.Clone(inputs.Policy),
 		PriorArtifacts: cloneBodies(inputs.PriorArtifacts),
+		ProtectedPaths: slices.Clone(inputs.ProtectedPaths),
 	}
 	if spec.StageInputs != nil {
 		prompt.Attachments = slices.Clone(spec.StageInputs.Attachments)

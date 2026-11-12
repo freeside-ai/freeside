@@ -48,6 +48,12 @@ func (cancellationAuthority) ImportOptionsRecord(
 	return importer.Options{}, errors.New("canceled handoff reached import")
 }
 
+func (cancellationAuthority) ProtectedPatterns(
+	context.Context, domain.InvocationID, exec.StartSpec,
+) ([]string, error) {
+	return nil, nil
+}
+
 type cancellationRecords struct {
 	mu      sync.Mutex
 	outcome *domain.ExecutionOutcome

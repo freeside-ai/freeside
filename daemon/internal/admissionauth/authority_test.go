@@ -109,6 +109,9 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 		PRGitHubTokenPermissions: domain.TokenPermissionsReadOnly, CommitPlan: domain.CommitPlanSingleCommit,
 		MessageRuleset: domain.MessageRulesetGitHub1, WorkflowAuditDigest: "sha256:workflow-audit",
 		Review: domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review"},
+		ProtectedPaths: domain.ProtectedPathConfig{
+			ExtraVerificationControlPatterns: []string{".freeside/recipe.yaml"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +195,15 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
 		t.Fatalf("original start authority: %v", err)
 	}
+	// The writer's list comes from the profile import applies: the widened
+	// recipe path is listed and no reviewer-instruction pattern is.
+	protected, err := authority.ProtectedPatterns(ctx, production.InvocationID, spec)
+	if err != nil {
+		t.Fatalf("protected patterns: %v", err)
+	}
+	if !slices.Contains(protected, ".freeside/recipe.yaml") || slices.Contains(protected, "**/AGENTS.md") {
+		t.Fatalf("protected patterns = %q", protected)
+	}
 	now = now.Add(time.Minute)
 	recordProof(domain.Digest("sha256:" + strings.Repeat("2", 64)))
 	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
@@ -203,6 +215,9 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	opts, err := authority.ImportOptions(ctx, production.InvocationID, spec, importer.Options{})
 	if err != nil || !reflect.DeepEqual(opts.Policy.Allowlist, authority.AllowedPaths) {
 		t.Fatalf("current import options = %#v, %v", opts, err)
+	}
+	if got := opts.Policy.PublishBlockingPatterns(); !slices.Equal(got, protected) {
+		t.Fatalf("import policy blocks %q, writer was told %q", got, protected)
 	}
 	if resolver.RevalidateCalls == 0 {
 		t.Fatal("current import omitted live author revalidation")

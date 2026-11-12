@@ -2,6 +2,7 @@ package importer
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
@@ -140,6 +141,28 @@ func categoryFor(kind FindingKind) (domain.ControlPlaneCategory, bool) {
 		}
 	}
 	return "", false
+}
+
+// PublishBlockingPatterns lists, sorted and without duplicates, every path
+// pattern whose match is fatal under the publish_strict finding profile: each
+// control-plane class whose finding is not advisory, plus git metadata, with
+// the defaults and the policy's widening together. It reads the same Fatal
+// predicate the pipeline applies to an import's findings, so the list and the
+// gate cannot disagree on a class. The list informs a writer before it edits;
+// it grants nothing, and import still derives its own patterns from the trust
+// profile.
+func (p Policy) PublishBlockingPatterns() []string {
+	var patterns []string
+	for _, cl := range controlPlaneClasses {
+		if (Finding{Kind: cl.kind}).Fatal(nil) {
+			patterns = append(patterns, cl.patterns(p)...)
+		}
+	}
+	if (Finding{Kind: FindingGitMetadataPath}).Fatal(nil) {
+		patterns = append(patterns, p.gitMetadata()...)
+	}
+	slices.Sort(patterns)
+	return slices.Compact(patterns)
 }
 
 // applyPolicy evaluates the path-class, allowlist, and size policy over

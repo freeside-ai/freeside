@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -560,4 +562,63 @@ func TestImportAllowlist(t *testing.T) {
 	if len(res.Findings) != 1 || res.Findings[0].Kind != FindingAllowlistViolation || res.Findings[0].Path != "src/new.go" {
 		t.Fatalf("findings = %+v, want one allowlist violation for src/new.go", res.Findings)
 	}
+}
+
+// TestPublishBlockingPatternsMatchGate pins the writer's protected-path list
+// to the import gate: every pattern of a class whose finding is fatal under
+// publish_strict is listed, defaults and profile widening alike; no
+// reviewer-instruction pattern is; and a path each listed pattern matches
+// draws a fatal finding from the same policy.
+func TestPublishBlockingPatternsMatchGate(t *testing.T) {
+	t.Parallel()
+	pol, err := Policy{}.WithProtectedPaths(fixtureTrustProfile(t))
+	if err != nil {
+		t.Fatalf("WithProtectedPaths: %v", err)
+	}
+	listed := pol.PublishBlockingPatterns()
+	if !slices.IsSorted(listed) || len(slices.Compact(slices.Clone(listed))) != len(listed) {
+		t.Fatalf("list is not sorted and unique: %q", listed)
+	}
+	for _, cl := range controlPlaneClasses {
+		for _, pattern := range cl.patterns(pol) {
+			want := cl.kind != FindingReviewerInstructionPath
+			if slices.Contains(listed, pattern) != want {
+				t.Errorf("%s pattern %q listed = %v, want %v", cl.kind, pattern, !want, want)
+			}
+		}
+	}
+	for _, pattern := range pol.gitMetadata() {
+		if !slices.Contains(listed, pattern) {
+			t.Errorf("git-metadata pattern %q not listed", pattern)
+		}
+	}
+	for _, pattern := range listed {
+		path := samplePath(pattern)
+		findings := applyPolicy([]plannedChange{{path: path, kind: ChangeModified, size: 1}}, pol)
+		if !slices.ContainsFunc(findings, func(f Finding) bool { return f.Fatal(nil) }) {
+			t.Errorf("listed pattern %q: %s draws no fatal finding: %+v", pattern, path, findings)
+		}
+	}
+	for _, pattern := range pol.reviewerInstruction() {
+		path := samplePath(pattern)
+		findings := applyPolicy([]plannedChange{{path: path, kind: ChangeModified, size: 1}}, pol)
+		if len(findings) == 0 || !AllAdvisory(findings) {
+			t.Errorf("reviewer-instruction pattern %q: %s findings = %+v, want advisory only", pattern, path, findings)
+		}
+	}
+}
+
+// samplePath turns a protected-path glob into a path it matches by filling
+// each wildcard with "x". The default and fixture patterns use only "**"
+// segments and "*" or "?" inside a segment.
+func samplePath(pattern string) string {
+	segments := strings.Split(pattern, "/")
+	for i, segment := range segments {
+		if segment == "**" {
+			segments[i] = "x"
+			continue
+		}
+		segments[i] = strings.NewReplacer("*", "x", "?", "x").Replace(segment)
+	}
+	return strings.Join(segments, "/")
 }
