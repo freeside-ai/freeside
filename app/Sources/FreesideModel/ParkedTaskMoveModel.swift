@@ -65,7 +65,12 @@ package final class ParkedTaskMoveModel {
         }
     }
 
-    package var canMove: Bool { unavailableReason == nil && pending == nil && !sending }
+    /// Whether the daemon serves the move: its `/health` lists
+    /// `parked_task_move` (#1266). An older daemon refuses the command, so
+    /// the page offers no move rather than one that can only fail.
+    package var isServed: Bool { coordinator.daemonFeatures.contains(.parked_task_move) }
+
+    package var canMove: Bool { isServed && unavailableReason == nil && pending == nil && !sending }
 
     package func move(taskID: String, to choice: Components.Schemas.AlternateAgentChoice) async {
         guard canMove, let epoch = coordinator.cursors?.syncEpoch else { return }

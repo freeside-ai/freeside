@@ -2634,6 +2634,9 @@
                         taskTimelines: [wait.history].compactMap { $0 }))
                 let waitCoordinator = SyncCoordinator(
                     client: APIClientFactory.mock(server: MockServer()), cache: waitCache)
+                // The page offers the move only once /health lists it, and
+                // this coordinator never syncs.
+                waitCoordinator.daemonFeatures = [.parked_task_move]
                 for width in [CGFloat(390), CGFloat(820)] {
                     for scheme in [ColorScheme.light, .dark] {
                         surfaces.append(

@@ -994,6 +994,31 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await recover()
     }
 
+    /// #1266: every round reads the daemon's features, which catches a daemon
+    /// restarted on another build, a change that moves neither the sync epoch
+    /// nor the revision. A daemon that omits the list serves none of them,
+    /// and a read that fails keeps the last answered set.
+    @Test func eachRoundReadsTheDaemonsFeatures() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        #expect(coordinator.daemonFeatures.isEmpty)
+        await coordinator.refresh()
+        #expect(coordinator.daemonFeatures == Set(MockServer.servedFeatures))
+
+        await server.setHealthFeatures(nil)
+        await coordinator.refresh()
+        #expect(coordinator.daemonFeatures.isEmpty)
+
+        await server.setHealthFeatures([.parked_task_move])
+        await coordinator.refresh()
+        #expect(coordinator.daemonFeatures == [.parked_task_move])
+        await server.setHealthFeatures([])
+        await server.setHealthAvailable(false)
+        await coordinator.refresh()
+        #expect(coordinator.daemonFeatures == [.parked_task_move])
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
     @Test func anUndeclaredAttentionTypeSyncsAsUnknown() async throws {
         // Responses tolerate additive change (#1266): a type a newer daemon
         // adds decodes as unknown instead of failing the whole sync read.

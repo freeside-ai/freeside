@@ -10,6 +10,12 @@ import Testing
 /// the hold that offered the move clears, its refusal shows on that task
 /// alone, and a move waiting on one task names that task where it blocks
 /// another task's move.
+/// Counts the commands a mock daemon receives.
+private actor CommandCount {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
 @Suite @MainActor struct ParkedTaskMoveViewTests {
     private static let teamChoice = Components.Schemas.AlternateAgentChoice(
         enrollment_id: UsageFixtures.readingCollectorID, model_id: nil, effort: "low")
@@ -62,6 +68,52 @@ import Testing
         await server.setAfterRespond { operation in
             if operation == "submitCommand" { try await lost.consume() }
         }
+    }
+
+    /// #1266: a daemon whose `/health` doesn't list `parked_task_move`, or
+    /// lists no features at all as one built before the list, refuses the
+    /// move, so the page offers none and a pick sends nothing.
+    @Test func aDaemonThatDoesNotServeTheMoveOffersNone() async throws {
+        for features: [Components.Schemas.DaemonFeature]? in [[], nil] {
+            let (server, taskID) = try parkedServer()
+            await server.setHealthFeatures(features)
+            let sent = CommandCount()
+            await server.setBeforeRespond { operation in
+                if operation == "submitCommand" { await sent.increment() }
+            }
+            let coordinator = await coordinator(server)
+            #expect(coordinator.store.freshness == .fresh)
+            let offers = try await offers(coordinator, taskID)
+            #expect(!offers.isEmpty)
+            let view = ParkedTaskMoveView(coordinator: coordinator, taskID: taskID, offers: offers)
+            #expect(!view.offersMove && view.isQuiet)
+
+            let model = coordinator.parkedTaskMove
+            #expect(!model.isServed && !model.canMove)
+            await model.move(taskID: taskID, to: Self.teamChoice)
+            #expect(await sent.value == 0)
+            #expect(coordinator.pendingParkedTaskMove == nil && model.failure == nil)
+        }
+    }
+
+    /// A daemon restarted on a build that predates the move, after the round
+    /// that listed it: the refusal tells the operator to update the daemon,
+    /// and the command is dropped rather than kept for Retry.
+    @Test func aMoveTheDaemonNoLongerServesIsDroppedWithTheUpdatePrompt() async throws {
+        let (server, taskID) = try parkedServer()
+        let coordinator = await coordinator(server)
+        let model = coordinator.parkedTaskMove
+        #expect(model.canMove)
+        let before = try await revision(coordinator)
+        await server.setHealthFeatures([])
+
+        await model.move(taskID: taskID, to: Self.teamChoice)
+
+        #expect(model.failure == .init(taskID: taskID, message: CommandRefusal.unservedKind))
+        #expect(coordinator.pendingParkedTaskMove == nil)
+        #expect(try await revision(coordinator) == before)
+        // The round the refusal ran read the list again.
+        #expect(!model.isServed)
     }
 
     /// The daemon records the move and clears the hold, but the answer is
