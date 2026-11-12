@@ -336,6 +336,9 @@ func TestAnalyzeWorkflowsFailsClosed(t *testing.T) {
 		{"remote reusable", "on: pull_request\njobs:\n  x:\n    uses: owner/repo/.github/workflows/x.yml@main\n"},
 		{"missing local reusable", "on: pull_request\njobs:\n  x:\n    uses: ./.github/workflows/missing.yml\n"},
 		{"missing local action", "on: pull_request\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./tools/action\n"},
+		// A merge key would otherwise read as an event named "<<" and hide
+		// the pull_request_target trigger it merges in.
+		{"merge key in triggers", "x-triggers: &t\n  pull_request_target:\non:\n  <<: *t\njobs:\n  x:\n    runs-on: ubuntu-latest\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
