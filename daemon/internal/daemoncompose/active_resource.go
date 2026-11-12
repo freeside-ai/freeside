@@ -35,6 +35,11 @@ type ActiveResourceReconciler struct {
 	// (or an empty set) simply records no native evidence (plan §5.16, §7).
 	Review    NativeReviewObserver
 	Reviewers map[string]bool
+	// appBotIdentity names the App bot per repository, so the bot's own
+	// conversation comments, which are its disposition replies, are never read
+	// as review (#3127). Optional: without it no conversation comment becomes
+	// an external finding.
+	appBotIdentity appBotIdentitySource
 	// reviewInvalidate drops the observer's cached validators for a PR when the
 	// durable append of its native observations fails, so the next tick
 	// re-fetches unconditionally instead of riding a 304 and permanently
@@ -1212,7 +1217,15 @@ func (r ActiveResourceReconciler) observeReadyResource(
 		case !reviewObs.NotModified:
 			reviewFetched = true
 			observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.Reviewers, observedAt)
-			observation.externalFindings, observation.externalSkipped = buildExternalFindings(reviewObs, binding)
+			botUserID, identityErr := r.conversationBotUserID(ctx, binding.Repo, reviewObs)
+			if identityErr != nil {
+				// The reviews and inline comments are still stored. The
+				// conversation comments wait for the bot's identity; the evicted
+				// cache makes the next pass read them again.
+				observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, identityErr)
+				r.dropReviewCache(binding)
+			}
+			observation.externalFindings, observation.externalSkipped = buildExternalFindings(reviewObs, binding, botUserID)
 		}
 	}
 	// Completion compares the unit's effective head, which a proven rebase
