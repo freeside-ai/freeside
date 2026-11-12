@@ -25,6 +25,7 @@ const (
 	DurableTransitionUpdateDrainRequest    DurableTransition = "update_drain_request"
 	DurableTransitionUpdateDrainCancel     DurableTransition = "update_drain_cancel"
 	DurableTransitionUpdateDrainLift       DurableTransition = "update_drain_lift"
+	DurableTransitionDaemonRerun           DurableTransition = "daemon_rerun"
 )
 
 // AllDurableTransitions is the production engine's crash-matrix registry.
@@ -45,6 +46,7 @@ var AllDurableTransitions = []DurableTransition{
 	DurableTransitionUpdateDrainRequest,
 	DurableTransitionUpdateDrainCancel,
 	DurableTransitionUpdateDrainLift,
+	DurableTransitionDaemonRerun,
 }
 
 func (transition DurableTransition) valid() bool {
@@ -62,7 +64,8 @@ func (transition DurableTransition) valid() bool {
 		DurableTransitionTerminalCompletion,
 		DurableTransitionUpdateDrainRequest,
 		DurableTransitionUpdateDrainCancel,
-		DurableTransitionUpdateDrainLift:
+		DurableTransitionUpdateDrainLift,
+		DurableTransitionDaemonRerun:
 		return true
 	default:
 		return false

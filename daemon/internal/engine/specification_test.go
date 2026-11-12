@@ -236,6 +236,10 @@ type specificationFixture struct {
 	// withoutExports leaves the fake driver's completions unexported; see
 	// exportingSpecificationDriver.
 	withoutExports bool
+	// admissionFloor adds capabilities the engine's admission requires
+	// beyond post-exit export. The test backend has none of them, so any
+	// entry makes admission refuse.
+	admissionFloor []exec.Capability
 }
 
 func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int) specificationFixture {
@@ -463,7 +467,7 @@ func (f specificationFixture) newEngineWithTransitionHook(
 		driver = exportingSpecificationDriver{StageDriver: driver, store: f.store, now: f.now}
 	}
 	engine, err := New(f.store, f.signet, driver,
-		WithAdmission(stageInputBackend{}, []exec.Capability{exec.CapPostExitExport}, AdmissionEnvironment{
+		WithAdmission(stageInputBackend{}, append([]exec.Capability{exec.CapPostExitExport}, f.admissionFloor...), AdmissionEnvironment{
 			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
 			EgressProfile:       domain.EgressProviderOnly,
 			ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
