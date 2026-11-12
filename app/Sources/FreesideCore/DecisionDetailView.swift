@@ -4846,7 +4846,7 @@ extension View {
 /// closed card printed its time in the wrong zone under a pinned
 /// screenshot or a device set to another zone. Read here, in a body of
 /// its own, they are the installed values.
-private struct TimeFormatEnvironment<Content: View>: View {
+struct TimeFormatEnvironment<Content: View>: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @ViewBuilder let content: (Locale, TimeZone) -> Content

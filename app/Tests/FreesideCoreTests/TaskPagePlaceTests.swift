@@ -124,7 +124,8 @@ import Testing
         let (coordinator, _) = try TaskStageFixtures.coordinator(TaskStageFixtures.page(.implementation))
         var held: TaskStopModel.Confirmation?
         let menu = TaskActionsMenu(
-            coordinator: coordinator, taskID: taskID, confirmation: Binding(get: { held }, set: { held = $0 }))
+            coordinator: coordinator, taskID: taskID, confirmation: Binding(get: { held }, set: { held = $0 }),
+            lineChange: .constant(nil))
         #expect(menu.offersStop)
         #expect(!menu.isDisabled)
         menu.requestStop()

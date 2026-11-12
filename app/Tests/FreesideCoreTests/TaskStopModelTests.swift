@@ -305,16 +305,22 @@ import Testing
         // A task being stopped starts no new attempt, so Change Agent goes
         // with Stop before sync shows the cancellation.
         #expect(
-            !TaskActionsMenu(coordinator: coordinator, taskID: taskID, confirmation: .constant(nil)).offersLineChange)
+            !TaskActionsMenu(
+                coordinator: coordinator, taskID: taskID, confirmation: .constant(nil), lineChange: .constant(nil)
+            ).offersLineChange)
         await release.open()
         await sending.value
         // Accepted: the synced cancellation keeps the control speaking.
         #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
         #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         // The menu no longer offers Stop; it stays only for a page's own items.
-        #expect(!TaskActionsMenu(coordinator: coordinator, taskID: taskID, confirmation: .constant(nil)).drawsMenu)
+        #expect(
+            !TaskActionsMenu(
+                coordinator: coordinator, taskID: taskID, confirmation: .constant(nil), lineChange: .constant(nil)
+            ).drawsMenu)
         let copying = TaskActionsMenu(
-            coordinator: coordinator, taskID: taskID, actions: [.init(title: "Copy") {}], confirmation: .constant(nil))
+            coordinator: coordinator, taskID: taskID, actions: [.init(title: "Copy") {}], confirmation: .constant(nil),
+            lineChange: .constant(nil))
         #expect(!copying.offersStop)
         #expect(copying.drawsMenu)
         #expect(!copying.isDisabled)
@@ -323,13 +329,14 @@ import Testing
     @Test func aPagesOwnItemsKeepTheMenuEnabledWhileStopIsUnavailable() async {
         let coordinator = await coordinator(MockServer())
         // No snapshot for the task: Stop cannot be prepared.
-        let stopOnly = TaskActionsMenu(coordinator: coordinator, taskID: "task-missing", confirmation: .constant(nil))
+        let stopOnly = TaskActionsMenu(
+            coordinator: coordinator, taskID: "task-missing", confirmation: .constant(nil), lineChange: .constant(nil))
         #expect(stopOnly.drawsMenu)
         #expect(stopOnly.isDisabled)
         #expect(stopOnly.stopIsUnavailable)
         let copying = TaskActionsMenu(
             coordinator: coordinator, taskID: "task-missing", actions: [.init(title: "Copy") {}],
-            confirmation: .constant(nil))
+            confirmation: .constant(nil), lineChange: .constant(nil))
         #expect(copying.offersStop)
         #expect(!copying.isDisabled)
     }

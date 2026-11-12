@@ -934,6 +934,7 @@
                                 draftStore: screenshotDraft(source: filledSource, choices: choices, agentsOpen: open),
                                 onSubmitted: { _ in }, rendersInteractiveControls: false))))
             }
+            surfaces += rolePickerSurfaces()
             // A long draft grows the text area to its cap; the foot stays
             // under it, and the closed Agents chip reads the choices.
             let grownSource =
@@ -5037,7 +5038,8 @@
                                     // so each state shows its enablement.
                                     TaskActionsMenu(
                                         coordinator: coordinator, taskID: snapshot.task.id,
-                                        confirmation: .constant(nil), rendersInteractiveControls: false)
+                                        confirmation: .constant(nil), lineChange: .constant(nil),
+                                        rendersInteractiveControls: false)
                                     TaskStopView(coordinator: coordinator, taskID: snapshot.task.id)
                                 }.padding(24).foregroundStyle(Color.ink).background(Color.ground))))
                     if state == "queued", let confirmation = coordinator.taskStop.prepare(taskID: snapshot.task.id) {
@@ -5050,6 +5052,51 @@
                 }
             }
             return surfaces
+        }
+
+        /// One role's agent picker (#3027), drawn directly: an enrollment
+        /// chosen, at the phone's width and the Mac popover's, light and
+        /// dark; the default chosen, its model and effort read-only; an
+        /// enrollment a sync dropped while the picker was open, kept in its
+        /// slot; and a running task's change with `Now` and `New`.
+        private func rolePickerSurfaces() -> [Surface] {
+            let catalog = UsageFixtures.defaultAgentCatalog()
+            let policy = UsageFixtures.defaultRoutingPolicy()
+            let pools = UsageFixtures.defaultUsagePools()
+            let now = Date(timeIntervalSince1970: 1_786_502_400 + 3_000)
+            let mac = UsageFixtures.readingCollectorID
+            var chosen = RolePicker.draft(role: .implementer, chosen: nil, catalog: catalog)
+            chosen.pick(.enrollment(mac), catalog: catalog)
+            chosen.pick(.effort("max"), catalog: catalog)
+            let lineup = RolePicker.draft(role: .implementer, chosen: nil, catalog: catalog)
+            var dropped = catalog
+            dropped.enrollments.removeAll { $0.enrollment_id == UsageFixtures.readingSecondEnrollmentID }
+            var change = RolePicker.change(
+                role: .specifier, current: UsageFixtures.agentSelection("claude-primary"), byName: nil,
+                catalog: catalog)
+            change.pick(.enrollment(UsageFixtures.unsupportedCollectorID), catalog: catalog)
+            change.pick(.effort("medium"), catalog: catalog)
+            let phone = CGFloat(390)
+            let popover = RolePickerLayout.popoverWidth
+            let cases: [(String, CGFloat, ColorScheme, RolePicker, AgentChoiceDisplay.Catalog)] = [
+                ("role-picker-phone", phone, .light, chosen, catalog),
+                ("role-picker-phone-dark", phone, .dark, chosen, catalog),
+                ("role-picker-popover", popover, .light, chosen, catalog),
+                ("role-picker-popover-dark", popover, .dark, chosen, catalog),
+                ("role-picker-phone-default", phone, .light, lineup, catalog),
+                ("role-picker-popover-dropped", popover, .light, chosen, dropped),
+                ("role-picker-phone-change", phone, .light, change, catalog),
+                ("role-picker-popover-change-dark", popover, .dark, change, catalog),
+            ]
+            return cases.map { name, width, scheme, picker, live in
+                Surface(
+                    name: name, width: width, colorScheme: scheme,
+                    view: AnyView(
+                        RolePickerView(
+                            picker: picker, catalog: live, policy: policy, pools: pools, now: now,
+                            onConfirm: { _ in }, onCancel: {}
+                        ).content))
+            }
         }
 
         private func attachmentStates() async -> AnyView {

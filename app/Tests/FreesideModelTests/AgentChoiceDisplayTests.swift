@@ -117,10 +117,40 @@ import Testing
         resolved.lineup[1].selection.model_id = "claude-opus-5-5"
         let chosen = AgentChoiceDisplay.choosing(
             enrollment: UsageFixtures.readingCollectorID, role: .implementer, catalog: resolved)
-        #expect(
-            chosen == UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus-5-5", "harness_default"))
-        #expect(chosen.flatMap { AgentChoiceDisplay.modelOption(for: $0, catalog: resolved) }?.id == "claude-opus")
+        // The pick records the catalog entry's id, not the lineup's spelling.
+        #expect(chosen == UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus", "harness_default"))
         #expect(chosen.map { AgentChoiceDisplay.offers(resolved, $0) } == true)
+    }
+
+    /// #3027: New Task recorded `opus` and Change Agent `claude-opus-5-5`
+    /// for one model. An enrollment pick and a model pick of the same model
+    /// now record the same id, the catalog entry's.
+    @Test func anEnrollmentPickAndAModelPickOfOneModelRecordOneID() {
+        var resolved = catalog
+        resolved.enrollments[0].discovery?.value1.models[0].resolved_model = "claude-opus-5-5"
+        resolved.lineup[1].selection.model_id = "claude-opus-5-5"
+        let byEnrollment = AgentChoiceDisplay.choosing(
+            enrollment: UsageFixtures.readingCollectorID, role: .implementer, catalog: resolved)
+        let sonnet = UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-sonnet", "harness_default")
+        let byModel = AgentChoiceDisplay.choosing(model: "claude-opus", from: sonnet, catalog: resolved)
+        #expect(byEnrollment == byModel)
+    }
+
+    /// A pick that records the entry's id still reads as the lineup's model
+    /// when the lineup names what the entry's alias resolves to.
+    @Test func aPickOfTheLineupsAliasedModelReadsAsTheEnrollmentAlone() {
+        var resolved = catalog
+        resolved.enrollments[0].discovery?.value1.models[0].resolved_model = "claude-opus-5-5"
+        resolved.lineup[1].selection.model_id = "claude-opus-5-5"
+        let pick = UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-opus", "high")
+        #expect(
+            AgentChoiceDisplay.choiceLabel(pick, roles: [.implementer], catalog: resolved)
+                == UsageFixtures.readingCollectorID)
+        // Another model at the lineup's effort still reads in full.
+        let sonnet = UsageFixtures.selection(UsageFixtures.readingCollectorID, "claude-sonnet", "high")
+        #expect(
+            AgentChoiceDisplay.choiceLabel(sonnet, roles: [.implementer], catalog: resolved)
+                == AgentChoiceDisplay.shortLabel(sonnet, catalog: resolved))
     }
 
     @Test func pickingAModelKeepsAnEffortItReportsAndOtherwiseResetsIt() {
@@ -443,6 +473,33 @@ import Testing
         #expect(
             AgentChoiceDisplay.defaultLabel(
                 role: .reviewer, policy: nil, catalog: UsageFixtures.treelessAgentCatalog()) == "Default · lineup")
+        #expect(
+            AgentChoiceDisplay.defaultLabel(
+                role: .implementer, policy: policy, catalog: UsageFixtures.treelessAgentCatalog())
+                == "Default · lineup or routing policy")
+    }
+
+    /// #3027: an unchosen role chip names what the role runs on, not a bare
+    /// `Default`; the default entry's label is built on the same text.
+    @Test func defaultSettingsNameTheLineupSelectionOrNothing() throws {
+        let policy = UsageFixtures.defaultRoutingPolicy()
+        #expect(
+            AgentChoiceDisplay.defaultSettingsLabel(role: .implementer, policy: policy, catalog: catalog)
+                == "\(UsageFixtures.readingCollectorID) · Opus · high or routing policy")
+        #expect(
+            AgentChoiceDisplay.defaultSettingsLabel(role: .reviewer, policy: nil, catalog: catalog)
+                == "\(UsageFixtures.unsupportedCollectorID) · GPT Codex")
+        for role in AgentChoiceDisplay.roleOrder {
+            let settings = try #require(
+                AgentChoiceDisplay.defaultSettingsLabel(role: role, policy: policy, catalog: catalog))
+            #expect(
+                AgentChoiceDisplay.defaultLabel(role: role, policy: policy, catalog: catalog)
+                    == "Default · lineup \(settings)")
+        }
+        #expect(AgentChoiceDisplay.defaultSettingsLabel(role: .reviewer, policy: policy, catalog: nil) == nil)
+        #expect(
+            AgentChoiceDisplay.defaultSettingsLabel(
+                role: .reviewer, policy: policy, catalog: UsageFixtures.treelessAgentCatalog()) == nil)
     }
 
     /// The task page clears a line where New Task leaves a role unchosen, so
