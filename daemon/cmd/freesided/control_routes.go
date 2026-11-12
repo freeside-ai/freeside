@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -153,7 +154,8 @@ func (s pairingControlSocket) Configure(
 func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs) {
 	s.pairing.registerControlRoutes(
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
-		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop)
+		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop,
+		in.ReleaseVerificationMemory)
 }
 
 func (s pairingControlSocket) Publish() error { return s.pairing.publish() }
@@ -164,6 +166,7 @@ func (p *pairingControl) registerControlRoutes(
 	usage *usagecollect.Coordinator, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 	commitWorkflowClosure, commitTaskStop func(context.Context, domain.TaskID, func() error) error,
+	releaseVerificationMemory func(context.Context, domain.TaskID, bool) (engine.VerificationMemoryRelease, error),
 ) {
 	p.registerNotifyTest(mux, st, attention)
 	p.handleGet(mux, "/execution", func(context.Context, *http.Request) (any, error) {
@@ -173,6 +176,7 @@ func (p *pairingControl) registerControlRoutes(
 		store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
 		repositoryID: repositoryID, credentialIntegrityProbe: integrityProbe,
 		commitWorkflowClosure: commitWorkflowClosure, commitTaskStop: commitTaskStop, usageCollection: usage,
+		releaseVerificationMemory: releaseVerificationMemory,
 	}
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
@@ -231,6 +235,7 @@ func (p *pairingControl) registerControlRoutes(
 	command("/shadow-review/configuration-approvals", runApproveShadowReviewCommand)
 	command("/usage-pools/limit", runSetPoolLimitCommand)
 	command("/memory-budget", runSetMemoryBudgetCommand)
+	command(releaseVerificationMemoryRoute, runReleaseVerificationMemoryCommand)
 	command("/tasks/lines", runTaskLineCommand)
 	command(routingPolicyRoute, runRoutingCommand)
 	command("/auth/list", runAuthListCommand)

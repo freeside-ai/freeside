@@ -2023,6 +2023,41 @@ and a refusal it causes names this command as the fix. Nothing clears a
 recorded budget; record a new one to change it. It applies to an instance
 started without a budget too, which then reserves from its next pass.
 
+### Release A Held Verification Reservation
+
+A verification job's memory is released only when ward proves every container
+it started gone and every command it ran joined. Two things can leave that
+proof failing after the task ends: a daemon crash mid-command, which leaves a
+command with no quiescence proof, and a container the runtime refuses to
+delete. Once a task has ended, the publication lane runs the proof once more
+per daemon start. If it passes, the memory is released. If it fails, the lane
+raises a `verification_memory_held` health item naming the task, run,
+invocation, MiB held, and cause. The item resolves itself when the
+reservation is released.
+
+`freesided release-verification-memory` re-runs the proof for one task and
+releases each reservation it proves. It runs inside the daemon, so it refuses
+when the daemon isn't running. It also refuses a task with a pending
+publication task, whose next pass proves its own containers, and reports the
+lane busy instead of waiting while a pass runs; retry then. It prints one row
+per held invocation: `released`, or held with the proof's reason.
+
+```sh
+freesided release-verification-memory \
+  -db <state-root>/daemon/freeside.db \
+  -task <task-id> [-command-gone]
+```
+
+- **A container the runtime couldn't remove:** remove it (the item names it,
+  or its ownership label when the crash came before its id was recorded),
+  then run the command without `-command-gone`.
+- **A command with no quiescence proof:** the daemon can't prove the old
+  `container run` CLI gone after a crash. Confirm that no `container` process
+  from the earlier daemon still runs, then pass `-command-gone`. The daemon
+  still refuses a live call, retries owned cleanup, and proves every owned
+  container absent; only the joined-command check is skipped. The daemon logs
+  every release made this way.
+
 ### Refresh A Usage Pool's Usage Record
 
 The daemon keeps one usage record per usage pool: what the provider reports

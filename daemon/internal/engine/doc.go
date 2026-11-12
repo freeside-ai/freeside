@@ -110,6 +110,8 @@
 //     committed publication outcome
 //   - production_verification.go running verification under an approved
 //     recipe and checkpointing its verdict
+//   - verification_memory_held.go the end-of-task proof of a held
+//     verification reservation, its alert, and the operator's release
 //   - production_remediation_source.go authenticating a remediation's source
 //     tree
 //   - production_publication_holds.go a publication task's run holds and

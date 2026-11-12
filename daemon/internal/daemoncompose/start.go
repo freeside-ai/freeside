@@ -130,6 +130,9 @@ type ControlRouteInputs struct {
 	// against invocation launch as a client's Stop is, or directly when no
 	// engine runs.
 	CommitTaskStop func(context.Context, domain.TaskID, func() error) error
+	// ReleaseVerificationMemory re-proves and releases a task's held
+	// verification reservations through the engine; nil when no engine runs.
+	ReleaseVerificationMemory func(context.Context, domain.TaskID, bool) (engine.VerificationMemoryRelease, error)
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -396,7 +399,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		Store: st, Attention: attention, Workflow: workflow, Driver: driver, Usage: usage,
 	}
 	pairing.Configure(d.Readiness().APIURL, attention.MintPairingCode)
-	pairing.RegisterRoutes(ControlRouteInputs{
+	routes := ControlRouteInputs{
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
@@ -411,7 +414,11 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 			}
 			return workflow.CommitTaskStop(ctx, id, commit)
 		},
-	})
+	}
+	if workflow != nil {
+		routes.ReleaseVerificationMemory = workflow.ReleaseVerificationMemory
+	}
+	pairing.RegisterRoutes(routes)
 	var fakeSched *scheduler.Scheduler
 	var loops *ClaudeLoops
 	if cfg.FakeDriverEnabled {

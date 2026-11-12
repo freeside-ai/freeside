@@ -150,8 +150,14 @@ func (o *VerificationOwnership) StopRun(ctx context.Context, task domain.TaskID,
 	if err != nil {
 		return err
 	}
-	return o.proveRecordsAbsent(ctx, dir, names, task, run, "")
+	return o.proveRecordsAbsent(ctx, dir, names, task, run, "", true)
 }
+
+// ErrVerificationCommandUnjoined marks a proof that failed because a
+// recorded command has no quiescence proof: a daemon crash, or a runner that
+// could not prove its process group gone, interrupted the call before it
+// joined. The engine reads it to tell the operator which release applies.
+var ErrVerificationCommandUnjoined = errors.New("host command has no quiescence proof")
 
 // ProveInvocationAbsent retries owned cleanup for every recorded container
 // call of one invocation, across all of its rooms and passes, and proves each
@@ -163,9 +169,30 @@ func (o *VerificationOwnership) StopRun(ctx context.Context, task domain.TaskID,
 // reaped, and a record it cannot read or check fails the proof whatever
 // invocation it names, since it may be this one's. A run with no records for
 // the invocation has nothing left to prove. Every failure to prove is marked
-// ErrVerificationAbsenceUnproven.
+// ErrVerificationAbsenceUnproven, and an unjoined command's also
+// ErrVerificationCommandUnjoined.
 func (o *VerificationOwnership) ProveInvocationAbsent(
 	ctx context.Context, task domain.TaskID, run domain.RunID, invocation domain.InvocationID,
+) error {
+	return o.proveInvocationAbsent(ctx, task, run, invocation, true)
+}
+
+// ProveInvocationContainersAbsent is ProveInvocationAbsent without the
+// quiescence condition: a record whose command never joined passes once its
+// containers are proved absent. It still refuses a live call, retries owned
+// cleanup, and fails on a record it cannot read. Only the operator-confirmed
+// release (freesided release-verification-memory -command-gone) calls it:
+// the operator has confirmed the old CLI is gone, which is the one fact the
+// daemon cannot prove for a call a crash interrupted. Every automatic release
+// keeps ProveInvocationAbsent's strict rule.
+func (o *VerificationOwnership) ProveInvocationContainersAbsent(
+	ctx context.Context, task domain.TaskID, run domain.RunID, invocation domain.InvocationID,
+) error {
+	return o.proveInvocationAbsent(ctx, task, run, invocation, false)
+}
+
+func (o *VerificationOwnership) proveInvocationAbsent(
+	ctx context.Context, task domain.TaskID, run domain.RunID, invocation domain.InvocationID, requireJoined bool,
 ) error {
 	if task == "" || run == "" || invocation == "" {
 		return domain.ErrEmptyID
@@ -175,7 +202,7 @@ func (o *VerificationOwnership) ProveInvocationAbsent(
 	if err != nil {
 		return errors.Join(ErrVerificationAbsenceUnproven, err)
 	}
-	proof := o.proveRecordsAbsent(ctx, dir, names, task, run, invocation)
+	proof := o.proveRecordsAbsent(ctx, dir, names, task, run, invocation, requireJoined)
 	// A call of the invocation that began while the proof ran is one the
 	// snapshot missed.
 	after, err := o.quiescentRecordNames(dir, invocation)
@@ -230,12 +257,13 @@ func verificationRecordNames(dir string) ([]string, error) {
 }
 
 // proveRecordsAbsent retries exact owned cleanup for each named record and
-// proves its containers absent and its command joined. An empty invocation
-// selects every record; otherwise a consistent record of another invocation
-// is skipped, while an inconsistent one still fails the proof.
+// proves its containers absent and, when requireJoined, its command joined.
+// An empty invocation selects every record; otherwise a consistent record of
+// another invocation is skipped, while an inconsistent one still fails the
+// proof.
 func (o *VerificationOwnership) proveRecordsAbsent(
 	ctx context.Context, dir string, names []string,
-	task domain.TaskID, run domain.RunID, invocation domain.InvocationID,
+	task domain.TaskID, run domain.RunID, invocation domain.InvocationID, requireJoined bool,
 ) error {
 	var pending error
 	room := &ProjectImageRoom{runtime: o.runtime}
@@ -253,10 +281,22 @@ func (o *VerificationOwnership) proveRecordsAbsent(
 		if idErr != nil && !errors.Is(idErr, os.ErrNotExist) {
 			pending = errors.Join(pending, idErr)
 		}
-		pending = errors.Join(pending, room.cleanupOwnedContainers(ctx, id, record.Owner))
-		pending = errors.Join(pending, room.verifyOwnedContainersAbsent(ctx, id, record.Owner))
-		if !record.CommandJoined {
-			pending = errors.Join(pending, fmt.Errorf("verification %s host command has no quiescence proof", record.InvocationID))
+		cleanup := errors.Join(
+			room.cleanupOwnedContainers(ctx, id, record.Owner),
+			room.verifyOwnedContainersAbsent(ctx, id, record.Owner))
+		if cleanup != nil {
+			// Name what the operator has to remove: the container the call
+			// recorded, or its owner label when a crash came before the record.
+			if id != "" {
+				cleanup = fmt.Errorf("verification %s container %s: %w", record.InvocationID, id, cleanup)
+			} else {
+				cleanup = fmt.Errorf("verification %s containers labeled %s=%s: %w",
+					record.InvocationID, record.Owner.Key, record.Owner.Value, cleanup)
+			}
+		}
+		pending = errors.Join(pending, cleanup)
+		if requireJoined && !record.CommandJoined {
+			pending = errors.Join(pending, fmt.Errorf("verification %s %w", record.InvocationID, ErrVerificationCommandUnjoined))
 		}
 	}
 	return pending

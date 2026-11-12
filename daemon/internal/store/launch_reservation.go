@@ -249,6 +249,18 @@ func (tx *WriteTx) reservedMemory(ctx context.Context, at time.Time) (int, []dom
 }
 
 func (tx *ReadTx) openLaunchReservations(ctx context.Context) ([]domain.LaunchReservation, error) {
+	return tx.queryLaunchReservations(ctx, listOpenLaunchReservationsSQL)
+}
+
+// ListOpenVerificationReservations returns every verification reservation
+// not yet released, in invocation order. The engine's end-of-task proof and
+// the operator release read it to find a reservation whose task has ended.
+func (tx *ReadTx) ListOpenVerificationReservations(ctx context.Context) ([]domain.LaunchReservation, error) {
+	return tx.queryLaunchReservations(ctx,
+		listOpenLaunchReservationsSQL+` AND kind = 'verification' ORDER BY invocation_id`)
+}
+
+func (tx *ReadTx) queryLaunchReservations(ctx context.Context, query string) ([]domain.LaunchReservation, error) {
 	open, err := queryAll(ctx, tx.tx, func(row scanner) (domain.LaunchReservation, error) {
 		var r domain.LaunchReservation
 		if err := row.Scan(&r.InvocationID, &r.RunID, &r.Kind, &r.MemoryMiB, &r.OverheadMiB); err != nil {
@@ -260,7 +272,7 @@ func (tx *ReadTx) openLaunchReservations(ctx context.Context) ([]domain.LaunchRe
 			return domain.LaunchReservation{}, err
 		}
 		return r, nil
-	}, listOpenLaunchReservationsSQL)
+	}, query)
 	if err != nil {
 		return nil, fmt.Errorf("list launch reservations: %w", err)
 	}

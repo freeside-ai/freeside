@@ -231,6 +231,10 @@ func TestProductionPublicationRefusesBoundRoomsWithoutAbsenceProof(t *testing.T)
 		t.Fatal("bound rooms without an absence proof were accepted")
 	}
 	cfg.ProveVerificationAbsent = func(context.Context, domain.Run, domain.InvocationID) error { return nil }
+	if _, err := newProductionPublicationWorkflow(f.store, f.signet, cfg); err == nil {
+		t.Fatal("bound rooms without the operator release's container-only proof were accepted")
+	}
+	cfg.ProveVerificationContainersAbsent = func(context.Context, domain.Run, domain.InvocationID) error { return nil }
 	if _, err := newProductionPublicationWorkflow(f.store, f.signet, cfg); err != nil {
 		t.Fatalf("bound rooms with an absence proof: %v", err)
 	}

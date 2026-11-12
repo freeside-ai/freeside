@@ -303,8 +303,9 @@
 //   - verification_room.go ProjectImageRoom, networkless recipe runs in the
 //     admitted project image (the second os/exec importer)
 //   - verification_ownership.go task-bound verification launch ownership,
-//     StopRun's owned cleanup, and ProveInvocationAbsent's per-invocation
-//     absence proof
+//     StopRun's owned cleanup, ProveInvocationAbsent's per-invocation
+//     absence proof, and ProveInvocationContainersAbsent, the same proof
+//     without the quiescence condition for the operator-confirmed release
 //
 // The full-lifecycle integration test and the conformance suite's
 // reference-runtime members (Suite.Full/PreJob end to end, and the

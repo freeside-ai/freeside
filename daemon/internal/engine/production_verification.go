@@ -313,7 +313,9 @@ func (e *verificationReservationRefused) Unwrap() error { return e.err }
 // stays held until a later pass's proof or a confirmed task stop: an unproven
 // container may still hold its memory, and releasing would let the budget
 // overcommit. A task that ends with no later pass and no confirmed stop keeps
-// it. Unbound rooms write no records, so for them the room's own return is the
+// it until the lane's end-of-task proof, which alerts the operator when it
+// fails too, or the operator's release (verification_memory_held.go). Unbound
+// rooms write no records, so for them the room's own return is the
 // proof: any return but one marked ward.ErrVerificationAbsenceUnproven.
 //
 // The host executor writes no ownership records either, so for its slots the
