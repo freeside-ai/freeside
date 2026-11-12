@@ -32,8 +32,15 @@ info:
     a response can reach leaves `additionalProperties` open, so a client
     built from an older contract ignores a field a newer daemon adds. An
     object schema that only requests use sets it to false, and the daemon
-    rejects an unknown field anywhere in a request. The API lint step
-    enforces both rules (api/README.md).
+    rejects an unknown field anywhere in a request.
+
+    Responses tolerate added enum members too. Every string enum of two or
+    more values that a response can reach lists `unknown`, the value a
+    client decodes a member it doesn't know as. Unless the enum's own
+    description says otherwise, the daemon never sends `unknown` and
+    rejects it in a request. A property a `oneOf` discriminates on is
+    exempt: a new union arm is a breaking change. The API lint step
+    enforces these rules (api/README.md, Response Tolerance).
   contact:
     name: Freeside
     url: https://github.com/freeside-ai/freeside
@@ -1265,6 +1272,7 @@ components:
       enum:
         - open
         - stopped
+        - unknown
 
     UnattendedStopKind:
       type: string
@@ -1281,6 +1289,7 @@ components:
         - operator_stop
         - blocking_system_health
         - update_drain
+        - unknown
 
     UnattendedStop:
       type: object
@@ -1430,7 +1439,7 @@ components:
     CollectionAttemptStatus:
       type: string
       description: How the collector's last attempt ended (mirrors domain.CollectionAttemptStatus).
-      enum: [succeeded, failed, unsupported]
+      enum: [succeeded, failed, unsupported, unknown]
 
     CollectionAttempt:
       type: object
@@ -1451,7 +1460,7 @@ components:
       description: >
         The provider's answer under one enrollment's own credential (mirrors
         domain.AvailabilityAnswer).
-      enum: [supported, unsupported, failed]
+      enum: [supported, unsupported, failed, unknown]
 
     UsagePoolEnrollment:
       type: object
@@ -1498,7 +1507,7 @@ components:
     WindowStatus:
       type: string
       description: What a reading says about a provider window (mirrors domain.WindowStatus).
-      enum: [allowed, exhausted]
+      enum: [allowed, exhausted, unknown]
 
     UsageWindowReading:
       type: object
@@ -1570,7 +1579,7 @@ components:
     ExhaustedMarkSource:
       type: string
       description: What made a window exhausted (mirrors domain.ExhaustedMarkSource).
-      enum: [provider_refusal, usage_reading]
+      enum: [provider_refusal, usage_reading, unknown]
 
     UsageExhaustedMark:
       type: object
@@ -1626,7 +1635,7 @@ components:
         domain.RoutingPolicySource): cli_routing_set is `freesided routing
         set` on the daemon host, client_routing_set a paired client's
         set_routing_policy command.
-      enum: [cli_routing_set, client_routing_set]
+      enum: [cli_routing_set, client_routing_set, unknown]
 
     RoutingPolicyRole:
       type: object
@@ -2185,7 +2194,7 @@ components:
         A ward role an operator may choose an agent for on one task (plan
         §5.4). The shadow reviewer and the roles that run without a ward take
         their agent from the lineup and are not members.
-      enum: [specifier, implementer, remediator, reviewer]
+      enum: [specifier, implementer, remediator, reviewer, unknown]
 
     TaskLineInput:
       type: object
@@ -2284,7 +2293,7 @@ components:
 
     TaskAttachmentMediaType:
       type: string
-      enum: [image/png, image/jpeg, image/gif, image/webp, application/octet-stream]
+      enum: [image/png, image/jpeg, image/gif, image/webp, application/octet-stream, unknown]
       description: >
         The daemon's determination of an attachment's type from its leading
         bytes. The set is closed: a format with no reliable signature, SVG
@@ -2345,7 +2354,7 @@ components:
         carry provenance. triage is the triager's escalation of the specifier
         to its escalated counterpart (plan §5.13), citing the task's triage
         record; it carries no provenance.
-      enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change, triage, alternate_agent_move]
+      enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change, triage, alternate_agent_move, unknown]
 
     TaskLineSelectionTier:
       type: string
@@ -2357,7 +2366,7 @@ components:
         whose known weekly reset for its agent's model came soonest, among
         those not marked. policy_order: the first pool in the policy's order among
         those with no known reset, when no pool with one was available.
-      enum: [drain_first_account, soonest_reset, policy_order]
+      enum: [drain_first_account, soonest_reset, policy_order, unknown]
 
     TaskLineRankingReading:
       type: object
@@ -2561,7 +2570,7 @@ components:
         image_policy_adoption proposes adopting the recipe digest or registry
         authorities a project-image upkeep refusal names (plan §5.7). Matches
         domain.AllEffectKinds.
-      enum: [run_proposal, source_issue_closure, follow_up_filing, image_policy_adoption]
+      enum: [run_proposal, source_issue_closure, follow_up_filing, image_policy_adoption, unknown]
 
     IssueTextRuleset:
       type: string
@@ -2576,7 +2585,7 @@ components:
         The outcome of screening one agent-controlled text field. Only a passed
         field reaches a proposal; rejected names the refusal for records that
         carry one. Matches domain.AllScreeningVerdicts.
-      enum: [passed, rejected]
+      enum: [passed, rejected, unknown]
 
     FollowUpSourceKind:
       type: string
@@ -2585,7 +2594,7 @@ components:
         effective disposition is deferred, separate_work_verdict when
         adjudication parked the finding as separate work (plan §5.17). Matches
         domain.AllFollowUpSourceKinds.
-      enum: [deferred_disposition, separate_work_verdict]
+      enum: [deferred_disposition, separate_work_verdict, unknown]
 
     ClosureProvenance:
       type: string
@@ -2594,7 +2603,7 @@ components:
         bound the issue subject, recommended when a same-repository target came
         from a client-supplied source the daemon cannot re-derive (plan §5.13).
         Matches domain.AllClosureProvenances.
-      enum: [verified, recommended]
+      enum: [verified, recommended, unknown]
 
     ClosureFlagOrigin:
       type: string
@@ -2604,7 +2613,7 @@ components:
         minted a durable resolve-false proposal, policy_default when the default
         policy set a resolving flag without asking the site (plan §5.13).
         Matches domain.AllClosureFlagOrigins.
-      enum: [propose_site, daemon_fallback, policy_default]
+      enum: [propose_site, daemon_fallback, policy_default, unknown]
 
     AttentionDeliverySnapshot:
       type: object
@@ -2668,7 +2677,7 @@ components:
         lifecycle:
           type: string
           nullable: true
-          enum: [active, finished, stopped, abandoned, null]
+          enum: [active, finished, stopped, abandoned, null, unknown]
           description: >
             A completed current episode is finished. Otherwise bound confirmed
             cancellation is stopped, explicit current-episode abandonment is
@@ -2732,7 +2741,7 @@ components:
 
     TaskCancellationState:
       type: string
-      enum: [requested, confirmed, failed_to_stop]
+      enum: [requested, confirmed, failed_to_stop, unknown]
       description: Request acceptance is not quiescence; failure retains the fence.
 
     TaskCancellationRun:
@@ -2832,7 +2841,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [started, completed, abandoned]
+          enum: [started, completed, abandoned, unknown]
         run_id:
           type: string
           minLength: 1
@@ -3226,7 +3235,7 @@ components:
           minLength: 1
         class:
           type: string
-          enum: [ready_clean, ready_degraded]
+          enum: [ready_clean, ready_degraded, unknown]
         head_sha:
           type: string
           minLength: 1
@@ -3335,7 +3344,7 @@ components:
         What the triager's one call for a task came to: answered, or the
         failure or skip that stood in for an answer (call_failed,
         invalid_answer, budget_spent, no_triager_line).
-      enum: [answered, call_failed, invalid_answer, budget_spent, no_triager_line]
+      enum: [answered, call_failed, invalid_answer, budget_spent, no_triager_line, unknown]
 
     TriageTier:
       type: string
@@ -3343,18 +3352,18 @@ components:
         The triager's bounded choice: standard keeps the specifier on its
         lineup agent; escalated moves it to that agent's escalated
         counterpart.
-      enum: [standard, escalated]
+      enum: [standard, escalated, unknown]
 
     TaskEventKind:
       type: string
       description: Closed vocabulary of recorded task-wide milestone history.
-      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered, task_line_set, specifier_triaged]
+      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered, task_line_set, specifier_triaged, unknown]
       example: task_created
 
     TaskRunRole:
       type: string
       description: The run's role in its production attempt.
-      enum: [specification, implementation]
+      enum: [specification, implementation, unknown]
       example: specification
 
     RunTimeline:
@@ -3461,7 +3470,7 @@ components:
     ReviewProgressState:
       type: "string"
       description: Progress derived from request, invocation and terminal review facts.
-      enum: ["pending", "running", "completed", "failed"]
+      enum: ["pending", "running", "completed", "failed", unknown]
     ReviewSource:
       type: "object"
       description: "Origin of daemon-held facts. Today kind is freeside_invoked and status is null. Open strings reserve future external sources and quarantined/promoted status."
@@ -3519,7 +3528,7 @@ components:
     ReviewSubjectKind:
       type: "string"
       description: "The role of the invocation whose export produced a reviewed head: the implementer, a remediator of an earlier round's findings, or an operator-feedback pass."
-      enum: ["implementation", "remediation", "operator_feedback"]
+      enum: ["implementation", "remediation", "operator_feedback", unknown]
     ReviewRoundSubject:
       type: "object"
       description: "What a review round reviewed: the invocation whose recorded export is the only one in the run that produced the round's head, classified by that invocation's authenticated dispatch intent."
@@ -3716,6 +3725,7 @@ components:
         - publication_ready
         - publication_blocked
         - work_unit_completed
+        - unknown
 
     RunHoldReason:
       type: string
@@ -3746,6 +3756,7 @@ components:
         - quota_window_exhausted
         - machine_capacity
         - update_drain
+        - unknown
 
     ImageUpkeepPending:
       type: string
@@ -3753,7 +3764,7 @@ components:
         What an image_upkeep_pending hold waits on, mirrored from
         domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the
         upkeep job's rebuild, an adoption card, or a maintenance task.
-      enum: [rebuild, adoption_proposal, maintenance_task]
+      enum: [rebuild, adoption_proposal, maintenance_task, unknown]
 
     QuotaWindowHold:
       type: object
@@ -3883,6 +3894,7 @@ components:
         - agent_egress_authority
         - agent_snapshot
         - agent_admission
+        - unknown
 
     AdmissionRefusal:
       type: object
@@ -3948,7 +3960,7 @@ components:
         enrollment (the daemon holds no such enrollment), model (the
         enrollment does not serve the model), or effort (the enrollment does
         not serve the effort for the model).
-      enum: [enrollment, model, effort]
+      enum: [enrollment, model, effort, unknown]
 
     RunOutcome:
       type: string
@@ -3972,7 +3984,7 @@ components:
         abandoned workflow episode with no invocation still pending or
         running. A run already terminal from its milestones keeps that
         outcome, and handed_off outranks stopped, which outranks abandoned.
-      enum: [unobserved, pending, published, blocked, failed, lost, completed, handed_off, stopped, abandoned]
+      enum: [unobserved, pending, published, blocked, failed, lost, completed, handed_off, stopped, abandoned, unknown]
 
     RunLifecycle:
       type: string
@@ -3985,12 +3997,12 @@ components:
         pending, published with no completion yet, and blocked with no
         successor. A client splits the runs list on this field instead of
         re-deriving it.
-      enum: [active, finished]
+      enum: [active, finished, unknown]
 
     ObservedInvocationStatus:
       type: string
       description: The daemon's closed observation-side invocation lifecycle.
-      enum: [pending, running, completed, failed, canceled, blocked, gone]
+      enum: [pending, running, completed, failed, canceled, blocked, gone, unknown]
 
     ExecutionOutcomeStatus:
       type: string
@@ -3998,7 +4010,7 @@ components:
         The closed non-export terminal authority vocabulary. blocked is the
         implementer's typed stop: no candidate exists and the run waits on an
         agent_question answer.
-      enum: [failed, canceled, lost, blocked]
+      enum: [failed, canceled, lost, blocked, unknown]
 
     FailureCause:
       type: string
@@ -4022,8 +4034,9 @@ components:
       description: >
         Why the daemon could not carry a completed, exported invocation's
         output forward. A separate vocabulary from FailureCause, which rides
-        on an execution outcome that never sits beside an export. It has no
-        unknown member: every writer names its cause.
+        on an execution outcome that never sits beside an export. Every
+        writer names its cause, so the daemon never sends unknown; a client
+        decodes a cause it doesn't know as unknown.
       enum:
         - research_url_refused
         - research_too_large
@@ -4032,6 +4045,7 @@ components:
         - invalid_output
         - transcript_unreadable
         - input_undeliverable
+        - unknown
 
     RunMilestone:
       type: object
@@ -4182,6 +4196,7 @@ components:
         - doctor
         - janitor
         - image_upkeep
+        - unknown
 
     ElapsedDeadline:
       type: object
@@ -4221,14 +4236,14 @@ components:
         fired-and-handled; resolved was explicitly resolved (the awaited
         condition arrived, or the subject concluded); expired ended with
         its validity window.
-      enum: [armed, fired, resolved, expired]
+      enum: [armed, fired, resolved, expired, unknown]
 
     ScheduleResolutionReason:
       type: string
       description: >
         The closed vocabulary of terminal causes (mirrors
         domain.ScheduleResolutionReason); a code, never free text.
-      enum: [deadline_elapsed, condition_satisfied, subject_concluded, intent_expired]
+      enum: [deadline_elapsed, condition_satisfied, subject_concluded, intent_expired, unknown]
 
     ScheduleResolution:
       type: object
@@ -4248,7 +4263,7 @@ components:
       description: >
         The class of durable subject a schedule is bound to (mirrors
         domain.ScheduleSubjectType).
-      enum: [attention_item, installation_intent, trusted_config]
+      enum: [attention_item, installation_intent, trusted_config, unknown]
 
     ScheduleSubject:
       type: object
@@ -4474,6 +4489,7 @@ components:
         - probe
         - publication
         - credential_lease
+        - unknown
 
     ServerRevision:
       type: object
@@ -5063,7 +5079,7 @@ components:
         The rule an alternate agent escapes its failure under (plan §5.4):
         different_pool for a quota exhaustion, valid_generation for an expired
         or revoked credential, different_route for exhausted service capacity.
-      enum: [different_pool, valid_generation, different_route]
+      enum: [different_pool, valid_generation, different_route, unknown]
 
     AlternateAgentOffer:
       type: object
@@ -5535,7 +5551,7 @@ components:
         upkeep's repair task, which the daemon accepts only against a recorded
         repair-class upkeep refusal for the project's repository and re-checks
         whenever it reads the record back. Widening it is a contract change.
-      enum: [device, daemon]
+      enum: [device, daemon, unknown]
 
     TaskSubmissionRecord:
       type: object
@@ -5843,7 +5859,7 @@ components:
         is bound to a loopback address, tailscale when it is bound to a
         Tailscale-owned address, the only two the daemon admits. A relay
         mode arrives with the §5.19 relay.
-      enum: [loopback, tailscale]
+      enum: [loopback, tailscale, unknown]
 
     DeviceScope:
       type: string
@@ -5969,6 +5985,7 @@ components:
           enum:
             - ready_clean
             - ready_degraded
+            - unknown
         evaluation_set_digest:
           $ref: "#/components/schemas/Digest"
 
@@ -5985,6 +6002,7 @@ components:
         - failed
         - not_run
         - not_applicable
+        - unknown
 
     VerificationCheckClass:
       type: string
@@ -5996,6 +6014,7 @@ components:
         - clean_verification
         - independent_review
         - repo_change_policy
+        - unknown
 
     RequirementKind:
       type: string
@@ -6006,6 +6025,7 @@ components:
       enum:
         - required
         - optional
+        - unknown
 
     WaiverGrantingAuthority:
       type: string
@@ -6016,6 +6036,7 @@ components:
       enum:
         - explicit_human_approval
         - daemon_trusted_configuration
+        - unknown
 
     ReadinessWaiver:
       type: object
@@ -6238,12 +6259,12 @@ components:
     RecommendationSource:
       type: string
       description: The closed authority class behind an item recommendation.
-      enum: [daemon_policy, agent_judgment, project_policy]
+      enum: [daemon_policy, agent_judgment, project_policy, unknown]
 
     JudgmentSite:
       type: string
       description: A declared daemon-side judgment site (plan §5.13).
-      enum: [finding_adjudicator, task_namer]
+      enum: [finding_adjudicator, task_namer, unknown]
 
     DaemonPolicyRecommendationProvenance:
       type: object
@@ -6338,7 +6359,7 @@ components:
     DisplayNameSource:
       type: string
       description: Whether a display label is a chosen name or an explicit identifier fallback.
-      enum: [name, identifier, operator, agent, specification]
+      enum: [name, identifier, operator, agent, specification, unknown]
 
     DisplayName:
       type: object
@@ -6381,14 +6402,14 @@ components:
     StageName:
       type: string
       description: The workflow stage that owns an execution outcome.
-      enum: [specification, implementation, review, verification]
+      enum: [specification, implementation, review, verification, unknown]
 
     AnswerRoute:
       type: string
       description: >
         Where a human's answer to an implementation-stage agent_question
         re-enters the workflow.
-      enum: [retry_implementation, revise_specification]
+      enum: [retry_implementation, revise_specification, unknown]
 
     ComprehensionEventKind:
       type: string
@@ -6403,6 +6424,7 @@ components:
         - action_taken
         - recommendation_override
         - not_decidable_here_shown
+        - unknown
 
     DeviceNotificationsInput:
       type: object
@@ -6612,6 +6634,7 @@ components:
         - scope_expansion
         - capability_unavailable
         - commit_plan_collision
+        - unknown
 
     DecisionOption:
       type: object
@@ -6876,7 +6899,7 @@ components:
     AdmissionKind:
       type: string
       description: The admission record an invocation's facts are read from.
-      enum: [execution, review]
+      enum: [execution, review, unknown]
 
     RoleName:
       type: string
@@ -6896,6 +6919,7 @@ components:
         - attention_discussion
         - briefer
         - triager
+        - unknown
 
     LineageRelation:
       type: string
@@ -6907,27 +6931,27 @@ components:
     HarnessClientKind:
       type: string
       description: The harness client an agent or enrollment runs (mirrors domain.HarnessClientKind).
-      enum: [claude_code, codex_cli]
+      enum: [claude_code, codex_cli, unknown]
 
     EffortLevel:
       type: string
       description: The effort an agent requested, in Freeside's vocabulary (plan §5.4).
-      enum: [harness_default, low, medium, high, max]
+      enum: [harness_default, low, medium, high, max, unknown]
 
     AgentSelectionSource:
       type: string
       description: What chose the agent an invocation was admitted with.
-      enum: [lineup, task_line, card]
+      enum: [lineup, task_line, card, unknown]
 
     CredentialMode:
       type: string
       description: The provider-credential containment an attempt was admitted under (plan §5.4).
-      enum: [subscription_contained, api_key_isolated, local_trusted]
+      enum: [subscription_contained, api_key_isolated, local_trusted, unknown]
 
     OperatingMode:
       type: string
       description: Whether an attempt was admitted attended or unattended.
-      enum: [attended_dev, unattended]
+      enum: [attended_dev, unattended, unknown]
 
     ExecutionFailureFacts:
       type: object
@@ -6998,12 +7022,12 @@ components:
         The network exposure a stage runs under (plan §5.4). provider_registry
         adds only the project policy's declared set of public package-registry
         hosts to provider_only.
-      enum: [provider_only, provider_registry, provider_web_read, clean_verification]
+      enum: [provider_only, provider_registry, provider_web_read, clean_verification, unknown]
 
     TrustRule:
       type: string
       description: A definitive publication trust rule surfaced on a blocked card.
-      enum: [recipe_unapproved, verification_failed, trust_profile_drift, target_base_advanced]
+      enum: [recipe_unapproved, verification_failed, trust_profile_drift, target_base_advanced, unknown]
 
     PublishBlockFacts:
       type: object
@@ -7144,7 +7168,7 @@ components:
         The authority or event a blocked item was waiting on. Retired with
         the `blocked` attention type (plan revision 84); it stays so closed
         items stored before the retirement still decode.
-      enum: [spec_approval, pr_checks, external_review]
+      enum: [spec_approval, pr_checks, external_review, unknown]
 
     BlockedWait:
       type: object
@@ -7171,7 +7195,7 @@ components:
     ImpairedCapability:
       type: string
       description: The operator capability currently affected by a health diagnostic.
-      enum: [unattended_admission, run_visibility, agent_credential, none]
+      enum: [unattended_admission, run_visibility, agent_credential, none, unknown]
 
     HealthDiagnostic:
       type: object
@@ -7235,7 +7259,7 @@ components:
           nullable: true
         severity:
           type: string
-          enum: ["", P0, P1, P2, P3]
+          enum: ["", P0, P1, P2, P3, unknown]
         external:
           type: object
           nullable: true
@@ -8003,7 +8027,7 @@ components:
       properties:
         media_type:
           type: string
-          enum: [text/plain, text/markdown]
+          enum: [text/plain, text/markdown, unknown]
         content:
           type: string
           minLength: 1
@@ -8018,9 +8042,9 @@ components:
         The daemon-validated media type of an evidence or claim reference
         (plan §5.15 rule 3; domain.EvidenceMediaType). The daemon validates
         magic bytes, type, and size, so a client reads the type from this
-        field rather than inferring it from a fetch. The set is closed;
-        adding a member is a contract change (the generated client's enum
-        rejects an unknown value).
+        field rather than inferring it from a fetch. Adding a member is a
+        contract change; a client built before it decodes the new member as
+        unknown.
       enum:
         - image/png
         - image/jpeg
@@ -8030,6 +8054,7 @@ components:
         - text/markdown
         - application/json
         - application/jsonl
+        - unknown
 
     EvidenceSource:
       type: string
@@ -8039,7 +8064,7 @@ components:
         evidence_snapshot, claim for every entry in agent_claims. The daemon
         pins the value to its container, so a reference cannot mislabel its
         channel.
-      enum: [run, claim]
+      enum: [run, claim, unknown]
 
     EvidenceAvailability:
       type: string
@@ -8051,7 +8076,7 @@ components:
         read-time fact, recomputed from the blob store immediately before
         serialization on every synced item and never a trusted persisted
         value, so it can differ between two reads of the same item version.
-      enum: [available, bytes_absent]
+      enum: [available, bytes_absent, unknown]
 
     EvidenceMetadata:
       type: object
@@ -8127,6 +8152,7 @@ components:
             - command_transcript
             - verify_log
             - license_scan
+            - unknown
         digest:
           $ref: "#/components/schemas/Digest"
         provenance:
@@ -8195,7 +8221,7 @@ components:
       properties:
         producer_class:
           type: string
-          enum: [verifier, daemon]
+          enum: [verifier, daemon, unknown]
         producer_invocation_id:
           type: string
           minLength: 1
@@ -8234,7 +8260,7 @@ components:
       properties:
         producer_class:
           type: string
-          enum: [verifier, daemon]
+          enum: [verifier, daemon, unknown]
         producer_invocation_id:
           type: string
           minLength: 1
@@ -8846,6 +8872,7 @@ components:
         - discussion_reply
         - revision
         - retry
+        - unknown
 
     # --- enumerated vocabularies (daemon/internal/domain/enums.go) ---
 
@@ -8871,6 +8898,7 @@ components:
         - effect_proposal
         - system_health
         - blocked
+        - unknown
 
     ReviewOutcome:
       type: string
@@ -8878,6 +8906,7 @@ components:
       enum:
         - clean
         - findings
+        - unknown
 
     DriftVerdict:
       type: string
@@ -8891,6 +8920,7 @@ components:
         - converged
         - over_hardened
         - stuck
+        - unknown
 
     ReviewDiminishingCause:
       type: string
@@ -8908,6 +8938,7 @@ components:
         - final_review_findings
         - growth_without_blockers
         - drift_audit
+        - unknown
 
     DriftReversal:
       type: object
@@ -8990,6 +9021,7 @@ components:
       enum:
         - planned_gate
         - exceptional
+        - unknown
 
     Action:
       type: string
@@ -9033,6 +9065,7 @@ components:
         - accept_recommended_route
         - choose_alternative_route
         - adjudicate_findings
+        - unknown
 
     Priority:
       type: string
@@ -9042,11 +9075,12 @@ components:
         - normal
         - high
         - urgent
+        - unknown
 
     GoalRelationship:
       type: string
       description: How a review finding relates to the assigned work-unit goal.
-      enum: [required, adjacent, contradictory, unclear]
+      enum: [required, adjacent, contradictory, unclear, unknown]
 
     WorkUnitCompatibility:
       type: string
@@ -9061,7 +9095,7 @@ components:
       enum:
         [remediate, park_revision, park_separate_work,
          attention_human_decision, park_unknown, defer, decline, dispute,
-         attention_unclear]
+         attention_unclear, unknown]
 
     AdjudicationProducer:
       type: string
@@ -9069,12 +9103,12 @@ components:
         The proposal's judgment and authority provenance. engine_model means
         the goal judgment and confidence came from the model while the engine
         independently derived the allowed remediation authority.
-      enum: [engine, model, engine_model, human]
+      enum: [engine, model, engine_model, human, unknown]
 
     AdjudicationConfidence:
       type: string
       description: The proposal producer's confidence in its recommended route.
-      enum: [low, medium, high]
+      enum: [low, medium, high, unknown]
 
     AttentionItemConclusion:
       type: object
@@ -9121,6 +9155,7 @@ components:
         - expired
         - superseded
         - resolved_by_daemon
+        - unknown
     ConclusionDecision:
       type: object
       description: >
@@ -9167,6 +9202,7 @@ components:
         - superseded
         - dismissed
         - expired
+        - unknown
 
     HealthPosture:
       type: string
@@ -9176,6 +9212,7 @@ components:
       enum:
         - blocking
         - advisory
+        - unknown
 
     SupersessionKind:
       type: string
@@ -9205,6 +9242,7 @@ components:
         - base_advanced
         - retargeted
         - identity_changed
+        - unknown
 
     ReadinessInvalidation:
       type: object
@@ -9363,6 +9401,7 @@ components:
         - product
         - risk
         - accessibility
+        - unknown
 
     ReviewExcerptSide:
       type: string
@@ -9372,6 +9411,7 @@ components:
       enum:
         - head
         - base
+        - unknown
 
     ReviewExcerptUnresolved:
       type: string
@@ -9385,6 +9425,7 @@ components:
         - range_out_of_file
         - binary
         - too_large
+        - unknown
 
     ReviewRecoveryBinding:
       type: object
@@ -9692,6 +9733,7 @@ components:
         - normal
         - sensitive
         - high_sensitivity
+        - unknown
 
     Author:
       type: string
@@ -9700,6 +9742,7 @@ components:
         - user
         - agent
         - daemon
+        - unknown
 
     ConversationStatus:
       type: string
@@ -9711,6 +9754,7 @@ components:
       enum:
         - idle
         - awaiting_agent
+        - unknown
 
     CommitPlanNoticeReason:
       type: string
@@ -9725,6 +9769,7 @@ components:
         - structural
         - screening
         - present_but_not_honored
+        - unknown
 
     Device:
       description: >

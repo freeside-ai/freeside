@@ -291,6 +291,9 @@ func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
 		status int
 	}{
 		{"unknown field", strings.Replace(valid, `"command_id"`, `"unexpected":true,"command_id"`, 1), http.StatusBadRequest},
+		// unknown is in the spec's Action enum for an older client to decode
+		// a newer member as; the daemon registers no such action.
+		{"unknown action", strings.Replace(valid, `"action":"open_pr"`, `"action":"unknown"`, 1), http.StatusBadRequest},
 		{"missing expected bindings", strings.Replace(valid, `"expected_bindings":{},`, "", 1), http.StatusBadRequest},
 		{"empty expected binding", strings.Replace(valid, `"expected_bindings":{}`, `"expected_bindings":{"evidence":""}`, 1), http.StatusBadRequest},
 		{"null expected binding", strings.Replace(valid, `"expected_bindings":{}`, `"expected_bindings":{"evidence":null}`, 1), http.StatusBadRequest},

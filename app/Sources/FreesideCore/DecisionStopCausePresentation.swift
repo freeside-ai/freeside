@@ -89,6 +89,7 @@ struct DecisionStopCausePresentation: Equatable {
         case .converged: return "Converged"
         case .over_hardened: return "Over-hardened"
         case .stuck: return "Stuck"
+        case .unknown: return "Unknown"
         }
     }
 
@@ -116,7 +117,11 @@ struct DecisionStopCausePresentation: Equatable {
                 return "Review stopped because a drift audit judged the change over-hardened."
             case .stuck:
                 return "Review stopped because a drift audit judged the review rounds stuck."
+            case .unknown:
+                return "Review stopped on a drift audit."
             }
+        case .unknown:
+            return "Review stopped for a reason this app doesn't recognize."
         }
     }
 
@@ -134,7 +139,7 @@ struct DecisionStopCausePresentation: Equatable {
             return drift.simplification_on_continue
                 ? "\(action) runs one simplification round that undoes the listed fixes."
                 : "\(action) runs an ordinary review round and will not undo the listed fixes."
-        case .converged, .stuck:
+        case .converged, .stuck, .unknown:
             return offered ? "\(action) runs an ordinary review round." : nil
         }
     }

@@ -234,7 +234,7 @@ import Testing
     /// unverified keyword once, in reading order, and the first carries the
     /// control, so no card has two and none with a visible keyword has
     /// none (plan §9 revision 82).
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func unverifiedExplanationIsOnDemandFromOneControlOnEveryCard(
         type: Components.Schemas.AttentionType
     ) {
@@ -337,7 +337,7 @@ import Testing
     /// Plan §9 revision 82: the card's details carry the full reason on
     /// every type, including a reason the card draws nowhere else, and an
     /// agent-written one keeps its label there.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func detailsCarryTheFullReasonOnEveryType(type: Components.Schemas.AttentionType) throws {
         let item = AttentionFixtures.fixture(type: type).item
         let reason = try #require(DecisionCardComposition.reason(for: item))
@@ -358,7 +358,7 @@ import Testing
     /// Visual audit D06 and D08: the question and dispute cards fold their
     /// run and binding coordinates; every other type keeps its facts beside
     /// the decision. Either way each fact has exactly one destination.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func everyCardFactHasOneDestination(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
         let now = Date(timeIntervalSince1970: 0)
@@ -714,7 +714,7 @@ import Testing
     /// goes to the type's one forward action; a type whose choices are peers,
     /// and the three with no frame, fill nothing, so View PR is an outline
     /// there.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func theFillGoesToTheTypesForwardActionOrToNothing(type: Components.Schemas.AttentionType) {
         let forward: [Components.Schemas.AttentionType: Components.Schemas.Action] = [
             .agent_question: .answer_and_retry, .ready_for_final_review: .open_pr,
@@ -733,7 +733,7 @@ import Testing
 
     /// A recommendation the card draws holds the fill in its own block, so
     /// the row under it fills nothing on any type: no card draws two.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func aDrawnRecommendationLeavesTheRowUnfilled(type: Components.Schemas.AttentionType) throws {
         let item = AttentionFixtures.fixture(type: type).item
         guard let recommended = item.requested_decision.first else { return }
@@ -817,7 +817,7 @@ import Testing
     /// A held pick moves the fill on a finding adjudication only: every
     /// other type fills what it fills without one, recommended or not, and
     /// still draws at most one filled control.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func aHeldPickMovesNoFillOnOtherTypes(type: Components.Schemas.AttentionType) {
         guard type != .finding_adjudication else { return }
         let item = AttentionFixtures.fixture(type: type).item
@@ -843,7 +843,7 @@ import Testing
         health.requested_decision = [.run_doctor, .resume_unattended, .stop_unattended]
         #expect(DecisionCardComposition.filledAction(for: health, ranking: ranking(health)) == nil)
 
-        for type in Components.Schemas.AttentionType.allCases {
+        for type in AttentionFixtures.fixtureTypes {
             let item = AttentionFixtures.fixture(type: type).item
             if let filled = DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) {
                 #expect(AttentionDisplay.confirmationConsequence(filled, for: item) == nil)
@@ -855,7 +855,7 @@ import Testing
     /// Discuss sits under More Actions on spec approval only, where the
     /// conversation is the place a reply starts (frame 5.1). The menu still
     /// draws when Discuss is its one entry.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func discussMovesUnderMoreActionsOnSpecApprovalOnly(type: Components.Schemas.AttentionType) {
         var item = AttentionFixtures.fixture(type: type).item
         item.requested_decision = [.approve, .discuss]
@@ -868,7 +868,7 @@ import Testing
     /// Visual audit D06: the agent's own question leads, so the shell's
     /// generic ask is dropped only when a typed decision is there to replace
     /// it. No card is ever left without a lead.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func askIsDroppedOnlyWhereATypedQuestionLeads(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
         #expect(DecisionCardComposition.rendersAsk(for: item) == (type != .agent_question))
@@ -894,7 +894,7 @@ import Testing
 
     /// Each fixture is its type's ordinary item, so its placement is the
     /// one its type names; the per-item tests cover the items that differ.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func reasonPlacementFollowsTheTypeForATypedItem(
         type: Components.Schemas.AttentionType
     ) {
@@ -1046,7 +1046,7 @@ import Testing
     /// The foot lists attachment claims on both platforms, so an attachment
     /// claim renders once: never in the foot and a claims module both, and
     /// never in neither.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func anAttachmentClaimRendersOnce(type: Components.Schemas.AttentionType) {
         let composition = DecisionCardComposition.forType(type)
         let claims = AttentionFixtures.fixture(type: type).item.agent_claims

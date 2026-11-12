@@ -80,6 +80,7 @@ package struct DecisionActionRanking: Equatable {
             .adopt_review_configuration, .resolve_reenrollment,
             .accept_recommended_route, .choose_alternative_route, .adjudicate_findings:
             return false
+        case .unknown: return false
         }
     }
 
@@ -98,6 +99,7 @@ package struct DecisionActionRanking: Equatable {
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route, .adjudicate_findings:
             return false
+        case .unknown: return false
         }
     }
 
@@ -122,6 +124,7 @@ package struct DecisionActionRanking: Equatable {
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route, .adjudicate_findings:
             return .max
+        case .unknown: return .max
         }
     }
 }

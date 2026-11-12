@@ -402,6 +402,7 @@ enum ReviewRoundPresentation {
         switch round.state {
         case .pending, .running: true
         case .completed, .failed: false
+        case .unknown: false
         }
     }
 
@@ -470,8 +471,9 @@ enum ReviewRoundPresentation {
             case .findings?:
                 if let open = round.dispositions?.value1.open { return "Findings · \(open) open" }
                 return round.findings_count.map { "Findings · \($0)" } ?? "Findings"
-            case nil: return "Completed"
+            case .unknown?, nil: return "Completed"
             }
+        case .unknown: return "Unknown"
         }
     }
 

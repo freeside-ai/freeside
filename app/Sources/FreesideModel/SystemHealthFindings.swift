@@ -51,9 +51,13 @@ package struct SystemHealthFindings: Equatable {
     }
 
     /// A finding with no posture is advisory: only a blocking one closes
-    /// unattended admission (plan §4).
+    /// unattended admission (plan §4). A posture this build doesn't know
+    /// counts as blocking, so the app never plays down a finding.
     package static func isBlocking(_ item: Components.Schemas.AttentionItem) -> Bool {
-        item.posture?.value1 == .blocking
+        switch item.posture?.value1 {
+        case .blocking?, .unknown?: true
+        case .advisory?, nil: false
+        }
     }
 
     /// Newest first by `instant`, an undated item last, ties in the order

@@ -353,6 +353,7 @@ struct AccountUsageView: View {
         case .supported: "Supported"
         case .unsupported: "Unsupported"
         case .failed: "Check failed"
+        case .unknown: "Unknown"
         }
     }
 }

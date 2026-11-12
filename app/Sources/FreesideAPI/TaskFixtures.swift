@@ -138,6 +138,7 @@ public enum TaskFixtures {
             case .started: kind = .task_started
             case .completed: kind = .task_completed
             case .abandoned: kind = .task_abandoned
+            case .unknown: continue
             }
             events.append(.init(kind: kind, recorded_at: fact.recorded_at, run_id: fact.run_id))
         }
@@ -147,7 +148,7 @@ public enum TaskFixtures {
                 switch ack.state {
                 case .confirmed: events.append(.init(kind: .task_stopped, recorded_at: ack.recorded_at))
                 case .failed_to_stop: events.append(.init(kind: .stop_failed, recorded_at: ack.recorded_at))
-                case .requested: break
+                case .requested, .unknown: break
                 }
             }
         }
@@ -164,7 +165,7 @@ public enum TaskFixtures {
                                 milestone: .init(value1: milestone), kind: .run_milestone,
                                 recorded_at: milestone.recorded_at, run_id: run.run_id))
                     case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded,
-                        .work_unit_completed:
+                        .work_unit_completed, .unknown:
                         break
                     }
                 }
@@ -281,7 +282,7 @@ public enum TaskFixtures {
                         kind: .completed, run_id: newest.id,
                         binding_unit_id: "workunit-\(newest.id)", recorded_at: lastActivity))
                 wip = false
-            case .active:
+            case .active, .unknown:
                 wip = true
             }
             return .init(

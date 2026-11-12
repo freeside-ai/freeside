@@ -36,12 +36,19 @@ the way in.
   (`AlternateAgentChoice`, `AlternativeChoice`, `TaskLineSelection`,
   `TaskProposalScope`) stays open in the spec, and the daemon's strict
   decoder still rejects an unknown field in it on the way in.
+- **Responses tolerate added enum members.** Every string enum of two or
+  more values that a response reaches lists `unknown`, and the app decodes
+  a member it doesn't know as `unknown`. Unless the enum's description
+  says otherwise, the daemon never sends `unknown` and rejects it in a
+  request. A constant, a null marker, and a property a `oneOf`
+  discriminates on are exempt: a new union arm is a breaking change.
 - **Order matters in a union with no discriminator.** A client tries
   `CommandRejection`'s arms in order and takes the first that decodes, so
   an arm goes before any arm whose required fields are a subset of its own.
 - **Enforced by the lint.** `api/functions/responseTolerance.js` backs the
-  rules `response-schemas-tolerate-added-fields` and
-  `request-schemas-reject-unknown-fields`. They read the unresolved
+  rules `response-schemas-tolerate-added-fields`,
+  `request-schemas-reject-unknown-fields`, and
+  `response-enums-list-unknown`. They read the unresolved
   document (`resolved: false`), because vacuum's resolved document inlines
   every `$ref` and so hides which schema a response reaches.
 

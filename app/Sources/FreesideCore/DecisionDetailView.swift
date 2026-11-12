@@ -2579,8 +2579,11 @@ struct DecisionDetailView: View {
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // A route this app doesn't know is never offered: picking it
+            // would send `unknown` back, so such a finding can't be routed
+            // until the app is updated.
             let routes: [ChoiceList<Components.Schemas.AdjudicationRoute?>.Option] =
-                finding.offered_routes.map {
+                finding.offered_routes.filter { $0 != .unknown }.map {
                     .init(
                         value: $0,
                         label: AttentionDisplay.disputeRouteLabel($0, external: external),
@@ -2756,7 +2759,9 @@ struct DecisionDetailView: View {
         reasons: [String: String] = [:]
     ) -> [Components.Schemas.FindingRouteChoice] {
         findings.compactMap { finding in
-            guard let route = selections[finding.finding_id], finding.offered_routes.contains(route) else {
+            guard let route = selections[finding.finding_id], route != .unknown,
+                finding.offered_routes.contains(route)
+            else {
                 return nil
             }
             let reason =
@@ -2787,7 +2792,7 @@ struct DecisionDetailView: View {
         selections: [String: Components.Schemas.AdjudicationRoute]
     ) -> [Components.Schemas.AlternativeChoice] {
         binding.proposals.compactMap { proposal in
-            guard let route = selections[proposal.finding_id] else { return nil }
+            guard let route = selections[proposal.finding_id], route != .unknown else { return nil }
             return .init(finding_id: proposal.finding_id, route: route)
         }
     }
@@ -3566,7 +3571,7 @@ struct DecisionDetailView: View {
 
         private func claimText(_ text: Components.Schemas.ClaimText) -> Text {
             switch text.media_type {
-            case .text_sol_plain:
+            case .text_sol_plain, .unknown:
                 return Text(text.content)
             case .text_sol_markdown:
                 // Inline-only interpretation keeps a summary a compact
@@ -4752,7 +4757,7 @@ extension StateChip {
     init(posture: Components.Schemas.HealthPosture) {
         let color: Color =
             switch posture {
-            case .blocking: .waxText
+            case .blocking, .unknown: .waxText
             case .advisory: .inkDim
             }
         self.init(label: AttentionDisplay.label(posture), color: color)

@@ -612,6 +612,8 @@ enum MockContractValidation {
                     {
                         return "finding_adjudication mixed-origin proposal is not allowed remediation"
                     }
+                case .unknown:
+                    return "finding_adjudication proposal has an unknown producer"
                 }
                 var alternativeRoutes = Set<Components.Schemas.AdjudicationRoute>()
                 for alternative in proposal.offered_alternatives {
@@ -808,6 +810,8 @@ enum MockContractValidation {
                 {
                     return "invalid blocked_on pull request reference"
                 }
+            case .unknown:
+                return "blocked_on has an unknown kind"
             }
             if let created = item.created_at, wait.since > created {
                 return "blocked_on starts after item creation"
@@ -980,6 +984,8 @@ enum MockContractValidation {
                 {
                     return "empty project-policy recommendation field"
                 }
+            case .unknown:
+                return "recommendation has an unknown source"
             }
         }
         // An empty requested_decision is structurally valid (#96): which
@@ -1137,6 +1143,7 @@ enum MockContractValidation {
             case .expired: [.expired]
             case .superseded: [.superseded]
             case .resolved_by_daemon: [.resolved]
+            case .unknown: []
             }
         if !admitted.contains(item.status) { return "conclusion cause does not admit the item's status" }
         if conclusion.successor_item_id == item.id || conclusion.successor_item_id?.isEmpty == true {
@@ -1787,6 +1794,8 @@ enum MockContractValidation {
             return compatibility == nil && (route == .decline || route == .dispute)
         case .unclear:
             return compatibility == nil && route == .attention_unclear
+        case .unknown:
+            return false
         }
     }
 

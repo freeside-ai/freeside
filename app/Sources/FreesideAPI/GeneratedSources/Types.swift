@@ -1203,6 +1203,7 @@ public enum Components {
         @frozen public enum UnattendedAdmission: String, Codable, Hashable, Sendable, CaseIterable {
             case open = "open"
             case stopped = "stopped"
+            case unknown = "unknown"
         }
         /// Why unattended admission is closed (mirrors domain.UnattendedStopKind). operator_stop is an accepted stop_unattended that only resume_unattended lifts; blocking_system_health is an open blocking system_health item, which includes the daemon's own durable stop and clears when the daemon resolves the item or a validated configuration supersedes it; update_drain is an update drain in force, which the daemon lifts when it restarts on a new build. Widening it is a contract change.
         ///
@@ -1212,6 +1213,7 @@ public enum Components {
             case operator_stop = "operator_stop"
             case blocking_system_health = "blocking_system_health"
             case update_drain = "update_drain"
+            case unknown = "unknown"
         }
         /// One stop that closes unattended admission.
         ///
@@ -1415,6 +1417,7 @@ public enum Components {
             case succeeded = "succeeded"
             case failed = "failed"
             case unsupported = "unsupported"
+            case unknown = "unknown"
         }
         /// The collector's last attempt to read the pool, and how it ended.
         ///
@@ -1457,6 +1460,7 @@ public enum Components {
             case supported = "supported"
             case unsupported = "unsupported"
             case failed = "failed"
+            case unknown = "unknown"
         }
         /// One enrollment whose identity meters the pool, with its recorded availability answer.
         ///
@@ -1573,6 +1577,7 @@ public enum Components {
         @frozen public enum WindowStatus: String, Codable, Hashable, Sendable, CaseIterable {
             case allowed = "allowed"
             case exhausted = "exhausted"
+            case unknown = "unknown"
         }
         /// One provider window as the collector last saw it, under the named enrollment generation. Unknown stays unknown: a reading with a status alone is complete. used_percent and quantity are the provider's two report forms, at most one set; unit is set exactly when quantity is.
         ///
@@ -1665,6 +1670,7 @@ public enum Components {
         @frozen public enum ExhaustedMarkSource: String, Codable, Hashable, Sendable, CaseIterable {
             case provider_refusal = "provider_refusal"
             case usage_reading = "usage_reading"
+            case unknown = "unknown"
         }
         /// One reason the pool's record holds a window exhausted, and what says so. invocation_id is set exactly for provider_refusal, reading_observed_at exactly for usage_reading.
         ///
@@ -1758,6 +1764,7 @@ public enum Components {
         @frozen public enum RoutingPolicySource: String, Codable, Hashable, Sendable, CaseIterable {
             case cli_routing_set = "cli_routing_set"
             case client_routing_set = "client_routing_set"
+            case unknown = "unknown"
         }
         /// One role's order: the router's candidates for the role, whose pools it ranks by the drain-first account, then the soonest known weekly reset, then this order, passing over a pool whose window is marked exhausted. Exactly one of enrollments and agents is non-null: a revision stored since #2736 orders enrollment ids, and an older one the agent names it recorded. The daemon never translates one into the other.
         ///
@@ -2826,6 +2833,7 @@ public enum Components {
             case implementer = "implementer"
             case remediator = "remediator"
             case reviewer = "reviewer"
+            case unknown = "unknown"
         }
         /// An operator's choice for one role on one task: the selection the role runs. The role's prompt stays the lineup's. When it accepts the command the daemon refuses, with a 400 that names the field, a selection whose enrollment it doesn't hold, or whose model or effort the enrollment's discovery record doesn't list; with no discovery record it checks the selection when it admits the role.
         ///
@@ -3019,6 +3027,7 @@ public enum Components {
             case image_sol_gif = "image/gif"
             case image_sol_webp = "image/webp"
             case application_sol_octet_hyphen_stream = "application/octet-stream"
+            case unknown = "unknown"
         }
         /// One attachment recorded on a task, as its submission carried it. Attachments are operator input, never evidence: they are not artifacts and never enter an evidence_snapshot (plan §5.15). Size limits: an image (an image media_type) at most 10 MiB, any other file at most 32 MiB, and per task at most 100 MiB in total and 1,000 attachments.
         ///
@@ -3085,6 +3094,7 @@ public enum Components {
             case client_line_change = "client_line_change"
             case triage = "triage"
             case alternate_agent_move = "alternate_agent_move"
+            case unknown = "unknown"
         }
         /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an enrollment on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
         ///
@@ -3094,6 +3104,7 @@ public enum Components {
             case drain_first_account = "drain_first_account"
             case soonest_reset = "soonest_reset"
             case policy_order = "policy_order"
+            case unknown = "unknown"
         }
         /// One candidate pool's known weekly reset for its agent's model, as the router ranked it: the window that resets soonest, the reset, and when the reading that reported it was observed.
         ///
@@ -3492,6 +3503,7 @@ public enum Components {
             case source_issue_closure = "source_issue_closure"
             case follow_up_filing = "follow_up_filing"
             case image_policy_adoption = "image_policy_adoption"
+            case unknown = "unknown"
         }
         /// The versioned ruleset an issue text field was screened under. Matches domain.AllIssueTextRulesets.
         ///
@@ -3507,6 +3519,7 @@ public enum Components {
         @frozen public enum ScreeningVerdict: String, Codable, Hashable, Sendable, CaseIterable {
             case passed = "passed"
             case rejected = "rejected"
+            case unknown = "unknown"
         }
         /// What produced a follow-up filing: deferred_disposition when a finding's effective disposition is deferred, separate_work_verdict when adjudication parked the finding as separate work (plan §5.17). Matches domain.AllFollowUpSourceKinds.
         ///
@@ -3515,6 +3528,7 @@ public enum Components {
         @frozen public enum FollowUpSourceKind: String, Codable, Hashable, Sendable, CaseIterable {
             case deferred_disposition = "deferred_disposition"
             case separate_work_verdict = "separate_work_verdict"
+            case unknown = "unknown"
         }
         /// The trust a source-issue-closure target earns: verified when the daemon bound the issue subject, recommended when a same-repository target came from a client-supplied source the daemon cannot re-derive (plan §5.13). Matches domain.AllClosureProvenances.
         ///
@@ -3523,6 +3537,7 @@ public enum Components {
         @frozen public enum ClosureProvenance: String, Codable, Hashable, Sendable, CaseIterable {
             case verified = "verified"
             case recommended = "recommended"
+            case unknown = "unknown"
         }
         /// Which mechanism produced a source-issue-closure proposal: propose_site when the inference site emitted the flag, daemon_fallback when the daemon minted a durable resolve-false proposal, policy_default when the default policy set a resolving flag without asking the site (plan §5.13). Matches domain.AllClosureFlagOrigins.
         ///
@@ -3532,6 +3547,7 @@ public enum Components {
             case propose_site = "propose_site"
             case daemon_fallback = "daemon_fallback"
             case policy_default = "policy_default"
+            case unknown = "unknown"
         }
         /// A resource snapshot wrapping one attention delivery (plan §5.14).
         ///
@@ -3640,6 +3656,7 @@ public enum Components {
                 case stopped = "stopped"
                 case abandoned = "abandoned"
                 case _empty = ""
+                case unknown = "unknown"
             }
             /// A completed current episode is finished. Otherwise bound confirmed cancellation is stopped, explicit current-episode abandonment is abandoned, and unaffected tasks keep the newest run's display state. Null means no run or terminal decision. A stopped task may have no run or current_position. A finished run alone proves neither task completion nor execution quiescence. Pending or failed cancellation does not supply a terminal override.
             ///
@@ -3790,6 +3807,7 @@ public enum Components {
             case requested = "requested"
             case confirmed = "confirmed"
             case failed_to_stop = "failed_to_stop"
+            case unknown = "unknown"
         }
         /// One daemon-derived run and its campaign, including a queued run.
         ///
@@ -3996,6 +4014,7 @@ public enum Components {
                 case started = "started"
                 case completed = "completed"
                 case abandoned = "abandoned"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/TaskLifecycleFact/kind`.
             public var kind: Components.Schemas.TaskLifecycleFact.kindPayload
@@ -4805,6 +4824,7 @@ public enum Components {
             @frozen public enum _classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case ready_clean = "ready_clean"
                 case ready_degraded = "ready_degraded"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/TaskEventVerification/class`.
             public var _class: Components.Schemas.TaskEventVerification._classPayload
@@ -5069,6 +5089,7 @@ public enum Components {
             case invalid_answer = "invalid_answer"
             case budget_spent = "budget_spent"
             case no_triager_line = "no_triager_line"
+            case unknown = "unknown"
         }
         /// The triager's bounded choice: standard keeps the specifier on its lineup agent; escalated moves it to that agent's escalated counterpart.
         ///
@@ -5077,6 +5098,7 @@ public enum Components {
         @frozen public enum TriageTier: String, Codable, Hashable, Sendable, CaseIterable {
             case standard = "standard"
             case escalated = "escalated"
+            case unknown = "unknown"
         }
         /// Closed vocabulary of recorded task-wide milestone history.
         ///
@@ -5101,6 +5123,7 @@ public enum Components {
             case external_review_reentered = "external_review_reentered"
             case task_line_set = "task_line_set"
             case specifier_triaged = "specifier_triaged"
+            case unknown = "unknown"
         }
         /// The run's role in its production attempt.
         ///
@@ -5108,6 +5131,7 @@ public enum Components {
         @frozen public enum TaskRunRole: String, Codable, Hashable, Sendable, CaseIterable {
             case specification = "specification"
             case implementation = "implementation"
+            case unknown = "unknown"
         }
         /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate.
         ///
@@ -5297,6 +5321,7 @@ public enum Components {
             case running = "running"
             case completed = "completed"
             case failed = "failed"
+            case unknown = "unknown"
         }
         /// Origin of daemon-held facts. Today kind is freeside_invoked and status is null. Open strings reserve future external sources and quarantined/promoted status.
         ///
@@ -5443,6 +5468,7 @@ public enum Components {
             case implementation = "implementation"
             case remediation = "remediation"
             case operator_feedback = "operator_feedback"
+            case unknown = "unknown"
         }
         /// What a review round reviewed: the invocation whose recorded export is the only one in the run that produced the round's head, classified by that invocation's authenticated dispatch intent.
         ///
@@ -5911,6 +5937,7 @@ public enum Components {
             case publication_ready = "publication_ready"
             case publication_blocked = "publication_blocked"
             case work_unit_completed = "work_unit_completed"
+            case unknown = "unknown"
         }
         /// The closed, operator-safe hold vocabulary mirrored from domain.RunHoldReason. Values are typed daemon observations, never free text.
         ///
@@ -5940,6 +5967,7 @@ public enum Components {
             case quota_window_exhausted = "quota_window_exhausted"
             case machine_capacity = "machine_capacity"
             case update_drain = "update_drain"
+            case unknown = "unknown"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
@@ -5949,6 +5977,7 @@ public enum Components {
             case rebuild = "rebuild"
             case adoption_proposal = "adoption_proposal"
             case maintenance_task = "maintenance_task"
+            case unknown = "unknown"
         }
         /// The typed fact beside a quota_window_exhausted hold, mirrored from domain.QuotaWindowHold: the pool and window a provider refused on and the mark that keeps the parked attempt waiting until its reset, and the agents the operator may move the task to instead.
         ///
@@ -6152,6 +6181,7 @@ public enum Components {
             case agent_egress_authority = "agent_egress_authority"
             case agent_snapshot = "agent_snapshot"
             case agent_admission = "agent_admission"
+            case unknown = "unknown"
         }
         /// The typed detail of an admission_policy_refused hold, mirrored from domain.AdmissionRefusal: the refused check and, once each resolved, the agent and the launch it refused, and for an agent_resolution refusal which part of the selection the daemon does not serve. The agent is a name from the admitted agent tree; refusal error text never appears here.
         ///
@@ -6306,6 +6336,7 @@ public enum Components {
             case enrollment = "enrollment"
             case model = "model"
             case effort = "effort"
+            case unknown = "unknown"
         }
         /// The daemon-derived run result mirrored from domain.RunOutcome. Pending can coexist with a current hold; blocked means a definitive publication_blocked milestone, not merely a transient hold. A run with no observation history (a pre-migration-0024 legacy run, which is deliberately not backfilled, and with no nonterminal invocation observation) classifies as unobserved, never pending, so a legacy terminal run is not shown as in flight; a legacy run still executing across the upgrade has a nonterminal invocation observation and reports pending. Completed means the work unit satisfied its completion criterion after publication (a work_unit_completed milestone); it outranks published and blocked and is terminal. Handed_off, stopped, and abandoned are terminal outcomes for a run no milestone concludes but nothing will run again: handed_off is a specification run whose approved specification bound an implementation run that took over its work; stopped is a run its task's confirmed cancellation named; abandoned is a run of an abandoned workflow episode with no invocation still pending or running. A run already terminal from its milestones keeps that outcome, and handed_off outranks stopped, which outranks abandoned.
         ///
@@ -6322,6 +6353,7 @@ public enum Components {
             case handed_off = "handed_off"
             case stopped = "stopped"
             case abandoned = "abandoned"
+            case unknown = "unknown"
         }
         /// Whether a run still has something pending for the daemon or the operator (active) or is done with (finished), derived from RunOutcome and supersession. Finished covers completed, failed, lost, unobserved, handed_off, stopped, abandoned, and any run superseded by a retry or by implementation taking over an approved specification run's work; active covers pending, published with no completion yet, and blocked with no successor. A client splits the runs list on this field instead of re-deriving it.
         ///
@@ -6330,6 +6362,7 @@ public enum Components {
         @frozen public enum RunLifecycle: String, Codable, Hashable, Sendable, CaseIterable {
             case active = "active"
             case finished = "finished"
+            case unknown = "unknown"
         }
         /// The daemon's closed observation-side invocation lifecycle.
         ///
@@ -6342,6 +6375,7 @@ public enum Components {
             case canceled = "canceled"
             case blocked = "blocked"
             case gone = "gone"
+            case unknown = "unknown"
         }
         /// The closed non-export terminal authority vocabulary. blocked is the implementer's typed stop: no candidate exists and the run waits on an agent_question answer.
         ///
@@ -6352,6 +6386,7 @@ public enum Components {
             case canceled = "canceled"
             case lost = "lost"
             case blocked = "blocked"
+            case unknown = "unknown"
         }
         /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure.
         ///
@@ -6368,7 +6403,7 @@ public enum Components {
             case memory_limit = "memory_limit"
             case unknown = "unknown"
         }
-        /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. It has no unknown member: every writer names its cause.
+        /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. Every writer names its cause, so the daemon never sends unknown; a client decodes a cause it doesn't know as unknown.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/InterpretationFailureCause`.
@@ -6380,6 +6415,7 @@ public enum Components {
             case invalid_output = "invalid_output"
             case transcript_unreadable = "transcript_unreadable"
             case input_undeliverable = "input_undeliverable"
+            case unknown = "unknown"
         }
         /// One append-only, first-observation-wins daemon milestone. Detail fields are kind-scoped and use explicit null when absent.
         ///
@@ -6779,6 +6815,7 @@ public enum Components {
             case doctor = "doctor"
             case janitor = "janitor"
             case image_upkeep = "image_upkeep"
+            case unknown = "unknown"
         }
         /// One publication deadline that elapsed on an open ready_for_final_review item (mirrors domain.ElapsedDeadline). armed_at is the nominal deadline minus deadline_seconds, so a re-armed schedule generation records the same deadline. kind is pr_checks_deadline or review_wait_threshold. elapsed_at is the instant the daemon's scheduler handled the fire, never before armed_at plus deadline_seconds.
         ///
@@ -6827,6 +6864,7 @@ public enum Components {
             case fired = "fired"
             case resolved = "resolved"
             case expired = "expired"
+            case unknown = "unknown"
         }
         /// The closed vocabulary of terminal causes (mirrors domain.ScheduleResolutionReason); a code, never free text.
         ///
@@ -6837,6 +6875,7 @@ public enum Components {
             case condition_satisfied = "condition_satisfied"
             case subject_concluded = "subject_concluded"
             case intent_expired = "intent_expired"
+            case unknown = "unknown"
         }
         /// How and when a schedule's generation terminated; present exactly on terminal schedules (mirrors domain.ScheduleResolution).
         ///
@@ -6872,6 +6911,7 @@ public enum Components {
             case attention_item = "attention_item"
             case installation_intent = "installation_intent"
             case trusted_config = "trusted_config"
+            case unknown = "unknown"
         }
         /// The schedule's subject binding and the expected subject version its consuming handler rechecks (plan §5.16; mirrors domain.ScheduleSubject). Fields are type-scoped: attention_item subjects carry item_id and item_version; installation_intent subjects carry the §5.9 activation coordinates (registration, active epoch, durable intent revision); trusted_config subjects carry neither.
         ///
@@ -7167,6 +7207,7 @@ public enum Components {
             case probe = "probe"
             case publication = "publication"
             case credential_lease = "credential_lease"
+            case unknown = "unknown"
         }
         /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState and unattended-admission verdict from one read transaction, and the committed agent tree's revision. A revision gap, a changed verdict, or a changed lineup_revision tells the client to bootstrap, never to adopt state from this payload.
         ///
@@ -8354,6 +8395,7 @@ public enum Components {
             case different_pool = "different_pool"
             case valid_generation = "valid_generation"
             case different_route = "different_route"
+            case unknown = "unknown"
         }
         /// One enrollment the daemon offers to run a failed role under: its id, the usage pool it draws on, its harness and the implementer lineup's model it was offered at, and the rule it escapes the failure under.
         ///
@@ -9231,6 +9273,7 @@ public enum Components {
         @frozen public enum TaskSubmissionOrigin: String, Codable, Hashable, Sendable, CaseIterable {
             case device = "device"
             case daemon = "daemon"
+            case unknown = "unknown"
         }
         /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created and its specification run, keyed by command_id. Explicit manual Retry returns this record and its committed revision unchanged, including historical results that reused a source-keyed task. The name is the display name recorded at acceptance, not the requested-name fingerprint.
         ///
@@ -9757,6 +9800,7 @@ public enum Components {
         @frozen public enum ConnectionMode: String, Codable, Hashable, Sendable, CaseIterable {
             case loopback = "loopback"
             case tailscale = "tailscale"
+            case unknown = "unknown"
         }
         /// The authority a pairing grants the new device (domain.DeviceScope). There is no device role model today, so the vocabulary has one member: operator, the operator's full authority over this daemon (every ClientCommand), revocable from the host.
         ///
@@ -9909,6 +9953,7 @@ public enum Components {
             @frozen public enum _classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case ready_clean = "ready_clean"
                 case ready_degraded = "ready_degraded"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/ReadinessSummary/class`.
             public var _class: Components.Schemas.ReadinessSummary._classPayload
@@ -9940,6 +9985,7 @@ public enum Components {
             case failed = "failed"
             case not_run = "not_run"
             case not_applicable = "not_applicable"
+            case unknown = "unknown"
         }
         /// A registered §6 requirement class (domain.VerificationCheckClass). Only repo_change_policy admits a waiver; clean_verification and independent_review never do.
         ///
@@ -9949,6 +9995,7 @@ public enum Components {
             case clean_verification = "clean_verification"
             case independent_review = "independent_review"
             case repo_change_policy = "repo_change_policy"
+            case unknown = "unknown"
         }
         /// Whether an applicable check is required for readiness or advisory only (domain.RequirementKind). An optional non-pass degrades the verdict; a required one blocks it unless waived.
         ///
@@ -9957,6 +10004,7 @@ public enum Components {
         @frozen public enum RequirementKind: String, Codable, Hashable, Sendable, CaseIterable {
             case required = "required"
             case optional = "optional"
+            case unknown = "unknown"
         }
         /// The closed set that can accept degraded readiness (plan §6; domain.WaiverGrantingAuthority). Resolved policy and agent inference are intentionally absent.
         ///
@@ -9965,6 +10013,7 @@ public enum Components {
         @frozen public enum WaiverGrantingAuthority: String, Codable, Hashable, Sendable, CaseIterable {
             case explicit_human_approval = "explicit_human_approval"
             case daemon_trusted_configuration = "daemon_trusted_configuration"
+            case unknown = "unknown"
         }
         /// The waiver that lets a required failure stay ready (plan §6; mirrors domain.ReadinessWaiver): its identity, the dimension it covers, the authority that granted it, and when.
         ///
@@ -10337,6 +10386,7 @@ public enum Components {
             case daemon_policy = "daemon_policy"
             case agent_judgment = "agent_judgment"
             case project_policy = "project_policy"
+            case unknown = "unknown"
         }
         /// A declared daemon-side judgment site (plan §5.13).
         ///
@@ -10344,6 +10394,7 @@ public enum Components {
         @frozen public enum JudgmentSite: String, Codable, Hashable, Sendable, CaseIterable {
             case finding_adjudicator = "finding_adjudicator"
             case task_namer = "task_namer"
+            case unknown = "unknown"
         }
         /// The registered daemon rule and canonical input behind a deterministic recommendation.
         ///
@@ -10614,6 +10665,7 @@ public enum Components {
             case _operator = "operator"
             case agent = "agent"
             case specification = "specification"
+            case unknown = "unknown"
         }
         /// One daemon-authored display label and whether it is a name or identifier fallback.
         ///
@@ -10710,6 +10762,7 @@ public enum Components {
             case implementation = "implementation"
             case review = "review"
             case verification = "verification"
+            case unknown = "unknown"
         }
         /// Where a human's answer to an implementation-stage agent_question re-enters the workflow.
         ///
@@ -10718,6 +10771,7 @@ public enum Components {
         @frozen public enum AnswerRoute: String, Codable, Hashable, Sendable, CaseIterable {
             case retry_implementation = "retry_implementation"
             case revise_specification = "revise_specification"
+            case unknown = "unknown"
         }
         /// One typed decision-path event the clients emit (plan §8, §9). The six kinds are the only comprehension events collected; they are tied to §9's specific measures, never an unrestricted clickstream.
         ///
@@ -10730,6 +10784,7 @@ public enum Components {
             case action_taken = "action_taken"
             case recommendation_override = "recommendation_override"
             case not_decidable_here_shown = "not_decidable_here_shown"
+            case unknown = "unknown"
         }
         /// The new value of a device's notifications switch.
         ///
@@ -11076,6 +11131,7 @@ public enum Components {
             case scope_expansion = "scope_expansion"
             case capability_unavailable = "capability_unavailable"
             case commit_plan_collision = "commit_plan_collision"
+            case unknown = "unknown"
         }
         /// One enumerated answer to a Decision.
         ///
@@ -11649,6 +11705,7 @@ public enum Components {
         @frozen public enum AdmissionKind: String, Codable, Hashable, Sendable, CaseIterable {
             case execution = "execution"
             case review = "review"
+            case unknown = "unknown"
         }
         /// A role an invocation runs as (plan §5.4).
         ///
@@ -11668,6 +11725,7 @@ public enum Components {
             case attention_discussion = "attention_discussion"
             case briefer = "briefer"
             case triager = "triager"
+            case unknown = "unknown"
         }
         /// A judging role's lineage group against a writing role's. unknown when either side records no lineage group or no writer was admitted.
         ///
@@ -11684,6 +11742,7 @@ public enum Components {
         @frozen public enum HarnessClientKind: String, Codable, Hashable, Sendable, CaseIterable {
             case claude_code = "claude_code"
             case codex_cli = "codex_cli"
+            case unknown = "unknown"
         }
         /// The effort an agent requested, in Freeside's vocabulary (plan §5.4).
         ///
@@ -11694,6 +11753,7 @@ public enum Components {
             case medium = "medium"
             case high = "high"
             case max = "max"
+            case unknown = "unknown"
         }
         /// What chose the agent an invocation was admitted with.
         ///
@@ -11702,6 +11762,7 @@ public enum Components {
             case lineup = "lineup"
             case task_line = "task_line"
             case card = "card"
+            case unknown = "unknown"
         }
         /// The provider-credential containment an attempt was admitted under (plan §5.4).
         ///
@@ -11710,6 +11771,7 @@ public enum Components {
             case subscription_contained = "subscription_contained"
             case api_key_isolated = "api_key_isolated"
             case local_trusted = "local_trusted"
+            case unknown = "unknown"
         }
         /// Whether an attempt was admitted attended or unattended.
         ///
@@ -11717,6 +11779,7 @@ public enum Components {
         @frozen public enum OperatingMode: String, Codable, Hashable, Sendable, CaseIterable {
             case attended_dev = "attended_dev"
             case unattended = "unattended"
+            case unknown = "unknown"
         }
         /// The terminal execution outcome and invocation that failed within a workflow stage. cause is present exactly when outcome is failed, copied from the recorded outcome, and absent for canceled and lost.
         ///
@@ -11867,6 +11930,7 @@ public enum Components {
             case provider_registry = "provider_registry"
             case provider_web_read = "provider_web_read"
             case clean_verification = "clean_verification"
+            case unknown = "unknown"
         }
         /// A definitive publication trust rule surfaced on a blocked card.
         ///
@@ -11876,6 +11940,7 @@ public enum Components {
             case verification_failed = "verification_failed"
             case trust_profile_drift = "trust_profile_drift"
             case target_base_advanced = "target_base_advanced"
+            case unknown = "unknown"
         }
         /// Exactly one of hold_reason or trust_rule is non-null.
         ///
@@ -12161,6 +12226,7 @@ public enum Components {
             case spec_approval = "spec_approval"
             case pr_checks = "pr_checks"
             case external_review = "external_review"
+            case unknown = "unknown"
         }
         /// What a `blocked` item was waiting on. The reference variant must match kind. Retired with the `blocked` attention type (plan revision 84); only a closed item carries one.
         ///
@@ -12225,6 +12291,7 @@ public enum Components {
             case run_visibility = "run_visibility"
             case agent_credential = "agent_credential"
             case none = "none"
+            case unknown = "unknown"
         }
         /// A daemon diagnostic code and its current operational impact.
         ///
@@ -12335,6 +12402,7 @@ public enum Components {
                 case P1 = "P1"
                 case P2 = "P2"
                 case P3 = "P3"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/DisputedFinding/severity`.
             public var severity: Components.Schemas.DisputedFinding.severityPayload
@@ -13692,6 +13760,7 @@ public enum Components {
             @frozen public enum media_typePayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case text_sol_plain = "text/plain"
                 case text_sol_markdown = "text/markdown"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/ClaimText/media_type`.
             public var media_type: Components.Schemas.ClaimText.media_typePayload
@@ -13714,7 +13783,7 @@ public enum Components {
                 case content
             }
         }
-        /// The daemon-validated media type of an evidence or claim reference (plan §5.15 rule 3; domain.EvidenceMediaType). The daemon validates magic bytes, type, and size, so a client reads the type from this field rather than inferring it from a fetch. The set is closed; adding a member is a contract change (the generated client's enum rejects an unknown value).
+        /// The daemon-validated media type of an evidence or claim reference (plan §5.15 rule 3; domain.EvidenceMediaType). The daemon validates magic bytes, type, and size, so a client reads the type from this field rather than inferring it from a fetch. Adding a member is a contract change; a client built before it decodes the new member as unknown.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EvidenceMediaType`.
@@ -13727,6 +13796,7 @@ public enum Components {
             case text_sol_markdown = "text/markdown"
             case application_sol_json = "application/json"
             case application_sol_jsonl = "application/jsonl"
+            case unknown = "unknown"
         }
         /// Which sync-contract container an evidence reference rides in (domain.EvidenceSource): run for every artifact in an item's evidence_snapshot, claim for every entry in agent_claims. The daemon pins the value to its container, so a reference cannot mislabel its channel.
         ///
@@ -13735,6 +13805,7 @@ public enum Components {
         @frozen public enum EvidenceSource: String, Codable, Hashable, Sendable, CaseIterable {
             case run = "run"
             case claim = "claim"
+            case unknown = "unknown"
         }
         /// Whether the bytes the digest names are currently in the daemon's blob store (domain.EvidenceAvailability): available means present and fetchable at GET /attachments/{digest}; bytes_absent means the digest is held but the bytes are not, so a fetch would 404. It is a daemon read-time fact, recomputed from the blob store immediately before serialization on every synced item and never a trusted persisted value, so it can differ between two reads of the same item version.
         ///
@@ -13743,6 +13814,7 @@ public enum Components {
         @frozen public enum EvidenceAvailability: String, Codable, Hashable, Sendable, CaseIterable {
             case available = "available"
             case bytes_absent = "bytes_absent"
+            case unknown = "unknown"
         }
         /// The §5.15 daemon-validated facts about an evidence or claim reference (domain.EvidenceMetadata), so a client renders an explicit evidence state from typed fields alone rather than inferring it from a fetch. "Oversized" and "unsupported" are deliberately absent: they are client dispositions derived from size_bytes and media_type against a device-specific render cap (today 8 MiB on iOS, 64 MiB on macOS), and over-cap content never passes the daemon's own validation gates, so the daemon carries no such disposition. availability is recomputed at serialization (see EvidenceAvailability); the other fields are fixed at the artifact's or claim's creation.
         ///
@@ -13812,6 +13884,7 @@ public enum Components {
                 case command_transcript = "command_transcript"
                 case verify_log = "verify_log"
                 case license_scan = "license_scan"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/EvidenceArtifact/type`.
             public var _type: Components.Schemas.EvidenceArtifact._typePayload
@@ -13905,6 +13978,7 @@ public enum Components {
             @frozen public enum producer_classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case verifier = "verifier"
                 case daemon = "daemon"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/HeadBoundProvenance/producer_class`.
             public var producer_class: Components.Schemas.HeadBoundProvenance.producer_classPayload
@@ -13964,6 +14038,7 @@ public enum Components {
             @frozen public enum producer_classPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case verifier = "verifier"
                 case daemon = "daemon"
+                case unknown = "unknown"
             }
             /// - Remark: Generated from `#/components/schemas/HeadIndependentProvenance/producer_class`.
             public var producer_class: Components.Schemas.HeadIndependentProvenance.producer_classPayload
@@ -14942,6 +15017,7 @@ public enum Components {
             case discussion_reply = "discussion_reply"
             case revision = "revision"
             case retry = "retry"
+            case unknown = "unknown"
         }
         /// The kind of decision an attention item asks for (plan §4). `blocked` is retired (plan revision 84): nothing raises it and no item of the type is ever open. The member stays so closed items stored before the retirement still decode.
         ///
@@ -14961,6 +15037,7 @@ public enum Components {
             case effect_proposal = "effect_proposal"
             case system_health = "system_health"
             case blocked = "blocked"
+            case unknown = "unknown"
         }
         /// The result of one routed-review pass.
         ///
@@ -14968,6 +15045,7 @@ public enum Components {
         @frozen public enum ReviewOutcome: String, Codable, Hashable, Sendable, CaseIterable {
             case clean = "clean"
             case findings = "findings"
+            case unknown = "unknown"
         }
         /// A drift audit's verdict on one review round (plan §7 Review Drift). converged means the change still implements the approved specification without excess hardening; over_hardened means review fixes added defenses the specification does not need, and the audit names what to undo; stuck means the rounds are not approaching the specification.
         ///
@@ -14977,6 +15055,7 @@ public enum Components {
             case converged = "converged"
             case over_hardened = "over_hardened"
             case stuck = "stuck"
+            case unknown = "unknown"
         }
         /// Why the review loop stopped and asked for a decision (plan §7). low_value_streak means the latest rounds raised only low-value findings; fixed_recurrence means a finding already fixed came back; final_review_findings means the last allowed round still had findings; growth_without_blockers means the change kept growing while no round raised a blocker; drift_audit means a drift audit judged the change against the approved specification.
         ///
@@ -14988,6 +15067,7 @@ public enum Components {
             case final_review_findings = "final_review_findings"
             case growth_without_blockers = "growth_without_blockers"
             case drift_audit = "drift_audit"
+            case unknown = "unknown"
         }
         /// One review fix a drift audit says to undo (plan §7 Review Drift); mirrors domain.DriftReversal.
         ///
@@ -15141,6 +15221,7 @@ public enum Components {
         @frozen public enum InterruptionClass: String, Codable, Hashable, Sendable, CaseIterable {
             case planned_gate = "planned_gate"
             case exceptional = "exceptional"
+            case unknown = "unknown"
         }
         /// A decision a client can take on an attention item (plan §4). answer_and_retry and answer_without_retry carry the answer in DecisionPayload.message; return_to_agent carries required feedback there.
         ///
@@ -15181,6 +15262,7 @@ public enum Components {
             case accept_recommended_route = "accept_recommended_route"
             case choose_alternative_route = "choose_alternative_route"
             case adjudicate_findings = "adjudicate_findings"
+            case unknown = "unknown"
         }
         /// Item priority. Provisional vocabulary (domain enums.go).
         ///
@@ -15190,6 +15272,7 @@ public enum Components {
             case normal = "normal"
             case high = "high"
             case urgent = "urgent"
+            case unknown = "unknown"
         }
         /// How a review finding relates to the assigned work-unit goal.
         ///
@@ -15199,6 +15282,7 @@ public enum Components {
             case adjacent = "adjacent"
             case contradictory = "contradictory"
             case unclear = "unclear"
+            case unknown = "unknown"
         }
         /// Whether the finding can be acted on within the current work unit.
         ///
@@ -15223,6 +15307,7 @@ public enum Components {
             case decline = "decline"
             case dispute = "dispute"
             case attention_unclear = "attention_unclear"
+            case unknown = "unknown"
         }
         /// The proposal's judgment and authority provenance. engine_model means the goal judgment and confidence came from the model while the engine independently derived the allowed remediation authority.
         ///
@@ -15233,6 +15318,7 @@ public enum Components {
             case model = "model"
             case engine_model = "engine_model"
             case human = "human"
+            case unknown = "unknown"
         }
         /// The proposal producer's confidence in its recommended route.
         ///
@@ -15241,6 +15327,7 @@ public enum Components {
             case low = "low"
             case medium = "medium"
             case high = "high"
+            case unknown = "unknown"
         }
         /// How an attention item closed (mirrors domain.Conclusion). cause decision pairs with a non-null decision and an empty reason; every other cause pairs with a null decision and the daemon's one-sentence reason.
         ///
@@ -15326,6 +15413,7 @@ public enum Components {
             case expired = "expired"
             case superseded = "superseded"
             case resolved_by_daemon = "resolved_by_daemon"
+            case unknown = "unknown"
         }
         /// The accepted command that concluded an attention item, as recorded at decision time.
         ///
@@ -15414,6 +15502,7 @@ public enum Components {
             case superseded = "superseded"
             case dismissed = "dismissed"
             case expired = "expired"
+            case unknown = "unknown"
         }
         /// Whether an open system_health item blocks unrelated unattended admission or remains advisory (plan §4; domain enums.go).
         ///
@@ -15422,6 +15511,7 @@ public enum Components {
         @frozen public enum HealthPosture: String, Codable, Hashable, Sendable, CaseIterable {
             case blocking = "blocking"
             case advisory = "advisory"
+            case unknown = "unknown"
         }
         /// The class of validated configuration that can supersede a system_health item's blocking effect (plan §4; domain attention_item.go).
         ///
@@ -15439,6 +15529,7 @@ public enum Components {
             case base_advanced = "base_advanced"
             case retargeted = "retargeted"
             case identity_changed = "identity_changed"
+            case unknown = "unknown"
         }
         /// The daemon-recorded fact that a ready_for_final_review item's clean-pass claim was invalidated (plan §7; mirrors domain.ReadinessInvalidation). observed differs from bound by construction, and that divergence (revalidated by the daemon) is what invalidates the pass.
         ///
@@ -15654,6 +15745,7 @@ public enum Components {
             case product = "product"
             case risk = "risk"
             case accessibility = "accessibility"
+            case unknown = "unknown"
         }
         /// Which commit an excerpt reads: head is the imported commit, base its bound base (mirrors domain.ReviewExcerptSide).
         ///
@@ -15662,6 +15754,7 @@ public enum Components {
         @frozen public enum ReviewExcerptSide: String, Codable, Hashable, Sendable, CaseIterable {
             case head = "head"
             case base = "base"
+            case unknown = "unknown"
         }
         /// Why the daemon could not read an excerpt (mirrors domain.ReviewExcerptUnresolved): path_missing (no such file on that side), range_out_of_file (the range runs past the file's end), binary (the file is not text), too_large (the text exceeds 8 KiB).
         ///
@@ -15672,6 +15765,7 @@ public enum Components {
             case range_out_of_file = "range_out_of_file"
             case binary = "binary"
             case too_large = "too_large"
+            case unknown = "unknown"
         }
         /// Every coordinate of one immutable persisted review contradiction, including its exact body digest. A recover_review command authorizes only this row; a later contradiction requires another decision.
         ///
@@ -16204,6 +16298,7 @@ public enum Components {
             case normal = "normal"
             case sensitive = "sensitive"
             case high_sensitivity = "high_sensitivity"
+            case unknown = "unknown"
         }
         /// Who authored a message. Provisional vocabulary (domain enums.go).
         ///
@@ -16212,6 +16307,7 @@ public enum Components {
             case user = "user"
             case agent = "agent"
             case daemon = "daemon"
+            case unknown = "unknown"
         }
         /// Where a conversation sits in its request/response cycle: awaiting_agent between a committed discuss and the accepted agent completion, idle otherwise (plan §5.14 sync test 12). Provisional vocabulary (domain enums.go).
         ///
@@ -16220,6 +16316,7 @@ public enum Components {
         @frozen public enum ConversationStatus: String, Codable, Hashable, Sendable, CaseIterable {
             case idle = "idle"
             case awaiting_agent = "awaiting_agent"
+            case unknown = "unknown"
         }
         /// Why a consumed commit-plan channel did not structure the import (plan §5.6; domain enums.go): absent, structural, and screening name the plan_preferred fallback classes on a non-empty import; present_but_not_honored records a present plan consumed but not used (single_commit, or a zero-change plan_preferred import).
         ///
@@ -16230,6 +16327,7 @@ public enum Components {
             case structural = "structural"
             case screening = "screening"
             case present_but_not_honored = "present_but_not_honored"
+            case unknown = "unknown"
         }
         /// A paired client device; mirrors domain.Device. The record carries no credential material: the credential is a separate daemon-internal record with no wire schema, so neither the sync surface nor this document can represent even its hash (plan §5.14). revoked_at corresponds exactly to the status (domain Device.Validate), so each status is its own branch; revoked is terminal, and revocation stops future access only (sync tests 15-16). revoked_at on or after paired_at is not schema-expressible and holds by the same validator.
         ///

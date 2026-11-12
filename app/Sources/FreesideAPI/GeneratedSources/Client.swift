@@ -31,8 +31,15 @@ import HTTPTypes
 /// a response can reach leaves `additionalProperties` open, so a client
 /// built from an older contract ignores a field a newer daemon adds. An
 /// object schema that only requests use sets it to false, and the daemon
-/// rejects an unknown field anywhere in a request. The API lint step
-/// enforces both rules (api/README.md).
+/// rejects an unknown field anywhere in a request.
+///
+/// Responses tolerate added enum members too. Every string enum of two or
+/// more values that a response can reach lists `unknown`, the value a
+/// client decodes a member it doesn't know as. Unless the enum's own
+/// description says otherwise, the daemon never sends `unknown` and
+/// rejects it in a request. A property a `oneOf` discriminates on is
+/// exempt: a new union arm is a breaking change. The API lint step
+/// enforces these rules (api/README.md, Response Tolerance).
 ///
 public struct Client: APIProtocol {
     /// The underlying HTTP client.

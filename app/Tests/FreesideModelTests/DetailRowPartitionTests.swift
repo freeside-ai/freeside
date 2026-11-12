@@ -9,7 +9,7 @@ import Testing
 /// split moves rows; it adds, drops, and rewrites none.
 @Suite struct DetailRowPartitionTests {
     static let fixtures: [Components.Schemas.AttentionItem] =
-        Components.Schemas.AttentionType.allCases.map { AttentionFixtures.fixture(type: $0).item }
+        AttentionFixtures.fixtureTypes.map { AttentionFixtures.fixture(type: $0).item }
         + [
             AttentionFixtures.degradedReady().item,
             AttentionFixtures.staleReady().item,
@@ -143,6 +143,7 @@ import Testing
                 switch readiness._class {
                 case .ready_clean: "Clean"
                 case .ready_degraded: "Degraded"
+                case .unknown: "Unknown"
                 }
             rows.append(.init(label: "Readiness", value: verdict))
             rows.append(.init(label: "Evaluation Set", value: readiness.evaluation_set_digest))

@@ -171,7 +171,7 @@ struct DecisionCardComposition: Equatable {
         case .execution_failure, .agent_question, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
-            .system_health, .blocked:
+            .system_health, .blocked, .unknown:
             return false
         }
     }
@@ -192,6 +192,10 @@ struct DecisionCardComposition: Equatable {
             .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
             .system_health, .blocked:
             return false
+        case .unknown:
+            // A type this build doesn't know can't vouch that the daemon
+            // composed its reason, so the shell quotes it as unverified prose.
+            return true
         }
     }
 
@@ -320,7 +324,7 @@ struct DecisionCardComposition: Equatable {
         case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
-            .system_health, .blocked:
+            .system_health, .blocked, .unknown:
             return "Facts"
         }
     }
@@ -338,7 +342,7 @@ struct DecisionCardComposition: Equatable {
         case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .ready_for_final_review, .publish_blocked, .effect_proposal,
-            .system_health, .blocked:
+            .system_health, .blocked, .unknown:
             return "Agent claims"
         }
     }
@@ -424,7 +428,7 @@ struct DecisionCardComposition: Equatable {
         case .spec_approval, .execution_failure, .agent_question, .review_diminishing_returns,
             .review_dispute, .review_contradiction, .review_configuration,
             .finding_adjudication, .ready_for_final_review, .publish_blocked, .task_proposal,
-            .effect_proposal, .blocked:
+            .effect_proposal, .blocked, .unknown:
             return .secondLine
         }
     }
@@ -450,7 +454,7 @@ struct DecisionCardComposition: Equatable {
         case .blocked:
             return .detailsOnly
         case .review_dispute, .spec_approval, .execution_failure, .review_diminishing_returns,
-            .review_contradiction, .review_configuration, .publish_blocked, .system_health:
+            .review_contradiction, .review_configuration, .publish_blocked, .system_health, .unknown:
             return .underAsk
         }
     }
@@ -776,6 +780,7 @@ struct DecisionCardComposition: Equatable {
         switch readiness._class {
         case .ready_clean: was = "clean"
         case .ready_degraded: was = "degraded"
+        case .unknown: was = "of an unrecognized class"
         }
         let detail = item.readiness_detail?.value1
         guard let invalidation = item.readiness_invalidation?.value1 else { return nil }
@@ -789,6 +794,10 @@ struct DecisionCardComposition: Equatable {
         // the reason, and its checklist row carries the pair alone.
         case .base_advanced, .retargeted, .identity_changed:
             return nil
+        case .unknown:
+            // The verdict is stale for a reason this build can't name; say so
+            // rather than drop the warning.
+            return "The verdict below was \(was) and is no longer current."
         }
     }
 
@@ -850,7 +859,7 @@ struct DecisionCardComposition: Equatable {
         case .system_health: return .acknowledge
         case .spec_approval, .review_dispute, .review_diminishing_returns,
             .finding_adjudication, .review_contradiction, .review_configuration,
-            .publish_blocked, .blocked:
+            .publish_blocked, .blocked, .unknown:
             return nil
         }
     }
@@ -876,7 +885,7 @@ struct DecisionCardComposition: Equatable {
         case .spec_approval, .execution_failure, .review_diminishing_returns,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
-            .system_health, .blocked:
+            .system_health, .blocked, .unknown:
             return false
         }
     }
@@ -1009,7 +1018,7 @@ struct DecisionCardComposition: Equatable {
                 ],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
-        case .system_health, .blocked:
+        case .system_health, .blocked, .unknown:
             return .init(
                 modules: [.recommendation, .facts, .factBlock, .claims, .evidence, .details],
                 actionInsertionIndex: 2,
@@ -1283,7 +1292,10 @@ struct FindingCardPresentation: Equatable, Identifiable {
                 RouteOption(
                     route: proposal.route, label: route, consequence: nil, isProposed: true)
             ]
-                + proposal.offered_alternatives.map {
+                // A route this app doesn't know is never offered: picking it
+                // would send `unknown` back (api/README.md, Response
+                // Tolerance).
+                + proposal.offered_alternatives.filter { $0.route != .unknown }.map {
                     RouteOption(
                         route: $0.route, label: AttentionDisplay.label($0.route),
                         consequence: $0.consequence, isProposed: false)
@@ -1297,6 +1309,7 @@ struct FindingCardPresentation: Equatable, Identifiable {
         case .adjacent: "Adjacent to the goal"
         case .contradictory: "Contradicts the goal"
         case .unclear: "Goal relationship unclear"
+        case .unknown: "Goal relationship unrecognized"
         }
     }
 
@@ -1514,6 +1527,7 @@ struct DecisionChecklistPresentation: Equatable {
             switch $0.value1._class {
             case .ready_clean: "Clean"
             case .ready_degraded: "Degraded"
+            case .unknown: "Unknown"
             }
         }
         if stale {
@@ -1544,7 +1558,7 @@ struct DecisionChecklistPresentation: Equatable {
             case (.head_changed?, let moved?):
                 value = "Head \(moved) · \(base)"
             case (.base_advanced?, _), (.retargeted?, _), (.identity_changed?, _),
-                (.head_changed?, nil), (nil, _):
+                (.head_changed?, nil), (.unknown?, _), (nil, _):
                 value = "\(head) · \(base)"
             }
             rows.append(
@@ -1614,6 +1628,9 @@ struct DecisionChecklistPresentation: Equatable {
                             label: "Terminal review",
                             value: "Findings dispositioned",
                             result: .passed))
+                case .unknown:
+                    // An outcome this build doesn't know is never read as a pass.
+                    rows.append(.init(label: "Terminal review", value: "Unrecognized outcome", result: .note))
                 }
             }
         }
@@ -1660,7 +1677,7 @@ extension DecisionChecklistPresentation {
             return .init(label: label, value: state, result: .passed)
         case .not_applicable:
             return .init(label: label, value: state, result: .note)
-        case .failed, .not_run:
+        case .failed, .not_run, .unknown:
             if let waiver = requirement.waiver?.value1 {
                 return .init(
                     label: label,

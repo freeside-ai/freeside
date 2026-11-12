@@ -104,7 +104,10 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
     }
 
     /// The orders as the command sends them: roles with an enrollment, in
-    /// TaskLineRole order, the order the policy records them in.
+    /// TaskLineRole order, the order the policy records them in. A role a
+    /// newer daemon added decodes as `unknown` and stays in the command, so
+    /// the daemon refuses the save rather than the app silently dropping an
+    /// order it can't show.
     public var roles: [Components.Schemas.RoutingPolicyRoleInput] {
         Role.allCases.compactMap { role in
             orders[role].map { .init(role: role, enrollments: $0) }

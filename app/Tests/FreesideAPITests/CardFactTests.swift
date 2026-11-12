@@ -138,7 +138,7 @@ import Testing
                 == "invalid review_dispute binding")
     }
 
-    @Test(arguments: Components.Schemas.ReviewDiminishingCause.allCases)
+    @Test(arguments: Components.Schemas.ReviewDiminishingCause.allCases.filter { $0 != .unknown })
     func diminishingFixturesCoverEveryStopCause(cause: Components.Schemas.ReviewDiminishingCause) {
         let item = AttentionFixtures.reviewDiminishing(cause: cause).item
 
@@ -147,7 +147,7 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == nil)
     }
 
-    @Test(arguments: Components.Schemas.DriftVerdict.allCases)
+    @Test(arguments: Components.Schemas.DriftVerdict.allCases.filter { $0 != .unknown })
     func diminishingFixturesCoverEveryDriftVerdict(verdict: Components.Schemas.DriftVerdict) throws {
         let item = AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: verdict).item
         let drift = try #require(item.review_diminishing?.value1.drift_audit?.value1)

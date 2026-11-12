@@ -361,6 +361,7 @@ package enum UsageDisplay {
         case .succeeded: return .init(text: "read \(time(attempt.at))", isWax: false, instant: attempt.at)
         case .failed: return .init(text: "refresh failed \(time(attempt.at))", isWax: true, instant: attempt.at)
         case .unsupported: return .init(text: "unsupported \(time(attempt.at))", isWax: true, instant: attempt.at)
+        case .unknown: return .init(text: "unrecognized reading \(time(attempt.at))", isWax: true, instant: attempt.at)
         }
     }
 }

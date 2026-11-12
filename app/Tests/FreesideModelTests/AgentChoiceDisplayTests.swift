@@ -51,7 +51,7 @@ import Testing
                 Line(role: .implementer, selection: selection("claude-primary")),
                 Line(role: .reviewer, selection: selection("codex-primary")),
             ])
-        #expect(AgentChoiceDisplay.roleOrder == Components.Schemas.TaskLineRole.allCases)
+        #expect(AgentChoiceDisplay.roleOrder == Components.Schemas.TaskLineRole.allCases.filter { $0 != .unknown })
     }
 
     @Test func noChoiceSendsNoLinesRatherThanAnEmptyList() {

@@ -112,6 +112,8 @@ package enum TaskDisplay {
                 run == nil || run?.spec_digest == digest
             else { return .unavailable }
             return .approved
+        case .unknown:
+            return .unavailable
         }
     }
 
@@ -217,7 +219,7 @@ package enum TaskDisplay {
     package static func isActive(_ task: Components.Schemas.Task) -> Bool {
         switch task.lifecycle {
         case .finished, .stopped, .abandoned: false
-        case .active, ._empty, nil: true
+        case .active, ._empty, .unknown, nil: true
         }
     }
 
@@ -227,6 +229,7 @@ package enum TaskDisplay {
         case .stopped: ("Stopped", "stop.circle")
         case .abandoned: ("Abandoned", "minus.circle")
         case .active, ._empty, nil: ("Active", "circle.dotted")
+        case .unknown: ("Unknown", "questionmark.circle")
         }
     }
 
@@ -371,6 +374,7 @@ package enum TaskDisplay {
             case .requested: return ("Stopping", false)
             case .failed_to_stop: return ("Stop Unconfirmed · No New Work", false)
             case .confirmed: break
+            case .unknown: return ("Stopping", false)
             }
         }
         if run?.superseded_by != nil { return ("Superseded Run · Historical", true) }
@@ -524,7 +528,7 @@ package enum TaskDisplay {
                 qualification: approval.qualification)
         }
         let stage = position.stage.map(RunDisplay.canonicalStageName)
-        var names = Components.Schemas.StageName.allCases.map {
+        var names = RunDisplay.pipelineStages.map {
             (name: $0.rawValue, label: AttentionDisplay.label($0))
         }
         if let stage, !names.contains(where: { $0.name == stage }) {
@@ -751,6 +755,7 @@ package enum TaskDisplay {
         case .implementation: "Implementing"
         case .review: "Reviewing"
         case .verification: "Verifying"
+        case .unknown: "Working"
         }
     }
 

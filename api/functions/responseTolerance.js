@@ -12,11 +12,16 @@
 // decoder still refuses unknown fields in it on the way in.
 //
 // functionOptions.check picks the rule:
-//   responseOpen   a response-reachable object schema must not set
-//                  additionalProperties: false.
-//   requestClosed  a request-only object schema must set it.
+//   responseOpen     a response-reachable object schema must not set
+//                    additionalProperties: false.
+//   requestClosed    a request-only object schema must set it.
+//   responseUnknown  a response-reachable string enum of two or more
+//                    values must list unknown, the member a client
+//                    decodes a value it doesn't know as.
 // An object schema whose additionalProperties holds a schema is a map and
-// neither rule applies to it.
+// neither object rule applies to it. The property a oneOf discriminates on
+// is exempt from the enum rule: a new union arm is a breaking change, not
+// one a client can decode as unknown.
 
 function getSchema() {
   return {
@@ -74,40 +79,93 @@ function reachable(doc, roots) {
   return seen;
 }
 
-// objectSchemas appends {path, schema} for every object schema at or under
-// schema, descending into properties, items, compositions, and map values.
-function objectSchemas(schema, path, out) {
+function isMap(schema) {
+  var ap = schema.additionalProperties;
+  return ap !== null && typeof ap === "object";
+}
+
+// subschemas appends {path, schema, prop} for schema and every schema
+// written inline under it, descending into properties, items,
+// compositions, and map values. prop is the nearest property name, so an
+// enum on a property's items still names the property.
+function subschemas(schema, path, prop, out) {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
     return;
   }
-  var ap = schema.additionalProperties;
-  var isMap = ap !== null && typeof ap === "object";
-  if ((schema.type === "object" || schema.properties) && !isMap) {
-    out.push({ path: path, schema: schema });
-  }
+  out.push({ path: path, schema: schema, prop: prop });
   var props = schema.properties || {};
   for (var name in props) {
-    objectSchemas(props[name], path + ".properties." + name, out);
+    subschemas(props[name], path + ".properties." + name, name, out);
   }
-  objectSchemas(schema.items, path + ".items", out);
+  subschemas(schema.items, path + ".items", prop, out);
   var compositions = ["allOf", "oneOf", "anyOf"];
   for (var c = 0; c < compositions.length; c++) {
     var members = schema[compositions[c]] || [];
     for (var i = 0; i < members.length; i++) {
-      objectSchemas(members[i], path + "." + compositions[c] + "[" + i + "]", out);
+      subschemas(members[i], path + "." + compositions[c] + "[" + i + "]", prop, out);
     }
   }
-  if (isMap) {
-    objectSchemas(ap, path + ".additionalProperties", out);
+  if (isMap(schema)) {
+    subschemas(schema.additionalProperties, path + ".additionalProperties", prop, out);
   }
+}
+
+function isObjectSchema(schema) {
+  return (schema.type === "object" || !!schema.properties) && !isMap(schema);
+}
+
+// isOpenEnum reports a string enum of two or more non-null values: one a
+// newer daemon could widen. A constant or a null marker can't widen.
+function isOpenEnum(schema) {
+  if (!Array.isArray(schema.enum)) {
+    return false;
+  }
+  var values = 0;
+  for (var i = 0; i < schema.enum.length; i++) {
+    if (schema.enum[i] === null) {
+      continue;
+    }
+    if (typeof schema.enum[i] !== "string") {
+      return false;
+    }
+    values++;
+  }
+  return values >= 2;
+}
+
+// discriminated returns the set of "Schema.property" pairs that a oneOf
+// discriminator names on the schemas it chooses between.
+function discriminated(doc) {
+  var exempt = {};
+  var stack = [doc.components];
+  while (stack.length > 0) {
+    var node = stack.pop();
+    if (node === null || typeof node !== "object") {
+      continue;
+    }
+    if (node.discriminator && node.discriminator.propertyName && Array.isArray(node.oneOf)) {
+      for (var i = 0; i < node.oneOf.length; i++) {
+        var ref = node.oneOf[i] && node.oneOf[i].$ref;
+        if (typeof ref === "string") {
+          exempt[ref.split("/").pop() + "." + node.discriminator.propertyName] = true;
+        }
+      }
+    }
+    for (var key in node) {
+      stack.push(node[key]);
+    }
+  }
+  return exempt;
 }
 
 var METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 
 function runRule(doc) {
   var check = context.options && context.options.check;
-  if (check !== "responseOpen" && check !== "requestClosed") {
-    return [{ message: "responseTolerance: functionOptions.check must be responseOpen or requestClosed" }];
+  if (check !== "responseOpen" && check !== "requestClosed" && check !== "responseUnknown") {
+    return [{
+      message: "responseTolerance: functionOptions.check must be responseOpen, requestClosed, or responseUnknown",
+    }];
   }
   var requestRoots = [];
   var responseRoots = [];
@@ -131,13 +189,15 @@ function runRule(doc) {
   var inRequest = reachable(doc, requestRoots);
   var inResponse = reachable(doc, responseRoots);
 
+  var exempt = discriminated(doc);
   var candidates = [];
   var schemas = (doc.components && doc.components.schemas) || {};
   for (var name in schemas) {
     var ref = "#/components/schemas/" + name;
     var found = [];
-    objectSchemas(schemas[name], "$.components.schemas." + name, found);
+    subschemas(schemas[name], "$.components.schemas." + name, null, found);
     for (var f = 0; f < found.length; f++) {
+      found[f].owner = name;
       found[f].response = !!inResponse[ref];
       found[f].request = !!inRequest[ref];
       candidates.push(found[f]);
@@ -149,7 +209,7 @@ function runRule(doc) {
     collectMediaSchemas(inline[n].node, inline[n].path, media);
     for (var s = 0; s < media.length; s++) {
       var nested = [];
-      objectSchemas(media[s].schema, media[s].path, nested);
+      subschemas(media[s].schema, media[s].path, null, nested);
       for (var k = 0; k < nested.length; k++) {
         nested[k].response = inline[n].response;
         nested[k].request = !inline[n].response;
@@ -161,6 +221,20 @@ function runRule(doc) {
   var results = [];
   for (var r = 0; r < candidates.length; r++) {
     var cand = candidates[r];
+    if (check === "responseUnknown") {
+      if (cand.response && isOpenEnum(cand.schema) && cand.schema.enum.indexOf("unknown") < 0 &&
+        !exempt[cand.owner + "." + cand.prop]) {
+        results.push({
+          message: cand.path + " is a string enum a response reaches and must list unknown, " +
+            "so an older client decodes a member a newer daemon adds",
+          path: cand.path,
+        });
+      }
+      continue;
+    }
+    if (!isObjectSchema(cand.schema)) {
+      continue;
+    }
     var closed = cand.schema.additionalProperties === false;
     if (check === "responseOpen" && cand.response && closed) {
       results.push({

@@ -117,6 +117,7 @@ public final class PairingModel {
         switch mode {
         case .loopback: "Local"
         case .tailscale: "Tailscale"
+        case .unknown: "Unknown connection"
         }
     }
 

@@ -84,6 +84,10 @@ package struct DecisionRecommendationPresentation: Equatable {
                     label: "Application Digest",
                     value: projectPolicy.application_digest, monospaced: true),
             ]
+        case .unknown:
+            // A source this build can't attribute is not shown as a
+            // recommendation at all.
+            return nil
         }
 
         action = recommendation.action

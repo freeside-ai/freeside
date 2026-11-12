@@ -40,3 +40,13 @@ rules:
       function: responseTolerance
       functionOptions:
         check: requestClosed
+  response-enums-list-unknown:
+    description: A string enum of two or more values that a response reaches must list unknown.
+    severity: error
+    recommended: true
+    given: $
+    resolved: false
+    then:
+      function: responseTolerance
+      functionOptions:
+        check: responseUnknown

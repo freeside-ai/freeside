@@ -525,6 +525,7 @@ public enum AgentChoiceDisplay {
         case .implementer: "Implementer"
         case .remediator: "Remediator"
         case .reviewer: "Reviewer"
+        case .unknown: "Unknown role"
         }
     }
 
@@ -534,6 +535,7 @@ public enum AgentChoiceDisplay {
         case .implementer: "implements"
         case .remediator: "remediates"
         case .reviewer: "reviews"
+        case .unknown: "works"
         }
     }
 }

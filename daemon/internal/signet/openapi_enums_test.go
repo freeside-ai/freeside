@@ -154,7 +154,11 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 
 // openAPIEnumMismatches compares each enum schema in spec with its domain
 // registration in want, skipping the names only in exempt, and returns one
-// message per problem in schema-name order. A want or exempt entry whose
+// message per problem in schema-name order. A spec's unknown member that
+// the domain doesn't register is left out of the comparison: it is the
+// value an older client decodes a member it doesn't know as, which the
+// daemon never sends (api/README.md, Response Tolerance). The API lint,
+// not this test, requires it in every enum a response reaches. A want or exempt entry whose
 // schema is absent from spec is a problem too, so a renamed or removed
 // schema can't leave an entry behind that checks nothing.
 func openAPIEnumMismatches(spec, want map[string][]string, exempt map[string]string) []string {
@@ -187,6 +191,11 @@ func openAPIEnumMismatches(spec, want map[string][]string, exempt map[string]str
 		case !mapped:
 			problems = append(problems, fmt.Sprintf("OpenAPI enum schema %s is unchecked: map it to its domain registration or exempt it with a reason", name))
 		default:
+			if !slices.Contains(expected, openAPIUnknownMember) {
+				values = slices.DeleteFunc(slices.Clone(values), func(value string) bool {
+					return value == openAPIUnknownMember
+				})
+			}
 			got := slices.Sorted(slices.Values(values))
 			registered := slices.Sorted(slices.Values(expected))
 			if !slices.Equal(got, registered) {
@@ -196,6 +205,10 @@ func openAPIEnumMismatches(spec, want map[string][]string, exempt map[string]str
 	}
 	return problems
 }
+
+// openAPIUnknownMember is the member every response enum lists for a value
+// a client doesn't know.
+const openAPIUnknownMember = "unknown"
 
 func TestOpenAPIEnumMismatches(t *testing.T) {
 	t.Parallel()
@@ -235,6 +248,17 @@ func TestOpenAPIEnumMismatches(t *testing.T) {
 			spec:     map[string][]string{"Marker": {""}},
 			want:     map[string][]string{"Marker": {""}},
 			problems: []string{"schema Marker is both mapped and exempted"},
+		},
+		{
+			name: "unknown the domain doesn't register",
+			spec: map[string][]string{"Color": {"red", "unknown"}, "Marker": {""}},
+			want: map[string][]string{"Color": {"red"}},
+		},
+		{
+			name:     "unknown the domain registers is compared",
+			spec:     map[string][]string{"Color": {"red"}, "Marker": {""}},
+			want:     map[string][]string{"Color": {"red", "unknown"}},
+			problems: []string{"OpenAPI Color = [red], domain registration = [red unknown]"},
 		},
 		{
 			name:     "values differ",

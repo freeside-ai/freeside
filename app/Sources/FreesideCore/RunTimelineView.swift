@@ -551,7 +551,7 @@ enum RunHistoryPresentation {
         case .publication_blocked:
             return .failure
         case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded, .publication_ready,
-            .work_unit_completed:
+            .work_unit_completed, .unknown:
             return .event
         }
     }
@@ -585,6 +585,8 @@ enum RunHistoryPresentation {
                 ?? "Operator feedback"
         case .remediation:
             return subject.remediates_round.map { "Remediation for Review \($0)" } ?? "Remediation"
+        case .unknown:
+            return "Review"
         }
     }
 
@@ -697,6 +699,7 @@ enum RunHistoryPresentation {
         case .discussion_reply: "Discuss Reply"
         case .revision: "Revision"
         case .retry: "Retry"
+        case .unknown: "Attempt"
         }
     }
 }
@@ -849,7 +852,7 @@ struct InvocationPresentation {
         switch invocation.status {
         case .completed, .failed, .canceled, .blocked:
             isTerminal = true
-        case .pending, .running, .gone:
+        case .pending, .running, .gone, .unknown:
             isTerminal = false
         }
         let stale = invocation.observed_at > asOf || asOf.timeIntervalSince(invocation.observed_at) > 30
@@ -876,7 +879,7 @@ struct InvocationPresentation {
                 // not on a failure.
                 color = .accentText
                 glyph = "?"
-            case .pending, .gone:
+            case .pending, .gone, .unknown:
                 color = .inkDim
                 glyph = invocation.live ? "●" : "○"
             }
@@ -899,7 +902,7 @@ struct RunOutcomeBadge: View {
 
     private var color: Color {
         switch outcome {
-        case .unobserved, .handed_off, .stopped, .abandoned: .inkDim
+        case .unobserved, .handed_off, .stopped, .abandoned, .unknown: .inkDim
         case .pending: .waterText
         case .published, .completed: .ink
         case .blocked: .accentText

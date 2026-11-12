@@ -15,7 +15,7 @@ import Testing
     /// exactly when the card has foot claims or attachments, and on an
     /// iPhone also when it has text claims a supporting module drew below
     /// the actions.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func theFootPlacesEachFoldByWhereTheCardSits(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
         let composition = DecisionCardComposition.forType(type)
@@ -73,7 +73,7 @@ import Testing
     /// Every claim a claims module or the foot would list renders once on an
     /// iPhone: in a claims module above the actions or in Evidence, never
     /// both and never neither.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    @Test(arguments: AttentionFixtures.fixtureTypes)
     func everyClaimRendersOnceOnAPhoneCard(type: Components.Schemas.AttentionType) {
         let composition = DecisionCardComposition.forType(type)
         let claims = AttentionFixtures.fixture(type: type).item.agent_claims

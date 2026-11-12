@@ -154,6 +154,7 @@ enum ComposerAttachmentIntake {
         case .image_sol_gif: ext = "gif"
         case .image_sol_webp: ext = "webp"
         case .application_sol_octet_hyphen_stream: ext = "bin"
+        case .unknown: ext = "bin"
         }
         return .attachment(name: "\(origin.baseName).\(ext)", claimedMediaType: mediaType.rawValue, bytes: bytes)
     }

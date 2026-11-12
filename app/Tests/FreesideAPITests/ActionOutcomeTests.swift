@@ -119,7 +119,11 @@ import Testing
         }
         let actions = vector.map(\.action)
         #expect(actions.count == Set(actions).count)
-        #expect(Set(actions) == Set(Components.Schemas.Action.allCases.map(\.rawValue)))
+        // unknown is the client's decode-only member: the daemon never sends
+        // it, so its table doesn't list it, and it stays pending.
+        let wireActions = Components.Schemas.Action.allCases.filter { $0 != .unknown }
+        #expect(Set(actions) == Set(wireActions.map(\.rawValue)))
         #expect(Set(vector.filter { $0.kind == "pending" }.map(\.action)) == ["convert_to_policy"])
+        #expect(ActionOutcome.of(.unknown) == .pending)
     }
 }
