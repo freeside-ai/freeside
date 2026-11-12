@@ -3486,21 +3486,26 @@ each prepared as the proof prepares it:
 | Step | Result | Unreclaimable peak | Wall |
 | --- | --- | --- | --- |
 | build | passes | 844 MiB | 43 s |
-| test | fails (#3013) | 1211 MiB | 267 s |
+| test | passes | 1211 MiB | 267 s |
 | vet | passes | 1280 MiB | 83 s |
 | lint | passes | 1600 MiB | 121 s |
 | docs | passes | 50 MiB | 1 s |
 | api | passes | 139 MiB | 1 s |
-| scripts | fails (#3013) | 286 MiB | 66 s |
+| scripts | fails (#3100) | 286 MiB | 66 s |
 | app linux | passes | 1283 MiB | 99 s |
 
 Each step started from a cold build cache on a host at load average 6 to
-31. `daemon test` and `scripts` fail in the mixed image at `main` too, on
-test assumptions the proof's workspace breaks (#3013), so Freeside's recipe
-proof can't pass until that lands. Lint's peak is over the 1536 MiB margin
-`devlog/2026-10-22-1241-proof-memory-bound.md` set, though under the room's
-2048 MiB; at `d03b0b88` it measured 1323 MiB. That note has the decision
-and the rejected options.
+31. At `c40bf92b7`, `daemon test` and `scripts` failed on test fixtures the
+proof's container breaks: it runs as root, with `TMPDIR` under `HOME` and no
+`.git`. #3013 fixed the fixtures; their rows keep the earlier run's peaks
+and wall times. `scripts` still fails on its `vocabulary` step, which in a
+tree without `.git` reads the Swift checkouts preparation adds under
+`app/.build/`, so Freeside's recipe proof can't pass until #3100 lands.
+With that step dropped, the whole proof passed at #3013's head. Lint's
+peak is over the 1536 MiB margin
+`devlog/2026-10-22-1241-proof-memory-bound.md` set, though under the
+room's 2048 MiB; at `d03b0b88` it measured 1323 MiB. That note has the
+decision and the rejected options.
 
 A Swift image for Freeside's `app` package, with the recipe
 `swift build --package-path app --only-use-versions-from-resolved-file

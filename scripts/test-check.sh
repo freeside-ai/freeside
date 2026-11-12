@@ -785,8 +785,11 @@ if '-list' in args:
         print(json.dumps({'Package': integration, 'Action': 'output', 'Output': name + '\n'}))
     print(json.dumps({'Package': integration, 'Action': 'pass'}))
     sys.exit(0)
-# Go's version-control stamping in a test build runs git status.
-subprocess.run(['git', 'status', '--porcelain'], stdout=subprocess.DEVNULL, check=True)
+# Go's version-control stamping in a test build runs git status. Only a test
+# step runs under the decoy; a build step outside a checkout has no repository
+# to stamp from (#3013).
+if args[0] == 'test':
+    subprocess.run(['git', 'status', '--porcelain'], stdout=subprocess.DEVNULL, check=True)
 if '-run' not in args:
     print('ok\t' + ' '.join(args[1:]))
     sys.exit(int(os.environ.get('REST_RC', '0')))

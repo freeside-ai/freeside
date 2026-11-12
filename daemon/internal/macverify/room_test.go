@@ -36,7 +36,7 @@ type fakeLauncher struct {
 	// jobDirMode is the mode a recipe job's prepare gives the job directory;
 	// zero is 0700.
 	jobDirMode os.FileMode
-	// uid is what prepare and reap report; zero is the test's own uid.
+	// uid is what prepare and reap report; zero is testSlotUID.
 	uid int
 	// reapUID overrides the uid reap reports.
 	reapUID int
@@ -123,11 +123,22 @@ func (f *fakeLauncher) record(call string) {
 	f.calls = append(f.calls, call)
 }
 
+// testSlotUID is the uid a fake slot runs as: the test's own, or a stand-in
+// when the test runs as root, as it does in the project image's recipe proof
+// (#3013). A real slot is never root: parseUID refuses uid 0, and teardown
+// reads a prepared uid of 0 as none reported and skips its uid check.
+func testSlotUID() int {
+	if uid := os.Getuid(); uid != 0 {
+		return uid
+	}
+	return 4242
+}
+
 func (f *fakeLauncher) slotUID() int {
 	if f.uid != 0 {
 		return f.uid
 	}
-	return os.Getuid()
+	return testSlotUID()
 }
 
 func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, swiftCache string) (preparedJob, error) {
@@ -160,6 +171,13 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 	}
 	if err := os.Chmod(jobDir, mode); err != nil {
 		return preparedJob{}, err
+	}
+	// As root, hand the directory to the stand-in slot uid, as slot-run's
+	// prepare does. A test that sets uid still finds it owned by another.
+	if os.Getuid() == 0 {
+		if err := os.Chown(jobDir, testSlotUID(), -1); err != nil {
+			return preparedJob{}, err
+		}
 	}
 	reported := swiftCache
 	if recipe && f.reportSwiftCache != nil {
@@ -365,7 +383,7 @@ func TestRunRefusesJobDirectoryNotPrivateToSlot(t *testing.T) {
 		// The mode applies to the recipe job, so its probe passes first.
 		"group readable": {setup: func(f *fakeLauncher) { f.jobDirMode = 0o750 }, calls: withProbe(refused...)},
 		// A slot that is another uid refuses the probe's job already.
-		"other uid": {setup: func(f *fakeLauncher) { f.uid = os.Getuid() + 1 }, calls: refused},
+		"other uid": {setup: func(f *fakeLauncher) { f.uid = testSlotUID() + 1 }, calls: refused},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeLauncher()
@@ -635,7 +653,7 @@ func TestRunQuarantinesSlotWhoseAbsenceIsUnproven(t *testing.T) {
 		"lingering process": func(f *fakeLauncher) { f.live = func(int) bool { return true } },
 		"reap failure":      func(f *fakeLauncher) { f.reapErr = errors.New("sudo: a password is required") },
 		"cleanup failure":   func(f *fakeLauncher) { f.cleanupErr = errors.New("slot-run: cannot remove job") },
-		"uid changed":       func(f *fakeLauncher) { f.reapUID = os.Getuid() + 1 },
+		"uid changed":       func(f *fakeLauncher) { f.reapUID = testSlotUID() + 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeLauncher()
