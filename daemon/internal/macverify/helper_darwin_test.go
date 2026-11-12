@@ -49,12 +49,12 @@ func TestUIDOwnsProcess(t *testing.T) {
 	}
 }
 
-// TestHelperEmptiesUserDirKeepingOnlyEmptyProtectedEntries runs slot-run's
+// TestHelperEmptiesUserDirKeepingOnlyAllowedProtectedEntries runs slot-run's
 // empty_user_dir on a directory built to look like a slot's temporary
 // directory after a job (#3009). Read-only parents stand in for the
 // protection that keeps root from removing an entry, so each case controls
 // what survives the rm; the gate is what the function then accepts.
-func TestHelperEmptiesUserDirKeepingOnlyEmptyProtectedEntries(t *testing.T) {
+func TestHelperEmptiesUserDirKeepingOnlyAllowedProtectedEntries(t *testing.T) {
 	t.Parallel()
 	script := string(helperScript)
 	start, end := strings.Index(script, "\nlisting() {"), strings.Index(script, "\nreset_home() {")
@@ -107,6 +107,9 @@ func TestHelperEmptiesUserDirKeepingOnlyEmptyProtectedEntries(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		layout layout
+		// cache runs the reset as for the slot's cache directory, not its
+		// temporary one.
+		cache bool
 		// left is what a passing case leaves, sorted.
 		left    []string
 		refusal string
@@ -119,10 +122,19 @@ func TestHelperEmptiesUserDirKeepingOnlyEmptyProtectedEntries(t *testing.T) {
 			layout: protected, left: []string{"TemporaryItems", "com.apple.MTLCompilerService", "com.apple.trustd"},
 		},
 		"no protected entries": {layout: layout{}},
-		"a file in TemporaryItems": {
+		// A SwiftPM atomic write can leave an entry here that no one can
+		// remove; the owner accepted it (#3009), so the slot stays usable.
+		"an entry left in the top-level TemporaryItems": {
 			layout: with(protected, func(l *layout) {
-				l.files = append(l.files, "TemporaryItems/carried")
+				l.dirs = append(l.dirs, "TemporaryItems/NSIRD_swift-build_left")
 			}),
+			left: []string{"TemporaryItems", "com.apple.MTLCompilerService", "com.apple.trustd"},
+		},
+		"an entry left in the cache directory's TemporaryItems": {
+			layout: with(protected, func(l *layout) {
+				l.dirs = append(l.dirs, "TemporaryItems/NSIRD_swift-build_left")
+			}),
+			cache:   true,
 			refusal: "holds entries no one can list or remove",
 		},
 		"a directory in trustd's TemporaryItems": {
@@ -194,8 +206,12 @@ func TestHelperEmptiesUserDirKeepingOnlyEmptyProtectedEntries(t *testing.T) {
 			// sudo is stubbed: the slot's chflags has nothing to clear here.
 			body := "set -eu\nIFS='\n'\nslot=fvslot1\nsudo() { :; }\n" +
 				"refuse() { printf 'slot-run: %s\\n' \"$*\" >&2; exit 120; }\n" + functions + keep.String() +
-				"\nempty_user_dir \"$1\"\n" + check.String()
-			cmd := exec.Command("/bin/sh", "-c", body, "slot-run", dir) //nolint:gosec // G204: fixed shell running the embedded helper's functions
+				"\nempty_user_dir \"$1\" \"$2\"\n" + check.String()
+			kind := "temp"
+			if tc.cache {
+				kind = "cache"
+			}
+			cmd := exec.Command("/bin/sh", "-c", body, "slot-run", dir, kind) //nolint:gosec // G204: fixed shell running the embedded helper's functions
 			cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C"}
 			out, err := cmd.CombinedOutput()
 			if tc.refusal == "" {

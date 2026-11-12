@@ -4824,14 +4824,17 @@ The helper resets all four every job. macOS leaves four entries in
 `SLOT_TMP` that neither root nor the slot can remove: `com.apple.trustd` and
 `com.apple.MTLCompilerService` (System Integrity Protection) and two
 `TemporaryItems` directories (one at the top, one in `com.apple.trustd`) that
-no one can list. The slot can write inside all four, so the reset keeps them
-only while each is empty: it lists the first two and reads each
-`TemporaryItems` directory's link count, which APFS raises by one per entry.
-Anything else that survives, or anything a job leaves inside them, fails
-the reset, and the slot is quarantined instead of carrying it to the next
-job. Known gap (#3009): a `swift test` run sometimes leaves an entry in the
-top-level `TemporaryItems`, which no one can remove, so that slot stays
-quarantined. The command's environment is exactly
+no one can list. The slot can write inside all four, so the reset keeps
+`com.apple.trustd`, `com.apple.MTLCompilerService`, and trustd's
+`TemporaryItems` only while each is empty: it lists the first two and reads
+the third's link count, which APFS raises by one per entry. Anything else
+that survives, or anything a job leaves inside them, fails the reset, and
+the slot is quarantined instead of carrying it to the next job. The
+top-level `TemporaryItems` is kept even with entries in it: a `swift test`
+run sometimes leaves one there that no one can remove, and Foundation names
+each at random, so a later job can reach it only by its name (#3009).
+Nothing bounds what collects there, so a job can use up disk space. The
+command's environment is exactly
 `HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`. A
 SwiftPM recipe command must pass `--disable-sandbox`: SwiftPM sandboxes its
 manifest build with `sandbox-exec`, which cannot nest inside the room's.
