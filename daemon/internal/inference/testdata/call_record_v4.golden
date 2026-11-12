@@ -26,7 +26,7 @@
       }
     },
     "treatment_digest": "sha256:fc485d945a78b5fb468f8b3845b899bf36eff27f005740b9c666f91d37894ac5",
-    "site_contract_digest": "sha256:8965930eebde706b73366d39b1ffca028ee240c933712f1b0144976f44c77cd3",
+    "site_contract_digest": "sha256:2b975dc9d5e9f7b209e29738631e3384bfd94bb17c5144579ef2e2c08c9d3ac4",
     "credential_source": "enrollment",
     "requested_model_id": "claude-test",
     "requested_effort": "harness_default",

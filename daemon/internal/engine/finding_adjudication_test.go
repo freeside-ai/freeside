@@ -113,11 +113,13 @@ func newFindingAdjudicationFixtureWithNote(
 
 // findingAdjudicationFixtureOptions varies the fixture for tests that need
 // more than the default round: extra resolved-policy keys, real commit
-// identities for a git-backed candidate, or another finding identity. The zero
-// value of each field keeps the default.
+// identities for a git-backed candidate, another finding identity, declared
+// paths, or finding message. The zero value of each field keeps the default.
 type findingAdjudicationFixtureOptions struct {
 	note                 string
 	policy               map[string]string
+	declaredPaths        string
+	message              string
 	baseSHA, headSHA     string
 	findingID            domain.FindingID
 	extraFindingIDs      []domain.FindingID
@@ -139,6 +141,14 @@ func newFindingAdjudicationFixtureWithOptions(
 	if options.findingID != "" {
 		findingID = options.findingID
 	}
+	declaredPaths := "daemon/**"
+	if options.declaredPaths != "" {
+		declaredPaths = options.declaredPaths
+	}
+	message := "review finding"
+	if options.message != "" {
+		message = options.message
+	}
 	ctx := t.Context()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "freeside.db")
@@ -152,7 +162,7 @@ func newFindingAdjudicationFixtureWithOptions(
 		specDigest: specification, instructionDigest: instructions,
 	}}
 	policyKeys := []domain.PolicyKey{
-		{Key: "paths", Value: "daemon/**", Provenance: domain.KeyProvenance{
+		{Key: "paths", Value: declaredPaths, Provenance: domain.KeyProvenance{
 			Source: domain.ProvenancePreset, Digest: adjudicationDigest("a"),
 		}},
 		{Key: findingConfidenceThresholdKey, Value: "high", Provenance: domain.KeyProvenance{
@@ -180,7 +190,7 @@ func newFindingAdjudicationFixtureWithOptions(
 	createdAt := time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC)
 	finding := domain.Finding{
 		ID: findingID, RunID: runID, Source: "codex_local", Severity: severity,
-		Location: location, Message: "review finding", RawText: "review finding",
+		Location: location, Message: message, RawText: message,
 		CreatedAt: createdAt,
 	}
 	findings := []domain.Finding{finding}
@@ -502,6 +512,122 @@ func TestProductionFindingAdjudicatorRetainsEngineAllowedRemediation(t *testing.
 			entry.Route != domain.RouteRemediate || entry.Confidence == nil ||
 			*entry.Confidence != domain.ConfidenceHigh {
 			t.Fatalf("artifact entry = %#v", entry)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newMissingArtifactFixture builds the round the #1445 exit run hit (#1550): a P3
+// "Repository-required artifact missing" finding anchored whole-file on a
+// changed source file, classified medium/high so the default high
+// materiality threshold keeps it off the fast path and sends it to the
+// model. The adjudicator answers from script with the given entry.
+func newMissingArtifactFixture(
+	t *testing.T, declaredPaths, entry string,
+) *findingAdjudicationFixture {
+	t.Helper()
+	location := &domain.FindingLocation{Path: "src/cleanup.ts"}
+	f := newFindingAdjudicationFixtureWithOptions(
+		t, domain.FindingSeverityP3, location, "medium", "high",
+		findingAdjudicationFixtureOptions{
+			declaredPaths: declaredPaths,
+			message: "Repository-required artifact missing: AGENTS.md requires a decision " +
+				"note for destructive-cleanup changes, and this change adds none.",
+		})
+	f.writePath(t, f.headRoot)
+	f.driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(`{"entries":[` + entry + `]}`), ComputeUnits: 5,
+	}})
+	f.workflow.findingAdjudicator = &productionFindingAdjudicator{
+		client: f.workflow.inference, store: f.store, artifacts: f.artifacts,
+	}
+	return f
+}
+
+// TestProductionFindingAdjudicatorRemediatesInScopeMissingArtifact pins the
+// in-scope route for a missing repository-required file (#1550): the engine
+// sends allowed for the anchor and the full declared paths, and the model's
+// required/null/null answer becomes an engine remediation with no operator
+// card.
+func TestProductionFindingAdjudicatorRemediatesInScopeMissingArtifact(t *testing.T) {
+	t.Parallel()
+	f := newMissingArtifactFixture(t, "src/*.ts,devlog/*.md,README.md",
+		`{"finding_id":"finding-a","goal_relationship":"required","compatibility":null,"route":null,"confidence":"high","rationale":"the repository requires a decision note for this change, and devlog/*.md is a declared path","evidence":["src/cleanup.ts"],"cited_rules":["AGENTS.md decision notes"],"assumptions":[],"alternatives":[],"open_questions":[]}`)
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("production inference adjudication = %d, %v", state, err)
+	}
+	requests := f.driver.Requests()
+	if len(requests) != 1 || requests[0].SiteID != inference.AdjudicatorSiteID {
+		t.Fatalf("requests = %#v", requests)
+	}
+	fields := requests[0].Fields
+	if !strings.Contains(fields["findings"], `"remediation_surface":"src/cleanup.ts"`) ||
+		!strings.Contains(fields["findings"], `"compatibility":"allowed"`) ||
+		!strings.Contains(fields["declared_paths"], `"devlog/*.md"`) {
+		t.Fatalf("engine-derived fields = %#v", fields)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.record.RunID, f.record.Round)
+		if err != nil {
+			return err
+		}
+		if len(artifact.Entries) != 1 {
+			t.Fatalf("artifact entries = %#v", artifact.Entries)
+		}
+		entry := artifact.Entries[0]
+		if entry.Producer != domain.AdjudicationProducerEngineModel ||
+			entry.Compatibility == nil || *entry.Compatibility != domain.CompatibilityAllowed ||
+			entry.Route != domain.RouteRemediate {
+			t.Fatalf("artifact entry = %#v", entry)
+		}
+		itemID := productionFindingAdjudicationItemID(f.task.RunID, f.record.Round, 1)
+		if _, err := tx.GetAttentionItem(f.ctx, itemID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("finding-adjudication item lookup = %v, want ErrNotFound", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionFindingAdjudicatorParksOutOfScopeMissingArtifact pins the
+// other side of #1550: when the required file falls outside the declared
+// paths, the model's park answer still parks the run, and the operator's card
+// carries the rationale that names the outside path.
+func TestProductionFindingAdjudicatorParksOutOfScopeMissingArtifact(t *testing.T) {
+	t.Parallel()
+	const rationale = "the repository requires a decision note at devlog/2026-11-11-cleanup.md, " +
+		"which is outside the declared paths src/*.ts"
+	f := newMissingArtifactFixture(t, "src/*.ts",
+		`{"finding_id":"finding-a","goal_relationship":"required","compatibility":"work_unit_revision_required","route":"park_revision","confidence":"high","rationale":"`+rationale+`","evidence":["src/cleanup.ts"],"cited_rules":["AGENTS.md decision notes"],"assumptions":[],"alternatives":[],"open_questions":[]}`)
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("production inference adjudication = %d, %v", state, err)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.record.RunID, f.record.Round)
+		if err != nil {
+			return err
+		}
+		if len(artifact.Entries) != 1 || artifact.Entries[0].Route != domain.RouteParkRevision {
+			t.Fatalf("artifact entries = %#v", artifact.Entries)
+		}
+		item, err := tx.GetAttentionItem(
+			f.ctx, productionFindingAdjudicationItemID(f.task.RunID, f.record.Round, 1))
+		if err != nil {
+			return err
+		}
+		binding := item.FindingAdjudication
+		if binding == nil || len(binding.Proposals) != 1 ||
+			binding.Proposals[0].FindingID != f.finding.ID ||
+			binding.Proposals[0].Route != domain.RouteParkRevision ||
+			binding.Proposals[0].Rationale != rationale {
+			t.Fatalf("finding-adjudication binding = %#v", binding)
 		}
 		return nil
 	}); err != nil {
