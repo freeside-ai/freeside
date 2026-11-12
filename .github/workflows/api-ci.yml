@@ -7,6 +7,9 @@ name: api CI
 # the daemon go.sum doesn't cover it. The binary runs the same lint
 # invocation scripts/check.sh uses locally (api/README.md); pinning is by version
 # plus sha256, matching the pinned-golangci-lint determinism convention.
+# The breaking-change differ (oasdiff) for the `compat` step is installed
+# the same way, and the checkout carries full history so the step can
+# compare the spec with its merge base on origin/main.
 
 on:
   push:
@@ -15,6 +18,7 @@ on:
       - "api/**"
       - "scripts/check.sh"
       - "scripts/api-contract-digest.sh"
+      - "scripts/api-compatibility-check.sh"
       - ".github/workflows/api-ci.yml"
   # Pull requests run this through pull-request.yml, which selects it
   # from the changed paths and reports the required check.
@@ -29,7 +33,7 @@ concurrency:
 
 jobs:
   lint:
-    name: lint (vacuum)
+    name: lint (vacuum, oasdiff)
     runs-on: ubuntu-latest
     env:
       VACUUM_VERSION: "0.29.9"
@@ -37,8 +41,18 @@ jobs:
       # release's checksums.txt. Bump together with VACUUM_VERSION (and the
       # version pinned in api/README.md and AGENTS.md).
       VACUUM_SHA256: "d1b9618493a12a30390719b0af88bfc57a8c2074d900134983cd358c1f38b8b9"
+      OASDIFF_VERSION: "1.35.0"
+      # sha256 of oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz from the
+      # release's checksums.txt. Bump together with OASDIFF_VERSION (and the
+      # version pinned in scripts/api-compatibility-check.sh and
+      # api/README.md).
+      OASDIFF_SHA256: "a8023002fcb2eaa7f5758148a9303cb63d33b939886df312268bc0fc7b939140"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The compat step diffs the spec against its merge base with
+          # origin/main, which a depth-1 checkout lacks.
+          fetch-depth: 0
       - name: Install vacuum (pinned binary, checksum-verified)
         run: |
           set -euo pipefail
@@ -46,5 +60,12 @@ jobs:
             "https://github.com/daveshanley/vacuum/releases/download/v${VACUUM_VERSION}/vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz"
           echo "${VACUUM_SHA256}  vacuum.tar.gz" | sha256sum -c -
           tar -xzf vacuum.tar.gz vacuum
-      - name: vacuum lint (scripts/check.sh)
-        run: VACUUM=./vacuum bash scripts/check.sh api
+      - name: Install oasdiff (pinned binary, checksum-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o oasdiff.tar.gz \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_SHA256}  oasdiff.tar.gz" | sha256sum -c -
+          tar -xzf oasdiff.tar.gz oasdiff
+      - name: api checks (scripts/check.sh)
+        run: VACUUM=./vacuum OASDIFF=./oasdiff bash scripts/check.sh api

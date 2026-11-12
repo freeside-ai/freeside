@@ -15,7 +15,7 @@
 # Components and steps (`--list` prints the same table):
 #   daemon       build test vet lint
 #   app          generate format test linux build-mac build-ios
-#   api          lint digest policy
+#   api          lint digest policy compat
 #   scripts      syntax shellcheck suites vocabulary tier-a-paths trackercollect
 #   convergence  run
 #   docs         plan-links
@@ -28,6 +28,11 @@
 #                  checksum-verified binary in .github/workflows/scripts-ci.yml)
 #   VACUUM         command for the OpenAPI linter (default: `go run`
 #                  of the pinned vacuum module, ~7 minutes cold)
+#   OASDIFF        command for the breaking-change differ the `api compat`
+#                  step runs (default: `go run` of the oasdiff module that
+#                  scripts/api-compatibility-check.sh pins; CI installs a
+#                  checksum-verified binary). The step also needs jq and
+#                  origin/main.
 #
 # macOS verification executor:
 #   APP_MACVERIFY  non-empty runs `app test`, `app build-mac`, and
@@ -179,7 +184,7 @@ steps_for() { # <component>; prints the component's steps in default order
   case $1 in
     daemon) echo 'build test vet lint' ;;
     app) echo 'generate format test linux build-mac build-ios' ;;
-    api) echo 'lint digest policy' ;;
+    api) echo 'lint digest policy compat' ;;
     scripts) echo 'syntax shellcheck suites vocabulary tier-a-paths trackercollect' ;;
     convergence) echo 'run' ;;
     docs) echo 'plan-links' ;;
@@ -658,6 +663,9 @@ api_lint() {
     --details --fail-severity warn api/openapi.yaml
 }
 api_digest() { in_dir "$ROOT" bash scripts/api-contract-digest.sh --check; }
+# api_compat fails a breaking contract change that leaves the spec's
+# x-compatibility-level unchanged (api/README.md, Compatibility Level).
+api_compat() { in_dir "$ROOT" bash scripts/api-compatibility-check.sh; }
 # api_policy proves the lint's custom rules still fire: each fixture under
 # api/testdata/policy/ names on its first line (`# expects-rule: <id>`) the
 # one rule it breaks, and the step fails unless linting the fixture fails

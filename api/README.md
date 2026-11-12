@@ -81,6 +81,29 @@ daemon and the app beside the digest, and `GET /health` reports them as
   and the rest of `HealthStatus` an app reads never change shape: an app
   that can't decode `/health` can't learn it was refused, and keeps
   syncing as if no verdict had come.
+- **`scripts/check.sh api compat` keeps the level honest.** It runs
+  `scripts/api-compatibility-check.sh`, which diffs `openapi.yaml` against
+  its merge base with `origin/main` using `oasdiff` v1.35.0 and fails a
+  breaking change that leaves the level unchanged, a level or floor that
+  goes down, or a floor above the level. Locally the step needs `jq` and a
+  fetched `origin/main`, and runs `go run github.com/oasdiff/oasdiff@v1.35.0`
+  unless `OASDIFF` names another command; CI installs a checksum-verified
+  binary of the same version (`.github/workflows/api-ci.yml`). Keep the
+  version in step across the script, the workflow, and this line.
+- **`oasdiff-severity.txt` sets the project's breaking set.** oasdiff
+  reads it with `--severity-levels`; the file allows only `<check-id>
+  <level>` lines, so its reasons live here. A new `oneOf` arm in a
+  response (`response-body-one-of-added`, `response-property-one-of-added`)
+  is pinned to `err`, which also stops oasdiff lowering it inside an
+  `allOf`. A request property removed (`request-property-removed`, `warn`
+  by default) is pinned to `err` too, because the daemon rejects a request
+  body field it doesn't know, so an older app that still sends it fails. An enum member added to a response
+  (`response-property-enum-value-added`,
+  `response-mediatype-enum-value-added`) drops to `info`, because every
+  response enum of two or more values lists `unknown`. That drop hides one
+  real break oasdiff can't tell apart: a one-value response enum widened.
+  The check doesn't catch it, so the author and reviewer raise the level
+  by hand for one.
 
 ## Task Cancellation Contract
 

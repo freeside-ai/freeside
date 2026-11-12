@@ -144,6 +144,143 @@ case $OUT in
   *) pass=$((pass + 1)) ;;
 esac
 
+# The compat step runs in a fixture repository whose origin/main holds a
+# spec at level 1, floor 1, after a first commit with no compatibility
+# lines at all. Each case writes the working-tree spec and a stubbed
+# oasdiff report; the check compares the two specs' levels and counts the
+# report's ERR-level changes.
+compat_root=$TMP/compat
+mkdir -p "$compat_root/scripts" "$compat_root/api"
+cp "$CHECK" "$SCRIPT_DIR/api-compatibility-check.sh" \
+  "$SCRIPT_DIR/api-contract-digest.sh" "$compat_root/scripts/"
+printf '%s\n' 'response-property-one-of-added err' >"$compat_root/api/oasdiff-severity.txt"
+compat_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 git -C "$compat_root" -c user.name=fixture \
+    -c user.email=fixture@example.invalid "$@"
+}
+compat_spec() { # [<level> <floor>]; writes the fixture spec, no lines without arguments
+  {
+    printf 'openapi: 3.0.3\ninfo:\n  title: fixture\n  version: 0.1.0\n'
+    if [ $# -eq 2 ]; then
+      printf '  x-compatibility-level: %s\n  x-compatibility-floor: %s\n' "$1" "$2"
+    fi
+    printf 'paths: {}\n'
+  } >"$compat_root/api/openapi.yaml"
+}
+compat_git init -q
+compat_spec
+compat_git add -A
+compat_git commit -q -m 'spec before compatibility lines'
+compat_pre=$(compat_git rev-parse HEAD)
+compat_spec 1 1
+compat_git commit -q -am 'spec at level 1, floor 1'
+compat_git update-ref refs/remotes/origin/main HEAD
+oasdiff_stub=$TMP/oasdiff
+cat >"$oasdiff_stub" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$0.args"
+printf '%s' "${OASDIFF_REPORT-[]}"
+exit "${OASDIFF_RC:-0}"
+STUB
+chmod +x "$oasdiff_stub"
+compat_breaking='[{"id":"response-property-one-of-added","text":"added a union arm","level":3}]'
+compat_additive='[{"id":"response-property-enum-value-added","text":"added an enum value","level":1}]'
+run_compat() { # <env-assignments...> [-- <compat script args...>]; sets OUT and RC
+  local assignments=() args=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    assignments+=("$1")
+    shift
+  done
+  if [ $# -gt 0 ]; then
+    shift
+    args=("$@")
+  fi
+  set +e
+  if [ ${#args[@]} -eq 0 ]; then
+    OUT=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE OASDIFF="$oasdiff_stub" \
+      ${assignments[@]+"${assignments[@]}"} "$compat_root/scripts/check.sh" api compat 2>&1)
+  else
+    OUT=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE OASDIFF="$oasdiff_stub" \
+      ${assignments[@]+"${assignments[@]}"} \
+      bash "$compat_root/scripts/api-compatibility-check.sh" "${args[@]}" 2>&1)
+  fi
+  RC=$?
+  set -e
+}
+
+begin_case "api compat fails a breaking change that leaves the level unchanged"
+compat_spec 1 1
+run_compat OASDIFF_REPORT="$compat_breaking"
+assert_rc 1
+assert_contains 'response-property-one-of-added: added a union arm'
+assert_contains 'x-compatibility-level raised from 1 to 2'
+
+begin_case "api compat passes an additive change and runs the pinned oasdiff invocation"
+compat_spec 1 1
+run_compat OASDIFF_REPORT="$compat_additive"
+assert_rc 0
+assert_contains 'PASS: api compat'
+case $(cat "$oasdiff_stub.args") in
+  breaking$'\n'*/base.yaml$'\n'api/openapi.yaml$'\n'--flatten-allof$'\n'--severity-levels$'\n'api/oasdiff-severity.txt$'\n'--format$'\n'json)
+    pass=$((pass + 1))
+    ;;
+  *)
+    OUT=$(cat "$oasdiff_stub.args")
+    report_failure "oasdiff received unexpected arguments"
+    ;;
+esac
+
+begin_case "api compat passes a breaking change that raises the level"
+for levels in '2 1' '2 2'; do
+  # shellcheck disable=SC2086 # two words: the level and the floor
+  compat_spec $levels
+  run_compat OASDIFF_REPORT="$compat_breaking"
+  assert_rc 0
+  assert_contains 'PASS: api compat'
+done
+
+begin_case "api compat fails a floor above the level"
+compat_spec 1 2
+run_compat OASDIFF_REPORT="$compat_additive"
+assert_rc 1
+assert_contains 'x-compatibility-floor (2) exceeds x-compatibility-level (1)'
+
+begin_case "api compat fails a level or floor that goes down"
+compat_spec 1 0
+run_compat OASDIFF_REPORT="$compat_additive"
+assert_rc 1
+assert_contains 'x-compatibility-floor went down from 1 to 0'
+compat_spec 0 0
+run_compat OASDIFF_REPORT="$compat_additive"
+assert_rc 1
+assert_contains 'x-compatibility-level went down from 1 to 0'
+
+begin_case "api compat fails when oasdiff fails or reports an unexpected shape"
+compat_spec 1 1
+run_compat OASDIFF_RC=102
+assert_rc 1
+assert_contains 'oasdiff failed'
+run_compat OASDIFF_REPORT='[{"id":"x","text":"y","level":"error"}]'
+assert_rc 1
+assert_contains 'oasdiff level is not a number'
+
+begin_case "api compat reads a base with no compatibility lines as level 0, floor 0"
+compat_spec 0 0
+run_compat OASDIFF_REPORT="$compat_additive" -- --base "$compat_pre"
+assert_rc 0
+assert_contains 'level 0 (base 0), floor 0 (base 0)'
+run_compat OASDIFF_REPORT="$compat_breaking" -- --base "$compat_pre"
+assert_rc 1
+assert_contains 'x-compatibility-level raised from 0 to 1'
+
+begin_case "api compat fails without origin/main instead of passing"
+compat_git update-ref -d refs/remotes/origin/main
+compat_spec 1 1
+run_compat OASDIFF_REPORT="$compat_additive"
+assert_rc 1
+assert_contains 'origin/main is not available'
+
 lint_root_a=$TMP/lint-a
 lint_root_b=$TMP/lint\ b
 lint_cache_home=$TMP/cache\ home
