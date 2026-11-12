@@ -52,9 +52,11 @@ var swiftLiveRecipes = []struct {
 	}},
 }
 
-// networkAttempts are what SwiftPM and git print when the room's sandbox
-// refuses a fetch.
-var networkAttempts = []string{"Could not resolve host", "nodename nor servname"}
+// networkAttempts are what SwiftPM and git print when they reach for the
+// network the room's sandbox refuses. SwiftPM prints "Fetching <url>" before
+// each clone; on the reference host (Xcode 27B52) a refused clone surfaces
+// only as a later `git -C` on the missing checkout, not as a resolver error.
+var networkAttempts = []string{"Could not resolve host", "nodename nor servname", "Fetching https://"}
 
 // swiftLiveWorkspace extracts the tree at the pinned commit into a fresh
 // workspace the daemon user owns, as the verifier's materialized one is.
