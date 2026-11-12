@@ -6,7 +6,8 @@
         "test",
         "./..."
       ],
-      "room": "project_image"
+      "room": "project_image",
+      "history": false
     },
     {
       "argv": [
@@ -14,7 +15,8 @@
         "vet",
         "./..."
       ],
-      "room": "project_image"
+      "room": "project_image",
+      "history": false
     }
   ],
   "capture": "none",

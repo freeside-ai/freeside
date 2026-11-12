@@ -62,4 +62,10 @@ var (
 	// so this is an integrity failure, never a finding: the verification
 	// does not start, and no command runs in another class's room.
 	ErrRoomUnavailable = errors.New("recipe names an execution class with no room")
+	// ErrHistoryUnavailable rejects a verification whose recipe asks for
+	// history the verifier can't give exactly: the head and the enforced
+	// base share no single merge base, or the verified tree holds a path
+	// component the written .git would collide with. Nothing runs. The
+	// path refusal also wraps ErrMalformedTree, since no retry gets past it.
+	ErrHistoryUnavailable = errors.New("candidate history cannot be given to a recipe command")
 )

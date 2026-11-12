@@ -72,11 +72,17 @@ func (c ExecutionClass) valid() bool {
 	}
 }
 
-// Command is one recipe command: its argument vector and the class of
-// room that runs it.
+// Command is one recipe command: its argument vector, the class of room
+// that runs it, and whether it asks for the candidate's git history.
 type Command struct {
 	Argv  []string
 	Class ExecutionClass
+	// History asks the verifier to add a verifier-written .git holding
+	// the candidate's commits to this command's workspace, and to export
+	// the range's base and head SHAs (history.go). Only a project_image
+	// command may ask; a command that doesn't keeps the exact-tree
+	// workspace.
+	History bool
 }
 
 // Recipe is a parsed trusted verification recipe: the commands the
@@ -91,6 +97,22 @@ type Command struct {
 type Recipe struct {
 	Commands []Command
 	Capture  CaptureMode
+}
+
+// ProofCommands returns the argument vectors of the project_image
+// commands the project image's offline proof can run, in recipe order:
+// every project_image command that doesn't ask for history. The proof
+// runs each command in a copy of one commit with no candidate, so it has
+// no base and head to give a history command, which would fail there
+// for want of them. Verification is where a history command first runs.
+func (r Recipe) ProofCommands() [][]string {
+	var out [][]string
+	for _, cmd := range r.Commands {
+		if cmd.Class == ClassProjectImage && !cmd.History {
+			out = append(out, cmd.Argv)
+		}
+	}
+	return out
 }
 
 // CommandsIn returns the argument vectors of the recipe's commands of
@@ -130,7 +152,9 @@ type recipeWire struct {
 // commandObjectWire is a command's object form,
 // {"argv": [...], "room": "macos_host"}. Both fields are required:
 // a missing room is refused rather than defaulted, so the object form
-// always says where its command runs.
+// always says where its command runs. The optional "history" boolean
+// asks for the candidate's git history; it is raw so a null is refused
+// rather than read as absent.
 //
 // Tokens are *string, not string, so the parser can tell a JSON null
 // (nil) from an intentional empty string (a non-nil pointer to ""):
@@ -139,8 +163,9 @@ type recipeWire struct {
 // argument, so a null token fails closed rather than executing. The
 // same holds for the bare array form.
 type commandObjectWire struct {
-	Argv []*string `json:"argv"`
-	Room *string   `json:"room"`
+	Argv    []*string       `json:"argv"`
+	Room    *string         `json:"room"`
+	History json.RawMessage `json:"history"`
 }
 
 // ParseRecipe parses and validates trusted recipe bytes. Unknown
@@ -149,8 +174,9 @@ type commandObjectWire struct {
 // argv or no room or an unknown room, an empty command (no argv or an
 // empty executable name), a null or NUL-bearing token, a ".." path
 // segment in a token, a recognized direct shell runner carrying a
-// command-string option, and an invalid capture mode all fail closed
-// with ErrRecipeInvalid. Command arguments are otherwise opaque: no
+// command-string option, a "history" that isn't a boolean or is true on
+// a macos_host command, and an invalid capture mode all fail closed with
+// ErrRecipeInvalid. Command arguments are otherwise opaque: no
 // whitespace splitting or metacharacter rejection.
 func ParseRecipe(raw []byte) (Recipe, error) {
 	var w recipeWire
@@ -191,6 +217,7 @@ func parseCommand(raw json.RawMessage) (Command, error) {
 	}
 	var rawArgv []*string
 	class := ClassProjectImage
+	history := false
 	switch trimmed[0] {
 	case '[':
 		if err := strictjson.Decode(raw, &rawArgv, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
@@ -212,6 +239,12 @@ func parseCommand(raw json.RawMessage) (Command, error) {
 			return Command{}, fmt.Errorf("recipe command room %q is not an execution class: %w", *obj.Room, ErrRecipeInvalid)
 		}
 		rawArgv = obj.Argv
+		if obj.History != nil {
+			var err error
+			if history, err = parseHistory(obj.History, class); err != nil {
+				return Command{}, err
+			}
+		}
 	default:
 		return Command{}, fmt.Errorf("recipe command is neither an argv array nor a command object: %w", ErrRecipeInvalid)
 	}
@@ -225,7 +258,26 @@ func parseCommand(raw json.RawMessage) (Command, error) {
 	if err := validateCommand(argv); err != nil {
 		return Command{}, err
 	}
-	return Command{Argv: argv, Class: class}, nil
+	return Command{Argv: argv, Class: class, History: history}, nil
+}
+
+// parseHistory reads a command object's "history" value: a JSON boolean,
+// never null or another type. Only a project_image command may ask for
+// history. The macOS slot helper passes a command exactly HOME, TMPDIR,
+// PATH, and LC_ALL (macverify's slot-run.sh), so it can't carry the
+// range's SHAs without changing the root-owned helper on every executor.
+func parseHistory(raw json.RawMessage, class ExecutionClass) (bool, error) {
+	var history *bool
+	if err := strictjson.Decode(raw, &history, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		return false, fmt.Errorf("recipe command history is not a boolean: %w: %w", err, ErrRecipeInvalid)
+	}
+	if history == nil {
+		return false, fmt.Errorf("recipe command history is null: %w", ErrRecipeInvalid)
+	}
+	if *history && class != ClassProjectImage {
+		return false, fmt.Errorf("recipe command room %q cannot give a command history: %w", class, ErrRecipeInvalid)
+	}
+	return *history, nil
 }
 
 // validateCommand fails closed on a malformed argument vector. A recipe

@@ -52,6 +52,8 @@
 //   - gitrunner.go    git plumbing over internal/gitrun with verifier-only pins
 //   - materialize.go  the head binding and the fresh, proven workspace
 //     materialization
+//   - history.go      the verifier-written .git and range variables a
+//     command that asks for history gets
 //   - exact.go        MaterializeExact, a commit tree as exact object bytes
 //   - room.go         the Room and EnvRoom seams and a step's observed
 //     result

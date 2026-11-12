@@ -392,10 +392,12 @@ func (b *Builder) Build(
 		return domain.ProjectImage{}, fmt.Errorf("local image allowlist: %w", proofFailure(err))
 	}
 	// The image runs only the recipe's project_image commands; a command
-	// of another class runs in its own room and proves nothing here.
+	// of another class runs in its own room and proves nothing here. A
+	// command that asks for history is left out too: the proof has no
+	// candidate, so no base and head to give it.
 	if err := b.proveOffline(
 		ctx, repositoryDir, normalized.CommitSHA, localRef,
-		recipe.CommandsIn(verify.ClassProjectImage), scratch, layout,
+		recipe.ProofCommands(), scratch, layout,
 	); err != nil {
 		return domain.ProjectImage{}, err
 	}
