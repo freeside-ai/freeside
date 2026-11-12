@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 119
+revision: 120
 status: active
 updated: 2026-11-12
 ---
@@ -7042,13 +7042,15 @@ repository features such as tag-only release automation belong in the audited,
 digest-bound trust profile. They are not prose exceptions.
 
 **Freeside follows gh-imgup and manages its whole repository (revisions 92,
-113, and 118).** After the first completed unattended run on gh-imgup (the wave 8
-exit proof), Freeside is onboarded as a managed repository for every path but
-`images/`, `app/` included, so no task needs a judgment of its edit set
+113, 118, and 120).** After the first completed unattended run on gh-imgup (the wave 8
+exit proof), Freeside is onboarded as a managed repository for every path,
+`app/` and `images/` included, so no task needs a judgment of its edit set
 before Freeside takes it; writer work that itself needs macOS keeps the
 bootstrap exception (Section
-[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). `images/` stays out because the agent bases stay
-operator-built (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). A task may edit the agent-base and exporter
+definitions in `images/`, but the agent bases stay operator-built: only the
+operator builds, probes, and pins one until agent-base upkeep (#2338) admits
+it, and no task builds or adopts the image it runs in (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). Onboarding
 waits until the project image, carrying the Go and Swift toolchain paths,
 verifies the Linux-clean checks and the macOS verification executor verifies
@@ -7542,46 +7544,31 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 119 ("The Specification Comment Posts Early, Edits in Place, and Claims the Issue"):
+Revision 120 ("Tasks May Edit the Image Definitions; the Operator Still Builds Them"):
 
-1. **The specification comment posts when the daemon accepts and screens a
-   bound task's specification, under either `gates.spec_approval` setting**
-   (Sections [1](#1-what-freeside-is),
-   [5.11](#511-github-integration-reconciliation-plus-intake), and
-   [14](#14-risks)). Screened agent text now reaches a public issue before a
-   person reads it, and with the gate off a person may never read it first.
-   This reverses revision 66's approval trigger and its "no comment when the
-   gate is off". The subsection is renamed The Specification Comment.
-2. **One comment per task, edited in place** (Sections
-   [5.5](#55-the-ci-trust-boundary) and
-   [5.11](#511-github-integration-reconciliation-plus-intake)). A revised
-   specification, an approval, and the release each replace the comment's
-   text, addressed by the comment ID the daemon stored from its own create
-   and re-checked as App-authored on the target issue before each edit. The
-   frame states the comment's state, a refused revision shows the frame
-   alone, and a deleted comment is never re-created. The narrowed token now
-   also edits that one comment, and each edit is another `issue_comment`
-   event. This reverses revision 66's append-only successor comments.
-3. **The comment is the unit's work claim** (Section
-   [5.11](#511-github-integration-reconciliation-plus-intake) and
-   `docs/coordination.md`, Claiming). Its `Claim:` line names the task, not a
-   branch, because the publication branch doesn't exist until a candidate is
-   ready. It has no lease, and the daemon releases it by an edit when the
-   task ends with no open pull request of its own; cancellation never fences
-   that edit. A daemon claim wins over any hand-run claim on the unit. A
-   claim, release, or reservation marker counts from the repository's owner,
-   members, and collaborators, and the project's own Freeside App's marker
-   counts as its task claim only, which settles #1738's question.
-4. **The specification comment is not an implementation plan**
-   (`docs/coordination.md`, Stages). A `Handle` session reads it as context.
+1. **Freeside manages `images/`, and the agent bases stay operator-built**
+   (Sections [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)
+   and [11](#11-roadmap-build-order-and-coordination)). A task may edit the
+   agent-base and exporter definitions under `images/`, and the edit
+   publishes with no finding, like any unprotected path. Nothing in
+   Freeside builds or adopts an image from that source: the operator
+   builds, probes, and re-pins an image after the change merges until
+   agent-base upkeep (#2338) admits a base itself, and no task builds or
+   adopts the image it runs in. The recipe checks an image change only
+   through the daemon tests that read the agent bases' CLI pins and the
+   Claude base's managed settings. The owner accepts
+   that the pull request's review is the only check on an image edit
+   before the operator's build. Rejected: keeping `images/` hand-run, which
+   leaves a kind of development outside Freeside. This overturns revision
+   113 item 1's `images/` exclusion. What changed is the owner's rule that
+   every kind of development done by hand goes through Freeside; the
+   exclusion's reason, that the bases need the network to build and sit on
+   the trust boundary, holds for building them, which stays the
+   operator's, not for editing their source.
 
-Nothing in this revision is built yet: #1433 through #1439 build the
-comment, and #1738 teaches `trackercollect` the claimant rule and the daemon
-claim.
+(Owner decision of 2026-11-11 on #3132;
+[decision note](../devlog/2026-11-12-1006-images-in-deputy-scope.md).)
 
-(Owner direction of 2026-11-11 on #3132, with the settled items decided in
-review of #3128's pull request;
-[decision note](../devlog/2026-11-12-1014-spec-comment-edit-in-place.md).)
 ## 14. Risks
 
 | Risk | Current response |

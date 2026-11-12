@@ -8,6 +8,8 @@ on:
       - "scripts/check.sh"
       - "scripts/daemon-test-shards.py"
       - "scripts/daemon-test-shards.json"
+      - "images/agent-claude/**"
+      - "images/agent-codex/**"
       - ".github/workflows/daemon-ci.yml"
   workflow_call:
 
