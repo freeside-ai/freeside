@@ -3450,7 +3450,47 @@ runs each command in its class's room and records the class as each step's
 `room` in the verification report. A recipe that names a class with no room
 available fails before any command runs; it never runs the command in
 another room. The project image's offline proof runs only the
-`project_image` commands, because the image never runs the others.
+`project_image` commands, because the image never runs the others, and of
+those only the commands that don't ask for history (below).
+
+**A command can ask for the candidate's git history.** A `project_image`
+command object may add `"history": true`, so a check such as
+`scripts/check-commit-messages.sh` can read the candidate's commits. The
+bare argv form can't ask, a `macos_host` command that asks is refused (the
+macOS slot helper passes a command only `HOME`, `TMPDIR`, `PATH`, and
+`LC_ALL`), and a value that isn't a boolean is refused. A daemon without
+this field refuses a recipe that uses it, so such a recipe needs a daemon
+that has it. For a history command the verifier:
+
+- **Writes its own `.git`** into the command's fresh workspace after the
+  workspace passes its exact-tree check: `HEAD` detached at the candidate
+  head, a fixed `config`, a `shallow` file naming the boundary commits,
+  an empty `refs/`, and one pack holding the commits in base..head, the
+  boundary commits, and every object in those commits' trees. Nothing
+  comes from the candidate or the daemon checkout's config, and the
+  command has no network.
+- **Exports the range.** `FREESIDE_VERIFY_BASE_SHA` is the single merge
+  base of the enforced base and the head; `FREESIDE_VERIFY_HEAD_SHA` is
+  the head. `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and
+  `GIT_CONFIG_VALUE_0=*` let git read the repository whatever uid the room
+  runs the command as. Recipe argv isn't shell-expanded, so a recipe
+  passes the SHAs through a committed wrapper script.
+- **Refuses what it can't give exactly**, before any command runs: a head
+  and base with no merge base or more than one, a verified tree holding a
+  `.git` path component or an alias of one, and a room that can't pass
+  extra environment variables (the project-image room and `ProcRoom`
+  can).
+
+On a base-advance re-entry the base is still the head's own base, so
+base..head is exactly the candidate's commits, and `HEAD` is the
+candidate head, while the workspace's files are the prospective merge's
+tree. The report marks each history step `"history": true` and records
+the base as `history_base_sha`; both are omitted when no command asks, so
+other reports keep their bytes. The project image's offline proof skips
+history commands, because it has no candidate to give them a range. A
+command that doesn't ask keeps the exact-tree workspace with no `.git`,
+the same stray-file check, and the same environment. Decision record:
+`devlog/2026-11-12-1730-verify-command-history.md`.
 
 **The daemon asks for the executor only when a recipe needs it.** Every
 verification job (a first cycle, a remediation round, a readiness re-entry,
