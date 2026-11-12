@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -35,6 +36,31 @@ const (
 		"Its text did not pass the issue-text screen, so it is not copied here. " +
 		"Read the finding and its adjudication in the run's review record before acting on this issue."
 
+	// externalFollowUpFilingFallbackTitle and
+	// externalFollowUpFilingFallbackBody are the fixed texts for a finding a
+	// reviewer outside Freeside wrote. Such a finding never joins the run's
+	// review record, so the body points at the pull request's review thread
+	// instead. Neither constant holds reviewer text.
+	externalFollowUpFilingFallbackTitle = "Follow up on an external review finding set aside as separate work"
+	externalFollowUpFilingFallbackBody  = "A finding a reviewer outside Freeside left on this work unit's pull request " +
+		"was set aside as follow-up work. Its text did not pass the issue-text screen, so it is not copied here. " +
+		"Read the finding in its review thread on the pull request before acting on this issue."
+
+	// externalFollowUpFilingTitlePrefix opens the title of a filing composed
+	// from an external finding, so the quoted line after it reads as a
+	// reviewer's words and not as Freeside's.
+	externalFollowUpFilingTitlePrefix = "External review finding: "
+	// externalFollowUpFilingTitleQuoteLimit bounds, in bytes, the reviewer's
+	// line a title quotes. With the prefix and the quoting it stays inside
+	// domain.MaxFollowUpFilingTitleBytes for ordinary text; text whose escapes
+	// push it past takes the fallback.
+	externalFollowUpFilingTitleQuoteLimit = 160
+	// externalFollowUpFilingBodyQuoteLimit bounds, in bytes, the reviewer's
+	// message a body quotes. It matches what a model input carries
+	// (externalFindingModelTextLimit), so the filing shows the words the
+	// adjudicator judged.
+	externalFollowUpFilingBodyQuoteLimit = externalFindingModelTextLimit
+
 	followUpFilingBatchVersion = "freeside.follow-up-filing.batch/v1"
 )
 
@@ -57,40 +83,26 @@ func followUpFilingRefusedItemID(runID domain.RunID) domain.ItemID {
 
 // followUpFilingText composes a filing's title and body from the finding and
 // its adjudication entry. No model writes either field, and nothing here
-// reaches the filing target. The title is the finding message's first
-// non-blank line; the body is the message, the location when there is one,
-// and the adjudication rationale. Each is cut to its size limit and then
-// screened, and a refused or blank field takes its fixed text alone.
+// reaches the filing target. Each field is screened, and a refused or blank
+// field takes its fixed text alone. The draft depends on who wrote the
+// finding: Freeside's own review (followUpFilingDraft) or a reviewer outside
+// Freeside (externalFollowUpFilingDraft), which also has its own fixed texts.
 func followUpFilingText(
 	finding domain.Finding, entry domain.FindingAdjudicationEntry,
 ) (domain.ScreenedIssueText, domain.ScreenedIssueText) {
-	title := ""
-	for line := range strings.Lines(finding.Message) {
-		if fields := strings.Fields(line); len(fields) > 0 {
-			title = strings.Join(fields, " ")
-			break
-		}
+	title, body := followUpFilingDraft(finding, entry)
+	fallbackTitle, fallbackBody := followUpFilingFallbackTitle, followUpFilingFallbackBody
+	if finding.External != nil {
+		title, body = externalFollowUpFilingDraft(finding, entry)
+		fallbackTitle, fallbackBody = externalFollowUpFilingFallbackTitle, externalFollowUpFilingFallbackBody
 	}
-	title = strings.TrimSpace(boundValidText(title, domain.MaxFollowUpFilingTitleBytes))
 	if title == "" || publicationtext.ScreenIssueTitle(
 		domain.IssueTextRulesetGitHubIssue1, title, domain.MaxFollowUpFilingTitleBytes) != nil {
-		title = followUpFilingFallbackTitle
+		title = fallbackTitle
 	}
-
-	var parts []string
-	if message := strings.TrimSpace(finding.Message); message != "" {
-		parts = append(parts, message)
-	}
-	if finding.Location != nil {
-		parts = append(parts, "Location: "+finding.Location.String())
-	}
-	if rationale := strings.TrimSpace(entry.Rationale); rationale != "" {
-		parts = append(parts, "Adjudication rationale: "+rationale)
-	}
-	body := strings.TrimSpace(boundValidText(strings.Join(parts, "\n\n"), domain.MaxFollowUpFilingBodyBytes))
 	if body == "" || publicationtext.ScreenIssueBody(
 		domain.IssueTextRulesetGitHubIssue1, body, domain.MaxFollowUpFilingBodyBytes) != nil {
-		body = followUpFilingFallbackBody
+		body = fallbackBody
 	}
 
 	passed := func(text string) domain.ScreenedIssueText {
@@ -99,6 +111,93 @@ func followUpFilingText(
 		}
 	}
 	return passed(title), passed(body)
+}
+
+// followUpFilingDraft drafts the text for a finding of Freeside's own. The
+// title is the message's first non-blank line; the body is the message, the
+// location when there is one, and the adjudication rationale. Each is cut to
+// its size limit.
+func followUpFilingDraft(finding domain.Finding, entry domain.FindingAdjudicationEntry) (string, string) {
+	title := strings.TrimSpace(boundValidText(followUpFilingFirstLine(finding.Message), domain.MaxFollowUpFilingTitleBytes))
+	var parts []string
+	if message := strings.TrimSpace(finding.Message); message != "" {
+		parts = append(parts, message)
+	}
+	parts = append(parts, followUpFilingContext(finding, entry)...)
+	body := strings.TrimSpace(boundValidText(strings.Join(parts, "\n\n"), domain.MaxFollowUpFilingBodyBytes))
+	return title, body
+}
+
+// externalFollowUpFilingDraft drafts the text for a finding a reviewer
+// outside Freeside wrote, which would otherwise reach the forge under
+// Freeside's identity as if Freeside wrote it (issue #1787). The reviewer's
+// words appear only quoted: cut to a fixed length, with every newline and
+// control character escaped, so no line of theirs can open a command or a
+// Markdown block. In the body, which GitHub renders, the quote also sits in
+// a code span (quotedCodeSpan), so a quote mark of theirs cannot close it on
+// the rendered page. The title names the words as an external finding, and
+// the body's fixed lead says whose they are. A field that comes out over its
+// limit is left for the screen to refuse. A blank message drafts nothing.
+func externalFollowUpFilingDraft(finding domain.Finding, entry domain.FindingAdjudicationEntry) (string, string) {
+	message := strings.TrimSpace(finding.Message)
+	if message == "" {
+		return "", ""
+	}
+	title := externalFollowUpFilingTitlePrefix +
+		quotedWithin(followUpFilingFirstLine(message), externalFollowUpFilingTitleQuoteLimit)
+	lead := fmt.Sprintf("A reviewer outside Freeside, %s, left this finding on the work unit's pull request. "+
+		"The quoted text is the reviewer's words, cut to at most %d bytes; Freeside did not write it.",
+		strconv.Quote(finding.External.ReviewerLogin), externalFollowUpFilingBodyQuoteLimit)
+	parts := []string{lead, "Reviewer's words: " + quotedCodeSpan(message, externalFollowUpFilingBodyQuoteLimit)}
+	parts = append(parts, followUpFilingContext(finding, entry)...)
+	return title, strings.Join(parts, "\n\n")
+}
+
+// quotedCodeSpan quotes text with quotedWithin and wraps the one-line result
+// in a Markdown code span whose backtick fence is longer than any backtick
+// run inside it. A renderer reads no escape, emphasis, link, or HTML inside a
+// code span, so the page shows the quoted string as written: without the
+// span, GitHub renders the \" that stands for a reviewer's quote mark as a
+// bare quote mark, which would close the quote on the page. The quoted string
+// starts and ends with a quote mark, never a backtick or a space, so the span
+// needs no padding.
+func quotedCodeSpan(text string, limit int) string {
+	quoted := quotedWithin(text, limit)
+	longest, run := 0, 0
+	for _, r := range quoted {
+		if r != '`' {
+			run = 0
+			continue
+		}
+		run++
+		longest = max(longest, run)
+	}
+	fence := strings.Repeat("`", longest+1)
+	return fence + quoted + fence
+}
+
+// followUpFilingFirstLine is text's first non-blank line, its runs of
+// whitespace collapsed to one space.
+func followUpFilingFirstLine(text string) string {
+	for line := range strings.Lines(text) {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			return strings.Join(fields, " ")
+		}
+	}
+	return ""
+}
+
+// followUpFilingContext is what a body carries after the finding's words:
+// the location when there is one, and the adjudication rationale.
+func followUpFilingContext(finding domain.Finding, entry domain.FindingAdjudicationEntry) []string {
+	var parts []string
+	if finding.Location != nil {
+		parts = append(parts, "Location: "+finding.Location.String())
+	}
+	if rationale := strings.TrimSpace(entry.Rationale); rationale != "" {
+		parts = append(parts, "Adjudication rationale: "+rationale)
+	}
+	return parts
 }
 
 // followUpFilingRoute is the adjudication route that concludes each source
@@ -177,17 +276,6 @@ func planFollowUpFilings(
 	var plan followUpFilingPlan
 	for _, candidate := range entries {
 		if proposed[candidate.ordinal] {
-			continue
-		}
-		// An external finding proposes no filing: the title and body would
-		// carry a reviewer's words onto the forge under Freeside's name, and
-		// that path is not built yet (issue #1767 decision 5). Dropping it
-		// here keeps a pass with nothing else to propose a read.
-		finding, err := tx.GetFinding(ctx, candidate.entry.FindingID)
-		if err != nil {
-			return followUpFilingPlan{}, err
-		}
-		if finding.External != nil {
 			continue
 		}
 		plan.pending = append(plan.pending, candidate)
