@@ -3683,7 +3683,8 @@ slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
 then `bash scripts/check.sh docs`, then `env VACUUM=vacuum bash
 scripts/check.sh api`, then `check.sh scripts` with the same Go limits,
 because `trackercollect` runs `go build`, `test`, and `vet`, then `bash
-scripts/check.sh app linux`. Measured on 2026-11-10 with this recipe on
+scripts/check.sh app generate`, then `bash scripts/check.sh app linux`.
+Measured on 2026-11-10 with this recipe on
 `main` at `c40bf92b7`, in Freeside's mixed Go and Swift image
 (`-go-module-dir daemon -swift-package-dir app`), one container per step,
 each prepared as the proof prepares it:
@@ -3697,6 +3698,7 @@ each prepared as the proof prepares it:
 | docs | passes | 50 MiB | 1 s |
 | api | passes | 139 MiB | 1 s |
 | scripts | passes | 286 MiB | 66 s |
+| app generate | passes | 1486 MiB | 55 s |
 | app linux | passes | 1283 MiB | 99 s |
 
 Each step started from a cold build cache on a host at load average 6 to
@@ -3708,7 +3710,11 @@ in a tree without `.git` read the Swift checkouts preparation adds under
 `app/.build/`; with that step dropped, the whole proof passed at #3013's
 head. #3100 made that step skip files the tree's own `.gitignore`
 files ignore; at its head, `check.sh scripts` passed in this image,
-prepared as the proof prepares it. Lint's
+prepared as the proof prepares it. #3122 added `app generate`, measured on
+2026-11-12 at `49b5655a6` the same way, at load average near 60: most of
+its time and memory is the debug build of `swift-openapi-generator` and
+its dependencies, and seven runs there and at its parent's version of the
+script peaked between 1365 and 1523 MiB. Lint's
 peak is over the 1536 MiB margin
 `devlog/2026-10-22-1241-proof-memory-bound.md` set, though under the
 room's 2048 MiB; at `d03b0b88` it measured 1323 MiB. That note has the
@@ -4071,9 +4077,10 @@ Freeside onboards itself for its whole repository (plan §11, revisions
 these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
-- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs nine
-  commands. Five run in the project image: the four `daemon`, `docs`, `api`,
+- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs ten
+  commands. Six run in the project image: the four `daemon`, `docs`, `api`,
   and `scripts` commands sized above, then
+  `bash scripts/check.sh app generate` and
   `bash scripts/check.sh app linux`. Four run on the macOS verification
   executor (`macos_host`): `app format`, `app test`,
   `app build-mac`, and `app build-ios`. The last three run as
@@ -4081,8 +4088,10 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   the executor flags documented under Install the macOS Verification
   Executor, because the recipe can't name the job's `../source-packages`
   itself: `verify.ParseRecipe` refuses a `..` path segment. `app generate`
-  stays out of the recipe: it needs the network, and `api digest` already
-  fails on a stale generated client.
+  builds the generator offline from the image's baked mirrors. In a tree
+  without `.git` it compares the generated outputs with a snapshot it takes
+  before regenerating, so it fails a schema change whose committed client is
+  stale, which `api digest` misses when the digest constants were refreshed.
 - **Toolchain:** `-go-module-dir daemon -swift-package-dir app`. The root
   has neither `go.mod` nor `Package.swift`, and the one image bakes both.
 - **Prerequisites:** the executor installed and proved on the daemon host
@@ -4152,10 +4161,12 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   advisory reviewer-instruction finding and publishes with it surfaced. An
   edit to `.gitattributes` or to an automation-control path fails the
   writer's run at import. A new top-level entry needs
-  its own allowed-path decision. `app/` is allowed, but an `api/openapi.yaml`
-  change still fails the recipe's `api digest` step: its fix is a
-  regenerated client, and `app generate` needs the network the writer's
-  room lacks, so schema work stays human-run.
+  its own allowed-path decision. `app/` is allowed, so a writer can change
+  `api/openapi.yaml` if it commits the regenerated client: it runs
+  `bash scripts/check.sh app generate` in its room, which works offline from
+  the project image's baked mirrors and, as for a human, exits 1 until the
+  regenerated files are committed. The recipe's `app generate` and
+  `api digest` steps fail a change that skips it.
 - **Image changes:** a task may edit `images/`, but nothing in Freeside
   builds or adopts an image from it (plan §11, revision 120). The recipe
   checks an image change only through `TestHarnessBuildsMatchTheImagePins`
