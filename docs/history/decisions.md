@@ -3844,3 +3844,28 @@ claim.
 (Owner direction of 2026-11-11 on #3132, with the settled items decided in
 review of #3128's pull request;
 [decision note](../../devlog/2026-11-12-1014-spec-comment-edit-in-place.md).)
+
+## Revision 120 ("Tasks May Edit the Image Definitions; the Operator Still Builds Them"):
+
+1. **Freeside manages `images/`, and the agent bases stay operator-built**
+   (Sections [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes)
+   and [11](../plan.md#11-roadmap-build-order-and-coordination)). A task may edit the
+   agent-base and exporter definitions under `images/`, and the edit
+   publishes with no finding, like any unprotected path. Nothing in
+   Freeside builds or adopts an image from that source: the operator
+   builds, probes, and re-pins an image after the change merges until
+   agent-base upkeep (#2338) admits a base itself, and no task builds or
+   adopts the image it runs in. The recipe checks an image change only
+   through the daemon tests that read the agent bases' CLI pins and the
+   Claude base's managed settings. The owner accepts
+   that the pull request's review is the only check on an image edit
+   before the operator's build. Rejected: keeping `images/` hand-run, which
+   leaves a kind of development outside Freeside. This overturns revision
+   113 item 1's `images/` exclusion. What changed is the owner's rule that
+   every kind of development done by hand goes through Freeside; the
+   exclusion's reason, that the bases need the network to build and sit on
+   the trust boundary, holds for building them, which stays the
+   operator's, not for editing their source.
+
+(Owner decision of 2026-11-11 on #3132;
+[decision note](../../devlog/2026-11-12-1006-images-in-deputy-scope.md).)
