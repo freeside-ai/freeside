@@ -122,6 +122,11 @@ type publicationHarness struct {
 	tokens            publish.TokenSource
 	now               time.Time
 
+	// replayStanceClaim, when set, is the candidate_automation_changes
+	// stance the next built replay's import options claim in place of the
+	// profile's, as a forged task payload would.
+	replayStanceClaim domain.AutomationChangePolicy
+
 	// repairRefusal, when set, makes a client submission the maintenance
 	// task image upkeep submits for the refusal it returns, given the
 	// harness's project image, in place of a device's task.
@@ -146,6 +151,16 @@ func newPublicationHarnessWithRecipe(t *testing.T, recipe []byte) *publicationHa
 
 func newPublicationHarnessWithBaseFiles(t *testing.T, recipe []byte, files map[string]string) *publicationHarness {
 	t.Helper()
+	return newPublicationHarnessWithStance(t, recipe, files, domain.AutomationChangesBlocked)
+}
+
+// newPublicationHarnessWithStance records a trust profile whose
+// candidate_automation_changes stance is stance, so a test can opt the
+// repository into publishing automation-control edits as advisory.
+func newPublicationHarnessWithStance(
+	t *testing.T, recipe []byte, files map[string]string, stance domain.AutomationChangePolicy,
+) *publicationHarness {
+	t.Helper()
 	ctx := t.Context()
 	root := t.TempDir()
 	base, baseSHA := publicationBaseTemplates.Copy(t, repotemplate.FilesKey(files), func() (string, string) {
@@ -165,7 +180,7 @@ func newPublicationHarnessWithBaseFiles(t *testing.T, recipe []byte, files map[s
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: fakePublicationRepo, RepositoryID: 123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
-		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		CandidateAutomationChanges: stance,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanPlanPreferred, MessageRuleset: domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest: auditEvidence.Digest(),
