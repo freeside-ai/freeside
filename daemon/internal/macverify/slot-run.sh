@@ -250,10 +250,22 @@ empty_dir() {
 # neither listed nor removed. The slot can write inside all four, and a file
 # a job leaves in a TemporaryItems directory reads back in the next job. So
 # each survivor is tolerated only when it is on this list, is a directory,
-# and is empty: the listable ones by their listing, a TemporaryItems by its
-# link count, which APFS raises by one for every entry. Anything a job
-# leaves in them fails cleanup, and the slot is quarantined instead of
+# and is empty: the listable ones by their listing, trustd's TemporaryItems
+# by its link count, which APFS raises by one for every entry. Anything a
+# job leaves in them fails cleanup, and the slot is quarantined instead of
 # carrying it to the next job.
+#
+# The temporary directory's top-level TemporaryItems is the exception: it is
+# tolerated with entries in it. It is Foundation's item-replacement
+# directory, and a SwiftPM atomic write sometimes leaves an entry there that
+# no one can remove, which would quarantine the slot for good. No one can
+# list it and Foundation names each entry at random, so a later job reaches
+# an entry only by its name: a planted entry only by a job written to
+# cooperate with the one that left it, and an honest job's leftover only by
+# guessing its random name. Nothing bounds or measures what accumulates
+# there, so a job can fill the disk. The owner accepted both
+# (devlog/2026-11-11-2151-macverify-tolerate-temporary-items.md). The cache
+# directory's TemporaryItems, if any, stays strict.
 
 # These functions run inside prepare and cleanup, and sh has no local
 # variables, so theirs carry a ud_ prefix that nothing else uses.
@@ -269,8 +281,9 @@ unlistable_empty() {
 	[ "$(stat -f '%l' "$1")" -eq 2 ] || refuse "$1 holds entries no one can list or remove"
 }
 
-# empty_user_dir empties the slot's per-user temporary or cache directory,
-# leaving only the empty protected entries above.
+# empty_user_dir empties the slot's per-user temporary ($2 = temp) or cache
+# ($2 = cache) directory $1, leaving only the protected entries above: each
+# empty, except the temporary directory's top-level TemporaryItems.
 empty_user_dir() {
 	sudo -u "$slot" /usr/bin/chflags -R -P nouchg,nouappnd "$1" 2>/dev/null || :
 	# rm fails on the protected entries; what survives is checked below.
@@ -294,7 +307,9 @@ empty_user_dir() {
 			listing "$ud_entry"
 			[ -z "$ud_entries" ] || refuse "cannot empty $ud_entry"
 			;;
-		TemporaryItems) unlistable_empty "$ud_entry" ;;
+		TemporaryItems)
+			[ "$2" = temp ] || unlistable_empty "$ud_entry"
+			;;
 		esac
 		ud_allowed=${ud_allowed:+$ud_allowed
 }$ud_entry
@@ -341,8 +356,8 @@ op_prepare() {
 	chmod 0644 "$profile"
 	select_user_dirs
 	reset_home
-	empty_user_dir "$tmp"
-	empty_user_dir "$cache"
+	empty_user_dir "$tmp" temp
+	empty_user_dir "$cache" cache
 	mkdir -m 0700 "$jobdir"
 	chown "$slot" "$jobdir"
 	sudo -u "$slot" mkdir "$jobdir/workspace"
@@ -450,8 +465,8 @@ op_cleanup() {
 	rm -f "$profile" "$archive"
 	select_user_dirs
 	reset_home
-	empty_user_dir "$tmp"
-	empty_user_dir "$cache"
+	empty_user_dir "$tmp" temp
+	empty_user_dir "$cache" cache
 	assert_idle
 }
 
